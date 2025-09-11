@@ -1,0 +1,3 @@
+# Coverage ignore patterns
+ignore:
+  - "examples"  # ignore examples folder
