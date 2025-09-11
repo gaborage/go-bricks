@@ -126,7 +126,7 @@ When adding new modules:
 
 ## Questions?
 
-- Check existing documentation in README.md and CLAUDE.md
+- Check existing documentation in README.md
 - Review existing code for patterns and conventions
 - Open an issue for questions about architecture or design decisions
 
