@@ -34,3 +34,5 @@ go.work.sum
 # AI generated files
 .claude
 CLAUDE.md
+
+.gocache/
