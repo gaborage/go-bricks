@@ -1,0 +1,119 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Database type constants
+const (
+	PostgreSQL = "postgresql"
+	Oracle     = "oracle"
+)
+
+func Validate(cfg *Config) error {
+	if err := validateApp(&cfg.App); err != nil {
+		return fmt.Errorf("app config: %w", err)
+	}
+
+	if err := validateServer(&cfg.Server); err != nil {
+		return fmt.Errorf("server config: %w", err)
+	}
+
+	if err := validateDatabase(&cfg.Database); err != nil {
+		return fmt.Errorf("database config: %w", err)
+	}
+
+	if err := validateLog(&cfg.Log); err != nil {
+		return fmt.Errorf("log config: %w", err)
+	}
+
+	return nil
+}
+
+func validateApp(cfg *AppConfig) error {
+	if cfg.Name == "" {
+		return fmt.Errorf("app name is required")
+	}
+
+	if cfg.Version == "" {
+		return fmt.Errorf("app version is required")
+	}
+
+	validEnvs := []string{"development", "staging", "production"}
+	if !contains(validEnvs, cfg.Env) {
+		return fmt.Errorf("invalid environment: %s (must be one of: %s)",
+			cfg.Env, strings.Join(validEnvs, ", "))
+	}
+
+	if cfg.RateLimit <= 0 {
+		return fmt.Errorf("rate limit must be positive")
+	}
+
+	return nil
+}
+
+func validateServer(cfg *ServerConfig) error {
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return fmt.Errorf("invalid port: %d (must be 1-65535)", cfg.Port)
+	}
+
+	if cfg.ReadTimeout <= 0 {
+		return fmt.Errorf("read timeout must be positive")
+	}
+
+	if cfg.WriteTimeout <= 0 {
+		return fmt.Errorf("write timeout must be positive")
+	}
+
+	return nil
+}
+
+func validateDatabase(cfg *DatabaseConfig) error {
+	validTypes := []string{PostgreSQL, Oracle}
+	if !contains(validTypes, cfg.Type) {
+		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
+			cfg.Type, strings.Join(validTypes, ", "))
+	}
+
+	if cfg.Host == "" {
+		return fmt.Errorf("database host is required")
+	}
+
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return fmt.Errorf("invalid database port: %d", cfg.Port)
+	}
+
+	if cfg.Database == "" {
+		return fmt.Errorf("database name is required")
+	}
+
+	if cfg.Username == "" {
+		return fmt.Errorf("database username is required")
+	}
+
+	if cfg.MaxConns <= 0 {
+		return fmt.Errorf("max connections must be positive")
+	}
+
+	return nil
+}
+
+func validateLog(cfg *LogConfig) error {
+	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
+	if !contains(validLevels, cfg.Level) {
+		return fmt.Errorf("invalid log level: %s (must be one of: %s)",
+			cfg.Level, strings.Join(validLevels, ", "))
+	}
+
+	return nil
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
