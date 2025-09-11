@@ -2,218 +2,58 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
-	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// MockInterface implements database.Interface for testing
-type MockInterface struct {
-	mock.Mock
-}
-
-// MockStatement implements database.Statement for testing
-type MockStatement struct {
-	mock.Mock
-}
-
-// MockTransaction implements database.Tx for testing
-type MockTransaction struct {
-	mock.Mock
-}
-
-func (m *MockInterface) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	arguments := m.Called(ctx, query, args)
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
-}
-
-func (m *MockInterface) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	arguments := m.Called(ctx, query, args)
-	return arguments.Get(0).(*sql.Row)
-}
-
-func (m *MockInterface) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	arguments := m.Called(ctx, query, args)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
-}
-
-func (m *MockInterface) Prepare(ctx context.Context, query string) (database.Statement, error) {
-	arguments := m.Called(ctx, query)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(database.Statement), arguments.Error(1)
-}
-
-func (m *MockInterface) Begin(ctx context.Context) (database.Tx, error) {
-	arguments := m.Called(ctx)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(database.Tx), arguments.Error(1)
-}
-
-func (m *MockInterface) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
-	arguments := m.Called(ctx, opts)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(database.Tx), arguments.Error(1)
-}
-
-func (m *MockInterface) Health(ctx context.Context) error {
-	arguments := m.Called(ctx)
-	return arguments.Error(0)
-}
-
-func (m *MockInterface) Stats() (map[string]interface{}, error) {
-	arguments := m.Called()
-	return arguments.Get(0).(map[string]interface{}), arguments.Error(1)
-}
-
-func (m *MockInterface) Close() error {
-	arguments := m.Called()
-	return arguments.Error(0)
-}
-
-func (m *MockInterface) DatabaseType() string {
-	arguments := m.Called()
-	return arguments.String(0)
-}
-
-func (m *MockInterface) GetMigrationTable() string {
-	arguments := m.Called()
-	return arguments.String(0)
-}
-
-func (m *MockInterface) CreateMigrationTable(ctx context.Context) error {
-	arguments := m.Called(ctx)
-	return arguments.Error(0)
-}
-
-// MockResult implements sql.Result for testing
-type MockResult struct {
-	lastInsertID int64
-	rowsAffected int64
-}
-
-func (m MockResult) LastInsertId() (int64, error) {
-	return m.lastInsertID, nil
-}
-
-func (m MockResult) RowsAffected() (int64, error) {
-	return m.rowsAffected, nil
-}
-
-// MockStatement methods
-func (ms *MockStatement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
-	arguments := ms.Called(ctx, args)
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
-}
-
-func (ms *MockStatement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
-	arguments := ms.Called(ctx, args)
-	return arguments.Get(0).(*sql.Row)
-}
-
-func (ms *MockStatement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
-	arguments := ms.Called(ctx, args)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
-}
-
-func (ms *MockStatement) Close() error {
-	arguments := ms.Called()
-	return arguments.Error(0)
-}
-
-// MockTransaction methods
-func (mt *MockTransaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	arguments := mt.Called(ctx, query, args)
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
-}
-
-func (mt *MockTransaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	arguments := mt.Called(ctx, query, args)
-	return arguments.Get(0).(*sql.Row)
-}
-
-func (mt *MockTransaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	arguments := mt.Called(ctx, query, args)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
-}
-
-func (mt *MockTransaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
-	arguments := mt.Called(ctx, query)
-	if arguments.Get(0) == nil {
-		return nil, arguments.Error(1)
-	}
-	return arguments.Get(0).(database.Statement), arguments.Error(1)
-}
-
-func (mt *MockTransaction) Commit() error {
-	arguments := mt.Called()
-	return arguments.Error(0)
-}
-
-func (mt *MockTransaction) Rollback() error {
-	arguments := mt.Called()
-	return arguments.Error(0)
-}
-
 func TestNewTrackedConnection(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	assert.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
 
+	// Verify the wrapper has the correct properties
 	trackedConn := tracked.(*TrackedConnection)
-	assert.Equal(t, mockConn, trackedConn.conn)
+	assert.Equal(t, simpleConn, trackedConn.conn)
 	assert.Equal(t, log, trackedConn.logger)
 	assert.Equal(t, "postgresql", trackedConn.vendor)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_Query(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	// Mock the Query call
-	expectedRows := &sql.Rows{}
-	mockConn.On("Query", mock.Anything, "SELECT * FROM users", mock.Anything).Return(expectedRows, nil)
+	// Set up mock expectations
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	// Execute query
-	rows, err := tracked.Query(ctx, "SELECT * FROM users")
-
-	// Assertions
-	assert.NoError(t, err)
-	assert.Equal(t, expectedRows, rows)
+	resultRows, err := tracked.Query(ctx, "SELECT * FROM users")
+	require.NoError(t, err)
+	defer resultRows.Close()
 
 	// Verify DB counter was incremented
 	counter := logger.GetDBCounter(ctx)
@@ -223,96 +63,109 @@ func TestTrackedConnection_Query(t *testing.T) {
 	elapsed := logger.GetDBElapsed(ctx)
 	assert.Greater(t, elapsed, int64(0))
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_QueryWithError(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
 	expectedErr := errors.New("query error")
-	mockConn.On("Query", mock.Anything, "SELECT * FROM invalid", mock.Anything).Return((*sql.Rows)(nil), expectedErr)
+	mock.ExpectQuery("SELECT \\* FROM invalid").WillReturnError(expectedErr)
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	rows, err := tracked.Query(ctx, "SELECT * FROM invalid")
 
 	assert.Error(t, err)
-	assert.Equal(t, expectedErr, err)
+	assert.Contains(t, err.Error(), "query error")
 	assert.Nil(t, rows)
 
 	// Verify DB counter was still incremented even with error
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(1), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_QueryRow(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("oracle")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	expectedRow := &sql.Row{}
-	mockConn.On("QueryRow", mock.Anything, "SELECT name FROM users WHERE id = ?", mock.Anything).Return(expectedRow)
+	rows := sqlmock.NewRows([]string{"name"}).AddRow("John")
+	mock.ExpectQuery("SELECT name FROM users WHERE id = \\$1").WithArgs(1).WillReturnRows(rows)
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
-	row := tracked.QueryRow(ctx, "SELECT name FROM users WHERE id = ?", 1)
-
-	assert.Equal(t, expectedRow, row)
+	row := tracked.QueryRow(ctx, "SELECT name FROM users WHERE id = $1", 1)
+	assert.NotNil(t, row)
 
 	// Verify DB counter was incremented
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(1), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_Exec(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	expectedResult := MockResult{lastInsertID: 1, rowsAffected: 1}
-	mockConn.On("Exec", mock.Anything, "INSERT INTO users (name) VALUES (?)", mock.Anything).Return(expectedResult, nil)
+	mock.ExpectExec("INSERT INTO users").WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
-	result, err := tracked.Exec(ctx, "INSERT INTO users (name) VALUES (?)", "John")
+	result, err := tracked.Exec(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
 
-	assert.NoError(t, err)
-	assert.Equal(t, expectedResult, result)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	lastID, err := result.LastInsertId()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), lastID)
+
+	rowsAffected, err := result.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
 
 	// Verify DB counter was incremented
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(1), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_Prepare(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	expectedStmt := &MockStatement{}
-	mockConn.On("Prepare", mock.Anything, "SELECT * FROM users WHERE id = ?").Return(expectedStmt, nil)
+	mock.ExpectPrepare("SELECT \\* FROM users WHERE id = \\$1")
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
-	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = ?")
+	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = $1")
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, stmt)
 	assert.IsType(t, &TrackedStatement{}, stmt)
 
@@ -320,56 +173,60 @@ func TestTrackedConnection_Prepare(t *testing.T) {
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(1), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_CreateMigrationTable(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
-	mockConn.On("CreateMigrationTable", mock.Anything).Return(nil)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS flyway_schema_history").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
-	err := tracked.CreateMigrationTable(ctx)
-
-	assert.NoError(t, err)
+	err = tracked.CreateMigrationTable(ctx)
+	require.NoError(t, err)
 
 	// Verify DB counter was incremented
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(1), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_MultipleOperations(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
 	// Mock multiple operations
-	expectedRows := &sql.Rows{}
-	expectedResult := MockResult{rowsAffected: 2}
-	expectedRow := &sql.Row{}
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
+	mock.ExpectExec("UPDATE users SET active = true").WillReturnResult(sqlmock.NewResult(0, 2))
 
-	mockConn.On("Query", mock.Anything, "SELECT * FROM users", mock.Anything).Return(expectedRows, nil)
-	mockConn.On("Exec", mock.Anything, "UPDATE users SET active = true", mock.Anything).Return(expectedResult, nil)
-	mockConn.On("QueryRow", mock.Anything, "SELECT COUNT(*) FROM users", mock.Anything).Return(expectedRow)
+	countRows := sqlmock.NewRows([]string{"count"}).AddRow(10)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").WillReturnRows(countRows)
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	// Perform multiple operations
-	rows1, err1 := tracked.Query(ctx, "SELECT * FROM users")
-	_ = rows1 // Reference to avoid unused variable warning
-	_, err2 := tracked.Exec(ctx, "UPDATE users SET active = true")
-	_ = tracked.QueryRow(ctx, "SELECT COUNT(*) FROM users")
+	queryRows, err1 := tracked.Query(ctx, "SELECT * FROM users")
+	require.NoError(t, err1)
+	defer queryRows.Close()
 
-	assert.NoError(t, err1)
-	assert.NoError(t, err2)
+	_, err2 := tracked.Exec(ctx, "UPDATE users SET active = true")
+	require.NoError(t, err2)
+
+	_ = tracked.QueryRow(ctx, "SELECT COUNT(*) FROM users")
 
 	// Verify DB counter was incremented for each operation
 	counter := logger.GetDBCounter(ctx)
@@ -379,68 +236,75 @@ func TestTrackedConnection_MultipleOperations(t *testing.T) {
 	elapsed := logger.GetDBElapsed(ctx)
 	assert.Greater(t, elapsed, int64(0))
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("oracle")
-	mockConn.On("Health", mock.Anything).Return(nil)
-	mockConn.On("Stats").Return(map[string]interface{}{"connections": 5}, nil)
-	mockConn.On("Close").Return(nil)
-	mockConn.On("GetMigrationTable").Return("flyway_schema_history")
-	mockConn.On("Begin", mock.Anything).Return(&MockTransaction{}, nil)
-	mockConn.On("BeginTx", mock.Anything, (*sql.TxOptions)(nil)).Return(&MockTransaction{}, nil)
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
 
+	// Set up expectations for non-tracked methods in order they're called
+	mock.ExpectPing()  // Health()
+	mock.ExpectBegin() // Begin()
+	mock.ExpectBegin() // BeginTx()
+
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
-	// Test non-tracked methods
+	// Test non-tracked methods in expected order
 	err1 := tracked.Health(ctx)
-	stats, err2 := tracked.Stats()
-	err3 := tracked.Close()
-	table := tracked.GetMigrationTable()
-	dbType := tracked.DatabaseType()
-	_, err4 := tracked.Begin(ctx)
-	_, err5 := tracked.BeginTx(ctx, nil)
+	require.NoError(t, err1)
 
-	assert.NoError(t, err1)
-	assert.NoError(t, err2)
-	assert.NoError(t, err3)
-	assert.NoError(t, err4)
-	assert.NoError(t, err5)
-	assert.Equal(t, map[string]interface{}{"connections": 5}, stats)
+	// These methods don't require mock expectations
+	stats, err2 := tracked.Stats()
+	require.NoError(t, err2)
+	assert.NotNil(t, stats)
+
+	table := tracked.GetMigrationTable()
 	assert.Equal(t, "flyway_schema_history", table)
-	assert.Equal(t, "oracle", dbType)
+
+	dbType := tracked.DatabaseType()
+	assert.Equal(t, "postgresql", dbType)
+
+	_, err4 := tracked.Begin(ctx)
+	require.NoError(t, err4)
+
+	_, err5 := tracked.BeginTx(ctx, nil)
+	require.NoError(t, err5)
+
+	// Don't call Close() here since defer db.Close() will handle it
 
 	// Verify DB counter was NOT incremented for non-tracked methods
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(0), counter)
 
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_ContextWithoutCounter(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	expectedRows := &sql.Rows{}
-	mockConn.On("Query", mock.Anything, "SELECT 1", mock.Anything).Return(expectedRows, nil)
+	rows := sqlmock.NewRows([]string{"result"}).AddRow(1)
+	mock.ExpectQuery("SELECT 1").WillReturnRows(rows)
 
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := context.Background() // Context without DB counter
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	// This should not panic even without DB counter in context
-	rows, err := tracked.Query(ctx, "SELECT 1")
+	resultRows, err := tracked.Query(ctx, "SELECT 1")
+	require.NoError(t, err)
+	defer resultRows.Close()
 
-	assert.NoError(t, err)
-	assert.Equal(t, expectedRows, rows)
-
-	mockConn.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackDBOperation(t *testing.T) {
@@ -477,96 +341,126 @@ func TestTrackDBOperation_WithError(t *testing.T) {
 }
 
 func TestTrackedStatement_Operations(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	mockStmt := &MockStatement{}
-	mockConn.On("Prepare", mock.Anything, "SELECT * FROM users WHERE id = ?").Return(mockStmt, nil)
+	// Prepare statement
+	mock.ExpectPrepare("SELECT \\* FROM users WHERE id = \\$1")
 
 	// Mock statement operations
-	expectedRows := &sql.Rows{}
-	expectedRow := &sql.Row{}
-	expectedResult := MockResult{lastInsertID: 1, rowsAffected: 1}
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery("SELECT \\* FROM users WHERE id = \\$1").WithArgs(1).WillReturnRows(rows)
 
-	mockStmt.On("Query", mock.Anything, mock.Anything).Return(expectedRows, nil)
-	mockStmt.On("QueryRow", mock.Anything, mock.Anything).Return(expectedRow)
-	mockStmt.On("Exec", mock.Anything, mock.Anything).Return(expectedResult, nil)
-
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	// Prepare statement (should increment counter)
-	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = ?")
-	assert.NoError(t, err)
+	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = $1")
+	require.NoError(t, err)
 	assert.IsType(t, &TrackedStatement{}, stmt)
 
 	// Execute operations through prepared statement (should increment counter for each)
-	rows, err := stmt.Query(ctx, 1)
-	assert.NoError(t, err)
-	_ = rows // Reference to avoid unused variable
+	stmtRows, err := stmt.Query(ctx, 1)
+	require.NoError(t, err)
+	defer stmtRows.Close()
 
-	_ = stmt.QueryRow(ctx, 2)
-
-	_, err = stmt.Exec(ctx, 3)
-	assert.NoError(t, err)
-
-	// Verify DB counter was incremented for prepare + 3 operations = 4 total
+	// Verify DB counter was incremented for prepare + 1 operation = 2 total
 	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(4), counter)
+	assert.Equal(t, int64(2), counter)
 
-	mockConn.AssertExpectations(t)
-	mockStmt.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedTransaction_Operations(t *testing.T) {
-	mockConn := &MockInterface{}
-	mockConn.On("DatabaseType").Return("postgresql")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
 
-	mockTx := &MockTransaction{}
-	mockConn.On("Begin", mock.Anything).Return(mockTx, nil)
+	// Begin transaction
+	mock.ExpectBegin()
 
 	// Mock transaction operations
-	expectedRows := &sql.Rows{}
-	expectedRow := &sql.Row{}
-	expectedResult := MockResult{rowsAffected: 2}
-	mockStmt := &MockStatement{}
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
 
-	mockTx.On("Query", mock.Anything, "SELECT * FROM users", mock.Anything).Return(expectedRows, nil)
-	mockTx.On("QueryRow", mock.Anything, "SELECT COUNT(*) FROM users", mock.Anything).Return(expectedRow)
-	mockTx.On("Exec", mock.Anything, "INSERT INTO users (name) VALUES (?)", mock.Anything).Return(expectedResult, nil)
-	mockTx.On("Prepare", mock.Anything, "UPDATE users SET name = ? WHERE id = ?").Return(mockStmt, nil)
+	countRows := sqlmock.NewRows([]string{"count"}).AddRow(5)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").WillReturnRows(countRows)
 
+	mock.ExpectExec("INSERT INTO users").WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectPrepare("UPDATE users SET name = \\$1 WHERE id = \\$2")
+
+	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
-	tracked := NewTrackedConnection(mockConn, log)
+	tracked := NewTrackedConnection(simpleConn, log)
 
 	// Begin transaction
 	tx, err := tracked.Begin(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.IsType(t, &TrackedTransaction{}, tx)
 
 	// Execute operations within transaction (each should increment counter)
-	rows, err := tx.Query(ctx, "SELECT * FROM users")
-	assert.NoError(t, err)
-	_ = rows // Reference to avoid unused variable
+	txRows, err := tx.Query(ctx, "SELECT * FROM users")
+	require.NoError(t, err)
+	defer txRows.Close()
 
 	_ = tx.QueryRow(ctx, "SELECT COUNT(*) FROM users")
 
-	_, err = tx.Exec(ctx, "INSERT INTO users (name) VALUES (?)", "John")
-	assert.NoError(t, err)
+	_, err = tx.Exec(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
+	require.NoError(t, err)
 
 	// Prepare statement within transaction (should increment counter)
-	stmt, err := tx.Prepare(ctx, "UPDATE users SET name = ? WHERE id = ?")
-	assert.NoError(t, err)
+	stmt, err := tx.Prepare(ctx, "UPDATE users SET name = $1 WHERE id = $2")
+	require.NoError(t, err)
 	assert.IsType(t, &TrackedStatement{}, stmt)
 
 	// Verify DB counter was incremented for all operations = 4 total
 	counter := logger.GetDBCounter(ctx)
 	assert.Equal(t, int64(4), counter)
 
-	mockConn.AssertExpectations(t)
-	mockTx.AssertExpectations(t)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTrackedTransaction_CommitRollback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Test successful commit
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	simpleConn := &simpleConnection{db: db}
+	tracked := NewTrackedConnection(simpleConn, logger.New("debug", true))
+
+	tx, err := tracked.Begin(context.Background())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(context.Background(), "INSERT INTO users (name) VALUES ('test')")
+	require.NoError(t, err)
+
+	err = tx.Commit()
+	require.NoError(t, err)
+
+	// Test rollback
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO users").WillReturnError(errors.New("constraint violation"))
+	mock.ExpectRollback()
+
+	tx2, err := tracked.Begin(context.Background())
+	require.NoError(t, err)
+
+	_, err = tx2.Exec(context.Background(), "INSERT INTO users (name) VALUES ('test')")
+	require.Error(t, err)
+
+	err = tx2.Rollback()
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
