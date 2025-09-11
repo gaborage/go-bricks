@@ -51,6 +51,8 @@ func NewClient(log logger.Logger) Client {
 			RequestInterceptors:  []RequestInterceptor{},
 			ResponseInterceptors: []ResponseInterceptor{},
 			DefaultHeaders:       make(map[string]string),
+			LogPayloads:          false,
+			MaxPayloadLogBytes:   1024,
 		},
 	}
 }
@@ -71,6 +73,8 @@ func NewBuilder(log logger.Logger) *Builder {
 			RequestInterceptors:  []RequestInterceptor{},
 			ResponseInterceptors: []ResponseInterceptor{},
 			DefaultHeaders:       make(map[string]string),
+			LogPayloads:          false,
+			MaxPayloadLogBytes:   1024,
 		},
 		logger: log,
 	}
@@ -118,15 +122,61 @@ func (b *Builder) WithResponseInterceptor(interceptor ResponseInterceptor) *Buil
 
 // Build creates the REST client with the configured options
 func (b *Builder) Build() Client {
+	// Deep-copy the builder config to avoid sharing mutable state
+	cfg := deepCopyConfig(b.config)
 	return &client{
 		httpClient: &nethttp.Client{
-			Timeout: b.config.Timeout,
+			Timeout: cfg.Timeout,
 		},
 		logger:               b.logger,
-		config:               b.config,
-		requestInterceptors:  b.config.RequestInterceptors,
-		responseInterceptors: b.config.ResponseInterceptors,
+		config:               cfg,
+		requestInterceptors:  cfg.RequestInterceptors,
+		responseInterceptors: cfg.ResponseInterceptors,
 	}
+}
+
+// deepCopyConfig creates a deep copy of the provided Config to ensure
+// clients do not share mutable state (maps, slices, pointers) with the builder.
+func deepCopyConfig(src *Config) *Config {
+	if src == nil {
+		return nil
+	}
+
+	dst := &Config{
+		Timeout:            src.Timeout,
+		MaxRetries:         src.MaxRetries,
+		RetryDelay:         src.RetryDelay,
+		LogPayloads:        src.LogPayloads,
+		MaxPayloadLogBytes: src.MaxPayloadLogBytes,
+	}
+
+	// Copy BasicAuth
+	if src.BasicAuth != nil {
+		dst.BasicAuth = &BasicAuth{
+			Username: src.BasicAuth.Username,
+			Password: src.BasicAuth.Password,
+		}
+	}
+
+	// Copy DefaultHeaders
+	if src.DefaultHeaders != nil {
+		dst.DefaultHeaders = make(map[string]string, len(src.DefaultHeaders))
+		for k, v := range src.DefaultHeaders {
+			dst.DefaultHeaders[k] = v
+		}
+	}
+
+	// Copy interceptors (new slice headers)
+	if src.RequestInterceptors != nil {
+		dst.RequestInterceptors = make([]RequestInterceptor, len(src.RequestInterceptors))
+		copy(dst.RequestInterceptors, src.RequestInterceptors)
+	}
+	if src.ResponseInterceptors != nil {
+		dst.ResponseInterceptors = make([]ResponseInterceptor, len(src.ResponseInterceptors))
+		copy(dst.ResponseInterceptors, src.ResponseInterceptors)
+	}
+
+	return dst
 }
 
 // Get performs a GET request
@@ -174,24 +224,20 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 
 		httpResp, err := c.httpClient.Do(httpReq)
 		if err != nil {
-			if c.isTimeout(err) {
-				if attempt < maxRetries {
-					time.Sleep(c.backoffDelay(attempt))
-					continue
-				}
-				return nil, NewTimeoutError("request timeout", c.config.Timeout)
-			}
-			if attempt < maxRetries {
-				time.Sleep(c.backoffDelay(attempt))
+			if cont, herr := c.shouldRetryOnError(ctx, err, attempt, maxRetries); herr != nil {
+				return nil, herr
+			} else if cont {
 				continue
 			}
+			// shouldRetryOnError returns a terminal error via herr; fallback for completeness
 			return nil, NewNetworkError("request execution failed", err)
 		}
 
 		resp, err := c.buildResponse(ctx, start, callCount, httpReq, httpResp)
 		if err != nil {
-			if attempt < maxRetries && IsErrorType(err, NetworkError) {
-				time.Sleep(c.backoffDelay(attempt))
+			if cont, herr := c.shouldRetryOnBuildRespError(ctx, err, attempt, maxRetries); herr != nil {
+				return nil, herr
+			} else if cont {
 				continue
 			}
 			return nil, err
@@ -202,8 +248,9 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 			return resp, nil
 		}
 
-		if c.isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
-			time.Sleep(c.backoffDelay(attempt))
+		if cont, herr := c.shouldRetryStatus(ctx, resp.StatusCode, attempt, maxRetries); herr != nil {
+			return nil, herr
+		} else if cont {
 			continue
 		}
 
@@ -214,6 +261,52 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 			resp.Body,
 		)
 	}
+}
+
+// shouldRetryOnError determines whether to retry after a request execution error
+// and waits with context if appropriate. Returns (true, nil) to retry, or (false, err)
+// when no retry should occur and an error should be propagated.
+func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	if c.isTimeout(err) {
+		if attempt < maxRetries {
+			if werr := c.backoffWithContext(ctx, attempt); werr != nil {
+				return false, werr
+			}
+			return true, nil
+		}
+		return false, NewTimeoutError("request timeout", c.config.Timeout)
+	}
+	if attempt < maxRetries {
+		if werr := c.backoffWithContext(ctx, attempt); werr != nil {
+			return false, werr
+		}
+		return true, nil
+	}
+	return false, NewNetworkError("request execution failed", err)
+}
+
+// shouldRetryOnBuildRespError handles errors that occur while building the response
+// and decides whether to retry based on error type and attempt count.
+func (c *client) shouldRetryOnBuildRespError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	if attempt < maxRetries && IsErrorType(err, NetworkError) {
+		if werr := c.backoffWithContext(ctx, attempt); werr != nil {
+			return false, werr
+		}
+		return true, nil
+	}
+	return false, err
+}
+
+// shouldRetryStatus decides whether to retry based on HTTP status code and waits
+// for the backoff delay while honoring context cancellation.
+func (c *client) shouldRetryStatus(ctx context.Context, statusCode, attempt, maxRetries int) (bool, error) {
+	if c.isRetryableStatus(statusCode) && attempt < maxRetries {
+		if werr := c.backoffWithContext(ctx, attempt); werr != nil {
+			return false, werr
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // backoffDelay returns the exponential backoff delay for the given attempt,
@@ -246,6 +339,28 @@ func (c *client) backoffDelay(attempt int) time.Duration {
 		return d
 	}
 	return time.Duration(n.Int64())
+}
+
+// backoffWithContext waits for the backoff delay or returns early if the context is done.
+func (c *client) backoffWithContext(ctx context.Context, attempt int) error {
+	d := c.backoffDelay(attempt)
+	if d <= 0 {
+		// Yield to scheduler but remain cancellable
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // validateRequest validates the request before sending
@@ -370,33 +485,88 @@ func (c *client) runResponseInterceptors(ctx context.Context, req *nethttp.Reque
 
 // logRequest logs the outgoing request
 func (c *client) logRequest(method string, req *Request) {
-	logEvent := c.logger.Info().
+	// Info-level: only metadata to avoid leaking PII/secrets
+	infoEvent := c.logger.Info().
 		Str("direction", "outbound").
 		Str("method", method).
 		Str("url", req.URL)
-
 	if len(req.Headers) > 0 {
-		logEvent.Interface("headers", req.Headers)
+		infoEvent.Int("header_count", len(req.Headers))
 	}
-
 	if len(req.Body) > 0 {
-		logEvent.Bytes("body", req.Body)
+		infoEvent.Int("body_size", len(req.Body))
 	}
+	infoEvent.Msg("REST client request")
 
-	logEvent.Msg("REST client request")
+	// Optional debug payload logging, gated by config
+	if c.config != nil && c.config.LogPayloads {
+		dbg := c.logger.Debug().
+			Str("direction", "outbound").
+			Str("method", method).
+			Str("url", req.URL)
+		if len(req.Headers) > 0 {
+			// Headers go through logger filter to mask sensitive keys/values
+			dbg = dbg.Interface("headers", req.Headers)
+		}
+		if len(req.Body) > 0 {
+			limit := c.config.MaxPayloadLogBytes
+			if limit <= 0 {
+				limit = 1024
+			}
+			truncated := false
+			preview := req.Body
+			if len(preview) > limit {
+				preview = preview[:limit]
+				truncated = true
+			}
+			dbg = dbg.Int("body_size", len(req.Body)).
+				Str("body_truncated", map[bool]string{true: "true", false: "false"}[truncated]).
+				Bytes("body_preview", preview)
+		}
+		dbg.Msg("REST client request")
+	}
 }
 
 // logResponse logs the incoming response
 func (c *client) logResponse(resp *Response) {
-	logEvent := c.logger.Info().
+	// Info-level: only metadata to avoid leaking PII/secrets
+	infoEvent := c.logger.Info().
 		Str("direction", "inbound").
 		Int("status", resp.StatusCode).
 		Dur("elapsed", resp.Stats.ElapsedTime).
 		Int64("call_count", resp.Stats.CallCount)
-
 	if len(resp.Body) > 0 {
-		logEvent.Bytes("body", resp.Body)
+		infoEvent.Int("body_size", len(resp.Body))
 	}
+	// Headers are not logged at info level to minimize risk
+	infoEvent.Msg("REST client response")
 
-	logEvent.Msg("REST client response")
+	// Optional debug payload logging, gated by config
+	if c.config != nil && c.config.LogPayloads {
+		dbg := c.logger.Debug().
+			Str("direction", "inbound").
+			Int("status", resp.StatusCode).
+			Dur("elapsed", resp.Stats.ElapsedTime).
+			Int64("call_count", resp.Stats.CallCount)
+		if len(resp.Body) > 0 {
+			limit := c.config.MaxPayloadLogBytes
+			if limit <= 0 {
+				limit = 1024
+			}
+			truncated := false
+			preview := resp.Body
+			if len(preview) > limit {
+				preview = preview[:limit]
+				truncated = true
+			}
+			dbg = dbg.Int("body_size", len(resp.Body)).
+				Str("body_truncated", map[bool]string{true: "true", false: "false"}[truncated]).
+				Bytes("body_preview", preview)
+		}
+		// Response headers go through logger filter to mask sensitive keys/values
+		if len(resp.Headers) > 0 {
+			dbg = dbg.Interface("headers", resp.Headers)
+		}
+		dbg.Msg("REST client response")
+	}
 }

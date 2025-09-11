@@ -81,7 +81,11 @@ func builderExample(log logger.Logger) {
 		"email": "john@example.com",
 	}
 
-	jsonBody, _ := json.Marshal(postData)
+	jsonBody, err := json.Marshal(postData)
+	if err != nil {
+		fmt.Printf("Failed to marshal request body: %v\n", err)
+		return
+	}
 	req := &httpClient.Request{
 		URL:  "https://httpbin.org/post",
 		Body: jsonBody,

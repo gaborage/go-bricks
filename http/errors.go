@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -160,7 +161,11 @@ func NewInterceptorError(message, stage string, wrapped error) ClientError {
 
 // IsErrorType checks if an error is of a specific type
 func IsErrorType(err error, errorType ErrorType) bool {
-	if clientErr, ok := err.(ClientError); ok {
+	if err == nil {
+		return false
+	}
+	var clientErr ClientError
+	if errors.As(err, &clientErr) {
 		return clientErr.Type() == errorType
 	}
 	return false
@@ -168,7 +173,8 @@ func IsErrorType(err error, errorType ErrorType) bool {
 
 // IsHTTPStatusError checks if an error is an HTTP error with a specific status code
 func IsHTTPStatusError(err error, statusCode int) bool {
-	if httpErr, ok := err.(*httpError); ok {
+	var httpErr *httpError
+	if errors.As(err, &httpErr) {
 		return httpErr.StatusCode() == statusCode
 	}
 	return false

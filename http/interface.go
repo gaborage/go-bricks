@@ -59,4 +59,8 @@ type Config struct {
 	ResponseInterceptors []ResponseInterceptor
 	BasicAuth            *BasicAuth
 	DefaultHeaders       map[string]string
+	// LogPayloads enables debug-level logging of headers and body payloads
+	LogPayloads bool
+	// MaxPayloadLogBytes caps the number of body bytes logged when LogPayloads is enabled
+	MaxPayloadLogBytes int
 }
