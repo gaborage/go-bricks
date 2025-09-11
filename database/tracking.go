@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -170,13 +171,13 @@ func (tx *TrackedTx) trackTx(ctx context.Context, query string, start time.Time,
 
 // TrackedConnection wraps database.Interface to provide performance tracking
 type TrackedConnection struct {
-	conn   Interface
+	conn   database.Interface
 	logger logger.Logger
 	vendor string
 }
 
 // NewTrackedConnection creates a new tracked database connection that wraps any Interface implementation
-func NewTrackedConnection(conn Interface, log logger.Logger) Interface {
+func NewTrackedConnection(conn database.Interface, log logger.Logger) database.Interface {
 	return &TrackedConnection{
 		conn:   conn,
 		logger: log,
@@ -212,22 +213,50 @@ func (tc *TrackedConnection) Exec(ctx context.Context, query string, args ...int
 }
 
 // Prepare creates a prepared statement with tracking
-func (tc *TrackedConnection) Prepare(ctx context.Context, query string) (*sql.Stmt, error) {
+func (tc *TrackedConnection) Prepare(ctx context.Context, query string) (database.Statement, error) {
 	start := time.Now()
 	stmt, err := tc.conn.Prepare(ctx, query)
 
 	tc.trackOperation(ctx, "PREPARE: "+query, start, err)
-	return stmt, err
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &TrackedStatement{
+		stmt:   stmt,
+		logger: tc.logger,
+		vendor: tc.vendor,
+		query:  query,
+	}, nil
 }
 
-// Begin starts a transaction (no tracking needed for begin itself)
-func (tc *TrackedConnection) Begin(ctx context.Context) (*sql.Tx, error) {
-	return tc.conn.Begin(ctx)
+// Begin starts a transaction with tracking wrapper
+func (tc *TrackedConnection) Begin(ctx context.Context) (database.Tx, error) {
+	tx, err := tc.conn.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TrackedTransaction{
+		tx:     tx,
+		logger: tc.logger,
+		vendor: tc.vendor,
+	}, nil
 }
 
-// BeginTx starts a transaction with options (no tracking needed for begin itself)
-func (tc *TrackedConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return tc.conn.BeginTx(ctx, opts)
+// BeginTx starts a transaction with options and tracking wrapper
+func (tc *TrackedConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+	tx, err := tc.conn.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TrackedTransaction{
+		tx:     tx,
+		logger: tc.logger,
+		vendor: tc.vendor,
+	}, nil
 }
 
 // Health checks database connectivity (no tracking needed)
@@ -292,4 +321,107 @@ func trackDBOperation(ctx context.Context, log logger.Logger, vendor, query stri
 	} else {
 		logEvent.Debug().Msg("Database operation executed")
 	}
+}
+
+// TrackedStatement wraps database.Statement to provide performance tracking
+type TrackedStatement struct {
+	stmt   database.Statement
+	logger logger.Logger
+	vendor string
+	query  string
+}
+
+// Query executes a prepared query with tracking
+func (ts *TrackedStatement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+	start := time.Now()
+	rows, err := ts.stmt.Query(ctx, args...)
+
+	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_QUERY: "+ts.query, start, err)
+	return rows, err
+}
+
+// QueryRow executes a prepared query that returns a single row with tracking
+func (ts *TrackedStatement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+	start := time.Now()
+	row := ts.stmt.QueryRow(ctx, args...)
+
+	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_QUERY_ROW: "+ts.query, start, nil)
+	return row
+}
+
+// Exec executes a prepared statement with tracking
+func (ts *TrackedStatement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+	start := time.Now()
+	result, err := ts.stmt.Exec(ctx, args...)
+
+	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_EXEC: "+ts.query, start, err)
+	return result, err
+}
+
+// Close closes the prepared statement (no tracking needed)
+func (ts *TrackedStatement) Close() error {
+	return ts.stmt.Close()
+}
+
+// TrackedTransaction wraps database.Tx to provide performance tracking
+type TrackedTransaction struct {
+	tx     database.Tx
+	logger logger.Logger
+	vendor string
+}
+
+// Query executes a query within the transaction with tracking
+func (tt *TrackedTransaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	start := time.Now()
+	rows, err := tt.tx.Query(ctx, query, args...)
+
+	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_QUERY: "+query, start, err)
+	return rows, err
+}
+
+// QueryRow executes a query that returns a single row within the transaction with tracking
+func (tt *TrackedTransaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	start := time.Now()
+	row := tt.tx.QueryRow(ctx, query, args...)
+
+	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_QUERY_ROW: "+query, start, nil)
+	return row
+}
+
+// Exec executes a query without returning rows within the transaction with tracking
+func (tt *TrackedTransaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	start := time.Now()
+	result, err := tt.tx.Exec(ctx, query, args...)
+
+	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_EXEC: "+query, start, err)
+	return result, err
+}
+
+// Prepare creates a prepared statement within the transaction with tracking
+func (tt *TrackedTransaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+	start := time.Now()
+	stmt, err := tt.tx.Prepare(ctx, query)
+
+	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_PREPARE: "+query, start, err)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &TrackedStatement{
+		stmt:   stmt,
+		logger: tt.logger,
+		vendor: tt.vendor,
+		query:  query,
+	}, nil
+}
+
+// Commit commits the transaction (no tracking needed)
+func (tt *TrackedTransaction) Commit() error {
+	return tt.tx.Commit()
+}
+
+// Rollback rolls back the transaction (no tracking needed)
+func (tt *TrackedTransaction) Rollback() error {
+	return tt.tx.Rollback()
 }

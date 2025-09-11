@@ -1,9 +1,13 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -179,4 +183,59 @@ func TestValidateDatabaseType_EdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Test that the factory wraps connections with tracking
+func TestNewConnection_ReturnsTrackedConnection(t *testing.T) {
+	// Test with mock to verify tracking wrapper structure
+	mockConn := &MockInterface{}
+	mockConn.On("DatabaseType").Return("postgresql")
+
+	log := logger.New("debug", true)
+
+	// Test that NewTrackedConnection creates the correct wrapper
+	tracked := NewTrackedConnection(mockConn, log)
+
+	require.NotNil(t, tracked)
+	assert.IsType(t, &TrackedConnection{}, tracked)
+
+	// Verify the wrapper has the correct properties
+	trackedConn := tracked.(*TrackedConnection)
+	assert.Equal(t, mockConn, trackedConn.conn)
+	assert.Equal(t, log, trackedConn.logger)
+	assert.Equal(t, "postgresql", trackedConn.vendor)
+
+	mockConn.AssertExpectations(t)
+}
+
+// Test that verifies the factory integration with tracking
+func TestFactoryIntegrationWithTracking(t *testing.T) {
+	// This test demonstrates how the factory should work with tracking
+	log := logger.New("debug", true)
+	ctx := logger.WithDBCounter(context.Background())
+
+	// Create a mock connection to simulate what the factory does
+	mockConn := &MockInterface{}
+	mockConn.On("DatabaseType").Return("postgresql")
+	mockConn.On("Query", ctx, "SELECT 1", mock.Anything).Return(&sql.Rows{}, nil)
+
+	// Simulate what the factory does: wrap with tracking
+	tracked := NewTrackedConnection(mockConn, log)
+
+	// Verify that operations are tracked
+	initialCounter := logger.GetDBCounter(ctx)
+
+	rows, err := tracked.Query(ctx, "SELECT 1")
+	require.NoError(t, err)
+	_ = rows // Just reference rows to avoid unused variable
+
+	// Verify counter was incremented
+	finalCounter := logger.GetDBCounter(ctx)
+	assert.Equal(t, initialCounter+1, finalCounter)
+
+	// Verify elapsed time was recorded
+	elapsed := logger.GetDBElapsed(ctx)
+	assert.Greater(t, elapsed, int64(0))
+
+	mockConn.AssertExpectations(t)
 }
