@@ -53,7 +53,9 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close Oracle database connection after ping failure")
+		}
 		return nil, fmt.Errorf("failed to ping Oracle database: %w", err)
 	}
 
