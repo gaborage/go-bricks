@@ -303,3 +303,84 @@ GoBricks was extracted from production enterprise applications and battle-tested
 ---
 
 **Built with ❤️ for the Go community**
+## 🌐 HTTP Client
+
+GoBricks includes a small HTTP client with a fluent builder, request/response interceptors, default headers and basic auth, plus a retry mechanism with exponential backoff and jitter.
+
+- Create a client with defaults:
+
+```go
+package main
+
+import (
+    "context"
+
+    brhttp "github.com/gaborage/go-bricks/http"
+    "github.com/gaborage/go-bricks/logger"
+)
+
+func main() {
+    log := logger.New("info", false)
+    client := brhttp.NewClient(log)
+
+    ctx := context.Background()
+    resp, err := client.Get(ctx, &brhttp.Request{URL: "https://example.com"})
+    if err != nil {
+        log.Error().Err(err).Msg("request failed")
+        return
+    }
+    log.Info().Int("status", resp.StatusCode).Msg("ok")
+}
+```
+
+- Configure via builder, including retries and interceptors:
+
+```go
+package main
+
+import (
+    "context"
+    nethttp "net/http"
+    "time"
+
+    brhttp "github.com/gaborage/go-bricks/http"
+    "github.com/gaborage/go-bricks/logger"
+)
+
+func main() {
+    log := logger.New("info", false)
+    client := brhttp.NewBuilder(log).
+        WithTimeout(5 * time.Second).
+        WithDefaultHeader("Accept", "application/json").
+        WithBasicAuth("user", "pass").
+        WithRequestInterceptor(func(ctx context.Context, r *nethttp.Request) error {
+            r.Header.Set("X-Correlation-ID", "demo-123")
+            return nil
+        }).
+        WithResponseInterceptor(func(ctx context.Context, r *nethttp.Request, resp *nethttp.Response) error {
+            if resp.StatusCode >= 500 {
+                log.Warn().Int("status", resp.StatusCode).Msg("server error")
+            }
+            return nil
+        }).
+        // Retries: exponential backoff with full jitter
+        // delay per attempt = baseDelay * 2^attempt, jittered in [0, delay), capped at 30s
+        WithRetries(3, 200*time.Millisecond).
+        Build()
+
+    ctx := context.Background()
+    req := &brhttp.Request{URL: "https://example.com/api"}
+    resp, err := client.Get(ctx, req)
+    if err != nil {
+        log.Error().Err(err).Msg("request failed")
+        return
+    }
+    log.Info().Int("status", resp.StatusCode).Msg("ok")
+}
+```
+
+Retry/backoff details:
+- Retries on: transport/network errors, timeouts, and 5xx responses.
+- No retries on 4xx.
+- Backoff: exponential (base × 2^attempt), full jitter, max 30s.
+- Interceptor errors are not retried and are returned immediately.
