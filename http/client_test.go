@@ -5,6 +5,7 @@ import (
 	"fmt"
 	nethttp "net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -466,10 +467,9 @@ func TestClientRetries(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("retries on 5xx then succeeds", func(t *testing.T) {
-		var calls int
+		var calls atomic.Int32
 		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
-			calls++
-			if calls == 1 {
+			if calls.Add(1) == 1 {
 				w.WriteHeader(nethttp.StatusInternalServerError)
 				w.Write([]byte("fail"))
 				return
@@ -487,13 +487,13 @@ func TestClientRetries(t *testing.T) {
 		resp, err := client.Get(context.Background(), req)
 		require.NoError(t, err)
 		assert.Equal(t, "ok", string(resp.Body))
-		assert.Equal(t, 2, calls)
+		assert.Equal(t, int32(2), calls.Load())
 	})
 
 	t.Run("does not retry on 4xx", func(t *testing.T) {
-		var calls int
+		var calls atomic.Int32
 		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
-			calls++
+			calls.Add(1)
 			w.WriteHeader(nethttp.StatusBadRequest)
 			w.Write([]byte("bad"))
 		}))
@@ -506,13 +506,13 @@ func TestClientRetries(t *testing.T) {
 		req := &Request{URL: server.URL}
 		_, err := client.Get(context.Background(), req)
 		require.Error(t, err)
-		assert.Equal(t, 1, calls)
+		assert.Equal(t, int32(1), calls.Load())
 	})
 
 	t.Run("retries on timeout then fails", func(t *testing.T) {
-		var calls int
+		var calls atomic.Int32
 		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
-			calls++
+			calls.Add(1)
 			time.Sleep(50 * time.Millisecond)
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -527,6 +527,6 @@ func TestClientRetries(t *testing.T) {
 		_, err := client.Get(context.Background(), req)
 		require.Error(t, err)
 		assert.True(t, IsErrorType(err, TimeoutError))
-		assert.Equal(t, 2, calls) // initial + one retry
+		assert.Equal(t, int32(2), calls.Load()) // initial + one retry
 	})
 }
