@@ -11,14 +11,24 @@ import (
 
 // NewConnection creates a new database connection based on the configuration
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
+	var conn Interface
+	var err error
+
 	switch cfg.Type {
 	case PostgreSQL:
-		return postgresql.NewConnection(cfg, log)
+		conn, err = postgresql.NewConnection(cfg, log)
 	case Oracle:
-		return oracle.NewConnection(cfg, log)
+		conn, err = oracle.NewConnection(cfg, log)
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s (supported: postgresql, oracle)", cfg.Type)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap the connection with performance tracking
+	return NewTrackedConnection(conn, log), nil
 }
 
 // ValidateDatabaseType checks if the database type is supported
