@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -13,10 +15,45 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-func TestNewTrackedConnection(t *testing.T) {
+// test helpers
+func setupTracked(t testing.TB, withCounter bool) (sqlmock.Sqlmock, *TrackedConnection, context.Context) {
+	t.Helper()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	sc := &simpleConnection{db: db}
+	log := logger.New("debug", true)
+	tracked := NewTrackedConnection(sc, log).(*TrackedConnection)
+	var ctx context.Context
+	if withCounter {
+		ctx = logger.WithDBCounter(context.Background())
+	} else {
+		ctx = context.Background()
+	}
+	return mock, tracked, ctx
+}
+
+// setupTrackedWithOptions is intentionally omitted to keep compatibility with
+// older sqlmock versions; use test-local setup for special options.
+
+func assertDBCounter(ctx context.Context, t testing.TB, want int64) {
+	t.Helper()
+	assert.Equal(t, want, logger.GetDBCounter(ctx))
+}
+
+func assertDBElapsedPositive(ctx context.Context, t testing.TB) {
+	t.Helper()
+	assert.Greater(t, logger.GetDBElapsed(ctx), int64(0))
+}
+
+func TestNewTrackedConnection(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
 
 	simpleConn := &simpleConnection{db: db}
 	log := logger.New("debug", true)
@@ -26,112 +63,62 @@ func TestNewTrackedConnection(t *testing.T) {
 	assert.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
 
-	// Verify the wrapper has the correct properties
 	trackedConn := tracked.(*TrackedConnection)
 	assert.Equal(t, simpleConn, trackedConn.conn)
 	assert.Equal(t, log, trackedConn.logger)
 	assert.Equal(t, "postgresql", trackedConn.vendor)
-
-	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTrackedConnection_Query(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
-	// Set up mock expectations
 	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
-	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users")).WillReturnRows(rows)
 
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
-
-	// Execute query
 	resultRows, err := tracked.Query(ctx, "SELECT * FROM users")
 	require.NoError(t, err)
 	defer resultRows.Close()
 
-	// Verify DB counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	// Verify elapsed time was recorded
-	elapsed := logger.GetDBElapsed(ctx)
-	assert.Greater(t, elapsed, int64(0))
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
+	assertDBElapsedPositive(ctx, t)
 }
 
 func TestTrackedConnection_QueryWithError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
 	expectedErr := errors.New("query error")
-	mock.ExpectQuery("SELECT \\* FROM invalid").WillReturnError(expectedErr)
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM invalid")).WillReturnError(expectedErr)
 
 	rows, err := tracked.Query(ctx, "SELECT * FROM invalid")
-
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "query error")
+	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, rows)
 
-	// Verify DB counter was still incremented even with error
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedConnection_QueryRow(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
 	rows := sqlmock.NewRows([]string{"name"}).AddRow("John")
-	mock.ExpectQuery("SELECT name FROM users WHERE id = \\$1").WithArgs(1).WillReturnRows(rows)
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM users WHERE id = $1")).WithArgs(1).WillReturnRows(rows)
 
 	row := tracked.QueryRow(ctx, "SELECT name FROM users WHERE id = $1", 1)
 	assert.NotNil(t, row)
 
-	// Verify DB counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedConnection_Exec(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
-	mock.ExpectExec("INSERT INTO users").WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users")).WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	result, err := tracked.Exec(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
-
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -143,82 +130,47 @@ func TestTrackedConnection_Exec(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), rowsAffected)
 
-	// Verify DB counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedConnection_Prepare(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
-	mock.ExpectPrepare("SELECT \\* FROM users WHERE id = \\$1")
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = $1"))
 
 	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = $1")
-
 	require.NoError(t, err)
 	assert.NotNil(t, stmt)
 	assert.IsType(t, &TrackedStatement{}, stmt)
+	t.Cleanup(func() { _ = stmt.Close() })
 
-	// Verify DB counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedConnection_CreateMigrationTable(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS flyway_schema_history").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS flyway_schema_history")).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
-
-	err = tracked.CreateMigrationTable(ctx)
+	err := tracked.CreateMigrationTable(ctx)
 	require.NoError(t, err)
 
-	// Verify DB counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedConnection_MultipleOperations(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
-	// Mock multiple operations
 	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
-	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
-	mock.ExpectExec("UPDATE users SET active = true").WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users")).WillReturnRows(rows)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE users SET active = true")).WillReturnResult(sqlmock.NewResult(0, 2))
 
 	countRows := sqlmock.NewRows([]string{"count"}).AddRow(10)
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").WillReturnRows(countRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM users")).WillReturnRows(countRows)
 
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
-
-	// Perform multiple operations
 	queryRows, err1 := tracked.Query(ctx, "SELECT * FROM users")
 	require.NoError(t, err1)
 	defer queryRows.Close()
@@ -228,32 +180,26 @@ func TestTrackedConnection_MultipleOperations(t *testing.T) {
 
 	_ = tracked.QueryRow(ctx, "SELECT COUNT(*) FROM users")
 
-	// Verify DB counter was incremented for each operation
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(3), counter)
-
-	// Verify total elapsed time was recorded
-	elapsed := logger.GetDBElapsed(ctx)
-	assert.Greater(t, elapsed, int64(0))
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 3)
+	assertDBElapsedPositive(ctx, t)
 }
 
 func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
+	t.Parallel()
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	sc := &simpleConnection{db: db}
+	log := logger.New("debug", true)
+	ctx := logger.WithDBCounter(context.Background())
+	tracked := NewTrackedConnection(sc, log)
 
 	// Set up expectations for non-tracked methods in order they're called
 	mock.ExpectPing()  // Health()
 	mock.ExpectBegin() // Begin()
 	mock.ExpectBegin() // BeginTx()
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
 
 	// Test non-tracked methods in expected order
 	err1 := tracked.Health(ctx)
@@ -276,38 +222,25 @@ func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
 	_, err5 := tracked.BeginTx(ctx, nil)
 	require.NoError(t, err5)
 
-	// Don't call Close() here since defer db.Close() will handle it
-
 	// Verify DB counter was NOT incremented for non-tracked methods
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(0), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 0)
 }
 
 func TestTrackedConnection_ContextWithoutCounter(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, _ := setupTracked(t, false)
 
 	rows := sqlmock.NewRows([]string{"result"}).AddRow(1)
-	mock.ExpectQuery("SELECT 1").WillReturnRows(rows)
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := context.Background() // Context without DB counter
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT 1")).WillReturnRows(rows)
 
 	// This should not panic even without DB counter in context
-	resultRows, err := tracked.Query(ctx, "SELECT 1")
+	resultRows, err := tracked.Query(context.Background(), "SELECT 1")
 	require.NoError(t, err)
-	defer resultRows.Close()
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	resultRows.Close()
 }
 
 func TestTrackDBOperation(t *testing.T) {
+	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
@@ -316,16 +249,13 @@ func TestTrackDBOperation(t *testing.T) {
 	// Test successful operation
 	trackDBOperation(ctx, log, "postgresql", "SELECT * FROM test", start, nil)
 
-	// Verify counter was incremented
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
-
-	// Verify elapsed time was recorded (should be >= 10ms in nanoseconds)
-	elapsed := logger.GetDBElapsed(ctx)
-	assert.Greater(t, elapsed, int64(10*time.Millisecond))
+	assertDBCounter(ctx, t, 1)
+	// elapsed should be >= 10ms in nanoseconds
+	assert.GreaterOrEqual(t, logger.GetDBElapsed(ctx), int64(10*time.Millisecond))
 }
 
 func TestTrackDBOperation_WithError(t *testing.T) {
+	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
 
@@ -336,32 +266,25 @@ func TestTrackDBOperation_WithError(t *testing.T) {
 	trackDBOperation(ctx, log, "oracle", "SELECT * FROM invalid", start, testErr)
 
 	// Verify counter was still incremented despite error
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(1), counter)
+	assertDBCounter(ctx, t, 1)
 }
 
 func TestTrackedStatement_Operations(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
 	// Prepare statement
-	mock.ExpectPrepare("SELECT \\* FROM users WHERE id = \\$1")
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = $1"))
 
 	// Mock statement operations
 	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
-	mock.ExpectQuery("SELECT \\* FROM users WHERE id = \\$1").WithArgs(1).WillReturnRows(rows)
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users WHERE id = $1")).WithArgs(1).WillReturnRows(rows)
 
 	// Prepare statement (should increment counter)
 	stmt, err := tracked.Prepare(ctx, "SELECT * FROM users WHERE id = $1")
 	require.NoError(t, err)
 	assert.IsType(t, &TrackedStatement{}, stmt)
+	t.Cleanup(func() { _ = stmt.Close() })
 
 	// Execute operations through prepared statement (should increment counter for each)
 	stmtRows, err := stmt.Query(ctx, 1)
@@ -369,35 +292,25 @@ func TestTrackedStatement_Operations(t *testing.T) {
 	defer stmtRows.Close()
 
 	// Verify DB counter was incremented for prepare + 1 operation = 2 total
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(2), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 2)
 }
 
 func TestTrackedTransaction_Operations(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
 
 	// Begin transaction
 	mock.ExpectBegin()
 
 	// Mock transaction operations
 	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
-	mock.ExpectQuery("SELECT \\* FROM users").WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users")).WillReturnRows(rows)
 
 	countRows := sqlmock.NewRows([]string{"count"}).AddRow(5)
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM users").WillReturnRows(countRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*) FROM users")).WillReturnRows(countRows)
 
-	mock.ExpectExec("INSERT INTO users").WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectPrepare("UPDATE users SET name = \\$1 WHERE id = \\$2")
-
-	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
-	ctx := logger.WithDBCounter(context.Background())
-
-	tracked := NewTrackedConnection(simpleConn, log)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users")).WithArgs("John").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectPrepare(regexp.QuoteMeta("UPDATE users SET name = $1 WHERE id = $2"))
 
 	// Begin transaction
 	tx, err := tracked.Begin(ctx)
@@ -418,26 +331,20 @@ func TestTrackedTransaction_Operations(t *testing.T) {
 	stmt, err := tx.Prepare(ctx, "UPDATE users SET name = $1 WHERE id = $2")
 	require.NoError(t, err)
 	assert.IsType(t, &TrackedStatement{}, stmt)
+	t.Cleanup(func() { _ = stmt.Close() })
 
 	// Verify DB counter was incremented for all operations = 4 total
-	counter := logger.GetDBCounter(ctx)
-	assert.Equal(t, int64(4), counter)
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	assertDBCounter(ctx, t, 4)
 }
 
 func TestTrackedTransaction_CommitRollback(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	defer db.Close()
+	t.Parallel()
+	mock, tracked, _ := setupTracked(t, false)
 
 	// Test successful commit
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users")).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
-
-	simpleConn := &simpleConnection{db: db}
-	tracked := NewTrackedConnection(simpleConn, logger.New("debug", true))
 
 	tx, err := tracked.Begin(context.Background())
 	require.NoError(t, err)
@@ -450,7 +357,7 @@ func TestTrackedTransaction_CommitRollback(t *testing.T) {
 
 	// Test rollback
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO users").WillReturnError(errors.New("constraint violation"))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users")).WillReturnError(errors.New("constraint violation"))
 	mock.ExpectRollback()
 
 	tx2, err := tracked.Begin(context.Background())
@@ -461,6 +368,56 @@ func TestTrackedTransaction_CommitRollback(t *testing.T) {
 
 	err = tx2.Rollback()
 	require.NoError(t, err)
-
-	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// Database tracking hardening tests
+
+func TestTrackDBOperation_NilLogger(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	start := time.Now().Add(-10 * time.Millisecond)
+
+	assert.NotPanics(t, func() {
+		trackDBOperation(ctx, nil, "postgresql", "SELECT 1", start, nil)
+	})
+}
+
+func TestTrackDBOperation_SqlErrNoRows(t *testing.T) {
+	t.Parallel()
+	log := logger.New("debug", true)
+	ctx := context.Background()
+	start := time.Now().Add(-10 * time.Millisecond)
+
+	assert.NotPanics(t, func() {
+		trackDBOperation(ctx, log, "postgresql", "SELECT * FROM users WHERE id = 999", start, sql.ErrNoRows)
+	})
+}
+
+// Removed QueryTruncation test: behavior not observable without capturing logs
+
+func TestTrackDBOperation_SlowQueryThreshold(t *testing.T) {
+	t.Parallel()
+	log := logger.New("debug", true)
+	ctx := context.Background()
+
+	slowStart := time.Now().Add(-SlowQueryThreshold - 10*time.Millisecond)
+
+	assert.NotPanics(t, func() {
+		trackDBOperation(ctx, log, "postgresql", "SELECT * FROM huge_table", slowStart, nil)
+	})
+}
+
+func TestTrackDBOperation_RegularError(t *testing.T) {
+	t.Parallel()
+	log := logger.New("debug", true)
+	ctx := context.Background()
+	start := time.Now().Add(-10 * time.Millisecond)
+
+	regularErr := errors.New("connection timeout")
+
+	assert.NotPanics(t, func() {
+		trackDBOperation(ctx, log, "oracle", "SELECT * FROM users", start, regularErr)
+	})
+}
+
+// Removed constant and constant-usage tests: prefer behavior over implementation details
