@@ -72,6 +72,70 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}, nil
 }
 
+// Statement wraps sql.Stmt to implement database.Statement
+type Statement struct {
+	stmt *sql.Stmt
+}
+
+// Query executes a prepared query with arguments
+func (s *Statement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+	return s.stmt.QueryContext(ctx, args...)
+}
+
+// QueryRow executes a prepared query that returns a single row
+func (s *Statement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+	return s.stmt.QueryRowContext(ctx, args...)
+}
+
+// Exec executes a prepared statement with arguments
+func (s *Statement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+	return s.stmt.ExecContext(ctx, args...)
+}
+
+// Close closes the prepared statement
+func (s *Statement) Close() error {
+	return s.stmt.Close()
+}
+
+// Transaction wraps sql.Tx to implement database.Tx
+type Transaction struct {
+	tx *sql.Tx
+}
+
+// Query executes a query within the transaction
+func (t *Transaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
+// QueryRow executes a query that returns a single row within the transaction
+func (t *Transaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return t.tx.QueryRowContext(ctx, query, args...)
+}
+
+// Exec executes a query without returning rows within the transaction
+func (t *Transaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	return t.tx.ExecContext(ctx, query, args...)
+}
+
+// Prepare creates a prepared statement within the transaction
+func (t *Transaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+	stmt, err := t.tx.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &Statement{stmt: stmt}, nil
+}
+
+// Commit commits the transaction
+func (t *Transaction) Commit() error {
+	return t.tx.Commit()
+}
+
+// Rollback rolls back the transaction
+func (t *Transaction) Rollback() error {
+	return t.tx.Rollback()
+}
+
 // Query executes a query that returns rows
 func (c *Connection) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	return c.db.QueryContext(ctx, query, args...)
@@ -88,18 +152,30 @@ func (c *Connection) Exec(ctx context.Context, query string, args ...interface{}
 }
 
 // Prepare creates a prepared statement for later queries or executions
-func (c *Connection) Prepare(ctx context.Context, query string) (*sql.Stmt, error) {
-	return c.db.PrepareContext(ctx, query)
+func (c *Connection) Prepare(ctx context.Context, query string) (database.Statement, error) {
+	stmt, err := c.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &Statement{stmt: stmt}, nil
 }
 
 // Begin starts a transaction
-func (c *Connection) Begin(ctx context.Context) (*sql.Tx, error) {
-	return c.db.BeginTx(ctx, nil)
+func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &Transaction{tx: tx}, nil
 }
 
 // BeginTx starts a transaction with options
-func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	return c.db.BeginTx(ctx, opts)
+func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+	tx, err := c.db.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &Transaction{tx: tx}, nil
 }
 
 // Health checks database connectivity

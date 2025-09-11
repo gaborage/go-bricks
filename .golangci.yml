@@ -90,6 +90,7 @@ linters:
           - gocyclo
           - gosec
           - ineffassign
+          - rowserrcheck
         path: _test\.go
       - linters:
           - gocyclo

@@ -1,11 +1,24 @@
 package database
 
 import (
+	"context"
+	"database/sql/driver"
+	"regexp"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Helper function to convert []interface{} to []driver.Value for sqlmock
+func convertToDriverValues(args []interface{}) []driver.Value {
+	values := make([]driver.Value, len(args))
+	for i, arg := range args {
+		values[i] = arg
+	}
+	return values
+}
 
 func TestNewQueryBuilder(t *testing.T) {
 	tests := []struct {
@@ -635,4 +648,124 @@ func TestQueryBuilder_IntegrationTest(t *testing.T) {
 	assert.Contains(t, sql, "ORDER BY")
 	assert.Contains(t, sql, "LIMIT")
 	assert.Contains(t, sql, "OFFSET")
+}
+
+// Test query builder with actual SQL execution using sqlmock
+func TestQueryBuilder_WithSqlmock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	qb := NewQueryBuilder(PostgreSQL)
+
+	// Build a SELECT query
+	query := qb.Select("id", "name").From("users").Where("active = ?", true)
+	sql, args, err := query.ToSql()
+	require.NoError(t, err)
+
+	// Set up mock expectation
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery(regexp.QuoteMeta(sql)).WithArgs(convertToDriverValues(args)...).WillReturnRows(rows)
+
+	// Execute query
+	resultRows, err := db.QueryContext(context.Background(), sql, args...)
+	require.NoError(t, err)
+	defer resultRows.Close()
+
+	// Verify we got expected data
+	require.True(t, resultRows.Next())
+	var id int
+	var name string
+	err = resultRows.Scan(&id, &name)
+	require.NoError(t, err)
+	assert.Equal(t, 1, id)
+	assert.Equal(t, "John", name)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Test INSERT with sqlmock
+func TestQueryBuilder_Insert_WithSqlmock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	qb := NewQueryBuilder(PostgreSQL)
+
+	// Build an INSERT query
+	query := qb.Insert("users").Columns("name", "email").Values("John", "john@example.com")
+	sql, args, err := query.ToSql()
+	require.NoError(t, err)
+
+	// Set up mock expectation
+	mock.ExpectExec(regexp.QuoteMeta(sql)).WithArgs(convertToDriverValues(args)...).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Execute query
+	result, err := db.ExecContext(context.Background(), sql, args...)
+	require.NoError(t, err)
+
+	// Verify result
+	lastID, err := result.LastInsertId()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), lastID)
+
+	rowsAffected, err := result.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Test complex query with joins and subqueries
+func TestQueryBuilder_ComplexQuery_WithSqlmock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	qb := NewQueryBuilder(PostgreSQL)
+
+	// Build a complex query with joins
+	query := qb.Select("u.id", "u.name", "p.title").
+		From("users u").
+		Join("posts p ON u.id = p.user_id").
+		Where("u.active = ?", true).
+		Where(qb.BuildCaseInsensitiveLike("p.title", "go")).
+		OrderBy("u.name ASC")
+
+	query = qb.BuildLimitOffset(query, 5, 0)
+
+	sql, args, err := query.ToSql()
+	require.NoError(t, err)
+
+	// Set up mock expectation
+	rows := sqlmock.NewRows([]string{"id", "name", "title"}).
+		AddRow(1, "John", "Learning Go").
+		AddRow(2, "Jane", "Go Best Practices")
+
+	mock.ExpectQuery(regexp.QuoteMeta(sql)).WithArgs(convertToDriverValues(args)...).WillReturnRows(rows)
+
+	// Execute query
+	resultRows, err := db.QueryContext(context.Background(), sql, args...)
+	require.NoError(t, err)
+	defer resultRows.Close()
+
+	// Verify we got expected data
+	var results []map[string]interface{}
+	for resultRows.Next() {
+		var id int
+		var name, title string
+		err = resultRows.Scan(&id, &name, &title)
+		require.NoError(t, err)
+		results = append(results, map[string]interface{}{
+			"id":    id,
+			"name":  name,
+			"title": title,
+		})
+	}
+
+	assert.Len(t, results, 2)
+	assert.Equal(t, "John", results[0]["name"])
+	assert.Equal(t, "Learning Go", results[0]["title"])
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -42,19 +43,28 @@ func (m *MockDatabase) Exec(ctx context.Context, query string, args ...interface
 	return argsList.Get(0).(sql.Result), argsList.Error(1)
 }
 
-func (m *MockDatabase) Prepare(ctx context.Context, query string) (*sql.Stmt, error) {
+func (m *MockDatabase) Prepare(ctx context.Context, query string) (database.Statement, error) {
 	argsList := m.Called(ctx, query)
-	return argsList.Get(0).(*sql.Stmt), argsList.Error(1)
+	if argsList.Get(0) == nil {
+		return nil, argsList.Error(1)
+	}
+	return argsList.Get(0).(database.Statement), argsList.Error(1)
 }
 
-func (m *MockDatabase) Begin(ctx context.Context) (*sql.Tx, error) {
+func (m *MockDatabase) Begin(ctx context.Context) (database.Tx, error) {
 	argsList := m.Called(ctx)
-	return argsList.Get(0).(*sql.Tx), argsList.Error(1)
+	if argsList.Get(0) == nil {
+		return nil, argsList.Error(1)
+	}
+	return argsList.Get(0).(database.Tx), argsList.Error(1)
 }
 
-func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
 	argsList := m.Called(ctx, opts)
-	return argsList.Get(0).(*sql.Tx), argsList.Error(1)
+	if argsList.Get(0) == nil {
+		return nil, argsList.Error(1)
+	}
+	return argsList.Get(0).(database.Tx), argsList.Error(1)
 }
 
 func (m *MockDatabase) Health(ctx context.Context) error {
