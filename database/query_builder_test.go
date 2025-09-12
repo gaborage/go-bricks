@@ -177,13 +177,13 @@ func TestQueryBuilder_InsertWithColumns_OracleReserved(t *testing.T) {
 
 	// Should quote the reserved column and use Oracle-style placeholders
 	assert.Contains(t, sql, "INSERT INTO accounts")
-	assert.Contains(t, sql, `"number"`)
+	assert.Contains(t, sql, `"NUMBER"`)
 }
 
 func TestQueryBuilder_QuoteColumns_Exported(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 	cols := qb.QuoteColumns("id", "number", "name")
-	expected := []string{"id", `"number"`, "name"}
+	expected := []string{"id", `"NUMBER"`, "name"}
 	assert.Equal(t, expected, cols)
 }
 
