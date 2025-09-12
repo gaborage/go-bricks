@@ -316,10 +316,9 @@ Built-in endpoints:
 
 See the [examples/](examples/) directory for complete examples:
 
-- [Basic API](examples/basic-api/) - Simple REST API
-- [Messaging Service](examples/messaging-service/) - AMQP messaging
-- [HTTP Client](examples/http_client_example.go) - Fluent HTTP client
-- [Oracle Insert With Reserved Column](examples/oracle_insert_reserved_word.go) - Safe quoting and `:n` binds
+- [HTTP Client](examples/http/main.go.go) - Fluent HTTP client
+- [Oracle Insert With Reserved Column](examples/oracle/main.go) - Safe quoting and `:n` binds
+- [Params usage example](examples/params/main.go) - Definition and usage of custom params
 
 ## 🤝 Contributing
 
