@@ -77,7 +77,26 @@ func (qb *QueryBuilder) quoteOracleColumns(columns ...string) []string {
 
 // QuoteColumns exposes vendor-specific column quoting for multiple columns.
 func (qb *QueryBuilder) QuoteColumns(columns ...string) []string { // exported helper
-	return qb.quoteOracleColumns(columns...)
+	return qb.quoteOracleColumnsForDML(columns...)
+}
+
+// quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
+// like INSERT or UPDATE where reserved words must be safely referenced. In these contexts, we
+// prefer upper-cased quoted identifiers for reserved words to match Oracle's default identifier case.
+func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
+	if qb.vendor != Oracle {
+		return columns
+	}
+
+	quoted := make([]string, len(columns))
+	for i, col := range columns {
+		if col == "number" { // Oracle reserved word
+			quoted[i] = `"` + strings.ToUpper(col) + `"`
+			continue
+		}
+		quoted[i] = col
+	}
+	return quoted
 }
 
 // Select creates a new SELECT query builder
@@ -93,7 +112,7 @@ func (qb *QueryBuilder) Insert(table string) squirrel.InsertBuilder {
 // InsertWithColumns creates an INSERT builder and applies vendor-specific
 // quoting to the provided column list (e.g., quotes reserved words on Oracle).
 func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
-	return qb.statementBuilder.Insert(table).Columns(qb.quoteOracleColumns(columns...)...)
+	return qb.statementBuilder.Insert(table).Columns(qb.quoteOracleColumnsForDML(columns...)...)
 }
 
 // Update creates a new UPDATE query builder
