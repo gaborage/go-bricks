@@ -207,6 +207,38 @@ database:
   password: "password"
 ```
 
+### Oracle Tips
+
+- Reserved identifiers: Oracle reserves many keywords like NUMBER. If your table has a column named number, you must quote it in SQL (e.g., "NUMBER" or "number", matching how it was created). GoBricks' query builder helps with this.
+- Placeholders: Oracle uses `:1`, `:2`, ... (or named binds like `:id`), not `$1`.
+
+Best practice: avoid reserved identifiers in schema. Prefer descriptive names like `account_number` instead of `number`. If you need to rename:
+
+```sql
+-- Use the exact quoted identifier if it was created quoted
+ALTER TABLE accounts RENAME COLUMN "NUMBER" TO account_number;
+```
+
+Example using the query builder to safely insert into a table with a reserved column:
+
+```go
+import (
+    brdb "github.com/gaborage/go-bricks/database"
+    "github.com/Masterminds/squirrel"
+)
+
+qb := brdb.NewQueryBuilder(brdb.Oracle)
+
+// Will quote the reserved column name on Oracle automatically
+insert := qb.
+    InsertWithColumns("accounts", "id", "name", "number", "balance", "created_at").
+    Values(1, "John", "12345", 100.50, squirrel.Expr(qb.BuildCurrentTimestamp()))
+
+sql, args, _ := insert.ToSql()
+// sql: INSERT INTO accounts (id,name,"number",balance,created_at) VALUES (:1,:2,:3,:4,:5)
+// args: [1 "John" "12345" 100.5]
+```
+
 ## 📨 Messaging
 
 AMQP messaging with RabbitMQ:
@@ -286,7 +318,8 @@ See the [examples/](examples/) directory for complete examples:
 
 - [Basic API](examples/basic-api/) - Simple REST API
 - [Messaging Service](examples/messaging-service/) - AMQP messaging
-- [Multi-Database](examples/multi-database/) - PostgreSQL + Oracle
+- [HTTP Client](examples/http_client_example.go) - Fluent HTTP client
+- [Oracle Insert With Reserved Column](examples/oracle_insert_reserved_word.go) - Safe quoting and `:n` binds
 
 ## 🤝 Contributing
 

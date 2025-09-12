@@ -167,6 +167,26 @@ func TestQueryBuilder_Update(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_InsertWithColumns_OracleReserved(t *testing.T) {
+	qb := NewQueryBuilder(Oracle)
+
+	// Build an INSERT with a reserved column name for Oracle
+	query := qb.InsertWithColumns("accounts", "id", "number", "name").Values(1, "123", "John")
+	sql, _, err := query.ToSql()
+	require.NoError(t, err)
+
+	// Should quote the reserved column and use Oracle-style placeholders
+	assert.Contains(t, sql, "INSERT INTO accounts")
+	assert.Contains(t, sql, `"number"`)
+}
+
+func TestQueryBuilder_QuoteColumns_Exported(t *testing.T) {
+	qb := NewQueryBuilder(Oracle)
+	cols := qb.QuoteColumns("id", "number", "name")
+	expected := []string{"id", `"number"`, "name"}
+	assert.Equal(t, expected, cols)
+}
+
 func TestQueryBuilder_Delete(t *testing.T) {
 	tests := []struct {
 		name     string
