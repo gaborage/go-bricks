@@ -53,6 +53,10 @@ func NewClient(log logger.Logger) Client {
 			DefaultHeaders:       make(map[string]string),
 			LogPayloads:          false,
 			MaxPayloadLogBytes:   1024,
+			TraceIDHeader:        HeaderXRequestID,
+			NewTraceID:           func() string { return EnsureTraceID(context.Background()) },
+			TraceIDExtractor:     TraceIDFromContext,
+			EnableW3CTrace:       true,
 		},
 	}
 }
@@ -75,6 +79,10 @@ func NewBuilder(log logger.Logger) *Builder {
 			DefaultHeaders:       make(map[string]string),
 			LogPayloads:          false,
 			MaxPayloadLogBytes:   1024,
+			TraceIDHeader:        HeaderXRequestID,
+			NewTraceID:           func() string { return EnsureTraceID(context.Background()) },
+			TraceIDExtractor:     TraceIDFromContext,
+			EnableW3CTrace:       true,
 		},
 		logger: log,
 	}
@@ -105,6 +113,36 @@ func (b *Builder) WithBasicAuth(username, password string) *Builder {
 // WithDefaultHeader adds a default header that will be sent with all requests
 func (b *Builder) WithDefaultHeader(key, value string) *Builder {
 	b.config.DefaultHeaders[key] = value
+	return b
+}
+
+// WithTraceIDHeader sets the header name used for the trace ID (default: X-Request-ID)
+func (b *Builder) WithTraceIDHeader(name string) *Builder {
+	if name != "" {
+		b.config.TraceIDHeader = name
+	}
+	return b
+}
+
+// WithTraceIDGenerator sets the generator used when no trace ID is present
+func (b *Builder) WithTraceIDGenerator(gen func() string) *Builder {
+	if gen != nil {
+		b.config.NewTraceID = gen
+	}
+	return b
+}
+
+// WithTraceIDExtractor sets a function to extract a trace ID from context
+func (b *Builder) WithTraceIDExtractor(extractor func(ctx context.Context) (string, bool)) *Builder {
+	if extractor != nil {
+		b.config.TraceIDExtractor = extractor
+	}
+	return b
+}
+
+// WithW3CTrace enables or disables W3C trace context propagation
+func (b *Builder) WithW3CTrace(enabled bool) *Builder {
+	b.config.EnableW3CTrace = enabled
 	return b
 }
 
@@ -148,6 +186,8 @@ func deepCopyConfig(src *Config) *Config {
 		RetryDelay:         src.RetryDelay,
 		LogPayloads:        src.LogPayloads,
 		MaxPayloadLogBytes: src.MaxPayloadLogBytes,
+		TraceIDHeader:      src.TraceIDHeader,
+		EnableW3CTrace:     src.EnableW3CTrace,
 	}
 
 	// Copy BasicAuth
@@ -174,6 +214,14 @@ func deepCopyConfig(src *Config) *Config {
 	if src.ResponseInterceptors != nil {
 		dst.ResponseInterceptors = make([]ResponseInterceptor, len(src.ResponseInterceptors))
 		copy(dst.ResponseInterceptors, src.ResponseInterceptors)
+	}
+
+	// Copy function fields
+	if src.NewTraceID != nil {
+		dst.NewTraceID = src.NewTraceID
+	}
+	if src.TraceIDExtractor != nil {
+		dst.TraceIDExtractor = src.TraceIDExtractor
 	}
 
 	return dst
@@ -215,12 +263,15 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 	maxRetries := c.config.MaxRetries
 
 	for attempt := 0; ; attempt++ {
-		c.logRequest(method, req)
-
 		httpReq, err := c.buildRequest(ctx, method, req)
 		if err != nil {
 			return nil, err
 		}
+
+		// Capture the trace identifier from the outgoing request for logging/correlation
+		traceIDForLog := httpReq.Header.Get(c.config.TraceIDHeader)
+
+		c.logRequest(httpReq, req.Body, traceIDForLog)
 
 		httpResp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -244,7 +295,7 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 		}
 
 		if IsSuccessStatus(resp.StatusCode) {
-			c.logResponse(resp)
+			c.logResponse(resp, traceIDForLog)
 			return resp, nil
 		}
 
@@ -254,7 +305,7 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 			continue
 		}
 
-		c.logResponse(resp)
+		c.logResponse(resp, traceIDForLog)
 		return resp, NewHTTPError(
 			fmt.Sprintf("HTTP request failed with status %d", resp.StatusCode),
 			resp.StatusCode,
@@ -374,6 +425,20 @@ func (c *client) validateRequest(req *Request) error {
 	return nil
 }
 
+// extractTraceID extracts a trace ID from the context using configured strategy, or generates a new one
+func (c *client) extractTraceID(ctx context.Context) string {
+	if c.config != nil && c.config.TraceIDExtractor != nil {
+		if traceID, ok := c.config.TraceIDExtractor(ctx); ok && traceID != "" {
+			return traceID
+		}
+	}
+	if c.config != nil && c.config.NewTraceID != nil {
+		return c.config.NewTraceID()
+	}
+	// Fallback in unlikely case config is nil or functions are nil
+	return EnsureTraceID(ctx)
+}
+
 // applyHeaders applies headers to the HTTP request
 func (c *client) applyHeaders(httpReq *nethttp.Request, req *Request) {
 	// Apply default headers first
@@ -389,6 +454,33 @@ func (c *client) applyHeaders(httpReq *nethttp.Request, req *Request) {
 	// Set Content-Type if not already set and body is present
 	if httpReq.Header.Get("Content-Type") == "" && req.Body != nil {
 		httpReq.Header.Set("Content-Type", "application/json")
+	}
+
+	// Automatically add trace ID header if not already present
+	headerName := c.config.TraceIDHeader
+	if headerName == "" {
+		headerName = HeaderXRequestID
+	}
+	if httpReq.Header.Get(headerName) == "" {
+		httpReq.Header.Set(headerName, c.extractTraceID(httpReq.Context()))
+	}
+
+	// W3C Trace Context: propagate or generate traceparent/tracestate if enabled
+	if c.config.EnableW3CTrace {
+		if httpReq.Header.Get(HeaderTraceParent) == "" {
+			// Try to get from context first
+			if tp, ok := TraceParentFromContext(httpReq.Context()); ok {
+				httpReq.Header.Set(HeaderTraceParent, tp)
+			} else {
+				// Generate a new traceparent
+				httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
+			}
+		}
+		if httpReq.Header.Get(HeaderTraceState) == "" {
+			if ts, ok := TraceStateFromContext(httpReq.Context()); ok {
+				httpReq.Header.Set(HeaderTraceState, ts)
+			}
+		}
 	}
 }
 
@@ -484,17 +576,18 @@ func (c *client) runResponseInterceptors(ctx context.Context, req *nethttp.Reque
 }
 
 // logRequest logs the outgoing request
-func (c *client) logRequest(method string, req *Request) {
+func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID string) {
 	// Info-level: only metadata to avoid leaking PII/secrets
 	infoEvent := c.logger.Info().
 		Str("direction", "outbound").
-		Str("method", method).
-		Str("url", req.URL)
-	if len(req.Headers) > 0 {
-		infoEvent.Int("header_count", len(req.Headers))
+		Str("method", httpReq.Method).
+		Str("url", httpReq.URL.String()).
+		Str("request_id", traceID)
+	if headerCount := len(httpReq.Header); headerCount > 0 {
+		infoEvent.Int("header_count", headerCount)
 	}
-	if len(req.Body) > 0 {
-		infoEvent.Int("body_size", len(req.Body))
+	if len(body) > 0 {
+		infoEvent.Int("body_size", len(body))
 	}
 	infoEvent.Msg("REST client request")
 
@@ -502,24 +595,25 @@ func (c *client) logRequest(method string, req *Request) {
 	if c.config != nil && c.config.LogPayloads {
 		dbg := c.logger.Debug().
 			Str("direction", "outbound").
-			Str("method", method).
-			Str("url", req.URL)
-		if len(req.Headers) > 0 {
+			Str("method", httpReq.Method).
+			Str("url", httpReq.URL.String()).
+			Str("request_id", traceID)
+		if len(httpReq.Header) > 0 {
 			// Headers go through logger filter to mask sensitive keys/values
-			dbg = dbg.Interface("headers", req.Headers)
+			dbg = dbg.Interface("headers", httpReq.Header)
 		}
-		if len(req.Body) > 0 {
+		if len(body) > 0 {
 			limit := c.config.MaxPayloadLogBytes
 			if limit <= 0 {
 				limit = 1024
 			}
 			truncated := false
-			preview := req.Body
+			preview := body
 			if len(preview) > limit {
 				preview = preview[:limit]
 				truncated = true
 			}
-			dbg = dbg.Int("body_size", len(req.Body)).
+			dbg = dbg.Int("body_size", len(body)).
 				Str("body_truncated", map[bool]string{true: "true", false: "false"}[truncated]).
 				Bytes("body_preview", preview)
 		}
@@ -528,13 +622,14 @@ func (c *client) logRequest(method string, req *Request) {
 }
 
 // logResponse logs the incoming response
-func (c *client) logResponse(resp *Response) {
+func (c *client) logResponse(resp *Response, traceID string) {
 	// Info-level: only metadata to avoid leaking PII/secrets
 	infoEvent := c.logger.Info().
 		Str("direction", "inbound").
 		Int("status", resp.StatusCode).
 		Dur("elapsed", resp.Stats.ElapsedTime).
-		Int64("call_count", resp.Stats.CallCount)
+		Int64("call_count", resp.Stats.CallCount).
+		Str("request_id", traceID)
 	if len(resp.Body) > 0 {
 		infoEvent.Int("body_size", len(resp.Body))
 	}
@@ -547,7 +642,8 @@ func (c *client) logResponse(resp *Response) {
 			Str("direction", "inbound").
 			Int("status", resp.StatusCode).
 			Dur("elapsed", resp.Stats.ElapsedTime).
-			Int64("call_count", resp.Stats.CallCount)
+			Int64("call_count", resp.Stats.CallCount).
+			Str("request_id", traceID)
 		if len(resp.Body) > 0 {
 			limit := c.config.MaxPayloadLogBytes
 			if limit <= 0 {
@@ -570,3 +666,5 @@ func (c *client) logResponse(resp *Response) {
 		dbg.Msg("REST client response")
 	}
 }
+
+// generator moved to http/interface.go for reuse by server

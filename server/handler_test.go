@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	gobrickshttp "github.com/gaborage/go-bricks/http"
 )
 
 // Basic request/response types for tests
@@ -163,4 +165,68 @@ func TestRequestBinder_AdvancedBinding(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, got.HeaderVals)
 	// time parsed correctly (in UTC)
 	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), got.When.UTC())
+}
+
+func TestTraceParentResponseHeader_PropagateWhenPresent(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: "ok"}, nil
+	}
+
+	h := WrapHandler(handler, binder, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/hello?name=John", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Provide inbound traceparent header
+	traceparent := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Response must propagate the same traceparent
+	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	assert.Equal(t, traceparent, got)
+}
+
+func TestTraceParentResponseHeader_GenerateWhenMissing(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: "ok"}, nil
+	}
+
+	h := WrapHandler(handler, binder, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/hello?name=John", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Response must contain a valid-looking traceparent
+	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	require.NotEmpty(t, got)
+	parts := strings.Split(got, "-")
+	require.Len(t, parts, 4)
+	assert.Len(t, parts[0], 2)
+	assert.Len(t, parts[1], 32)
+	assert.Len(t, parts[2], 16)
+	assert.Len(t, parts[3], 2)
 }

@@ -14,6 +14,9 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 	// Request ID
 	e.Use(middleware.RequestID())
 
+	// Inject trace context into request context for outbound propagation
+	e.Use(TraceContext())
+
 	// Operation Tracker - Initialize AMQP and DB operation tracking for each request
 	e.Use(PerformanceStats())
 
