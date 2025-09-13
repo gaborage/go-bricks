@@ -115,6 +115,16 @@ func TestWrapHandler_ValidationError(t *testing.T) {
 	assert.Equal(t, "Request validation failed", resp.Error.Message)
 	// should include details in dev env
 	require.NotNil(t, resp.Error.Details)
+	// details must use camelCase key: validationErrors
+	if resp.Error.Details != nil {
+		_, hasSnake := resp.Error.Details["validation_errors"]
+		assert.False(t, hasSnake, "details should not use snake_case key validation_errors")
+		ve, hasCamel := resp.Error.Details["validationErrors"]
+		require.True(t, hasCamel, "details must include validationErrors key")
+		// should be a list of field errors
+		_, ok := ve.([]interface{})
+		assert.True(t, ok, "validationErrors must be an array of errors")
+	}
 }
 
 type advancedBindReq struct {
