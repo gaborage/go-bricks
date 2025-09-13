@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 )
 
@@ -39,8 +40,13 @@ func (e *BaseAPIError) HTTPStatus() int {
 }
 
 // Details returns additional error details.
-func (e *BaseAPIError) Details() map[string]interface{} {
-	return e.details
+func (e *BaseAPIError) Details() map[string]any {
+	if e.details == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(e.details))
+	maps.Copy(cp, e.details)
+	return cp
 }
 
 // WithDetails adds details to the error.
@@ -184,3 +190,6 @@ func NewBusinessLogicError(code, message string) *BusinessLogicError {
 		BaseAPIError: NewBaseAPIError(code, message, http.StatusUnprocessableEntity),
 	}
 }
+
+// Compile-time interface assertions
+var _ IAPIError = (*BaseAPIError)(nil)

@@ -127,8 +127,12 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	}
 
 	// In non-debug (production) hide internal details for 500s
-	if !c.Echo().Debug && status == http.StatusInternalServerError {
+	if !cfg.App.Debug && status == http.StatusInternalServerError {
 		msg = "An error occurred while processing your request"
+	}
+
+	if status >= http.StatusInternalServerError {
+		c.Echo().Logger.Errorf("unhandled error: %v", err)
 	}
 
 	code := statusToErrorCode(status)
@@ -161,5 +165,3 @@ func statusToErrorCode(status int) string {
 		return "INTERNAL_ERROR"
 	}
 }
-
-// (legacy getRequestID removed; use handler.getTraceID for consistent behavior)
