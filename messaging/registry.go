@@ -3,11 +3,13 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -411,7 +413,11 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	startTime := time.Now()
 
-	log.Debug().
+	msgCtx := r.extractTraceContext(ctx, delivery)
+	traceID := gobrickshttp.EnsureTraceID(msgCtx)
+	tlog := log.WithFields(map[string]interface{}{"trace_id": traceID})
+
+	tlog.Debug().
 		Str("message_id", delivery.MessageId).
 		Str("routing_key", delivery.RoutingKey).
 		Str("exchange", delivery.Exchange).
@@ -420,11 +426,11 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Msg("Processing message")
 
 	// Process message with handler
-	err := consumer.Handler.Handle(ctx, delivery)
+	err := consumer.Handler.Handle(msgCtx, delivery)
 	processingTime := time.Since(startTime)
 
 	if err != nil {
-		log.Error().
+		tlog.Error().
 			Err(err).
 			Str("message_id", delivery.MessageId).
 			Dur("processing_time", processingTime).
@@ -432,7 +438,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 		// Negative acknowledgment - requeue the message
 		if nackErr := delivery.Nack(false, true); nackErr != nil {
-			log.Error().
+			tlog.Error().
 				Err(nackErr).
 				Uint64("delivery_tag", delivery.DeliveryTag).
 				Msg("Failed to nack message")
@@ -440,18 +446,57 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		return
 	}
 
-	log.Info().
+	tlog.Info().
 		Str("message_id", delivery.MessageId).
 		Dur("processing_time", processingTime).
 		Msg("Message processed successfully")
 
 	// Positive acknowledgment
 	if ackErr := delivery.Ack(false); ackErr != nil {
-		log.Error().
+		tlog.Error().
 			Err(ackErr).
 			Uint64("delivery_tag", delivery.DeliveryTag).
 			Msg("Failed to ack message")
 	}
+}
+
+// extractTraceContext pulls trace headers from the AMQP delivery into the context.
+func (r *Registry) extractTraceContext(ctx context.Context, delivery *amqp.Delivery) context.Context {
+	if delivery == nil || delivery.Headers == nil {
+		return ctx
+	}
+
+	msgCtx := ctx
+
+	if v, ok := delivery.Headers[gobrickshttp.HeaderXRequestID]; ok {
+		if traceID, ok2 := v.(string); ok2 && traceID != "" {
+			msgCtx = gobrickshttp.WithTraceID(msgCtx, traceID)
+		}
+	}
+
+	if v, ok := delivery.Headers[gobrickshttp.HeaderTraceParent]; ok {
+		if tp, ok2 := v.(string); ok2 && tp != "" {
+			msgCtx = gobrickshttp.WithTraceParent(msgCtx, tp)
+			// Derive trace ID from traceparent if not already set
+			if _, hasTraceID := gobrickshttp.TraceIDFromContext(msgCtx); !hasTraceID {
+				parts := strings.Split(tp, "-")
+				if len(parts) >= 4 {
+					traceIDHex := parts[1]
+					if traceIDHex != "" {
+						msgCtx = gobrickshttp.WithTraceID(msgCtx, traceIDHex)
+					}
+				}
+			}
+		}
+	}
+
+	if v, ok := delivery.Headers[gobrickshttp.HeaderTraceState]; ok {
+		if ts, ok2 := v.(string); ok2 && ts != "" {
+			msgCtx = gobrickshttp.WithTraceState(msgCtx, ts)
+		}
+	}
+
+	return msgCtx
 }
 
 // GetPublishers returns all registered publishers (for documentation/monitoring)
