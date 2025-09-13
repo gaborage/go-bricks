@@ -71,7 +71,7 @@ func WrapHandler[T any, R any](
 		}
 
 		// Validate request using Echo's configured validator
-		if err := c.Validate(request); err != nil {
+		if err := c.Validate(&request); err != nil {
 			vErr := NewBadRequestError("Request validation failed")
 			var ve *ValidationError
 			if errors.As(err, &ve) {
@@ -116,7 +116,7 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target interface{}) error {
 
 	// Bind JSON body if present (tolerate parameters like charset)
 	if ct := c.Request().Header.Get("Content-Type"); ct != "" {
-		if mt, _, _ := mime.ParseMediaType(ct); mt == "application/json" {
+		if mt, _, _ := mime.ParseMediaType(ct); mt == "application/json" || strings.HasSuffix(mt, "+json") {
 			if err := c.Bind(target); err != nil {
 				return fmt.Errorf("failed to bind JSON body: %w", err)
 			}
@@ -164,21 +164,21 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target interface{}) error {
 
 		// Check for header tag
 		if headerName := field.Tag.Get("header"); headerName != "" {
-			if value := c.Request().Header.Get(headerName); value != "" {
+			if values := c.Request().Header.Values(headerName); len(values) > 0 {
 				// Support comma-separated list for []string headers
 				if fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.String {
-					parts := strings.Split(value, ",")
-					slice := reflect.MakeSlice(fieldValue.Type(), 0, len(parts))
-					for _, p := range parts {
-						p = strings.TrimSpace(p)
-						if p == "" {
-							continue
+					slice := reflect.MakeSlice(fieldValue.Type(), 0, 8)
+					for _, raw := range values {
+						for _, p := range strings.Split(raw, ",") {
+							p = strings.TrimSpace(p)
+							if p != "" {
+								slice = reflect.Append(slice, reflect.ValueOf(p))
+							}
 						}
-						slice = reflect.Append(slice, reflect.ValueOf(p))
 					}
 					fieldValue.Set(slice)
 				} else {
-					if err := setFieldValue(fieldValue, value); err != nil {
+					if err := setFieldValue(fieldValue, values[0]); err != nil {
 						return fmt.Errorf("failed to set header %s: %w", headerName, err)
 					}
 				}
@@ -281,7 +281,7 @@ func formatSuccessResponse(c echo.Context, data interface{}) error {
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]interface{}{
-			"timestamp": time.Now().Format(time.RFC3339),
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
 	}
@@ -305,7 +305,7 @@ func formatSuccessResponseWithStatus(c echo.Context, data interface{}, status in
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]interface{}{
-			"timestamp": time.Now().Format(time.RFC3339),
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
 	}
@@ -329,7 +329,7 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 	response := APIResponse{
 		Error: errorResp,
 		Meta: map[string]interface{}{
-			"timestamp": time.Now().Format(time.RFC3339),
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
 	}
