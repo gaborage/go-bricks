@@ -5,6 +5,7 @@ import (
 	"fmt"
 	nethttp "net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -528,5 +529,210 @@ func TestClientRetries(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, IsErrorType(err, TimeoutError))
 		assert.Equal(t, int32(2), calls.Load()) // initial + one retry
+	})
+}
+
+func TestTraceIDPropagation(t *testing.T) {
+	log := createTestLogger()
+
+	t.Run("automatically adds trace ID when none present", func(t *testing.T) {
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+			w.Write([]byte("ok"))
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{URL: server.URL}
+
+		_, err := client.Get(context.Background(), req)
+		require.NoError(t, err)
+
+		// Should have automatically added X-Request-ID header
+		traceID := requestHeaders.Get(HeaderXRequestID)
+		assert.NotEmpty(t, traceID)
+		assert.Len(t, traceID, 36) // UUID format
+	})
+
+	t.Run("preserves existing X-Request-ID header", func(t *testing.T) {
+		expectedTraceID := "custom-trace-123"
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{
+			URL: server.URL,
+			Headers: map[string]string{
+				HeaderXRequestID: expectedTraceID,
+			},
+		}
+
+		_, err := client.Get(context.Background(), req)
+		require.NoError(t, err)
+
+		// Should preserve the existing trace ID
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+	})
+
+	t.Run("extracts trace ID from context", func(t *testing.T) {
+		expectedTraceID := "context-trace-456"
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{URL: server.URL}
+
+		// Add trace ID to context
+		ctx := WithTraceID(context.Background(), expectedTraceID)
+
+		_, err := client.Get(ctx, req)
+		require.NoError(t, err)
+
+		// Should use trace ID from context
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+	})
+
+	t.Run("request header takes precedence over context", func(t *testing.T) {
+		contextTraceID := "context-trace"
+		headerTraceID := "header-trace"
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{
+			URL: server.URL,
+			Headers: map[string]string{
+				HeaderXRequestID: headerTraceID,
+			},
+		}
+
+		// Add different trace ID to context
+		ctx := WithTraceID(context.Background(), contextTraceID)
+
+		_, err := client.Get(ctx, req)
+		require.NoError(t, err)
+
+		// Request header should take precedence
+		assert.Equal(t, headerTraceID, requestHeaders.Get(HeaderXRequestID))
+	})
+
+	t.Run("trace ID interceptor works correctly", func(t *testing.T) {
+		expectedTraceID := "interceptor-trace-789"
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		// Create client with trace ID interceptor
+		client := NewBuilder(log).
+			WithRequestInterceptor(NewTraceIDInterceptor()).
+			Build()
+
+		req := &Request{URL: server.URL}
+		ctx := WithTraceID(context.Background(), expectedTraceID)
+
+		_, err := client.Get(ctx, req)
+		require.NoError(t, err)
+
+		// Should use trace ID from interceptor
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+	})
+
+	t.Run("adds W3C traceparent when enabled", func(t *testing.T) {
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{URL: server.URL}
+
+		_, err := client.Get(context.Background(), req)
+		require.NoError(t, err)
+
+		tp := requestHeaders.Get(HeaderTraceParent)
+		assert.NotEmpty(t, tp)
+		// Basic shape: 2-32-16-2 hex groups separated by '-'
+		parts := strings.Split(tp, "-")
+		require.Len(t, parts, 4)
+		assert.Len(t, parts[0], 2)
+		assert.Len(t, parts[1], 32)
+		assert.Len(t, parts[2], 16)
+		assert.Len(t, parts[3], 2)
+	})
+
+	t.Run("propagates traceparent and tracestate from context", func(t *testing.T) {
+		var requestHeaders nethttp.Header
+		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			requestHeaders = r.Header.Clone()
+			w.WriteHeader(nethttp.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewClient(log)
+		req := &Request{URL: server.URL}
+
+		ctx := context.Background()
+		ctx = WithTraceParent(ctx, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+		ctx = WithTraceState(ctx, "vendor=k:v")
+
+		_, err := client.Get(ctx, req)
+		require.NoError(t, err)
+
+		assert.Equal(t, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", requestHeaders.Get(HeaderTraceParent))
+		assert.Equal(t, "vendor=k:v", requestHeaders.Get(HeaderTraceState))
+	})
+}
+
+func TestTraceIDUtilities(t *testing.T) {
+	t.Run("WithTraceID and GetTraceIDFromContext", func(t *testing.T) {
+		expectedTraceID := "test-trace-123"
+		ctx := WithTraceID(context.Background(), expectedTraceID)
+
+		actualTraceID := GetTraceIDFromContext(ctx)
+		assert.Equal(t, expectedTraceID, actualTraceID)
+	})
+
+	t.Run("GetTraceIDFromContext generates UUID when no trace ID", func(t *testing.T) {
+		traceID := GetTraceIDFromContext(context.Background())
+		assert.NotEmpty(t, traceID)
+		assert.Len(t, traceID, 36) // UUID format
+	})
+
+	t.Run("NewTraceIDInterceptor creates valid interceptor", func(t *testing.T) {
+		interceptor := NewTraceIDInterceptor()
+		assert.NotNil(t, interceptor)
+
+		// Test that it adds header when missing
+		ctx := WithTraceID(context.Background(), "test-trace")
+		req, _ := nethttp.NewRequestWithContext(ctx, "GET", "http://example.com", nethttp.NoBody)
+
+		err := interceptor(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "test-trace", req.Header.Get(HeaderXRequestID))
+
+		// Test that it doesn't override existing header
+		req.Header.Set(HeaderXRequestID, "existing-trace")
+		err = interceptor(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "existing-trace", req.Header.Get(HeaderXRequestID))
 	})
 }

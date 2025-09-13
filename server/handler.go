@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/gaborage/go-bricks/config"
+	gobrickshttp "github.com/gaborage/go-bricks/http"
 )
 
 // IAPIError defines the interface for API errors with structured information.
@@ -278,6 +279,7 @@ func parseTime(s string) (time.Time, error) {
 
 // formatSuccessResponse formats a successful response with standardized structure.
 func formatSuccessResponse(c echo.Context, data interface{}) error {
+	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]interface{}{
@@ -302,6 +304,7 @@ func formatSuccessResponseWithStatus(c echo.Context, data interface{}, status in
 	if status == http.StatusNoContent {
 		return c.NoContent(http.StatusNoContent)
 	}
+	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]interface{}{
@@ -334,6 +337,7 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 		},
 	}
 
+	ensureTraceParentHeader(c)
 	return c.JSON(apiErr.HTTPStatus(), response)
 }
 
@@ -352,6 +356,22 @@ func getTraceID(c echo.Context) string {
 	// Set it so downstream might pick it up
 	c.Response().Header().Set(echo.HeaderXRequestID, newID)
 	return newID
+}
+
+// ensureTraceParentHeader ensures the response contains a W3C traceparent header.
+// It propagates the inbound header when present, otherwise generates a new one.
+func ensureTraceParentHeader(c echo.Context) {
+	// If already set, do nothing
+	if c.Response().Header().Get(gobrickshttp.HeaderTraceParent) != "" {
+		return
+	}
+	// Prefer inbound header
+	if tp := c.Request().Header.Get(gobrickshttp.HeaderTraceParent); tp != "" {
+		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, tp)
+		return
+	}
+	// Generate new traceparent and set
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
 }
 
 // HandlerRegistry manages enhanced handlers and provides registration utilities.

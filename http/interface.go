@@ -2,8 +2,31 @@ package http
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	nethttp "net/http"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
+)
+
+// contextKey is the type for context keys to avoid collisions
+type contextKey string
+
+const (
+	// traceIDKey is the context key for trace ID values
+	traceIDKey contextKey = "trace_id"
+	// traceParentKey is the context key for W3C Trace Context header value
+	traceParentKey contextKey = "traceparent"
+	// traceStateKey is the context key for W3C tracestate header value
+	traceStateKey contextKey = "tracestate"
+	// HeaderXRequestID is the standard header name for request tracing
+	HeaderXRequestID = "X-Request-ID"
+	// HeaderTraceParent is the W3C trace context header name
+	HeaderTraceParent = "traceparent"
+	// HeaderTraceState is the W3C trace context "tracestate" header name
+	HeaderTraceState = "tracestate"
 )
 
 // Client defines the REST client interface for making HTTP requests
@@ -63,4 +86,120 @@ type Config struct {
 	LogPayloads bool
 	// MaxPayloadLogBytes caps the number of body bytes logged when LogPayloads is enabled
 	MaxPayloadLogBytes int
+	// TraceIDHeader configures the header name used for trace ID propagation (default: X-Request-ID)
+	TraceIDHeader string
+	// NewTraceID generates a new trace ID when none is present (default: uuid)
+	NewTraceID func() string
+	// TraceIDExtractor allows advanced extraction of a trace ID from context; return ok=false to fallback to generator
+	TraceIDExtractor func(ctx context.Context) (traceID string, ok bool)
+	// EnableW3CTrace enables W3C Trace Context (traceparent/tracestate) propagation and generation
+	EnableW3CTrace bool
+}
+
+// Trace ID utility functions
+
+// WithTraceID adds a trace ID to the context for HTTP client propagation
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	return context.WithValue(ctx, traceIDKey, traceID)
+}
+
+// TraceIDFromContext returns a trace ID from context if present
+func TraceIDFromContext(ctx context.Context) (string, bool) {
+	if traceID, ok := ctx.Value(traceIDKey).(string); ok && traceID != "" {
+		return traceID, true
+	}
+	return "", false
+}
+
+// EnsureTraceID returns an existing trace ID from context or generates a new one
+func EnsureTraceID(ctx context.Context) string {
+	if traceID, ok := TraceIDFromContext(ctx); ok {
+		return traceID
+	}
+	return uuid.New().String()
+}
+
+// GetTraceIDFromContext remains for backward compatibility; it ensures a non-empty value
+func GetTraceIDFromContext(ctx context.Context) string {
+	return EnsureTraceID(ctx)
+}
+
+// WithTraceParent adds a W3C traceparent value to the context
+func WithTraceParent(ctx context.Context, traceParent string) context.Context {
+	return context.WithValue(ctx, traceParentKey, traceParent)
+}
+
+// TraceParentFromContext returns a traceparent from context if present
+func TraceParentFromContext(ctx context.Context) (string, bool) {
+	if tp, ok := ctx.Value(traceParentKey).(string); ok && tp != "" {
+		return tp, true
+	}
+	return "", false
+}
+
+// WithTraceState adds a W3C tracestate value to the context
+func WithTraceState(ctx context.Context, traceState string) context.Context {
+	return context.WithValue(ctx, traceStateKey, traceState)
+}
+
+// TraceStateFromContext returns a tracestate from context if present
+func TraceStateFromContext(ctx context.Context) (string, bool) {
+	if ts, ok := ctx.Value(traceStateKey).(string); ok && ts != "" {
+		return ts, true
+	}
+	return "", false
+}
+
+// GenerateTraceParent creates a minimal W3C traceparent header value.
+// Format: version(2)-trace-id(32)-span-id(16)-flags(2), e.g., "00-<32>-<16>-01"
+func GenerateTraceParent() string {
+	traceID := make([]byte, 16)
+	spanID := make([]byte, 8)
+	if _, err := crand.Read(traceID); err != nil {
+		traceID = []byte(strings.Repeat("\x00", 16))
+	}
+	if _, err := crand.Read(spanID); err != nil {
+		spanID = []byte(strings.Repeat("\x00", 8))
+	}
+	if allZero(traceID) {
+		traceID[len(traceID)-1] = 0x01
+	}
+	if allZero(spanID) {
+		spanID[len(spanID)-1] = 0x01
+	}
+	return "00-" + strings.ToLower(hex.EncodeToString(traceID)) + "-" + strings.ToLower(hex.EncodeToString(spanID)) + "-01"
+}
+
+func allZero(b []byte) bool {
+	for _, v := range b {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// NewTraceIDInterceptor creates a request interceptor that adds trace ID headers
+// This provides an alternative approach for users who want explicit control
+func NewTraceIDInterceptor() RequestInterceptor {
+	return func(ctx context.Context, req *nethttp.Request) error {
+		if req.Header.Get(HeaderXRequestID) == "" {
+			traceID := GetTraceIDFromContext(ctx)
+			req.Header.Set(HeaderXRequestID, traceID)
+		}
+		return nil
+	}
+}
+
+// NewTraceIDInterceptorFor creates an interceptor that uses a custom header name
+func NewTraceIDInterceptorFor(header string) RequestInterceptor {
+	if header == "" {
+		header = HeaderXRequestID
+	}
+	return func(ctx context.Context, req *nethttp.Request) error {
+		if req.Header.Get(header) == "" {
+			req.Header.Set(header, GetTraceIDFromContext(ctx))
+		}
+		return nil
+	}
 }
