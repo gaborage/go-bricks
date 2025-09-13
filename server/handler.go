@@ -76,7 +76,7 @@ func WrapHandler[T any, R any](
 			vErr := NewBadRequestError("Request validation failed")
 			var ve *ValidationError
 			if errors.As(err, &ve) {
-				_ = vErr.WithDetails("validation_errors", ve.Errors)
+				_ = vErr.WithDetails("validationErrors", ve.Errors)
 			} else {
 				_ = vErr.WithDetails("error", err.Error())
 			}

@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
+	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -49,7 +50,7 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				Str("request_id", v.RequestID).
 				Str("method", v.Method).
 				Str("uri", v.URI).
-				Str("resultCode", resultCode).
+				Str("result_code", resultCode).
 				Int("status", v.Status).
 				Int64("http_elapsed", v.Latency.Nanoseconds()).
 				Int64("amqp_published", amqpCount).
@@ -58,6 +59,7 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				Int64("db_elapsed", dbElapsed).
 				Str("ip", c.RealIP()).
 				Str("user_agent", c.Request().UserAgent()).
+				Str("trace_id", c.Request().Header.Get(gobrickshttp.HeaderTraceParent)).
 				Msg("Request")
 			return nil
 		},
