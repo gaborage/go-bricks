@@ -57,12 +57,6 @@ func (qb *QueryBuilder) quoteOracleColumn(column string) string {
 	return column
 }
 
-// QuoteColumn exposes vendor-specific column quoting for callers.
-// Useful when building INSERT/UPDATE lists that include reserved words on Oracle.
-func (qb *QueryBuilder) QuoteColumn(column string) string { // exported helper
-	return qb.quoteOracleColumn(column)
-}
-
 // quoteOracleColumns handles Oracle-specific column name quoting for multiple columns
 func (qb *QueryBuilder) quoteOracleColumns(columns ...string) []string {
 	if qb.vendor == Oracle {
@@ -73,11 +67,6 @@ func (qb *QueryBuilder) quoteOracleColumns(columns ...string) []string {
 		return quotedColumns
 	}
 	return columns
-}
-
-// QuoteColumns exposes vendor-specific column quoting for multiple columns.
-func (qb *QueryBuilder) QuoteColumns(columns ...string) []string { // exported helper
-	return qb.quoteOracleColumnsForDML(columns...)
 }
 
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements

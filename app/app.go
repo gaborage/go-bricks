@@ -70,6 +70,7 @@ func New() (*App, error) {
 		DB:        db,
 		Logger:    log,
 		Messaging: msgClient,
+		Config:    cfg,
 	}
 	registry := NewModuleRegistry(deps)
 

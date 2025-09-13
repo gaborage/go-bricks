@@ -88,9 +88,9 @@ log:
 package example
 
 import (
-    "net/http"
     "github.com/labstack/echo/v4"
     "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/server"
 )
 
 type Module struct {
@@ -106,19 +106,25 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
     return nil
 }
 
-func (m *Module) RegisterRoutes(e *echo.Echo) error {
-    e.GET("/hello", m.hello)
-    return nil
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+    server.GET(hr, e, "/hello", m.hello)
 }
 
 func (m *Module) Shutdown() error {
     return nil
 }
 
-func (m *Module) hello(c echo.Context) error {
-    return c.JSON(http.StatusOK, map[string]string{
-        "message": "Hello from GoBricks!",
-    })
+// Enhanced handler signature: focuses on business logic
+type HelloReq struct {
+    Name string `query:"name" validate:"required"`
+}
+
+type HelloResp struct {
+    Message string `json:"message"`
+}
+
+func (m *Module) hello(req HelloReq, _ server.HandlerContext) (HelloResp, server.IAPIError) {
+    return HelloResp{Message: "Hello " + req.Name}, nil
 }
 ```
 
@@ -165,7 +171,7 @@ Each module implements the `Module` interface:
 type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
-    RegisterRoutes(e *echo.Echo) error
+    RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
     Shutdown() error
 }
 ```
@@ -178,6 +184,129 @@ type ModuleDeps struct {
     Logger    logger.Logger       // Structured logger
     Messaging messaging.Client    // AMQP client
 }
+
+### Enhanced Handlers: Result and Envelope
+
+Handlers use a type-safe signature and return either a data type or a Result wrapper to control status codes and headers:
+
+```go
+// Create returns 201 Created
+func (m *Module) createUser(req CreateReq, _ server.HandlerContext) (server.Result[User], server.IAPIError) {
+    user := User{ /* ... */ }
+    return server.Created(user), nil
+}
+
+// Update returns 202 Accepted
+func (m *Module) updateUser(req UpdateReq, _ server.HandlerContext) (server.Result[User], server.IAPIError) {
+    updated := User{ /* ... */ }
+    return server.Accepted(updated), nil
+}
+
+// Delete returns 204 No Content (no body)
+func (m *Module) deleteUser(req DeleteReq, _ server.HandlerContext) (server.NoContentResult, server.IAPIError) {
+    return server.NoContent(), nil
+}
+```
+
+All responses are wrapped in a standard envelope on success:
+
+```json
+{
+  "data": { /* your payload */ },
+  "meta": {
+    "timestamp": "2025-01-12T12:34:56Z",
+    "traceId": "uuid-or-request-id"
+  }
+}
+```
+
+Errors are returned in a consistent envelope with codes and optional details (details in dev):
+
+```json
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "User not found",
+    "details": { /* dev only */ }
+  },
+  "meta": {
+    "timestamp": "2025-01-12T12:34:56Z",
+    "traceId": "uuid-or-request-id"
+  }
+}
+```
+
+### Migration: echo.Context to Enhanced Handlers
+
+Minimal steps to migrate an endpoint from raw Echo to the enhanced pattern:
+
+1) Change Module interface and route registration
+
+Before:
+```go
+func (m *Module) RegisterRoutes(e *echo.Echo) error {
+    e.GET("/users/:id", m.getUser)
+    return nil
+}
+
+func (m *Module) getUser(c echo.Context) error {
+    id := c.Param("id")
+    // ...parse, validate, fetch
+    return c.JSON(http.StatusOK, user)
+}
+```
+
+After:
+```go
+type GetUserReq struct {
+    ID int `param:"id" validate:"min=1"`
+}
+
+type UserResp struct { /* fields */ }
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+    server.GET(hr, e, "/users/:id", m.getUser)
+}
+
+func (m *Module) getUser(req GetUserReq, _ server.HandlerContext) (UserResp, server.IAPIError) {
+    // ...business logic only
+    // on missing: return UserResp{}, server.NewNotFoundError("User")
+    return UserResp{/* ... */}, nil
+}
+```
+
+2) Use struct tags for binding and validation
+- `param:"id"`, `query:"q"`, `header:"Authorization"`, and JSON body tags.
+- Add `validate:"..."` using validator/v10 rules.
+
+3) Set custom statuses with Result helpers when needed
+- 201: `return server.Created(resp), nil`
+- 202: `return server.Accepted(resp), nil`
+- 204: `return server.NoContent(), nil` (no body)
+
+Notes
+- The framework auto-wraps responses into `{ data, meta }` and errors into `{ error, meta }`.
+- Existing Echo middleware remains compatible; tracing uses `X-Request-ID` (generated if missing).
+
+Common Pitfalls
+- Ensure Echo’s validator is set. Using `app.New()` wires `server.NewValidator()` automatically. If you build Echo manually, set `e.Validator = server.NewValidator()`.
+- 204 responses must not include a body. Use `server.NoContent()`.
+- To set headers (e.g., `Location` on 201), return a `server.Result[T]{ Data: t, Status: http.StatusCreated, Headers: http.Header{"Location": {"/users/123"}} }`.
+- Binding precedence: JSON body → path params → query params → headers. Later sources overwrite earlier values.
+- `[]string` binding: use repeated query params (`?names=a&names=b`) or comma-separated headers (`X-Items: a, b`).
+- Error details appear only in development; production hides internal details for 5xx.
+- Handlers get `server.HandlerContext` with optional `Echo` access for advanced cases; most handlers won’t need it.
+
+Old → New Mapping (quick reference)
+- `c.Param("id")` → `ID int \\`param:"id"\\`` in request struct
+- `c.QueryParam("q")` → `Q string \\`query:"q"\\``
+- Repeated query values → `Tags []string \\`query:"tags"\\`` with `?tags=a&tags=b`
+- Header read → `Auth string \\`header:"Authorization"\\``
+- Manual bind/validate → Framework binds and calls `c.Validate()` for you (add `validate:"..."` tags)
+- `return c.JSON(200, data)` → `return data, nil`
+- `return c.JSON(201, data)` → `return server.Created(data), nil`
+- `return c.NoContent(204)` → `return server.NoContent(), nil`
+- Errors: `echo.NewHTTPError(404)` → `server.NewNotFoundError("Resource")`; `400` → `server.NewBadRequestError("...")`; `409` → `server.NewConflictError("...")`
 ```
 
 ## 🗄️ Database Support

@@ -19,5 +19,7 @@
 
 !Makefile
 
+!wiki/*
+
 # ...even if they are in subdirectories
 !*/
