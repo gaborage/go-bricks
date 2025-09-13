@@ -46,6 +46,9 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 			amqpElapsed := logger.GetAMQPElapsed(c.Request().Context())
 			dbElapsed := logger.GetDBElapsed(c.Request().Context())
 
+			// Resolve the same trace ID used in API responses
+			traceID := getTraceID(c)
+
 			event.
 				Str("request_id", v.RequestID).
 				Str("method", v.Method).
@@ -59,7 +62,10 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				Int64("db_elapsed", dbElapsed).
 				Str("ip", c.RealIP()).
 				Str("user_agent", c.Request().UserAgent()).
-				Str("trace_id", c.Request().Header.Get(gobrickshttp.HeaderTraceParent)).
+				// Log unified trace ID (matches response meta.traceId)
+				Str("trace_id", traceID).
+				// Also log W3C traceparent if present for distributed tracing
+				Str("traceparent", c.Response().Header().Get(gobrickshttp.HeaderTraceParent)).
 				Msg("Request")
 			return nil
 		},
