@@ -5,9 +5,11 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // Module defines the interface that all application modules must implement.
@@ -15,7 +17,7 @@ import (
 type Module interface {
 	Name() string
 	Init(deps *ModuleDeps) error
-	RegisterRoutes(e *echo.Echo)
+	RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
 	RegisterMessaging(registry *messaging.Registry)
 	Shutdown() error
 }
@@ -26,6 +28,7 @@ type ModuleDeps struct {
 	DB        database.Interface
 	Logger    logger.Logger
 	Messaging messaging.Client
+	Config    *config.Config
 }
 
 // ModuleRegistry manages the registration and lifecycle of application modules.
@@ -73,12 +76,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 // RegisterRoutes calls RegisterRoutes on all registered modules.
 // It should be called after all modules have been registered.
 func (r *ModuleRegistry) RegisterRoutes(e *echo.Echo) {
+	// Create handler registry
+	handlerRegistry := server.NewHandlerRegistry(r.deps.Config)
+
 	for _, module := range r.modules {
 		r.logger.Info().
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		module.RegisterRoutes(e)
+		module.RegisterRoutes(handlerRegistry, e)
 	}
 }
 

@@ -141,8 +141,8 @@ func (m *MockModule) Init(deps *ModuleDeps) error {
 	return argsList.Error(0)
 }
 
-func (m *MockModule) RegisterRoutes(e *echo.Echo) {
-	m.Called(e)
+func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+	m.Called(hr, e)
 }
 
 func (m *MockModule) RegisterMessaging(registry *messaging.Registry) {
@@ -187,8 +187,13 @@ func createTestApp(_ *testing.T) (*App, *MockDatabase, *MockMessagingClient) {
 	mockMessaging := &MockMessagingClient{}
 
 	registry := &ModuleRegistry{
-		modules:           make([]Module, 0),
-		deps:              &ModuleDeps{DB: mockDB, Logger: log, Messaging: mockMessaging},
+		modules: make([]Module, 0),
+		deps: &ModuleDeps{
+			DB:        mockDB,
+			Logger:    log,
+			Messaging: mockMessaging,
+			Config:    &config.Config{},
+		},
 		logger:            log,
 		messagingRegistry: nil,
 	}

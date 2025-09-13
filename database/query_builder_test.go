@@ -180,12 +180,7 @@ func TestQueryBuilder_InsertWithColumns_OracleReserved(t *testing.T) {
 	assert.Contains(t, sql, `"NUMBER"`)
 }
 
-func TestQueryBuilder_QuoteColumns_Exported(t *testing.T) {
-	qb := NewQueryBuilder(Oracle)
-	cols := qb.QuoteColumns("id", "number", "name")
-	expected := []string{"id", `"NUMBER"`, "name"}
-	assert.Equal(t, expected, cols)
-}
+// Removed test for exported QuoteColumns helper (API pruned).
 
 func TestQueryBuilder_Delete(t *testing.T) {
 	tests := []struct {

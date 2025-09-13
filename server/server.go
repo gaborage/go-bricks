@@ -4,7 +4,7 @@ package server
 
 import (
 	"context"
-	"errors"
+	goerrors "errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -29,7 +29,10 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
-	e.HTTPErrorHandler = customErrorHandler
+	// Use an error handler that emits standardized APIResponse envelopes
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, cfg)
+	}
 	if v := NewValidator(); v != nil {
 		e.Validator = v
 	} else {
@@ -99,42 +102,64 @@ func (s *Server) readyCheck(c echo.Context) error {
 	})
 }
 
-func customErrorHandler(err error, c echo.Context) {
-	code := http.StatusInternalServerError
-	message := "Internal server error"
+func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
+	// If this is a structured API error, reuse its fields
+	var apiErr IAPIError
+	if goerrors.As(err, &apiErr) {
+		_ = formatErrorResponse(c, apiErr, cfg)
+		return
+	}
+
+	// Map echo.HTTPError and untyped errors to standardized envelope
+	status := http.StatusInternalServerError
+	msg := "Internal server error"
 	var he *echo.HTTPError
-	if errors.As(err, &he) {
-		code = he.Code
-		if msg, ok := he.Message.(string); ok {
-			message = msg
+	if goerrors.As(err, &he) {
+		status = he.Code
+		switch m := he.Message.(type) {
+		case string:
+			msg = m
+		case error:
+			msg = m.Error()
+		default:
+			// keep default
 		}
 	}
 
-	requestID := getRequestID(c)
-
-	if !c.Echo().Debug && code == http.StatusInternalServerError {
-		message = "An error occurred while processing your request"
+	// In non-debug (production) hide internal details for 500s
+	if !c.Echo().Debug && status == http.StatusInternalServerError {
+		msg = "An error occurred while processing your request"
 	}
 
-	err = c.JSON(code, map[string]interface{}{
-		"error": map[string]interface{}{
-			"message":    message,
-			"status":     code,
-			"request_id": requestID,
-		},
-	})
-	if err != nil {
-		return
+	code := statusToErrorCode(status)
+	base := NewBaseAPIError(code, msg, status)
+	// Include raw error details in development
+	if cfg.App.Env == "development" || cfg.App.Env == "dev" {
+		_ = base.WithDetails("error", err.Error())
+	}
+
+	_ = formatErrorResponse(c, base, cfg)
+}
+
+func statusToErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "BAD_REQUEST"
+	case http.StatusUnauthorized:
+		return "UNAUTHORIZED"
+	case http.StatusForbidden:
+		return "FORBIDDEN"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusConflict:
+		return "CONFLICT"
+	case http.StatusTooManyRequests:
+		return "TOO_MANY_REQUESTS"
+	case http.StatusServiceUnavailable:
+		return "SERVICE_UNAVAILABLE"
+	default:
+		return "INTERNAL_ERROR"
 	}
 }
 
-func getRequestID(c echo.Context) string {
-	requestID := c.Response().Header().Get(echo.HeaderXRequestID)
-	if requestID == "" {
-		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
-	}
-	if requestID == "" {
-		requestID = "unknown"
-	}
-	return requestID
-}
+// (legacy getRequestID removed; use handler.getTraceID for consistent behavior)

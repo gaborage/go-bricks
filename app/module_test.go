@@ -6,8 +6,10 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -19,6 +21,7 @@ func TestNewModuleRegistry(t *testing.T) {
 		DB:        &MockDatabase{},
 		Logger:    log,
 		Messaging: mockMessaging,
+		Config:    &config.Config{},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -37,6 +40,7 @@ func TestModuleRegistry_Register_Success(t *testing.T) {
 		DB:        &MockDatabase{},
 		Logger:    log,
 		Messaging: &MockMessagingClient{},
+		Config:    &config.Config{},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -58,6 +62,7 @@ func TestModuleRegistry_Register_InitError(t *testing.T) {
 		DB:        &MockDatabase{},
 		Logger:    log,
 		Messaging: &MockMessagingClient{},
+		Config:    &config.Config{},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -80,6 +85,7 @@ func TestModuleRegistry_RegisterRoutes(t *testing.T) {
 		DB:        &MockDatabase{},
 		Logger:    log,
 		Messaging: &MockMessagingClient{},
+		Config:    &config.Config{},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -100,8 +106,8 @@ func TestModuleRegistry_RegisterRoutes(t *testing.T) {
 	e := echo.New()
 
 	// Setup route registration expectations
-	module1.On("RegisterRoutes", e).Return()
-	module2.On("RegisterRoutes", e).Return()
+	module1.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
+	module2.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
 
 	// Call RegisterRoutes
 	registry.RegisterRoutes(e)
@@ -142,7 +148,10 @@ func TestModuleRegistry_Shutdown_NoModules(t *testing.T) {
 
 func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
 	log := logger.New("debug", true)
-	deps := &ModuleDeps{Logger: log}
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
 	registry := NewModuleRegistry(deps)
 
 	// Add modules
@@ -168,7 +177,10 @@ func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
 
 func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
 	log := logger.New("debug", true)
-	deps := &ModuleDeps{Logger: log}
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
 	registry := NewModuleRegistry(deps)
 
 	// Add modules
@@ -195,7 +207,10 @@ func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
 
 func TestModuleRegistry_Shutdown_SingleModule(t *testing.T) {
 	log := logger.New("debug", true)
-	deps := &ModuleDeps{Logger: log}
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
 	registry := NewModuleRegistry(deps)
 
 	// Add a module

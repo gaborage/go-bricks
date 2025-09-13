@@ -29,6 +29,11 @@ func NewValidator() *Validator {
 	return &Validator{validate: v}
 }
 
+// GetValidator returns the underlying validator instance.
+func (v *Validator) GetValidator() *validator.Validate {
+	return v.validate
+}
+
 // Validate performs validation on the provided struct and returns any validation errors.
 func (v *Validator) Validate(i interface{}) error {
 	if err := v.validate.Struct(i); err != nil {
