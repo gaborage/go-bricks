@@ -36,7 +36,7 @@ func TestWrapHandler_Success_DefaultStatus(t *testing.T) {
 		return helloResp{Message: "Hello " + req.Name}, nil
 	}
 
-	h := WrapHandler[helloReq, helloResp](handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/hello?name=John", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestWrapHandler_Success_CustomStatusWithResult(t *testing.T) {
 		return NewResult(http.StatusCreated, helloResp{Message: "Hello " + req.Name}), nil
 	}
 
-	h := WrapHandler[helloReq, Result[helloResp]](handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestWrapHandler_ValidationError(t *testing.T) {
 		return helloResp{Message: "Hello " + req.Name}, nil
 	}
 
-	h := WrapHandler[helloReq, helloResp](handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query parameter "name"
 	req := httptest.NewRequest(http.MethodGet, "/hello", http.NoBody)
@@ -135,7 +135,7 @@ func TestRequestBinder_AdvancedBinding(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler[advancedBindReq, advancedBindReq](handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/users/5?names=a&names=b&active=true&when=2025-01-01T00:00:00Z", http.NoBody)
 	req.Header.Set("X-Items", "a, b , c")
