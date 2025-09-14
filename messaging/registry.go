@@ -3,7 +3,6 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -413,7 +412,9 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	startTime := time.Now()
 
-	msgCtx := r.extractTraceContext(ctx, delivery)
+	// Extract trace context using centralized trace package
+	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, accessor)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
 	tlog := log.WithFields(map[string]interface{}{"trace_id": traceID})
 
@@ -436,12 +437,14 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			Dur("processing_time", processingTime).
 			Msg("Message processing failed")
 
-		// Negative acknowledgment - requeue the message
-		if nackErr := delivery.Nack(false, true); nackErr != nil {
-			tlog.Error().
-				Err(nackErr).
-				Uint64("delivery_tag", delivery.DeliveryTag).
-				Msg("Failed to nack message")
+		// Negative acknowledgment - requeue the message (only when AutoAck is false)
+		if !consumer.AutoAck {
+			if nackErr := delivery.Nack(false, true); nackErr != nil {
+				tlog.Error().
+					Err(nackErr).
+					Uint64("delivery_tag", delivery.DeliveryTag).
+					Msg("Failed to nack message")
+			}
 		}
 		return
 	}
@@ -451,52 +454,32 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Dur("processing_time", processingTime).
 		Msg("Message processed successfully")
 
-	// Positive acknowledgment
-	if ackErr := delivery.Ack(false); ackErr != nil {
-		tlog.Error().
-			Err(ackErr).
-			Uint64("delivery_tag", delivery.DeliveryTag).
-			Msg("Failed to ack message")
+	// Positive acknowledgment (only when AutoAck is false)
+	if !consumer.AutoAck {
+		if ackErr := delivery.Ack(false); ackErr != nil {
+			tlog.Error().
+				Err(ackErr).
+				Uint64("delivery_tag", delivery.DeliveryTag).
+				Msg("Failed to ack message")
+		}
 	}
 }
 
-// extractTraceContext pulls trace headers from the AMQP delivery into the context.
-func (r *Registry) extractTraceContext(ctx context.Context, delivery *amqp.Delivery) context.Context {
-	if delivery == nil || delivery.Headers == nil {
-		return ctx
+// amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)
+type amqpDeliveryAccessor struct {
+	headers amqp.Table
+}
+
+func (a *amqpDeliveryAccessor) Get(key string) interface{} {
+	if a.headers == nil {
+		return nil
 	}
+	return a.headers[key]
+}
 
-	msgCtx := ctx
-
-	if v, ok := delivery.Headers[gobrickstrace.HeaderXRequestID]; ok {
-		if traceID, ok2 := v.(string); ok2 && traceID != "" {
-			msgCtx = gobrickstrace.WithTraceID(msgCtx, traceID)
-		}
-	}
-
-	if v, ok := delivery.Headers[gobrickstrace.HeaderTraceParent]; ok {
-		if tp, ok2 := v.(string); ok2 && tp != "" {
-			msgCtx = gobrickstrace.WithTraceParent(msgCtx, tp)
-			// Derive trace ID from traceparent if not already set
-			if _, hasTraceID := gobrickstrace.IDFromContext(msgCtx); !hasTraceID {
-				parts := strings.Split(tp, "-")
-				if len(parts) >= 4 {
-					traceIDHex := parts[1]
-					if traceIDHex != "" {
-						msgCtx = gobrickstrace.WithTraceID(msgCtx, traceIDHex)
-					}
-				}
-			}
-		}
-	}
-
-	if v, ok := delivery.Headers[gobrickstrace.HeaderTraceState]; ok {
-		if ts, ok2 := v.(string); ok2 && ts != "" {
-			msgCtx = gobrickstrace.WithTraceState(msgCtx, ts)
-		}
-	}
-
-	return msgCtx
+func (a *amqpDeliveryAccessor) Set(_ string, _ interface{}) {
+	// Read-only accessor for delivery headers
+	// This is intentionally a no-op as we don't modify incoming message headers
 }
 
 // GetPublishers returns all registered publishers (for documentation/monitoring)

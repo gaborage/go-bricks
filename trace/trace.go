@@ -4,6 +4,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -101,4 +102,190 @@ func allZero(b []byte) bool {
 		}
 	}
 	return true
+}
+
+// HeaderAccessor provides a simple interface for reading and writing headers
+type HeaderAccessor interface {
+	Get(key string) interface{}
+	Set(key string, value interface{})
+}
+
+// InjectMode controls how headers are written by InjectIntoHeaders
+type InjectMode int
+
+const (
+	// InjectForce overwrites or aligns headers to ensure consistency with traceparent
+	InjectForce InjectMode = iota
+	// InjectPreserve sets headers only if missing; does not overwrite existing values
+	InjectPreserve
+)
+
+// InjectOptions configures how trace context is injected into headers
+type InjectOptions struct {
+	Mode InjectMode
+}
+
+// ExtractFromHeaders extracts trace context from transport headers
+func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Context {
+	if headers == nil {
+		return ctx
+	}
+
+	traceCtx := ctx
+
+	// Extract X-Request-ID
+	if v := headers.Get(HeaderXRequestID); v != nil {
+		if traceID := safeToString(v); traceID != "" {
+			traceCtx = WithTraceID(traceCtx, traceID)
+		}
+	}
+
+	// Extract traceparent
+	if v := headers.Get(HeaderTraceParent); v != nil {
+		if tp := safeToString(v); tp != "" {
+			traceCtx = WithTraceParent(traceCtx, tp)
+			// Derive trace ID from traceparent if not already set
+			if _, hasTraceID := IDFromContext(traceCtx); !hasTraceID {
+				if traceID := extractTraceIDFromParent(tp); traceID != "" {
+					traceCtx = WithTraceID(traceCtx, traceID)
+				}
+			}
+		}
+	}
+
+	// Extract tracestate
+	if v := headers.Get(HeaderTraceState); v != nil {
+		if ts := safeToString(v); ts != "" {
+			traceCtx = WithTraceState(traceCtx, ts)
+		}
+	}
+
+	return traceCtx
+}
+
+// InjectIntoHeaders injects trace context into transport headers (default: force mode)
+// Backward compatible wrapper over InjectIntoHeadersWithOptions.
+func InjectIntoHeaders(ctx context.Context, headers HeaderAccessor) {
+	InjectIntoHeadersWithOptions(ctx, headers, InjectOptions{Mode: InjectForce})
+}
+
+// InjectIntoHeadersWithOptions injects trace context into headers with configurable behavior
+func InjectIntoHeadersWithOptions(ctx context.Context, headers HeaderAccessor, opts InjectOptions) {
+	if headers == nil {
+		return
+	}
+
+	// Normalize mode (default to force)
+	mode := opts.Mode
+	if mode != InjectPreserve {
+		mode = InjectForce
+	}
+
+	// Resolve values once
+	traceparent := computeTraceParent(ctx, headers)
+
+	if mode == InjectForce {
+		// Align trace ID with traceparent and overwrite headers
+		alignedTraceID := forceAlignTraceID(EnsureTraceID(ctx), traceparent)
+		setHeader(headers, HeaderXRequestID, alignedTraceID, false)
+		setHeader(headers, HeaderTraceParent, traceparent, false)
+		if ts, ok := StateFromContext(ctx); ok {
+			setHeader(headers, HeaderTraceState, ts, false)
+		}
+		return
+	}
+
+	// Preserve mode: only set when missing
+	effectiveTraceID := computeTraceIDPreserve(ctx, headers, traceparent)
+	setHeader(headers, HeaderXRequestID, effectiveTraceID, true)
+	setHeader(headers, HeaderTraceParent, traceparent, true)
+	if ts, ok := StateFromContext(ctx); ok {
+		setHeader(headers, HeaderTraceState, ts, true)
+	}
+}
+
+// computeTraceParent determines the traceparent value to use (existing header > context > generated)
+func computeTraceParent(ctx context.Context, headers HeaderAccessor) string {
+	if v := headerString(headers, HeaderTraceParent); v != "" {
+		return v
+	}
+	if tp, ok := ParentFromContext(ctx); ok && tp != "" {
+		return tp
+	}
+	return GenerateTraceParent()
+}
+
+// computeTraceIDPreserve returns the trace ID to use in preserve mode.
+// Preference: existing header > context > derived from traceparent > generated
+func computeTraceIDPreserve(ctx context.Context, headers HeaderAccessor, traceparent string) string {
+	if v := headerString(headers, HeaderXRequestID); v != "" {
+		return v
+	}
+	if tid, ok := IDFromContext(ctx); ok && tid != "" {
+		return tid
+	}
+	if tid := extractTraceIDFromParent(traceparent); tid != "" {
+		return tid
+	}
+	return EnsureTraceID(ctx)
+}
+
+// setHeader writes a header value, honoring preserve=true to avoid overwrites
+func setHeader(headers HeaderAccessor, key, value string, preserve bool) {
+	if preserve {
+		if existing := headerString(headers, key); existing != "" {
+			return
+		}
+	}
+	headers.Set(key, value)
+}
+
+// headerString gets a header as string using safe conversion
+func headerString(headers HeaderAccessor, key string) string {
+	if v := headers.Get(key); v != nil {
+		return safeToString(v)
+	}
+	return ""
+}
+
+// safeToString safely converts interface{} to string, handling []byte
+func safeToString(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+
+	switch v := value.(type) {
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	default:
+		if str := fmt.Sprintf("%v", v); str != "<nil>" {
+			return str
+		}
+		return ""
+	}
+}
+
+// extractTraceIDFromParent extracts the trace ID from a W3C traceparent header
+func extractTraceIDFromParent(traceparent string) string {
+	parts := strings.Split(traceparent, "-")
+	if len(parts) >= 4 && len(parts[1]) == 32 {
+		return parts[1]
+	}
+	return ""
+}
+
+// forceAlignTraceID aligns trace ID with traceparent (force mode)
+func forceAlignTraceID(traceID, traceparent string) string {
+	if traceparent == "" {
+		return traceID
+	}
+
+	// Extract trace ID from traceparent
+	if parentTraceID := extractTraceIDFromParent(traceparent); parentTraceID != "" {
+		return parentTraceID
+	}
+
+	return traceID
 }
