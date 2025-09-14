@@ -13,14 +13,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// Interfaces and dialer are defined in amqp_adapters.go
+
 // AMQPClientImpl provides an AMQP implementation of the messaging client interface.
 // It includes automatic reconnection, retry logic, and AMQP-specific features.
 type AMQPClientImpl struct {
 	m               *sync.RWMutex
 	brokerURL       string
 	log             logger.Logger
-	connection      *amqp.Connection
-	channel         *amqp.Channel
+	connection      amqpConnection
+	channel         amqpChannel
 	done            chan bool
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
@@ -283,14 +285,19 @@ func (c *AMQPClientImpl) handleReconnect() {
 
 // connect creates a new AMQP connection.
 func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
-	conn, err := amqp.Dial(c.brokerURL)
+	// Use pluggable dialer
+	ac, err := amqpDialFunc(c.brokerURL)
 	if err != nil {
 		return nil, err
 	}
-
-	c.changeConnection(conn)
+	// Store as interface and also return underlying real connection when available
+	c.changeConnection(ac)
 	c.log.Info().Msg("Connected to AMQP broker")
-	return conn, nil
+	// If the underlying type is realConnection, return its concrete pointer; otherwise nil
+	if rc, ok := ac.(realConnection); ok {
+		return rc.c, nil
+	}
+	return nil, nil
 }
 
 // handleReInit manages channel initialization and reinitialization.
@@ -300,7 +307,14 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 		c.isReady = false
 		c.m.Unlock()
 
-		err := c.init(conn)
+		// Wrap real connection into adapter if needed
+		var ac amqpConnection
+		if conn != nil {
+			ac = realConnection{c: conn}
+		} else {
+			ac = c.connection
+		}
+		err := c.init(ac)
 		if err != nil {
 			c.log.Error().Err(err).Msg("Failed to initialize AMQP channel, retrying...")
 
@@ -328,7 +342,7 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 }
 
 // init initializes the AMQP channel and sets up confirmation mode.
-func (c *AMQPClientImpl) init(conn *amqp.Connection) error {
+func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return err
@@ -352,14 +366,14 @@ func (c *AMQPClientImpl) init(conn *amqp.Connection) error {
 }
 
 // changeConnection updates the connection and sets up close notifications.
-func (c *AMQPClientImpl) changeConnection(connection *amqp.Connection) {
+func (c *AMQPClientImpl) changeConnection(connection amqpConnection) {
 	c.connection = connection
 	c.notifyConnClose = make(chan *amqp.Error, 1)
 	c.connection.NotifyClose(c.notifyConnClose)
 }
 
 // changeChannel updates the channel and sets up notifications.
-func (c *AMQPClientImpl) changeChannel(channel *amqp.Channel) {
+func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	c.channel = channel
 	c.notifyChanClose = make(chan *amqp.Error, 1)
 	c.notifyConfirm = make(chan amqp.Confirmation, 1)
