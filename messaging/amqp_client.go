@@ -8,8 +8,8 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // AMQPClientImpl provides an AMQP implementation of the messaging client interface.
@@ -409,37 +409,37 @@ func (c *AMQPClientImpl) injectTraceHeaders(ctx context.Context, publishing *amq
 
 	// Resolve trace ID: prefer existing header, then context/generate
 	var traceID string
-	if v, ok := publishing.Headers[gobrickshttp.HeaderXRequestID]; ok {
+	if v, ok := publishing.Headers[gobrickstrace.HeaderXRequestID]; ok {
 		if hv, ok2 := v.(string); ok2 && hv != "" {
 			traceID = hv
 		}
 	}
 	if traceID == "" {
-		if v, ok := gobrickshttp.TraceIDFromContext(ctx); ok && v != "" {
+		if v, ok := gobrickstrace.IDFromContext(ctx); ok && v != "" {
 			traceID = v
 		} else {
-			traceID = gobrickshttp.EnsureTraceID(ctx)
+			traceID = gobrickstrace.EnsureTraceID(ctx)
 		}
 	}
 
 	// X-Request-ID header (do not overwrite if user provided)
-	if _, exists := publishing.Headers[gobrickshttp.HeaderXRequestID]; !exists {
-		publishing.Headers[gobrickshttp.HeaderXRequestID] = traceID
+	if _, exists := publishing.Headers[gobrickstrace.HeaderXRequestID]; !exists {
+		publishing.Headers[gobrickstrace.HeaderXRequestID] = traceID
 	}
 
 	// W3C traceparent header
-	if _, exists := publishing.Headers[gobrickshttp.HeaderTraceParent]; !exists {
-		if tp, ok := gobrickshttp.TraceParentFromContext(ctx); ok {
-			publishing.Headers[gobrickshttp.HeaderTraceParent] = tp
+	if _, exists := publishing.Headers[gobrickstrace.HeaderTraceParent]; !exists {
+		if tp, ok := gobrickstrace.ParentFromContext(ctx); ok {
+			publishing.Headers[gobrickstrace.HeaderTraceParent] = tp
 		} else {
-			publishing.Headers[gobrickshttp.HeaderTraceParent] = gobrickshttp.GenerateTraceParent()
+			publishing.Headers[gobrickstrace.HeaderTraceParent] = gobrickstrace.GenerateTraceParent()
 		}
 	}
 
 	// W3C tracestate header (only if present in context)
-	if _, exists := publishing.Headers[gobrickshttp.HeaderTraceState]; !exists {
-		if ts, ok := gobrickshttp.TraceStateFromContext(ctx); ok {
-			publishing.Headers[gobrickshttp.HeaderTraceState] = ts
+	if _, exists := publishing.Headers[gobrickstrace.HeaderTraceState]; !exists {
+		if ts, ok := gobrickstrace.StateFromContext(ctx); ok {
+			publishing.Headers[gobrickstrace.HeaderTraceState] = ts
 		}
 	}
 

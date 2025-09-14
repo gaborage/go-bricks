@@ -9,8 +9,8 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // Registry manages messaging infrastructure declarations across modules.
@@ -414,7 +414,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	startTime := time.Now()
 
 	msgCtx := r.extractTraceContext(ctx, delivery)
-	traceID := gobrickshttp.EnsureTraceID(msgCtx)
+	traceID := gobrickstrace.EnsureTraceID(msgCtx)
 	tlog := log.WithFields(map[string]interface{}{"trace_id": traceID})
 
 	tlog.Debug().
@@ -468,31 +468,31 @@ func (r *Registry) extractTraceContext(ctx context.Context, delivery *amqp.Deliv
 
 	msgCtx := ctx
 
-	if v, ok := delivery.Headers[gobrickshttp.HeaderXRequestID]; ok {
+	if v, ok := delivery.Headers[gobrickstrace.HeaderXRequestID]; ok {
 		if traceID, ok2 := v.(string); ok2 && traceID != "" {
-			msgCtx = gobrickshttp.WithTraceID(msgCtx, traceID)
+			msgCtx = gobrickstrace.WithTraceID(msgCtx, traceID)
 		}
 	}
 
-	if v, ok := delivery.Headers[gobrickshttp.HeaderTraceParent]; ok {
+	if v, ok := delivery.Headers[gobrickstrace.HeaderTraceParent]; ok {
 		if tp, ok2 := v.(string); ok2 && tp != "" {
-			msgCtx = gobrickshttp.WithTraceParent(msgCtx, tp)
+			msgCtx = gobrickstrace.WithTraceParent(msgCtx, tp)
 			// Derive trace ID from traceparent if not already set
-			if _, hasTraceID := gobrickshttp.TraceIDFromContext(msgCtx); !hasTraceID {
+			if _, hasTraceID := gobrickstrace.IDFromContext(msgCtx); !hasTraceID {
 				parts := strings.Split(tp, "-")
 				if len(parts) >= 4 {
 					traceIDHex := parts[1]
 					if traceIDHex != "" {
-						msgCtx = gobrickshttp.WithTraceID(msgCtx, traceIDHex)
+						msgCtx = gobrickstrace.WithTraceID(msgCtx, traceIDHex)
 					}
 				}
 			}
 		}
 	}
 
-	if v, ok := delivery.Headers[gobrickshttp.HeaderTraceState]; ok {
+	if v, ok := delivery.Headers[gobrickstrace.HeaderTraceState]; ok {
 		if ts, ok2 := v.(string); ok2 && ts != "" {
-			msgCtx = gobrickshttp.WithTraceState(msgCtx, ts)
+			msgCtx = gobrickstrace.WithTraceState(msgCtx, ts)
 		}
 	}
 
