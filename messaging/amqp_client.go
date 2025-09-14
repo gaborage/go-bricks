@@ -9,6 +9,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // AMQPClientImpl provides an AMQP implementation of the messaging client interface.
@@ -378,11 +379,16 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 	publishing := amqp.Publishing{
 		ContentType: "application/octet-stream",
 		Body:        data,
+		Headers:     amqp.Table{},
 	}
 
 	if options.Headers != nil {
-		publishing.Headers = options.Headers
+		for k, v := range options.Headers {
+			publishing.Headers[k] = v
+		}
 	}
+
+	c.injectTraceHeaders(ctx, &publishing)
 
 	return channel.PublishWithContext(
 		ctx,
@@ -392,4 +398,56 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 		options.Immediate,
 		publishing,
 	)
+}
+
+// injectTraceHeaders adds tracing information to AMQP publishing metadata and headers.
+func (c *AMQPClientImpl) injectTraceHeaders(ctx context.Context, publishing *amqp.Publishing) {
+	// Ensure headers map is initialized
+	if publishing.Headers == nil {
+		publishing.Headers = amqp.Table{}
+	}
+
+	// Resolve trace ID: prefer existing header, then context/generate
+	var traceID string
+	if v, ok := publishing.Headers[gobrickstrace.HeaderXRequestID]; ok {
+		if hv, ok2 := v.(string); ok2 && hv != "" {
+			traceID = hv
+		}
+	}
+	if traceID == "" {
+		if v, ok := gobrickstrace.IDFromContext(ctx); ok && v != "" {
+			traceID = v
+		} else {
+			traceID = gobrickstrace.EnsureTraceID(ctx)
+		}
+	}
+
+	// X-Request-ID header (do not overwrite if user provided)
+	if _, exists := publishing.Headers[gobrickstrace.HeaderXRequestID]; !exists {
+		publishing.Headers[gobrickstrace.HeaderXRequestID] = traceID
+	}
+
+	// W3C traceparent header
+	if _, exists := publishing.Headers[gobrickstrace.HeaderTraceParent]; !exists {
+		if tp, ok := gobrickstrace.ParentFromContext(ctx); ok {
+			publishing.Headers[gobrickstrace.HeaderTraceParent] = tp
+		} else {
+			publishing.Headers[gobrickstrace.HeaderTraceParent] = gobrickstrace.GenerateTraceParent()
+		}
+	}
+
+	// W3C tracestate header (only if present in context)
+	if _, exists := publishing.Headers[gobrickstrace.HeaderTraceState]; !exists {
+		if ts, ok := gobrickstrace.StateFromContext(ctx); ok {
+			publishing.Headers[gobrickstrace.HeaderTraceState] = ts
+		}
+	}
+
+	// Populate CorrelationId and MessageId for external tooling if unset
+	if publishing.CorrelationId == "" {
+		publishing.CorrelationId = traceID
+	}
+	if publishing.MessageId == "" {
+		publishing.MessageId = traceID
+	}
 }
