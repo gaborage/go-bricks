@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	nethttp "net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -66,4 +67,55 @@ func TestGenerateTraceParent_Format(t *testing.T) {
 func TestIDFromContext_Missing(t *testing.T) {
 	_, ok := IDFromContext(context.Background())
 	assert.False(t, ok)
+}
+
+func TestInjectIntoHeadersWithOptions_Preserve_PreservesExisting(t *testing.T) {
+	headers := nethttp.Header{}
+	// Pre-populate headers
+	headers.Set(HeaderXRequestID, "pre-xid")
+	headers.Set(HeaderTraceParent, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+	headers.Set(HeaderTraceState, "vendor=a:b")
+
+	// adapter
+	acc := httpHeaderAccessor{h: headers}
+
+	// Context has different values – should not overwrite in preserve mode
+	ctx := WithTraceID(context.Background(), "ctx-xid")
+	ctx = WithTraceParent(ctx, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+	ctx = WithTraceState(ctx, "vendor=ctx")
+
+	InjectIntoHeadersWithOptions(ctx, &acc, InjectOptions{Mode: InjectPreserve})
+
+	assert.Equal(t, "pre-xid", headers.Get(HeaderXRequestID))
+	assert.Equal(t, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", headers.Get(HeaderTraceParent))
+	assert.Equal(t, "vendor=a:b", headers.Get(HeaderTraceState))
+}
+
+func TestInjectIntoHeadersWithOptions_Preserve_FillsMissing(t *testing.T) {
+	headers := nethttp.Header{}
+	acc := httpHeaderAccessor{h: headers}
+
+	// Context supplies traceparent and tracestate
+	ctx := WithTraceParent(context.Background(), "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01")
+	ctx = WithTraceState(ctx, "vendor=x")
+
+	InjectIntoHeadersWithOptions(ctx, &acc, InjectOptions{Mode: InjectPreserve})
+
+	assert.Equal(t, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01", headers.Get(HeaderTraceParent))
+	// X-Request-ID should be derived from traceparent when missing
+	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", headers.Get(HeaderXRequestID))
+	assert.Equal(t, "vendor=x", headers.Get(HeaderTraceState))
+}
+
+// Minimal http header accessor for tests
+type httpHeaderAccessor struct{ h nethttp.Header }
+
+func (a *httpHeaderAccessor) Get(key string) interface{} { return a.h.Get(key) }
+func (a *httpHeaderAccessor) Set(key string, value interface{}) {
+	switch v := value.(type) {
+	case string:
+		a.h.Set(key, v)
+	default:
+		a.h.Set(key, safeToString(v))
+	}
 }
