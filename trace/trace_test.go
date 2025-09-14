@@ -119,3 +119,121 @@ func (a *httpHeaderAccessor) Set(key string, value interface{}) {
 		a.h.Set(key, safeToString(v))
 	}
 }
+
+// Additional tests merged from trace_extra_test.go
+
+// Simple map-based HeaderAccessor for tests
+type mapAccessor struct{ m map[string]interface{} }
+
+func (a *mapAccessor) Get(key string) interface{} {
+	if a.m == nil {
+		return nil
+	}
+	return a.m[key]
+}
+func (a *mapAccessor) Set(key string, value interface{}) {
+	if a.m == nil {
+		a.m = map[string]interface{}{}
+	}
+	a.m[key] = value
+}
+
+func TestExtractFromHeaders_AllPresent(t *testing.T) {
+	acc := &mapAccessor{m: map[string]interface{}{
+		HeaderXRequestID:  "rid-123",
+		HeaderTraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		HeaderTraceState:  "vendor=a:b",
+	}}
+
+	ctx := ExtractFromHeaders(context.Background(), acc)
+
+	tid, ok := IDFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "rid-123", tid)
+
+	tp, ok := ParentFromContext(ctx)
+	require.True(t, ok)
+	assert.NotEmpty(t, tp)
+
+	ts, ok := StateFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "vendor=a:b", ts)
+}
+
+func TestExtractFromHeaders_DeriveIDFromParent(t *testing.T) {
+	acc := &mapAccessor{m: map[string]interface{}{
+		HeaderTraceParent: "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01",
+	}}
+	ctx := ExtractFromHeaders(context.Background(), acc)
+	tid, ok := IDFromContext(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", tid)
+}
+
+func TestExtractFromHeaders_NilHeaders(t *testing.T) {
+	ctx := ExtractFromHeaders(context.Background(), nil)
+	_, ok := IDFromContext(ctx)
+	assert.False(t, ok)
+}
+
+func TestInjectIntoHeaders_ForceMode(t *testing.T) {
+	// Context with parent and state; force mode aligns X-Request-ID with parent
+	ctx := WithTraceParent(context.Background(), "00-aabbccddeeffaabbccddeeffaabbccdd-1122334455667788-01")
+	ctx = WithTraceState(ctx, "vendor=test")
+
+	acc := &mapAccessor{m: map[string]interface{}{}}
+	InjectIntoHeaders(ctx, acc) // wrapper (force mode)
+
+	assert.Equal(t, "aabbccddeeffaabbccddeeffaabbccdd", acc.m[HeaderXRequestID])
+	assert.Equal(t, "00-aabbccddeeffaabbccddeeffaabbccdd-1122334455667788-01", acc.m[HeaderTraceParent])
+	assert.Equal(t, "vendor=test", acc.m[HeaderTraceState])
+}
+
+func TestComputeHelpers(t *testing.T) {
+	// computeTraceParent: header > context > generated
+	acc := &mapAccessor{m: map[string]interface{}{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
+	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", computeTraceParent(context.Background(), acc))
+
+	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", computeTraceParent(ctx, &mapAccessor{}))
+
+	// Fallback generates a valid 00-... string
+	gen := computeTraceParent(context.Background(), &mapAccessor{})
+	ok, _ := regexp.MatchString(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, gen)
+	assert.True(t, ok)
+
+	// computeTraceIDPreserve: header > context > derived > generated
+	acc2 := &mapAccessor{m: map[string]interface{}{HeaderXRequestID: "hdr-id"}}
+	assert.Equal(t, "hdr-id", computeTraceIDPreserve(context.Background(), acc2, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
+
+	ctx2 := WithTraceID(context.Background(), "ctx-id")
+	assert.Equal(t, "ctx-id", computeTraceIDPreserve(ctx2, &mapAccessor{}, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
+
+	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", computeTraceIDPreserve(context.Background(), &mapAccessor{}, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
+
+	// generated when nothing present
+	got := computeTraceIDPreserve(context.Background(), &mapAccessor{}, "invalid-parent")
+	assert.NotEmpty(t, got)
+}
+
+func TestHeaderStringAndSafeToString(t *testing.T) {
+	acc := &mapAccessor{m: map[string]interface{}{HeaderXRequestID: []byte("bytes-id")}}
+	assert.Equal(t, "bytes-id", headerString(acc, HeaderXRequestID))
+	assert.Equal(t, "", headerString(&mapAccessor{}, "missing"))
+
+	assert.Equal(t, "str", safeToString("str"))
+	assert.Equal(t, "abc", safeToString([]byte("abc")))
+	assert.Equal(t, "123", safeToString(123))
+	var p *int
+	assert.Equal(t, "", safeToString(p))
+}
+
+func TestExtractTraceIDAndForceAlign(t *testing.T) {
+	// extractTraceIDFromParent
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", extractTraceIDFromParent("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
+	assert.Equal(t, "", extractTraceIDFromParent("bad-parent"))
+
+	// forceAlignTraceID
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", forceAlignTraceID("orig", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"))
+	assert.Equal(t, "orig", forceAlignTraceID("orig", ""))
+}
