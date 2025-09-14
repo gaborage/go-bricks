@@ -277,9 +277,9 @@ func TestHandleReconnect_ExitsOnDone(t *testing.T) {
 	t.Log("spawn reconnect and close done")
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://example", reconnectDelay: 5 * time.Millisecond}
 	// Force dialer to always error
-	oldDial := amqpDialFunc
-	amqpDialFunc = func(_ string) (amqpConnection, error) { return nil, errors.New("dial failed") }
-	defer func() { amqpDialFunc = oldDial }()
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New("dial failed") })
+	defer func() { setAmqpDialFunc(oldDial) }()
 	done := make(chan bool)
 	c.done = done
 	go c.handleReconnect()
@@ -291,9 +291,9 @@ func TestHandleReconnect_ExitsOnDone(t *testing.T) {
 
 func TestConnect_StubSuccess(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
-	oldDial := amqpDialFunc
-	defer func() { amqpDialFunc = oldDial }()
-	amqpDialFunc = func(_ string) (amqpConnection, error) { return stubConn{}, nil }
+	oldDial := getAmqpDialFunc()
+	defer func() { setAmqpDialFunc(oldDial) }()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return stubConn{}, nil })
 	_, err := c.connect()
 	if err != nil {
 		t.Fatalf("connect expected nil err, got %v", err)
@@ -332,13 +332,13 @@ func TestHandleReInit_InitErrorNotifyConnClose(t *testing.T) {
 func TestNewAMQPClient_ConstructsAndStarts(t *testing.T) {
 	t.Helper()
 	// Ensure dialer does not hit network
-	oldDial := amqpDialFunc
-	amqpDialFunc = func(_ string) (amqpConnection, error) { return nil, errors.New("dial fail") }
-	defer func() { amqpDialFunc = oldDial }()
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New("dial fail") })
+	defer func() { setAmqpDialFunc(oldDial) }()
 	c := NewAMQPClient("amqp://example", &stubLogger{})
 	if c == nil {
 		t.Fatalf("expected client instance")
 	}
-	// Give the goroutine a beat, then return
-	time.Sleep(2 * time.Millisecond)
+	// Stop background goroutine to avoid races before restoring dialer
+	close(c.done)
 }

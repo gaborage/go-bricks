@@ -286,7 +286,8 @@ func (c *AMQPClientImpl) handleReconnect() {
 // connect creates a new AMQP connection.
 func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	// Use pluggable dialer
-	ac, err := amqpDialFunc(c.brokerURL)
+	dial := getAmqpDialFunc()
+	ac, err := dial(c.brokerURL)
 	if err != nil {
 		return nil, err
 	}

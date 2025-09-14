@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -34,10 +35,26 @@ func (r realConnection) NotifyClose(c chan *amqp.Error) chan *amqp.Error { retur
 func (r realConnection) Close() error                                    { return r.c.Close() }
 
 // Pluggable dialer for tests
-var amqpDialFunc = func(url string) (amqpConnection, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, err
+var (
+	amqpDialMu   sync.RWMutex
+	amqpDialFunc = func(url string) (amqpConnection, error) {
+		conn, err := amqp.Dial(url)
+		if err != nil {
+			return nil, err
+		}
+		return realConnection{c: conn}, nil
 	}
-	return realConnection{c: conn}, nil
+)
+
+func setAmqpDialFunc(f func(string) (amqpConnection, error)) {
+	amqpDialMu.Lock()
+	amqpDialFunc = f
+	amqpDialMu.Unlock()
+}
+
+func getAmqpDialFunc() func(string) (amqpConnection, error) {
+	amqpDialMu.RLock()
+	f := amqpDialFunc
+	amqpDialMu.RUnlock()
+	return f
 }
