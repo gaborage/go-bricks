@@ -1,5 +1,4 @@
-// Package app provides the core application framework for the MDW API Platform.
-// It handles application lifecycle, module registration, and service orchestration.
+// Package app provides the core application structure and lifecycle management.
 package app
 
 import (
