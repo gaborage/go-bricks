@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -352,7 +353,10 @@ func TestAMQPCentralizedArchitecture_ConsistentProcessing(t *testing.T) {
 // =============================================================================
 
 // stubLogger implements logger.Logger for testing log message capture
-type stubLogger struct{ entries []string }
+type stubLogger struct {
+	entries []string
+	mu      sync.Mutex
+}
 
 func (l *stubLogger) Info() logger.LogEvent                             { return &stubEvent{l} }
 func (l *stubLogger) Error() logger.LogEvent                            { return &stubEvent{l} }
@@ -364,8 +368,16 @@ func (l *stubLogger) WithFields(_ map[string]interface{}) logger.Logger { return
 
 type stubEvent struct{ l *stubLogger }
 
-func (e *stubEvent) Msg(msg string)                                    { e.l.entries = append(e.l.entries, msg) }
-func (e *stubEvent) Msgf(format string, _ ...interface{})              { e.l.entries = append(e.l.entries, format) }
+func (e *stubEvent) Msg(msg string) {
+	e.l.mu.Lock()
+	defer e.l.mu.Unlock()
+	e.l.entries = append(e.l.entries, msg)
+}
+func (e *stubEvent) Msgf(format string, _ ...interface{}) {
+	e.l.mu.Lock()
+	defer e.l.mu.Unlock()
+	e.l.entries = append(e.l.entries, format)
+}
 func (e *stubEvent) Err(_ error) logger.LogEvent                       { return e }
 func (e *stubEvent) Str(_, _ string) logger.LogEvent                   { return e }
 func (e *stubEvent) Int(_ string, _ int) logger.LogEvent               { return e }
