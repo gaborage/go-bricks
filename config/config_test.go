@@ -29,7 +29,7 @@ func TestLoad_Defaults(t *testing.T) {
 	// Verify default values
 	assert.Equal(t, "nova-service", cfg.App.Name)
 	assert.Equal(t, "v1.0.0", cfg.App.Version)
-	assert.Equal(t, "development", cfg.App.Env)
+	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 	assert.False(t, cfg.App.Debug)
 	assert.Equal(t, 100, cfg.App.RateLimit)
 	assert.Equal(t, "default", cfg.App.Namespace)
@@ -41,7 +41,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.Server.MiddlewareTimeout)
 	assert.Equal(t, 10*time.Second, cfg.Server.ShutdownTimeout)
 
-	assert.Equal(t, "postgresql", cfg.Database.Type)
+	assert.Equal(t, PostgreSQL, cfg.Database.Type)
 	assert.Equal(t, "localhost", cfg.Database.Host)
 	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)   // From env var
@@ -63,7 +63,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 
 	// Set a few key environment variables to test override functionality
 	os.Setenv("APP_NAME", "test-service")
-	os.Setenv("APP_ENV", "production")
+	os.Setenv("APP_ENV", EnvProduction)
 	os.Setenv("SERVER_PORT", "9090")
 	os.Setenv("DATABASE_DATABASE", "testdb")
 	os.Setenv("DATABASE_USERNAME", "testuser")
@@ -75,7 +75,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 
 	// Verify key environment variables override defaults
 	assert.Equal(t, "test-service", cfg.App.Name)
-	assert.Equal(t, "production", cfg.App.Env)
+	assert.Equal(t, EnvProduction, cfg.App.Env)
 	assert.Equal(t, 9090, cfg.Server.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)
 	assert.Equal(t, "testuser", cfg.Database.Username)
@@ -84,7 +84,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	// Verify defaults still work for non-overridden values
 	assert.Equal(t, "v1.0.0", cfg.App.Version)
 	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
-	assert.Equal(t, "postgresql", cfg.Database.Type)
+	assert.Equal(t, PostgreSQL, cfg.Database.Type)
 	assert.Equal(t, "localhost", cfg.Database.Host)
 }
 
@@ -159,7 +159,7 @@ func TestLoadDefaults(t *testing.T) {
 	// Verify defaults are loaded
 	assert.Equal(t, "nova-service", k.String("app.name"))
 	assert.Equal(t, "v1.0.0", k.String("app.version"))
-	assert.Equal(t, "development", k.String("app.env"))
+	assert.Equal(t, EnvDevelopment, k.String("app.env"))
 	assert.False(t, k.Bool("app.debug"))
 	assert.Equal(t, 100, k.Int("app.rate_limit"))
 
