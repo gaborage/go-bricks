@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	testTraceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	testTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 )
 
 func TestTraceContext(t *testing.T) {

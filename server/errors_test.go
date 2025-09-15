@@ -14,11 +14,6 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
-const (
-	developmentEnv = "development"
-	devEnv         = "dev"
-)
-
 func TestBaseAPIError(t *testing.T) {
 	t.Run("new_base_api_error", func(t *testing.T) {
 		err := NewBaseAPIError("TEST_ERROR", "Test error message", http.StatusBadRequest)
@@ -229,7 +224,7 @@ func TestCustomErrorHandler(t *testing.T) {
 		{
 			name: "api_error_in_development",
 			config: &config.Config{
-				App: config.AppConfig{Env: developmentEnv, Debug: true},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			},
 			error:          NewBadRequestError("Invalid input"),
 			expectedStatus: http.StatusBadRequest,
@@ -239,7 +234,7 @@ func TestCustomErrorHandler(t *testing.T) {
 		{
 			name: "api_error_in_production",
 			config: &config.Config{
-				App: config.AppConfig{Env: "production", Debug: false},
+				App: config.AppConfig{Env: config.EnvProduction, Debug: false},
 			},
 			error:          NewInternalServerError("Database error"),
 			expectedStatus: http.StatusInternalServerError,
@@ -249,7 +244,7 @@ func TestCustomErrorHandler(t *testing.T) {
 		{
 			name: "echo_http_error_string",
 			config: &config.Config{
-				App: config.AppConfig{Env: developmentEnv, Debug: true},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			},
 			error:          echo.NewHTTPError(http.StatusNotFound, "Route not found"),
 			expectedStatus: http.StatusNotFound,
@@ -259,7 +254,7 @@ func TestCustomErrorHandler(t *testing.T) {
 		{
 			name: "echo_http_error_error_type",
 			config: &config.Config{
-				App: config.AppConfig{Env: developmentEnv, Debug: true},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			},
 			error:          echo.NewHTTPError(http.StatusBadRequest, fmt.Errorf("validation failed")),
 			expectedStatus: http.StatusBadRequest,
@@ -269,7 +264,7 @@ func TestCustomErrorHandler(t *testing.T) {
 		{
 			name: "generic_error_development",
 			config: &config.Config{
-				App: config.AppConfig{Env: developmentEnv, Debug: true},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			},
 			error:          fmt.Errorf("generic error"),
 			expectedStatus: http.StatusInternalServerError,
@@ -321,7 +316,7 @@ func TestCustomErrorHandler(t *testing.T) {
 			assert.NotEmpty(t, response.Error.Message)
 
 			// Verify details presence based on environment
-			if tt.expectDetails && (tt.config.App.Env == developmentEnv || tt.config.App.Env == devEnv) {
+			if tt.expectDetails && (tt.config.App.Env == config.EnvDevelopment) {
 				if tt.expectedStatus >= http.StatusInternalServerError && !tt.config.App.Debug {
 					// Production 5xx errors should not have details
 					assert.Nil(t, response.Error.Details)
@@ -370,7 +365,7 @@ func TestErrorResponseFormatting(t *testing.T) {
 	e := echo.New()
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		customErrorHandler(err, c, &config.Config{
-			App: config.AppConfig{Env: developmentEnv, Debug: true},
+			App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 		})
 	}
 
@@ -417,7 +412,7 @@ func TestErrorHandlerLogging(t *testing.T) {
 
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		customErrorHandler(err, c, &config.Config{
-			App: config.AppConfig{Env: developmentEnv, Debug: true},
+			App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 		})
 	}
 
@@ -452,7 +447,7 @@ func TestErrorHandlerLogging(t *testing.T) {
 			c := e.NewContext(req, rec)
 
 			customErrorHandler(tt.error, c, &config.Config{
-				App: config.AppConfig{Env: developmentEnv, Debug: true},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			})
 
 			if tt.expectLogged {
@@ -485,7 +480,7 @@ func TestErrorChaining(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	customErrorHandler(wrappedErr, c, &config.Config{
-		App: config.AppConfig{Env: developmentEnv, Debug: true},
+		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 	})
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)

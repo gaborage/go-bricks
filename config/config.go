@@ -64,7 +64,7 @@ func loadDefaults(k *koanf.Koanf) error {
 	defaults := map[string]interface{}{
 		"app.name":       "nova-service",
 		"app.version":    "v1.0.0",
-		"app.env":        "development",
+		"app.env":        EnvDevelopment,
 		"app.debug":      false,
 		"app.rate_limit": 100,
 		"app.namespace":  "default",

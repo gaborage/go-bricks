@@ -16,10 +16,8 @@ import (
 
 func TestSetupMiddlewares(t *testing.T) {
 	tests := []struct {
-		name            string
-		config          *config.Config
-		expectTimeout   bool
-		expectRateLimit bool
+		name   string
+		config *config.Config
 	}{
 		{
 			name: "standard_middleware_setup",
@@ -31,8 +29,6 @@ func TestSetupMiddlewares(t *testing.T) {
 					MiddlewareTimeout: 30 * time.Second,
 				},
 			},
-			expectTimeout:   true,
-			expectRateLimit: true,
 		},
 		{
 			name: "zero_rate_limit_disabled",
@@ -44,8 +40,6 @@ func TestSetupMiddlewares(t *testing.T) {
 					MiddlewareTimeout: 30 * time.Second,
 				},
 			},
-			expectTimeout:   true,
-			expectRateLimit: false,
 		},
 	}
 
@@ -130,6 +124,8 @@ func TestMiddlewareOrder(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
+
+	assert.NotEmpty(t, rec.Header().Get(echo.HeaderXRequestID))
 
 	// Verify middleware executed in correct order
 	assert.Contains(t, middlewareOrder, "pre-setup")
@@ -225,6 +221,7 @@ func TestGzipMiddleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
+		assert.Contains(t, rec.Header().Get("Vary"), "Accept-Encoding")
 
 		// Compressed response should be smaller than original
 		assert.Less(t, len(rec.Body.Bytes()), len(largeResponse))

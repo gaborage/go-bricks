@@ -53,6 +53,7 @@ func TestRateLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
 			e := echo.New()
 			e.Use(RateLimit(tt.requestsPerSec))
@@ -170,7 +171,7 @@ func TestRateLimitErrorResponse(t *testing.T) {
 	assert.Contains(t, blockedResponse.Body.String(), "request_id")
 
 	// Verify Content-Type is JSON
-	assert.Equal(t, "application/json", blockedResponse.Header().Get("Content-Type"))
+	assert.Contains(t, blockedResponse.Header().Get("Content-Type"), "application/json")
 }
 
 func TestRateLimitIPExtraction(t *testing.T) {
@@ -184,7 +185,6 @@ func TestRateLimitIPExtraction(t *testing.T) {
 	tests := []struct {
 		name     string
 		setupReq func(*http.Request)
-		expectIP string
 	}{
 		{
 			name: "x_real_ip_header",

@@ -11,6 +11,13 @@ const (
 	Oracle     = "oracle"
 )
 
+// Environment constants
+const (
+	EnvDevelopment = "development"
+	EnvStaging     = "staging"
+	EnvProduction  = "production"
+)
+
 func Validate(cfg *Config) error {
 	if err := validateApp(&cfg.App); err != nil {
 		return fmt.Errorf("app config: %w", err)
@@ -40,7 +47,7 @@ func validateApp(cfg *AppConfig) error {
 		return fmt.Errorf("app version is required")
 	}
 
-	validEnvs := []string{"development", "staging", "production"}
+	validEnvs := []string{EnvDevelopment, EnvStaging, EnvProduction}
 	if !contains(validEnvs, cfg.Env) {
 		return fmt.Errorf("invalid environment: %s (must be one of: %s)",
 			cfg.Env, strings.Join(validEnvs, ", "))

@@ -12,7 +12,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 		App: AppConfig{
 			Name:      "test-app",
 			Version:   "v1.0.0",
-			Env:       "development",
+			Env:       EnvDevelopment,
 			RateLimit: 100,
 		},
 		Server: ServerConfig{
@@ -47,7 +47,7 @@ func TestValidateApp_Success(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "test-app",
 				Version:   "v1.0.0",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: 100,
 			},
 		},
@@ -56,7 +56,7 @@ func TestValidateApp_Success(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "staging-app",
 				Version:   "v2.0.0",
-				Env:       "staging",
+				Env:       EnvStaging,
 				RateLimit: 200,
 			},
 		},
@@ -65,7 +65,7 @@ func TestValidateApp_Success(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "prod-app",
 				Version:   "v3.0.0",
-				Env:       "production",
+				Env:       EnvProduction,
 				RateLimit: 500,
 			},
 		},
@@ -74,7 +74,7 @@ func TestValidateApp_Success(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "min-app",
 				Version:   "v1.0.0",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: 1,
 			},
 		},
@@ -99,7 +99,7 @@ func TestValidateApp_Failures(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "",
 				Version:   "v1.0.0",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: 100,
 			},
 			expectedError: "app name is required",
@@ -109,7 +109,7 @@ func TestValidateApp_Failures(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "test-app",
 				Version:   "",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: 100,
 			},
 			expectedError: "app version is required",
@@ -129,7 +129,7 @@ func TestValidateApp_Failures(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "test-app",
 				Version:   "v1.0.0",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: 0,
 			},
 			expectedError: "rate limit must be positive",
@@ -139,7 +139,7 @@ func TestValidateApp_Failures(t *testing.T) {
 			cfg: AppConfig{
 				Name:      "test-app",
 				Version:   "v1.0.0",
-				Env:       "development",
+				Env:       EnvDevelopment,
 				RateLimit: -1,
 			},
 			expectedError: "rate limit must be positive",
@@ -290,7 +290,7 @@ func TestValidateDatabase_Success(t *testing.T) {
 		{
 			name: "postgresql_config",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     5432,
 				Database: "testdb",
@@ -301,7 +301,7 @@ func TestValidateDatabase_Success(t *testing.T) {
 		{
 			name: "oracle_config",
 			cfg: DatabaseConfig{
-				Type:     "oracle",
+				Type:     Oracle,
 				Host:     "oracle.example.com",
 				Port:     1521,
 				Database: "XE",
@@ -312,7 +312,7 @@ func TestValidateDatabase_Success(t *testing.T) {
 		{
 			name: "minimum_values",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "db",
 				Port:     1,
 				Database: "d",
@@ -323,7 +323,7 @@ func TestValidateDatabase_Success(t *testing.T) {
 		{
 			name: "maximum_port",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     65535,
 				Database: "testdb",
@@ -362,7 +362,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "empty_host",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "",
 				Port:     5432,
 				Database: "testdb",
@@ -374,7 +374,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "zero_port",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     0,
 				Database: "testdb",
@@ -386,7 +386,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "negative_port",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     -1,
 				Database: "testdb",
@@ -398,7 +398,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "port_too_high",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     65536,
 				Database: "testdb",
@@ -410,7 +410,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "empty_database",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     5432,
 				Database: "",
@@ -422,7 +422,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "empty_username",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     5432,
 				Database: "testdb",
@@ -434,7 +434,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "zero_max_conns",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     5432,
 				Database: "testdb",
@@ -446,7 +446,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 		{
 			name: "negative_max_conns",
 			cfg: DatabaseConfig{
-				Type:     "postgresql",
+				Type:     PostgreSQL,
 				Host:     "localhost",
 				Port:     5432,
 				Database: "testdb",
@@ -535,7 +535,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 				App: AppConfig{
 					Name:      "",
 					Version:   "v1.0.0",
-					Env:       "development",
+					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
 				Server: ServerConfig{
@@ -544,7 +544,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 					WriteTimeout: 30 * time.Second,
 				},
 				Database: DatabaseConfig{
-					Type:     "postgresql",
+					Type:     PostgreSQL,
 					Host:     "localhost",
 					Port:     5432,
 					Database: "testdb",
@@ -561,7 +561,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 				App: AppConfig{
 					Name:      "test-app",
 					Version:   "v1.0.0",
-					Env:       "development",
+					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
 				Server: ServerConfig{
@@ -570,7 +570,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 					WriteTimeout: 30 * time.Second,
 				},
 				Database: DatabaseConfig{
-					Type:     "postgresql",
+					Type:     PostgreSQL,
 					Host:     "localhost",
 					Port:     5432,
 					Database: "testdb",
@@ -587,7 +587,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 				App: AppConfig{
 					Name:      "test-app",
 					Version:   "v1.0.0",
-					Env:       "development",
+					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
 				Server: ServerConfig{
@@ -613,7 +613,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 				App: AppConfig{
 					Name:      "test-app",
 					Version:   "v1.0.0",
-					Env:       "development",
+					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
 				Server: ServerConfig{
@@ -622,7 +622,7 @@ func TestValidate_NestedErrors(t *testing.T) {
 					WriteTimeout: 30 * time.Second,
 				},
 				Database: DatabaseConfig{
-					Type:     "postgresql",
+					Type:     PostgreSQL,
 					Host:     "localhost",
 					Port:     5432,
 					Database: "testdb",
