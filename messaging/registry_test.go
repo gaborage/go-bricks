@@ -33,6 +33,9 @@ type simpleMockAMQPClient struct {
 	mu sync.RWMutex
 }
 
+// Compile-time interface conformance check
+var _ AMQPClient = (*simpleMockAMQPClient)(nil)
+
 func (m *simpleMockAMQPClient) IsReady() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
