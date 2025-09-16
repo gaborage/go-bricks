@@ -30,8 +30,8 @@ func TestNewModuleRegistry(t *testing.T) {
 	assert.Equal(t, deps, registry.deps)
 	assert.Equal(t, log, registry.logger)
 	assert.Empty(t, registry.modules)
-	// messaging registry should be nil since MockMessagingClient doesn't implement AMQPClient
-	assert.Nil(t, registry.messagingRegistry)
+	// messaging registry should now be created since MockMessagingClient implements AMQPClient
+	assert.NotNil(t, registry.messagingRegistry)
 }
 
 func TestModuleRegistry_Register_Success(t *testing.T) {
@@ -121,7 +121,7 @@ func TestModuleRegistry_RegisterMessaging_NoRegistry(t *testing.T) {
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
 		Logger:    log,
-		Messaging: &MockMessagingClient{}, // Not an AMQPClient
+		Messaging: nil, // No messaging client
 	}
 
 	registry := NewModuleRegistry(deps)

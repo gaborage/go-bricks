@@ -122,6 +122,31 @@ func (m *MockMessagingClient) IsReady() bool {
 	return argsList.Bool(0)
 }
 
+func (m *MockMessagingClient) PublishToExchange(ctx context.Context, options messaging.PublishOptions, data []byte) error {
+	argsList := m.Called(ctx, options, data)
+	return argsList.Error(0)
+}
+
+func (m *MockMessagingClient) ConsumeFromQueue(ctx context.Context, options messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
+	argsList := m.Called(ctx, options)
+	return argsList.Get(0).(<-chan amqp.Delivery), argsList.Error(1)
+}
+
+func (m *MockMessagingClient) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool) error {
+	argsList := m.Called(name, durable, autoDelete, exclusive, noWait)
+	return argsList.Error(0)
+}
+
+func (m *MockMessagingClient) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool) error {
+	argsList := m.Called(name, kind, durable, autoDelete, internal, noWait)
+	return argsList.Error(0)
+}
+
+func (m *MockMessagingClient) BindQueue(queue, exchange, routingKey string, noWait bool) error {
+	argsList := m.Called(queue, exchange, routingKey, noWait)
+	return argsList.Error(0)
+}
+
 // MockModule implements the Module interface for testing
 type MockModule struct {
 	mock.Mock
@@ -186,17 +211,13 @@ func createTestApp(_ *testing.T) (*App, *MockDatabase, *MockMessagingClient) {
 	mockDB := &MockDatabase{}
 	mockMessaging := &MockMessagingClient{}
 
-	registry := &ModuleRegistry{
-		modules: make([]Module, 0),
-		deps: &ModuleDeps{
-			DB:        mockDB,
-			Logger:    log,
-			Messaging: mockMessaging,
-			Config:    &config.Config{},
-		},
-		logger:            log,
-		messagingRegistry: nil,
+	deps := &ModuleDeps{
+		DB:        mockDB,
+		Logger:    log,
+		Messaging: mockMessaging,
+		Config:    cfg,
 	}
+	registry := NewModuleRegistry(deps)
 
 	// Create test server
 	srv := server.New(cfg, log)
@@ -463,4 +484,94 @@ func TestApp_Shutdown_NoMessaging(t *testing.T) {
 	assert.NoError(t, err)
 
 	mockDB.AssertExpectations(t)
+}
+
+// =============================================================================
+// Application Lifecycle Tests
+// =============================================================================
+
+func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
+	app, mockDB, mockMessaging := createTestApp(t)
+
+	// Setup mocks for unhealthy messaging
+	mockDB.On("Health", mock.Anything).Return(nil)
+	mockDB.On("Stats").Return(map[string]interface{}{
+		"open_connections": 5,
+	}, nil)
+	mockMessaging.On("IsReady").Return(false) // Messaging not ready
+
+	// Create test request
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Execute ready check
+	err := app.readyCheck(c)
+	require.NoError(t, err)
+
+	// Verify response
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Parse JSON response
+	var response map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ready", response["status"])
+	assert.Equal(t, "healthy", response["database"])
+	assert.Equal(t, "unhealthy", response["messaging"])
+
+	mockDB.AssertExpectations(t)
+	mockMessaging.AssertExpectations(t)
+}
+
+func TestApp_RegisterMessaging_Success(t *testing.T) {
+	app, _, mockMessaging := createTestApp(t)
+
+	// Add a test module with messaging registration
+	module := &MockModule{name: "messaging-module"}
+	module.On("RegisterMessaging", mock.Anything).Return()
+	app.registry.modules = append(app.registry.modules, module)
+
+	// Mock the messaging operations that will be called during RegisterMessaging
+	mockMessaging.On("IsReady").Return(true)
+
+	err := app.registry.RegisterMessaging()
+	assert.NoError(t, err)
+
+	module.AssertExpectations(t)
+}
+
+func TestApp_RegisterMessaging_NoMessagingClient(t *testing.T) {
+	app, _, _ := createTestApp(t)
+
+	// Set messaging to nil to simulate no messaging client
+	app.registry.deps.Messaging = nil
+	// Recreate registry without messaging
+	app.registry = NewModuleRegistry(app.registry.deps)
+
+	err := app.registry.RegisterMessaging()
+	// Should not return error when no messaging client is available
+	assert.NoError(t, err)
+}
+
+func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
+	app, mockDB, mockMessaging := createTestApp(t)
+
+	// Mock server that fails to shutdown gracefully
+	// Since we can't easily mock the echo server, we'll focus on the shutdown logic
+	mockDB.On("Close").Return(nil)
+	mockMessaging.On("Close").Return(nil)
+
+	// Execute shutdown with very short timeout to test timeout scenario
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+
+	err := app.Shutdown(ctx)
+	// Shutdown should not return error even if server shutdown fails
+	assert.NoError(t, err)
+
+	mockDB.AssertExpectations(t)
+	mockMessaging.AssertExpectations(t)
 }

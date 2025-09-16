@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -93,4 +94,237 @@ func TestConnection_BasicMethods_WithSQLMock(t *testing.T) {
 
 	// Verify expectations
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// =============================================================================
+// Connection Management Tests
+// =============================================================================
+
+func TestConnection_NewConnection_WithConnectionString(t *testing.T) {
+	// Test configuration with connection string
+	cfg := &config.DatabaseConfig{
+		ConnectionString: "oracle://user:pass@localhost:1521/XE",
+		MaxConns:         25,
+		MaxIdleConns:     10,
+		ConnMaxLifetime:  time.Hour,
+		ConnMaxIdleTime:  30 * time.Minute,
+	}
+
+	log := logger.New("debug", true)
+
+	// This will fail because we're not connecting to a real database
+	// but we can test the configuration parsing part
+	_, err := NewConnection(cfg, log)
+
+	// We expect an error because the database doesn't exist, but the error should be connection-related, not config-related
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+}
+
+func TestConnection_NewConnection_WithServiceName(t *testing.T) {
+	// Test configuration with ServiceName
+	cfg := &config.DatabaseConfig{
+		Host:            "localhost",
+		Port:            1521,
+		Username:        "testuser",
+		Password:        "testpass",
+		ServiceName:     "XEPDB1",
+		MaxConns:        25,
+		MaxIdleConns:    10,
+		ConnMaxLifetime: time.Hour,
+		ConnMaxIdleTime: 30 * time.Minute,
+	}
+
+	log := logger.New("debug", true)
+
+	// This will fail because we're not connecting to a real database
+	_, err := NewConnection(cfg, log)
+
+	// We expect an error because the database doesn't exist
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+}
+
+func TestConnection_NewConnection_WithSID(t *testing.T) {
+	// Test configuration with SID
+	cfg := &config.DatabaseConfig{
+		Host:            "localhost",
+		Port:            1521,
+		Username:        "testuser",
+		Password:        "testpass",
+		SID:             "XE",
+		MaxConns:        25,
+		MaxIdleConns:    10,
+		ConnMaxLifetime: time.Hour,
+		ConnMaxIdleTime: 30 * time.Minute,
+	}
+
+	log := logger.New("debug", true)
+
+	// This will fail because we're not connecting to a real database
+	_, err := NewConnection(cfg, log)
+
+	// We expect an error because the database doesn't exist
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+}
+
+func TestConnection_NewConnection_WithDatabase(t *testing.T) {
+	// Test configuration with Database (fallback when no ServiceName or SID)
+	cfg := &config.DatabaseConfig{
+		Host:            "localhost",
+		Port:            1521,
+		Username:        "testuser",
+		Password:        "testpass",
+		Database:        "XE",
+		MaxConns:        25,
+		MaxIdleConns:    10,
+		ConnMaxLifetime: time.Hour,
+		ConnMaxIdleTime: 30 * time.Minute,
+	}
+
+	log := logger.New("debug", true)
+
+	// This will fail because we're not connecting to a real database
+	_, err := NewConnection(cfg, log)
+
+	// We expect an error because the database doesn't exist
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+}
+
+func TestConnection_CreateMigrationTable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	c := &Connection{db: db, logger: logger.New("debug", true)}
+
+	ctx := context.Background()
+
+	// Mock the CREATE TABLE execution (two PL/SQL blocks)
+	mock.ExpectExec(`BEGIN`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`BEGIN`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err = c.CreateMigrationTable(ctx)
+	assert.NoError(t, err)
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConnection_CreateMigrationTable_FirstError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	c := &Connection{db: db, logger: logger.New("debug", true)}
+
+	ctx := context.Background()
+
+	// Mock the first PL/SQL block to fail
+	mock.ExpectExec(`BEGIN`).
+		WillReturnError(sql.ErrConnDone)
+
+	err = c.CreateMigrationTable(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create Oracle migration table")
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConnection_CreateMigrationTable_SecondError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	c := &Connection{db: db, logger: logger.New("debug", true)}
+
+	ctx := context.Background()
+
+	// Mock the first PL/SQL block to succeed, second to fail
+	mock.ExpectExec(`BEGIN`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`BEGIN`).
+		WillReturnError(sql.ErrTxDone)
+
+	err = c.CreateMigrationTable(ctx)
+	assert.Error(t, err)
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConnection_QueryOperations_ErrorHandling(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	c := &Connection{db: db, logger: logger.New("debug", true)}
+	ctx := context.Background()
+
+	// Test Query error
+	mock.ExpectQuery("SELECT").WillReturnError(sql.ErrConnDone)
+	rows, err := c.Query(ctx, "SELECT * FROM test")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "sql: connection is already closed")
+	assert.Nil(t, rows)
+
+	// Test QueryRow (doesn't return error, but we can test it executes)
+	countRows := sqlmock.NewRows([]string{"count"}).AddRow(42)
+	mock.ExpectQuery("SELECT COUNT").WillReturnRows(countRows)
+	row := c.QueryRow(ctx, "SELECT COUNT(*) FROM test")
+	assert.NotNil(t, row)
+
+	// Test Prepare error
+	mock.ExpectPrepare("INVALID SQL").WillReturnError(sql.ErrTxDone)
+	_, err = c.Prepare(ctx, "INVALID SQL")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "sql: transaction has already been committed or rolled back")
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConnection_TransactionOperations_ErrorHandling(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	c := &Connection{db: db, logger: logger.New("debug", true)}
+	ctx := context.Background()
+
+	// Test Begin error
+	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
+	_, err = c.Begin(ctx)
+	assert.Error(t, err)
+
+	// Test BeginTx error
+	mock.ExpectBegin().WillReturnError(sql.ErrTxDone)
+	_, err = c.BeginTx(ctx, &sql.TxOptions{})
+	assert.Error(t, err)
+
+	// Test successful Prepare error in statement
+	mock.ExpectPrepare("SELECT").WillReturnError(sql.ErrConnDone)
+	_, err = c.Prepare(ctx, "SELECT * FROM test")
+	assert.Error(t, err)
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConnection_Metadata(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	mock.ExpectClose()
+
+	c := &Connection{db: db, logger: logger.New("disabled", true)}
+
+	assert.Equal(t, "oracle", c.DatabaseType())
+	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
+	assert.NoError(t, c.Close())
 }
