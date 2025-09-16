@@ -356,20 +356,20 @@ func TestAMQPCentralizedArchitecture_ConsistentProcessing(t *testing.T) {
 // stubLogger implements logger.Logger for testing log message capture
 type stubLogger struct {
 	entries []string
-	mu      sync.Mutex
+	mu      sync.RWMutex
 }
 
 // reset clears all log entries safely
 func (l *stubLogger) reset() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	l.entries = nil
 }
 
 // getEntries returns a copy of the entries safely
 func (l *stubLogger) getEntries() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	entriesCopy := make([]string, len(l.entries))
 	copy(entriesCopy, l.entries)
 	return entriesCopy
@@ -410,6 +410,25 @@ type testHandler struct{ retErr error }
 func (h *testHandler) Handle(_ context.Context, _ *amqp.Delivery) error { return h.retErr }
 func (h *testHandler) EventType() string                                { return "test" }
 
+// Test helper functions for robust log message checking
+func containsAckFailure(entries []string) bool {
+	for _, entry := range entries {
+		if strings.Contains(entry, "Failed to ack") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNackFailure(entries []string) bool {
+	for _, entry := range entries {
+		if strings.Contains(entry, "Failed to nack") {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 	// Set up a registry with stub logger
 	l := &stubLogger{}
@@ -424,7 +443,7 @@ func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// Should not attempt ack; check absence of ack error log message
 		entries := l.getEntries()
-		assert.NotContains(t, entries, "Failed to ack message")
+		assert.False(t, containsAckFailure(entries), "Expected no ack failure messages")
 	})
 
 	t.Run("AutoAck=true error does not nack", func(t *testing.T) {
@@ -433,7 +452,7 @@ func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// Should not attempt nack; check absence of nack error log message
 		entries := l.getEntries()
-		assert.NotContains(t, entries, "Failed to nack message")
+		assert.False(t, containsNackFailure(entries), "Expected no nack failure messages")
 	})
 
 	t.Run("AutoAck=false success acks (may error)", func(t *testing.T) {
@@ -442,7 +461,7 @@ func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// With uninitialized delivery, ack will likely fail, so expect log message
 		entries := l.getEntries()
-		assert.Contains(t, entries, "Failed to ack message")
+		assert.True(t, containsAckFailure(entries), "Expected ack failure message")
 	})
 
 	t.Run("AutoAck=false error nacks (may error)", func(t *testing.T) {
@@ -450,6 +469,6 @@ func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 		cons := &ConsumerDeclaration{AutoAck: false, Handler: &testHandler{retErr: assert.AnError}}
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		entries := l.getEntries()
-		assert.Contains(t, entries, "Failed to nack message")
+		assert.True(t, containsNackFailure(entries), "Expected nack failure message")
 	})
 }

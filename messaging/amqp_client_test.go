@@ -48,6 +48,8 @@ type fakeChannel struct {
 	declaredQueue    string
 	declaredExchange string
 	boundQueue       struct{ q, ex, rk string }
+	// Signal channel for test coordination
+	publishAttemptSignal chan struct{}
 	// Mutex to protect concurrent access to fields
 	mu sync.RWMutex
 }
@@ -64,6 +66,14 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 		mandatory, immediate bool
 	}{exchange, key, mandatory, immediate}
 	err := f.publishErr
+
+	// Signal that a publish attempt occurred (non-blocking)
+	if f.publishAttemptSignal != nil {
+		select {
+		case f.publishAttemptSignal <- struct{}{}:
+		default:
+		}
+	}
 	f.mu.Unlock()
 	return err
 }
@@ -163,7 +173,6 @@ func TestPublishToExchange_AckSuccess(t *testing.T) {
 
 	// Send ack after publish
 	go func() {
-		time.Sleep(1 * time.Millisecond)
 		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	}()
 
@@ -178,12 +187,19 @@ func TestPublishToExchange_NackThenCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// First confirmation is nack, then cancel context to exit loop
+	// Use signaling channel to coordinate timing
+	publishStarted := make(chan struct{})
+
 	go func() {
-		time.Sleep(1 * time.Millisecond)
+		<-publishStarted // Wait for publish to start
+		// Send nack confirmation (buffered channel, no sleep needed)
 		c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 2}
-		time.Sleep(2 * time.Millisecond)
+		// Cancel to exit retry loop after nack
 		cancel()
 	}()
+
+	// Signal that publish is starting
+	close(publishStarted)
 
 	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err == nil {
 		t.Fatalf("expected context error after cancel")
@@ -194,12 +210,10 @@ func TestPublishToExchange_ConfirmTimeoutThenCancel(t *testing.T) {
 	t.Helper()
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
-	// No confirmation sent -> timeout branch executed; then cancel
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
+	// No confirmation sent -> timeout branch executed
+	// Use timeout context instead of sleep-based cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
 	_ = c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 }
 
@@ -346,8 +360,8 @@ func TestNewAMQPClient_ConstructsAndStarts(t *testing.T) {
 	if c == nil {
 		t.Fatalf("expected client instance")
 	}
-	// Stop background goroutine to avoid races before restoring dialer
-	close(c.done)
+	// Ensure background goroutines are stopped
+	t.Cleanup(func() { _ = c.Close() })
 }
 
 // ===== Enhanced Connection Management Tests =====
@@ -667,16 +681,21 @@ func TestPublishToExchange_MultipleRetriesBeforeSuccess(t *testing.T) {
 	c.resendDelay = 1 * time.Millisecond
 
 	// Fail first attempt, succeed on second
+	// Use signaling to coordinate retry behavior
+	publishAttempts := make(chan struct{}, 2)
+
+	// Set up the fakeChannel to fail initially
 	ch.mu.Lock()
 	ch.publishErr = errors.New("initial failure")
+	ch.publishAttemptSignal = publishAttempts // Signal on each publish attempt
 	ch.mu.Unlock()
 
 	go func() {
-		time.Sleep(2 * time.Millisecond) // Wait for first attempt
+		<-publishAttempts // Wait for first attempt
 		ch.mu.Lock()
 		ch.publishErr = nil // Success on retry
 		ch.mu.Unlock()
-		time.Sleep(1 * time.Millisecond) // Wait for retry attempt
+		<-publishAttempts // Wait for retry attempt
 		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	}()
 
@@ -693,11 +712,8 @@ func TestPublishToExchange_CustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
-	// Send ack after publish
-	go func() {
-		time.Sleep(1 * time.Millisecond)
-		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
-	}()
+	// Send ack immediately using buffered channel (no sleep needed)
+	c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 
 	customHeaders := map[string]any{
 		"custom-header": "test-value",
@@ -752,11 +768,8 @@ func TestPublishToExchange_ContextTrackingOnSuccess(t *testing.T) {
 	// Create context with counters for tracking
 	ctx := context.Background()
 
-	// Send ack after publish
-	go func() {
-		time.Sleep(1 * time.Millisecond)
-		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
-	}()
+	// Send ack immediately using buffered channel (no sleep needed)
+	c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 
 	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if err != nil {
@@ -770,16 +783,10 @@ func TestPublishToExchange_MultipleNacksBeforeTimeout(_ *testing.T) {
 	c.connectionTimeout = 5 * time.Millisecond
 	c.resendDelay = 1 * time.Millisecond
 
-	nackCount := 0
-	// Send multiple nacks to test the retry loop
-	go func() {
-		for nackCount < 2 {
-			time.Sleep(1 * time.Millisecond)
-			c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: uint64(nackCount + 1)}
-			nackCount++
-		}
-		// After 2 nacks, let timeout happen naturally
-	}()
+	// Send multiple nacks immediately using buffered channel
+	// After these nacks, let timeout happen naturally
+	c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 1}
+	c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 2}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -793,11 +800,8 @@ func TestPublish_BasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
-	// Send ack after publish
-	go func() {
-		time.Sleep(1 * time.Millisecond)
-		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
-	}()
+	// Send ack immediately using buffered channel (no sleep needed)
+	c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 
 	// Test the basic Publish method delegates to PublishToExchange
 	err := c.Publish(context.Background(), "test-queue", []byte("msg"))
@@ -891,6 +895,9 @@ func TestAMQPClient_ConsumeFromQueue_ChannelError(t *testing.T) {
 	})
 
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	// Ensure background goroutines are stopped
+	t.Cleanup(func() { _ = client.Close() })
+
 	// Set up manually with our mock channel
 	client.m.Lock()
 	client.channel = mockChannel

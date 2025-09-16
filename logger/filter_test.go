@@ -121,7 +121,7 @@ func TestFilterFields(t *testing.T) {
 	input := map[string]any{
 		"username": testUserDoe,
 		"password": testPassword,
-		"api_key":  "sk_test_1234567890",
+		"api_key":  "test_api_1234567890",
 		"email":    "john@example.com",
 	}
 
@@ -196,7 +196,7 @@ func TestFilterValue_StructFiltering(t *testing.T) {
 		Username: "test_user_john_doe",
 		Password: "test_secret123",
 		Email:    "john@example.com",
-		APIKey:   "sk_test_123456",
+		APIKey:   "test_api_123456",
 	}
 
 	result := filter.FilterValue("user", input)
