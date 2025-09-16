@@ -361,8 +361,8 @@ type stubLogger struct {
 
 // reset clears all log entries safely
 func (l *stubLogger) reset() {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.entries = nil
 }
 
