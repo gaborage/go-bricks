@@ -30,17 +30,17 @@ type MockDatabase struct {
 	mock.Mock
 }
 
-func (m *MockDatabase) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	argsList := m.Called(ctx, query, args)
 	return argsList.Get(0).(*sql.Rows), argsList.Error(1)
 }
 
-func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	argsList := m.Called(ctx, query, args)
 	return argsList.Get(0).(*sql.Row)
 }
 
-func (m *MockDatabase) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	argsList := m.Called(ctx, query, args)
 	return argsList.Get(0).(sql.Result), argsList.Error(1)
 }
@@ -74,9 +74,9 @@ func (m *MockDatabase) Health(ctx context.Context) error {
 	return argsList.Error(0)
 }
 
-func (m *MockDatabase) Stats() (map[string]interface{}, error) {
+func (m *MockDatabase) Stats() (map[string]any, error) {
 	argsList := m.Called()
-	return argsList.Get(0).(map[string]interface{}), argsList.Error(1)
+	return argsList.Get(0).(map[string]any), argsList.Error(1)
 }
 
 func (m *MockDatabase) Close() error {
@@ -331,7 +331,7 @@ func TestApp_ReadyCheck_Healthy(t *testing.T) {
 
 	// Setup mocks for healthy state
 	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]interface{}{
+	mockDB.On("Stats").Return(map[string]any{
 		"open_connections": 5,
 		"max_connections":  25,
 	}, nil)
@@ -351,7 +351,7 @@ func TestApp_ReadyCheck_Healthy(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Parse JSON response
-	var response map[string]interface{}
+	var response map[string]any
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
@@ -363,7 +363,7 @@ func TestApp_ReadyCheck_Healthy(t *testing.T) {
 	assert.NotNil(t, response["app"])
 
 	// Verify app details
-	appDetails := response["app"].(map[string]interface{})
+	appDetails := response["app"].(map[string]any)
 	assert.Equal(t, "test-app", appDetails["name"])
 	assert.Equal(t, "test", appDetails["environment"])
 	assert.Equal(t, "v1.0.0-test", appDetails["version"])
@@ -394,7 +394,7 @@ func TestApp_ReadyCheck_UnhealthyDatabase(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	// Parse JSON response
-	var response map[string]interface{}
+	var response map[string]any
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
@@ -413,7 +413,7 @@ func TestApp_ReadyCheck_NoMessaging(t *testing.T) {
 
 	// Setup mocks for healthy database
 	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]interface{}{
+	mockDB.On("Stats").Return(map[string]any{
 		"open_connections": 5,
 	}, nil)
 
@@ -431,7 +431,7 @@ func TestApp_ReadyCheck_NoMessaging(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Parse JSON response
-	var response map[string]interface{}
+	var response map[string]any
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
@@ -447,7 +447,7 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 
 	// Setup mocks - healthy database but stats error
 	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]interface{}{}, errors.New("stats unavailable"))
+	mockDB.On("Stats").Return(map[string]any{}, errors.New("stats unavailable"))
 	mockMessaging.On("IsReady").Return(true)
 
 	// Create test request
@@ -464,7 +464,7 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Parse JSON response
-	var response map[string]interface{}
+	var response map[string]any
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
@@ -472,7 +472,7 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 	assert.Equal(t, "healthy", response["database"])
 
 	// Check that db_stats contains error
-	dbStats := response["db_stats"].(map[string]interface{})
+	dbStats := response["db_stats"].(map[string]any)
 	assert.Equal(t, "stats unavailable", dbStats["error"])
 
 	mockDB.AssertExpectations(t)
@@ -554,7 +554,7 @@ func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
 
 	// Setup mocks for unhealthy messaging
 	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]interface{}{
+	mockDB.On("Stats").Return(map[string]any{
 		"open_connections": 5,
 	}, nil)
 	mockMessaging.On("IsReady").Return(false) // Messaging not ready
@@ -573,7 +573,7 @@ func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Parse JSON response
-	var response map[string]interface{}
+	var response map[string]any
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
@@ -696,4 +696,334 @@ func TestApp_Run_Success(t *testing.T) {
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
 	module.AssertExpectations(t)
+}
+
+// =============================================================================
+// New() Constructor Tests - Factory Method Testing
+// =============================================================================
+
+func TestApp_NewWithConfig_DatabaseAndMessagingEnabled(t *testing.T) {
+	// Create test config with both database and messaging enabled
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "test-host",
+			Port: 5432,
+		},
+		Messaging: config.MessagingConfig{
+			BrokerURL: "amqp://test-broker:5672",
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	// Use mocks to avoid real connections
+	mockDB := &MockDatabase{}
+	mockMessaging := &MockMessagingClient{}
+	mockSignalHandler := NewMockSignalHandler()
+	mockTimeoutProvider := &MockTimeoutProvider{}
+
+	opts := &Options{
+		Database:        mockDB,
+		MessagingClient: mockMessaging,
+		SignalHandler:   mockSignalHandler,
+		TimeoutProvider: mockTimeoutProvider,
+	}
+
+	app, err := NewWithConfig(cfg, opts)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, app)
+	assert.Equal(t, mockDB, app.db)
+	assert.Equal(t, mockMessaging, app.messaging)
+	assert.Equal(t, mockSignalHandler, app.signalHandler)
+	assert.Equal(t, mockTimeoutProvider, app.timeoutProvider)
+	assert.Equal(t, "test-app", app.cfg.App.Name)
+}
+
+func TestApp_NewWithConfig_DatabaseOnlyEnabled(t *testing.T) {
+	// Create test config with only database enabled
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "test-host",
+			Port: 5432,
+		},
+		Messaging: config.MessagingConfig{
+			BrokerURL: "", // Empty means disabled
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	mockDB := &MockDatabase{}
+
+	opts := &Options{
+		Database: mockDB,
+	}
+
+	app, err := NewWithConfig(cfg, opts)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, app)
+	assert.Equal(t, mockDB, app.db)
+	assert.Nil(t, app.messaging) // Should be nil when not configured
+}
+
+func TestApp_NewWithConfig_MessagingOnlyEnabled(t *testing.T) {
+	// Create test config with only messaging enabled
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			// Empty database config means disabled
+		},
+		Messaging: config.MessagingConfig{
+			BrokerURL: "amqp://test-broker:5672",
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	mockMessaging := &MockMessagingClient{}
+
+	opts := &Options{
+		MessagingClient: mockMessaging,
+	}
+
+	app, err := NewWithConfig(cfg, opts)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, app)
+	assert.Nil(t, app.db) // Should be nil when not configured
+	assert.Equal(t, mockMessaging, app.messaging)
+}
+
+func TestApp_NewWithConfig_NeitherEnabled(t *testing.T) {
+	// Create test config with neither database nor messaging enabled
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			// Empty database config means disabled
+		},
+		Messaging: config.MessagingConfig{
+			BrokerURL: "", // Empty means disabled
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	app, err := NewWithConfig(cfg, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, app)
+	assert.Nil(t, app.db)        // Should be nil when not configured
+	assert.Nil(t, app.messaging) // Should be nil when not configured
+	assert.NotNil(t, app.server)
+	assert.NotNil(t, app.logger)
+	assert.NotNil(t, app.registry)
+}
+
+func TestApp_isDatabaseEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *config.Config
+		expected bool
+	}{
+		{
+			name: "enabled with host",
+			config: &config.Config{
+				Database: config.DatabaseConfig{
+					Host: "localhost",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "enabled with type",
+			config: &config.Config{
+				Database: config.DatabaseConfig{
+					Type: "postgresql",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "enabled with both",
+			config: &config.Config{
+				Database: config.DatabaseConfig{
+					Host: "localhost",
+					Type: "postgresql",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "disabled when empty",
+			config: &config.Config{
+				Database: config.DatabaseConfig{},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isDatabaseEnabled(tt.config)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestApp_isMessagingEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *config.Config
+		expected bool
+	}{
+		{
+			name: "enabled with broker URL",
+			config: &config.Config{
+				Messaging: config.MessagingConfig{
+					BrokerURL: "amqp://localhost:5672",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "disabled when empty",
+			config: &config.Config{
+				Messaging: config.MessagingConfig{
+					BrokerURL: "",
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isMessagingEnabled(tt.config)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// =============================================================================
+// readyCheck Tests with Optional Dependencies
+// =============================================================================
+
+func TestApp_ReadyCheck_DatabaseDisabled(t *testing.T) {
+	// Create app without database
+	cfg := &config.Config{
+		App:       config.AppConfig{Name: "test-app", Version: "v1.0.0", Env: "test"},
+		Server:    config.ServerConfig{Host: "localhost", Port: 8080},
+		Database:  config.DatabaseConfig{}, // Empty means disabled
+		Messaging: config.MessagingConfig{BrokerURL: ""},
+		Log:       config.LogConfig{Level: "info", Pretty: false},
+	}
+
+	app, err := NewWithConfig(cfg, nil)
+	require.NoError(t, err)
+
+	// Create test request
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Execute ready check
+	err = app.readyCheck(c)
+	require.NoError(t, err)
+
+	// Verify response
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Parse JSON response
+	var response map[string]any
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ready", response["status"])
+	assert.Equal(t, "disabled", response["database"])
+	assert.Equal(t, "disabled", response["messaging"])
+
+	// Check db_stats shows disabled status
+	dbStats := response["db_stats"].(map[string]any)
+	assert.Equal(t, "disabled", dbStats["status"])
+}
+
+func TestApp_ReadyCheck_MessagingDisabled(t *testing.T) {
+	app, mockDB, _ := createTestApp(t)
+
+	// Disable messaging
+	app.messaging = nil
+
+	// Setup healthy database
+	mockDB.On("Health", mock.Anything).Return(nil)
+	mockDB.On("Stats").Return(map[string]any{"open_connections": 5}, nil)
+
+	// Create test request
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Execute ready check
+	err := app.readyCheck(c)
+	require.NoError(t, err)
+
+	// Verify response
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response map[string]any
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ready", response["status"])
+	assert.Equal(t, "healthy", response["database"])
+	assert.Equal(t, "disabled", response["messaging"])
+
+	mockDB.AssertExpectations(t)
 }

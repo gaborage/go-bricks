@@ -62,14 +62,38 @@ type App struct {
 	timeoutProvider TimeoutProvider
 }
 
-// New creates a new application instance with all necessary dependencies.
-// It initializes configuration, logging, database, and HTTP server components.
+// isDatabaseEnabled determines if database should be initialized based on config
+func isDatabaseEnabled(cfg *config.Config) bool {
+	return cfg.Database.Host != "" || cfg.Database.Type != ""
+}
+
+// isMessagingEnabled determines if messaging should be initialized based on config
+func isMessagingEnabled(cfg *config.Config) bool {
+	return cfg.Messaging.BrokerURL != ""
+}
+
+// Options contains optional dependencies for creating an App instance
+type Options struct {
+	Database        database.Interface
+	MessagingClient messaging.Client
+	SignalHandler   SignalHandler
+	TimeoutProvider TimeoutProvider
+}
+
+// New creates a new application instance with dependencies determined by configuration.
+// It initializes only the services that are configured, failing fast if configured services cannot connect.
 func New() (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
+	return NewWithConfig(cfg, nil)
+}
+
+// NewWithConfig creates a new application instance with the provided config and optional overrides.
+// This factory method allows for dependency injection while maintaining fail-fast behavior.
+func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 	log := logger.New(cfg.Log.Level, cfg.Log.Pretty)
 
 	log.Info().
@@ -78,23 +102,52 @@ func New() (*App, error) {
 		Str("version", cfg.App.Version).
 		Msg("Starting application")
 
-	db, err := database.NewConnection(&cfg.Database, log)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	// Initialize database if configured or provided
+	var db database.Interface
+	if opts != nil && opts.Database != nil {
+		db = opts.Database
+		log.Debug().Msg("Using provided database instance")
+	} else if isDatabaseEnabled(cfg) {
+		var err error
+		db, err = database.NewConnection(&cfg.Database, log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to database: %w", err)
+		}
+		log.Info().
+			Str("type", cfg.Database.Type).
+			Str("host", cfg.Database.Host).
+			Msg("Database connection established")
+	} else {
+		log.Info().Msg("No database configured, running without database")
 	}
 
-	srv := server.New(cfg, log)
-
-	// Initialize messaging client if broker URL is provided
+	// Initialize messaging client if configured or provided
 	var msgClient messaging.Client
-	if cfg.Messaging.BrokerURL != "" {
+	if opts != nil && opts.MessagingClient != nil {
+		msgClient = opts.MessagingClient
+		log.Debug().Msg("Using provided messaging client")
+	} else if isMessagingEnabled(cfg) {
 		msgClient = messaging.NewAMQPClient(cfg.Messaging.BrokerURL, log)
 		log.Info().
 			Str("broker_url", cfg.Messaging.BrokerURL).
 			Msg("Initializing AMQP messaging client")
 	} else {
-		log.Debug().Msg("No messaging broker URL configured, messaging disabled")
+		log.Info().Msg("No messaging broker URL configured, messaging disabled")
 	}
+
+	// Use provided signal handler and timeout provider or defaults
+	var signalHandler SignalHandler = &OSSignalHandler{}
+	var timeoutProvider TimeoutProvider = &StandardTimeoutProvider{}
+	if opts != nil {
+		if opts.SignalHandler != nil {
+			signalHandler = opts.SignalHandler
+		}
+		if opts.TimeoutProvider != nil {
+			timeoutProvider = opts.TimeoutProvider
+		}
+	}
+
+	srv := server.New(cfg, log)
 
 	deps := &ModuleDeps{
 		DB:        db,
@@ -111,8 +164,8 @@ func New() (*App, error) {
 		logger:          log,
 		messaging:       msgClient,
 		registry:        registry,
-		signalHandler:   &OSSignalHandler{},
-		timeoutProvider: &StandardTimeoutProvider{},
+		signalHandler:   signalHandler,
+		timeoutProvider: timeoutProvider,
 	}
 
 	srv.Echo().GET("/ready", app.readyCheck)
@@ -174,8 +227,13 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	if err := a.db.Close(); err != nil {
-		a.logger.Error().Err(err).Msg("Failed to close database connection")
+	// Close database connection if enabled
+	if a.db != nil {
+		if err := a.db.Close(); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to close database connection")
+		} else {
+			a.logger.Info().Msg("Database connection closed successfully")
+		}
 	}
 
 	a.logger.Info().Msg("Application shutdown complete")
@@ -185,20 +243,28 @@ func (a *App) Shutdown(ctx context.Context) error {
 func (a *App) readyCheck(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	dbHealth := "healthy"
-	if err := a.db.Health(ctx); err != nil {
-		dbHealth = "unhealthy"
-		return c.JSON(http.StatusServiceUnavailable, map[string]any{
-			"status":   "not ready",
-			"database": dbHealth,
-			"error":    err.Error(),
-		})
-	}
+	// Check database health if enabled
+	dbHealth := "disabled"
+	var stats map[string]any
+	if a.db != nil {
+		if err := a.db.Health(ctx); err != nil {
+			dbHealth = "unhealthy"
+			return c.JSON(http.StatusServiceUnavailable, map[string]any{
+				"status":   "not ready",
+				"database": dbHealth,
+				"error":    err.Error(),
+			})
+		}
+		dbHealth = "healthy"
 
-	stats, err := a.db.Stats()
-	if err != nil {
-		a.logger.Error().Err(err).Msg("Failed to get database stats")
-		stats = map[string]any{"error": err.Error()}
+		var err error
+		stats, err = a.db.Stats()
+		if err != nil {
+			a.logger.Error().Err(err).Msg("Failed to get database stats")
+			stats = map[string]any{"error": err.Error()}
+		}
+	} else {
+		stats = map[string]any{"status": "disabled"}
 	}
 
 	// Check messaging health if enabled
