@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -97,6 +99,45 @@ func (m *MockDatabase) CreateMigrationTable(ctx context.Context) error {
 	return argsList.Error(0)
 }
 
+// MockSignalHandler implements SignalHandler for testing
+type MockSignalHandler struct {
+	mock.Mock
+	shouldExit chan bool
+}
+
+func NewMockSignalHandler() *MockSignalHandler {
+	return &MockSignalHandler{
+		shouldExit: make(chan bool, 1),
+	}
+}
+
+func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
+	m.Called(c, sig)
+	// In tests, we don't use the real signal mechanism
+}
+
+func (m *MockSignalHandler) WaitForSignal(c <-chan os.Signal) {
+	m.Called(c)
+	// Wait for test to signal us to exit
+	<-m.shouldExit
+}
+
+func (m *MockSignalHandler) TriggerShutdown() {
+	m.shouldExit <- true
+}
+
+// MockTimeoutProvider implements TimeoutProvider for testing
+type MockTimeoutProvider struct {
+	mock.Mock
+}
+
+func (m *MockTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	args := m.Called(parent, timeout)
+	ctx := args.Get(0).(context.Context)
+	cancel := args.Get(1).(context.CancelFunc)
+	return ctx, cancel
+}
+
 // MockMessagingClient implements the messaging.Client for testing
 type MockMessagingClient struct {
 	mock.Mock
@@ -181,6 +222,11 @@ func (m *MockModule) Shutdown() error {
 
 // Helper to create a test app with mocked dependencies
 func createTestApp(_ *testing.T) (*App, *MockDatabase, *MockMessagingClient) {
+	return createTestAppWithMocks(nil, nil)
+}
+
+// Helper to create a test app with injectable mocked dependencies
+func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutProvider *MockTimeoutProvider) (*App, *MockDatabase, *MockMessagingClient) {
 	// Create test config
 	cfg := &config.Config{
 		App: config.AppConfig{
@@ -222,13 +268,26 @@ func createTestApp(_ *testing.T) (*App, *MockDatabase, *MockMessagingClient) {
 	// Create test server
 	srv := server.New(cfg, log)
 
+	// Use default implementations if not provided
+	var signalHandler SignalHandler = &OSSignalHandler{}
+	var timeoutProvider TimeoutProvider = &StandardTimeoutProvider{}
+
+	if mockSignalHandler != nil {
+		signalHandler = mockSignalHandler
+	}
+	if mockTimeoutProvider != nil {
+		timeoutProvider = mockTimeoutProvider
+	}
+
 	app := &App{
-		cfg:       cfg,
-		server:    srv,
-		db:        mockDB,
-		logger:    log,
-		messaging: mockMessaging,
-		registry:  registry,
+		cfg:             cfg,
+		server:          srv,
+		db:              mockDB,
+		logger:          log,
+		messaging:       mockMessaging,
+		registry:        registry,
+		signalHandler:   signalHandler,
+		timeoutProvider: timeoutProvider,
 	}
 
 	return app, mockDB, mockMessaging
@@ -574,4 +633,67 @@ func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
+}
+
+// =============================================================================
+// Run() Method Tests - Application Lifecycle
+// =============================================================================
+
+func TestApp_Run_Success(t *testing.T) {
+	mockSignalHandler := NewMockSignalHandler()
+	mockTimeoutProvider := &MockTimeoutProvider{}
+
+	app, mockDB, mockMessaging := createTestAppWithMocks(mockSignalHandler, mockTimeoutProvider)
+
+	// Setup mocks for successful run
+	mockSignalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
+	mockSignalHandler.On("WaitForSignal", mock.Anything).Return()
+
+	// Mock timeout creation for shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mockTimeoutProvider.On("WithTimeout", context.Background(), 10*time.Second).Return(ctx, cancel)
+
+	// Setup mocks for shutdown sequence
+	mockDB.On("Close").Return(nil)
+	mockMessaging.On("Close").Return(nil)
+
+	// Mock messaging client health check during infrastructure declaration
+	mockMessaging.On("IsReady").Return(true)
+
+	// Test module for registry
+	module := &MockModule{name: "test-module"}
+	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
+	module.On("RegisterMessaging", mock.Anything).Return()
+	module.On("Shutdown").Return(nil)
+	app.registry.modules = append(app.registry.modules, module)
+
+	// Run the app in a goroutine since it blocks
+	var runErr error
+	done := make(chan bool)
+	go func() {
+		defer func() { done <- true }()
+		runErr = app.Run()
+	}()
+
+	// Give the app time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Send shutdown signal
+	mockSignalHandler.TriggerShutdown()
+
+	// Wait for shutdown to complete
+	select {
+	case <-done:
+		// Expected completion
+	case <-time.After(2 * time.Second):
+		t.Fatal("App.Run() did not complete in expected time")
+	}
+
+	assert.NoError(t, runErr)
+	mockSignalHandler.AssertExpectations(t)
+	mockTimeoutProvider.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	mockMessaging.AssertExpectations(t)
+	module.AssertExpectations(t)
 }

@@ -20,15 +20,46 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+// SignalHandler interface allows for injectable signal handling for testing
+type SignalHandler interface {
+	Notify(c chan<- os.Signal, sig ...os.Signal)
+	WaitForSignal(c <-chan os.Signal)
+}
+
+// TimeoutProvider interface allows for injectable timeout creation for testing
+type TimeoutProvider interface {
+	WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc)
+}
+
+// OSSignalHandler implements SignalHandler using the real OS signal package
+type OSSignalHandler struct{}
+
+func (osh *OSSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
+	signal.Notify(c, sig...)
+}
+
+func (osh *OSSignalHandler) WaitForSignal(c <-chan os.Signal) {
+	<-c
+}
+
+// StandardTimeoutProvider implements TimeoutProvider using context.WithTimeout
+type StandardTimeoutProvider struct{}
+
+func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, timeout)
+}
+
 // App represents the main application instance.
 // It manages the lifecycle and coordination of all application components.
 type App struct {
-	cfg       *config.Config
-	server    *server.Server
-	db        database.Interface
-	logger    logger.Logger
-	messaging messaging.Client
-	registry  *ModuleRegistry
+	cfg             *config.Config
+	server          *server.Server
+	db              database.Interface
+	logger          logger.Logger
+	messaging       messaging.Client
+	registry        *ModuleRegistry
+	signalHandler   SignalHandler
+	timeoutProvider TimeoutProvider
 }
 
 // New creates a new application instance with all necessary dependencies.
@@ -74,12 +105,14 @@ func New() (*App, error) {
 	registry := NewModuleRegistry(deps)
 
 	app := &App{
-		cfg:       cfg,
-		server:    srv,
-		db:        db,
-		logger:    log,
-		messaging: msgClient,
-		registry:  registry,
+		cfg:             cfg,
+		server:          srv,
+		db:              db,
+		logger:          log,
+		messaging:       msgClient,
+		registry:        registry,
+		signalHandler:   &OSSignalHandler{},
+		timeoutProvider: &StandardTimeoutProvider{},
 	}
 
 	srv.Echo().GET("/ready", app.readyCheck)
@@ -110,12 +143,12 @@ func (a *App) Run() error {
 	}()
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
+	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	a.signalHandler.WaitForSignal(quit)
 
 	a.logger.Info().Msg("Shutting down application")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	return a.Shutdown(ctx)
@@ -155,7 +188,7 @@ func (a *App) readyCheck(c echo.Context) error {
 	dbHealth := "healthy"
 	if err := a.db.Health(ctx); err != nil {
 		dbHealth = "unhealthy"
-		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
+		return c.JSON(http.StatusServiceUnavailable, map[string]any{
 			"status":   "not ready",
 			"database": dbHealth,
 			"error":    err.Error(),
@@ -165,7 +198,7 @@ func (a *App) readyCheck(c echo.Context) error {
 	stats, err := a.db.Stats()
 	if err != nil {
 		a.logger.Error().Err(err).Msg("Failed to get database stats")
-		stats = map[string]interface{}{"error": err.Error()}
+		stats = map[string]any{"error": err.Error()}
 	}
 
 	// Check messaging health if enabled
@@ -178,13 +211,13 @@ func (a *App) readyCheck(c echo.Context) error {
 		}
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	return c.JSON(http.StatusOK, map[string]any{
 		"status":    "ready",
 		"time":      time.Now().Unix(),
 		"database":  dbHealth,
 		"db_stats":  stats,
 		"messaging": messagingHealth,
-		"app": map[string]interface{}{
+		"app": map[string]any{
 			"name":        a.cfg.App.Name,
 			"environment": a.cfg.App.Env,
 			"version":     a.cfg.App.Version,
