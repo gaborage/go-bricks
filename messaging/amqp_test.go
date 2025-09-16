@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -358,13 +359,29 @@ type stubLogger struct {
 	mu      sync.Mutex
 }
 
-func (l *stubLogger) Info() logger.LogEvent                             { return &stubEvent{l} }
-func (l *stubLogger) Error() logger.LogEvent                            { return &stubEvent{l} }
-func (l *stubLogger) Debug() logger.LogEvent                            { return &stubEvent{l} }
-func (l *stubLogger) Warn() logger.LogEvent                             { return &stubEvent{l} }
-func (l *stubLogger) Fatal() logger.LogEvent                            { return &stubEvent{l} }
-func (l *stubLogger) WithContext(_ interface{}) logger.Logger           { return l }
-func (l *stubLogger) WithFields(_ map[string]interface{}) logger.Logger { return l }
+// reset clears all log entries safely
+func (l *stubLogger) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = nil
+}
+
+// getEntries returns a copy of the entries safely
+func (l *stubLogger) getEntries() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entriesCopy := make([]string, len(l.entries))
+	copy(entriesCopy, l.entries)
+	return entriesCopy
+}
+
+func (l *stubLogger) Info() logger.LogEvent                     { return &stubEvent{l} }
+func (l *stubLogger) Error() logger.LogEvent                    { return &stubEvent{l} }
+func (l *stubLogger) Debug() logger.LogEvent                    { return &stubEvent{l} }
+func (l *stubLogger) Warn() logger.LogEvent                     { return &stubEvent{l} }
+func (l *stubLogger) Fatal() logger.LogEvent                    { return &stubEvent{l} }
+func (l *stubLogger) WithContext(_ any) logger.Logger           { return l }
+func (l *stubLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
 type stubEvent struct{ l *stubLogger }
 
@@ -373,19 +390,19 @@ func (e *stubEvent) Msg(msg string) {
 	defer e.l.mu.Unlock()
 	e.l.entries = append(e.l.entries, msg)
 }
-func (e *stubEvent) Msgf(format string, _ ...interface{}) {
+func (e *stubEvent) Msgf(format string, args ...any) {
 	e.l.mu.Lock()
 	defer e.l.mu.Unlock()
-	e.l.entries = append(e.l.entries, format)
+	e.l.entries = append(e.l.entries, fmt.Sprintf(format, args...))
 }
-func (e *stubEvent) Err(_ error) logger.LogEvent                       { return e }
-func (e *stubEvent) Str(_, _ string) logger.LogEvent                   { return e }
-func (e *stubEvent) Int(_ string, _ int) logger.LogEvent               { return e }
-func (e *stubEvent) Int64(_ string, _ int64) logger.LogEvent           { return e }
-func (e *stubEvent) Uint64(_ string, _ uint64) logger.LogEvent         { return e }
-func (e *stubEvent) Dur(_ string, _ time.Duration) logger.LogEvent     { return e }
-func (e *stubEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e }
-func (e *stubEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
+func (e *stubEvent) Err(_ error) logger.LogEvent                   { return e }
+func (e *stubEvent) Str(_, _ string) logger.LogEvent               { return e }
+func (e *stubEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *stubEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *stubEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *stubEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *stubEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
+func (e *stubEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 
 // testHandler is a MessageHandler that returns a configured error
 type testHandler struct{ retErr error }
@@ -402,51 +419,37 @@ func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
 	delivery := amqp.Delivery{}
 
 	t.Run("AutoAck=true success does not ack", func(t *testing.T) {
-		l.entries = nil
+		l.reset()
 		cons := &ConsumerDeclaration{AutoAck: true, Handler: &testHandler{retErr: nil}}
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// Should not attempt ack; check absence of ack error log message
-		for _, m := range l.entries {
-			assert.NotEqual(t, "Failed to ack message", m)
-		}
+		entries := l.getEntries()
+		assert.NotContains(t, entries, "Failed to ack message")
 	})
 
 	t.Run("AutoAck=true error does not nack", func(t *testing.T) {
-		l.entries = nil
+		l.reset()
 		cons := &ConsumerDeclaration{AutoAck: true, Handler: &testHandler{retErr: assert.AnError}}
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// Should not attempt nack; check absence of nack error log message
-		for _, m := range l.entries {
-			assert.NotEqual(t, "Failed to nack message", m)
-		}
+		entries := l.getEntries()
+		assert.NotContains(t, entries, "Failed to nack message")
 	})
 
 	t.Run("AutoAck=false success acks (may error)", func(t *testing.T) {
-		l.entries = nil
+		l.reset()
 		cons := &ConsumerDeclaration{AutoAck: false, Handler: &testHandler{retErr: nil}}
 		reg.processMessage(context.Background(), cons, &delivery, l)
 		// With uninitialized delivery, ack will likely fail, so expect log message
-		found := false
-		for _, m := range l.entries {
-			if m == "Failed to ack message" {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found)
+		entries := l.getEntries()
+		assert.Contains(t, entries, "Failed to ack message")
 	})
 
 	t.Run("AutoAck=false error nacks (may error)", func(t *testing.T) {
-		l.entries = nil
+		l.reset()
 		cons := &ConsumerDeclaration{AutoAck: false, Handler: &testHandler{retErr: assert.AnError}}
 		reg.processMessage(context.Background(), cons, &delivery, l)
-		found := false
-		for _, m := range l.entries {
-			if m == "Failed to nack message" {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found)
+		entries := l.getEntries()
+		assert.Contains(t, entries, "Failed to nack message")
 	})
 }

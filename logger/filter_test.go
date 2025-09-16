@@ -1,13 +1,14 @@
 package logger
 
 import (
+	"slices"
 	"testing"
 )
 
 const (
-	testUsername = "john"
-	testPassword = "secret123"
-	testUserDoe  = "john_doe"
+	testUsername = "test_user_john"
+	testPassword = "test_password_123"
+	testUserDoe  = "test_user_john_doe"
 )
 
 func TestDefaultFilterConfig(t *testing.T) {
@@ -24,14 +25,7 @@ func TestDefaultFilterConfig(t *testing.T) {
 	// Test that common sensitive fields are included
 	expectedFields := []string{"password", "secret", "token", "api_key"}
 	for _, expected := range expectedFields {
-		found := false
-		for _, field := range config.SensitiveFields {
-			if field == expected {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(config.SensitiveFields, expected) {
 			t.Errorf("Expected field '%s' to be in default sensitive fields", expected)
 		}
 	}
@@ -102,13 +96,13 @@ func TestFilterValue(t *testing.T) {
 	}
 
 	// Test map filtering
-	input := map[string]interface{}{
+	input := map[string]any{
 		"username": testUsername,
 		"password": testPassword,
 		"email":    "john@example.com",
 	}
 	result = filter.FilterValue("user_data", input)
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 
 	if resultMap["username"] != testUsername {
 		t.Errorf("Expected username to remain '%s', got '%v'", testUsername, resultMap["username"])
@@ -124,10 +118,10 @@ func TestFilterFields(t *testing.T) {
 		MaskValue:       DefaultMaskValue,
 	})
 
-	input := map[string]interface{}{
+	input := map[string]any{
 		"username": testUserDoe,
 		"password": testPassword,
-		"api_key":  "sk_live_1234567890",
+		"api_key":  "sk_test_1234567890",
 		"email":    "john@example.com",
 	}
 
@@ -199,21 +193,21 @@ func TestFilterValue_StructFiltering(t *testing.T) {
 	}
 
 	input := TestStruct{
-		Username: "john_doe",
-		Password: "secret123",
+		Username: "test_user_john_doe",
+		Password: "test_secret123",
 		Email:    "john@example.com",
-		APIKey:   "sk_live_123456",
+		APIKey:   "sk_test_123456",
 	}
 
 	result := filter.FilterValue("user", input)
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]interface{}")
+		t.Fatal("Expected result to be a map[string]any")
 	}
 
 	// Check that non-sensitive fields are preserved
-	if resultMap["username"] != "john_doe" {
-		t.Errorf("Expected username to remain 'john_doe', got '%v'", resultMap["username"])
+	if resultMap["username"] != "test_user_john_doe" {
+		t.Errorf("Expected username to remain 'test_user_john_doe', got '%v'", resultMap["username"])
 	}
 	if resultMap["email"] != "john@example.com" {
 		t.Errorf("Expected email to remain unchanged, got '%v'", resultMap["email"])
@@ -242,7 +236,7 @@ func TestFilterValue_PointerStruct(t *testing.T) {
 	// Test with pointer to struct
 	input := &TestStruct{
 		Username: testUsername,
-		Password: "secret",
+		Password: "test_secret",
 	}
 
 	// Based on the implementation, pointers don't get converted to struct filtering
@@ -289,9 +283,9 @@ func TestFilterValue_UnexportedFields(t *testing.T) {
 	}
 
 	result := filter.FilterValue("user", input)
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]interface{}")
+		t.Fatal("Expected result to be a map[string]any")
 	}
 
 	// Only exported fields should be in the result
@@ -326,9 +320,9 @@ func TestFilterValue_JSONTags(t *testing.T) {
 	}
 
 	result := filter.FilterValue("data", input)
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]interface{}")
+		t.Fatal("Expected result to be a map[string]any")
 	}
 
 	// Check JSON tag names are used
@@ -342,12 +336,9 @@ func TestFilterValue_JSONTags(t *testing.T) {
 		t.Errorf("Expected comma_field to be 'comma', got '%v'", resultMap["comma_field"])
 	}
 
-	// Looking at the implementation, json:"-" fields are still included but use the field name
-	// This might be a bug in the implementation, but let's test what actually happens
 	if resultMap["IgnoredField"] != "ignored" {
 		t.Error("Field with json:\"-\" uses field name, should be 'ignored'")
 	}
-	// The "-" tag should not be used as the key
 	if _, exists := resultMap["-"]; exists {
 		t.Error("Field with json:\"-\" should not use '-' as key")
 	}
@@ -359,7 +350,7 @@ func TestFilterValue_NonStructType(t *testing.T) {
 	// Test with simple non-struct types that should pass through unchanged
 	testCases := []struct {
 		name  string
-		input interface{}
+		input any
 	}{
 		{"integer", 42},
 		{"float", 3.14},
@@ -502,11 +493,11 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 	})
 
 	// Test deeply nested maps
-	input := map[string]interface{}{
-		"user": map[string]interface{}{
+	input := map[string]any{
+		"user": map[string]any{
 			"name":     testUsername,
 			"password": testPassword,
-			"config": map[string]interface{}{
+			"config": map[string]any{
 				"theme":  "dark",
 				"secret": "api_secret",
 			},
@@ -515,7 +506,7 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 	}
 
 	result := filter.FilterValue("data", input)
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 
 	// Check top level
 	if resultMap["public_info"] != "visible" {
@@ -523,7 +514,7 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 	}
 
 	// Check nested user map
-	userMap := resultMap["user"].(map[string]interface{})
+	userMap := resultMap["user"].(map[string]any)
 	if userMap["name"] != testUsername {
 		t.Errorf("Expected nested name to remain '%s'", testUsername)
 	}
@@ -532,7 +523,7 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 	}
 
 	// Check deeply nested config map
-	configMap := userMap["config"].(map[string]interface{})
+	configMap := userMap["config"].(map[string]any)
 	if configMap["theme"] != "dark" {
 		t.Error("Expected nested theme to remain 'dark'")
 	}

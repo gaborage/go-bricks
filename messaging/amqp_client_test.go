@@ -671,7 +671,6 @@ func TestPublishToExchange_MultipleRetriesBeforeSuccess(t *testing.T) {
 	ch.publishErr = errors.New("initial failure")
 	ch.mu.Unlock()
 
-	// Fixed goroutine with proper exit condition
 	go func() {
 		time.Sleep(2 * time.Millisecond) // Wait for first attempt
 		ch.mu.Lock()
@@ -700,7 +699,7 @@ func TestPublishToExchange_CustomHeaders(t *testing.T) {
 		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	}()
 
-	customHeaders := map[string]interface{}{
+	customHeaders := map[string]any{
 		"custom-header": "test-value",
 		"priority":      5,
 	}
@@ -763,9 +762,6 @@ func TestPublishToExchange_ContextTrackingOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
-
-	// Note: We can't easily test the actual counter increment without accessing internal context values
-	// But we verify the path that should increment counters executed successfully
 }
 
 func TestPublishToExchange_MultipleNacksBeforeTimeout(_ *testing.T) {
@@ -837,6 +833,7 @@ func TestUnsafePublish_NotReady(t *testing.T) {
 
 func TestAMQPClient_DeclareQueue_NotReady_Error(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
 	err := client.DeclareQueue("test-queue", true, false, false, false)
@@ -847,6 +844,7 @@ func TestAMQPClient_DeclareQueue_NotReady_Error(t *testing.T) {
 
 func TestAMQPClient_DeclareExchange_NotReady_Error(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
 	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false)
@@ -857,6 +855,7 @@ func TestAMQPClient_DeclareExchange_NotReady_Error(t *testing.T) {
 
 func TestAMQPClient_BindQueue_NotReady_Error(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
 	err := client.BindQueue("test-queue", "test-exchange", "test.key", false)
@@ -867,6 +866,7 @@ func TestAMQPClient_BindQueue_NotReady_Error(t *testing.T) {
 
 func TestAMQPClient_ConsumeFromQueue_NotReady_Error(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
 	_, err := client.ConsumeFromQueue(context.Background(), ConsumeOptions{
