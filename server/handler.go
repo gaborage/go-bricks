@@ -267,7 +267,11 @@ func setStringValue(fieldValue reflect.Value, value string) error {
 }
 
 func setSignedIntValue(fieldValue reflect.Value, value string) error {
-	intVal, err := strconv.ParseInt(value, 10, 64)
+	bitSize := fieldValue.Type().Bits()
+	if bitSize == 0 {
+		bitSize = 64
+	}
+	intVal, err := strconv.ParseInt(value, 10, bitSize)
 	if err != nil {
 		return err
 	}
@@ -276,7 +280,11 @@ func setSignedIntValue(fieldValue reflect.Value, value string) error {
 }
 
 func setUnsignedIntValue(fieldValue reflect.Value, value string) error {
-	uintVal, err := strconv.ParseUint(value, 10, 64)
+	bitSize := fieldValue.Type().Bits()
+	if bitSize == 0 {
+		bitSize = 64
+	}
+	uintVal, err := strconv.ParseUint(value, 10, bitSize)
 	if err != nil {
 		return err
 	}
