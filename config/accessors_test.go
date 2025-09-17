@@ -360,6 +360,8 @@ func TestTypeConversions(t *testing.T) {
 	})
 
 	t.Run("floatToInt64", func(t *testing.T) {
+		maxInt64Precise := math.Nextafter(float64(math.MaxInt64), math.Inf(-1))
+
 		tests := []struct {
 			name        string
 			input       float64
@@ -369,8 +371,9 @@ func TestTypeConversions(t *testing.T) {
 			{"zero", 0.0, 0, false},
 			{"positive integer", 42.0, 42, false},
 			{"negative integer", -123.0, -123, false},
-			// float64(MaxInt64) rounds to 2^63, but Go's int64() conversion handles it gracefully
-			{"max int64 representable in go", float64(math.MaxInt64), math.MaxInt64, false},
+			// float64(MaxInt64) rounds to 2^63, so we expect an overflow error instead of wraparound
+			{"max int64 rounding overflow", float64(math.MaxInt64), 0, true},
+			{"largest precise float below max int64", maxInt64Precise, int64(maxInt64Precise), false},
 			// Use a value that actually overflows: 2^63 + large number
 			{"actual overflow", float64(math.MaxInt64) + 1e10, 0, true},
 			{"min int64", float64(math.MinInt64), math.MinInt64, false},

@@ -12,6 +12,11 @@ const (
 	minInt = -maxInt - 1
 )
 
+var (
+	maxInt64ExactFloat = math.Nextafter(float64(math.MaxInt64), math.Inf(-1))
+	minInt64ExactFloat = float64(math.MinInt64)
+)
+
 // GetString retrieves a string value from the configuration or the provided default.
 func (c *Config) GetString(key string, defaultVal ...string) string {
 	if c == nil || c.k == nil || !c.k.Exists(key) {
@@ -357,8 +362,12 @@ func floatToInt64(value float64) (int64, error) {
 	if math.Trunc(value) != value {
 		return 0, fmt.Errorf("value %v is not an integer", value)
 	}
-	if value > math.MaxInt64 || value < math.MinInt64 {
+	if value > maxInt64ExactFloat || value < minInt64ExactFloat {
 		return 0, fmt.Errorf("value %v overflows int64", value)
 	}
-	return int64(value), nil
+	result := int64(value)
+	if float64(result) != value {
+		return 0, fmt.Errorf("value %v cannot be represented exactly as int64", value)
+	}
+	return result, nil
 }
