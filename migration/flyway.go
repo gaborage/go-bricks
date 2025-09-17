@@ -16,8 +16,9 @@ import (
 
 // FlywayMigrator handles database migrations using Flyway
 type FlywayMigrator struct {
-	config *config.Config
-	logger logger.Logger
+	config        *config.Config
+	logger        logger.Logger
+	defaultConfig func(*FlywayMigrator) *Config
 }
 
 // Config configuration for migrations
@@ -32,14 +33,26 @@ type Config struct {
 
 // NewFlywayMigrator creates a new instance of the migrator
 func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
-	return &FlywayMigrator{
+	fm := &FlywayMigrator{
 		config: cfg,
 		logger: log,
 	}
+
+	fm.defaultConfig = (*FlywayMigrator).defaultMigrationConfig
+
+	return fm
 }
 
 // GetDefaultMigrationConfig gets the default configuration for migrations
 func (fm *FlywayMigrator) GetDefaultMigrationConfig() *Config {
+	if fm.defaultConfig == nil {
+		fm.defaultConfig = (*FlywayMigrator).defaultMigrationConfig
+	}
+
+	return fm.defaultConfig(fm)
+}
+
+func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 	vendor := fm.config.Database.Type
 
 	return &Config{
