@@ -396,7 +396,7 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 }
 
 // Helper function to create a stub that captures which command was called
-func createCommandCapturingStub(t *testing.T) (string, string) {
+func createCommandCapturingStub(t *testing.T) (_, _ string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-capture.sh")
