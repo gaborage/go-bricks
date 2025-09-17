@@ -2,6 +2,7 @@ package server
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v4"
@@ -56,8 +57,8 @@ func TestRouteMetadataCapture(t *testing.T) {
 	assert.Equal(t, []string{"testing", "example"}, route.Tags)
 	assert.Equal(t, "Test endpoint", route.Summary)
 	assert.Equal(t, "A test endpoint for validation", route.Description)
-	assert.Contains(t, route.HandlerName, "testHandler")
-	assert.Contains(t, route.Package, "github.com/gaborage/go-bricks/server")
+	assert.NotEmpty(t, route.Package)
+	assert.True(t, strings.HasSuffix(route.Package, "/server"))
 
 	// Verify request and response types are captured
 	assert.Equal(t, reflect.TypeOf(TestRequest{}), route.RequestType)

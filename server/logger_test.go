@@ -118,7 +118,15 @@ func TestRequestLogger_SkipsHealthAndReady(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
-	for _, path := range []string{"/health", "/ready"} {
+	api := e.Group("/api")
+	api.GET("/health", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	api.GET("/ready", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+
+	for _, path := range []string{"/health", "/ready", "/api/health", "/api/ready"} {
 		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 		rec := httptest.NewRecorder()
 

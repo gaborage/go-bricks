@@ -62,7 +62,7 @@ func normalizeRoutePath(route, defaultRoute string) string {
 
 // buildFullPath combines base path with route path
 func (s *Server) buildFullPath(route string) string {
-	if s.basePath == "" {
+	if s.basePath == "" || s.basePath == "/" {
 		return route
 	}
 
@@ -131,7 +131,7 @@ func (s *Server) Echo() *echo.Echo {
 // ModuleGroup returns an Echo group with the base path applied for module route registration.
 // If no base path is configured, it returns a group with empty prefix.
 func (s *Server) ModuleGroup() *echo.Group {
-	if s.basePath == "" {
+	if s.basePath == "" || s.basePath == "/" {
 		return s.echo.Group("")
 	}
 	return s.echo.Group(s.basePath)
@@ -215,7 +215,7 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	code := statusToErrorCode(status)
 	base := NewBaseAPIError(code, msg, status)
 	// Include raw error details in development
-	if cfg.App.Env == "development" || cfg.App.Env == "dev" {
+	if isDevelopmentEnv(cfg.App.Env) {
 		_ = base.WithDetails("error", err.Error())
 	}
 

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"strings"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
@@ -20,7 +22,11 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 		LogError:     true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			// Skip health checks en los logs
-			if v.URI == "/health" || v.URI == "/ready" {
+			path := c.Path()
+			if path == "" {
+				path = v.URI
+			}
+			if strings.HasSuffix(path, "/health") || strings.HasSuffix(path, "/ready") {
 				return nil
 			}
 

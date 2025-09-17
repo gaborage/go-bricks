@@ -255,6 +255,22 @@ func TestModuleGroupAppliesBasePath(t *testing.T) {
 
 	e.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	// when base path is "/", ensure routes are not double prefixed
+	s.basePath = "/"
+	e = echo.New()
+	s.echo = e
+
+	group = s.ModuleGroup()
+	group.GET("/ping", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	req = httptest.NewRequest(http.MethodGet, "/ping", http.NoBody)
+	rec = httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
 }
 
 func TestStatusToErrorCodeMappings(t *testing.T) {

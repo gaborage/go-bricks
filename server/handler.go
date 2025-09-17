@@ -379,7 +379,7 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 	}
 
 	// Include details only in development environment
-	if cfg.App.Env == "development" || cfg.App.Env == "dev" {
+	if isDevelopmentEnv(cfg.App.Env) {
 		if details := apiErr.Details(); details != nil {
 			errorResp.Details = details
 		}

@@ -237,23 +237,59 @@ func TestRateLimitIPExtraction(t *testing.T) {
 }
 
 func TestRateLimitDisabled(t *testing.T) {
-	e := echo.New()
-	e.Use(RateLimit(0))
-
-	count := 0
-	e.GET("/test", func(c echo.Context) error {
-		count++
-		return c.NoContent(http.StatusNoContent)
-	})
-
-	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		e.ServeHTTP(rec, req)
-		require.Equal(t, http.StatusNoContent, rec.Code)
+	tests := []struct {
+		name           string
+		requestCount   int
+		expectedStatus int
+		trackCalls     bool
+	}{
+		{
+			name:           "handler_invoked_for_each_request",
+			requestCount:   5,
+			expectedStatus: http.StatusNoContent,
+			trackCalls:     true,
+		},
+		{
+			name:           "responses_allow_when_disabled",
+			requestCount:   50,
+			expectedStatus: http.StatusOK,
+			trackCalls:     false,
+		},
 	}
 
-	assert.Equal(t, 5, count)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			e.Use(RateLimit(0))
+
+			callCount := 0
+			handler := func(c echo.Context) error {
+				if tt.trackCalls {
+					callCount++
+					return c.NoContent(tt.expectedStatus)
+				}
+				return c.JSON(tt.expectedStatus, map[string]string{"status": "ok"})
+			}
+
+			e.GET("/test", handler)
+
+			for i := 0; i < tt.requestCount; i++ {
+				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req.Header.Set("X-Real-IP", testIP)
+				req.RemoteAddr = testIP + ":12345"
+				rec := httptest.NewRecorder()
+
+				e.ServeHTTP(rec, req)
+
+				require.Equalf(t, tt.expectedStatus, rec.Code,
+					"request %d should return status %d when rate limiting is disabled", i+1, tt.expectedStatus)
+			}
+
+			if tt.trackCalls {
+				assert.Equal(t, tt.requestCount, callCount)
+			}
+		})
+	}
 }
 
 func TestRateLimitReset(t *testing.T) {
@@ -294,28 +330,4 @@ func TestRateLimitReset(t *testing.T) {
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestRateLimitZeroDisabled(t *testing.T) {
-	e := echo.New()
-	e.Use(RateLimit(0)) // Should disable rate limiting
-
-	e.GET("/test", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	ip := testIP
-
-	// Make many requests - all should be allowed when rate limiting is disabled
-	for i := 0; i < 50; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		req.Header.Set("X-Real-IP", ip)
-		rec := httptest.NewRecorder()
-
-		e.ServeHTTP(rec, req)
-
-		// All requests should succeed when rate limiting is disabled
-		assert.Equal(t, http.StatusOK, rec.Code,
-			"Request %d should succeed when rate limiting is disabled", i+1)
-	}
 }
