@@ -271,9 +271,7 @@ func toInt64FromUnsignedInt(value interface{}) (int64, error) {
 		if uint64(v) > uint64(math.MaxInt64) {
 			return 0, fmt.Errorf("value %d overflows int64", v)
 		}
-		// Safe conversion after overflow check
-		//nolint:gosec // G115: overflow checked above
-		return int64(v), nil
+		return int64(v), nil //#nosec G115 -- safe conversion after overflow check
 	case uint64:
 		if v > uint64(math.MaxInt64) {
 			return 0, fmt.Errorf("value %d overflows int64", v)
