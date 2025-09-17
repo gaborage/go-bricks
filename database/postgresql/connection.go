@@ -22,6 +22,45 @@ type Connection struct {
 	logger logger.Logger
 }
 
+var (
+	openPostgresDB = func(cfg *pgx.ConnConfig) *sql.DB {
+		return stdlib.OpenDB(*cfg)
+	}
+	pingPostgresDB = func(ctx context.Context, db *sql.DB) error {
+		return db.PingContext(ctx)
+	}
+)
+
+// quoteDSN quotes a DSN value according to libpq rules:
+// - Returns ” for empty strings
+// - Escapes backslashes and single quotes
+// - Wraps in single quotes when value contains non-alphanumeric/._- characters
+func quoteDSN(value string) string {
+	if value == "" {
+		return "''"
+	}
+
+	// Check if quoting is needed (contains spaces or special characters)
+	needsQuoting := false
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
+			needsQuoting = true
+			break
+		}
+	}
+
+	if !needsQuoting {
+		return value
+	}
+
+	// Escape backslashes and single quotes
+	escaped := strings.ReplaceAll(value, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "'", "\\'")
+
+	return "'" + escaped + "'"
+}
+
 // NewConnection creates a new PostgreSQL connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
 	var dsn string
@@ -31,9 +70,9 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		parts := []string{
 			fmt.Sprintf("host=%s", cfg.Host),
 			fmt.Sprintf("port=%d", cfg.Port),
-			fmt.Sprintf("user=%s", cfg.Username),
-			fmt.Sprintf("password=%s", cfg.Password),
-			fmt.Sprintf("dbname=%s", cfg.Database),
+			fmt.Sprintf("user=%s", quoteDSN(cfg.Username)),
+			fmt.Sprintf("password=%s", quoteDSN(cfg.Password)),
+			fmt.Sprintf("dbname=%s", quoteDSN(cfg.Database)),
 		}
 
 		if cfg.SSLMode != "" {
@@ -50,7 +89,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}
 
 	// Create connection using pgx driver
-	db := stdlib.OpenDB(*pgxConfig)
+	db := openPostgresDB(pgxConfig)
 
 	// Configure connection pool
 	db.SetMaxOpenConns(int(cfg.MaxConns))
@@ -62,7 +101,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingPostgresDB(ctx, db); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("Failed to close PostgreSQL database connection after ping failure")
 		}

@@ -20,6 +20,15 @@ type Connection struct {
 	logger logger.Logger
 }
 
+var (
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		return sql.Open("oracle", dsn)
+	}
+	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
+		return db.PingContext(ctx)
+	}
+)
+
 // NewConnection creates a new Oracle connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
 	var dsn string
@@ -37,7 +46,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}
 
 	// Open Oracle connection
-	db, err := sql.Open("oracle", dsn)
+	db, err := openOracleDB(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
 	}
@@ -52,7 +61,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingOracleDB(ctx, db); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("Failed to close Oracle database connection after ping failure")
 		}
