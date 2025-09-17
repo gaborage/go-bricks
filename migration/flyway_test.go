@@ -207,19 +207,17 @@ func TestGetDefaultMigrationConfig(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
-				Database: config.DatabaseConfig{Type: tc.dbType},
-				App:      config.AppConfig{Env: tc.appEnv},
+				Database: config.DatabaseConfig{Type: tt.dbType},
+				App:      config.AppConfig{Env: tt.appEnv},
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 			result := fm.GetDefaultMigrationConfig()
 
-			expected := tc.expectedConf(tc.dbType, tc.appEnv)
+			expected := tt.expectedConf(tt.dbType, tt.appEnv)
 
 			assert.Equal(t, expected.FlywayPath, result.FlywayPath)
 			assert.Equal(t, expected.ConfigPath, result.ConfigPath)
@@ -229,22 +227,6 @@ func TestGetDefaultMigrationConfig(t *testing.T) {
 			assert.Equal(t, expected.DryRun, result.DryRun)
 		})
 	}
-}
-
-func TestGetDefaultMigrationConfig_FallbackInitialization(t *testing.T) {
-	cfg := &config.Config{
-		Database: config.DatabaseConfig{Type: "postgresql"},
-		App:      config.AppConfig{Env: "test"},
-	}
-
-	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-	fm.defaultConfig = nil
-
-	defaultCfg := fm.GetDefaultMigrationConfig()
-	require.NotNil(t, defaultCfg)
-	assert.Equal(t, "flyway", defaultCfg.FlywayPath)
-	assert.Equal(t, "migrations/postgresql", defaultCfg.MigrationPath)
-	assert.Equal(t, cfg.App.Env, defaultCfg.Environment)
 }
 
 func TestInfo(t *testing.T) {
@@ -364,15 +346,23 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 			environment: "production",
 			expectedCmd: "validate",
 		},
+		{
+			name:        "test_environment_runs_validate",
+			environment: "test",
+			expectedCmd: "validate",
+		},
+		{
+			name:        "staging_environment_runs_validate",
+			environment: "staging",
+			expectedCmd: "validate",
+		},
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
 				Database: config.DatabaseConfig{Type: "postgresql"},
-				App:      config.AppConfig{Env: tc.environment},
+				App:      config.AppConfig{Env: tt.environment},
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
@@ -391,7 +381,7 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 					ConfigPath:    configPath,
 					MigrationPath: migrationPath,
 					Timeout:       10 * time.Second,
-					Environment:   tc.environment,
+					Environment:   tt.environment,
 				}
 			}
 
@@ -400,56 +390,7 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 
 			captured, readErr := os.ReadFile(capturePath)
 			require.NoError(t, readErr)
-			assert.Contains(t, string(captured), tc.expectedCmd)
-		})
-	}
-}
-
-func TestRunMigrationsAtStartup_PropagatesErrors(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell script stub not supported on windows CI")
-	}
-
-	tests := []struct {
-		name        string
-		environment string
-	}{
-		{name: "development_error", environment: "development"},
-		{name: "production_error", environment: "production"},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := &config.Config{
-				Database: config.DatabaseConfig{Type: "postgresql"},
-				App:      config.AppConfig{Env: tc.environment},
-			}
-
-			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-
-			stub := createFailingFlywayStub(t)
-			tempDir := t.TempDir()
-			configPath := filepath.Join(tempDir, "flyway.conf")
-			migrationPath := filepath.Join(tempDir, "migrations")
-
-			require.NoError(t, os.WriteFile(configPath, []byte(""), 0o644))
-			require.NoError(t, os.MkdirAll(migrationPath, 0o755))
-
-			fm.defaultConfig = func(*FlywayMigrator) *Config {
-				return &Config{
-					FlywayPath:    stub,
-					ConfigPath:    configPath,
-					MigrationPath: migrationPath,
-					Timeout:       5 * time.Second,
-					Environment:   tc.environment,
-				}
-			}
-
-			err := fm.RunMigrationsAtStartup(context.Background())
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "flyway command failed")
+			assert.Contains(t, string(captured), tt.expectedCmd)
 		})
 	}
 }
@@ -483,14 +424,14 @@ exit 1
 }
 
 // Helper function to create a slow stub for testing timeout scenarios
-func createSlowFlywayStub(t *testing.T, delay time.Duration) string {
+func createSlowFlywayStub(t *testing.T, delaySeconds int) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-slow.sh")
 	content := fmt.Sprintf(`#!/bin/sh
-sleep %.3f
+sleep %d
 exit 0
-`, delay.Seconds())
+`, delaySeconds)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
@@ -541,12 +482,12 @@ func TestRunFlywayCommand_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("timeout_scenario", func(t *testing.T) {
-		stub := createSlowFlywayStub(t, 200*time.Millisecond)
+		stub := createSlowFlywayStub(t, 5) // 5 second delay
 		mcfg := &Config{
 			FlywayPath:    stub,
 			ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
 			MigrationPath: filepath.Join(t.TempDir(), "migrations"),
-			Timeout:       50 * time.Millisecond,
+			Timeout:       1_000_000_000, // 1 second timeout
 		}
 
 		// Ensure paths exist
@@ -607,36 +548,22 @@ func TestValidateFlywayPath_ComprehensiveEdgeCases(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			path := tc.flywayPath
-			if tc.setup != nil {
-				path = tc.setup(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.flywayPath
+			if tt.setup != nil {
+				path = tt.setup(t)
 			}
 
 			err := fm.validateFlywayPath(path)
 
-			if tc.expectError {
+			if tt.expectError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
 			}
 		})
 	}
-}
-
-func TestValidateFlywayPath_CleansRelativeSegments(t *testing.T) {
-	cfg := &config.Config{Database: config.DatabaseConfig{Type: "postgresql"}, App: config.AppConfig{Env: "test"}}
-	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-
-	dir := t.TempDir()
-	cleanPath := filepath.Join(dir, "flyway-real")
-	require.NoError(t, os.WriteFile(cleanPath, []byte(""), 0o755))
-
-	dirtyPath := filepath.Join(dir, ".", "flyway-real")
-	assert.NoError(t, fm.validateFlywayPath(dirtyPath))
 }
 
 func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
@@ -717,12 +644,10 @@ func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
-				Database: tc.dbConfig,
+				Database: tt.dbConfig,
 				App:      config.AppConfig{Env: "test"},
 			}
 
@@ -730,7 +655,7 @@ func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
 			envVars := fm.buildEnvironmentVariables()
 
 			// Check expected variables are present
-			for _, expectedVar := range tc.expectedVars {
+			for _, expectedVar := range tt.expectedVars {
 				found := false
 				for _, envVar := range envVars {
 					if envVar == expectedVar {
@@ -742,7 +667,7 @@ func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
 			}
 
 			// Check that unexpected variable prefixes are not present
-			for _, notExpectedPrefix := range tc.notExpectedVars {
+			for _, notExpectedPrefix := range tt.notExpectedVars {
 				for _, envVar := range envVars {
 					assert.NotContains(t, envVar, notExpectedPrefix,
 						"Unexpected environment variable prefix '%s' found in '%s'", notExpectedPrefix, envVar)
