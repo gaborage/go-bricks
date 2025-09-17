@@ -141,6 +141,8 @@ func TestRouteOptions(t *testing.T) {
 		WithTags("tag1", "tag2"),
 		WithSummary("Test summary"),
 		WithDescription("Test description"),
+		WithMiddleware("auth", "logging"),
+		WithHandlerName("customHandler"),
 	}
 
 	var descriptor RouteDescriptor
@@ -152,4 +154,29 @@ func TestRouteOptions(t *testing.T) {
 	assert.Equal(t, []string{"tag1", "tag2"}, descriptor.Tags)
 	assert.Equal(t, "Test summary", descriptor.Summary)
 	assert.Equal(t, "Test description", descriptor.Description)
+	assert.Equal(t, []string{"auth", "logging"}, descriptor.Middleware)
+	assert.Equal(t, "customHandler", descriptor.HandlerName)
+}
+
+func TestRouteRegistry_GetByPathAndCount(t *testing.T) {
+	registry := &RouteRegistry{}
+
+	userGet := RouteDescriptor{Method: "GET", Path: "/users"}
+	userPost := RouteDescriptor{Method: "POST", Path: "/users"}
+	product := RouteDescriptor{Method: "GET", Path: "/products"}
+
+	registry.Register(&userGet)
+	registry.Register(&userPost)
+	registry.Register(&product)
+
+	assert.Equal(t, 3, registry.Count())
+
+	users := registry.GetByPath("/users")
+	assert.Len(t, users, 2)
+	for _, route := range users {
+		assert.Equal(t, "/users", route.Path)
+	}
+
+	none := registry.GetByPath("/missing")
+	assert.Empty(t, none)
 }

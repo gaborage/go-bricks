@@ -236,6 +236,26 @@ func TestRateLimitIPExtraction(t *testing.T) {
 	}
 }
 
+func TestRateLimitDisabled(t *testing.T) {
+	e := echo.New()
+	e.Use(RateLimit(0))
+
+	count := 0
+	e.GET("/test", func(c echo.Context) error {
+		count++
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusNoContent, rec.Code)
+	}
+
+	assert.Equal(t, 5, count)
+}
+
 func TestRateLimitReset(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping rate limit reset test in short mode")

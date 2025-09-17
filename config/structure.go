@@ -33,6 +33,9 @@ type ServerConfig struct {
 	WriteTimeout      time.Duration `koanf:"write_timeout"`
 	MiddlewareTimeout time.Duration `koanf:"middleware_timeout"`
 	ShutdownTimeout   time.Duration `koanf:"shutdown_timeout"`
+	BasePath          string        `koanf:"base_path"`
+	HealthRoute       string        `koanf:"health_route"`
+	ReadyRoute        string        `koanf:"ready_route"`
 }
 
 type DatabaseConfig struct {

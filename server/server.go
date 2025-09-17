@@ -7,6 +7,7 @@ import (
 	goerrors "errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -18,9 +19,59 @@ import (
 // Server represents an HTTP server instance with Echo framework.
 // It manages server lifecycle, configuration, and request handling.
 type Server struct {
-	echo   *echo.Echo
-	cfg    *config.Config
-	logger logger.Logger
+	echo        *echo.Echo
+	cfg         *config.Config
+	logger      logger.Logger
+	basePath    string
+	healthRoute string
+	readyRoute  string
+}
+
+// normalizeBasePath ensures the base path starts with "/" and doesn't end with "/"
+// unless it's the root path. Empty string is returned as-is (no prefix).
+func normalizeBasePath(basePath string) string {
+	if basePath == "" {
+		return ""
+	}
+
+	// Ensure it starts with "/"
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+
+	// Remove trailing "/" unless it's just "/"
+	if len(basePath) > 1 && strings.HasSuffix(basePath, "/") {
+		basePath = strings.TrimSuffix(basePath, "/")
+	}
+
+	return basePath
+}
+
+// normalizeRoutePath ensures a route path starts with "/" and handles empty paths
+func normalizeRoutePath(route, defaultRoute string) string {
+	if route == "" {
+		route = defaultRoute
+	}
+
+	if !strings.HasPrefix(route, "/") {
+		route = "/" + route
+	}
+
+	return route
+}
+
+// buildFullPath combines base path with route path
+func (s *Server) buildFullPath(route string) string {
+	if s.basePath == "" {
+		return route
+	}
+
+	// If route is just "/", don't append it to avoid double slashes
+	if route == "/" {
+		return s.basePath
+	}
+
+	return s.basePath + route
 }
 
 // New creates a new HTTP server instance with the given configuration and logger.
@@ -41,15 +92,32 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 
 	SetupMiddlewares(e, log, cfg)
 
+	// Initialize server with path configuration
+	basePath := normalizeBasePath(cfg.Server.BasePath)
+	healthRoute := normalizeRoutePath(cfg.Server.HealthRoute, "/health")
+	readyRoute := normalizeRoutePath(cfg.Server.ReadyRoute, "/ready")
+
 	s := &Server{
-		echo:   e,
-		cfg:    cfg,
-		logger: log,
+		echo:        e,
+		cfg:         cfg,
+		logger:      log,
+		basePath:    basePath,
+		healthRoute: healthRoute,
+		readyRoute:  readyRoute,
 	}
 
-	// Health check
-	e.GET("/health", s.healthCheck)
-	e.GET("/ready", s.readyCheck)
+	// Register health endpoints with base path applied
+	healthPath := s.buildFullPath(healthRoute)
+	readyPath := s.buildFullPath(readyRoute)
+
+	e.GET(healthPath, s.healthCheck)
+	e.GET(readyPath, s.readyCheck)
+
+	log.Debug().
+		Str("base_path", basePath).
+		Str("health_path", healthPath).
+		Str("ready_path", readyPath).
+		Msg("Server paths configured")
 
 	return s
 }
@@ -58,6 +126,15 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 // This allows modules to register their routes with the server.
 func (s *Server) Echo() *echo.Echo {
 	return s.echo
+}
+
+// ModuleGroup returns an Echo group with the base path applied for module route registration.
+// If no base path is configured, it returns a group with empty prefix.
+func (s *Server) ModuleGroup() *echo.Group {
+	if s.basePath == "" {
+		return s.echo.Group("")
+	}
+	return s.echo.Group(s.basePath)
 }
 
 // Start starts the HTTP server and begins accepting requests.
