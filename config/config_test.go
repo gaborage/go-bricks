@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,153 @@ func TestLoad_EdgeCases(t *testing.T) {
 	})
 }
 
+func TestLoad_CustomConfiguration(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	t.Run("custom_config_via_environment", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+
+		// Set custom configuration via environment variables
+		// Note: underscores in env vars are converted to dots by Koanf
+		os.Setenv("CUSTOM_FEATURE_ENABLED", "true")
+		os.Setenv("CUSTOM_SERVICE_ENDPOINT", "https://api.test.com")
+		os.Setenv("CUSTOM_SERVICE_TIMEOUT", "30s")
+		os.Setenv("CUSTOM_MAX_RETRIES", "5")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		require.NotNil(t, cfg.k, "Koanf instance should be set")
+
+		// Test accessing custom configuration
+		assert.True(t, cfg.GetBool("custom.feature.enabled"))
+		assert.Equal(t, "https://api.test.com", cfg.GetString("custom.service.endpoint"))
+		timeout := cfg.GetString("custom.service.timeout")
+		dur, err := time.ParseDuration(timeout)
+		require.NoError(t, err)
+		assert.Equal(t, 30*time.Second, dur)
+		assert.Equal(t, 5, cfg.GetInt("custom.max.retries"))
+	})
+
+	t.Run("custom_config_with_defaults", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Test default values for missing custom config
+		assert.Equal(t, "default-value", cfg.GetString("custom.missing.key", "default-value"))
+		assert.Equal(t, 100, cfg.GetInt("custom.missing.int", 100))
+		assert.False(t, cfg.GetBool("custom.missing.bool"))
+	})
+
+	t.Run("custom_config_required_fields", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv("CUSTOM_API_KEY", "secret-key-123")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Test required field that exists
+		apiKey, err := cfg.GetRequiredString("custom.api.key")
+		assert.NoError(t, err)
+		assert.Equal(t, "secret-key-123", apiKey)
+
+		// Test required field that doesn't exist
+		_, err = cfg.GetRequiredString("custom.missing.required")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "missing")
+	})
+
+	t.Run("custom_config_unmarshal_struct", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+
+		// Set complex custom configuration
+		os.Setenv("CUSTOM_SERVICE_NAME", "test-service")
+		os.Setenv("CUSTOM_SERVICE_PORT", "8090")
+		os.Setenv("CUSTOM_SERVICE_ENABLED", "true")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Define a struct to unmarshal into
+		type ServiceConfig struct {
+			Name    string `koanf:"name"`
+			Port    int    `koanf:"port"`
+			Enabled bool   `koanf:"enabled"`
+		}
+
+		var svcConfig ServiceConfig
+		err = cfg.Unmarshal("custom.service", &svcConfig)
+		assert.NoError(t, err)
+		assert.Equal(t, "test-service", svcConfig.Name)
+		assert.Equal(t, 8090, svcConfig.Port)
+		assert.True(t, svcConfig.Enabled)
+	})
+
+	t.Run("custom_config_exists_check", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv("CUSTOM_FEATURE_FLAG", "true")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Test existing custom config
+		assert.True(t, cfg.Exists("custom.feature.flag"))
+
+		// Test non-existing custom config
+		assert.False(t, cfg.Exists("custom.nonexistent.key"))
+
+		// Test standard config still works
+		assert.True(t, cfg.Exists("database.database"))
+		assert.True(t, cfg.Exists("app.name"))
+	})
+
+	t.Run("custom_namespace_retrieval", func(t *testing.T) {
+		clearEnvironmentVariables()
+		// Set required database fields
+		os.Setenv("DATABASE_DATABASE", "testdb")
+		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv("CUSTOM_KEY1", "value1")
+		os.Setenv("CUSTOM_KEY2", "value2")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Get all custom configuration
+		customMap := cfg.Custom()
+		if customMap != nil {
+			// Check if custom values are present
+			if key1, ok := customMap["key1"]; ok {
+				assert.Equal(t, "value1", key1)
+			}
+			if key2, ok := customMap["key2"]; ok {
+				assert.Equal(t, "value2", key2)
+			}
+		}
+	})
+}
+
 // Helper function to clear environment variables that might affect tests
 func clearEnvironmentVariables() {
 	envVars := []string{
@@ -231,5 +379,15 @@ func clearEnvironmentVariables() {
 
 	for _, envVar := range envVars {
 		os.Unsetenv(envVar)
+	}
+
+	// Remove any custom configuration vars introduced during tests
+	for _, envEntry := range os.Environ() {
+		if !strings.HasPrefix(envEntry, "CUSTOM_") {
+			continue
+		}
+		if idx := strings.IndexRune(envEntry, '='); idx > 0 {
+			os.Unsetenv(envEntry[:idx])
+		}
 	}
 }
