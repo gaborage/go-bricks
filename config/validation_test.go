@@ -321,6 +321,17 @@ func TestValidateDatabase_Success(t *testing.T) {
 			},
 		},
 		{
+			name: "zero_max_conns_gets_default",
+			cfg: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 0, // Should get set to default (25)
+			},
+		},
+		{
 			name: "maximum_port",
 			cfg: DatabaseConfig{
 				Type:     PostgreSQL,
@@ -430,18 +441,6 @@ func TestValidateDatabase_Failures(t *testing.T) {
 				MaxConns: 25,
 			},
 			expectedError: "database username is required",
-		},
-		{
-			name: "zero_max_conns",
-			cfg: DatabaseConfig{
-				Type:     PostgreSQL,
-				Host:     "localhost",
-				Port:     5432,
-				Database: "testdb",
-				Username: "testuser",
-				MaxConns: 0,
-			},
-			expectedError: "max connections must be positive",
 		},
 		{
 			name: "negative_max_conns",
@@ -695,4 +694,271 @@ func TestContains(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestIsDatabaseConfigured(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   DatabaseConfig
+		expected bool
+	}{
+		{
+			name:     "empty_config_not_configured",
+			config:   DatabaseConfig{},
+			expected: false,
+		},
+		{
+			name: "host_only_is_configured",
+			config: DatabaseConfig{
+				Host: "localhost",
+			},
+			expected: true,
+		},
+		{
+			name: "type_only_is_configured",
+			config: DatabaseConfig{
+				Type: "postgresql",
+			},
+			expected: true,
+		},
+		{
+			name: "both_host_and_type_configured",
+			config: DatabaseConfig{
+				Host: "localhost",
+				Type: "postgresql",
+			},
+			expected: true,
+		},
+		{
+			name: "connection_string_is_configured",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+			},
+			expected: true,
+		},
+		{
+			name: "connection_string_with_empty_host_type",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				Host:             "",
+				Type:             "",
+			},
+			expected: true,
+		},
+		{
+			name: "whitespace_host_not_configured",
+			config: DatabaseConfig{
+				Host: "   ",
+			},
+			expected: true, // Whitespace is still considered configured
+		},
+		{
+			name: "whitespace_type_not_configured",
+			config: DatabaseConfig{
+				Type: "   ",
+			},
+			expected: true, // Whitespace is still considered configured
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsDatabaseConfigured(&tt.config)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestValidateDatabase_ConditionalBehavior(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name:        "empty_config_passes_validation",
+			config:      DatabaseConfig{},
+			expectError: false,
+		},
+		{
+			name: "host_only_fails_validation",
+			config: DatabaseConfig{
+				Host: "localhost",
+				// Missing required fields
+			},
+			expectError:   true,
+			errorContains: "invalid database type",
+		},
+		{
+			name: "type_only_fails_validation",
+			config: DatabaseConfig{
+				Type: "postgresql",
+				// Missing required fields
+			},
+			expectError:   true,
+			errorContains: "database host is required",
+		},
+		{
+			name: "partial_config_missing_database_name",
+			config: DatabaseConfig{
+				Type: "postgresql",
+				Host: "localhost",
+				Port: 5432,
+				// Missing Database, Username, MaxConns
+			},
+			expectError:   true,
+			errorContains: "database name is required",
+		},
+		{
+			name: "partial_config_missing_username",
+			config: DatabaseConfig{
+				Type:     "postgresql",
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				// Missing Username, MaxConns
+			},
+			expectError:   true,
+			errorContains: "database username is required",
+		},
+		{
+			name: "partial_config_zero_max_conns_gets_default",
+			config: DatabaseConfig{
+				Type:     "postgresql",
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 0, // Gets set to default (25)
+			},
+			expectError: false, // Now passes with default
+		},
+		{
+			name: "valid_postgresql_config_passes",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 25,
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_oracle_config_passes",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     "oracle.example.com",
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				MaxConns: 50,
+			},
+			expectError: false,
+		},
+		{
+			name: "connection_string_minimal_config_passes",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				MaxConns:         25,
+			},
+			expectError: false,
+		},
+		{
+			name: "connection_string_invalid_port_uses_optional_validation",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				Port:             70000,
+				MaxConns:         25,
+			},
+			expectError:   true,
+			errorContains: "invalid database port",
+		},
+		{
+			name: "connection_string_with_invalid_type",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				Type:             "invalid",
+				MaxConns:         25,
+			},
+			expectError:   true,
+			errorContains: "invalid database type",
+		},
+		{
+			name: "connection_string_missing_max_conns_errors",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				MaxConns:         0,
+			},
+			expectError:   true,
+			errorContains: "max connections must be positive",
+		},
+		{
+			name: "invalid_database_type",
+			config: DatabaseConfig{
+				Type:     "mysql",
+				Host:     "localhost",
+				Port:     3306,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 25,
+			},
+			expectError:   true,
+			errorContains: "invalid database type: mysql",
+		},
+		{
+			name: "invalid_port_range",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     70000, // Invalid port
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 25,
+			},
+			expectError:   true,
+			errorContains: "invalid database port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidate_DatabaseDisabledConfig(t *testing.T) {
+	cfg := &Config{
+		App: AppConfig{
+			Name:      "test-app",
+			Version:   "v1.0.0",
+			Env:       EnvDevelopment,
+			RateLimit: 100,
+		},
+		Server: ServerConfig{
+			Port:         8080,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		},
+		Database: DatabaseConfig{
+			// Empty database config - should skip validation
+		},
+		Log: LogConfig{
+			Level: "info",
+		},
+	}
+
+	err := Validate(cfg)
+	assert.NoError(t, err, "Validation should pass with empty database config")
 }

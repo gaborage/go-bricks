@@ -334,6 +334,25 @@ func TestQueryBuilder_BuildLimitOffset(t *testing.T) {
 	}
 }
 
+func TestQueryBuilder_BuildLimitOffset_DefaultVendor(t *testing.T) {
+	qb := NewQueryBuilder("sqlite")
+	query := qb.Select("*").From("items")
+
+	// Apply only offset to verify it is respected without LIMIT
+	query = qb.BuildLimitOffset(query, 0, 3)
+	sqlText, _, err := query.ToSql()
+	require.NoError(t, err)
+	assert.NotContains(t, sqlText, "LIMIT")
+	assert.Contains(t, sqlText, "OFFSET")
+
+	// Apply limit and offset together
+	query = qb.BuildLimitOffset(qb.Select("*").From("items"), 4, 2)
+	sqlText, _, err = query.ToSql()
+	require.NoError(t, err)
+	assert.Contains(t, sqlText, "LIMIT 4")
+	assert.Contains(t, sqlText, "OFFSET 2")
+}
+
 func TestQueryBuilder_BuildCurrentTimestamp(t *testing.T) {
 	tests := []struct {
 		name     string

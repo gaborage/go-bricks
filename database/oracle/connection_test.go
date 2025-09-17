@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -193,6 +195,41 @@ func TestConnection_NewConnection_WithDatabase(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping Oracle database")
 }
 
+func TestConnection_NewConnection_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:            "localhost",
+		Port:            1521,
+		Username:        "stub",
+		Password:        "secret",
+		ServiceName:     "XEPDB1",
+		MaxConns:        4,
+		MaxIdleConns:    2,
+		ConnMaxLifetime: 45 * time.Second,
+	}
+
+	log := logger.New("debug", true)
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
 func TestConnection_CreateMigrationTable(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -234,6 +271,117 @@ func TestConnection_CreateMigrationTable_FirstError(t *testing.T) {
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestOracleStatement_QueryAndQueryRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT id FROM dual WHERE flag = :1")).
+		ExpectQuery().
+		WithArgs(true).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+
+	stmt, err := db.PrepareContext(context.Background(), "SELECT id FROM dual WHERE flag = :1")
+	require.NoError(t, err)
+	ps := &Statement{stmt: stmt}
+
+	rows, err := ps.Query(context.Background(), true)
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	rows.Close()
+	require.NoError(t, ps.Close())
+
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT name FROM dual WHERE id = :1")).
+		ExpectQuery().
+		WithArgs(5).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("beta"))
+
+	stmtRow, err := db.PrepareContext(context.Background(), "SELECT name FROM dual WHERE id = :1")
+	require.NoError(t, err)
+	psRow := &Statement{stmt: stmtRow}
+
+	row := psRow.QueryRow(context.Background(), 5)
+	var name string
+	require.NoError(t, row.Scan(&name))
+	assert.Equal(t, "beta", name)
+	require.NoError(t, psRow.Close())
+}
+
+func TestOracleTransaction_QueryPrepareExec(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectBegin()
+	nativeTx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	trx := &Transaction{tx: nativeTx}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM dual WHERE code = :1")).
+		WithArgs("X").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(11))
+
+	rows, err := trx.Query(context.Background(), "SELECT id FROM dual WHERE code = :1", "X")
+	require.NoError(t, err)
+	rows.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM dual WHERE id = :1")).
+		WithArgs(11).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("gamma"))
+
+	row := trx.QueryRow(context.Background(), "SELECT name FROM dual WHERE id = :1", 11)
+	var name string
+	require.NoError(t, row.Scan(&name))
+	assert.Equal(t, "gamma", name)
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE dual SET name = :1 WHERE id = :2")).
+		WithArgs("delta", 11).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = trx.Exec(context.Background(), "UPDATE dual SET name = :1 WHERE id = :2", "delta", 11)
+	require.NoError(t, err)
+
+	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO dual(id, name) VALUES (:1, :2)"))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO dual(id, name) VALUES (:1, :2)")).
+		WithArgs(12, "epsilon").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	stmt, err := trx.Prepare(context.Background(), "INSERT INTO dual(id, name) VALUES (:1, :2)")
+	require.NoError(t, err)
+	_, err = stmt.Exec(context.Background(), 12, "epsilon")
+	require.NoError(t, err)
+	require.NoError(t, stmt.Close())
+
+	mock.ExpectCommit()
+	require.NoError(t, trx.Commit())
+}
+
+func TestOracleTransaction_PrepareError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectBegin()
+	nativeTx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	trx := &Transaction{tx: nativeTx}
+
+	prepareErr := errors.New("prepare failed")
+	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO fail(id) VALUES (:1)")).
+		WillReturnError(prepareErr)
+
+	stmt, err := trx.Prepare(context.Background(), "INSERT INTO fail(id) VALUES (:1)")
+	assert.Nil(t, stmt)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, prepareErr)
+
+	mock.ExpectRollback()
+	require.NoError(t, trx.Rollback())
 }
 
 func TestConnection_CreateMigrationTable_SecondError(t *testing.T) {

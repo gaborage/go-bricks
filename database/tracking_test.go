@@ -183,6 +183,86 @@ func TestTrackedConnection_MultipleOperations(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
+func TestTrackedTx_ContextMethods(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectBegin()
+	nativeTx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	trackedTx := &TrackedTx{
+		Tx:     nativeTx,
+		logger: logger.New("debug", true),
+		vendor: "postgresql",
+	}
+
+	ctx := logger.WithDBCounter(context.Background())
+
+	rows := sqlmock.NewRows([]string{"id"}).AddRow(1)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM sample WHERE flag = $1")).
+		WithArgs(true).
+		WillReturnRows(rows)
+
+	resultRows, err := trackedTx.QueryContext(ctx, "SELECT id FROM sample WHERE flag = $1", true)
+	require.NoError(t, err)
+	require.NotNil(t, resultRows)
+	resultRows.Close()
+
+	nameRows := sqlmock.NewRows([]string{"name"}).AddRow("alice")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM sample WHERE id = $1")).
+		WithArgs(1).
+		WillReturnRows(nameRows)
+
+	row := trackedTx.QueryRowContext(ctx, "SELECT name FROM sample WHERE id = $1", 1)
+	require.NotNil(t, row)
+	var name string
+	require.NoError(t, row.Scan(&name))
+	assert.Equal(t, "alice", name)
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE sample SET name = $1 WHERE id = $2")).
+		WithArgs("bob", 1).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	_, err = trackedTx.ExecContext(ctx, "UPDATE sample SET name = $1 WHERE id = $2", "bob", 1)
+	require.NoError(t, err)
+
+	mock.ExpectCommit()
+	require.NoError(t, trackedTx.Commit())
+
+	assert.Greater(t, logger.GetDBCounter(ctx), int64(0))
+	assertDBElapsedPositive(ctx, t)
+}
+
+func TestTrackedConnection_BeginErrors(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	sc := &simpleConnection{db: db}
+	log := logger.New("debug", true)
+	tracked := NewTrackedConnection(sc, log).(*TrackedConnection)
+
+	expectedBeginErr := errors.New("begin failed")
+	mock.ExpectBegin().WillReturnError(expectedBeginErr)
+
+	_, err = tracked.Begin(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, expectedBeginErr)
+
+	expectedBeginTxErr := errors.New("begin tx failed")
+	mock.ExpectBegin().WillReturnError(expectedBeginTxErr)
+
+	_, err = tracked.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, expectedBeginTxErr)
+}
+
 func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))

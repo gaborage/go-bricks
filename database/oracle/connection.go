@@ -20,6 +20,15 @@ type Connection struct {
 	logger logger.Logger
 }
 
+var (
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		return sql.Open("oracle", dsn)
+	}
+	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
+		return db.PingContext(ctx)
+	}
+)
+
 // NewConnection creates a new Oracle connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
 	var dsn string
@@ -30,14 +39,15 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		if cfg.ServiceName != "" {
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.ServiceName, cfg.Username, cfg.Password, nil)
 		} else if cfg.SID != "" {
-			dsn = fmt.Sprintf("%s:%s@%s:%d/%s", cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.SID)
+			urlOpts := map[string]string{"SID": cfg.SID}
+			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, "", cfg.Username, cfg.Password, urlOpts)
 		} else {
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, nil)
 		}
 	}
 
 	// Open Oracle connection
-	db, err := sql.Open("oracle", dsn)
+	db, err := openOracleDB(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
 	}
@@ -52,18 +62,24 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingOracleDB(ctx, db); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("Failed to close Oracle database connection after ping failure")
 		}
 		return nil, fmt.Errorf("failed to ping Oracle database: %w", err)
 	}
 
-	log.Info().
+	ev := log.Info().
 		Str("host", cfg.Host).
-		Int("port", cfg.Port).
-		Str("database", cfg.Database).
-		Msg("Connected to Oracle database")
+		Int("port", cfg.Port)
+	if cfg.ServiceName != "" {
+		ev = ev.Str("service_name", cfg.ServiceName)
+	} else if cfg.SID != "" {
+		ev = ev.Str("sid", cfg.SID)
+	} else {
+		ev = ev.Str("database", cfg.Database)
+	}
+	ev.Msg("Connected to Oracle database")
 
 	return &Connection{
 		db:     db,

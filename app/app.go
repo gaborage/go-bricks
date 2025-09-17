@@ -63,8 +63,9 @@ type App struct {
 }
 
 // isDatabaseEnabled determines if database should be initialized based on config
+// Uses the shared logic from config.IsDatabaseConfigured for consistency
 func isDatabaseEnabled(cfg *config.Config) bool {
-	return cfg.Database.Host != "" || cfg.Database.Type != ""
+	return config.IsDatabaseConfigured(&cfg.Database)
 }
 
 // isMessagingEnabled determines if messaging should be initialized based on config
