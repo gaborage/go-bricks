@@ -32,7 +32,7 @@ var (
 )
 
 // quoteDSN quotes a DSN value according to libpq rules:
-// - Returns ” for empty strings
+// - Returns double single quotes for empty strings (empty value)
 // - Escapes backslashes and single quotes
 // - Wraps in single quotes when value contains non-alphanumeric/._- characters
 func quoteDSN(value string) string {
@@ -68,7 +68,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		dsn = cfg.ConnectionString
 	} else {
 		parts := []string{
-			fmt.Sprintf("host=%s", cfg.Host),
+			fmt.Sprintf("host=%s", quoteDSN(cfg.Host)),
 			fmt.Sprintf("port=%d", cfg.Port),
 			fmt.Sprintf("user=%s", quoteDSN(cfg.Username)),
 			fmt.Sprintf("password=%s", quoteDSN(cfg.Password)),

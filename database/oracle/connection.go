@@ -39,7 +39,8 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		if cfg.ServiceName != "" {
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.ServiceName, cfg.Username, cfg.Password, nil)
 		} else if cfg.SID != "" {
-			dsn = fmt.Sprintf("%s:%s@%s:%d/%s", cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.SID)
+			urlOpts := map[string]string{"SID": cfg.SID}
+			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, "", cfg.Username, cfg.Password, urlOpts)
 		} else {
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, nil)
 		}
@@ -68,11 +69,17 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		return nil, fmt.Errorf("failed to ping Oracle database: %w", err)
 	}
 
-	log.Info().
+	ev := log.Info().
 		Str("host", cfg.Host).
-		Int("port", cfg.Port).
-		Str("database", cfg.Database).
-		Msg("Connected to Oracle database")
+		Int("port", cfg.Port)
+	if cfg.ServiceName != "" {
+		ev = ev.Str("service_name", cfg.ServiceName)
+	} else if cfg.SID != "" {
+		ev = ev.Str("sid", cfg.SID)
+	} else {
+		ev = ev.Str("database", cfg.Database)
+	}
+	ev.Msg("Connected to Oracle database")
 
 	return &Connection{
 		db:     db,
