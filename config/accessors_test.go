@@ -369,7 +369,10 @@ func TestTypeConversions(t *testing.T) {
 			{"zero", 0.0, 0, false},
 			{"positive integer", 42.0, 42, false},
 			{"negative integer", -123.0, -123, false},
-			{"max int64", float64(math.MaxInt64), math.MaxInt64, false},
+			// float64(MaxInt64) rounds to 2^63, but Go's int64() conversion handles it gracefully
+			{"max int64 representable in go", float64(math.MaxInt64), math.MaxInt64, false},
+			// Use a value that actually overflows: 2^63 + large number
+			{"actual overflow", float64(math.MaxInt64) + 1e10, 0, true},
 			{"min int64", float64(math.MinInt64), math.MinInt64, false},
 			{"not integer", 3.14, 0, true},
 			{"small decimal", 0.1, 0, true},

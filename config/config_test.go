@@ -90,47 +90,55 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 }
 
 func TestLoad_InvalidEnvironmentVariables(t *testing.T) {
-	defer clearEnvironmentVariables()
+	baseEnv := map[string]string{
+		"DATABASE_DATABASE": "testdb",
+		"DATABASE_USERNAME": "testuser",
+	}
 
 	tests := []struct {
-		name   string
-		envVar string
-		value  string
+		name    string
+		envKey  string
+		value   string
+		wantErr string
 	}{
 		{
-			name:   "invalid_port",
-			envVar: "SERVER_PORT",
-			value:  "invalid",
+			name:    "invalid_port",
+			envKey:  "SERVER_PORT",
+			value:   "invalid",
+			wantErr: "server.port",
 		},
 		{
-			name:   "invalid_timeout",
-			envVar: "SERVER_READ_TIMEOUT",
-			value:  "invalid-duration",
+			name:    "invalid_boolean",
+			envKey:  "APP_DEBUG",
+			value:   "maybe",
+			wantErr: "app.debug",
 		},
 		{
-			name:   "invalid_boolean",
-			envVar: "APP_DEBUG",
-			value:  "maybe",
+			name:    "invalid_database_port",
+			envKey:  "DATABASE_PORT",
+			value:   "not-a-number",
+			wantErr: "database.port",
 		},
 		{
-			name:   "invalid_integer",
-			envVar: "APP_RATE_LIMIT",
-			value:  "not-a-number",
+			name:    "invalid_log_level",
+			envKey:  "LOG_LEVEL",
+			value:   "super-loud",
+			wantErr: "invalid log level",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearEnvironmentVariables()
-			os.Setenv(tt.envVar, tt.value)
+			for key, val := range baseEnv {
+				t.Setenv(key, val)
+			}
+			t.Setenv(tt.envKey, tt.value)
 
 			cfg, err := Load()
-			// Should either fail to load or fail validation
-			if err == nil {
-				require.NotNil(t, cfg)
-				// If loading succeeds, validation should catch the error
-				assert.Contains(t, err.Error(), "invalid")
-			}
+			require.Error(t, err)
+			assert.Nil(t, cfg)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }

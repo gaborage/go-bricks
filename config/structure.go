@@ -14,7 +14,7 @@ type Config struct {
 	Messaging MessagingConfig `koanf:"messaging"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
-	k *koanf.Koanf
+	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
 }
 
 type AppConfig struct {
