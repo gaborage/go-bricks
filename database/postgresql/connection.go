@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,10 +28,19 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	if cfg.ConnectionString != "" {
 		dsn = cfg.ConnectionString
 	} else {
-		dsn = fmt.Sprintf(
-			"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-			cfg.Host, cfg.Port, cfg.Username, cfg.Password, cfg.Database, cfg.SSLMode,
-		)
+		parts := []string{
+			fmt.Sprintf("host=%s", cfg.Host),
+			fmt.Sprintf("port=%d", cfg.Port),
+			fmt.Sprintf("user=%s", cfg.Username),
+			fmt.Sprintf("password=%s", cfg.Password),
+			fmt.Sprintf("dbname=%s", cfg.Database),
+		}
+
+		if cfg.SSLMode != "" {
+			parts = append(parts, fmt.Sprintf("sslmode=%s", cfg.SSLMode))
+		}
+
+		dsn = strings.Join(parts, " ")
 	}
 
 	// Parse config for pgx

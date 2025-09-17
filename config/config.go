@@ -65,7 +65,7 @@ func Load() (*Config, error) {
 
 func loadDefaults(k *koanf.Koanf) error {
 	defaults := map[string]interface{}{
-		"app.name":       "nova-service",
+		"app.name":       "gobricks-service",
 		"app.version":    "v1.0.0",
 		"app.env":        EnvDevelopment,
 		"app.debug":      false,
@@ -79,14 +79,8 @@ func loadDefaults(k *koanf.Koanf) error {
 		"server.middleware_timeout": "5s",
 		"server.shutdown_timeout":   "10s",
 
-		"database.type":               "postgresql",
-		"database.host":               "localhost",
-		"database.port":               5432,
-		"database.ssl_mode":           "disable",
-		"database.max_conns":          25,
-		"database.max_idle_conns":     5,
-		"database.conn_max_lifetime":  "5m",
-		"database.conn_max_idle_time": "5m",
+		// Database defaults not provided for deterministic behavior
+		// Database will only be enabled when explicitly configured
 
 		"log.level":  "info",
 		"log.pretty": false,

@@ -151,6 +151,29 @@ func TestConnection_NewConnection_WithHostConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
 }
 
+func TestConnection_NewConnection_WithHostConfigNoSSLMode(t *testing.T) {
+	// Configuration without sslmode should omit the parameter from the DSN
+	cfg := &config.DatabaseConfig{
+		Host:            "localhost",
+		Port:            5432,
+		Username:        "testuser",
+		Password:        "testpass",
+		Database:        "testdb",
+		MaxConns:        25,
+		MaxIdleConns:    10,
+		ConnMaxLifetime: time.Hour,
+		ConnMaxIdleTime: 30 * time.Minute,
+	}
+
+	log := logger.New("debug", true)
+
+	// This will fail because we're not connecting to a real database, but should parse successfully
+	_, err := NewConnection(cfg, log)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
+}
+
 func TestConnection_NewConnection_InvalidConfig(t *testing.T) {
 	// Test with invalid configuration that causes parsing to fail
 	cfg := &config.DatabaseConfig{

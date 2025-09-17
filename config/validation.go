@@ -76,19 +76,72 @@ func validateServer(cfg *ServerConfig) error {
 	return nil
 }
 
-func validateDatabase(cfg *DatabaseConfig) error {
-	validTypes := []string{PostgreSQL, Oracle}
-	if !contains(validTypes, cfg.Type) {
-		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
-			cfg.Type, strings.Join(validTypes, ", "))
+// IsDatabaseConfigured determines if database is intentionally configured.
+// This mirrors the logic used in app.isDatabaseEnabled() for consistency.
+func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
+	// Connection string indicates explicit database configuration
+	if cfg.ConnectionString != "" {
+		return true
 	}
 
+	// Mirror the logic from app.isDatabaseEnabled()
+	return cfg.Host != "" || cfg.Type != ""
+}
+
+func validateDatabase(cfg *DatabaseConfig) error {
+	if !IsDatabaseConfigured(cfg) {
+		return nil
+	}
+
+	if cfg.ConnectionString != "" {
+		return validateDatabaseWithConnectionString(cfg)
+	}
+
+	if err := validateDatabaseType(cfg.Type); err != nil {
+		return err
+	}
+
+	if err := validateDatabaseCoreFields(cfg); err != nil {
+		return err
+	}
+
+	return applyDatabasePoolDefaults(cfg)
+}
+
+func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
+	if cfg.Type != "" {
+		if err := validateDatabaseType(cfg.Type); err != nil {
+			return err
+		}
+	}
+
+	if err := validateOptionalDatabasePort(cfg.Port); err != nil {
+		return err
+	}
+
+	if cfg.MaxConns <= 0 {
+		return fmt.Errorf("max connections must be positive")
+	}
+
+	return nil
+}
+
+func validateDatabaseType(dbType string) error {
+	validTypes := []string{PostgreSQL, Oracle}
+	if !contains(validTypes, dbType) {
+		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
+			dbType, strings.Join(validTypes, ", "))
+	}
+	return nil
+}
+
+func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 	if cfg.Host == "" {
 		return fmt.Errorf("database host is required")
 	}
 
-	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return fmt.Errorf("invalid database port: %d", cfg.Port)
+	if err := validateRequiredDatabasePort(cfg.Port); err != nil {
+		return err
 	}
 
 	if cfg.Database == "" {
@@ -99,7 +152,27 @@ func validateDatabase(cfg *DatabaseConfig) error {
 		return fmt.Errorf("database username is required")
 	}
 
-	if cfg.MaxConns <= 0 {
+	return nil
+}
+
+func validateOptionalDatabasePort(port int) error {
+	if port > 0 && port > 65535 {
+		return fmt.Errorf("invalid database port: %d", port)
+	}
+	return nil
+}
+
+func validateRequiredDatabasePort(port int) error {
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("invalid database port: %d", port)
+	}
+	return nil
+}
+
+func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	if cfg.MaxConns == 0 {
+		cfg.MaxConns = 25
+	} else if cfg.MaxConns < 0 {
 		return fmt.Errorf("max connections must be positive")
 	}
 

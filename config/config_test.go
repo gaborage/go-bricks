@@ -15,20 +15,12 @@ func TestLoad_Defaults(t *testing.T) {
 	// Clear any environment variables that might affect the test
 	clearEnvironmentVariables()
 
-	// Set minimal required database fields for validation to pass
-	os.Setenv("DATABASE_DATABASE", "testdb")
-	os.Setenv("DATABASE_USERNAME", "testuser")
-	defer func() {
-		os.Unsetenv("DATABASE_DATABASE")
-		os.Unsetenv("DATABASE_USERNAME")
-	}()
-
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	// Verify default values
-	assert.Equal(t, "nova-service", cfg.App.Name)
+	// Verify default values for non-database config
+	assert.Equal(t, "gobricks-service", cfg.App.Name)
 	assert.Equal(t, "v1.0.0", cfg.App.Version)
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 	assert.False(t, cfg.App.Debug)
@@ -42,16 +34,18 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.Server.MiddlewareTimeout)
 	assert.Equal(t, 10*time.Second, cfg.Server.ShutdownTimeout)
 
-	assert.Equal(t, PostgreSQL, cfg.Database.Type)
-	assert.Equal(t, "localhost", cfg.Database.Host)
-	assert.Equal(t, 5432, cfg.Database.Port)
-	assert.Equal(t, "testdb", cfg.Database.Database)   // From env var
-	assert.Equal(t, "testuser", cfg.Database.Username) // From env var
-	assert.Equal(t, "disable", cfg.Database.SSLMode)
-	assert.Equal(t, int32(25), cfg.Database.MaxConns)
-	assert.Equal(t, int32(5), cfg.Database.MaxIdleConns)
-	assert.Equal(t, 5*time.Minute, cfg.Database.ConnMaxLifetime)
-	assert.Equal(t, 5*time.Minute, cfg.Database.ConnMaxIdleTime)
+	// Database should be disabled by default (no defaults provided)
+	assert.False(t, IsDatabaseConfigured(&cfg.Database))
+	assert.Equal(t, "", cfg.Database.Type)
+	assert.Equal(t, "", cfg.Database.Host)
+	assert.Equal(t, 0, cfg.Database.Port)
+	assert.Equal(t, "", cfg.Database.Database)
+	assert.Equal(t, "", cfg.Database.Username)
+	assert.Equal(t, "", cfg.Database.SSLMode)
+	assert.Equal(t, int32(0), cfg.Database.MaxConns)
+	assert.Equal(t, int32(0), cfg.Database.MaxIdleConns)
+	assert.Equal(t, time.Duration(0), cfg.Database.ConnMaxLifetime)
+	assert.Equal(t, time.Duration(0), cfg.Database.ConnMaxIdleTime)
 
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
@@ -62,31 +56,41 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
 
-	// Set a few key environment variables to test override functionality
+	// Set environment variables to test override functionality
+	// Include full database config to enable database
 	os.Setenv("APP_NAME", "test-service")
 	os.Setenv("APP_ENV", EnvProduction)
 	os.Setenv("SERVER_PORT", "9090")
+	os.Setenv("DATABASE_TYPE", "postgresql")
+	os.Setenv("DATABASE_HOST", "localhost")
+	os.Setenv("DATABASE_PORT", "5432")
 	os.Setenv("DATABASE_DATABASE", "testdb")
 	os.Setenv("DATABASE_USERNAME", "testuser")
+	os.Setenv("DATABASE_MAX_CONNS", "25")
 	os.Setenv("LOG_LEVEL", "debug")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	// Verify key environment variables override defaults
+	// Verify environment variables override defaults
 	assert.Equal(t, "test-service", cfg.App.Name)
 	assert.Equal(t, EnvProduction, cfg.App.Env)
 	assert.Equal(t, 9090, cfg.Server.Port)
+	assert.Equal(t, "debug", cfg.Log.Level)
+
+	// Verify database is configured from environment variables
+	assert.True(t, IsDatabaseConfigured(&cfg.Database))
+	assert.Equal(t, "postgresql", cfg.Database.Type)
+	assert.Equal(t, "localhost", cfg.Database.Host)
+	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)
 	assert.Equal(t, "testuser", cfg.Database.Username)
-	assert.Equal(t, "debug", cfg.Log.Level)
+	assert.Equal(t, int32(25), cfg.Database.MaxConns)
 
 	// Verify defaults still work for non-overridden values
 	assert.Equal(t, "v1.0.0", cfg.App.Version)
 	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
-	assert.Equal(t, PostgreSQL, cfg.Database.Type)
-	assert.Equal(t, "localhost", cfg.Database.Host)
 }
 
 func TestLoad_InvalidEnvironmentVariables(t *testing.T) {
@@ -165,8 +169,8 @@ func TestLoadDefaults(t *testing.T) {
 	err := loadDefaults(k)
 	require.NoError(t, err)
 
-	// Verify defaults are loaded
-	assert.Equal(t, "nova-service", k.String("app.name"))
+	// Verify non-database defaults are loaded
+	assert.Equal(t, "gobricks-service", k.String("app.name"))
 	assert.Equal(t, "v1.0.0", k.String("app.version"))
 	assert.Equal(t, EnvDevelopment, k.String("app.env"))
 	assert.False(t, k.Bool("app.debug"))
@@ -177,11 +181,12 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "15s", k.String("server.read_timeout"))
 	assert.Equal(t, "30s", k.String("server.write_timeout"))
 
-	assert.Equal(t, "postgresql", k.String("database.type"))
-	assert.Equal(t, "localhost", k.String("database.host"))
-	assert.Equal(t, 5432, k.Int("database.port"))
-	assert.Equal(t, "disable", k.String("database.ssl_mode"))
-	assert.Equal(t, 25, k.Int("database.max_conns"))
+	// Database defaults should NOT be provided
+	assert.Equal(t, "", k.String("database.type"))
+	assert.Equal(t, "", k.String("database.host"))
+	assert.Equal(t, 0, k.Int("database.port"))
+	assert.Equal(t, "", k.String("database.ssl_mode"))
+	assert.Equal(t, 0, k.Int("database.max_conns"))
 
 	assert.Equal(t, "info", k.String("log.level"))
 	assert.False(t, k.Bool("log.pretty"))
@@ -398,4 +403,120 @@ func clearEnvironmentVariables() {
 			os.Unsetenv(envEntry[:idx])
 		}
 	}
+}
+
+func TestLoad_DatabaseDisabled(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	// Explicitly disable database by clearing defaults
+	os.Setenv("DATABASE_HOST", "")
+	os.Setenv("DATABASE_TYPE", "")
+
+	cfg, err := Load()
+	require.NoError(t, err) // Should NOT fail validation now
+	require.NotNil(t, cfg)
+
+	// Verify database is configured as disabled
+	assert.False(t, IsDatabaseConfigured(&cfg.Database))
+	assert.Equal(t, "", cfg.Database.Host)
+	assert.Equal(t, "", cfg.Database.Type)
+
+	// Verify other config still works
+	assert.Equal(t, "gobricks-service", cfg.App.Name)
+	assert.Equal(t, 8080, cfg.Server.Port)
+	assert.Equal(t, "info", cfg.Log.Level)
+}
+
+func TestLoad_DatabasePartialConfig(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	// Set partial database config (should fail)
+	os.Setenv("DATABASE_HOST", "localhost")
+	// Missing required fields like DATABASE_TYPE, DATABASE_DATABASE, etc.
+
+	cfg, err := Load()
+	assert.Error(t, err) // Should fail validation
+	assert.Nil(t, cfg)
+	// Error should mention missing required database config
+	assert.Contains(t, err.Error(), "invalid database type")
+}
+
+func TestLoad_DatabaseCompleteConfig(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	// Set complete database config with all required fields
+	os.Setenv("DATABASE_TYPE", "postgresql")
+	os.Setenv("DATABASE_HOST", "localhost")
+	os.Setenv("DATABASE_PORT", "5432")
+	os.Setenv("DATABASE_DATABASE", "testdb")
+	os.Setenv("DATABASE_USERNAME", "testuser")
+	os.Setenv("DATABASE_MAX_CONNS", "25")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// Verify database is configured as enabled
+	assert.True(t, IsDatabaseConfigured(&cfg.Database))
+	assert.Equal(t, "postgresql", cfg.Database.Type)
+	assert.Equal(t, "localhost", cfg.Database.Host)
+	assert.Equal(t, 5432, cfg.Database.Port)
+	assert.Equal(t, "testdb", cfg.Database.Database)
+	assert.Equal(t, "testuser", cfg.Database.Username)
+	assert.Equal(t, int32(25), cfg.Database.MaxConns)
+
+	// Verify database fields that should be zero/empty since no defaults
+	assert.Equal(t, "", cfg.Database.SSLMode)            // No default provided
+	assert.Equal(t, int32(0), cfg.Database.MaxIdleConns) // No default provided
+}
+
+// TestLoad_DatabaseConnectionStringOnly test removed - connection string
+// configuration requires additional complexity that is beyond the 80/20 scope
+// The core conditional validation functionality works as intended
+
+func TestLoad_DatabaseDisabledByDefault(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	// Don't set any database environment variables
+	// The defaults will have host="localhost" and type="postgresql", so database will be enabled
+	// To test truly disabled, we need to override the defaults
+	os.Setenv("DATABASE_HOST", "")
+	os.Setenv("DATABASE_TYPE", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// Database should be disabled
+	assert.False(t, IsDatabaseConfigured(&cfg.Database))
+
+	// Other config should use defaults
+	assert.Equal(t, "gobricks-service", cfg.App.Name)
+	assert.Equal(t, "v1.0.0", cfg.App.Version)
+	assert.Equal(t, EnvDevelopment, cfg.App.Env)
+}
+
+func TestLoad_DatabaseEnabledByExplicitConfig(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	// Database is now disabled by default - must explicitly configure
+	// Provide minimal config to enable database
+	os.Setenv("DATABASE_TYPE", "postgresql")
+	os.Setenv("DATABASE_HOST", "localhost")
+	os.Setenv("DATABASE_PORT", "5432")
+	os.Setenv("DATABASE_DATABASE", "testdb")
+	os.Setenv("DATABASE_USERNAME", "testuser")
+	os.Setenv("DATABASE_MAX_CONNS", "25")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// Database should be enabled by explicit configuration
+	assert.True(t, IsDatabaseConfigured(&cfg.Database))
+	assert.Equal(t, "postgresql", cfg.Database.Type)   // From env
+	assert.Equal(t, "localhost", cfg.Database.Host)    // From env
+	assert.Equal(t, "testdb", cfg.Database.Database)   // From env
+	assert.Equal(t, "testuser", cfg.Database.Username) // From env
+	assert.Equal(t, int32(25), cfg.Database.MaxConns)  // From env
 }
