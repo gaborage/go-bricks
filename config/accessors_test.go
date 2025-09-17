@@ -261,6 +261,28 @@ func TestTypeConversions(t *testing.T) {
 		}
 	})
 
+	t.Run("toInt64", func(t *testing.T) {
+		t.Run("string with spaces", func(t *testing.T) {
+			result, err := toInt64("  12345  ")
+			assert.NoError(t, err)
+			assert.Equal(t, int64(12345), result)
+		})
+
+		t.Run("empty string", func(t *testing.T) {
+			_, err := toInt64("   ")
+			assert.Error(t, err)
+		})
+	})
+
+	t.Run("toInt", func(t *testing.T) {
+		t.Run("overflow", func(t *testing.T) {
+			// Use the largest precise float above MaxInt64 to trigger overflow after conversion to int64
+			value := math.Nextafter(float64(math.MaxInt64), math.Inf(1))
+			_, err := toInt(value)
+			assert.Error(t, err)
+		})
+	})
+
 	t.Run("toFloat64", func(t *testing.T) {
 		tests := []struct {
 			name        string
@@ -385,6 +407,7 @@ func TestTypeConversions(t *testing.T) {
 			{"negative infinity", math.Inf(-1), 0, true},
 			{"overflow positive", float64(math.MaxInt64) + 1e10, 0, true},
 			{"overflow negative", float64(math.MinInt64) - 1e10, 0, true},
+			{"non-exact integer", math.Nextafter(float64(math.MaxInt64), math.Inf(1)), 0, true},
 		}
 
 		for _, tt := range tests {

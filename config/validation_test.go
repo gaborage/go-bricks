@@ -867,6 +867,16 @@ func TestValidateDatabase_ConditionalBehavior(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "connection_string_invalid_port_uses_optional_validation",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				Port:             70000,
+				MaxConns:         25,
+			},
+			expectError:   true,
+			errorContains: "invalid database port",
+		},
+		{
 			name: "connection_string_with_invalid_type",
 			config: DatabaseConfig{
 				ConnectionString: "postgresql://user:pass@localhost/db",
@@ -875,6 +885,15 @@ func TestValidateDatabase_ConditionalBehavior(t *testing.T) {
 			},
 			expectError:   true,
 			errorContains: "invalid database type",
+		},
+		{
+			name: "connection_string_missing_max_conns_errors",
+			config: DatabaseConfig{
+				ConnectionString: "postgresql://user:pass@localhost/db",
+				MaxConns:         0,
+			},
+			expectError:   true,
+			errorContains: "max connections must be positive",
 		},
 		{
 			name: "invalid_database_type",
