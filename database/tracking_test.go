@@ -37,7 +37,6 @@ func setupTracked(t testing.TB, withCounter bool) (sqlmock.Sqlmock, *TrackedConn
 
 // setupTrackedWithOptions is intentionally omitted to keep compatibility with
 // older sqlmock versions; use test-local setup for special options.
-
 func assertDBCounter(ctx context.Context, t testing.TB, want int64) {
 	t.Helper()
 	assert.Equal(t, want, logger.GetDBCounter(ctx))
@@ -421,3 +420,397 @@ func TestTrackDBOperation_RegularError(t *testing.T) {
 }
 
 // Removed constant and constant-usage tests: prefer behavior over implementation details
+
+// =============================================================================
+// TrackedDB Tests - 0% Coverage Area
+// =============================================================================
+
+func TestNewTrackedDB(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	vendor := "postgresql"
+
+	trackedDB := NewTrackedDB(db, log, vendor)
+
+	assert.NotNil(t, trackedDB)
+	assert.Equal(t, db, trackedDB.DB)
+	assert.Equal(t, log, trackedDB.logger)
+	assert.Equal(t, vendor, trackedDB.vendor)
+}
+
+func TestTrackedDB_QueryContext(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	// Setup expectations
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users")).WillReturnRows(rows)
+
+	ctx := logger.WithDBCounter(context.Background())
+	resultRows, err := trackedDB.QueryContext(ctx, "SELECT * FROM users")
+
+	require.NoError(t, err)
+	assert.NotNil(t, resultRows)
+	resultRows.Close()
+
+	assertDBCounter(ctx, t, 1)
+	assertDBElapsedPositive(ctx, t)
+}
+
+func TestTrackedDB_QueryContext_Error(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	expectedErr := errors.New("query failed")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM invalid")).WillReturnError(expectedErr)
+
+	ctx := logger.WithDBCounter(context.Background())
+	rows, err := trackedDB.QueryContext(ctx, "SELECT * FROM invalid")
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, rows)
+	assertDBCounter(ctx, t, 1)
+}
+
+func TestTrackedDB_QueryRowContext(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "oracle")
+
+	rows := sqlmock.NewRows([]string{"name"}).AddRow("John")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM users WHERE id = ?")).WithArgs(1).WillReturnRows(rows)
+
+	ctx := logger.WithDBCounter(context.Background())
+	row := trackedDB.QueryRowContext(ctx, "SELECT name FROM users WHERE id = ?", 1)
+
+	assert.NotNil(t, row)
+
+	// Verify we can scan the result
+	var name string
+	err = row.Scan(&name)
+	require.NoError(t, err)
+	assert.Equal(t, "John", name)
+	assertDBCounter(ctx, t, 1)
+}
+
+func TestTrackedDB_ExecContext(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name) VALUES (?)")).
+		WithArgs("Alice").
+		WillReturnResult(sqlmock.NewResult(2, 1))
+
+	ctx := logger.WithDBCounter(context.Background())
+	result, err := trackedDB.ExecContext(ctx, "INSERT INTO users (name) VALUES (?)", "Alice")
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	lastID, err := result.LastInsertId()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), lastID)
+
+	rowsAffected, err := result.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
+	assertDBCounter(ctx, t, 1)
+}
+
+func TestTrackedDB_ExecContext_Error(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "oracle")
+
+	expectedErr := errors.New("constraint violation")
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name) VALUES (?)")).
+		WithArgs("").
+		WillReturnError(expectedErr)
+
+	ctx := logger.WithDBCounter(context.Background())
+	result, err := trackedDB.ExecContext(ctx, "INSERT INTO users (name) VALUES (?)", "")
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, result)
+	assertDBCounter(ctx, t, 1)
+}
+
+func TestTrackedDB_Close(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	mock.ExpectClose()
+
+	err = trackedDB.Close()
+	require.NoError(t, err)
+}
+
+func TestTrackedDB_PrepareContext(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "oracle")
+
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = ?"))
+
+	ctx := logger.WithDBCounter(context.Background())
+	stmt, err := trackedDB.PrepareContext(ctx, "SELECT * FROM users WHERE id = ?")
+
+	require.NoError(t, err)
+	assert.NotNil(t, stmt)
+	assert.IsType(t, &TrackedStmt{}, stmt)
+	t.Cleanup(func() { _ = stmt.Close() })
+	assertDBCounter(ctx, t, 1)
+}
+
+func TestTrackedDB_PrepareContext_Error(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	expectedErr := errors.New("prepare failed")
+	mock.ExpectPrepare(regexp.QuoteMeta("INVALID SQL")).WillReturnError(expectedErr)
+
+	ctx := logger.WithDBCounter(context.Background())
+	stmt, err := trackedDB.PrepareContext(ctx, "INVALID SQL")
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, stmt)
+	assertDBCounter(ctx, t, 1)
+}
+
+// =============================================================================
+// TrackedStmt Tests - Missing Coverage Areas
+// =============================================================================
+
+func TestTrackedStmt_Query(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	// Prepare a statement
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = $1"))
+
+	ctx := logger.WithDBCounter(context.Background())
+	stmt, err := trackedDB.PrepareContext(ctx, "SELECT * FROM users WHERE id = $1")
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+
+	trackedStmt, ok := stmt.(*TrackedStmt)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = stmt.Close() })
+	assertDBCounter(ctx, t, 1)
+
+	// Test Query method
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM users WHERE id = $1")).WithArgs(1).WillReturnRows(rows)
+
+	resultRows, err := trackedStmt.Query(ctx, 1)
+	require.NoError(t, err)
+	assert.NotNil(t, resultRows)
+	resultRows.Close()
+	assertDBCounter(ctx, t, 2)
+}
+
+func TestTrackedStmt_QueryRow(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	// Prepare a statement
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT name FROM users WHERE id = $1"))
+
+	ctx := logger.WithDBCounter(context.Background())
+	stmt, err := trackedDB.PrepareContext(ctx, "SELECT name FROM users WHERE id = $1")
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+
+	trackedStmt, ok := stmt.(*TrackedStmt)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = stmt.Close() })
+	assertDBCounter(ctx, t, 1)
+
+	// Test QueryRow method
+	rowData := sqlmock.NewRows([]string{"name"}).AddRow("Jane")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM users WHERE id = $1")).WithArgs(2).WillReturnRows(rowData)
+
+	row := trackedStmt.QueryRow(ctx, 2)
+	assert.NotNil(t, row)
+
+	var name string
+	err = row.Scan(&name)
+	require.NoError(t, err)
+	assert.Equal(t, "Jane", name)
+	assertDBCounter(ctx, t, 2)
+}
+
+func TestTrackedStmt_Exec(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+	t.Cleanup(func() { _ = db.Close() })
+
+	log := logger.New("debug", true)
+	trackedDB := NewTrackedDB(db, log, "postgresql")
+
+	// Prepare a statement for an UPDATE operation
+	mock.ExpectPrepare(regexp.QuoteMeta("UPDATE users SET name = $1 WHERE id = $2"))
+
+	ctx := logger.WithDBCounter(context.Background())
+	stmt, err := trackedDB.PrepareContext(ctx, "UPDATE users SET name = $1 WHERE id = $2")
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+
+	trackedStmt, ok := stmt.(*TrackedStmt)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = stmt.Close() })
+	assertDBCounter(ctx, t, 1)
+
+	// Test Exec method
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE users SET name = $1 WHERE id = $2")).WithArgs("NewName", 3).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	result, err := trackedStmt.Exec(ctx, "NewName", 3)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	affected, err := result.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), affected)
+	assertDBCounter(ctx, t, 2)
+}
+
+func TestTrackedConnection_Close(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	log := logger.New("debug", true)
+	sc := &simpleConnection{db: db}
+	conn := NewTrackedConnection(sc, log)
+
+	mock.ExpectClose()
+
+	err = conn.Close()
+	require.NoError(t, err)
+}
+
+// =============================================================================
+// TrackedStatement Tests - Missing Coverage Areas
+// =============================================================================
+
+func TestTrackedStatement_QueryRow_Missing(t *testing.T) {
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
+
+	// Prepare statement
+	mock.ExpectPrepare(regexp.QuoteMeta("SELECT name FROM users WHERE id = ?"))
+
+	// Mock QueryRow operation
+	rows := sqlmock.NewRows([]string{"name"}).AddRow("Alice")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM users WHERE id = ?")).WithArgs(5).WillReturnRows(rows)
+
+	stmt, err := tracked.Prepare(ctx, "SELECT name FROM users WHERE id = ?")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stmt.Close() })
+
+	// Test QueryRow (0% coverage)
+	row := stmt.QueryRow(ctx, 5)
+	assert.NotNil(t, row)
+
+	var name string
+	err = row.Scan(&name)
+	require.NoError(t, err)
+	assert.Equal(t, "Alice", name)
+
+	assertDBCounter(ctx, t, 2) // prepare + queryrow
+}
+
+func TestTrackedStatement_Exec_Missing(t *testing.T) {
+	t.Parallel()
+	mock, tracked, ctx := setupTracked(t, true)
+
+	// Prepare statement
+	mock.ExpectPrepare(regexp.QuoteMeta("UPDATE users SET active = ? WHERE id = ?"))
+
+	// Mock Exec operation
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE users SET active = ? WHERE id = ?")).
+		WithArgs(true, 10).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	stmt, err := tracked.Prepare(ctx, "UPDATE users SET active = ? WHERE id = ?")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stmt.Close() })
+
+	// Test Exec (0% coverage)
+	result, err := stmt.Exec(ctx, true, 10)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	rowsAffected, err := result.RowsAffected()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
+
+	assertDBCounter(ctx, t, 2) // prepare + exec
+}

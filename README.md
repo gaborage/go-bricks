@@ -13,14 +13,14 @@ GoBricks is an open-source, enterprise-grade Go framework for building robust mi
 ## 🚀 Features
 
 - **🏗️ Modular Architecture**: Component-based design with dependency injection
-- **🌐 HTTP Server**: Echo-based server with comprehensive middleware ecosystem
-- **🗄️ Multi-Database Support**: PostgreSQL and Oracle with unified interface
-- **📨 AMQP Messaging**: RabbitMQ integration with automatic reconnection
-- **⚙️ Configuration Management**: Koanf-based config with multiple sources (YAML, env vars)
-- **📊 Built-in Observability**: Request tracking, performance metrics, structured logging
-- **🔧 Database Migrations**: Flyway integration for schema management
-- **🧩 Plugin System**: Easy module registration and lifecycle management
-- **🚀 Production Ready**: Used in enterprise environments
+- **🌐 HTTP Server**: Echo-based server with standardized envelopes and middleware stack
+- **🗄️ Multi-Database Support**: PostgreSQL and Oracle drivers with unified interface and health checks
+- **📨 Messaging Registry**: RabbitMQ client with infrastructure declaration and consumer lifecycle management
+- **⚙️ Configuration Management**: Koanf-based loader that merges defaults, YAML, and environment variables
+- **📊 Built-in Observability**: Request tracking, trace propagation, performance metrics, structured logging
+- **🔧 Database Migrations**: Flyway compatible workflow for schema management
+- **🧩 Pluggable Modules**: Register modules with HTTP routes and messaging hooks in seconds
+- **🚀 Production Ready**: Graceful shutdown, rate limiting, and battle-tested defaults
 
 ## 📦 Installation
 
@@ -64,6 +64,7 @@ app:
   name: "my-service"
   version: "v1.0.0"
   env: "development"
+  rate_limit: 200
 
 server:
   port: 8080
@@ -79,7 +80,12 @@ database:
 log:
   level: "info"
   pretty: true
+
+messaging:
+  broker_url: "amqp://guest:guest@localhost:5672/" # optional
 ```
+
+`app.New()` loads defaults, `config.yaml`, `config.<env>.yaml`, and environment variables (highest priority) via the Koanf-powered loader.
 
 ### 3. Create a Module
 
@@ -89,7 +95,9 @@ package example
 
 import (
     "github.com/labstack/echo/v4"
+
     "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/messaging"
     "github.com/gaborage/go-bricks/server"
 )
 
@@ -108,6 +116,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
     server.GET(hr, e, "/hello", m.hello)
+}
+
+func (m *Module) RegisterMessaging(registry *messaging.Registry) {
+    // Declare exchanges/queues or register publishers & consumers here when needed
 }
 
 func (m *Module) Shutdown() error {
@@ -139,7 +151,9 @@ func main() {
     }
     
     // Register modules
-    framework.RegisterModule(&example.Module{})
+    if err := framework.RegisterModule(&example.Module{}); err != nil {
+        log.Fatal(err)
+    }
     
     if err := framework.Run(); err != nil {
         log.Fatal(err)
@@ -172,9 +186,12 @@ type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
     RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
+    RegisterMessaging(registry *messaging.Registry)
     Shutdown() error
 }
 ```
+
+`RegisterMessaging` receives a shared `messaging.Registry` that can declare exchanges, queues, bindings, publishers, and consumers before the server starts.
 
 Modules have access to shared dependencies:
 
@@ -183,7 +200,12 @@ type ModuleDeps struct {
     DB        database.Interface  // Database connection
     Logger    logger.Logger       // Structured logger
     Messaging messaging.Client    // AMQP client
+    Config    *config.Config      // Loaded configuration
 }
+
+```
+
+`Config` gives modules read-only access to the fully merged application settings so that feature flags or rate limits can be honored without custom loading logic.
 
 ### Enhanced Handlers: Result and Envelope
 
@@ -416,12 +438,13 @@ Automatic tracking of:
 - Database query performance
 - AMQP message statistics
 - Request correlation IDs
+- W3C `traceparent` propagation for outbound calls
 
 ### Health Checks
 
 Built-in endpoints:
 - `/health` - Basic health check
-- `/ready` - Readiness probe with database connectivity
+- `/ready` - Readiness probe with database stats and messaging readiness
 
 ## 🚀 Production Features
 
@@ -435,19 +458,20 @@ Built-in endpoints:
 
 ## 📚 Documentation
 
-- [Getting Started Guide](docs/getting-started.md)
-- [Configuration Reference](docs/configuration.md)
-- [Module Development](docs/modules.md)
-- [Database Usage](docs/database.md)
-- [Messaging Guide](docs/messaging.md)
+- `wiki/architecture_decisions.md` – Design notes and rationales for the building blocks
+- `CONTRIBUTING.md` – Project workflow, coding standards, and test expectations
+- Inline GoDoc comments across packages (`app`, `server`, `messaging`, `database`, `trace`)
+- Rich examples under `examples/` demonstrating enhanced handlers, HTTP client usage, params, Oracle quirks, and trace propagation
 
 ## 🛠️ Examples
 
 See the [examples/](examples/) directory for complete examples:
 
-- [HTTP Client](examples/http/main.go.go) - Fluent HTTP client
+- [Enhanced HTTP Handlers](examples/enhanced-handlers) - Full module showcasing typed handlers
+- [HTTP Client](examples/http/main.go) - Fluent client with builder, interceptors, retries
 - [Oracle Insert With Reserved Column](examples/oracle/main.go) - Safe quoting and `:n` binds
 - [Params usage example](examples/params/main.go) - Definition and usage of custom params
+- [Trace Propagation](examples/trace-propagation) - Demonstrates W3C traceparent support
 
 ## 🤝 Contributing
 
