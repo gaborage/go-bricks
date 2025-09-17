@@ -531,3 +531,227 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 		t.Error("Expected deeply nested secret to be masked")
 	}
 }
+
+// TestFilterStruct_CompleteFieldCoverage covers the remaining filterStruct edge cases
+func TestFilterStruct_CompleteFieldCoverage(t *testing.T) {
+	const testName = "test"
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"password", "secret", "token"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	t.Run("struct_with_interface_field", func(t *testing.T) {
+		type TestStruct struct {
+			Username string      `json:"username"`
+			Password string      `json:"password"`
+			Data     interface{} `json:"data"`
+		}
+
+		input := TestStruct{
+			Username: "john",
+			Password: "secret123",
+			Data:     "some interface data",
+		}
+
+		result := filter.FilterValue(testName, input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["username"] != "john" {
+			t.Error("Expected username to be preserved")
+		}
+		if resultMap["password"] != DefaultMaskValue {
+			t.Error("Expected password to be masked")
+		}
+		if resultMap["data"] != "some interface data" {
+			t.Error("Expected interface data to be preserved")
+		}
+	})
+
+	t.Run("struct_with_non_interface_field", func(t *testing.T) {
+		type TestStruct struct {
+			Name    string `json:"name"`
+			Secret  string `json:"secret"`
+			private string // Unexported, can't interface
+		}
+
+		input := TestStruct{
+			Name:    testName,
+			Secret:  "hidden",
+			private: "invisible",
+		}
+
+		result := filter.FilterValue(testName, input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["name"] != testName {
+			t.Error("Expected name to be preserved")
+		}
+		if resultMap["secret"] != DefaultMaskValue {
+			t.Error("Expected secret to be masked")
+		}
+		// private field should not appear as it's unexported
+		if _, exists := resultMap["private"]; exists {
+			t.Error("Unexported field should not appear in result")
+		}
+	})
+
+	t.Run("pointer_to_nil_struct", func(t *testing.T) {
+		type TestStruct struct {
+			Name string `json:"name"`
+		}
+
+		var input *TestStruct // nil pointer
+
+		result := filter.FilterValue(testName, input)
+		// Should return the original nil pointer
+		if result != input {
+			t.Error("Expected nil pointer to be returned unchanged")
+		}
+	})
+
+	t.Run("pointer_to_valid_struct", func(t *testing.T) {
+		type TestStruct struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+		}
+
+		input := &TestStruct{
+			Name:     "john",
+			Password: "secret",
+		}
+
+		result := filter.FilterValue(testName, input)
+		// Based on FilterValue implementation, pointers pass through unchanged
+		// since they're not struct type (they're pointer type)
+		if result != input {
+			t.Error("Expected pointer to struct to pass through unchanged")
+		}
+	})
+
+	t.Run("pointer_handling_in_filterStruct", func(t *testing.T) {
+		// Test the pointer handling within filterStruct directly
+		type TestStruct struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+		}
+
+		input := &TestStruct{
+			Name:     "john",
+			Password: "secret",
+		}
+
+		// Call filterStruct directly to test pointer dereferencing
+		result := filter.filterStruct(input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["name"] != "john" {
+			t.Error("Expected name to be preserved")
+		}
+		if resultMap["password"] != DefaultMaskValue {
+			t.Error("Expected password to be masked")
+		}
+	})
+
+	t.Run("struct_with_embedded_struct", func(t *testing.T) {
+		type EmbeddedStruct struct {
+			Secret string `json:"secret"`
+		}
+
+		type TestStruct struct {
+			Name string         `json:"name"`
+			Auth EmbeddedStruct `json:"auth"`
+		}
+
+		input := TestStruct{
+			Name: testName,
+			Auth: EmbeddedStruct{Secret: "hidden"},
+		}
+
+		result := filter.FilterValue(testName, input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["name"] != testName {
+			t.Error("Expected name to be preserved")
+		}
+
+		// The embedded struct should be recursively filtered
+		authMap, ok := resultMap["auth"].(map[string]any)
+		if !ok {
+			t.Fatal("Expected auth to be a map")
+		}
+		if authMap["secret"] != DefaultMaskValue {
+			t.Error("Expected embedded secret to be masked")
+		}
+	})
+
+	t.Run("struct_with_slice_field", func(t *testing.T) {
+		type TestStruct struct {
+			Name  string   `json:"name"`
+			Items []string `json:"items"`
+		}
+
+		input := TestStruct{
+			Name:  testName,
+			Items: []string{"item1", "item2"},
+		}
+
+		result := filter.FilterValue(testName, input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["name"] != testName {
+			t.Error("Expected name to be preserved")
+		}
+
+		items, ok := resultMap["items"].([]string)
+		if !ok {
+			t.Fatal("Expected items to be a slice")
+		}
+		if len(items) != 2 || items[0] != "item1" || items[1] != "item2" {
+			t.Error("Expected items slice to be preserved")
+		}
+	})
+
+	t.Run("struct_field_that_cannot_interface", func(t *testing.T) {
+		// Create a struct with a field that cannot be interface{}d
+		type TestStruct struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+			// Note: In Go, all exported fields can be interface{}d, so this
+			// test is mainly for the CanInterface() check coverage
+		}
+
+		input := TestStruct{
+			Name:     testName,
+			Password: "secret",
+		}
+
+		// All exported fields should be processable
+		result := filter.FilterValue(testName, input)
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Fatal("Expected result to be a map")
+		}
+
+		if resultMap["name"] != testName {
+			t.Error("Expected name to be preserved")
+		}
+		if resultMap["password"] != DefaultMaskValue {
+			t.Error("Expected password to be masked")
+		}
+	})
+}

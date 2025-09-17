@@ -478,3 +478,120 @@ func TestLogEventAdapter_ReturnedTypes(t *testing.T) {
 	event = event.Err(errors.New("test"))
 	assert.Implements(t, (*LogEvent)(nil), event)
 }
+
+// TestLogEventAdapter_FilterCoverage tests the filter paths in Str and Interface methods
+func TestLogEventAdapter_FilterCoverage(t *testing.T) {
+	// Create logger with custom filter to ensure filter path is taken
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf)
+
+	filterConfig := &FilterConfig{
+		SensitiveFields: []string{"password", "secret", "api_key"},
+		MaskValue:       "[FILTERED]",
+	}
+
+	logger := &ZeroLogger{
+		zlog:   &zl,
+		filter: NewSensitiveDataFilter(filterConfig),
+	}
+
+	t.Run("Str_with_filter_applied", func(t *testing.T) {
+		buf.Reset()
+
+		// Test Str method with sensitive field - should trigger filter path
+		logger.Info().
+			Str("username", "john_doe").  // Not filtered
+			Str("password", "secret123"). // Should be filtered
+			Msg("login attempt")
+
+		output := buf.String()
+
+		// Parse JSON to verify filtering
+		var logEntry map[string]interface{}
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		// Verify filtering worked
+		assert.Equal(t, "john_doe", logEntry["username"])
+		assert.Equal(t, "[FILTERED]", logEntry["password"])
+		assert.NotContains(t, output, "secret123")
+	})
+
+	t.Run("Interface_with_filter_applied", func(t *testing.T) {
+		buf.Reset()
+
+		// Test Interface method with sensitive data - should trigger filter path
+		sensitiveData := map[string]interface{}{
+			"username": "john_doe",
+			"api_key":  "super_secret_key",
+			"config": map[string]interface{}{
+				"theme":  "dark",
+				"secret": "nested_secret",
+			},
+		}
+
+		logger.Info().
+			Interface("user_data", sensitiveData).
+			Msg("user data logged")
+
+		output := buf.String()
+
+		// Parse JSON to verify filtering
+		var logEntry map[string]interface{}
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		// Verify filtering worked on nested data
+		userData, ok := logEntry["user_data"].(map[string]interface{})
+		require.True(t, ok)
+
+		assert.Equal(t, "john_doe", userData["username"])
+		assert.Equal(t, "[FILTERED]", userData["api_key"])
+
+		// Check nested map filtering
+		config, ok := userData["config"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "dark", config["theme"])
+		assert.Equal(t, "[FILTERED]", config["secret"])
+
+		// Ensure sensitive data not in raw output
+		assert.NotContains(t, output, "super_secret_key")
+		assert.NotContains(t, output, "nested_secret")
+	})
+
+	t.Run("Str_and_Interface_with_nil_filter", func(t *testing.T) {
+		// Test the nil filter path to ensure 100% coverage
+		buf.Reset()
+
+		loggerNoFilter := &ZeroLogger{
+			zlog:   &zl,
+			filter: nil, // No filter
+		}
+
+		// Both Str and Interface should pass through without filtering
+		loggerNoFilter.Info().
+			Str("password", "visible_password").
+			Interface("data", map[string]interface{}{
+				"secret": "visible_secret",
+			}).
+			Msg("no filtering")
+
+		output := buf.String()
+
+		// Parse JSON
+		var logEntry map[string]interface{}
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		// Without filter, sensitive data should be visible
+		assert.Equal(t, "visible_password", logEntry["password"])
+
+		data, ok := logEntry["data"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "visible_secret", data["secret"])
+
+		// Raw output should contain sensitive data
+		assert.Contains(t, output, "visible_password")
+		assert.Contains(t, output, "visible_secret")
+	})
+}
