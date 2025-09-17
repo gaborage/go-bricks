@@ -31,6 +31,21 @@ type TimeoutProvider interface {
 	WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc)
 }
 
+var (
+	configLoader           = config.Load
+	databaseConnector      = database.NewConnection
+	messagingClientFactory = func(brokerURL string, log logger.Logger) messaging.Client {
+		return messaging.NewAMQPClient(brokerURL, log)
+	}
+)
+
+// ServerRunner abstracts the HTTP server to allow injecting test-friendly implementations
+type ServerRunner interface {
+	Start() error
+	Shutdown(ctx context.Context) error
+	Echo() *echo.Echo
+}
+
 // OSSignalHandler implements SignalHandler using the real OS signal package
 type OSSignalHandler struct{}
 
@@ -53,7 +68,7 @@ func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout 
 // It manages the lifecycle and coordination of all application components.
 type App struct {
 	cfg             *config.Config
-	server          *server.Server
+	server          ServerRunner
 	db              database.Interface
 	logger          logger.Logger
 	messaging       messaging.Client
@@ -79,12 +94,13 @@ type Options struct {
 	MessagingClient messaging.Client
 	SignalHandler   SignalHandler
 	TimeoutProvider TimeoutProvider
+	Server          ServerRunner
 }
 
 // New creates a new application instance with dependencies determined by configuration.
 // It initializes only the services that are configured, failing fast if configured services cannot connect.
 func New() (*App, error) {
-	cfg, err := config.Load()
+	cfg, err := configLoader()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -110,7 +126,7 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		log.Debug().Msg("Using provided database instance")
 	} else if isDatabaseEnabled(cfg) {
 		var err error
-		db, err = database.NewConnection(&cfg.Database, log)
+		db, err = databaseConnector(&cfg.Database, log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to database: %w", err)
 		}
@@ -128,7 +144,7 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		msgClient = opts.MessagingClient
 		log.Debug().Msg("Using provided messaging client")
 	} else if isMessagingEnabled(cfg) {
-		msgClient = messaging.NewAMQPClient(cfg.Messaging.BrokerURL, log)
+		msgClient = messagingClientFactory(cfg.Messaging.BrokerURL, log)
 		log.Info().
 			Str("broker_url", cfg.Messaging.BrokerURL).
 			Msg("Initializing AMQP messaging client")
@@ -148,7 +164,13 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		}
 	}
 
-	srv := server.New(cfg, log)
+	var srv ServerRunner
+	if opts != nil && opts.Server != nil {
+		srv = opts.Server
+		log.Debug().Msg("Using provided server instance")
+	} else {
+		srv = server.New(cfg, log)
+	}
 
 	deps := &ModuleDeps{
 		DB:        db,

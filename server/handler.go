@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -443,40 +444,75 @@ func NewHandlerRegistry(cfg *config.Config) *HandlerRegistry {
 	}
 }
 
-// Register registers a typed handler with the Echo instance.
+// Register registers a typed handler with the Echo instance and captures metadata.
 func RegisterHandler[T any, R any](
 	hr *HandlerRegistry,
 	e *echo.Echo,
 	method, path string,
 	handler HandlerFunc[T, R],
+	opts ...RouteOption,
 ) {
+	// Extract type information
+	var reqType T
+	var respType R
+
+	// Create descriptor with type information
+	descriptor := RouteDescriptor{
+		Method:       method,
+		Path:         path,
+		HandlerID:    fmt.Sprintf("%s:%s", method, path),
+		RequestType:  reflect.TypeOf(reqType),
+		ResponseType: reflect.TypeOf(respType),
+		Package:      getCallerPackage(),
+		HandlerName:  extractHandlerName(handler),
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		opt(&descriptor)
+	}
+
+	// Register with global registry
+	DefaultRouteRegistry.Register(&descriptor)
+
+	// Original registration (unchanged behavior)
 	wrappedHandler := WrapHandler(handler, hr.binder, hr.cfg)
 	e.Add(method, path, wrappedHandler)
 }
 
-// GET registers a GET handler.
-func GET[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R]) {
-	RegisterHandler(hr, e, http.MethodGet, path, handler)
+// GET registers a GET handler with optional route configuration.
+func GET[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodGet, path, handler, opts...)
 }
 
-// POST registers a POST handler.
-func POST[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R]) {
-	RegisterHandler(hr, e, http.MethodPost, path, handler)
+// POST registers a POST handler with optional route configuration.
+func POST[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodPost, path, handler, opts...)
 }
 
-// PUT registers a PUT handler.
-func PUT[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R]) {
-	RegisterHandler(hr, e, http.MethodPut, path, handler)
+// PUT registers a PUT handler with optional route configuration.
+func PUT[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodPut, path, handler, opts...)
 }
 
-// DELETE registers a DELETE handler.
-func DELETE[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R]) {
-	RegisterHandler(hr, e, http.MethodDelete, path, handler)
+// DELETE registers a DELETE handler with optional route configuration.
+func DELETE[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodDelete, path, handler, opts...)
 }
 
-// PATCH registers a PATCH handler.
-func PATCH[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R]) {
-	RegisterHandler(hr, e, http.MethodPatch, path, handler)
+// PATCH registers a PATCH handler with optional route configuration.
+func PATCH[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodPatch, path, handler, opts...)
+}
+
+// HEAD registers a HEAD handler with optional route configuration.
+func HEAD[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodHead, path, handler, opts...)
+}
+
+// OPTIONS registers an OPTIONS handler with optional route configuration.
+func OPTIONS[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, e, http.MethodOptions, path, handler, opts...)
 }
 
 // (legacy validation formatting helpers removed; validation now centralized via server/validator.go)
@@ -533,3 +569,65 @@ func Accepted[R any](data R) Result[R] {
 
 // NoContent returns a 204 No Content result without a response body
 func NoContent() NoContentResult { return NoContentResult{} }
+
+// getCallerPackage extracts the package path of the calling function
+func getCallerPackage() string {
+	pc, _, _, ok := runtime.Caller(3) // Skip this func + RegisterHandler + GET/POST/etc
+	if !ok {
+		return ""
+	}
+
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return ""
+	}
+
+	name := fn.Name()
+
+	// Extract package path from function name
+	// Function names are typically in the format: package/path.functionName
+	lastSlash := strings.LastIndex(name, "/")
+	if lastSlash >= 0 {
+		// Find the next dot after the last slash to separate package from function
+		remaining := name[lastSlash+1:]
+		if dot := strings.Index(remaining, "."); dot >= 0 {
+			return name[:lastSlash+1+dot]
+		}
+	}
+
+	// Fallback: try to extract package from the beginning
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		packagePart := name[:dot]
+		// Remove receiver type if present (e.g., package.(*Type).method -> package)
+		if parenIndex := strings.LastIndex(packagePart, "("); parenIndex >= 0 {
+			if dotIndex := strings.LastIndex(packagePart[:parenIndex], "."); dotIndex >= 0 {
+				return packagePart[:dotIndex]
+			}
+		}
+		return packagePart
+	}
+
+	return ""
+}
+
+// extractHandlerName gets the function name from a handler function
+func extractHandlerName(handler interface{}) string {
+	if handler == nil {
+		return ""
+	}
+
+	v := reflect.ValueOf(handler)
+	if v.Kind() != reflect.Func {
+		return ""
+	}
+
+	name := runtime.FuncForPC(v.Pointer()).Name()
+
+	// Extract just the function name from the full path
+	// e.g., "github.com/example/module.(*Module).getUser" -> "getUser"
+	if lastDot := strings.LastIndex(name, "."); lastDot >= 0 {
+		return name[lastDot+1:]
+	}
+
+	return name
+}
