@@ -1,20 +1,21 @@
+//nolint:gocritic // Example code prioritizes simplicity over perfect defer handling
 package main
 
 import (
 	"fmt"
 	"log"
+	"os"
+	"sort"
 	"time"
 
-	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/file"
-	koanf "github.com/knadh/koanf/v2"
+	"github.com/gaborage/go-bricks/config"
 )
 
-// CustomParams demonstrates how to recover custom parameters
-// from a YAML configuration file using koanf.
+// CustomParams demonstrates how to recover custom parameters using the
+// helpers that now ship with the config package.
 type CustomParams struct {
-	FeatureFlag bool `koanf:"feature_flag"`
-	MaxItems    int  `koanf:"max_items"`
+	FeatureFlag bool `koanf:"feature.flag"`
+	MaxItems    int  `koanf:"max.items"`
 
 	Service struct {
 		Endpoint string        `koanf:"endpoint"`
@@ -26,31 +27,92 @@ type CustomParams struct {
 }
 
 func main() {
-	// Create koanf instance with dot-delimited paths
-	k := koanf.New(".")
+	// Seed the environment with the values required by config.Load and our
+	// custom namespace. In a real application these would come from your
+	// deployment environment or configuration management system.
+	envVars := map[string]string{
+		"DATABASE_DATABASE":       "exampledb",
+		"DATABASE_USERNAME":       "example-user",
+		"CUSTOM_FEATURE_FLAG":     "true",
+		"CUSTOM_MAX_ITEMS":        "25",
+		"CUSTOM_SERVICE_ENDPOINT": "https://api.example.com/v1",
+		"CUSTOM_SERVICE_TIMEOUT":  "3s",
+		"CUSTOM_TAGS_0":           "alpha",
+		"CUSTOM_TAGS_1":           "beta",
+		"CUSTOM_TAGS_2":           "gamma",
+		"CUSTOM_META_OWNER":       "team-platform",
+		"CUSTOM_META_PURPOSE":     "demo-custom-params",
+		"CUSTOM_META_REGION":      "eu-central-1",
+		"CUSTOM_API_KEY":          "secret-key-123",
+	}
 
-	// Load example YAML from this folder
-	if err := k.Load(file.Provider("examples/params/config.yaml"), yaml.Parser()); err != nil {
+	// Set environment variables and collect keys for cleanup
+	envKeys := make([]string, 0, len(envVars))
+	for key, value := range envVars {
+		if err := os.Setenv(key, value); err != nil {
+			log.Fatalf("failed to set %s: %v", key, err)
+		}
+		envKeys = append(envKeys, key)
+	}
+
+	// Load the full application configuration (defaults + env overrides).
+	cfg, err := config.Load()
+	if err != nil {
+		// Clean up environment variables before exiting
+		for _, key := range envKeys {
+			os.Unsetenv(key)
+		}
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	// Unmarshal only the `custom` subtree into our struct
+	// Ensure cleanup happens at the end (after successful config load)
+	defer func() {
+		for _, key := range envKeys {
+			os.Unsetenv(key)
+		}
+	}()
+
+	// Unmarshal the entire custom namespace into a dedicated struct.
 	var params CustomParams
-	if err := k.Unmarshal("custom", &params); err != nil {
+	if err := cfg.Unmarshal("custom", &params); err != nil {
 		log.Fatalf("failed to unmarshal custom params: %v", err)
 	}
 
-	// Print recovered values
-	fmt.Println("Custom parameters recovered from YAML:")
-	fmt.Printf("  feature_flag: %v\n", params.FeatureFlag)
-	fmt.Printf("  max_items: %d\n", params.MaxItems)
-	fmt.Printf("  service.endpoint: %s\n", params.Service.Endpoint)
-	fmt.Printf("  service.timeout: %s\n", params.Service.Timeout)
-	fmt.Printf("  tags: %v\n", params.Tags)
-	fmt.Printf("  meta: %v\n", params.Meta)
+	timeoutStr := cfg.GetString("custom.service.timeout")
+	timeout, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		log.Fatalf("invalid custom.service.timeout: %v", err)
+	}
 
-	// Access a single value without defining a struct (optional)
-	// This reads the raw value directly by path.
-	single := k.String("custom.service.endpoint")
-	fmt.Printf("\nDirect access example (custom.service.endpoint): %s\n", single)
+	fmt.Println("Custom parameters via helper accessors:")
+	fmt.Printf("  custom.feature.flag: %v\n", cfg.GetBool("custom.feature.flag"))
+	fmt.Printf("  custom.max.items: %d\n", cfg.GetInt("custom.max.items"))
+	fmt.Printf("  custom.service.endpoint: %s\n", cfg.GetString("custom.service.endpoint"))
+	fmt.Printf("  custom.service.timeout: %s\n", timeout)
+	fmt.Printf("  custom.tags: %v\n", params.Tags)
+	fmt.Printf("  custom.meta: %v\n", params.Meta)
+	fmt.Printf("  custom.feature.flag exists? %v\n", cfg.Exists("custom.feature.flag"))
+	fmt.Printf("  custom.nonexistent exists? %v\n", cfg.Exists("custom.nonexistent"))
+
+	apiKey, err := cfg.GetRequiredString("custom.api.key")
+	if err != nil {
+		log.Fatalf("missing required custom.api.key: %v", err)
+	}
+	fmt.Printf("  custom.api.key: %s\n", apiKey)
+
+	fmt.Println("\nCustom parameters unmarshalled into struct:")
+	fmt.Printf("  %+v\n", params)
+
+	// Or inspect the namespace as a generic map when you need dynamic access.
+	if customMap := cfg.Custom(); customMap != nil {
+		fmt.Println("\nCustom namespace map view:")
+		keys := make([]string, 0, len(customMap))
+		for key := range customMap {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Printf("  %s -> %v\n", key, customMap[key])
+		}
+	}
 }

@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	"github.com/knadh/koanf/v2"
+)
 
 type Config struct {
 	App       AppConfig       `koanf:"app"`
@@ -8,6 +12,9 @@ type Config struct {
 	Database  DatabaseConfig  `koanf:"database"`
 	Log       LogConfig       `koanf:"log"`
 	Messaging MessagingConfig `koanf:"messaging"`
+
+	// k holds the underlying Koanf instance for flexible access to custom configurations
+	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
 }
 
 type AppConfig struct {

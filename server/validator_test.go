@@ -33,6 +33,12 @@ func TestNewValidator(t *testing.T) {
 	require.NotNil(t, validator.validate)
 }
 
+func TestValidator_GetValidator(t *testing.T) {
+	v := NewValidator()
+	require.NotNil(t, v)
+	require.Same(t, v.validate, v.GetValidator())
+}
+
 func TestValidator_ValidateSuccess(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)

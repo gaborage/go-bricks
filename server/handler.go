@@ -190,9 +190,29 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target interface{}) error {
 	return nil
 }
 
+type valueSetter func(reflect.Value, string) error
+
+var (
+	timeType    = reflect.TypeOf(time.Time{})
+	kindSetters = map[reflect.Kind]valueSetter{
+		reflect.String:  setStringValue,
+		reflect.Int:     setSignedIntValue,
+		reflect.Int8:    setSignedIntValue,
+		reflect.Int16:   setSignedIntValue,
+		reflect.Int32:   setSignedIntValue,
+		reflect.Int64:   setSignedIntValue,
+		reflect.Uint:    setUnsignedIntValue,
+		reflect.Uint8:   setUnsignedIntValue,
+		reflect.Uint16:  setUnsignedIntValue,
+		reflect.Uint32:  setUnsignedIntValue,
+		reflect.Uint64:  setUnsignedIntValue,
+		reflect.Float32: setFloatValue,
+		reflect.Float64: setFloatValue,
+		reflect.Bool:    setBoolValue,
+	}
+)
+
 // setFieldValue sets a reflect.Value from a string value, handling type conversion.
-//
-//nolint:gocyclo,exhaustive // Multiple kinds handled explicitly; unsupported kinds return errors.
 func setFieldValue(fieldValue reflect.Value, value string) error {
 	// Handle pointers by allocating and setting the underlying value
 	if fieldValue.Kind() == reflect.Ptr {
@@ -203,55 +223,90 @@ func setFieldValue(fieldValue reflect.Value, value string) error {
 	}
 
 	// Special type handling: time.Time
-	if fieldValue.Type() == reflect.TypeOf(time.Time{}) {
-		t, err := parseTime(value)
-		if err != nil {
-			return err
-		}
-		fieldValue.Set(reflect.ValueOf(t))
+	handled, err := setSpecialType(fieldValue, value)
+	if err != nil {
+		return err
+	}
+	if handled {
 		return nil
 	}
 
-	switch fieldValue.Kind() {
-	case reflect.String:
-		fieldValue.SetString(value)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		intVal, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldValue.SetInt(intVal)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		uintVal, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		fieldValue.SetUint(uintVal)
-	case reflect.Float32, reflect.Float64:
-		floatVal, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return err
-		}
-		fieldValue.SetFloat(floatVal)
-	case reflect.Bool:
-		boolVal, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		fieldValue.SetBool(boolVal)
-	case reflect.Struct:
+	kind := fieldValue.Kind()
+	if setter, ok := kindSetters[kind]; ok {
+		return setter(fieldValue, value)
+	}
+
+	if kind == reflect.Struct {
 		// time.Time handled above; other structs unsupported
 		return fmt.Errorf("unsupported struct type: %s", fieldValue.Type())
-	case reflect.Slice:
-		// Slice assignment from single string not supported here; handled by bindRequest for []string
-		return fmt.Errorf("unsupported assignment to slice from string for kind: %s", fieldValue.Kind())
-	case reflect.Invalid, reflect.Uintptr, reflect.Complex64, reflect.Complex128,
-		reflect.Array, reflect.Chan, reflect.Func, reflect.Interface,
-		reflect.Map, reflect.UnsafePointer:
-		return fmt.Errorf("unsupported field type: %s", fieldValue.Kind())
-	default:
-		return fmt.Errorf("unsupported field type: %s", fieldValue.Kind())
 	}
+
+	if kind == reflect.Slice {
+		// Slice assignment from single string not supported here; handled by bindRequest for []string
+		return fmt.Errorf("unsupported assignment to slice from string for kind: %s", kind)
+	}
+
+	return fmt.Errorf("unsupported field type: %s", kind)
+}
+
+func setSpecialType(fieldValue reflect.Value, value string) (bool, error) {
+	if fieldValue.Type() == timeType {
+		t, err := parseTime(value)
+		if err != nil {
+			return true, err
+		}
+		fieldValue.Set(reflect.ValueOf(t))
+		return true, nil
+	}
+	return false, nil
+}
+
+func setStringValue(fieldValue reflect.Value, value string) error {
+	fieldValue.SetString(value)
+	return nil
+}
+
+func setSignedIntValue(fieldValue reflect.Value, value string) error {
+	bitSize := fieldValue.Type().Bits()
+	if bitSize == 0 {
+		bitSize = 64
+	}
+	intVal, err := strconv.ParseInt(value, 10, bitSize)
+	if err != nil {
+		return err
+	}
+	fieldValue.SetInt(intVal)
+	return nil
+}
+
+func setUnsignedIntValue(fieldValue reflect.Value, value string) error {
+	bitSize := fieldValue.Type().Bits()
+	if bitSize == 0 {
+		bitSize = 64
+	}
+	uintVal, err := strconv.ParseUint(value, 10, bitSize)
+	if err != nil {
+		return err
+	}
+	fieldValue.SetUint(uintVal)
+	return nil
+}
+
+func setFloatValue(fieldValue reflect.Value, value string) error {
+	floatVal, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return err
+	}
+	fieldValue.SetFloat(floatVal)
+	return nil
+}
+
+func setBoolValue(fieldValue reflect.Value, value string) error {
+	boolVal, err := strconv.ParseBool(value)
+	if err != nil {
+		return err
+	}
+	fieldValue.SetBool(boolVal)
 	return nil
 }
 

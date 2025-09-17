@@ -52,6 +52,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Store the Koanf instance for flexible access
+	cfg.k = k
+
 	// Validate configuration
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
