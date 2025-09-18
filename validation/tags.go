@@ -172,6 +172,14 @@ func parseValidateTag(validate string, constraints map[string]string) {
 
 // isFieldRequired determines if a field is required based on validation and other tags
 func isFieldRequired(constraints, tags map[string]string, paramType string) bool {
+	// Respect explicit omissions from validation or JSON tags
+	if _, skip := constraints["omitempty"]; skip {
+		return false
+	}
+	if _, skip := tags["omitempty"]; skip {
+		return false
+	}
+
 	// Explicit required constraint
 	if _, required := constraints["required"]; required {
 		return true

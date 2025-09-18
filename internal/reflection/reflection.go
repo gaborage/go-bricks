@@ -12,10 +12,10 @@ var (
 	funcForPCFn = runtime.FuncForPC
 )
 
-// GetCallerPackage extracts the package path of the calling function
-// It skips the specified number of stack frames to find the actual caller
+// GetCallerPackage extracts the package path of the calling function.
+// The skip parameter is relative to the caller of GetCallerPackage.
 func GetCallerPackage(skip int) string {
-	pc, _, _, ok := callerFn(skip)
+	pc, _, _, ok := callerFn(skip + 1)
 	if !ok {
 		return ""
 	}

@@ -35,16 +35,17 @@ var DefaultRouteRegistry = &RouteRegistry{}
 func (r *RouteRegistry) Register(descriptor *RouteDescriptor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.routes = append(r.routes, *descriptor)
+	r.routes = append(r.routes, cloneDescriptor(descriptor))
 }
 
 // GetRoutes returns a copy of all registered routes
 func (r *RouteRegistry) GetRoutes() []RouteDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	// Return a copy to prevent concurrent modification
 	result := make([]RouteDescriptor, len(r.routes))
-	copy(result, r.routes)
+	for i := range r.routes {
+		result[i] = cloneDescriptor(&r.routes[i])
+	}
 	return result
 }
 
@@ -55,7 +56,7 @@ func (r *RouteRegistry) GetByModule(moduleName string) []RouteDescriptor {
 	var result []RouteDescriptor
 	for i := range r.routes {
 		if r.routes[i].ModuleName == moduleName {
-			result = append(result, r.routes[i])
+			result = append(result, cloneDescriptor(&r.routes[i]))
 		}
 	}
 	return result
@@ -68,7 +69,7 @@ func (r *RouteRegistry) GetByPath(path string) []RouteDescriptor {
 	var result []RouteDescriptor
 	for i := range r.routes {
 		if r.routes[i].Path == path {
-			result = append(result, r.routes[i])
+			result = append(result, cloneDescriptor(&r.routes[i]))
 		}
 	}
 	return result
@@ -146,7 +147,7 @@ func (r *RouteRegistry) GetRoutesByMethod(method string) []RouteDescriptor {
 	var result []RouteDescriptor
 	for i := range r.routes {
 		if r.routes[i].Method == method {
-			result = append(result, r.routes[i])
+			result = append(result, cloneDescriptor(&r.routes[i]))
 		}
 	}
 	return result
@@ -155,4 +156,20 @@ func (r *RouteRegistry) GetRoutesByMethod(method string) []RouteDescriptor {
 // GetRoutesByModule filters routes by module name (alias for GetByModule)
 func (r *RouteRegistry) GetRoutesByModule(moduleName string) []RouteDescriptor {
 	return r.GetByModule(moduleName)
+}
+
+// cloneDescriptor deep-copies slice fields to prevent external mutation
+func cloneDescriptor(d *RouteDescriptor) RouteDescriptor {
+	if d == nil {
+		return RouteDescriptor{}
+	}
+
+	out := *d
+	if d.Tags != nil {
+		out.Tags = append([]string(nil), d.Tags...)
+	}
+	if d.Middleware != nil {
+		out.Middleware = append([]string(nil), d.Middleware...)
+	}
+	return out
 }

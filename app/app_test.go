@@ -813,13 +813,13 @@ func TestApp_New_DefaultConfig(t *testing.T) {
 }
 
 func TestApp_New_ConfigLoadError(t *testing.T) {
-	originalLoader := configLoader
-	configLoader = func() (*config.Config, error) {
-		return nil, errors.New("load failed")
+	opts := &Options{
+		ConfigLoader: func() (*config.Config, error) {
+			return nil, errors.New("load failed")
+		},
 	}
-	t.Cleanup(func() { configLoader = originalLoader })
 
-	app, err := New()
+	app, err := NewWithOptions(opts)
 	assert.Error(t, err)
 	assert.Nil(t, app)
 }
@@ -855,24 +855,20 @@ func TestApp_NewWithConfig_UsesConnectors(t *testing.T) {
 	msgMock := &MockMessagingClient{}
 	var dbCalled, messagingCalled bool
 
-	originalDB := databaseConnector
-	databaseConnector = func(dbCfg *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
-		dbCalled = true
-		assert.Equal(t, cfg.Database.Host, dbCfg.Host)
-		return dbMock, nil
+	opts := &Options{
+		DatabaseConnector: func(dbCfg *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+			dbCalled = true
+			assert.Equal(t, cfg.Database.Host, dbCfg.Host)
+			return dbMock, nil
+		},
+		MessagingClientFactory: func(url string, _ logger.Logger) messaging.Client {
+			messagingCalled = true
+			assert.Equal(t, cfg.Messaging.BrokerURL, url)
+			return msgMock
+		},
 	}
-	originalMessaging := messagingClientFactory
-	messagingClientFactory = func(url string, _ logger.Logger) messaging.Client {
-		messagingCalled = true
-		assert.Equal(t, cfg.Messaging.BrokerURL, url)
-		return msgMock
-	}
-	t.Cleanup(func() {
-		databaseConnector = originalDB
-		messagingClientFactory = originalMessaging
-	})
 
-	app, err := NewWithConfig(cfg, nil)
+	app, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 	assert.True(t, dbCalled)
@@ -906,21 +902,17 @@ func TestApp_NewWithConfig_DatabaseConnectorError(t *testing.T) {
 		},
 	}
 
-	originalDB := databaseConnector
-	databaseConnector = func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
-		return nil, errors.New("connection failed")
+	opts := &Options{
+		DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+			return nil, errors.New("connection failed")
+		},
+		MessagingClientFactory: func(_ string, _ logger.Logger) messaging.Client {
+			t.Fatalf("messaging factory should not be called on db failure")
+			return nil
+		},
 	}
-	originalMessaging := messagingClientFactory
-	messagingClientFactory = func(_ string, _ logger.Logger) messaging.Client {
-		t.Fatalf("messaging factory should not be called on db failure")
-		return nil
-	}
-	t.Cleanup(func() {
-		databaseConnector = originalDB
-		messagingClientFactory = originalMessaging
-	})
 
-	app, err := NewWithConfig(cfg, nil)
+	app, err := NewWithConfig(cfg, opts)
 	assert.Error(t, err)
 	assert.Nil(t, app)
 }
