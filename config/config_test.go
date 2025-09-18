@@ -11,6 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// Environment variable keys reused across tests
+	testDatabaseUsername = "DATABASE_USERNAME"
+	testDatabaseDatabase = "DATABASE_DATABASE"
+	testDatabaseMaxConns = "DATABASE_MAX_CONNS"
+)
+
 func TestLoadWithDefaults(t *testing.T) {
 	// Clear any environment variables that might affect the test
 	clearEnvironmentVariables()
@@ -64,9 +71,9 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	os.Setenv("DATABASE_TYPE", "postgresql")
 	os.Setenv("DATABASE_HOST", "localhost")
 	os.Setenv("DATABASE_PORT", "5432")
-	os.Setenv("DATABASE_DATABASE", "testdb")
-	os.Setenv("DATABASE_USERNAME", "testuser")
-	os.Setenv("DATABASE_MAX_CONNS", "25")
+	os.Setenv(testDatabaseDatabase, "testdb")
+	os.Setenv(testDatabaseUsername, "testuser")
+	os.Setenv(testDatabaseMaxConns, "25")
 	os.Setenv("LOG_LEVEL", "debug")
 
 	cfg, err := Load()
@@ -95,8 +102,8 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
 	baseEnv := map[string]string{
-		"DATABASE_DATABASE": "testdb",
-		"DATABASE_USERNAME": "testuser",
+		testDatabaseDatabase: "testdb",
+		testDatabaseUsername: "testuser",
 	}
 
 	tests := []struct {
@@ -209,7 +216,7 @@ func TestLoadEdgeCases(t *testing.T) {
 		clearEnvironmentVariables()
 		os.Setenv("SERVER_PORT", "0")
 		os.Setenv("APP_RATE_LIMIT", "0")
-		os.Setenv("DATABASE_MAX_CONNS", "0")
+		os.Setenv(testDatabaseMaxConns, "0")
 
 		cfg, err := Load()
 		assert.Error(t, err)
@@ -233,8 +240,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_config_via_environment", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 
 		// Set custom configuration via environment variables
 		// Note: underscores in env vars are converted to dots by Koanf
@@ -261,8 +268,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_config_with_defaults", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 
 		cfg, err := Load()
 		require.NoError(t, err)
@@ -277,8 +284,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_config_required_fields", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_API_KEY", "secret-key-123")
 
 		cfg, err := Load()
@@ -299,8 +306,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_config_unmarshal_struct", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 
 		// Set complex custom configuration
 		os.Setenv("CUSTOM_SERVICE_NAME", "test-service")
@@ -329,8 +336,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_config_exists_check", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_FEATURE_FLAG", "true")
 
 		cfg, err := Load()
@@ -351,8 +358,8 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	t.Run("custom_namespace_retrieval", func(t *testing.T) {
 		clearEnvironmentVariables()
 		// Set required database fields
-		os.Setenv("DATABASE_DATABASE", "testdb")
-		os.Setenv("DATABASE_USERNAME", "testuser")
+		os.Setenv(testDatabaseDatabase, "testdb")
+		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_KEY1", "value1")
 		os.Setenv("CUSTOM_KEY2", "value2")
 
@@ -380,9 +387,9 @@ func clearEnvironmentVariables() {
 		"APP_NAME", "APP_VERSION", "APP_ENV", "APP_DEBUG", "APP_RATE_LIMIT", "APP_NAMESPACE",
 		"SERVER_HOST", "SERVER_PORT", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT",
 		"SERVER_MIDDLEWARE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
-		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_DATABASE",
-		"DATABASE_USERNAME", "DATABASE_PASSWORD", "DATABASE_SSL_MODE",
-		"DATABASE_MAX_CONNS", "DATABASE_MAX_IDLE_CONNS",
+		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
+		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_SSL_MODE",
+		testDatabaseMaxConns, "DATABASE_MAX_IDLE_CONNS",
 		"DATABASE_CONN_MAX_LIFETIME", "DATABASE_CONN_MAX_IDLE_TIME",
 		"DATABASE_SERVICE_NAME", "DATABASE_SID", "DATABASE_CONNECTION_STRING",
 		"LOG_LEVEL", "LOG_PRETTY",
@@ -448,9 +455,9 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	os.Setenv("DATABASE_TYPE", "postgresql")
 	os.Setenv("DATABASE_HOST", "localhost")
 	os.Setenv("DATABASE_PORT", "5432")
-	os.Setenv("DATABASE_DATABASE", "testdb")
-	os.Setenv("DATABASE_USERNAME", "testuser")
-	os.Setenv("DATABASE_MAX_CONNS", "25")
+	os.Setenv(testDatabaseDatabase, "testdb")
+	os.Setenv(testDatabaseUsername, "testuser")
+	os.Setenv(testDatabaseMaxConns, "25")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -504,9 +511,9 @@ func TestLoadDatabaseEnabledByExplicitConfig(t *testing.T) {
 	os.Setenv("DATABASE_TYPE", "postgresql")
 	os.Setenv("DATABASE_HOST", "localhost")
 	os.Setenv("DATABASE_PORT", "5432")
-	os.Setenv("DATABASE_DATABASE", "testdb")
-	os.Setenv("DATABASE_USERNAME", "testuser")
-	os.Setenv("DATABASE_MAX_CONNS", "25")
+	os.Setenv(testDatabaseDatabase, "testdb")
+	os.Setenv(testDatabaseUsername, "testuser")
+	os.Setenv(testDatabaseMaxConns, "25")
 
 	cfg, err := Load()
 	require.NoError(t, err)

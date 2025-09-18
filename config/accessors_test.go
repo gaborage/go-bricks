@@ -11,7 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestConfig(t *testing.T, data map[string]interface{}) *Config {
+const (
+	name            = "custom.name"
+	port            = "custom.port"
+	retries         = "custom.retries"
+	threshold       = "custom.threshold"
+	enabled         = "custom.enabled"
+	invalidInt      = "custom.invalid_int"
+	missing         = "custom.missing"
+	emptyString     = "empty string"
+	unsupportedType = "unsupported type"
+)
+
+func setupTestConfig(t *testing.T, data map[string]any) *Config {
 	t.Helper()
 
 	k := koanf.New(".")
@@ -22,75 +34,75 @@ func setupTestConfig(t *testing.T, data map[string]interface{}) *Config {
 }
 
 func TestGetString(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
-		"custom.name":  "test-service",
+	cfg := setupTestConfig(t, map[string]any{
+		name:           "test-service",
 		"custom.empty": "",
 	})
 
-	assert.Equal(t, "test-service", cfg.GetString("custom.name"))
-	assert.Equal(t, "fallback", cfg.GetString("custom.missing", "fallback"))
+	assert.Equal(t, "test-service", cfg.GetString(name))
+	assert.Equal(t, "fallback", cfg.GetString(missing, "fallback"))
 	assert.Equal(t, "", cfg.GetString("custom.empty"))
 }
 
 func TestGetNumericAndBool(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
-		"custom.port":        8080,
-		"custom.retries":     "3",
-		"custom.long":        int64(42),
-		"custom.threshold":   "0.75",
-		"custom.enabled":     "true",
-		"custom.invalid_int": "oops",
+	cfg := setupTestConfig(t, map[string]any{
+		port:          8080,
+		retries:       "3",
+		"custom.long": int64(42),
+		threshold:     "0.75",
+		enabled:       "true",
+		invalidInt:    "oops",
 	})
 
-	assert.Equal(t, 8080, cfg.GetInt("custom.port"))
-	assert.Equal(t, 3, cfg.GetInt("custom.retries"))
-	assert.Equal(t, 7, cfg.GetInt("custom.missing", 7))
-	assert.Equal(t, 0, cfg.GetInt("custom.invalid_int"))
+	assert.Equal(t, 8080, cfg.GetInt(port))
+	assert.Equal(t, 3, cfg.GetInt(retries))
+	assert.Equal(t, 7, cfg.GetInt(missing, 7))
+	assert.Equal(t, 0, cfg.GetInt(invalidInt))
 
 	assert.Equal(t, int64(42), cfg.GetInt64("custom.long"))
 	assert.Equal(t, int64(5), cfg.GetInt64("custom.missing_long", 5))
 
-	assert.InEpsilon(t, 0.75, cfg.GetFloat64("custom.threshold"), 0.001)
+	assert.InEpsilon(t, 0.75, cfg.GetFloat64(threshold), 0.001)
 	assert.Equal(t, 1.5, cfg.GetFloat64("custom.missing_float", 1.5))
 
-	assert.True(t, cfg.GetBool("custom.enabled"))
+	assert.True(t, cfg.GetBool(enabled))
 	assert.False(t, cfg.GetBool("custom.missing_bool"))
 	assert.True(t, cfg.GetBool("custom.missing_bool", true))
 }
 
 func TestRequiredAccessors(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
-		"custom.port":        "8080",
-		"custom.retries":     3,
-		"custom.threshold":   "0.91",
-		"custom.enabled":     true,
-		"custom.name":        "example",
-		"custom.invalid_int": "oops",
+	cfg := setupTestConfig(t, map[string]any{
+		port:       "8080",
+		retries:    3,
+		threshold:  "0.91",
+		enabled:    true,
+		name:       "example",
+		invalidInt: "oops",
 	})
 
-	val, err := cfg.GetRequiredString("custom.name")
+	val, err := cfg.GetRequiredString(name)
 	require.NoError(t, err)
 	assert.Equal(t, "example", val)
 
-	_, err = cfg.GetRequiredString("custom.missing")
+	_, err = cfg.GetRequiredString(missing)
 	assert.Error(t, err)
 
-	vInt, err := cfg.GetRequiredInt("custom.port")
+	vInt, err := cfg.GetRequiredInt(port)
 	require.NoError(t, err)
 	assert.Equal(t, 8080, vInt)
 
-	_, err = cfg.GetRequiredInt("custom.invalid_int")
+	_, err = cfg.GetRequiredInt(invalidInt)
 	assert.Error(t, err)
 
-	vInt64, err := cfg.GetRequiredInt64("custom.retries")
+	vInt64, err := cfg.GetRequiredInt64(retries)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), vInt64)
 
-	vFloat, err := cfg.GetRequiredFloat64("custom.threshold")
+	vFloat, err := cfg.GetRequiredFloat64(threshold)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 0.91, vFloat, 0.0001)
 
-	vBool, err := cfg.GetRequiredBool("custom.enabled")
+	vBool, err := cfg.GetRequiredBool(enabled)
 	require.NoError(t, err)
 	assert.True(t, vBool)
 }
@@ -119,11 +131,11 @@ func TestNilConfigAccessors(t *testing.T) {
 }
 
 func TestUnmarshalAndCustom(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
+	cfg := setupTestConfig(t, map[string]any{
 		"custom.service.endpoint": "https://api.example.com",
 		"custom.service.timeout":  "30s",
-		"custom.tags":             []interface{}{"alpha", "beta"},
-		"custom.meta": map[string]interface{}{
+		"custom.tags":             []any{"alpha", "beta"},
+		"custom.meta": map[string]any{
 			"owner": "team-platform",
 		},
 	})
@@ -145,7 +157,7 @@ func TestUnmarshalAndCustom(t *testing.T) {
 }
 
 func TestAllAndExists(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
+	cfg := setupTestConfig(t, map[string]any{
 		"custom.one": 1,
 		"custom.two": 2,
 	})
@@ -159,7 +171,7 @@ func TestAllAndExists(t *testing.T) {
 }
 
 func TestCustomHandlesNonMap(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
+	cfg := setupTestConfig(t, map[string]any{
 		"custom": "not-a-map",
 	})
 
@@ -167,8 +179,8 @@ func TestCustomHandlesNonMap(t *testing.T) {
 }
 
 func TestInvalidTypesReturnDefaults(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
-		"custom.port":         []string{"not", "number"},
+	cfg := setupTestConfig(t, map[string]any{
+		port:                  []string{"not", "number"},
 		"custom.float":        []int{1, 2},
 		"custom.bool":         []bool{true},
 		"custom.int64":        []int{1},
@@ -176,7 +188,7 @@ func TestInvalidTypesReturnDefaults(t *testing.T) {
 		"custom.bool_invalid": struct{}{},
 	})
 
-	assert.Equal(t, 5, cfg.GetInt("custom.port", 5))
+	assert.Equal(t, 5, cfg.GetInt(port, 5))
 	assert.Equal(t, int64(7), cfg.GetInt64("custom.int64", 7))
 	assert.Equal(t, 9.9, cfg.GetFloat64("custom.float", 9.9))
 	assert.True(t, cfg.GetBool("custom.bool", true))
@@ -204,7 +216,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toInt64FromUnsignedInt", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    int64
 			expectError bool
 		}{
@@ -216,7 +228,7 @@ func TestTypeConversions(t *testing.T) {
 			{"uint overflow", uint(math.MaxUint64), 0, true},
 			{"uint64 overflow", uint64(math.MaxUint64), 0, true},
 			{"uint64 max safe", uint64(math.MaxInt64), math.MaxInt64, false},
-			{"unsupported type", "invalid", 0, true},
+			{unsupportedType, "invalid", 0, true},
 			{"unsupported type int", 42, 0, true},
 		}
 
@@ -236,7 +248,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toInt64FromSignedInt", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    int64
 			expectError bool
 		}{
@@ -244,7 +256,7 @@ func TestTypeConversions(t *testing.T) {
 			{"int8 conversion", int8(-128), -128, false},
 			{"int16 conversion", int16(32767), 32767, false},
 			{"int32 conversion", int32(-2147483648), -2147483648, false},
-			{"unsupported type", "invalid", 0, true},
+			{unsupportedType, "invalid", 0, true},
 			{"unsupported type uint", uint(42), 0, true},
 		}
 
@@ -268,7 +280,7 @@ func TestTypeConversions(t *testing.T) {
 			assert.Equal(t, int64(12345), result)
 		})
 
-		t.Run("empty string", func(t *testing.T) {
+		t.Run(emptyString, func(t *testing.T) {
 			_, err := toInt64("   ")
 			assert.Error(t, err)
 		})
@@ -286,7 +298,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toFloat64", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    float64
 			expectError bool
 		}{
@@ -305,10 +317,10 @@ func TestTypeConversions(t *testing.T) {
 			{"string valid", "123.45", 123.45, false},
 			{"string integer", "42", 42.0, false},
 			{"string negative", "-3.14", -3.14, false},
-			{"string empty", "", 0, true},
+			{emptyString, "", 0, true},
 			{"string whitespace", "   ", 0, true},
 			{"string invalid", "not-a-number", 0, true},
-			{"unsupported type", []int{1, 2}, 0, true},
+			{unsupportedType, []int{1, 2}, 0, true},
 		}
 
 		for _, tt := range tests {
@@ -327,7 +339,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toBool", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    bool
 			expectError bool
 		}{
@@ -342,7 +354,7 @@ func TestTypeConversions(t *testing.T) {
 			{"string True", "True", true, false},
 			{"string FALSE", "FALSE", false, false},
 			{"string with spaces", "  true  ", true, false},
-			{"string empty", "", false, true},
+			{emptyString, "", false, true},
 			{"string invalid", "maybe", false, true},
 			{"int zero", int(0), false, false},
 			{"int nonzero", int(42), true, false},
@@ -365,7 +377,7 @@ func TestTypeConversions(t *testing.T) {
 			{"uint32 nonzero", uint32(4000000), true, false},
 			{"uint64 zero", uint64(0), false, false},
 			{"uint64 nonzero", uint64(123), true, false},
-			{"unsupported type", []bool{true}, false, true},
+			{unsupportedType, []bool{true}, false, true},
 		}
 
 		for _, tt := range tests {
@@ -426,16 +438,16 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toInt edge cases", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    int
 			expectError bool
 		}{
-			{"string empty", "", 0, true},
+			{emptyString, "", 0, true},
 			{"string whitespace", "   ", 0, true},
 			{"string invalid", "not-a-number", 0, true},
 			{"int64 max value", int64(math.MaxInt64), int(math.MaxInt64), false},
 			{"uint64 overflow", uint64(math.MaxUint64), 0, true},
-			{"unsupported type", []int{1}, 0, true},
+			{unsupportedType, []int{1}, 0, true},
 		}
 
 		for _, tt := range tests {
@@ -454,7 +466,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toInt64 edge cases", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    int64
 			expectError bool
 		}{
@@ -479,7 +491,7 @@ func TestTypeConversions(t *testing.T) {
 	t.Run("toBool edge cases", func(t *testing.T) {
 		tests := []struct {
 			name        string
-			input       interface{}
+			input       any
 			expected    bool
 			expectError bool
 		}{
@@ -503,7 +515,7 @@ func TestTypeConversions(t *testing.T) {
 
 // TestRequiredAccessorErrorPaths ensures all error paths in required getters are covered
 func TestRequiredAccessorErrorPaths(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
+	cfg := setupTestConfig(t, map[string]any{
 		"valid.string":    "test",
 		"valid.int":       42,
 		"valid.int64":     int64(123),
@@ -522,14 +534,14 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 			key  string
 		}{
 			{"missing key", "missing.key"},
-			{"empty string", "empty.string"},
+			{emptyString, "empty.string"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := cfg.GetRequiredString(tt.key)
 				assert.Error(t, err)
-				if tt.name == "empty string" {
+				if tt.name == emptyString {
 					assert.Contains(t, err.Error(), "empty")
 				} else {
 					assert.Contains(t, err.Error(), "missing")
@@ -592,7 +604,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 
 // TestGetStringEdgeCases covers remaining GetString scenarios
 func TestGetStringEdgeCases(t *testing.T) {
-	cfg := setupTestConfig(t, map[string]interface{}{
+	cfg := setupTestConfig(t, map[string]any{
 		"non.string": 42,
 	})
 
@@ -629,7 +641,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 	// Test platform-specific int overflow if needed
 	t.Run("platform specific int conversion", func(t *testing.T) {
 		// Force test a case that might trigger int overflow on different architectures
-		cfg := setupTestConfig(t, map[string]interface{}{
+		cfg := setupTestConfig(t, map[string]any{
 			"large.number": "9223372036854775807", // Max int64 as string
 		})
 
@@ -640,7 +652,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 
 	t.Run("toBool with uint conversion error", func(t *testing.T) {
 		// Test a case where toBool calls toInt64 with uint and gets an error
-		cfg := setupTestConfig(t, map[string]interface{}{
+		cfg := setupTestConfig(t, map[string]any{
 			"overflow.uint": uint64(math.MaxUint64),
 		})
 

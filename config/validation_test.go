@@ -7,6 +7,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	testConnectionString = "postgresql://user:pass@localhost/db"
+	testOracleHost       = "oracle.example.com"
+)
+
 func TestValidateValidConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
@@ -302,7 +307,7 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 			name: "oracle_config",
 			cfg: DatabaseConfig{
 				Type:     Oracle,
-				Host:     "oracle.example.com",
+				Host:     testOracleHost,
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
@@ -732,14 +737,14 @@ func TestIsDatabaseConfigured(t *testing.T) {
 		{
 			name: "connection_string_is_configured",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 			},
 			expected: true,
 		},
 		{
 			name: "connection_string_with_empty_host_type",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 				Host:             "",
 				Type:             "",
 			},
@@ -850,7 +855,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			name: "valid_oracle_config_passes",
 			config: DatabaseConfig{
 				Type:     Oracle,
-				Host:     "oracle.example.com",
+				Host:     testOracleHost,
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
@@ -861,7 +866,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		{
 			name: "connection_string_minimal_config_passes",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 				MaxConns:         25,
 			},
 			expectError: false,
@@ -869,7 +874,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		{
 			name: "connection_string_invalid_port_uses_optional_validation",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 				Port:             70000,
 				MaxConns:         25,
 			},
@@ -879,7 +884,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		{
 			name: "connection_string_with_invalid_type",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 				Type:             "invalid",
 				MaxConns:         25,
 			},
@@ -889,7 +894,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		{
 			name: "connection_string_missing_max_conns_errors",
 			config: DatabaseConfig{
-				ConnectionString: "postgresql://user:pass@localhost/db",
+				ConnectionString: testConnectionString,
 				MaxConns:         0,
 			},
 			expectError:   true,
