@@ -251,7 +251,7 @@ func toInt64(value any) (int64, error) {
 		if str == "" {
 			return 0, errEmptyString
 		}
-		return strconv.ParseInt(str, 10, 64)
+		return strconv.ParseInt(str, 10, strconv.IntSize)
 	default:
 		return 0, fmt.Errorf(errMsgUnsupportedType, value)
 	}
