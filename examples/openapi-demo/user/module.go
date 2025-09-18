@@ -10,6 +10,13 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+const (
+	getUserRoute  = "/users/:id"
+	getUsersRoute = "/users"
+	testUserName  = "John Doe"
+	testEmail     = "john.doe@example.com"
+)
+
 // Module implements the go-bricks Module interface and optionally the Describer interface
 type Module struct {
 	deps *app.ModuleDeps
@@ -29,28 +36,28 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // RegisterRoutes demonstrates both old and new registration styles
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Backward compatible - no options (still works)
-	server.GET(hr, r, "/users/:id", m.getUser)
+	server.GET(hr, r, getUserRoute, m.getUser)
 
 	// Enhanced with metadata for OpenAPI generation
-	server.POST(hr, r, "/users", m.createUser,
+	server.POST(hr, r, getUsersRoute, m.createUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Create a new user"),
 		server.WithDescription("Creates a new user account with the provided information"))
 
-	server.PUT(hr, r, "/users/:id", m.updateUser,
+	server.PUT(hr, r, getUserRoute, m.updateUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Update user information"),
 		server.WithDescription("Updates an existing user's information"))
 
-	server.DELETE(hr, r, "/users/:id", m.deleteUser,
+	server.DELETE(hr, r, getUserRoute, m.deleteUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Delete a user"),
 		server.WithDescription("Permanently deletes a user account"))
 
-	server.GET(hr, r, "/users", m.listUsers,
+	server.GET(hr, r, getUsersRoute, m.listUsers,
 		server.WithModule("user"),
 		server.WithTags("users", "listing"),
 		server.WithSummary("List users"),
@@ -74,7 +81,7 @@ func (m *Module) DescribeModule() app.ModuleDescriptor {
 		Version:     "1.0.0",
 		Description: "User management operations including CRUD operations and user listings",
 		Tags:        []string{"users", "management", "authentication"},
-		BasePath:    "/users",
+		BasePath:    getUsersRoute,
 	}
 }
 
@@ -94,8 +101,8 @@ type GetUserReq struct {
 
 // CreateUserReq represents a request to create a new user
 type CreateUserReq struct {
-	Name     string            `json:"name" validate:"required,min=2,max=100" doc:"User's full name" example:"John Doe"`
-	Email    string            `json:"email" validate:"required,email" doc:"User's email address" example:"john.doe@example.com"`
+	Name     string            `json:"name" validate:"required,min=2,max=100" doc:"User's full name" example:"testUserName"`
+	Email    string            `json:"email" validate:"required,email" doc:"User's email address" example:"testEmail"`
 	Age      *int              `json:"age,omitempty" validate:"omitempty,min=13,max=120" doc:"User's age (optional)" example:"30"`
 	Role     string            `json:"role" validate:"oneof=admin user guest" doc:"User role" example:"user"`
 	Active   bool              `json:"active" doc:"Whether the user account is active" example:"true"`
@@ -105,8 +112,8 @@ type CreateUserReq struct {
 // UpdateUserReq represents a request to update user information
 type UpdateUserReq struct {
 	ID     int    `param:"id" validate:"required,min=1" doc:"User ID" example:"123"`
-	Name   string `json:"name,omitempty" validate:"omitempty,min=2,max=100" doc:"User's full name" example:"John Doe"`
-	Email  string `json:"email,omitempty" validate:"omitempty,email" doc:"User's email address" example:"john.doe@example.com"`
+	Name   string `json:"name,omitempty" validate:"omitempty,min=2,max=100" doc:"User's full name" example:"testUserName"`
+	Email  string `json:"email,omitempty" validate:"omitempty,email" doc:"User's email address" example:"testEmail"`
 	Age    *int   `json:"age,omitempty" validate:"omitempty,min=13,max=120" doc:"User's age" example:"30"`
 	Role   string `json:"role,omitempty" validate:"omitempty,oneof=admin user guest" doc:"User role" example:"user"`
 	Active *bool  `json:"active,omitempty" doc:"Whether the user account is active" example:"true"`
@@ -130,8 +137,8 @@ type ListUsersReq struct {
 // Response represents a user in API responses
 type Response struct {
 	ID        int               `json:"id" doc:"Unique user identifier" example:"123"`
-	Name      string            `json:"name" doc:"User's full name" example:"John Doe"`
-	Email     string            `json:"email" doc:"User's email address" example:"john.doe@example.com"`
+	Name      string            `json:"name" doc:"User's full name" example:"testUserName"`
+	Email     string            `json:"email" doc:"User's email address" example:"testEmail"`
 	Age       *int              `json:"age,omitempty" doc:"User's age" example:"30"`
 	Role      string            `json:"role" doc:"User role" example:"user"`
 	Active    bool              `json:"active" doc:"Whether the user account is active" example:"true"`
@@ -160,8 +167,8 @@ func (m *Module) getUser(req GetUserReq, _ server.HandlerContext) (Response, ser
 	// Mock user data
 	user := Response{
 		ID:        req.ID,
-		Name:      "John Doe",
-		Email:     "john.doe@example.com",
+		Name:      testUserName,
+		Email:     testEmail,
 		Age:       intPtr(30),
 		Role:      "user",
 		Active:    true,
@@ -197,8 +204,8 @@ func (m *Module) updateUser(req UpdateUserReq, _ server.HandlerContext) (Respons
 	// Simulate user update
 	user := Response{
 		ID:        req.ID,
-		Name:      "John Doe", // Would come from database
-		Email:     "john.doe@example.com",
+		Name:      testUserName, // Would come from database
+		Email:     testEmail,
 		Age:       intPtr(30),
 		Role:      "user",
 		Active:    true,
@@ -254,8 +261,8 @@ func (m *Module) listUsers(req ListUsersReq, _ server.HandlerContext) (ListRespo
 	users := []Response{
 		{
 			ID:        1,
-			Name:      "John Doe",
-			Email:     "john.doe@example.com",
+			Name:      testUserName,
+			Email:     testEmail,
 			Age:       intPtr(30),
 			Role:      "user",
 			Active:    true,

@@ -14,7 +14,7 @@ type routeGroup struct {
 func newRouteGroup(group *echo.Group, prefix string) RouteRegistrar {
 	return &routeGroup{
 		group:  group,
-		prefix: normalizeGroupBase(prefix),
+		prefix: normalizePrefix(prefix),
 	}
 }
 
@@ -24,7 +24,7 @@ func (rg *routeGroup) Add(method, path string, handler echo.HandlerFunc, middlew
 }
 
 func (rg *routeGroup) Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar {
-	normalized := normalizeGroupPrefix(prefix)
+	normalized := normalizePrefix(prefix)
 	newGroup := rg.group.Group(normalized, middleware...)
 
 	return &routeGroup{
@@ -92,17 +92,7 @@ func ensureLeadingSlash(path string) string {
 	return path
 }
 
-func normalizeGroupBase(prefix string) string {
-	if prefix == "" || prefix == "/" {
-		return ""
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	return strings.TrimRight(prefix, "/")
-}
-
-func normalizeGroupPrefix(prefix string) string {
+func normalizePrefix(prefix string) string {
 	if prefix == "" || prefix == "/" {
 		return ""
 	}

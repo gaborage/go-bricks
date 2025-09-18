@@ -207,7 +207,6 @@ func TestServerEchoReturnsUnderlyingInstance(t *testing.T) {
 
 func TestPathNormalization(t *testing.T) {
 	t.Run("normalizeBasePath", func(t *testing.T) {
-
 		tests := []struct {
 			name     string
 			input    string

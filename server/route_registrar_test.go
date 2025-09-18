@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	usersRoute = "/users"
+	childRoute = "/child"
+)
+
 func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	e := echo.New()
 	base := newRouteGroup(e.Group("/api"), "/api")
@@ -17,7 +22,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	require.True(t, ok)
 
 	var hits int
-	rg.Add(http.MethodGet, "/users", func(c echo.Context) error {
+	rg.Add(http.MethodGet, usersRoute, func(c echo.Context) error {
 		hits++
 		return c.NoContent(http.StatusOK)
 	})
@@ -117,15 +122,15 @@ func TestRouteGroupUseAppliesMiddleware(t *testing.T) {
 func TestRouteGroupFullPathAndRelative(t *testing.T) {
 	rg := &routeGroup{prefix: "/api"}
 
-	assert.Equal(t, "/api/child", rg.FullPath("/child"))
+	assert.Equal(t, "/api/child", rg.FullPath(childRoute))
 	assert.Equal(t, "/api", rg.FullPath("/"))
 	assert.Equal(t, "/api", rg.FullPath(""))
-	assert.Equal(t, "/child", (&routeGroup{}).FullPath("/child"))
+	assert.Equal(t, childRoute, (&routeGroup{}).FullPath(childRoute))
 
 	assert.Equal(t, "", rg.relativePath("/"))
 	assert.Equal(t, "", rg.relativePath("/api"))
-	assert.Equal(t, "/child", rg.relativePath("/api/child"))
-	assert.Equal(t, "/child", rg.relativePath("child"))
+	assert.Equal(t, childRoute, rg.relativePath("/api/child"))
+	assert.Equal(t, childRoute, rg.relativePath("child"))
 	assert.Equal(t, "/apples", rg.relativePath("/apples"))
 
 	assert.Equal(t, "/api", rg.combinePrefix(""))
@@ -148,7 +153,7 @@ func TestEnsureLeadingSlash(t *testing.T) {
 	}
 }
 
-func TestNormalizeGroupBase(t *testing.T) {
+func TestNormalizePrefix(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
@@ -158,27 +163,13 @@ func TestNormalizeGroupBase(t *testing.T) {
 		{"api", "/api"},
 		{"/api/", "/api"},
 		{"/api///", "/api"},
-	}
-
-	for _, tt := range tests {
-		assert.Equal(t, tt.expected, normalizeGroupBase(tt.input))
-	}
-}
-
-func TestNormalizeGroupPrefix(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"", ""},
-		{"/", ""},
 		{"v1", "/v1"},
 		{"/v1/", "/v1"},
 		{"/v1///", "/v1"},
 	}
 
 	for _, tt := range tests {
-		assert.Equal(t, tt.expected, normalizeGroupPrefix(tt.input))
+		assert.Equal(t, tt.expected, normalizePrefix(tt.input))
 	}
 }
 
@@ -189,10 +180,10 @@ func TestStripPathPrefix(t *testing.T) {
 		expectedTail    string
 		expectedMatched bool
 	}{
-		{"/users", "", "/users", false},
-		{"/users", "/api", "/users", false},
+		{usersRoute, "", usersRoute, false},
+		{usersRoute, "/api", usersRoute, false},
 		{"/api", "/api", "", true},
-		{"/api/users", "/api", "/users", true},
+		{"/api/users", "/api", usersRoute, true},
 		{"/apiusers", "/api", "/apiusers", false},
 	}
 
