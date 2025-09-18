@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"net"
 	nethttp "net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,23 @@ import (
 // createTestLogger creates a logger that outputs to a buffer for testing
 func createTestLogger() logger.Logger {
 	return logger.New("info", false)
+}
+
+func newIPv4TestServer(t *testing.T, handler nethttp.Handler) *httptest.Server {
+	t.Helper()
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skipping test: unable to bind IPv4 listener: %v", err)
+		return &httptest.Server{}
+	}
+
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &nethttp.Server{Handler: handler},
+	}
+	server.Start()
+	return server
 }
 
 func TestNewClient(t *testing.T) {
@@ -102,7 +120,7 @@ func TestClientHTTPMethods(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+			server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 				assert.Equal(t, tt.expectedMethod, r.Method)
 				w.WriteHeader(nethttp.StatusOK)
 				w.Write([]byte(`{"status": "ok"}`))
@@ -163,7 +181,7 @@ func TestClientHeaders(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("request headers", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 			assert.Equal(t, "test-value", r.Header.Get("X-Custom-Header"))
 			w.WriteHeader(nethttp.StatusOK)
@@ -184,7 +202,7 @@ func TestClientHeaders(t *testing.T) {
 	})
 
 	t.Run("default headers", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
 			assert.Equal(t, "test-key", r.Header.Get("X-API-Key"))
 			w.WriteHeader(nethttp.StatusOK)
@@ -203,7 +221,7 @@ func TestClientHeaders(t *testing.T) {
 	})
 
 	t.Run("request headers override defaults", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			assert.Equal(t, "custom-agent", r.Header.Get("User-Agent"))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -229,7 +247,7 @@ func TestClientBasicAuth(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("client-level auth", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			username, password, ok := r.BasicAuth()
 			assert.True(t, ok)
 			assert.Equal(t, "user", username)
@@ -249,7 +267,7 @@ func TestClientBasicAuth(t *testing.T) {
 	})
 
 	t.Run("request-level auth overrides client auth", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			username, password, ok := r.BasicAuth()
 			assert.True(t, ok)
 			assert.Equal(t, "request-user", username)
@@ -277,7 +295,7 @@ func TestClientBasicAuth(t *testing.T) {
 
 func TestDefaultContentTypeWhenBodyPresent(t *testing.T) {
 	log := createTestLogger()
-	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		// Content-Type should default to application/json when body is present
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		w.WriteHeader(nethttp.StatusOK)
@@ -299,7 +317,7 @@ func TestClientInterceptors(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("request interceptor", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			assert.Equal(t, "intercepted", r.Header.Get("X-Intercepted"))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -321,7 +339,7 @@ func TestClientInterceptors(t *testing.T) {
 	})
 
 	t.Run("response interceptor", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
@@ -348,7 +366,7 @@ func TestInterceptorErrors(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("request interceptor error", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
@@ -368,7 +386,7 @@ func TestInterceptorErrors(t *testing.T) {
 	})
 
 	t.Run("response interceptor error", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
@@ -393,7 +411,7 @@ func TestClientErrorHandling(t *testing.T) {
 	client := NewClient(log)
 
 	t.Run("HTTP error status", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			w.WriteHeader(nethttp.StatusNotFound)
 			w.Write([]byte(`{"error": "not found"}`))
 		}))
@@ -421,7 +439,7 @@ func TestClientErrorHandling(t *testing.T) {
 	})
 
 	t.Run("timeout error", func(t *testing.T) {
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			time.Sleep(100 * time.Millisecond)
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -443,7 +461,7 @@ func TestClientStats(t *testing.T) {
 	log := createTestLogger()
 	client := NewClient(log)
 
-	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 		time.Sleep(10 * time.Millisecond) // Small delay to measure
 		w.WriteHeader(nethttp.StatusOK)
 	}))
@@ -469,7 +487,7 @@ func TestClientRetries(t *testing.T) {
 
 	t.Run("retries on 5xx then succeeds", func(t *testing.T) {
 		var calls atomic.Int32
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			if calls.Add(1) == 1 {
 				w.WriteHeader(nethttp.StatusInternalServerError)
 				w.Write([]byte("fail"))
@@ -493,7 +511,7 @@ func TestClientRetries(t *testing.T) {
 
 	t.Run("does not retry on 4xx", func(t *testing.T) {
 		var calls atomic.Int32
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			calls.Add(1)
 			w.WriteHeader(nethttp.StatusBadRequest)
 			w.Write([]byte("bad"))
@@ -512,7 +530,7 @@ func TestClientRetries(t *testing.T) {
 
 	t.Run("retries on timeout then fails", func(t *testing.T) {
 		var calls atomic.Int32
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
 			calls.Add(1)
 			time.Sleep(50 * time.Millisecond)
 			w.WriteHeader(nethttp.StatusOK)
@@ -537,7 +555,7 @@ func TestTraceIDPropagation(t *testing.T) {
 
 	t.Run("automatically adds trace ID when none present", func(t *testing.T) {
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 			w.Write([]byte("ok"))
@@ -559,7 +577,7 @@ func TestTraceIDPropagation(t *testing.T) {
 	t.Run("preserves existing X-Request-ID header", func(t *testing.T) {
 		expectedTraceID := "custom-trace-123"
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -583,7 +601,7 @@ func TestTraceIDPropagation(t *testing.T) {
 	t.Run("extracts trace ID from context", func(t *testing.T) {
 		expectedTraceID := "context-trace-456"
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -606,7 +624,7 @@ func TestTraceIDPropagation(t *testing.T) {
 		contextTraceID := "context-trace"
 		headerTraceID := "header-trace"
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -633,7 +651,7 @@ func TestTraceIDPropagation(t *testing.T) {
 	t.Run("trace ID interceptor works correctly", func(t *testing.T) {
 		expectedTraceID := "interceptor-trace-789"
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -656,7 +674,7 @@ func TestTraceIDPropagation(t *testing.T) {
 
 	t.Run("adds W3C traceparent when enabled", func(t *testing.T) {
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -681,7 +699,7 @@ func TestTraceIDPropagation(t *testing.T) {
 
 	t.Run("propagates traceparent and tracestate from context", func(t *testing.T) {
 		var requestHeaders nethttp.Header
-		server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
 			w.WriteHeader(nethttp.StatusOK)
 		}))

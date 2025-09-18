@@ -33,6 +33,9 @@ type ServerConfig struct {
 	WriteTimeout      time.Duration `koanf:"write_timeout"`
 	MiddlewareTimeout time.Duration `koanf:"middleware_timeout"`
 	ShutdownTimeout   time.Duration `koanf:"shutdown_timeout"`
+	BasePath          string        `koanf:"base_path"`    // Base path for all routes, should start with "/"
+	HealthRoute       string        `koanf:"health_route"` // e.g. "/health"
+	ReadyRoute        string        `koanf:"ready_route"`  // e.g. "/ready"
 }
 
 type DatabaseConfig struct {

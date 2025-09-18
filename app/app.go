@@ -31,6 +31,13 @@ type TimeoutProvider interface {
 	WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc)
 }
 
+// ServerRunner abstracts the HTTP server to allow injecting test-friendly implementations
+type ServerRunner interface {
+	Start() error
+	Shutdown(ctx context.Context) error
+	Echo() *echo.Echo
+}
+
 // OSSignalHandler implements SignalHandler using the real OS signal package
 type OSSignalHandler struct{}
 
@@ -53,7 +60,7 @@ func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout 
 // It manages the lifecycle and coordination of all application components.
 type App struct {
 	cfg             *config.Config
-	server          *server.Server
+	server          ServerRunner
 	db              database.Interface
 	logger          logger.Logger
 	messaging       messaging.Client
@@ -73,23 +80,117 @@ func isMessagingEnabled(cfg *config.Config) bool {
 	return cfg.Messaging.BrokerURL != ""
 }
 
+func resolveDatabase(cfg *config.Config, log logger.Logger, opts *Options) (database.Interface, error) {
+	if opts != nil && opts.Database != nil {
+		log.Debug().Msg("Using provided database instance")
+		return opts.Database, nil
+	}
+
+	if !isDatabaseEnabled(cfg) {
+		log.Info().Msg("No database configured, running without database")
+		return nil, nil
+	}
+
+	connector := database.NewConnection
+	if opts != nil && opts.DatabaseConnector != nil {
+		connector = opts.DatabaseConnector
+	}
+
+	db, err := connector(&cfg.Database, log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	log.Info().
+		Str("type", cfg.Database.Type).
+		Str("host", cfg.Database.Host).
+		Msg("Database connection established")
+
+	return db, nil
+}
+
+func resolveMessaging(cfg *config.Config, log logger.Logger, opts *Options) messaging.Client {
+	factory := func(brokerURL string, log logger.Logger) messaging.Client {
+		return messaging.NewAMQPClient(brokerURL, log)
+	}
+	if opts != nil && opts.MessagingClientFactory != nil {
+		factory = opts.MessagingClientFactory
+	}
+
+	if opts != nil && opts.MessagingClient != nil {
+		log.Debug().Msg("Using provided messaging client")
+		return opts.MessagingClient
+	}
+
+	if !isMessagingEnabled(cfg) {
+		log.Info().Msg("No messaging broker URL configured, messaging disabled")
+		return nil
+	}
+
+	log.Info().
+		Str("broker_url", cfg.Messaging.BrokerURL).
+		Msg("Initializing AMQP messaging client")
+
+	return factory(cfg.Messaging.BrokerURL, log)
+}
+
+func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
+	signalHandler := SignalHandler(&OSSignalHandler{})
+	timeoutProvider := TimeoutProvider(&StandardTimeoutProvider{})
+
+	if opts != nil {
+		if opts.SignalHandler != nil {
+			signalHandler = opts.SignalHandler
+		}
+		if opts.TimeoutProvider != nil {
+			timeoutProvider = opts.TimeoutProvider
+		}
+	}
+
+	return signalHandler, timeoutProvider
+}
+
+func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerRunner {
+	if opts != nil && opts.Server != nil {
+		log.Debug().Msg("Using provided server instance")
+		return opts.Server
+	}
+
+	return server.New(cfg, log)
+}
+
 // Options contains optional dependencies for creating an App instance
 type Options struct {
-	Database        database.Interface
-	MessagingClient messaging.Client
-	SignalHandler   SignalHandler
-	TimeoutProvider TimeoutProvider
+	Database               database.Interface
+	MessagingClient        messaging.Client
+	SignalHandler          SignalHandler
+	TimeoutProvider        TimeoutProvider
+	Server                 ServerRunner
+	ConfigLoader           func() (*config.Config, error)
+	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
+	MessagingClientFactory func(string, logger.Logger) messaging.Client
 }
 
 // New creates a new application instance with dependencies determined by configuration.
 // It initializes only the services that are configured, failing fast if configured services cannot connect.
+
 func New() (*App, error) {
-	cfg, err := config.Load()
+	return NewWithOptions(nil)
+}
+
+// NewWithOptions creates a new application instance allowing overrides for config loading and dependencies.
+func NewWithOptions(opts *Options) (*App, error) {
+	loader := config.Load
+	if opts != nil && opts.ConfigLoader != nil {
+		loader = opts.ConfigLoader
+	}
+
+	cfg, err := loader()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	return NewWithConfig(cfg, nil)
+	return NewWithConfig(cfg, opts)
 }
 
 // NewWithConfig creates a new application instance with the provided config and optional overrides.
@@ -104,51 +205,19 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		Msg("Starting application")
 
 	// Initialize database if configured or provided
-	var db database.Interface
-	if opts != nil && opts.Database != nil {
-		db = opts.Database
-		log.Debug().Msg("Using provided database instance")
-	} else if isDatabaseEnabled(cfg) {
-		var err error
-		db, err = database.NewConnection(&cfg.Database, log)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to database: %w", err)
-		}
-		log.Info().
-			Str("type", cfg.Database.Type).
-			Str("host", cfg.Database.Host).
-			Msg("Database connection established")
-	} else {
-		log.Info().Msg("No database configured, running without database")
+	db, err := resolveDatabase(cfg, log, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	// Initialize messaging client if configured or provided
-	var msgClient messaging.Client
-	if opts != nil && opts.MessagingClient != nil {
-		msgClient = opts.MessagingClient
-		log.Debug().Msg("Using provided messaging client")
-	} else if isMessagingEnabled(cfg) {
-		msgClient = messaging.NewAMQPClient(cfg.Messaging.BrokerURL, log)
-		log.Info().
-			Str("broker_url", cfg.Messaging.BrokerURL).
-			Msg("Initializing AMQP messaging client")
-	} else {
-		log.Info().Msg("No messaging broker URL configured, messaging disabled")
-	}
+	msgClient := resolveMessaging(cfg, log, opts)
 
 	// Use provided signal handler and timeout provider or defaults
-	var signalHandler SignalHandler = &OSSignalHandler{}
-	var timeoutProvider TimeoutProvider = &StandardTimeoutProvider{}
-	if opts != nil {
-		if opts.SignalHandler != nil {
-			signalHandler = opts.SignalHandler
-		}
-		if opts.TimeoutProvider != nil {
-			timeoutProvider = opts.TimeoutProvider
-		}
-	}
+	signalHandler, timeoutProvider := resolveSignalAndTimeout(opts)
 
-	srv := server.New(cfg, log)
+	// Resolve HTTP server implementation
+	srv := resolveServer(cfg, log, opts)
 
 	deps := &ModuleDeps{
 		DB:        db,

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	dbpkg "github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -188,6 +191,41 @@ func (m *MockMessagingClient) BindQueue(queue, exchange, routingKey string, noWa
 	return argsList.Error(0)
 }
 
+type mockServer struct {
+	startErr      error
+	shutdownErr   error
+	startCalls    int32
+	shutdownCalls int32
+	e             *echo.Echo
+}
+
+func newMockServer() *mockServer {
+	return &mockServer{e: echo.New()}
+}
+
+func (m *mockServer) Start() error {
+	atomic.AddInt32(&m.startCalls, 1)
+	return m.startErr
+}
+
+func (m *mockServer) Shutdown(ctx context.Context) error {
+	atomic.AddInt32(&m.shutdownCalls, 1)
+	_ = ctx
+	return m.shutdownErr
+}
+
+func (m *mockServer) Echo() *echo.Echo {
+	return m.e
+}
+
+func (m *mockServer) startCount() int {
+	return int(atomic.LoadInt32(&m.startCalls))
+}
+
+func (m *mockServer) shutdownCount() int {
+	return int(atomic.LoadInt32(&m.shutdownCalls))
+}
+
 // MockModule implements the Module interface for testing
 type MockModule struct {
 	mock.Mock
@@ -266,7 +304,7 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 	registry := NewModuleRegistry(deps)
 
 	// Create test server
-	srv := server.New(cfg, log)
+	srv := newMockServer()
 
 	// Use default implementations if not provided
 	var signalHandler SignalHandler = &OSSignalHandler{}
@@ -289,6 +327,8 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 		signalHandler:   signalHandler,
 		timeoutProvider: timeoutProvider,
 	}
+
+	srv.Echo().GET("/ready", app.readyCheck)
 
 	return app, mockDB, mockMessaging
 }
@@ -481,6 +521,7 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 
 func TestApp_Shutdown_Success(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
+	mockSrv := app.server.(*mockServer)
 
 	// Add a test module
 	module := &MockModule{name: "test-module"}
@@ -497,6 +538,7 @@ func TestApp_Shutdown_Success(t *testing.T) {
 
 	err := app.Shutdown(ctx)
 	assert.NoError(t, err)
+	assert.Equal(t, 1, mockSrv.shutdownCount())
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
@@ -505,6 +547,7 @@ func TestApp_Shutdown_Success(t *testing.T) {
 
 func TestApp_Shutdown_WithErrors(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
+	mockSrv := app.server.(*mockServer)
 
 	// Add a test module that fails shutdown
 	module := &MockModule{name: "failing-module"}
@@ -522,6 +565,7 @@ func TestApp_Shutdown_WithErrors(t *testing.T) {
 	err := app.Shutdown(ctx)
 	// Shutdown should not return error, but log the errors internally
 	assert.NoError(t, err)
+	assert.Equal(t, 1, mockSrv.shutdownCount())
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
@@ -617,6 +661,8 @@ func TestApp_RegisterMessaging_NoMessagingClient(t *testing.T) {
 
 func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
+	mockSrv := app.server.(*mockServer)
+	mockSrv.shutdownErr = errors.New("server shutdown failed")
 
 	// Mock server that fails to shutdown gracefully
 	// Since we can't easily mock the echo server, we'll focus on the shutdown logic
@@ -630,6 +676,7 @@ func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
 	err := app.Shutdown(ctx)
 	// Shutdown should not return error even if server shutdown fails
 	assert.NoError(t, err)
+	assert.Equal(t, 1, mockSrv.shutdownCount())
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
@@ -644,6 +691,7 @@ func TestApp_Run_Success(t *testing.T) {
 	mockTimeoutProvider := &MockTimeoutProvider{}
 
 	app, mockDB, mockMessaging := createTestAppWithMocks(mockSignalHandler, mockTimeoutProvider)
+	mockSrv := app.server.(*mockServer)
 
 	// Setup mocks for successful run
 	mockSignalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
@@ -676,8 +724,10 @@ func TestApp_Run_Success(t *testing.T) {
 		runErr = app.Run()
 	}()
 
-	// Give the app time to start
-	time.Sleep(50 * time.Millisecond)
+	// Wait until server reports started
+	assert.Eventually(t, func() bool {
+		return mockSrv.startCount() > 0
+	}, time.Second, 10*time.Millisecond)
 
 	// Send shutdown signal
 	mockSignalHandler.TriggerShutdown()
@@ -691,6 +741,61 @@ func TestApp_Run_Success(t *testing.T) {
 	}
 
 	assert.NoError(t, runErr)
+	assert.Equal(t, 1, mockSrv.startCount())
+	assert.Equal(t, 1, mockSrv.shutdownCount())
+	mockSignalHandler.AssertExpectations(t)
+	mockTimeoutProvider.AssertExpectations(t)
+	mockDB.AssertExpectations(t)
+	mockMessaging.AssertExpectations(t)
+	module.AssertExpectations(t)
+}
+
+func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
+	mockSignalHandler := NewMockSignalHandler()
+	mockTimeoutProvider := &MockTimeoutProvider{}
+
+	app, mockDB, mockMessaging := createTestAppWithMocks(mockSignalHandler, mockTimeoutProvider)
+	mockSrv := app.server.(*mockServer)
+	mockSrv.startErr = http.ErrServerClosed
+
+	mockSignalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
+	mockSignalHandler.On("WaitForSignal", mock.Anything).Return()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mockTimeoutProvider.On("WithTimeout", context.Background(), 10*time.Second).Return(ctx, cancel)
+
+	mockDB.On("Close").Return(nil)
+	mockMessaging.On("Close").Return(nil)
+	mockMessaging.On("IsReady").Return(true)
+
+	module := &MockModule{name: "test-module"}
+	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
+	module.On("RegisterMessaging", mock.Anything).Return()
+	module.On("Shutdown").Return(nil)
+	app.registry.modules = append(app.registry.modules, module)
+
+	var runErr error
+	done := make(chan bool)
+	go func() {
+		defer func() { done <- true }()
+		runErr = app.Run()
+	}()
+
+	assert.Eventually(t, func() bool {
+		return mockSrv.startCount() > 0
+	}, time.Second, 10*time.Millisecond)
+	mockSignalHandler.TriggerShutdown()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("App.Run() did not complete in expected time")
+	}
+
+	assert.NoError(t, runErr)
+	assert.Equal(t, 1, mockSrv.startCount())
+	assert.Equal(t, 1, mockSrv.shutdownCount())
 	mockSignalHandler.AssertExpectations(t)
 	mockTimeoutProvider.AssertExpectations(t)
 	mockDB.AssertExpectations(t)
@@ -701,6 +806,152 @@ func TestApp_Run_Success(t *testing.T) {
 // =============================================================================
 // New() Constructor Tests - Factory Method Testing
 // =============================================================================
+
+func TestApp_New_DefaultConfig(t *testing.T) {
+	opts := &Options{ConfigLoader: func() (*config.Config, error) {
+		return &config.Config{
+			App: config.AppConfig{Name: "test", Env: "test", Version: "v"},
+			Log: config.LogConfig{Level: "info"},
+		}, nil
+	}}
+	app, err := NewWithOptions(opts)
+	require.NoError(t, err)
+	require.NotNil(t, app)
+	assert.NotNil(t, app.server)
+	assert.Nil(t, app.db)
+	assert.Nil(t, app.messaging)
+}
+
+func TestApp_New_ConfigLoadError(t *testing.T) {
+	opts := &Options{
+		ConfigLoader: func() (*config.Config, error) {
+			return nil, errors.New("load failed")
+		},
+	}
+
+	app, err := NewWithOptions(opts)
+	assert.Error(t, err)
+	assert.Nil(t, app)
+}
+
+func TestApp_NewWithConfig_UsesConnectors(t *testing.T) {
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			Type:     config.PostgreSQL,
+			Host:     "db-host",
+			Port:     5432,
+			Database: "testdb",
+			Username: "user",
+		},
+		Messaging: config.MessagingConfig{
+			BrokerURL: "amqp://broker",
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	dbMock := &MockDatabase{}
+	msgMock := &MockMessagingClient{}
+	var dbCalled, messagingCalled bool
+
+	opts := &Options{
+		DatabaseConnector: func(dbCfg *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+			dbCalled = true
+			assert.Equal(t, cfg.Database.Host, dbCfg.Host)
+			return dbMock, nil
+		},
+		MessagingClientFactory: func(url string, _ logger.Logger) messaging.Client {
+			messagingCalled = true
+			assert.Equal(t, cfg.Messaging.BrokerURL, url)
+			return msgMock
+		},
+	}
+
+	app, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err)
+	require.NotNil(t, app)
+	assert.True(t, dbCalled)
+	assert.True(t, messagingCalled)
+	assert.Equal(t, dbMock, app.db)
+	assert.Equal(t, msgMock, app.messaging)
+}
+
+func TestApp_NewWithConfig_DatabaseConnectorError(t *testing.T) {
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Database: config.DatabaseConfig{
+			Type:     config.PostgreSQL,
+			Host:     "db-host",
+			Port:     5432,
+			Database: "testdb",
+			Username: "user",
+		},
+		Messaging: config.MessagingConfig{},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	opts := &Options{
+		DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+			return nil, errors.New("connection failed")
+		},
+		MessagingClientFactory: func(_ string, _ logger.Logger) messaging.Client {
+			t.Fatalf("messaging factory should not be called on db failure")
+			return nil
+		},
+	}
+
+	app, err := NewWithConfig(cfg, opts)
+	assert.Error(t, err)
+	assert.Nil(t, app)
+}
+
+func TestApp_NewWithConfig_UsesProvidedServer(t *testing.T) {
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name:    "test-app",
+			Version: "v1.0.0",
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: false,
+		},
+	}
+
+	providedServer := newMockServer()
+	opts := &Options{Server: providedServer}
+
+	app, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err)
+	require.NotNil(t, app)
+	assert.Equal(t, providedServer, app.server)
+}
 
 func TestApp_NewWithConfig_DatabaseAndMessagingEnabled(t *testing.T) {
 	// Create test config with both database and messaging enabled
@@ -828,6 +1079,46 @@ func TestApp_NewWithConfig_MessagingOnlyEnabled(t *testing.T) {
 	assert.NotNil(t, app)
 	assert.Nil(t, app.db) // Should be nil when not configured
 	assert.Equal(t, mockMessaging, app.messaging)
+}
+
+func TestStandardTimeoutProvider_WithTimeout(t *testing.T) {
+	provider := &StandardTimeoutProvider{}
+
+	start := time.Now()
+	ctx, cancel := provider.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	assert.True(t, ok)
+	assert.WithinDuration(t, start.Add(5*time.Millisecond), deadline, 20*time.Millisecond)
+
+	cancel()
+	assert.Eventually(t, func() bool {
+		return ctx.Err() == context.Canceled
+	}, 10*time.Millisecond, time.Millisecond)
+}
+
+func TestOSSignalHandler_WaitForSignal(t *testing.T) {
+	handler := &OSSignalHandler{}
+	signals := make(chan os.Signal, 1)
+	handler.Notify(signals, os.Interrupt)
+	done := make(chan struct{})
+
+	go func() {
+		handler.WaitForSignal(signals)
+		close(done)
+	}()
+
+	signals <- os.Interrupt
+
+	select {
+	case <-done:
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("wait for signal timed out")
+	}
+
+	signal.Stop(signals)
 }
 
 func TestApp_NewWithConfig_NeitherEnabled(t *testing.T) {

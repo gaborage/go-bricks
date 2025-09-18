@@ -105,3 +105,36 @@ func TestRequestLogger_LogsTraceparentWhenInboundPresent(t *testing.T) {
 	require.NotNil(t, recLog.last)
 	require.Equal(t, inboundTP, recLog.last.fields["traceparent"])
 }
+
+func TestRequestLogger_SkipsHealthAndReady(t *testing.T) {
+	e := echo.New()
+	recLog := &recLogger{}
+	e.Use(Logger(recLog))
+
+	e.GET("/health", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	e.GET("/ready", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+
+	api := e.Group("/api")
+	api.GET("/health", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	api.GET("/ready", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+
+	for _, path := range []string{"/health", "/ready", "/api/health", "/api/ready"} {
+		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder()
+
+		// If the middleware logs, recLog.last will be non-nil; reset before each request
+		recLog.last = nil
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Nil(t, recLog.last, "health-style endpoints should not be logged")
+	}
+}

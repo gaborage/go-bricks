@@ -62,6 +62,11 @@ func TestBaseAPIError(t *testing.T) {
 		err := NewBaseAPIError("", "Test message", http.StatusBadRequest)
 		assert.Equal(t, "Test message", err.Error())
 	})
+
+	t.Run("details_nil_returns_nil", func(t *testing.T) {
+		err := &BaseAPIError{details: nil}
+		assert.Nil(t, err.Details())
+	})
 }
 
 func TestSpecificErrorTypes(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -172,4 +173,122 @@ func TestServerEchoReturnsUnderlyingInstance(t *testing.T) {
 	e := srv.Echo()
 	require.NotNil(t, e)
 	assert.Same(t, e, srv.echo)
+}
+
+func TestNormalizeBasePath(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		out  string
+	}{
+		{name: "empty", in: "", out: ""},
+		{name: "already_normalized", in: "/api", out: "/api"},
+		{name: "missing_leading", in: "api", out: "/api"},
+		{name: "trailing_slash", in: "/api/", out: "/api"},
+		{name: "root", in: "/", out: "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.out, normalizeBasePath(tt.in))
+		})
+	}
+}
+
+func TestNormalizeRoutePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		route    string
+		defaultR string
+		expected string
+	}{
+		{name: "empty_uses_default", route: "", defaultR: "/health", expected: "/health"},
+		{name: "missing_leading_slash", route: "ready", defaultR: "/ready", expected: "/ready"},
+		{name: "already_prefixed", route: "/status", defaultR: "/status", expected: "/status"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, normalizeRoutePath(tt.route, tt.defaultR))
+		})
+	}
+}
+
+func TestServerBuildFullPath(t *testing.T) {
+	s := &Server{basePath: "/api"}
+	assert.Equal(t, "/api/users", s.buildFullPath("/users"))
+	assert.Equal(t, "/api", s.buildFullPath("/"))
+
+	s.basePath = ""
+	assert.Equal(t, "/users", s.buildFullPath("/users"))
+}
+
+func TestModuleGroupAppliesBasePath(t *testing.T) {
+	e := echo.New()
+	s := &Server{echo: e, basePath: "/api"}
+
+	group := s.ModuleGroup()
+	require.NotNil(t, group)
+
+	group.GET("/ping", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ping", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	// when base path empty, route should remain unchanged
+	s.basePath = ""
+	e = echo.New()
+	s.echo = e
+
+	group = s.ModuleGroup()
+	group.GET("/ping", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	req = httptest.NewRequest(http.MethodGet, "/ping", http.NoBody)
+	rec = httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	// when base path is "/", ensure routes are not double prefixed
+	s.basePath = "/"
+	e = echo.New()
+	s.echo = e
+
+	group = s.ModuleGroup()
+	group.GET("/ping", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	req = httptest.NewRequest(http.MethodGet, "/ping", http.NoBody)
+	rec = httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestStatusToErrorCodeMappings(t *testing.T) {
+	tests := []struct {
+		status int
+		code   string
+	}{
+		{status: http.StatusBadRequest, code: "BAD_REQUEST"},
+		{status: http.StatusUnauthorized, code: "UNAUTHORIZED"},
+		{status: http.StatusForbidden, code: "FORBIDDEN"},
+		{status: http.StatusNotFound, code: "NOT_FOUND"},
+		{status: http.StatusConflict, code: "CONFLICT"},
+		{status: http.StatusTooManyRequests, code: "TOO_MANY_REQUESTS"},
+		{status: http.StatusServiceUnavailable, code: "SERVICE_UNAVAILABLE"},
+		{status: http.StatusTeapot, code: "INTERNAL_ERROR"},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.code, statusToErrorCode(tt.status))
+	}
 }

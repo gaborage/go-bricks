@@ -226,3 +226,23 @@ func TestModuleRegistry_Shutdown_SingleModule(t *testing.T) {
 
 	module.AssertExpectations(t)
 }
+
+func TestMetadataRegistryOperations(t *testing.T) {
+	registry := &MetadataRegistry{modules: make(map[string]ModuleInfo)}
+	module := &MockModule{name: "alpha"}
+	registry.RegisterModule("alpha", module, "example/pkg")
+
+	assert.Equal(t, 1, registry.Count())
+
+	modules := registry.GetModules()
+	assert.Len(t, modules, 1)
+	modules["beta"] = ModuleInfo{}
+	assert.Equal(t, 1, registry.Count(), "get modules should return copy")
+
+	info, ok := registry.GetModule("alpha")
+	assert.True(t, ok)
+	assert.Equal(t, "alpha", info.Descriptor.Name)
+
+	registry.Clear()
+	assert.Equal(t, 0, registry.Count())
+}
