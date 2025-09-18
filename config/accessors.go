@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -10,11 +11,20 @@ import (
 const (
 	maxInt = int(^uint(0) >> 1)
 	minInt = -maxInt - 1
+
+	// Error message constants to avoid duplication while preserving context
+	errMsgRequiredKeyInvalid      = "required configuration key '%s' is invalid: %w"
+	errMsgUnsupportedType         = "unsupported type %T"
+	errMsgUnsupportedSignedType   = "unsupported signed int type %T"
+	errMsgUnsupportedUnsignedType = "unsupported unsigned int type %T"
 )
 
 var (
 	maxInt64ExactFloat = math.Nextafter(float64(math.MaxInt64), math.Inf(-1))
 	minInt64ExactFloat = float64(math.MinInt64)
+
+	// Error variables for simple messages without format specifiers
+	errEmptyString = errors.New("empty string")
 )
 
 // GetString retrieves a string value from the configuration or the provided default.
@@ -106,7 +116,7 @@ func (c *Config) GetRequiredInt(key string) (int, error) {
 
 	n, err := toInt(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return n, nil
 }
@@ -120,7 +130,7 @@ func (c *Config) GetRequiredInt64(key string) (int64, error) {
 
 	n, err := toInt64(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return n, nil
 }
@@ -134,7 +144,7 @@ func (c *Config) GetRequiredFloat64(key string) (float64, error) {
 
 	f, err := toFloat64(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return f, nil
 }
@@ -148,13 +158,13 @@ func (c *Config) GetRequiredBool(key string) (bool, error) {
 
 	b, err := toBool(val)
 	if err != nil {
-		return false, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return false, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return b, nil
 }
 
 // Unmarshal unmarshals a configuration section into the provided struct.
-func (c *Config) Unmarshal(key string, out interface{}) error {
+func (c *Config) Unmarshal(key string, out any) error {
 	if c == nil || c.k == nil {
 		return fmt.Errorf("configuration not initialized")
 	}
@@ -170,7 +180,7 @@ func (c *Config) Exists(key string) bool {
 }
 
 // All returns all configuration as a flattened map.
-func (c *Config) All() map[string]interface{} {
+func (c *Config) All() map[string]any {
 	if c == nil || c.k == nil {
 		return nil
 	}
@@ -178,25 +188,25 @@ func (c *Config) All() map[string]interface{} {
 }
 
 // Custom returns the values under the `custom` namespace.
-func (c *Config) Custom() map[string]interface{} {
+func (c *Config) Custom() map[string]any {
 	if c == nil || c.k == nil {
 		return nil
 	}
 	raw := c.k.Get("custom")
-	if m, ok := raw.(map[string]interface{}); ok {
+	if m, ok := raw.(map[string]any); ok {
 		return m
 	}
 	return nil
 }
 
-func (c *Config) rawValue(key string) (interface{}, bool) {
+func (c *Config) rawValue(key string) (any, bool) {
 	if c == nil || c.k == nil || !c.k.Exists(key) {
 		return nil, false
 	}
 	return c.k.Get(key), true
 }
 
-func (c *Config) rawRequiredValue(key string) (interface{}, error) {
+func (c *Config) rawRequiredValue(key string) (any, error) {
 	if c == nil || c.k == nil {
 		return nil, fmt.Errorf("configuration not initialized")
 	}
@@ -213,7 +223,7 @@ func optionalDefault[T any](zero T, overrides ...T) T {
 	return zero
 }
 
-func toInt(value interface{}) (int, error) {
+func toInt(value any) (int, error) {
 	n, err := toInt64(value)
 	if err != nil {
 		return 0, err
@@ -224,7 +234,7 @@ func toInt(value interface{}) (int, error) {
 	return int(n), nil
 }
 
-func toInt64(value interface{}) (int64, error) {
+func toInt64(value any) (int64, error) {
 	switch v := value.(type) {
 	case int64:
 		return v, nil
@@ -239,16 +249,16 @@ func toInt64(value interface{}) (int64, error) {
 	case string:
 		str := strings.TrimSpace(v)
 		if str == "" {
-			return 0, fmt.Errorf("empty string")
+			return 0, errEmptyString
 		}
 		return strconv.ParseInt(str, 10, 64)
 	default:
-		return 0, fmt.Errorf("unsupported type %T", value)
+		return 0, fmt.Errorf(errMsgUnsupportedType, value)
 	}
 }
 
 // toInt64FromSignedInt handles conversion from signed integer types
-func toInt64FromSignedInt(value interface{}) (int64, error) {
+func toInt64FromSignedInt(value any) (int64, error) {
 	switch v := value.(type) {
 	case int:
 		return int64(v), nil
@@ -259,12 +269,12 @@ func toInt64FromSignedInt(value interface{}) (int64, error) {
 	case int32:
 		return int64(v), nil
 	default:
-		return 0, fmt.Errorf("unsupported signed int type %T", value)
+		return 0, fmt.Errorf(errMsgUnsupportedSignedType, value)
 	}
 }
 
 // toInt64FromUnsignedInt handles conversion from unsigned integer types with overflow checks
-func toInt64FromUnsignedInt(value interface{}) (int64, error) {
+func toInt64FromUnsignedInt(value any) (int64, error) {
 	switch v := value.(type) {
 	case uint8:
 		return int64(v), nil
@@ -283,11 +293,11 @@ func toInt64FromUnsignedInt(value interface{}) (int64, error) {
 		}
 		return int64(v), nil
 	default:
-		return 0, fmt.Errorf("unsupported unsigned int type %T", value)
+		return 0, fmt.Errorf(errMsgUnsupportedUnsignedType, value)
 	}
 }
 
-func toFloat64(value interface{}) (float64, error) {
+func toFloat64(value any) (float64, error) {
 	switch v := value.(type) {
 	case float64:
 		return v, nil
@@ -316,22 +326,22 @@ func toFloat64(value interface{}) (float64, error) {
 	case string:
 		str := strings.TrimSpace(v)
 		if str == "" {
-			return 0, fmt.Errorf("empty string")
+			return 0, errEmptyString
 		}
 		return strconv.ParseFloat(str, 64)
 	default:
-		return 0, fmt.Errorf("unsupported type %T", value)
+		return 0, fmt.Errorf(errMsgUnsupportedType, value)
 	}
 }
 
-func toBool(value interface{}) (bool, error) {
+func toBool(value any) (bool, error) {
 	switch v := value.(type) {
 	case bool:
 		return v, nil
 	case string:
 		str := strings.TrimSpace(v)
 		if str == "" {
-			return false, fmt.Errorf("empty string")
+			return false, errEmptyString
 		}
 		b, err := strconv.ParseBool(str)
 		if err != nil {
@@ -351,7 +361,7 @@ func toBool(value interface{}) (bool, error) {
 		}
 		return n != 0, nil
 	default:
-		return false, fmt.Errorf("unsupported type %T", value)
+		return false, fmt.Errorf(errMsgUnsupportedType, value)
 	}
 }
 
