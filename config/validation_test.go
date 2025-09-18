@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestValidate_ValidConfig(t *testing.T) {
+func TestValidateValidConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
 			Name:      "test-app",
@@ -37,7 +37,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestValidateApp_Success(t *testing.T) {
+func TestValidateAppSuccess(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  AppConfig
@@ -88,7 +88,7 @@ func TestValidateApp_Success(t *testing.T) {
 	}
 }
 
-func TestValidateApp_Failures(t *testing.T) {
+func TestValidateAppFailures(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           AppConfig
@@ -155,7 +155,7 @@ func TestValidateApp_Failures(t *testing.T) {
 	}
 }
 
-func TestValidateServer_Success(t *testing.T) {
+func TestValidateServerSuccess(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  ServerConfig
@@ -202,7 +202,7 @@ func TestValidateServer_Success(t *testing.T) {
 	}
 }
 
-func TestValidateServer_Failures(t *testing.T) {
+func TestValidateServerFailures(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           ServerConfig
@@ -282,7 +282,7 @@ func TestValidateServer_Failures(t *testing.T) {
 	}
 }
 
-func TestValidateDatabase_Success(t *testing.T) {
+func TestValidateDatabaseSuccess(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  DatabaseConfig
@@ -352,7 +352,7 @@ func TestValidateDatabase_Success(t *testing.T) {
 	}
 }
 
-func TestValidateDatabase_Failures(t *testing.T) {
+func TestValidateDatabaseFailures(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           DatabaseConfig
@@ -465,7 +465,7 @@ func TestValidateDatabase_Failures(t *testing.T) {
 	}
 }
 
-func TestValidateLog_Success(t *testing.T) {
+func TestValidateLogSuccess(t *testing.T) {
 	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
 
 	for _, level := range validLevels {
@@ -477,7 +477,7 @@ func TestValidateLog_Success(t *testing.T) {
 	}
 }
 
-func TestValidateLog_Failures(t *testing.T) {
+func TestValidateLogFailures(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           LogConfig
@@ -522,7 +522,7 @@ func TestValidateLog_Failures(t *testing.T) {
 	}
 }
 
-func TestValidate_NestedErrors(t *testing.T) {
+func TestValidateNestedErrors(t *testing.T) {
 	tests := []struct {
 		name          string
 		cfg           Config
@@ -769,7 +769,7 @@ func TestIsDatabaseConfigured(t *testing.T) {
 	}
 }
 
-func TestValidateDatabase_ConditionalBehavior(t *testing.T) {
+func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 	tests := []struct {
 		name          string
 		config        DatabaseConfig
@@ -938,7 +938,7 @@ func TestValidateDatabase_ConditionalBehavior(t *testing.T) {
 	}
 }
 
-func TestValidate_DatabaseDisabledConfig(t *testing.T) {
+func TestValidateDatabaseDisabledConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
 			Name:      "test-app",

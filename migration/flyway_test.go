@@ -119,7 +119,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 	assert.Contains(t, joined, "ORACLE_PDB=pdb1")
 }
 
-func TestRunFlywayCommand_Success_WithEnv(t *testing.T) {
+func TestRunFlywayCommandSuccessWithEnv(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}
@@ -436,7 +436,7 @@ exit 0
 	return path
 }
 
-func TestRunFlywayCommand_ErrorHandling(t *testing.T) {
+func TestRunFlywayCommandErrorHandling(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}
@@ -501,7 +501,7 @@ func TestRunFlywayCommand_ErrorHandling(t *testing.T) {
 	})
 }
 
-func TestValidateFlywayPath_ComprehensiveEdgeCases(t *testing.T) {
+func TestValidateFlywayPathComprehensiveEdgeCases(t *testing.T) {
 	cfg := &config.Config{Database: config.DatabaseConfig{Type: "postgresql"}, App: config.AppConfig{Env: "test"}}
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
@@ -566,7 +566,7 @@ func TestValidateFlywayPath_ComprehensiveEdgeCases(t *testing.T) {
 	}
 }
 
-func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
+func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 	tests := []struct {
 		name            string
 		dbConfig        config.DatabaseConfig
@@ -677,7 +677,7 @@ func TestBuildEnvironmentVariables_ComprehensiveDrivers(t *testing.T) {
 	}
 }
 
-func TestMigrate_EdgeCases(t *testing.T) {
+func TestMigrateEdgeCases(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}
@@ -735,7 +735,7 @@ func TestMigrate_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestInfo_EdgeCases(t *testing.T) {
+func TestInfoEdgeCases(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}
@@ -775,7 +775,7 @@ func TestInfo_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestValidate_EdgeCases(t *testing.T) {
+func TestValidateEdgeCases(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}

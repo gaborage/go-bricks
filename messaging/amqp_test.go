@@ -20,7 +20,7 @@ import (
 // AMQP Trace Injection Tests
 // =============================================================================
 
-func TestAMQPTraceInjection_GeneratesDefaults(t *testing.T) {
+func TestAMQPTraceInjectionGeneratesDefaults(t *testing.T) {
 	pub := amqp.Publishing{Headers: amqp.Table{}}
 
 	ctx := context.Background()
@@ -48,7 +48,7 @@ func TestAMQPTraceInjection_GeneratesDefaults(t *testing.T) {
 	assert.False(t, existsTS)
 }
 
-func TestAMQPTraceInjection_ForceAlignment(t *testing.T) {
+func TestAMQPTraceInjectionForceAlignment(t *testing.T) {
 	pub := amqp.Publishing{Headers: amqp.Table{
 		gobrickstrace.HeaderXRequestID:  "preexisting-xid",
 		gobrickstrace.HeaderTraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
@@ -66,7 +66,7 @@ func TestAMQPTraceInjection_ForceAlignment(t *testing.T) {
 	assert.Equal(t, "vendor=foo", pub.Headers[gobrickstrace.HeaderTraceState])
 }
 
-func TestAMQPTraceInjection_PropagatesFromContext(t *testing.T) {
+func TestAMQPTraceInjectionPropagatesFromContext(t *testing.T) {
 	pub := amqp.Publishing{Headers: amqp.Table{}}
 
 	ctx := gobrickstrace.WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
@@ -83,7 +83,7 @@ func TestAMQPTraceInjection_PropagatesFromContext(t *testing.T) {
 // AMQP Trace Extraction Tests
 // =============================================================================
 
-func TestAMQPTraceExtraction_DerivesFromHeaders(t *testing.T) {
+func TestAMQPTraceExtractionDerivesFromHeaders(t *testing.T) {
 	base := context.Background()
 	delivery := &amqp.Delivery{Headers: amqp.Table{
 		gobrickstrace.HeaderTraceParent: "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01",
@@ -105,7 +105,7 @@ func TestAMQPTraceExtraction_DerivesFromHeaders(t *testing.T) {
 	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", tid)
 }
 
-func TestAMQPTraceExtraction_ByteSliceHeaders(t *testing.T) {
+func TestAMQPTraceExtractionByteSliceHeaders(t *testing.T) {
 	base := context.Background()
 
 	// Test with []byte headers in AMQP delivery
@@ -137,7 +137,7 @@ func TestAMQPTraceExtraction_ByteSliceHeaders(t *testing.T) {
 // AMQP Header Hardening Tests
 // =============================================================================
 
-func TestAMQPHeaderHardening_VariousTypes(t *testing.T) {
+func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 	// Test various header value types that could cause runtime issues
 	pub := amqp.Publishing{
 		Headers: amqp.Table{
@@ -177,7 +177,7 @@ func TestAMQPHeaderHardening_VariousTypes(t *testing.T) {
 	assert.NotEqual(t, pub.CorrelationId, pub.MessageId)
 }
 
-func TestAMQPHeaderAccessor_NilSafety(t *testing.T) {
+func TestAMQPHeaderAccessorNilSafety(t *testing.T) {
 	// Given a nil headers map, Set should initialize it and Get should work
 	accessor := &amqpHeaderAccessor{headers: nil}
 	gobrickstrace.InjectIntoHeaders(context.Background(), accessor)
@@ -187,7 +187,7 @@ func TestAMQPHeaderAccessor_NilSafety(t *testing.T) {
 	assert.NotEmpty(t, gobrickstrace.EnsureTraceID(context.Background()))
 }
 
-func TestAMQPHeaderHardening_SafeConsumption(t *testing.T) {
+func TestAMQPHeaderHardeningSafeConsumption(t *testing.T) {
 	// Test consuming messages with various header value types
 	delivery := &amqp.Delivery{
 		Headers: amqp.Table{
@@ -219,7 +219,7 @@ func TestAMQPHeaderHardening_SafeConsumption(t *testing.T) {
 	assert.Equal(t, "vendor=test-system", tracestate)
 }
 
-func TestAMQPHeaderHardening_ByteSliceInjection(t *testing.T) {
+func TestAMQPHeaderHardeningByteSliceInjection(t *testing.T) {
 	// Test with []byte headers that should be safely converted
 	pub := amqp.Publishing{Headers: amqp.Table{
 		gobrickstrace.HeaderXRequestID:  []byte("byte-trace-id"),
@@ -240,7 +240,7 @@ func TestAMQPHeaderHardening_ByteSliceInjection(t *testing.T) {
 // AMQP Force Alignment Tests
 // =============================================================================
 
-func TestAMQPForceAlignment_Consistency(t *testing.T) {
+func TestAMQPForceAlignmentConsistency(t *testing.T) {
 	// Demonstrate that trace IDs are consistently aligned with traceparent
 	testCases := []struct {
 		name            string
@@ -291,7 +291,7 @@ func TestAMQPForceAlignment_Consistency(t *testing.T) {
 // AMQP Centralized Architecture Tests
 // =============================================================================
 
-func TestAMQPCentralizedArchitecture_ExtractAndInject(t *testing.T) {
+func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 	// Test that centralized trace functions work correctly with AMQP headers
 
 	// Test injection
@@ -323,7 +323,7 @@ func TestAMQPCentralizedArchitecture_ExtractAndInject(t *testing.T) {
 	assert.Equal(t, "00-ffeeddccbbaa9988ffeeddccbbaa9988-1122334455667788-01", traceparent)
 }
 
-func TestAMQPCentralizedArchitecture_ConsistentProcessing(t *testing.T) {
+func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
 	// Verify that both AMQP client and registry use the same centralized logic
 	headers := amqp.Table{
 		gobrickstrace.HeaderXRequestID:  []byte("consistency-test-id"),
@@ -429,7 +429,7 @@ func containsNackFailure(entries []string) bool {
 	return false
 }
 
-func TestRegistry_ProcessMessage_AutoAckGuard(t *testing.T) {
+func TestRegistryProcessMessageAutoAckGuard(t *testing.T) {
 	// Set up a registry with stub logger
 	l := &stubLogger{}
 	reg := &Registry{logger: l}

@@ -177,7 +177,7 @@ func TestConsumeOptions(t *testing.T) {
 	assert.True(t, options.NoWait)
 }
 
-func TestMockClient_Publish(t *testing.T) {
+func TestMockClientPublish(t *testing.T) {
 	tests := []struct {
 		name        string
 		isReady     bool
@@ -223,7 +223,7 @@ func TestMockClient_Publish(t *testing.T) {
 	}
 }
 
-func TestMockClient_Consume(t *testing.T) {
+func TestMockClientConsume(t *testing.T) {
 	tests := []struct {
 		name        string
 		isReady     bool
@@ -271,7 +271,7 @@ func TestMockClient_Consume(t *testing.T) {
 	}
 }
 
-func TestMockClient_Close(t *testing.T) {
+func TestMockClientClose(t *testing.T) {
 	client := &MockClient{
 		isReady: true,
 		closed:  false,
@@ -288,7 +288,7 @@ func TestMockClient_Close(t *testing.T) {
 	assert.Equal(t, errAlreadyClosed, err)
 }
 
-func TestMockClient_IsReady(t *testing.T) {
+func TestMockClientIsReady(t *testing.T) {
 	client := &MockClient{
 		isReady: true,
 		closed:  false,
@@ -304,7 +304,7 @@ func TestMockClient_IsReady(t *testing.T) {
 	assert.False(t, client.IsReady())
 }
 
-func TestMockAMQPClient_PublishToExchange(t *testing.T) {
+func TestMockAMQPClientPublishToExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	ctx := context.Background()
@@ -317,7 +317,7 @@ func TestMockAMQPClient_PublishToExchange(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestMockAMQPClient_ConsumeFromQueue(t *testing.T) {
+func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	ctx := context.Background()
@@ -331,7 +331,7 @@ func TestMockAMQPClient_ConsumeFromQueue(t *testing.T) {
 	assert.NotNil(t, ch)
 }
 
-func TestMockAMQPClient_DeclareQueue(t *testing.T) {
+func TestMockAMQPClientDeclareQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareQueue("test-queue", true, false, false, false)
@@ -339,7 +339,7 @@ func TestMockAMQPClient_DeclareQueue(t *testing.T) {
 	assert.True(t, client.queues["test-queue"])
 }
 
-func TestMockAMQPClient_DeclareExchange(t *testing.T) {
+func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false)
@@ -347,7 +347,7 @@ func TestMockAMQPClient_DeclareExchange(t *testing.T) {
 	assert.True(t, client.exchanges["test-exchange"])
 }
 
-func TestMockAMQPClient_BindQueue(t *testing.T) {
+func TestMockAMQPClientBindQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
 	err := client.BindQueue("test-queue", "test-exchange", "test.route", false)
@@ -357,7 +357,7 @@ func TestMockAMQPClient_BindQueue(t *testing.T) {
 	assert.True(t, client.bindings[bindingKey])
 }
 
-func TestMockAMQPClient_NotReady(t *testing.T) {
+func TestMockAMQPClientNotReady(t *testing.T) {
 	client := NewMockAMQPClient()
 	client.isReady = false
 
@@ -390,7 +390,7 @@ func TestMockAMQPClient_NotReady(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 }
 
-func TestMockAMQPClient_Closed(t *testing.T) {
+func TestMockAMQPClientClosed(t *testing.T) {
 	client := NewMockAMQPClient()
 	client.closed = true
 
@@ -408,7 +408,7 @@ func TestMockAMQPClient_Closed(t *testing.T) {
 	assert.Equal(t, errAlreadyClosed, err)
 }
 
-func TestMockMessageHandler_Handle(t *testing.T) {
+func TestMockMessageHandlerHandle(t *testing.T) {
 	handler := &MockMessageHandler{
 		eventType: "test.event",
 		shouldErr: false,
@@ -425,7 +425,7 @@ func TestMockMessageHandler_Handle(t *testing.T) {
 	assert.Equal(t, "test message", string(handler.handled[0].Body))
 }
 
-func TestMockMessageHandler_Handle_Error(t *testing.T) {
+func TestMockMessageHandlerHandleError(t *testing.T) {
 	handler := &MockMessageHandler{
 		eventType: "test.event",
 		shouldErr: true,
@@ -441,7 +441,7 @@ func TestMockMessageHandler_Handle_Error(t *testing.T) {
 	assert.Len(t, handler.handled, 1)
 }
 
-func TestMockMessageHandler_EventType(t *testing.T) {
+func TestMockMessageHandlerEventType(t *testing.T) {
 	handler := &MockMessageHandler{
 		eventType: "test.event.type",
 	}

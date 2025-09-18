@@ -101,7 +101,7 @@ func (m *simpleMockAMQPClient) SetReady(ready bool) {
 	m.isReady = ready
 }
 
-func TestNewRegistry_Simple(t *testing.T) {
+func TestNewRegistrySimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
 
@@ -119,7 +119,7 @@ func TestNewRegistry_Simple(t *testing.T) {
 	assert.False(t, registry.consumersActive)
 }
 
-func TestRegistry_DeclareInfrastructure_Success_Simple(t *testing.T) {
+func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
 	registry := NewRegistry(client, logger)
@@ -149,7 +149,7 @@ func TestRegistry_DeclareInfrastructure_Success_Simple(t *testing.T) {
 	assert.Contains(t, client.bindings, "test-queue:test-exchange:test.key")
 }
 
-func TestRegistry_DeclareInfrastructure_ClientNotReady_Timeout_Simple(t *testing.T) {
+func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: false}
 	registry := NewRegistry(client, &stubLogger{})
 
@@ -166,7 +166,7 @@ func TestRegistry_DeclareInfrastructure_ClientNotReady_Timeout_Simple(t *testing
 		"Expected timeout or context cancellation error, got: %s", err.Error())
 }
 
-func TestRegistry_DeclareInfrastructure_ExchangeDeclarationError_Simple(t *testing.T) {
+func TestRegistryDeclareInfrastructureExchangeDeclarationErrorSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{
 		isReady:            true,
 		declareExchangeErr: errors.New("exchange declaration failed"),
@@ -184,7 +184,7 @@ func TestRegistry_DeclareInfrastructure_ExchangeDeclarationError_Simple(t *testi
 	assert.Contains(t, err.Error(), "failed to declare exchange test-exchange")
 }
 
-func TestRegistry_StartConsumers_Success_Simple(t *testing.T) {
+func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 	deliveries := make(chan amqp.Delivery)
 	close(deliveries) // Close immediately to avoid starting consumer goroutines
 
@@ -211,7 +211,7 @@ func TestRegistry_StartConsumers_Success_Simple(t *testing.T) {
 	registry.StopConsumers()
 }
 
-func TestRegistry_StartConsumers_ClientNotReady_Simple(t *testing.T) {
+func TestRegistryStartConsumersClientNotReadySimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{isReady: false}, &stubLogger{})
 
 	err := registry.StartConsumers(context.Background())
@@ -220,7 +220,7 @@ func TestRegistry_StartConsumers_ClientNotReady_Simple(t *testing.T) {
 	assert.Contains(t, err.Error(), "AMQP client is not ready")
 }
 
-func TestRegistry_StopConsumers_Success_Simple(t *testing.T) {
+func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
 
 	// Simulate active consumers
@@ -242,7 +242,7 @@ func TestRegistry_StopConsumers_Success_Simple(t *testing.T) {
 	}
 }
 
-func TestRegistry_ValidatePublisher_Simple(t *testing.T) {
+func TestRegistryValidatePublisherSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	registry.RegisterPublisher(&PublisherDeclaration{
@@ -258,7 +258,7 @@ func TestRegistry_ValidatePublisher_Simple(t *testing.T) {
 	assert.False(t, registry.ValidatePublisher("test-exchange", "unknown.key"))
 }
 
-func TestRegistry_ValidateConsumer_Simple(t *testing.T) {
+func TestRegistryValidateConsumerSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -272,7 +272,7 @@ func TestRegistry_ValidateConsumer_Simple(t *testing.T) {
 	assert.False(t, registry.ValidateConsumer("unknown-queue"))
 }
 
-func TestRegistry_GetPublishers_Simple(t *testing.T) {
+func TestRegistryGetPublishersSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
@@ -302,7 +302,7 @@ func TestRegistry_GetPublishers_Simple(t *testing.T) {
 	assert.Len(t, registry.GetPublishers(), 2) // Original should be unchanged
 }
 
-func TestRegistry_GetConsumers_Simple(t *testing.T) {
+func TestRegistryGetConsumersSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
@@ -330,7 +330,7 @@ func TestRegistry_GetConsumers_Simple(t *testing.T) {
 	assert.Len(t, registry.GetConsumers(), 2) // Original should be unchanged
 }
 
-func TestRegistry_RegisterAfterDeclared_Simple(t *testing.T) {
+func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
 	registry := NewRegistry(client, logger)
@@ -361,7 +361,7 @@ func TestRegistry_RegisterAfterDeclared_Simple(t *testing.T) {
 	assert.NotContains(t, client.declaredQueues, "late-queue")
 }
 
-func TestRegistry_DeclareInfrastructure_AlreadyDeclared_Simple(t *testing.T) {
+func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	registry := NewRegistry(client, &stubLogger{})
 
@@ -375,7 +375,7 @@ func TestRegistry_DeclareInfrastructure_AlreadyDeclared_Simple(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestRegistry_DeclareInfrastructure_NilClient_Simple(t *testing.T) {
+func TestRegistryDeclareInfrastructureNilClientSimple(t *testing.T) {
 	registry := NewRegistry(nil, &stubLogger{})
 
 	err := registry.DeclareInfrastructure(context.Background())
@@ -384,7 +384,7 @@ func TestRegistry_DeclareInfrastructure_NilClient_Simple(t *testing.T) {
 	assert.Contains(t, err.Error(), "AMQP client is not available")
 }
 
-func TestRegistry_StartConsumers_ConsumeError_Simple(t *testing.T) {
+func TestRegistryStartConsumersConsumeErrorSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{
 		isReady:    true,
 		consumeErr: errors.New("consume error"),
@@ -405,7 +405,7 @@ func TestRegistry_StartConsumers_ConsumeError_Simple(t *testing.T) {
 	assert.False(t, registry.consumersActive)
 }
 
-func TestRegistry_StartConsumers_NoHandlers_Simple(t *testing.T) {
+func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	registry := NewRegistry(client, &stubLogger{})
 
@@ -426,7 +426,7 @@ func TestRegistry_StartConsumers_NoHandlers_Simple(t *testing.T) {
 	registry.StopConsumers()
 }
 
-func TestRegistry_StopConsumers_NotActive_Simple(t *testing.T) {
+func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// StopConsumers when not active should be no-op

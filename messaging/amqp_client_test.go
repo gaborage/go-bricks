@@ -124,7 +124,7 @@ func (stubConn) Close() error                                    { return nil }
 
 // ===== Tests exercising amqp_client.go via seam =====
 
-func TestAMQPClient_IsReady_Toggle(t *testing.T) {
+func TestAMQPClientIsReadyToggle(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}}
 	if c.IsReady() {
 		t.Fatalf("expected not ready")
@@ -137,14 +137,14 @@ func TestAMQPClient_IsReady_Toggle(t *testing.T) {
 	}
 }
 
-func TestPublish_NotReady_ReturnsNil(t *testing.T) {
+func TestPublishNotReadyReturnsNil(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	if err := c.Publish(context.Background(), "q", []byte("x")); err != nil {
 		t.Fatalf("expected nil when not ready, got %v", err)
 	}
 }
 
-func TestUnsafePublish_Success_InjectionAndIDs(t *testing.T) {
+func TestUnsafePublishSuccessInjectionAndIDs(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 	ctx := context.Background()
@@ -167,7 +167,7 @@ func TestUnsafePublish_Success_InjectionAndIDs(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_AckSuccess(t *testing.T) {
+func TestPublishToExchangeAckSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -181,7 +181,7 @@ func TestPublishToExchange_AckSuccess(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_NackThenCancel(t *testing.T) {
+func TestPublishToExchangeNackThenCancel(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -206,7 +206,7 @@ func TestPublishToExchange_NackThenCancel(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_ConfirmTimeoutThenCancel(t *testing.T) {
+func TestPublishToExchangeConfirmTimeoutThenCancel(t *testing.T) {
 	t.Helper()
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
@@ -217,7 +217,7 @@ func TestPublishToExchange_ConfirmTimeoutThenCancel(t *testing.T) {
 	_ = c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 }
 
-func TestConsumeFromQueue_Success(t *testing.T) {
+func TestConsumeFromQueueSuccess(t *testing.T) {
 	deliveries := make(chan amqp.Delivery)
 	close(deliveries)
 	ch := &fakeChannel{consumeCh: deliveries}
@@ -228,7 +228,7 @@ func TestConsumeFromQueue_Success(t *testing.T) {
 	}
 }
 
-func TestConsume_NotReady(t *testing.T) {
+func TestConsumeNotReady(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}}
 	ch, err := c.Consume(context.Background(), "q")
 	if err == nil || ch != nil {
@@ -236,7 +236,7 @@ func TestConsume_NotReady(t *testing.T) {
 	}
 }
 
-func TestDeclareExchangeQueueBind_Success(t *testing.T) {
+func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 	if err := c.DeclareQueue("q", true, false, false, false); err != nil {
@@ -250,7 +250,7 @@ func TestDeclareExchangeQueueBind_Success(t *testing.T) {
 	}
 }
 
-func TestClose_ChannelAndConnectionErrors(t *testing.T) {
+func TestCloseChannelAndConnectionErrors(t *testing.T) {
 	ch := &fakeChannel{closeErr: errors.New("channel close failed")}
 	c := newClientWithFakeChannel(ch)
 	c.m.Lock()
@@ -262,7 +262,7 @@ func TestClose_ChannelAndConnectionErrors(t *testing.T) {
 	}
 }
 
-func TestChangeConnectionAndChannel_SetupNotifications(t *testing.T) {
+func TestChangeConnectionAndChannelSetupNotifications(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	fc := &fakeConnAdapter{}
 	c.changeConnection(fc)
@@ -276,7 +276,7 @@ func TestChangeConnectionAndChannel_SetupNotifications(t *testing.T) {
 	}
 }
 
-func TestInit_Success_And_FailurePaths(t *testing.T) {
+func TestInitSuccessAndFailurePaths(t *testing.T) {
 	// success path
 	ch := &fakeChannel{}
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
@@ -294,7 +294,7 @@ func TestInit_Success_And_FailurePaths(t *testing.T) {
 	c.m.Unlock()
 }
 
-func TestHandleReconnect_ExitsOnDone(t *testing.T) {
+func TestHandleReconnectExitsOnDone(t *testing.T) {
 	t.Log("spawn reconnect and close done")
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://example", reconnectDelay: 5 * time.Millisecond}
 	// Force dialer to always error
@@ -310,7 +310,7 @@ func TestHandleReconnect_ExitsOnDone(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 }
 
-func TestConnect_StubSuccess(t *testing.T) {
+func TestConnectStubSuccess(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	oldDial := getAmqpDialFunc()
 	defer func() { setAmqpDialFunc(oldDial) }()
@@ -321,7 +321,7 @@ func TestConnect_StubSuccess(t *testing.T) {
 	}
 }
 
-func TestHandleReInit_ExitOnDoneAfterInitError(t *testing.T) {
+func TestHandleReInitExitOnDoneAfterInitError(t *testing.T) {
 	t.Helper()
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, reInitDelay: 5 * time.Millisecond}
 	c.done = make(chan bool)
@@ -337,7 +337,7 @@ func TestHandleReInit_ExitOnDoneAfterInitError(t *testing.T) {
 	_ = c.handleReInit(nil)
 }
 
-func TestHandleReInit_InitErrorNotifyConnClose(t *testing.T) {
+func TestHandleReInitInitErrorNotifyConnClose(t *testing.T) {
 	t.Helper()
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, reInitDelay: 5 * time.Millisecond}
 	c.done = make(chan bool)
@@ -350,7 +350,7 @@ func TestHandleReInit_InitErrorNotifyConnClose(t *testing.T) {
 	}
 }
 
-func TestNewAMQPClient_ConstructsAndStarts(t *testing.T) {
+func TestNewAMQPClientConstructsAndStarts(t *testing.T) {
 	t.Helper()
 	// Ensure dialer does not hit network
 	oldDial := getAmqpDialFunc()
@@ -387,7 +387,7 @@ func (m *mockChannelConnection) Close() error {
 	return m.closeErr
 }
 
-func TestInit_Success_CompleteFlow(t *testing.T) {
+func TestInitSuccessCompleteFlow(t *testing.T) {
 	ch := &fakeChannel{}
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 
@@ -407,7 +407,7 @@ func TestInit_Success_CompleteFlow(t *testing.T) {
 	}
 }
 
-func TestInit_ChannelCreationFailure(t *testing.T) {
+func TestInitChannelCreationFailure(t *testing.T) {
 	mockConn := &mockChannelConnection{channelErr: errors.New("channel creation failed")}
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 
@@ -420,7 +420,7 @@ func TestInit_ChannelCreationFailure(t *testing.T) {
 	}
 }
 
-func TestInit_ConfirmFailure_ChannelCloseError(t *testing.T) {
+func TestInitConfirmFailureChannelCloseError(t *testing.T) {
 	ch := &fakeChannel{
 		confirmErr: errors.New("confirm failed"),
 		closeErr:   errors.New("close failed"),
@@ -443,7 +443,7 @@ func TestInit_ConfirmFailure_ChannelCloseError(t *testing.T) {
 	}
 }
 
-func TestInit_ConfirmFailure_ChannelCloseSuccess(t *testing.T) {
+func TestInitConfirmFailureChannelCloseSuccess(t *testing.T) {
 	ch := &fakeChannel{confirmErr: errors.New("confirm failed")}
 
 	// Test confirm failure with successful channel close
@@ -463,7 +463,7 @@ func TestInit_ConfirmFailure_ChannelCloseSuccess(t *testing.T) {
 	}
 }
 
-func TestHandleReInit_SuccessAfterInitFailure(t *testing.T) {
+func TestHandleReInitSuccessAfterInitFailure(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:           &sync.RWMutex{},
 		log:         &stubLogger{},
@@ -492,7 +492,7 @@ func TestHandleReInit_SuccessAfterInitFailure(t *testing.T) {
 	}
 }
 
-func TestHandleReconnect_ConnectionSuccess_InitFailure(t *testing.T) {
+func TestHandleReconnectConnectionSuccessInitFailure(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:              &sync.RWMutex{},
 		log:            &stubLogger{},
@@ -529,7 +529,7 @@ func TestHandleReconnect_ConnectionSuccess_InitFailure(t *testing.T) {
 	}
 }
 
-func TestHandleReconnect_ConnectionFailure_RetryCycle(t *testing.T) {
+func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:              &sync.RWMutex{},
 		log:            &stubLogger{},
@@ -571,7 +571,7 @@ func TestHandleReconnect_ConnectionFailure_RetryCycle(t *testing.T) {
 	}
 }
 
-func TestConnect_RealConnectionWrapping(t *testing.T) {
+func TestConnectRealConnectionWrapping(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 
 	// Test with stubConnection (not realConnection)
@@ -598,7 +598,7 @@ func TestConnect_RealConnectionWrapping(t *testing.T) {
 	}
 }
 
-func TestConnect_DialFailure(t *testing.T) {
+func TestConnectDialFailure(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 
 	oldDial := getAmqpDialFunc()
@@ -623,7 +623,7 @@ func TestConnect_DialFailure(t *testing.T) {
 
 // ===== Enhanced Publishing & Confirmation Tests =====
 
-func TestPublishToExchange_ShutdownDuringPublish(t *testing.T) {
+func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -639,7 +639,7 @@ func TestPublishToExchange_ShutdownDuringPublish(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_ShutdownDuringConfirmation(t *testing.T) {
+func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -658,7 +658,7 @@ func TestPublishToExchange_ShutdownDuringConfirmation(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_RetryLogicWithUnsafePublishFailure(t *testing.T) {
+func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	ch := &fakeChannel{publishErr: errors.New("publish failed")}
 	c := newClientWithFakeChannel(ch)
 	c.resendDelay = 1 * time.Millisecond
@@ -675,7 +675,7 @@ func TestPublishToExchange_RetryLogicWithUnsafePublishFailure(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_MultipleRetriesBeforeSuccess(t *testing.T) {
+func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 	c.resendDelay = 1 * time.Millisecond
@@ -708,7 +708,7 @@ func TestPublishToExchange_MultipleRetriesBeforeSuccess(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_CustomHeaders(t *testing.T) {
+func TestPublishToExchangeCustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -761,7 +761,7 @@ func TestPublishToExchange_CustomHeaders(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_ContextTrackingOnSuccess(t *testing.T) {
+func TestPublishToExchangeContextTrackingOnSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -777,7 +777,7 @@ func TestPublishToExchange_ContextTrackingOnSuccess(t *testing.T) {
 	}
 }
 
-func TestPublishToExchange_MultipleNacksBeforeTimeout(_ *testing.T) {
+func TestPublishToExchangeMultipleNacksBeforeTimeout(_ *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 	c.connectionTimeout = 5 * time.Millisecond
@@ -796,7 +796,7 @@ func TestPublishToExchange_MultipleNacksBeforeTimeout(_ *testing.T) {
 	// Test passes if it doesn't hang indefinitely
 }
 
-func TestPublish_BasicMethodDelegation(t *testing.T) {
+func TestPublishBasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(ch)
 
@@ -818,7 +818,7 @@ func TestPublish_BasicMethodDelegation(t *testing.T) {
 	}
 }
 
-func TestUnsafePublish_NotReady(t *testing.T) {
+func TestUnsafePublishNotReady(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	c.isReady = false
 
@@ -835,7 +835,7 @@ func TestUnsafePublish_NotReady(t *testing.T) {
 // Error Scenarios and Edge Case Tests
 // =============================================================================
 
-func TestAMQPClient_DeclareQueue_NotReady_Error(t *testing.T) {
+func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -846,7 +846,7 @@ func TestAMQPClient_DeclareQueue_NotReady_Error(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 }
 
-func TestAMQPClient_DeclareExchange_NotReady_Error(t *testing.T) {
+func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -857,7 +857,7 @@ func TestAMQPClient_DeclareExchange_NotReady_Error(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 }
 
-func TestAMQPClient_BindQueue_NotReady_Error(t *testing.T) {
+func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -868,7 +868,7 @@ func TestAMQPClient_BindQueue_NotReady_Error(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 }
 
-func TestAMQPClient_ConsumeFromQueue_NotReady_Error(t *testing.T) {
+func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -881,7 +881,7 @@ func TestAMQPClient_ConsumeFromQueue_NotReady_Error(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 }
 
-func TestAMQPClient_ConsumeFromQueue_ChannelError(t *testing.T) {
+func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 	originalDialFunc := getAmqpDialFunc()
 	defer setAmqpDialFunc(originalDialFunc)
 
@@ -913,7 +913,7 @@ func TestAMQPClient_ConsumeFromQueue_ChannelError(t *testing.T) {
 	assert.Contains(t, err.Error(), "consume channel error")
 }
 
-func TestAMQPClient_Init_ChannelCreationFailure(t *testing.T) {
+func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	client := NewAMQPClient("amqp://localhost", &stubLogger{})
 
 	// Test init with a connection that fails to create channels

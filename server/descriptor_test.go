@@ -161,7 +161,7 @@ func TestRouteOptions(t *testing.T) {
 	assert.Equal(t, "customHandler", descriptor.HandlerName)
 }
 
-func TestRouteRegistry_GetByPathAndCount(t *testing.T) {
+func TestRouteRegistryGetByPathAndCount(t *testing.T) {
 	registry := &RouteRegistry{}
 
 	userGet := RouteDescriptor{Method: "GET", Path: "/users"}

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCORS_DevelopmentEnvironment(t *testing.T) {
+func TestCORSDevelopmentEnvironment(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -60,7 +60,7 @@ func TestCORS_DevelopmentEnvironment(t *testing.T) {
 	assert.Contains(t, allowedMethods, "OPTIONS")
 }
 
-func TestCORS_ProductionEnvironmentWithCustomOrigins(t *testing.T) {
+func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -137,7 +137,7 @@ func TestCORS_ProductionEnvironmentWithCustomOrigins(t *testing.T) {
 	}
 }
 
-func TestCORS_ProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
+func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -174,7 +174,7 @@ func TestCORS_ProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
-func TestCORS_AllowedHeaders(t *testing.T) {
+func TestCORSAllowedHeaders(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {
@@ -213,7 +213,7 @@ func TestCORS_AllowedHeaders(t *testing.T) {
 	assert.Contains(t, allowedHeaders, "X-Request-ID")
 }
 
-func TestCORS_ExposedHeaders(t *testing.T) {
+func TestCORSExposedHeaders(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {
@@ -249,7 +249,7 @@ func TestCORS_ExposedHeaders(t *testing.T) {
 	assert.Contains(t, exposedHeaders, "X-Response-Time")
 }
 
-func TestCORS_ActualRequestHandling(t *testing.T) {
+func TestCORSActualRequestHandling(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {
@@ -298,7 +298,7 @@ func TestCORS_ActualRequestHandling(t *testing.T) {
 	}
 }
 
-func TestCORS_MaxAge(t *testing.T) {
+func TestCORSMaxAge(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {
@@ -330,7 +330,7 @@ func TestCORS_MaxAge(t *testing.T) {
 	assert.Equal(t, "86400", rec.Header().Get("Access-Control-Max-Age"))
 }
 
-func TestCORS_CredentialsEnabled(t *testing.T) {
+func TestCORSCredentialsEnabled(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {
@@ -362,7 +362,7 @@ func TestCORS_CredentialsEnabled(t *testing.T) {
 	assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
 }
 
-func TestCORS_EmptyOriginsList(t *testing.T) {
+func TestCORSEmptyOriginsList(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -397,7 +397,7 @@ func TestCORS_EmptyOriginsList(t *testing.T) {
 	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
 }
 
-func TestCORS_SingleOrigin(t *testing.T) {
+func TestCORSSingleOrigin(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -456,7 +456,7 @@ func TestCORS_SingleOrigin(t *testing.T) {
 	}
 }
 
-func TestCORS_MiddlewareIntegration(t *testing.T) {
+func TestCORSMiddlewareIntegration(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
 	defer func() {

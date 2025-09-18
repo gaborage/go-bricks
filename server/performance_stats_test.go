@@ -142,7 +142,7 @@ func TestPerformanceStats(t *testing.T) {
 	}
 }
 
-func TestPerformanceStats_ContextInitialization(t *testing.T) {
+func TestPerformanceStatsContextInitialization(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -184,7 +184,7 @@ func TestPerformanceStats_ContextInitialization(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestPerformanceStats_ConcurrentAccess(t *testing.T) {
+func TestPerformanceStatsConcurrentAccess(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -240,7 +240,7 @@ func TestPerformanceStats_ConcurrentAccess(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestPerformanceStats_MiddlewareChaining(t *testing.T) {
+func TestPerformanceStatsMiddlewareChaining(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()

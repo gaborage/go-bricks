@@ -168,7 +168,7 @@ func TestMaskURL(t *testing.T) {
 // Enhanced Sensitive Data Filtering Tests
 // =============================================================================
 
-func TestSensitiveDataFilter_Run_Hook(_ *testing.T) {
+func TestSensitiveDataFilterRunHook(_ *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// Test that Run method can be called without panic
@@ -178,7 +178,7 @@ func TestSensitiveDataFilter_Run_Hook(_ *testing.T) {
 	// The method should not panic or error, it's a no-op placeholder
 }
 
-func TestFilterValue_StructFiltering(t *testing.T) {
+func TestFilterValueStructFiltering(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password", "secret", "apiKey"},
 		MaskValue:       DefaultMaskValue,
@@ -222,7 +222,7 @@ func TestFilterValue_StructFiltering(t *testing.T) {
 	}
 }
 
-func TestFilterValue_PointerStruct(t *testing.T) {
+func TestFilterValuePointerStruct(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password"},
 		MaskValue:       DefaultMaskValue,
@@ -250,7 +250,7 @@ func TestFilterValue_PointerStruct(t *testing.T) {
 	}
 }
 
-func TestFilterValue_NilPointer(t *testing.T) {
+func TestFilterValueNilPointer(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	type TestStruct struct {
@@ -266,7 +266,7 @@ func TestFilterValue_NilPointer(t *testing.T) {
 	}
 }
 
-func TestFilterValue_UnexportedFields(t *testing.T) {
+func TestFilterValueUnexportedFields(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password"},
 		MaskValue:       DefaultMaskValue,
@@ -299,7 +299,7 @@ func TestFilterValue_UnexportedFields(t *testing.T) {
 	}
 }
 
-func TestFilterValue_JSONTags(t *testing.T) {
+func TestFilterValueJSONTags(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"secret_key"},
 		MaskValue:       DefaultMaskValue,
@@ -344,7 +344,7 @@ func TestFilterValue_JSONTags(t *testing.T) {
 	}
 }
 
-func TestFilterValue_NonStructType(t *testing.T) {
+func TestFilterValueNonStructType(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// Test with simple non-struct types that should pass through unchanged
@@ -383,7 +383,7 @@ func TestFilterValue_NonStructType(t *testing.T) {
 	}
 }
 
-func TestMaskURL_ErrorHandling(t *testing.T) {
+func TestMaskURLErrorHandling(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// Test with malformed URL that causes parsing error
@@ -397,7 +397,7 @@ func TestMaskURL_ErrorHandling(t *testing.T) {
 	}
 }
 
-func TestMaskURL_NoUserInfo(t *testing.T) {
+func TestMaskURLNoUserInfo(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// Test URLs without user info
@@ -416,7 +416,7 @@ func TestMaskURL_NoUserInfo(t *testing.T) {
 	}
 }
 
-func TestMaskURL_UserWithoutPassword(t *testing.T) {
+func TestMaskURLUserWithoutPassword(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// Test URL with username but no password
@@ -429,7 +429,7 @@ func TestMaskURL_UserWithoutPassword(t *testing.T) {
 	}
 }
 
-func TestIsSensitiveField_CaseInsensitive(t *testing.T) {
+func TestIsSensitiveFieldCaseInsensitive(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"Password", "API_KEY"},
 		MaskValue:       DefaultMaskValue,
@@ -460,7 +460,7 @@ func TestIsSensitiveField_CaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestFilterConfig_EmptyMaskValue(t *testing.T) {
+func TestFilterConfigEmptyMaskValue(t *testing.T) {
 	// Test that empty MaskValue gets defaulted
 	config := &FilterConfig{
 		SensitiveFields: []string{"password"},
@@ -473,7 +473,7 @@ func TestFilterConfig_EmptyMaskValue(t *testing.T) {
 	}
 }
 
-func TestFilterString_EmptyValue(t *testing.T) {
+func TestFilterStringEmptyValue(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password"},
 		MaskValue:       DefaultMaskValue,
@@ -486,7 +486,7 @@ func TestFilterString_EmptyValue(t *testing.T) {
 	}
 }
 
-func TestFilterValue_NestedMaps(t *testing.T) {
+func TestFilterValueNestedMaps(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password", "secret"},
 		MaskValue:       DefaultMaskValue,
@@ -533,7 +533,7 @@ func TestFilterValue_NestedMaps(t *testing.T) {
 }
 
 // TestFilterStruct_CompleteFieldCoverage covers the remaining filterStruct edge cases
-func TestFilterStruct_CompleteFieldCoverage(t *testing.T) {
+func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 	const testName = "test"
 	filter := NewSensitiveDataFilter(&FilterConfig{
 		SensitiveFields: []string{"password", "secret", "token"},

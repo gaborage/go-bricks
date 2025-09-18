@@ -34,7 +34,7 @@ func TestNewModuleRegistry(t *testing.T) {
 	assert.NotNil(t, registry.messagingRegistry)
 }
 
-func TestModuleRegistry_Register_Success(t *testing.T) {
+func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -56,7 +56,7 @@ func TestModuleRegistry_Register_Success(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Register_InitError(t *testing.T) {
+func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -79,7 +79,7 @@ func TestModuleRegistry_Register_InitError(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_RegisterRoutes(t *testing.T) {
+func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -119,7 +119,7 @@ func TestModuleRegistry_RegisterRoutes(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_RegisterMessaging_NoRegistry(t *testing.T) {
+func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -141,7 +141,7 @@ func TestModuleRegistry_RegisterMessaging_NoRegistry(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_NoModules(t *testing.T) {
+func TestModuleRegistryShutdownNoModules(t *testing.T) {
 	log := logger.New("debug", true)
 	registry := NewModuleRegistry(&ModuleDeps{Logger: log})
 
@@ -149,7 +149,7 @@ func TestModuleRegistry_Shutdown_NoModules(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
+func TestModuleRegistryShutdownWithModules(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,
@@ -178,7 +178,7 @@ func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
+func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,
@@ -208,7 +208,7 @@ func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_SingleModule(t *testing.T) {
+func TestModuleRegistryShutdownSingleModule(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,

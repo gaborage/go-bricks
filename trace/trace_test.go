@@ -17,20 +17,20 @@ func TestHeaderConstants(t *testing.T) {
 	assert.Equal(t, "tracestate", HeaderTraceState)
 }
 
-func TestEnsureTraceID_UsesExisting(t *testing.T) {
+func TestEnsureTraceIDUsesExisting(t *testing.T) {
 	ctx := WithTraceID(context.Background(), "existing-trace-id")
 	got := EnsureTraceID(ctx)
 	assert.Equal(t, "existing-trace-id", got)
 }
 
-func TestEnsureTraceID_GeneratesWhenMissing(t *testing.T) {
+func TestEnsureTraceIDGeneratesWhenMissing(t *testing.T) {
 	got := EnsureTraceID(context.Background())
 	// UUID v4 format: 36 chars with hyphens
 	re := regexp.MustCompile(`^[a-f0-9\-]{36}$`)
 	assert.True(t, re.MatchString(strings.ToLower(got)))
 }
 
-func TestTraceParent_ContextRoundTrip(t *testing.T) {
+func TestTraceParentContextRoundTrip(t *testing.T) {
 	in := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	ctx := WithTraceParent(context.Background(), in)
 	out, ok := ParentFromContext(ctx)
@@ -38,7 +38,7 @@ func TestTraceParent_ContextRoundTrip(t *testing.T) {
 	assert.Equal(t, in, out)
 }
 
-func TestTraceState_ContextRoundTrip(t *testing.T) {
+func TestTraceStateContextRoundTrip(t *testing.T) {
 	in := "vendor=a:b,c=d"
 	ctx := WithTraceState(context.Background(), in)
 	out, ok := StateFromContext(ctx)
@@ -46,7 +46,7 @@ func TestTraceState_ContextRoundTrip(t *testing.T) {
 	assert.Equal(t, in, out)
 }
 
-func TestGenerateTraceParent_Format(t *testing.T) {
+func TestGenerateTraceParentFormat(t *testing.T) {
 	tp := GenerateTraceParent()
 	// Basic format checks
 	assert.True(t, strings.HasPrefix(tp, "00-"))
@@ -64,12 +64,12 @@ func TestGenerateTraceParent_Format(t *testing.T) {
 	assert.Equal(t, "01", parts[3])
 }
 
-func TestIDFromContext_Missing(t *testing.T) {
+func TestIDFromContextMissing(t *testing.T) {
 	_, ok := IDFromContext(context.Background())
 	assert.False(t, ok)
 }
 
-func TestInjectIntoHeadersWithOptions_Preserve_PreservesExisting(t *testing.T) {
+func TestInjectIntoHeadersWithOptionsPreservePreservesExisting(t *testing.T) {
 	headers := nethttp.Header{}
 	// Pre-populate headers
 	headers.Set(HeaderXRequestID, "pre-xid")
@@ -91,7 +91,7 @@ func TestInjectIntoHeadersWithOptions_Preserve_PreservesExisting(t *testing.T) {
 	assert.Equal(t, "vendor=a:b", headers.Get(HeaderTraceState))
 }
 
-func TestInjectIntoHeadersWithOptions_Preserve_FillsMissing(t *testing.T) {
+func TestInjectIntoHeadersWithOptionsPreserveFillsMissing(t *testing.T) {
 	headers := nethttp.Header{}
 	acc := httpHeaderAccessor{h: headers}
 
@@ -138,7 +138,7 @@ func (a *mapAccessor) Set(key string, value interface{}) {
 	a.m[key] = value
 }
 
-func TestExtractFromHeaders_AllPresent(t *testing.T) {
+func TestExtractFromHeadersAllPresent(t *testing.T) {
 	acc := &mapAccessor{m: map[string]interface{}{
 		HeaderXRequestID:  "rid-123",
 		HeaderTraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
@@ -160,7 +160,7 @@ func TestExtractFromHeaders_AllPresent(t *testing.T) {
 	assert.Equal(t, "vendor=a:b", ts)
 }
 
-func TestExtractFromHeaders_DeriveIDFromParent(t *testing.T) {
+func TestExtractFromHeadersDeriveIDFromParent(t *testing.T) {
 	acc := &mapAccessor{m: map[string]interface{}{
 		HeaderTraceParent: "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01",
 	}}
@@ -170,13 +170,13 @@ func TestExtractFromHeaders_DeriveIDFromParent(t *testing.T) {
 	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", tid)
 }
 
-func TestExtractFromHeaders_NilHeaders(t *testing.T) {
+func TestExtractFromHeadersNilHeaders(t *testing.T) {
 	ctx := ExtractFromHeaders(context.Background(), nil)
 	_, ok := IDFromContext(ctx)
 	assert.False(t, ok)
 }
 
-func TestInjectIntoHeaders_ForceMode(t *testing.T) {
+func TestInjectIntoHeadersForceMode(t *testing.T) {
 	// Context with parent and state; force mode aligns X-Request-ID with parent
 	ctx := WithTraceParent(context.Background(), "00-aabbccddeeffaabbccddeeffaabbccdd-1122334455667788-01")
 	ctx = WithTraceState(ctx, "vendor=test")

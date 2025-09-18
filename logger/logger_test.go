@@ -231,7 +231,7 @@ func TestCallerMarshalFuncSetup(t *testing.T) {
 	assert.NotNil(t, logger3.zlog)
 }
 
-func TestLogger_WithContext(t *testing.T) {
+func TestLoggerWithContext(t *testing.T) {
 	logger := New("info", false)
 
 	tests := []struct {
@@ -302,7 +302,7 @@ func TestLogger_WithContext(t *testing.T) {
 	}
 }
 
-func TestLogger_WithFields(t *testing.T) {
+func TestLoggerWithFields(t *testing.T) {
 	logger := New("info", false)
 
 	tests := []struct {
@@ -381,7 +381,7 @@ func TestLogger_WithFields(t *testing.T) {
 	}
 }
 
-func TestLogger_WithFields_NilFilter(t *testing.T) {
+func TestLoggerWithFieldsNilFilter(t *testing.T) {
 	// Create a logger with nil filter to test the nil check
 	zl := zerolog.New(os.Stdout).With().Logger()
 	logger := &ZeroLogger{
@@ -401,7 +401,7 @@ func TestLogger_WithFields_NilFilter(t *testing.T) {
 	assert.Implements(t, (*Logger)(nil), result)
 }
 
-func TestLogger_IntegrationWithLoggingMethods(t *testing.T) {
+func TestLoggerIntegrationWithLoggingMethods(t *testing.T) {
 	// Test that our logger constructor works with actual logging
 	var buf bytes.Buffer
 
