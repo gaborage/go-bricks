@@ -122,10 +122,10 @@ type DeleteUserReq struct {
 
 // ListUsersReq represents a request to list users with pagination and filtering
 type ListUsersReq struct {
-	Page     int      `query:"page" validate:"min=1" doc:"Page number (1-based)" example:"1"`
-	PageSize int      `query:"page_size" validate:"min=1,max=100" doc:"Number of users per page" example:"20"`
+	Page     int      `query:"page" validate:"omitempty,min=1" doc:"Page number (1-based)" example:"1"`
+	PageSize int      `query:"page_size" validate:"omitempty,min=1,max=100" doc:"Number of users per page" example:"20"`
 	Search   string   `query:"search" doc:"Search term for name or email" example:"john"`
-	Roles    []string `query:"roles" doc:"Filter by user roles" example:"user,admin"`
+	Roles    []string `query:"roles" doc:"Filter by user roles (repeat query param: roles=user&roles=admin)" example:"user,admin"`
 	Active   *bool    `query:"active" doc:"Filter by active status" example:"true"`
 }
 

@@ -39,6 +39,10 @@ func ExtractHandlerName(handler any) string {
 		return ""
 	}
 
+	if v.IsNil() {
+		return ""
+	}
+
 	fn := funcForPCFn(v.Pointer())
 	if fn == nil {
 		return ""

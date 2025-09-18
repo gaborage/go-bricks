@@ -724,8 +724,10 @@ func TestApp_Run_Success(t *testing.T) {
 		runErr = app.Run()
 	}()
 
-	// Give the app time to start
-	time.Sleep(50 * time.Millisecond)
+	// Wait until server reports started
+	assert.Eventually(t, func() bool {
+		return mockSrv.startCount() > 0
+	}, time.Second, 10*time.Millisecond)
 
 	// Send shutdown signal
 	mockSignalHandler.TriggerShutdown()
@@ -780,7 +782,9 @@ func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
 		runErr = app.Run()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	assert.Eventually(t, func() bool {
+		return mockSrv.startCount() > 0
+	}, time.Second, 10*time.Millisecond)
 	mockSignalHandler.TriggerShutdown()
 
 	select {
@@ -804,7 +808,13 @@ func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
 // =============================================================================
 
 func TestApp_New_DefaultConfig(t *testing.T) {
-	app, err := New()
+	opts := &Options{ConfigLoader: func() (*config.Config, error) {
+		return &config.Config{
+			App: config.AppConfig{Name: "test", Env: "test", Version: "v"},
+			Log: config.LogConfig{Level: "info"},
+		}, nil
+	}}
+	app, err := NewWithOptions(opts)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 	assert.NotNil(t, app.server)

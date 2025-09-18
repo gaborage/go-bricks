@@ -69,10 +69,24 @@ func TestGetCallerPackageFallback(t *testing.T) {
 
 func TestExtractPackageFromName(t *testing.T) {
 	expected := reflect.TypeOf(sampleType{}).PkgPath()
-	assert.Equal(t, expected, extractPackageFromName(expected+".sampleFunction"))
-	assert.Equal(t, expected, extractPackageFromName(expected+".(*sampleType).method"))
-	assert.Equal(t, "strings", extractPackageFromName("strings.TrimSpace"))
-	assert.Equal(t, "", extractPackageFromName("no_delimiters"))
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "standard function", input: expected + ".sampleFunction", expected: expected},
+		{name: "pointer method", input: expected + ".(*sampleType).method", expected: expected},
+		{name: "value method", input: expected + ".sampleType.method", expected: expected},
+		{name: "generic function", input: expected + ".sampleFunction[go.shape.int]", expected: expected},
+		{name: "generic method", input: expected + ".(*sampleType[go.shape.string]).method", expected: expected},
+		{name: "init function", input: expected + ".init.0", expected: expected},
+		{name: "std package", input: "strings.TrimSpace", expected: "strings"},
+		{name: "no delimiters", input: "no_delimiters", expected: ""},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.expected, extractPackageFromName(tt.input), tt.name)
+	}
 }
 
 func TestExtractHandlerName(t *testing.T) {

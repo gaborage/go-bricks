@@ -17,7 +17,7 @@ const (
 type TagInfo struct {
 	Name        string            // Go field name
 	JSONName    string            // JSON field name (from json tag)
-	ParamType   string            // Parameter type: param, query, header, body
+	ParamType   string            // Parameter type: path, query, header, form, body
 	ParamName   string            // Parameter name for path/query/header params
 	Required    bool              // Whether field is required
 	Constraints map[string]string // Validation constraints from validate tag
@@ -33,7 +33,7 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 	var tags []TagInfo
 
 	// Handle pointer types
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -62,7 +62,9 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 		// Parse JSON tag for field naming
 		if json := field.Tag.Get("json"); json != "" {
 			parts := strings.Split(json, ",")
-			if parts[0] != "" && parts[0] != "-" {
+			if parts[0] == "-" {
+				tagInfo.JSONName = "-"
+			} else if parts[0] != "" {
 				tagInfo.JSONName = parts[0]
 			}
 			// Check for omitempty which affects required status
@@ -82,7 +84,7 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 		}
 
 		// Determine if field is required
-		tagInfo.Required = isFieldRequired(tagInfo.Constraints, tagInfo.Tags, tagInfo.ParamType)
+		tagInfo.Required = isFieldRequired(tagInfo.Constraints, tagInfo.Tags, tagInfo.ParamType, tagInfo.JSONName)
 
 		// Parse documentation tags
 		if doc := field.Tag.Get("doc"); doc != "" {
@@ -103,16 +105,12 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 
 // parseAllStructTags parses all struct tags into a map
 func parseAllStructTags(tag reflect.StructTag, tags map[string]string) {
-	// Use reflect.StructTag's built-in parsing
-	tagString := string(tag)
-
-	// Simple parsing - this could be enhanced with proper tag parsing
-	parts := strings.Fields(tagString)
-	for _, part := range parts {
-		if colon := strings.Index(part, ":"); colon > 0 {
-			key := part[:colon]
-			value := strings.Trim(part[colon+1:], `"`)
-			tags[key] = value
+	for _, k := range []string{
+		"json", "validate", "doc", "description", "example",
+		"param", "query", "header", "form",
+	} {
+		if v := tag.Get(k); v != "" {
+			tags[k] = v
 		}
 	}
 }
@@ -165,13 +163,14 @@ func parseValidateTag(validate string, constraints map[string]string) {
 		if len(kv) == 2 {
 			key := strings.TrimSpace(kv[0])
 			value := strings.TrimSpace(kv[1])
+			value = strings.Trim(value, `"`)
 			constraints[key] = value
 		}
 	}
 }
 
 // isFieldRequired determines if a field is required based on validation and other tags
-func isFieldRequired(constraints, tags map[string]string, paramType string) bool {
+func isFieldRequired(constraints, tags map[string]string, paramType, jsonName string) bool {
 	// Respect explicit omissions from validation or JSON tags
 	if _, skip := constraints["omitempty"]; skip {
 		return false
@@ -193,8 +192,8 @@ func isFieldRequired(constraints, tags map[string]string, paramType string) bool
 	// JSON fields without omitempty are typically required for body params
 	if paramType == "body" {
 		if _, hasOmitempty := tags["omitempty"]; !hasOmitempty {
-			// Only consider required if it's actually in the JSON body
-			if jsonName, hasJSON := tags["json"]; hasJSON && jsonName != "-" {
+			// Empty jsonName means default (present); "-" means explicitly ignored.
+			if jsonName != "-" {
 				return true
 			}
 		}
