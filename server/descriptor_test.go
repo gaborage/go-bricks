@@ -38,9 +38,10 @@ func TestRouteMetadataCapture(t *testing.T) {
 	cfg := &config.Config{}
 	registry := NewHandlerRegistry(cfg)
 	e := echo.New()
+	registrar := newRouteGroup(e.Group(""), "")
 
 	// Register a route with metadata
-	GET(registry, e, "/test/:id", testHandler,
+	GET(registry, registrar, "/test/:id", testHandler,
 		WithModule("test"),
 		WithTags("testing", "example"),
 		WithSummary("Test endpoint"),
@@ -114,9 +115,10 @@ func TestBackwardCompatibility(t *testing.T) {
 	cfg := &config.Config{}
 	registry := NewHandlerRegistry(cfg)
 	e := echo.New()
+	registrar := newRouteGroup(e.Group(""), "")
 
 	// Register route without options (backward compatible)
-	GET(registry, e, "/legacy/:id", testHandler)
+	GET(registry, registrar, "/legacy/:id", testHandler)
 
 	// Verify route was registered
 	routes := DefaultRouteRegistry.GetRoutes()

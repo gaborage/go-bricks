@@ -4,13 +4,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
 func TestNewModuleRegistry(t *testing.T) {
@@ -102,15 +102,18 @@ func TestModuleRegistry_RegisterRoutes(t *testing.T) {
 	require.NoError(t, registry.Register(module1))
 	require.NoError(t, registry.Register(module2))
 
-	// Create Echo instance
-	e := echo.New()
+	serverCfg := &config.Config{}
+	registrarServer := server.New(serverCfg, log)
+	registrar := registrarServer.ModuleGroup()
+
+	matcher := mock.MatchedBy(func(r server.RouteRegistrar) bool { return r != nil })
 
 	// Setup route registration expectations
-	module1.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
-	module2.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
+	module1.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), matcher).Return()
+	module2.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), matcher).Return()
 
 	// Call RegisterRoutes
-	registry.RegisterRoutes(e)
+	registry.RegisterRoutes(registrar)
 
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)

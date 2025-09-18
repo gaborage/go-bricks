@@ -5,8 +5,6 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -19,7 +17,7 @@ import (
 type Module interface {
 	Name() string
 	Init(deps *ModuleDeps) error
-	RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
+	RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
 	RegisterMessaging(registry *messaging.Registry)
 	Shutdown() error
 }
@@ -180,7 +178,7 @@ func (r *ModuleRegistry) Register(module Module) error {
 
 // RegisterRoutes calls RegisterRoutes on all registered modules.
 // It should be called after all modules have been registered.
-func (r *ModuleRegistry) RegisterRoutes(e *echo.Echo) {
+func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	// Create handler registry
 	handlerRegistry := server.NewHandlerRegistry(r.deps.Config)
 
@@ -189,7 +187,7 @@ func (r *ModuleRegistry) RegisterRoutes(e *echo.Echo) {
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		module.RegisterRoutes(handlerRegistry, e)
+		module.RegisterRoutes(handlerRegistry, registrar)
 	}
 }
 

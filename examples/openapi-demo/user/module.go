@@ -5,8 +5,6 @@ package user
 import (
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -29,30 +27,30 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 
 // RegisterRoutes demonstrates both old and new registration styles
-func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Backward compatible - no options (still works)
-	server.GET(hr, e, "/users/:id", m.getUser)
+	server.GET(hr, r, "/users/:id", m.getUser)
 
 	// Enhanced with metadata for OpenAPI generation
-	server.POST(hr, e, "/users", m.createUser,
+	server.POST(hr, r, "/users", m.createUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Create a new user"),
 		server.WithDescription("Creates a new user account with the provided information"))
 
-	server.PUT(hr, e, "/users/:id", m.updateUser,
+	server.PUT(hr, r, "/users/:id", m.updateUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Update user information"),
 		server.WithDescription("Updates an existing user's information"))
 
-	server.DELETE(hr, e, "/users/:id", m.deleteUser,
+	server.DELETE(hr, r, "/users/:id", m.deleteUser,
 		server.WithModule("user"),
 		server.WithTags("users", "management"),
 		server.WithSummary("Delete a user"),
 		server.WithDescription("Permanently deletes a user account"))
 
-	server.GET(hr, e, "/users", m.listUsers,
+	server.GET(hr, r, "/users", m.listUsers,
 		server.WithModule("user"),
 		server.WithTags("users", "listing"),
 		server.WithSummary("List users"),

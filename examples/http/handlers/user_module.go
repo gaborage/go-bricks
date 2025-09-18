@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
-
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -34,13 +32,13 @@ func (m *UserModule) Init(deps *app.ModuleDeps) error {
 }
 
 // RegisterRoutes registers module routes using the enhanced handler system.
-func (m *UserModule) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+func (m *UserModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Register enhanced handlers with type safety
-	server.GET(hr, e, "/users", m.getUsers)
-	server.GET(hr, e, "/users/:id", m.getUserByID)
-	server.POST(hr, e, "/users", m.createUser)
-	server.PUT(hr, e, "/users/:id", m.updateUser)
-	server.DELETE(hr, e, "/users/:id", m.deleteUser)
+	server.GET(hr, r, "/users", m.getUsers)
+	server.GET(hr, r, "/users/:id", m.getUserByID)
+	server.POST(hr, r, "/users", m.createUser)
+	server.PUT(hr, r, "/users/:id", m.updateUser)
+	server.DELETE(hr, r, "/users/:id", m.deleteUser)
 }
 
 // RegisterMessaging registers messaging handlers.

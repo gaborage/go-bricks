@@ -430,6 +430,16 @@ func ensureTraceParentHeader(c echo.Context) {
 	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
 }
 
+// RouteRegistrar abstracts the subset of Echo's routing features that modules need
+// while allowing the server to enforce common behavior such as base-path handling.
+// Implementations may wrap Echo groups to ensure routes are consistently registered.
+type RouteRegistrar interface {
+	Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) *echo.Route
+	Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar
+	Use(middleware ...echo.MiddlewareFunc)
+	FullPath(path string) string
+}
+
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
 type HandlerRegistry struct {
 	binder *RequestBinder
@@ -444,10 +454,10 @@ func NewHandlerRegistry(cfg *config.Config) *HandlerRegistry {
 	}
 }
 
-// Register registers a typed handler with the Echo instance and captures metadata.
+// RegisterHandler registers a typed handler with the route registrar and captures metadata.
 func RegisterHandler[T any, R any](
 	hr *HandlerRegistry,
-	e *echo.Echo,
+	r RouteRegistrar,
 	method, path string,
 	handler HandlerFunc[T, R],
 	opts ...RouteOption,
@@ -456,11 +466,14 @@ func RegisterHandler[T any, R any](
 	var reqType T
 	var respType R
 
+	// Determine final path after registrar adjustments (e.g. base path prefixes)
+	fullPath := r.FullPath(path)
+
 	// Create descriptor with type information
 	descriptor := RouteDescriptor{
 		Method:       method,
-		Path:         path,
-		HandlerID:    fmt.Sprintf("%s:%s", method, path),
+		Path:         fullPath,
+		HandlerID:    fmt.Sprintf("%s:%s", method, fullPath),
 		RequestType:  reflect.TypeOf(reqType),
 		ResponseType: reflect.TypeOf(respType),
 		Package:      getCallerPackage(),
@@ -475,44 +488,44 @@ func RegisterHandler[T any, R any](
 	// Register with global registry
 	DefaultRouteRegistry.Register(&descriptor)
 
-	// Original registration (unchanged behavior)
+	// Register with route registrar (works with both Echo instances and Groups)
 	wrappedHandler := WrapHandler(handler, hr.binder, hr.cfg)
-	e.Add(method, path, wrappedHandler)
+	r.Add(method, path, wrappedHandler)
 }
 
 // GET registers a GET handler with optional route configuration.
-func GET[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodGet, path, handler, opts...)
+func GET[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodGet, path, handler, opts...)
 }
 
 // POST registers a POST handler with optional route configuration.
-func POST[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodPost, path, handler, opts...)
+func POST[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodPost, path, handler, opts...)
 }
 
 // PUT registers a PUT handler with optional route configuration.
-func PUT[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodPut, path, handler, opts...)
+func PUT[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodPut, path, handler, opts...)
 }
 
 // DELETE registers a DELETE handler with optional route configuration.
-func DELETE[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodDelete, path, handler, opts...)
+func DELETE[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodDelete, path, handler, opts...)
 }
 
 // PATCH registers a PATCH handler with optional route configuration.
-func PATCH[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodPatch, path, handler, opts...)
+func PATCH[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodPatch, path, handler, opts...)
 }
 
 // HEAD registers a HEAD handler with optional route configuration.
-func HEAD[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodHead, path, handler, opts...)
+func HEAD[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodHead, path, handler, opts...)
 }
 
 // OPTIONS registers an OPTIONS handler with optional route configuration.
-func OPTIONS[T any, R any](hr *HandlerRegistry, e *echo.Echo, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
-	RegisterHandler(hr, e, http.MethodOptions, path, handler, opts...)
+func OPTIONS[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
+	RegisterHandler(hr, r, http.MethodOptions, path, handler, opts...)
 }
 
 // (legacy validation formatting helpers removed; validation now centralized via server/validator.go)

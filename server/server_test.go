@@ -177,50 +177,155 @@ func TestServerEchoReturnsUnderlyingInstance(t *testing.T) {
 
 func TestNormalizeBasePath(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		out  string
+		name     string
+		input    string
+		expected string
 	}{
-		{name: "empty", in: "", out: ""},
-		{name: "already_normalized", in: "/api", out: "/api"},
-		{name: "missing_leading", in: "api", out: "/api"},
-		{name: "trailing_slash", in: "/api/", out: "/api"},
-		{name: "root", in: "/", out: "/"},
+		{
+			name:     "empty string returns empty",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "root path returns root",
+			input:    "/",
+			expected: "/",
+		},
+		{
+			name:     "adds leading slash",
+			input:    "api",
+			expected: "/api",
+		},
+		{
+			name:     "removes trailing slash",
+			input:    "/api/",
+			expected: "/api",
+		},
+		{
+			name:     "handles multiple trailing slashes",
+			input:    "/api///",
+			expected: "/api",
+		},
+		{
+			name:     "handles path with subdirectories",
+			input:    "api/v1/test",
+			expected: "/api/v1/test",
+		},
+		{
+			name:     "handles path with subdirectories and trailing slash",
+			input:    "/api/v1/test/",
+			expected: "/api/v1/test",
+		},
+		{
+			name:     "handles already normalized path",
+			input:    "/api/v1",
+			expected: "/api/v1",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.out, normalizeBasePath(tt.in))
+			result := normalizeBasePath(tt.input)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 func TestNormalizeRoutePath(t *testing.T) {
 	tests := []struct {
-		name     string
-		route    string
-		defaultR string
-		expected string
+		name         string
+		route        string
+		defaultRoute string
+		expected     string
 	}{
-		{name: "empty_uses_default", route: "", defaultR: "/health", expected: "/health"},
-		{name: "missing_leading_slash", route: "ready", defaultR: "/ready", expected: "/ready"},
-		{name: "already_prefixed", route: "/status", defaultR: "/status", expected: "/status"},
+		{
+			name:         "empty route uses default",
+			route:        "",
+			defaultRoute: "/health",
+			expected:     "/health",
+		},
+		{
+			name:         "adds leading slash to route",
+			route:        "custom-health",
+			defaultRoute: "/health",
+			expected:     "/custom-health",
+		},
+		{
+			name:         "preserves route with leading slash",
+			route:        "/custom-health",
+			defaultRoute: "/health",
+			expected:     "/custom-health",
+		},
+		{
+			name:         "handles root route",
+			route:        "/",
+			defaultRoute: "/health",
+			expected:     "/",
+		},
+		{
+			name:         "handles complex route path",
+			route:        "/api/v1/status",
+			defaultRoute: "/health",
+			expected:     "/api/v1/status",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, normalizeRoutePath(tt.route, tt.defaultR))
+			result := normalizeRoutePath(tt.route, tt.defaultRoute)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
 func TestServerBuildFullPath(t *testing.T) {
-	s := &Server{basePath: "/api"}
-	assert.Equal(t, "/api/users", s.buildFullPath("/users"))
-	assert.Equal(t, "/api", s.buildFullPath("/"))
+	tests := []struct {
+		name     string
+		basePath string
+		route    string
+		expected string
+	}{
+		{
+			name:     "empty base path returns route as-is",
+			basePath: "",
+			route:    "/health",
+			expected: "/health",
+		},
+		{
+			name:     "combines base path with route",
+			basePath: "/api",
+			route:    "/health",
+			expected: "/api/health",
+		},
+		{
+			name:     "handles root route with base path",
+			basePath: "/api",
+			route:    "/",
+			expected: "/api",
+		},
+		{
+			name:     "handles complex paths",
+			basePath: "/api/v1",
+			route:    "/users/:id",
+			expected: "/api/v1/users/:id",
+		},
+		{
+			name:     "handles root base path",
+			basePath: "/",
+			route:    "/health",
+			expected: "/health",
+		},
+	}
 
-	s.basePath = ""
-	assert.Equal(t, "/users", s.buildFullPath("/users"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{
+				basePath: tt.basePath,
+			}
+			result := server.buildFullPath(tt.route)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestModuleGroupAppliesBasePath(t *testing.T) {
@@ -230,7 +335,7 @@ func TestModuleGroupAppliesBasePath(t *testing.T) {
 	group := s.ModuleGroup()
 	require.NotNil(t, group)
 
-	group.GET("/ping", func(c echo.Context) error {
+	group.Add(http.MethodGet, "/ping", func(c echo.Context) error {
 		return c.NoContent(http.StatusNoContent)
 	})
 
@@ -246,7 +351,7 @@ func TestModuleGroupAppliesBasePath(t *testing.T) {
 	s.echo = e
 
 	group = s.ModuleGroup()
-	group.GET("/ping", func(c echo.Context) error {
+	group.Add(http.MethodGet, "/ping", func(c echo.Context) error {
 		return c.NoContent(http.StatusNoContent)
 	})
 
@@ -262,7 +367,7 @@ func TestModuleGroupAppliesBasePath(t *testing.T) {
 	s.echo = e
 
 	group = s.ModuleGroup()
-	group.GET("/ping", func(c echo.Context) error {
+	group.Add(http.MethodGet, "/ping", func(c echo.Context) error {
 		return c.NoContent(http.StatusNoContent)
 	})
 
@@ -290,5 +395,329 @@ func TestStatusToErrorCodeMappings(t *testing.T) {
 
 	for _, tt := range tests {
 		assert.Equal(t, tt.code, statusToErrorCode(tt.status))
+	}
+}
+
+func TestServer_CustomBasePath(t *testing.T) {
+	tests := []struct {
+		name             string
+		basePath         string
+		expectedBasePath string
+	}{
+		{
+			name:             "empty base path",
+			basePath:         "",
+			expectedBasePath: "",
+		},
+		{
+			name:             "api base path",
+			basePath:         "/api",
+			expectedBasePath: "/api",
+		},
+		{
+			name:             "versioned api base path",
+			basePath:         "/api/v1",
+			expectedBasePath: "/api/v1",
+		},
+		{
+			name:             "base path without leading slash",
+			basePath:         "api/v2",
+			expectedBasePath: "/api/v2",
+		},
+		{
+			name:             "base path with trailing slash",
+			basePath:         "/api/v1/",
+			expectedBasePath: "/api/v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Server: config.ServerConfig{
+					BasePath:    tt.basePath,
+					HealthRoute: "/health",
+					ReadyRoute:  "/ready",
+				},
+			}
+
+			log := logger.New("error", false)
+			server := New(cfg, log)
+
+			assert.Equal(t, tt.expectedBasePath, server.basePath)
+		})
+	}
+}
+
+func TestServer_CustomHealthRoutes(t *testing.T) {
+	tests := []struct {
+		name               string
+		healthRoute        string
+		readyRoute         string
+		expectedHealthPath string
+		expectedReadyPath  string
+	}{
+		{
+			name:               "default routes",
+			healthRoute:        "",
+			readyRoute:         "",
+			expectedHealthPath: "/health",
+			expectedReadyPath:  "/ready",
+		},
+		{
+			name:               "custom health route",
+			healthRoute:        "/custom-health",
+			readyRoute:         "",
+			expectedHealthPath: "/custom-health",
+			expectedReadyPath:  "/ready",
+		},
+		{
+			name:               "custom ready route",
+			healthRoute:        "",
+			readyRoute:         "/custom-ready",
+			expectedHealthPath: "/health",
+			expectedReadyPath:  "/custom-ready",
+		},
+		{
+			name:               "both custom routes",
+			healthRoute:        "/status",
+			readyRoute:         "/ping",
+			expectedHealthPath: "/status",
+			expectedReadyPath:  "/ping",
+		},
+		{
+			name:               "routes without leading slash",
+			healthRoute:        "health-check",
+			readyRoute:         "readiness",
+			expectedHealthPath: "/health-check",
+			expectedReadyPath:  "/readiness",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Server: config.ServerConfig{
+					BasePath:    "",
+					HealthRoute: tt.healthRoute,
+					ReadyRoute:  tt.readyRoute,
+				},
+			}
+
+			log := logger.New("error", false)
+			server := New(cfg, log)
+
+			assert.Equal(t, tt.expectedHealthPath, server.healthRoute)
+			assert.Equal(t, tt.expectedReadyPath, server.readyRoute)
+		})
+	}
+}
+
+func TestServer_HealthEndpointsWithBasePath(t *testing.T) {
+	tests := []struct {
+		name           string
+		basePath       string
+		healthRoute    string
+		readyRoute     string
+		testHealthPath string
+		testReadyPath  string
+		shouldWork     bool
+	}{
+		{
+			name:           "no base path, default routes",
+			basePath:       "",
+			healthRoute:    "",
+			readyRoute:     "",
+			testHealthPath: "/health",
+			testReadyPath:  "/ready",
+			shouldWork:     true,
+		},
+		{
+			name:           "with base path, default routes",
+			basePath:       "/api",
+			healthRoute:    "",
+			readyRoute:     "",
+			testHealthPath: "/api/health",
+			testReadyPath:  "/api/ready",
+			shouldWork:     true,
+		},
+		{
+			name:           "with base path, custom routes",
+			basePath:       "/api/v1",
+			healthRoute:    "/status",
+			readyRoute:     "/ping",
+			testHealthPath: "/api/v1/status",
+			testReadyPath:  "/api/v1/ping",
+			shouldWork:     true,
+		},
+		{
+			name:           "wrong path should fail",
+			basePath:       "/api",
+			healthRoute:    "/status",
+			readyRoute:     "",
+			testHealthPath: "/health", // This should fail
+			testReadyPath:  "/ready",  // This should fail
+			shouldWork:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Server: config.ServerConfig{
+					BasePath:    tt.basePath,
+					HealthRoute: tt.healthRoute,
+					ReadyRoute:  tt.readyRoute,
+				},
+			}
+
+			log := logger.New("error", false)
+			server := New(cfg, log)
+
+			// Test health endpoint
+			req := httptest.NewRequest(http.MethodGet, tt.testHealthPath, http.NoBody)
+			rec := httptest.NewRecorder()
+			server.Echo().ServeHTTP(rec, req)
+
+			if tt.shouldWork {
+				assert.Equal(t, http.StatusOK, rec.Code, "Health endpoint should respond with 200")
+			} else {
+				assert.Equal(t, http.StatusNotFound, rec.Code, "Health endpoint should respond with 404 for wrong path")
+			}
+
+			// Test ready endpoint
+			req = httptest.NewRequest(http.MethodGet, tt.testReadyPath, http.NoBody)
+			rec = httptest.NewRecorder()
+			server.Echo().ServeHTTP(rec, req)
+
+			if tt.shouldWork {
+				assert.Equal(t, http.StatusOK, rec.Code, "Ready endpoint should respond with 200")
+			} else {
+				assert.Equal(t, http.StatusNotFound, rec.Code, "Ready endpoint should respond with 404 for wrong path")
+			}
+		})
+	}
+}
+
+func TestServer_ModuleGroup(t *testing.T) {
+	tests := []struct {
+		name     string
+		basePath string
+	}{
+		{
+			name:     "empty base path",
+			basePath: "",
+		},
+		{
+			name:     "api base path",
+			basePath: "/api",
+		},
+		{
+			name:     "versioned api base path",
+			basePath: "/api/v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Server: config.ServerConfig{
+					BasePath:    tt.basePath,
+					HealthRoute: "/health",
+					ReadyRoute:  "/ready",
+				},
+			}
+
+			log := logger.New("error", false)
+			server := New(cfg, log)
+
+			group := server.ModuleGroup()
+			require.NotNil(t, group)
+			raw := any(group)
+			_, isEchoGroup := raw.(*echo.Group)
+			assert.False(t, isEchoGroup, "ModuleGroup should not expose raw echo.Group")
+			_, isRouteGroup := raw.(*routeGroup)
+			assert.True(t, isRouteGroup, "ModuleGroup should return internal routeGroup wrapper")
+
+			registrations := []struct {
+				name         string
+				registerPath string
+				expectedPath string
+				responseBody string
+			}{
+				{
+					name:         "relative path",
+					registerPath: "/test",
+					expectedPath: group.FullPath("/test"),
+					responseBody: "relative",
+				},
+			}
+
+			if tt.basePath != "" {
+				registrations = append(registrations, struct {
+					name         string
+					registerPath string
+					expectedPath string
+					responseBody string
+				}{
+					name:         "prefixed path",
+					registerPath: tt.basePath + "/prefixed",
+					expectedPath: group.FullPath(tt.basePath + "/prefixed"),
+					responseBody: "prefixed",
+				})
+			}
+
+			for _, reg := range registrations {
+				reg := reg
+				group.Add(http.MethodGet, reg.registerPath, func(c echo.Context) error {
+					return c.String(http.StatusOK, reg.responseBody)
+				})
+
+				req := httptest.NewRequest(http.MethodGet, reg.expectedPath, http.NoBody)
+				rec := httptest.NewRecorder()
+				server.Echo().ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusOK, rec.Code)
+				assert.Equal(t, reg.responseBody, rec.Body.String(), reg.name)
+			}
+
+			// Nested group should inherit base path and normalize inputs
+			nested := group.Group("/v1")
+			require.NotNil(t, nested)
+			_, nestedIsRouteGroup := nested.(*routeGroup)
+			assert.True(t, nestedIsRouteGroup, "nested group should use wrapper")
+
+			nestedPath := nested.FullPath("/resource")
+			nested.Add(http.MethodGet, "/resource", func(c echo.Context) error {
+				return c.String(http.StatusOK, "nested")
+			})
+
+			req := httptest.NewRequest(http.MethodGet, nestedPath, http.NoBody)
+			rec := httptest.NewRecorder()
+			server.Echo().ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, "nested", rec.Body.String())
+
+			// Paths including the base prefix should not duplicate the base path
+			if tt.basePath != "" {
+				dedupPath := nested.FullPath(tt.basePath + "/v1/dedup")
+				nested.Add(http.MethodGet, tt.basePath+"/v1/dedup", func(c echo.Context) error {
+					return c.String(http.StatusOK, "dedup")
+				})
+
+				req = httptest.NewRequest(http.MethodGet, dedupPath, http.NoBody)
+				rec = httptest.NewRecorder()
+				server.Echo().ServeHTTP(rec, req)
+				assert.Equal(t, http.StatusOK, rec.Code)
+				assert.Equal(t, "dedup", rec.Body.String())
+			}
+
+			full := group.FullPath("/")
+			if tt.basePath == "" {
+				assert.Equal(t, "/", full)
+			} else {
+				assert.Equal(t, normalizeBasePath(tt.basePath), full)
+			}
+		})
 	}
 }

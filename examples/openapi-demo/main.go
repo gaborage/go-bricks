@@ -57,8 +57,8 @@ func main() {
 	// Create HTTP server
 	httpServer := server.New(cfg, appLogger)
 
-	// Register routes
-	registry.RegisterRoutes(httpServer.Echo())
+	// Register routes using base path aware registrar
+	registry.RegisterRoutes(httpServer.ModuleGroup())
 
 	// Print discovered routes (for demonstration)
 	printDiscoveredRoutes(appLogger)

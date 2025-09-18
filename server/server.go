@@ -40,8 +40,8 @@ func normalizeBasePath(basePath string) string {
 	}
 
 	// Remove trailing "/" unless it's just "/"
-	if len(basePath) > 1 && strings.HasSuffix(basePath, "/") {
-		basePath = strings.TrimSuffix(basePath, "/")
+	if len(basePath) > 1 {
+		basePath = strings.TrimRight(basePath, "/")
 	}
 
 	return basePath
@@ -130,11 +130,11 @@ func (s *Server) Echo() *echo.Echo {
 
 // ModuleGroup returns an Echo group with the base path applied for module route registration.
 // If no base path is configured, it returns a group with empty prefix.
-func (s *Server) ModuleGroup() *echo.Group {
+func (s *Server) ModuleGroup() RouteRegistrar {
 	if s.basePath == "" || s.basePath == "/" {
-		return s.echo.Group("")
+		return newRouteGroup(s.echo.Group(""), "")
 	}
-	return s.echo.Group(s.basePath)
+	return newRouteGroup(s.echo.Group(s.basePath), s.basePath)
 }
 
 // Start starts the HTTP server and begins accepting requests.

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -199,6 +200,28 @@ type mockServer struct {
 	e             *echo.Echo
 }
 
+type noopRouteRegistrar struct{}
+
+func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) *echo.Route {
+	return nil
+}
+
+func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
+	return &noopRouteRegistrar{}
+}
+
+func (n *noopRouteRegistrar) Use(_ ...echo.MiddlewareFunc) {}
+
+func (n *noopRouteRegistrar) FullPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+	return "/" + path
+}
+
 func newMockServer() *mockServer {
 	return &mockServer{e: echo.New()}
 }
@@ -216,6 +239,10 @@ func (m *mockServer) Shutdown(ctx context.Context) error {
 
 func (m *mockServer) Echo() *echo.Echo {
 	return m.e
+}
+
+func (m *mockServer) ModuleGroup() server.RouteRegistrar {
+	return &noopRouteRegistrar{}
 }
 
 func (m *mockServer) startCount() int {
@@ -245,8 +272,8 @@ func (m *MockModule) Init(deps *ModuleDeps) error {
 	return argsList.Error(0)
 }
 
-func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
-	m.Called(hr, e)
+func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.Called(hr, r)
 }
 
 func (m *MockModule) RegisterMessaging(registry *messaging.Registry) {

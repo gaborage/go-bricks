@@ -589,6 +589,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	v := NewValidator()
 	require.NotNil(t, v)
 	e.Validator = v
+	registrar := newRouteGroup(e.Group(""), "")
 
 	type emptyReq struct{}
 
@@ -596,14 +597,14 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	RegisterHandler(hr, e, http.MethodGet, "/custom", handler)
-	GET(hr, e, "/get", handler)
-	POST(hr, e, "/post", handler)
-	PUT(hr, e, "/put", handler)
-	DELETE(hr, e, "/delete", handler)
-	PATCH(hr, e, "/patch", handler)
-	HEAD(hr, e, "/head", handler)
-	OPTIONS(hr, e, "/options", handler)
+	RegisterHandler(hr, registrar, http.MethodGet, "/custom", handler)
+	GET(hr, registrar, "/get", handler)
+	POST(hr, registrar, "/post", handler)
+	PUT(hr, registrar, "/put", handler)
+	DELETE(hr, registrar, "/delete", handler)
+	PATCH(hr, registrar, "/patch", handler)
+	HEAD(hr, registrar, "/head", handler)
+	OPTIONS(hr, registrar, "/options", handler)
 
 	routes := make(map[string]struct{})
 	for _, route := range e.Routes() {
