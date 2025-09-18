@@ -48,7 +48,7 @@ func TestNewQueryBuilder(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_Vendor(t *testing.T) {
+func TestQueryBuilderVendor(t *testing.T) {
 	pgBuilder := NewQueryBuilder(PostgreSQL)
 	assert.Equal(t, PostgreSQL, pgBuilder.Vendor())
 
@@ -56,7 +56,7 @@ func TestQueryBuilder_Vendor(t *testing.T) {
 	assert.Equal(t, Oracle, oracleBuilder.Vendor())
 }
 
-func TestQueryBuilder_Select(t *testing.T) {
+func TestQueryBuilderSelect(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -101,7 +101,7 @@ func TestQueryBuilder_Select(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_Insert(t *testing.T) {
+func TestQueryBuilderInsert(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -134,7 +134,7 @@ func TestQueryBuilder_Insert(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_Update(t *testing.T) {
+func TestQueryBuilderUpdate(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -167,7 +167,7 @@ func TestQueryBuilder_Update(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_InsertWithColumns_OracleReserved(t *testing.T) {
+func TestQueryBuilderInsertWithColumnsOracleReserved(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
 	// Build an INSERT with a reserved column name for Oracle
@@ -182,7 +182,7 @@ func TestQueryBuilder_InsertWithColumns_OracleReserved(t *testing.T) {
 
 // Removed test for exported QuoteColumns helper (API pruned).
 
-func TestQueryBuilder_Delete(t *testing.T) {
+func TestQueryBuilderDelete(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -215,7 +215,7 @@ func TestQueryBuilder_Delete(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_BuildCaseInsensitiveLike(t *testing.T) {
+func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -267,7 +267,7 @@ func TestQueryBuilder_BuildCaseInsensitiveLike(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_BuildLimitOffset(t *testing.T) {
+func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 	tests := []struct {
 		name         string
 		vendor       string
@@ -334,7 +334,7 @@ func TestQueryBuilder_BuildLimitOffset(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_BuildLimitOffset_DefaultVendor(t *testing.T) {
+func TestQueryBuilderBuildLimitOffsetDefaultVendor(t *testing.T) {
 	qb := NewQueryBuilder("sqlite")
 	query := qb.Select("*").From("items")
 
@@ -353,7 +353,7 @@ func TestQueryBuilder_BuildLimitOffset_DefaultVendor(t *testing.T) {
 	assert.Contains(t, sqlText, "OFFSET 2")
 }
 
-func TestQueryBuilder_BuildCurrentTimestamp(t *testing.T) {
+func TestQueryBuilderBuildCurrentTimestamp(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -385,7 +385,7 @@ func TestQueryBuilder_BuildCurrentTimestamp(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_BuildUUIDGeneration(t *testing.T) {
+func TestQueryBuilderBuildUUIDGeneration(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -417,7 +417,7 @@ func TestQueryBuilder_BuildUUIDGeneration(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_BuildBooleanValue(t *testing.T) {
+func TestQueryBuilderBuildBooleanValue(t *testing.T) {
 	tests := []struct {
 		name     string
 		vendor   string
@@ -465,7 +465,7 @@ func TestQueryBuilder_BuildBooleanValue(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_EscapeIdentifier(t *testing.T) {
+func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 	tests := []struct {
 		name       string
 		vendor     string
@@ -507,7 +507,7 @@ func TestQueryBuilder_EscapeIdentifier(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_QuoteOracleColumn(t *testing.T) {
+func TestQueryBuilderQuoteOracleColumn(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
 	tests := []struct {
@@ -540,7 +540,7 @@ func TestQueryBuilder_QuoteOracleColumn(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_QuoteOracleColumns(t *testing.T) {
+func TestQueryBuilderQuoteOracleColumns(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
 	columns := []string{"id", "number", "name"}
@@ -550,7 +550,7 @@ func TestQueryBuilder_QuoteOracleColumns(t *testing.T) {
 	assert.Equal(t, expected, result)
 }
 
-func TestQueryBuilder_QuoteOracleColumns_NonOracle(t *testing.T) {
+func TestQueryBuilderQuoteOracleColumnsNonOracle(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	columns := []string{"id", "number", "name"}
@@ -560,7 +560,7 @@ func TestQueryBuilder_QuoteOracleColumns_NonOracle(t *testing.T) {
 	assert.Equal(t, columns, result)
 }
 
-func TestQueryBuilder_BuildUpsert_PostgreSQL(t *testing.T) {
+func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	insertColumns := map[string]interface{}{
@@ -582,7 +582,7 @@ func TestQueryBuilder_BuildUpsert_PostgreSQL(t *testing.T) {
 	assert.Contains(t, sql, "DO UPDATE SET")
 }
 
-func TestQueryBuilder_BuildUpsert_Oracle(t *testing.T) {
+func TestQueryBuilderBuildUpsertOracle(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
 	insertColumns := map[string]interface{}{
@@ -602,7 +602,7 @@ func TestQueryBuilder_BuildUpsert_Oracle(t *testing.T) {
 	assert.Empty(t, args)
 }
 
-func TestQueryBuilder_BuildUpsert_Unknown(t *testing.T) {
+func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
 	qb := NewQueryBuilder("unknown")
 
 	insertColumns := map[string]interface{}{
@@ -621,7 +621,7 @@ func TestQueryBuilder_BuildUpsert_Unknown(t *testing.T) {
 	assert.Empty(t, args)
 }
 
-func TestQueryBuilder_PlaceholderFormat(t *testing.T) {
+func TestQueryBuilderPlaceholderFormat(t *testing.T) {
 	tests := []struct {
 		name      string
 		vendor    string
@@ -656,7 +656,7 @@ func TestQueryBuilder_PlaceholderFormat(t *testing.T) {
 	}
 }
 
-func TestQueryBuilder_IntegrationTest(t *testing.T) {
+func TestQueryBuilderIntegrationTest(t *testing.T) {
 	// Test a complete query building scenario
 	qb := NewQueryBuilder(PostgreSQL)
 
@@ -685,7 +685,7 @@ func TestQueryBuilder_IntegrationTest(t *testing.T) {
 }
 
 // Test query builder with actual SQL execution using sqlmock
-func TestQueryBuilder_WithSqlmock(t *testing.T) {
+func TestQueryBuilderWithSqlmock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -719,7 +719,7 @@ func TestQueryBuilder_WithSqlmock(t *testing.T) {
 }
 
 // Test INSERT with sqlmock
-func TestQueryBuilder_Insert_WithSqlmock(t *testing.T) {
+func TestQueryBuilderInsertWithSqlmock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -751,7 +751,7 @@ func TestQueryBuilder_Insert_WithSqlmock(t *testing.T) {
 }
 
 // Test complex query with joins and subqueries
-func TestQueryBuilder_ComplexQuery_WithSqlmock(t *testing.T) {
+func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()

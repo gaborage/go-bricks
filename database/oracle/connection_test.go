@@ -17,7 +17,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-func TestConnection_BasicMethods_WithSQLMock(t *testing.T) {
+func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -102,7 +102,7 @@ func TestConnection_BasicMethods_WithSQLMock(t *testing.T) {
 // Connection Management Tests
 // =============================================================================
 
-func TestConnection_NewConnection_WithConnectionString(t *testing.T) {
+func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 	// Test configuration with connection string
 	cfg := &config.DatabaseConfig{
 		ConnectionString: "oracle://user:pass@localhost:1521/XE",
@@ -123,7 +123,7 @@ func TestConnection_NewConnection_WithConnectionString(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping Oracle database")
 }
 
-func TestConnection_NewConnection_WithServiceName(t *testing.T) {
+func TestConnectionNewConnectionWithServiceName(t *testing.T) {
 	// Test configuration with ServiceName
 	cfg := &config.DatabaseConfig{
 		Host:            "localhost",
@@ -147,7 +147,7 @@ func TestConnection_NewConnection_WithServiceName(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping Oracle database")
 }
 
-func TestConnection_NewConnection_WithSID(t *testing.T) {
+func TestConnectionNewConnectionWithSID(t *testing.T) {
 	// Test configuration with SID
 	cfg := &config.DatabaseConfig{
 		Host:            "localhost",
@@ -171,7 +171,7 @@ func TestConnection_NewConnection_WithSID(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping Oracle database")
 }
 
-func TestConnection_NewConnection_WithDatabase(t *testing.T) {
+func TestConnectionNewConnectionWithDatabase(t *testing.T) {
 	// Test configuration with Database (fallback when no ServiceName or SID)
 	cfg := &config.DatabaseConfig{
 		Host:            "localhost",
@@ -195,7 +195,7 @@ func TestConnection_NewConnection_WithDatabase(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping Oracle database")
 }
 
-func TestConnection_NewConnection_Success(t *testing.T) {
+func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -230,7 +230,7 @@ func TestConnection_NewConnection_Success(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
-func TestConnection_CreateMigrationTable(t *testing.T) {
+func TestConnectionCreateMigrationTable(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -252,7 +252,7 @@ func TestConnection_CreateMigrationTable(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_CreateMigrationTable_FirstError(t *testing.T) {
+func TestConnectionCreateMigrationTableFirstError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -273,7 +273,7 @@ func TestConnection_CreateMigrationTable_FirstError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestOracleStatement_QueryAndQueryRow(t *testing.T) {
+func TestOracleStatementQueryAndQueryRow(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -310,7 +310,7 @@ func TestOracleStatement_QueryAndQueryRow(t *testing.T) {
 	require.NoError(t, psRow.Close())
 }
 
-func TestOracleTransaction_QueryPrepareExec(t *testing.T) {
+func TestOracleTransactionQueryPrepareExec(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -360,7 +360,7 @@ func TestOracleTransaction_QueryPrepareExec(t *testing.T) {
 	require.NoError(t, trx.Commit())
 }
 
-func TestOracleTransaction_PrepareError(t *testing.T) {
+func TestOracleTransactionPrepareError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -384,7 +384,7 @@ func TestOracleTransaction_PrepareError(t *testing.T) {
 	require.NoError(t, trx.Rollback())
 }
 
-func TestConnection_CreateMigrationTable_SecondError(t *testing.T) {
+func TestConnectionCreateMigrationTableSecondError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -406,7 +406,7 @@ func TestConnection_CreateMigrationTable_SecondError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_QueryOperations_ErrorHandling(t *testing.T) {
+func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -437,7 +437,7 @@ func TestConnection_QueryOperations_ErrorHandling(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_TransactionOperations_ErrorHandling(t *testing.T) {
+func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -464,7 +464,7 @@ func TestConnection_TransactionOperations_ErrorHandling(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_Metadata(t *testing.T) {
+func TestConnectionMetadata(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()

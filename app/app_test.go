@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -26,6 +27,13 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
+)
+
+const (
+	appName       = "test-app"
+	readyEndpoint = "/ready"
+	moduleName    = "test-module"
+	appVersion    = "v1.0.0"
 )
 
 // MockDatabase implements the database.Interface for testing
@@ -93,13 +101,13 @@ func (m *MockDatabase) DatabaseType() string {
 }
 
 func (m *MockDatabase) GetMigrationTable() string {
-	argsList := m.Called()
-	return argsList.String(0)
+	// Mock implementation for GetMigrationTable (distinct from DatabaseType)
+	return "migrations" // Return a fixed mock value to differentiate from DatabaseType
 }
 
-func (m *MockDatabase) CreateMigrationTable(ctx context.Context) error {
-	argsList := m.Called(ctx)
-	return argsList.Error(0)
+func (m *MockDatabase) CreateMigrationTable(_ context.Context) error {
+	// Mock implementation for CreateMigrationTable (distinct from Health)
+	return nil // Return a fixed mock value to differentiate from Health
 }
 
 // MockSignalHandler implements SignalHandler for testing
@@ -199,6 +207,30 @@ type mockServer struct {
 	e             *echo.Echo
 }
 
+type noopRouteRegistrar struct{}
+
+func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) *echo.Route {
+	return nil
+}
+
+func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
+	return &noopRouteRegistrar{}
+}
+
+func (n *noopRouteRegistrar) Use(_ ...echo.MiddlewareFunc) {
+	// No-op implementation for testing purposes
+}
+
+func (n *noopRouteRegistrar) FullPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+	return "/" + path
+}
+
 func newMockServer() *mockServer {
 	return &mockServer{e: echo.New()}
 }
@@ -216,6 +248,10 @@ func (m *mockServer) Shutdown(ctx context.Context) error {
 
 func (m *mockServer) Echo() *echo.Echo {
 	return m.e
+}
+
+func (m *mockServer) ModuleGroup() server.RouteRegistrar {
+	return &noopRouteRegistrar{}
 }
 
 func (m *mockServer) startCount() int {
@@ -245,8 +281,8 @@ func (m *MockModule) Init(deps *ModuleDeps) error {
 	return argsList.Error(0)
 }
 
-func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
-	m.Called(hr, e)
+func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.Called(hr, r)
 }
 
 func (m *MockModule) RegisterMessaging(registry *messaging.Registry) {
@@ -268,8 +304,8 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 	// Create test config
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0-test",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -328,15 +364,15 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 		timeoutProvider: timeoutProvider,
 	}
 
-	srv.Echo().GET("/ready", app.readyCheck)
+	srv.Echo().GET(readyEndpoint, app.readyCheck)
 
 	return app, mockDB, mockMessaging
 }
 
-func TestApp_RegisterModule_Success(t *testing.T) {
+func TestAppRegisterModuleSuccess(t *testing.T) {
 	app, _, _ := createTestApp(t)
 
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: moduleName}
 	module.On("Init", mock.Anything).Return(nil)
 
 	err := app.RegisterModule(module)
@@ -344,12 +380,12 @@ func TestApp_RegisterModule_Success(t *testing.T) {
 
 	// Verify module was added to registry
 	assert.Len(t, app.registry.modules, 1)
-	assert.Equal(t, "test-module", app.registry.modules[0].Name())
+	assert.Equal(t, moduleName, app.registry.modules[0].Name())
 
 	module.AssertExpectations(t)
 }
 
-func TestApp_RegisterModule_InitError(t *testing.T) {
+func TestAppRegisterModuleInitError(t *testing.T) {
 	app, _, _ := createTestApp(t)
 
 	module := &MockModule{name: "failing-module"}
@@ -366,7 +402,7 @@ func TestApp_RegisterModule_InitError(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestApp_ReadyCheck_Healthy(t *testing.T) {
+func TestAppReadyCheckHealthy(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 
 	// Setup mocks for healthy state
@@ -379,7 +415,7 @@ func TestApp_ReadyCheck_Healthy(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -404,15 +440,15 @@ func TestApp_ReadyCheck_Healthy(t *testing.T) {
 
 	// Verify app details
 	appDetails := response["app"].(map[string]any)
-	assert.Equal(t, "test-app", appDetails["name"])
+	assert.Equal(t, appName, appDetails["name"])
 	assert.Equal(t, "test", appDetails["environment"])
-	assert.Equal(t, "v1.0.0-test", appDetails["version"])
+	assert.Equal(t, appVersion, appDetails["version"])
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
 }
 
-func TestApp_ReadyCheck_UnhealthyDatabase(t *testing.T) {
+func TestAppReadyCheckUnhealthyDatabase(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 
 	// Setup mocks for unhealthy database
@@ -422,7 +458,7 @@ func TestApp_ReadyCheck_UnhealthyDatabase(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -445,7 +481,7 @@ func TestApp_ReadyCheck_UnhealthyDatabase(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestApp_ReadyCheck_NoMessaging(t *testing.T) {
+func TestAppReadyCheckNoMessaging(t *testing.T) {
 	app, mockDB, _ := createTestApp(t)
 
 	// Disable messaging
@@ -459,7 +495,7 @@ func TestApp_ReadyCheck_NoMessaging(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -482,7 +518,7 @@ func TestApp_ReadyCheck_NoMessaging(t *testing.T) {
 	mockDB.AssertExpectations(t)
 }
 
-func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
+func TestAppReadyCheckDatabaseStatsError(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 
 	// Setup mocks - healthy database but stats error
@@ -492,7 +528,7 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -519,12 +555,12 @@ func TestApp_ReadyCheck_DatabaseStatsError(t *testing.T) {
 	mockMessaging.AssertExpectations(t)
 }
 
-func TestApp_Shutdown_Success(t *testing.T) {
+func TestAppShutdownSuccess(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 	mockSrv := app.server.(*mockServer)
 
 	// Add a test module
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: moduleName}
 	module.On("Shutdown").Return(nil)
 	app.registry.modules = append(app.registry.modules, module)
 
@@ -545,7 +581,7 @@ func TestApp_Shutdown_Success(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestApp_Shutdown_WithErrors(t *testing.T) {
+func TestAppShutdownWithErrors(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 	mockSrv := app.server.(*mockServer)
 
@@ -572,7 +608,7 @@ func TestApp_Shutdown_WithErrors(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestApp_Shutdown_NoMessaging(t *testing.T) {
+func TestAppShutdownNoMessaging(t *testing.T) {
 	app, mockDB, _ := createTestApp(t)
 	app.messaging = nil
 
@@ -593,7 +629,7 @@ func TestApp_Shutdown_NoMessaging(t *testing.T) {
 // Application Lifecycle Tests
 // =============================================================================
 
-func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
+func TestAppReadyCheckUnhealthyMessaging(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 
 	// Setup mocks for unhealthy messaging
@@ -605,7 +641,7 @@ func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -629,7 +665,7 @@ func TestApp_ReadyCheck_UnhealthyMessaging(t *testing.T) {
 	mockMessaging.AssertExpectations(t)
 }
 
-func TestApp_RegisterMessaging_Success(t *testing.T) {
+func TestAppRegisterMessagingSuccess(t *testing.T) {
 	app, _, mockMessaging := createTestApp(t)
 
 	// Add a test module with messaging registration
@@ -646,7 +682,7 @@ func TestApp_RegisterMessaging_Success(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestApp_RegisterMessaging_NoMessagingClient(t *testing.T) {
+func TestAppRegisterMessagingNoMessagingClient(t *testing.T) {
 	app, _, _ := createTestApp(t)
 
 	// Set messaging to nil to simulate no messaging client
@@ -659,7 +695,7 @@ func TestApp_RegisterMessaging_NoMessagingClient(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
+func TestAppShutdownServerShutdownError(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 	mockSrv := app.server.(*mockServer)
 	mockSrv.shutdownErr = errors.New("server shutdown failed")
@@ -686,7 +722,7 @@ func TestApp_Shutdown_ServerShutdownError(t *testing.T) {
 // Run() Method Tests - Application Lifecycle
 // =============================================================================
 
-func TestApp_Run_Success(t *testing.T) {
+func TestAppRunSuccess(t *testing.T) {
 	mockSignalHandler := NewMockSignalHandler()
 	mockTimeoutProvider := &MockTimeoutProvider{}
 
@@ -710,7 +746,7 @@ func TestApp_Run_Success(t *testing.T) {
 	mockMessaging.On("IsReady").Return(true)
 
 	// Test module for registry
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: moduleName}
 	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
 	module.On("RegisterMessaging", mock.Anything).Return()
 	module.On("Shutdown").Return(nil)
@@ -750,7 +786,7 @@ func TestApp_Run_Success(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
+func TestAppRunIgnoresServerClosedError(t *testing.T) {
 	mockSignalHandler := NewMockSignalHandler()
 	mockTimeoutProvider := &MockTimeoutProvider{}
 
@@ -769,7 +805,7 @@ func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
 	mockMessaging.On("Close").Return(nil)
 	mockMessaging.On("IsReady").Return(true)
 
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: moduleName}
 	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
 	module.On("RegisterMessaging", mock.Anything).Return()
 	module.On("Shutdown").Return(nil)
@@ -807,7 +843,7 @@ func TestApp_Run_IgnoresServerClosedError(t *testing.T) {
 // New() Constructor Tests - Factory Method Testing
 // =============================================================================
 
-func TestApp_New_DefaultConfig(t *testing.T) {
+func TestAppNewDefaultConfig(t *testing.T) {
 	opts := &Options{ConfigLoader: func() (*config.Config, error) {
 		return &config.Config{
 			App: config.AppConfig{Name: "test", Env: "test", Version: "v"},
@@ -822,7 +858,7 @@ func TestApp_New_DefaultConfig(t *testing.T) {
 	assert.Nil(t, app.messaging)
 }
 
-func TestApp_New_ConfigLoadError(t *testing.T) {
+func TestAppNewConfigLoadError(t *testing.T) {
 	opts := &Options{
 		ConfigLoader: func() (*config.Config, error) {
 			return nil, errors.New("load failed")
@@ -834,11 +870,11 @@ func TestApp_New_ConfigLoadError(t *testing.T) {
 	assert.Nil(t, app)
 }
 
-func TestApp_NewWithConfig_UsesConnectors(t *testing.T) {
+func TestAppNewWithConfigUsesConnectors(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -887,11 +923,11 @@ func TestApp_NewWithConfig_UsesConnectors(t *testing.T) {
 	assert.Equal(t, msgMock, app.messaging)
 }
 
-func TestApp_NewWithConfig_DatabaseConnectorError(t *testing.T) {
+func TestAppNewWithConfigDatabaseConnectorError(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -927,11 +963,11 @@ func TestApp_NewWithConfig_DatabaseConnectorError(t *testing.T) {
 	assert.Nil(t, app)
 }
 
-func TestApp_NewWithConfig_UsesProvidedServer(t *testing.T) {
+func TestAppNewWithConfigUsesProvidedServer(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -953,12 +989,12 @@ func TestApp_NewWithConfig_UsesProvidedServer(t *testing.T) {
 	assert.Equal(t, providedServer, app.server)
 }
 
-func TestApp_NewWithConfig_DatabaseAndMessagingEnabled(t *testing.T) {
+func TestAppNewWithConfigDatabaseAndMessagingEnabled(t *testing.T) {
 	// Create test config with both database and messaging enabled
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -1000,15 +1036,15 @@ func TestApp_NewWithConfig_DatabaseAndMessagingEnabled(t *testing.T) {
 	assert.Equal(t, mockMessaging, app.messaging)
 	assert.Equal(t, mockSignalHandler, app.signalHandler)
 	assert.Equal(t, mockTimeoutProvider, app.timeoutProvider)
-	assert.Equal(t, "test-app", app.cfg.App.Name)
+	assert.Equal(t, appName, app.cfg.App.Name)
 }
 
-func TestApp_NewWithConfig_DatabaseOnlyEnabled(t *testing.T) {
+func TestAppNewWithConfigDatabaseOnlyEnabled(t *testing.T) {
 	// Create test config with only database enabled
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -1043,12 +1079,12 @@ func TestApp_NewWithConfig_DatabaseOnlyEnabled(t *testing.T) {
 	assert.Nil(t, app.messaging) // Should be nil when not configured
 }
 
-func TestApp_NewWithConfig_MessagingOnlyEnabled(t *testing.T) {
+func TestAppNewWithConfigMessagingOnlyEnabled(t *testing.T) {
 	// Create test config with only messaging enabled
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -1081,7 +1117,7 @@ func TestApp_NewWithConfig_MessagingOnlyEnabled(t *testing.T) {
 	assert.Equal(t, mockMessaging, app.messaging)
 }
 
-func TestStandardTimeoutProvider_WithTimeout(t *testing.T) {
+func TestStandardTimeoutProviderWithTimeout(t *testing.T) {
 	provider := &StandardTimeoutProvider{}
 
 	start := time.Now()
@@ -1098,7 +1134,7 @@ func TestStandardTimeoutProvider_WithTimeout(t *testing.T) {
 	}, 10*time.Millisecond, time.Millisecond)
 }
 
-func TestOSSignalHandler_WaitForSignal(t *testing.T) {
+func TestOSSignalHandlerWaitForSignal(t *testing.T) {
 	handler := &OSSignalHandler{}
 	signals := make(chan os.Signal, 1)
 	handler.Notify(signals, os.Interrupt)
@@ -1121,12 +1157,12 @@ func TestOSSignalHandler_WaitForSignal(t *testing.T) {
 	signal.Stop(signals)
 }
 
-func TestApp_NewWithConfig_NeitherEnabled(t *testing.T) {
+func TestAppNewWithConfigNeitherEnabled(t *testing.T) {
 	// Create test config with neither database nor messaging enabled
 	cfg := &config.Config{
 		App: config.AppConfig{
-			Name:    "test-app",
-			Version: "v1.0.0",
+			Name:    appName,
+			Version: appVersion,
 			Env:     "test",
 		},
 		Server: config.ServerConfig{
@@ -1156,7 +1192,7 @@ func TestApp_NewWithConfig_NeitherEnabled(t *testing.T) {
 	assert.NotNil(t, app.registry)
 }
 
-func TestApp_isDatabaseEnabled(t *testing.T) {
+func TestAppIsDatabaseEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
 		config   *config.Config
@@ -1207,7 +1243,7 @@ func TestApp_isDatabaseEnabled(t *testing.T) {
 	}
 }
 
-func TestApp_isMessagingEnabled(t *testing.T) {
+func TestAppIsMessagingEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
 		config   *config.Config
@@ -1245,10 +1281,10 @@ func TestApp_isMessagingEnabled(t *testing.T) {
 // readyCheck Tests with Optional Dependencies
 // =============================================================================
 
-func TestApp_ReadyCheck_DatabaseDisabled(t *testing.T) {
+func TestAppReadyCheckDatabaseDisabled(t *testing.T) {
 	// Create app without database
 	cfg := &config.Config{
-		App:       config.AppConfig{Name: "test-app", Version: "v1.0.0", Env: "test"},
+		App:       config.AppConfig{Name: appName, Version: appVersion, Env: "test"},
 		Server:    config.ServerConfig{Host: "localhost", Port: 8080},
 		Database:  config.DatabaseConfig{}, // Empty means disabled
 		Messaging: config.MessagingConfig{BrokerURL: ""},
@@ -1260,7 +1296,7 @@ func TestApp_ReadyCheck_DatabaseDisabled(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1285,7 +1321,7 @@ func TestApp_ReadyCheck_DatabaseDisabled(t *testing.T) {
 	assert.Equal(t, "disabled", dbStats["status"])
 }
 
-func TestApp_ReadyCheck_MessagingDisabled(t *testing.T) {
+func TestAppReadyCheckMessagingDisabled(t *testing.T) {
 	app, mockDB, _ := createTestApp(t)
 
 	// Disable messaging
@@ -1297,7 +1333,7 @@ func TestApp_ReadyCheck_MessagingDisabled(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/ready", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1315,6 +1351,12 @@ func TestApp_ReadyCheck_MessagingDisabled(t *testing.T) {
 	assert.Equal(t, "ready", response["status"])
 	assert.Equal(t, "healthy", response["database"])
 	assert.Equal(t, "disabled", response["messaging"])
+
+	// Verify app details
+	appDetails := response["app"].(map[string]any)
+	assert.Equal(t, appName, appDetails["name"])
+	assert.Equal(t, "test", appDetails["environment"])
+	assert.Equal(t, appVersion, appDetails["version"])
 
 	mockDB.AssertExpectations(t)
 }

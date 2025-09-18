@@ -33,13 +33,13 @@ func TestNewValidator(t *testing.T) {
 	require.NotNil(t, validator.validate)
 }
 
-func TestValidator_GetValidator(t *testing.T) {
+func TestValidatorGetValidator(t *testing.T) {
 	v := NewValidator()
 	require.NotNil(t, v)
 	require.Same(t, v.validate, v.GetValidator())
 }
 
-func TestValidator_ValidateSuccess(t *testing.T) {
+func TestValidatorValidateSuccess(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)
 
@@ -104,7 +104,7 @@ func TestValidator_ValidateSuccess(t *testing.T) {
 	}
 }
 
-func TestValidator_ValidateFailures(t *testing.T) {
+func TestValidatorValidateFailures(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)
 
@@ -262,7 +262,7 @@ func TestValidator_ValidateFailures(t *testing.T) {
 	}
 }
 
-func TestValidator_ValidateNonStruct(t *testing.T) {
+func TestValidatorValidateNonStruct(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)
 
@@ -305,7 +305,7 @@ func TestValidator_ValidateNonStruct(t *testing.T) {
 	}
 }
 
-func TestValidationError_Error(t *testing.T) {
+func TestValidationErrorError(t *testing.T) {
 	tests := []struct {
 		name     string
 		errors   []FieldError
@@ -341,7 +341,7 @@ func TestValidationError_Error(t *testing.T) {
 	}
 }
 
-func TestValidationError_JSON(t *testing.T) {
+func TestValidationErrorJSON(t *testing.T) {
 	ve := &ValidationError{
 		Errors: []FieldError{
 			{Field: "Name", Message: "Name is required", Value: ""},
@@ -533,7 +533,7 @@ func TestGetErrorMessage(t *testing.T) {
 	}
 }
 
-func TestGetErrorMessage_UnknownTag(t *testing.T) {
+func TestGetErrorMessageUnknownTag(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)
 
@@ -599,7 +599,7 @@ func TestNewValidationError(t *testing.T) {
 	assert.Equal(t, "abc", fieldErrors["MerchantCode"].Value)
 }
 
-func TestValidator_EdgeCases(t *testing.T) {
+func TestValidatorEdgeCases(t *testing.T) {
 	validator := NewValidator()
 	require.NotNil(t, validator)
 
@@ -653,7 +653,7 @@ func TestValidator_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestValidator_NilValidation(t *testing.T) {
+func TestValidatorNilValidation(t *testing.T) {
 	// Test what happens if validator creation fails (hypothetical scenario)
 	// Since we can't easily mock the RegisterValidation failure,
 	// we'll just test the current behavior

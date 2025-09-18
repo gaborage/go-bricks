@@ -27,7 +27,7 @@ type helloResp struct {
 	Message string `json:"message"`
 }
 
-func TestWrapHandler_Success_DefaultStatus(t *testing.T) {
+func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	require.NotNil(t, v)
@@ -60,7 +60,7 @@ func TestWrapHandler_Success_DefaultStatus(t *testing.T) {
 	assert.Equal(t, "test-trace-123", resp.Meta["traceId"]) // request header first
 }
 
-func TestWrapHandler_Success_CustomStatusWithResult(t *testing.T) {
+func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -87,7 +87,7 @@ func TestWrapHandler_Success_CustomStatusWithResult(t *testing.T) {
 	assert.Nil(t, resp.Error)
 }
 
-func TestWrapHandler_ValidationError(t *testing.T) {
+func TestWrapHandlerValidationError(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -143,7 +143,7 @@ type numericRequest struct {
 	Ratio     float32 `query:"ratio"`
 }
 
-func TestRequestBinder_AdvancedBinding(t *testing.T) {
+func TestRequestBinderAdvancedBinding(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -185,7 +185,7 @@ func TestRequestBinder_AdvancedBinding(t *testing.T) {
 	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), got.When.UTC())
 }
 
-func TestRequestBinder_BindsUnsignedAndFloatValues(t *testing.T) {
+func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	require.NotNil(t, v)
@@ -223,7 +223,7 @@ func TestRequestBinder_BindsUnsignedAndFloatValues(t *testing.T) {
 	assert.InDelta(t, 3.5, float64(got.Ratio), 0.001)
 }
 
-func TestRequestBinder_InvalidFloatReturnsError(t *testing.T) {
+func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	require.NotNil(t, v)
@@ -275,7 +275,7 @@ func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
 	assert.Equal(t, existing, c.Response().Header().Get(gobrickshttp.HeaderTraceParent))
 }
 
-func TestTraceParentResponseHeader_PropagateWhenPresent(t *testing.T) {
+func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -306,7 +306,7 @@ func TestTraceParentResponseHeader_PropagateWhenPresent(t *testing.T) {
 	assert.Equal(t, traceparent, got)
 }
 
-func TestTraceParentResponseHeader_GenerateWhenMissing(t *testing.T) {
+func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -368,7 +368,7 @@ type failingValidator struct{ err error }
 
 func (v failingValidator) Validate(_ interface{}) error { return v.err }
 
-func TestWrapHandler_ValidationError_ProdEnv_OmitsDetails(t *testing.T) {
+func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -399,7 +399,7 @@ func TestWrapHandler_ValidationError_ProdEnv_OmitsDetails(t *testing.T) {
 	assert.Nil(t, resp.Error.Details)
 }
 
-func TestWrapHandler_ValidateOtherError_InDev_IncludesErrorDetail(t *testing.T) {
+func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 	e := echo.New()
 	e.Validator = failingValidator{err: fmt.Errorf("boom")} // not a ValidationError
 
@@ -433,7 +433,7 @@ func TestWrapHandler_ValidateOtherError_InDev_IncludesErrorDetail(t *testing.T) 
 	assert.Equal(t, "boom", got)
 }
 
-func TestWrapHandler_NoContentResult(t *testing.T) {
+func TestWrapHandlerNoContentResult(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -473,7 +473,7 @@ func TestResultHelpers(t *testing.T) {
 	assert.Equal(t, "queued", data)
 }
 
-func TestWrapHandler_ResultAddsHeaders(t *testing.T) {
+func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -502,7 +502,7 @@ func TestWrapHandler_ResultAddsHeaders(t *testing.T) {
 	assert.Equal(t, "/hello/123", rec.Header().Get("Location"))
 }
 
-func TestWrapHandler_Success_MetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
+func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -540,7 +540,7 @@ func TestWrapHandler_Success_MetaTimestampAndTraceIdFromResponseHeader(t *testin
 	}
 }
 
-func TestWrapHandler_Error_MetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
+func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()
 	e.Validator = v
@@ -589,6 +589,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	v := NewValidator()
 	require.NotNil(t, v)
 	e.Validator = v
+	registrar := newRouteGroup(e.Group(""), "")
 
 	type emptyReq struct{}
 
@@ -596,14 +597,14 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	RegisterHandler(hr, e, http.MethodGet, "/custom", handler)
-	GET(hr, e, "/get", handler)
-	POST(hr, e, "/post", handler)
-	PUT(hr, e, "/put", handler)
-	DELETE(hr, e, "/delete", handler)
-	PATCH(hr, e, "/patch", handler)
-	HEAD(hr, e, "/head", handler)
-	OPTIONS(hr, e, "/options", handler)
+	RegisterHandler(hr, registrar, http.MethodGet, "/custom", handler)
+	GET(hr, registrar, "/get", handler)
+	POST(hr, registrar, "/post", handler)
+	PUT(hr, registrar, "/put", handler)
+	DELETE(hr, registrar, "/delete", handler)
+	PATCH(hr, registrar, "/patch", handler)
+	HEAD(hr, registrar, "/head", handler)
+	OPTIONS(hr, registrar, "/options", handler)
 
 	routes := make(map[string]struct{})
 	for _, route := range e.Routes() {
@@ -627,7 +628,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	}
 }
 
-func TestSetFieldValue_AllocatesPointer(t *testing.T) {
+func TestSetFieldValueAllocatesPointer(t *testing.T) {
 	type payload struct {
 		Count *int
 	}
@@ -644,7 +645,7 @@ func TestSetFieldValue_AllocatesPointer(t *testing.T) {
 	assert.Equal(t, 42, *target.Count)
 }
 
-func TestSetFieldValue_ReturnsErrorForUnsupportedStruct(t *testing.T) {
+func TestSetFieldValueReturnsErrorForUnsupportedStruct(t *testing.T) {
 	type payload struct {
 		Custom struct {
 			Value int
@@ -659,7 +660,7 @@ func TestSetFieldValue_ReturnsErrorForUnsupportedStruct(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported struct type")
 }
 
-func TestSetFieldValue_ReturnsErrorForSlice(t *testing.T) {
+func TestSetFieldValueReturnsErrorForSlice(t *testing.T) {
 	type payload struct {
 		Items []string
 	}
@@ -672,7 +673,7 @@ func TestSetFieldValue_ReturnsErrorForSlice(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported assignment to slice")
 }
 
-func TestSetFieldValue_ReturnsErrorForMap(t *testing.T) {
+func TestSetFieldValueReturnsErrorForMap(t *testing.T) {
 	type payload struct {
 		Data map[string]int
 	}
@@ -685,7 +686,7 @@ func TestSetFieldValue_ReturnsErrorForMap(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported field type")
 }
 
-func TestSetFieldValue_InvalidBool(t *testing.T) {
+func TestSetFieldValueInvalidBool(t *testing.T) {
 	type payload struct {
 		Enabled bool
 	}
@@ -698,7 +699,7 @@ func TestSetFieldValue_InvalidBool(t *testing.T) {
 	assert.Contains(t, err.Error(), "ParseBool")
 }
 
-func TestSetFieldValue_InvalidSignedInt(t *testing.T) {
+func TestSetFieldValueInvalidSignedInt(t *testing.T) {
 	type payload struct {
 		Count int
 	}
@@ -711,7 +712,7 @@ func TestSetFieldValue_InvalidSignedInt(t *testing.T) {
 	assert.Contains(t, err.Error(), "ParseInt")
 }
 
-func TestSetFieldValue_InvalidUnsignedInt(t *testing.T) {
+func TestSetFieldValueInvalidUnsignedInt(t *testing.T) {
 	type payload struct {
 		Count uint
 	}
@@ -724,7 +725,7 @@ func TestSetFieldValue_InvalidUnsignedInt(t *testing.T) {
 	assert.Contains(t, err.Error(), "ParseUint")
 }
 
-func TestSetFieldValue_TimeInvalid(t *testing.T) {
+func TestSetFieldValueTimeInvalid(t *testing.T) {
 	type payload struct {
 		When time.Time
 	}
@@ -737,7 +738,7 @@ func TestSetFieldValue_TimeInvalid(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse")
 }
 
-func TestSetFieldValue_SignedIntBitSize(t *testing.T) {
+func TestSetFieldValueSignedIntBitSize(t *testing.T) {
 	type payload struct {
 		Value int8
 	}
@@ -749,7 +750,7 @@ func TestSetFieldValue_SignedIntBitSize(t *testing.T) {
 	assert.Equal(t, int8(7), target.Value)
 }
 
-func TestSetFieldValue_UnsignedIntBitSize(t *testing.T) {
+func TestSetFieldValueUnsignedIntBitSize(t *testing.T) {
 	type payload struct {
 		Value uint8
 	}

@@ -68,7 +68,7 @@ func TestNewTrackedConnection(t *testing.T) {
 	assert.Equal(t, "postgresql", trackedConn.vendor)
 }
 
-func TestTrackedConnection_Query(t *testing.T) {
+func TestTrackedConnectionQuery(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -83,7 +83,7 @@ func TestTrackedConnection_Query(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
-func TestTrackedConnection_QueryWithError(t *testing.T) {
+func TestTrackedConnectionQueryWithError(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -98,7 +98,7 @@ func TestTrackedConnection_QueryWithError(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedConnection_QueryRow(t *testing.T) {
+func TestTrackedConnectionQueryRow(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -111,7 +111,7 @@ func TestTrackedConnection_QueryRow(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedConnection_Exec(t *testing.T) {
+func TestTrackedConnectionExec(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -132,7 +132,7 @@ func TestTrackedConnection_Exec(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedConnection_Prepare(t *testing.T) {
+func TestTrackedConnectionPrepare(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -147,7 +147,7 @@ func TestTrackedConnection_Prepare(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedConnection_CreateMigrationTable(t *testing.T) {
+func TestTrackedConnectionCreateMigrationTable(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -159,7 +159,7 @@ func TestTrackedConnection_CreateMigrationTable(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedConnection_MultipleOperations(t *testing.T) {
+func TestTrackedConnectionMultipleOperations(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -183,7 +183,7 @@ func TestTrackedConnection_MultipleOperations(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
-func TestTrackedTx_ContextMethods(t *testing.T) {
+func TestTrackedTxContextMethods(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestTrackedTx_ContextMethods(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
-func TestTrackedConnection_BeginErrors(t *testing.T) {
+func TestTrackedConnectionBeginErrors(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -263,7 +263,7 @@ func TestTrackedConnection_BeginErrors(t *testing.T) {
 	assert.ErrorIs(t, err, expectedBeginTxErr)
 }
 
-func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
+func TestTrackedConnectionNonTrackedMethods(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestTrackedConnection_NonTrackedMethods(t *testing.T) {
 	assertDBCounter(ctx, t, 0)
 }
 
-func TestTrackedConnection_ContextWithoutCounter(t *testing.T) {
+func TestTrackedConnectionContextWithoutCounter(t *testing.T) {
 	t.Parallel()
 	mock, tracked, _ := setupTracked(t, false)
 
@@ -333,7 +333,7 @@ func TestTrackDBOperation(t *testing.T) {
 	assert.GreaterOrEqual(t, logger.GetDBElapsed(ctx), int64(10*time.Millisecond))
 }
 
-func TestTrackDBOperation_WithError(t *testing.T) {
+func TestTrackDBOperationWithError(t *testing.T) {
 	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := logger.WithDBCounter(context.Background())
@@ -348,7 +348,7 @@ func TestTrackDBOperation_WithError(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedStatement_Operations(t *testing.T) {
+func TestTrackedStatementOperations(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -374,7 +374,7 @@ func TestTrackedStatement_Operations(t *testing.T) {
 	assertDBCounter(ctx, t, 2)
 }
 
-func TestTrackedTransaction_Operations(t *testing.T) {
+func TestTrackedTransactionOperations(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -416,7 +416,7 @@ func TestTrackedTransaction_Operations(t *testing.T) {
 	assertDBCounter(ctx, t, 4)
 }
 
-func TestTrackedTransaction_CommitRollback(t *testing.T) {
+func TestTrackedTransactionCommitRollback(t *testing.T) {
 	t.Parallel()
 	mock, tracked, _ := setupTracked(t, false)
 
@@ -451,7 +451,7 @@ func TestTrackedTransaction_CommitRollback(t *testing.T) {
 
 // Database tracking hardening tests
 
-func TestTrackDBOperation_NilLogger(t *testing.T) {
+func TestTrackDBOperationNilLogger(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)
@@ -461,7 +461,7 @@ func TestTrackDBOperation_NilLogger(t *testing.T) {
 	})
 }
 
-func TestTrackDBOperation_SqlErrNoRows(t *testing.T) {
+func TestTrackDBOperationSqlErrNoRows(t *testing.T) {
 	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := context.Background()
@@ -474,7 +474,7 @@ func TestTrackDBOperation_SqlErrNoRows(t *testing.T) {
 
 // Removed QueryTruncation test: behavior not observable without capturing logs
 
-func TestTrackDBOperation_SlowQueryThreshold(t *testing.T) {
+func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := context.Background()
@@ -486,7 +486,7 @@ func TestTrackDBOperation_SlowQueryThreshold(t *testing.T) {
 	})
 }
 
-func TestTrackDBOperation_RegularError(t *testing.T) {
+func TestTrackDBOperationRegularError(t *testing.T) {
 	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := context.Background()
@@ -523,7 +523,7 @@ func TestNewTrackedDB(t *testing.T) {
 	assert.Equal(t, vendor, trackedDB.vendor)
 }
 
-func TestTrackedDB_QueryContext(t *testing.T) {
+func TestTrackedDBQueryContext(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -548,7 +548,7 @@ func TestTrackedDB_QueryContext(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
-func TestTrackedDB_QueryContext_Error(t *testing.T) {
+func TestTrackedDBQueryContextError(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -570,7 +570,7 @@ func TestTrackedDB_QueryContext_Error(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedDB_QueryRowContext(t *testing.T) {
+func TestTrackedDBQueryRowContext(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -596,7 +596,7 @@ func TestTrackedDB_QueryRowContext(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedDB_ExecContext(t *testing.T) {
+func TestTrackedDBExecContext(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -626,7 +626,7 @@ func TestTrackedDB_ExecContext(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedDB_ExecContext_Error(t *testing.T) {
+func TestTrackedDBExecContextError(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -650,7 +650,7 @@ func TestTrackedDB_ExecContext_Error(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedDB_Close(t *testing.T) {
+func TestTrackedDBClose(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -665,7 +665,7 @@ func TestTrackedDB_Close(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestTrackedDB_PrepareContext(t *testing.T) {
+func TestTrackedDBPrepareContext(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -687,7 +687,7 @@ func TestTrackedDB_PrepareContext(t *testing.T) {
 	assertDBCounter(ctx, t, 1)
 }
 
-func TestTrackedDB_PrepareContext_Error(t *testing.T) {
+func TestTrackedDBPrepareContextError(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -713,7 +713,7 @@ func TestTrackedDB_PrepareContext_Error(t *testing.T) {
 // TrackedStmt Tests - Missing Coverage Areas
 // =============================================================================
 
-func TestTrackedStmt_Query(t *testing.T) {
+func TestTrackedStmtQuery(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -747,7 +747,7 @@ func TestTrackedStmt_Query(t *testing.T) {
 	assertDBCounter(ctx, t, 2)
 }
 
-func TestTrackedStmt_QueryRow(t *testing.T) {
+func TestTrackedStmtQueryRow(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -784,7 +784,7 @@ func TestTrackedStmt_QueryRow(t *testing.T) {
 	assertDBCounter(ctx, t, 2)
 }
 
-func TestTrackedStmt_Exec(t *testing.T) {
+func TestTrackedStmtExec(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -820,7 +820,7 @@ func TestTrackedStmt_Exec(t *testing.T) {
 	assertDBCounter(ctx, t, 2)
 }
 
-func TestTrackedConnection_Close(t *testing.T) {
+func TestTrackedConnectionClose(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -840,7 +840,7 @@ func TestTrackedConnection_Close(t *testing.T) {
 // TrackedStatement Tests - Missing Coverage Areas
 // =============================================================================
 
-func TestTrackedStatement_QueryRow_Missing(t *testing.T) {
+func TestTrackedStatementQueryRowMissing(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 
@@ -867,7 +867,7 @@ func TestTrackedStatement_QueryRow_Missing(t *testing.T) {
 	assertDBCounter(ctx, t, 2) // prepare + queryrow
 }
 
-func TestTrackedStatement_Exec_Missing(t *testing.T) {
+func TestTrackedStatementExecMissing(t *testing.T) {
 	t.Parallel()
 	mock, tracked, ctx := setupTracked(t, true)
 

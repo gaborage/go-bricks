@@ -20,7 +20,7 @@ func createTestLogger() (*ZeroLogger, *bytes.Buffer) {
 	return &ZeroLogger{zlog: &zl}, &buf
 }
 
-func TestLogEventAdapter_Msg(t *testing.T) {
+func TestLogEventAdapterMsg(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event and send a message
@@ -36,7 +36,7 @@ func TestLogEventAdapter_Msg(t *testing.T) {
 	assert.Equal(t, "info", logEntry["level"])
 }
 
-func TestLogEventAdapter_Msgf(t *testing.T) {
+func TestLogEventAdapterMsgf(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event and send a formatted message
@@ -52,7 +52,7 @@ func TestLogEventAdapter_Msgf(t *testing.T) {
 	assert.Equal(t, "info", logEntry["level"])
 }
 
-func TestLogEventAdapter_Err(t *testing.T) {
+func TestLogEventAdapterErr(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	testErr := errors.New("test error")
@@ -71,7 +71,7 @@ func TestLogEventAdapter_Err(t *testing.T) {
 	assert.Equal(t, "error", logEntry["level"])
 }
 
-func TestLogEventAdapter_Str(t *testing.T) {
+func TestLogEventAdapterStr(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with a string field
@@ -88,7 +88,7 @@ func TestLogEventAdapter_Str(t *testing.T) {
 	assert.Equal(t, "info", logEntry["level"])
 }
 
-func TestLogEventAdapter_Int(t *testing.T) {
+func TestLogEventAdapterInt(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with an integer field
@@ -104,7 +104,7 @@ func TestLogEventAdapter_Int(t *testing.T) {
 	assert.Equal(t, "processing items", logEntry["message"])
 }
 
-func TestLogEventAdapter_Int64(t *testing.T) {
+func TestLogEventAdapterInt64(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with an int64 field
@@ -120,7 +120,7 @@ func TestLogEventAdapter_Int64(t *testing.T) {
 	assert.Equal(t, "event occurred", logEntry["message"])
 }
 
-func TestLogEventAdapter_Uint64(t *testing.T) {
+func TestLogEventAdapterUint64(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with a uint64 field
@@ -136,7 +136,7 @@ func TestLogEventAdapter_Uint64(t *testing.T) {
 	assert.Equal(t, "file processed", logEntry["message"])
 }
 
-func TestLogEventAdapter_Dur(t *testing.T) {
+func TestLogEventAdapterDur(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with a duration field
@@ -153,7 +153,7 @@ func TestLogEventAdapter_Dur(t *testing.T) {
 	assert.Equal(t, "request completed", logEntry["message"])
 }
 
-func TestLogEventAdapter_Interface(t *testing.T) {
+func TestLogEventAdapterInterface(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with an interface{} field
@@ -176,7 +176,7 @@ func TestLogEventAdapter_Interface(t *testing.T) {
 	assert.Equal(t, "structured data", logEntry["message"])
 }
 
-func TestLogEventAdapter_Bytes(t *testing.T) {
+func TestLogEventAdapterBytes(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with a bytes field
@@ -194,7 +194,7 @@ func TestLogEventAdapter_Bytes(t *testing.T) {
 	assert.Equal(t, "binary payload", logEntry["message"])
 }
 
-func TestLogEventAdapter_ChainedFields(t *testing.T) {
+func TestLogEventAdapterChainedFields(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a log event with chained fields
@@ -220,7 +220,7 @@ func TestLogEventAdapter_ChainedFields(t *testing.T) {
 	assert.Equal(t, "error", logEntry["level"])
 }
 
-func TestZeroLogger_Info(t *testing.T) {
+func TestZeroLoggerInfo(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create an info-level log event
@@ -241,7 +241,7 @@ func TestZeroLogger_Info(t *testing.T) {
 	assert.Equal(t, "info", logEntry["level"])
 }
 
-func TestZeroLogger_Error(t *testing.T) {
+func TestZeroLoggerError(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create an error-level log event
@@ -262,7 +262,7 @@ func TestZeroLogger_Error(t *testing.T) {
 	assert.Equal(t, "error", logEntry["level"])
 }
 
-func TestZeroLogger_Debug(t *testing.T) {
+func TestZeroLoggerDebug(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a debug-level log event
@@ -283,7 +283,7 @@ func TestZeroLogger_Debug(t *testing.T) {
 	assert.Equal(t, "debug", logEntry["level"])
 }
 
-func TestZeroLogger_Warn(t *testing.T) {
+func TestZeroLoggerWarn(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Create a warning-level log event
@@ -304,7 +304,7 @@ func TestZeroLogger_Warn(t *testing.T) {
 	assert.Equal(t, "warn", logEntry["level"])
 }
 
-func TestZeroLogger_Fatal(t *testing.T) {
+func TestZeroLoggerFatal(t *testing.T) {
 	// Note: Fatal logs and then calls os.Exit, so we need to be careful
 	logger, buf := createTestLogger()
 
@@ -325,7 +325,7 @@ func TestZeroLogger_Fatal(t *testing.T) {
 	assert.Empty(t, buf.String())
 }
 
-func TestLogEventAdapter_InterfaceCompliance(t *testing.T) {
+func TestLogEventAdapterInterfaceCompliance(t *testing.T) {
 	// Verify that LogEventAdapter implements the LogEvent interface
 	logger, _ := createTestLogger()
 
@@ -346,7 +346,7 @@ func TestLogEventAdapter_InterfaceCompliance(t *testing.T) {
 	event.Msg("test complete")
 }
 
-func TestLogEventAdapter_EdgeCases(t *testing.T) {
+func TestLogEventAdapterEdgeCases(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	tests := []struct {
@@ -401,7 +401,7 @@ func TestLogEventAdapter_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestLogEventAdapter_LargeValues(t *testing.T) {
+func TestLogEventAdapterLargeValues(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Test with large values
@@ -427,7 +427,7 @@ func TestLogEventAdapter_LargeValues(t *testing.T) {
 	assert.Equal(t, float64(18446744073709551615), logEntry["max_uint64"])
 }
 
-func TestLogEventAdapter_SpecialCharacters(t *testing.T) {
+func TestLogEventAdapterSpecialCharacters(t *testing.T) {
 	logger, buf := createTestLogger()
 
 	// Test with special characters and unicode
@@ -447,7 +447,7 @@ func TestLogEventAdapter_SpecialCharacters(t *testing.T) {
 	assert.Equal(t, "special characters test", logEntry["message"])
 }
 
-func TestLogEventAdapter_ReturnedTypes(t *testing.T) {
+func TestLogEventAdapterReturnedTypes(t *testing.T) {
 	logger, _ := createTestLogger()
 
 	// Test that all field methods return LogEvent interface
@@ -480,7 +480,7 @@ func TestLogEventAdapter_ReturnedTypes(t *testing.T) {
 }
 
 // TestLogEventAdapter_FilterCoverage tests the filter paths in Str and Interface methods
-func TestLogEventAdapter_FilterCoverage(t *testing.T) {
+func TestLogEventAdapterFilterCoverage(t *testing.T) {
 	// Create logger with custom filter to ensure filter path is taken
 	var buf bytes.Buffer
 	zl := zerolog.New(&buf)

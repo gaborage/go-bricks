@@ -202,6 +202,7 @@ func register(framework *app.App) error {
 ## HTTP Server
 
 - Based on Echo v4 with middleware stack (logging, recovery, rate limiting, CORS).
+- **Configurable base paths and health routes** for flexible deployment scenarios.
 - Request binding/validation: define request structs with tags (`path`, `query`, `header`, `validate`).
 - Response envelope ensures consistent `{data:…, meta:…}` payloads.
 - Typed handler signatures simplify status codes:
@@ -211,6 +212,29 @@ func (h *Handler) createUser(req CreateReq, ctx server.HandlerContext) (server.R
     user := h.svc.Create(req)
     return server.Created(user), nil
 }
+```
+
+### Flexible Routing Configuration
+
+GoBricks supports configurable base paths and health endpoints for different deployment scenarios:
+
+```yaml
+server:
+  base_path: "/api/v1"        # All routes automatically prefixed
+  health_route: "/health"     # Custom health endpoint path
+  ready_route: "/ready"       # Custom readiness endpoint path
+```
+
+With this configuration:
+- Module route `/users` becomes `/api/v1/users`
+- Health endpoint available at `/api/v1/health`
+- Ready endpoint available at `/api/v1/ready`
+
+Environment variable overrides:
+```bash
+SERVER_BASE_PATH="/api/v1"
+SERVER_HEALTH_ROUTE="/status"
+SERVER_READY_ROUTE="/readiness"
 ```
 
 ---

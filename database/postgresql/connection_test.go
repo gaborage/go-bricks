@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestConnection_BasicMethods_WithSQLMock(t *testing.T) {
+func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -91,7 +91,7 @@ func TestConnection_BasicMethods_WithSQLMock(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_Metadata(t *testing.T) {
+func TestConnectionMetadata(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -108,7 +108,7 @@ func TestConnection_Metadata(t *testing.T) {
 // Connection Management Tests
 // =============================================================================
 
-func TestConnection_NewConnection_WithConnectionString(t *testing.T) {
+func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 	// Test configuration with connection string
 	cfg := &config.DatabaseConfig{
 		ConnectionString: "postgres://user:pass@localhost/testdb?sslmode=disable",
@@ -129,7 +129,7 @@ func TestConnection_NewConnection_WithConnectionString(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
 }
 
-func TestConnection_NewConnection_WithHostConfig(t *testing.T) {
+func TestConnectionNewConnectionWithHostConfig(t *testing.T) {
 	// Test configuration with individual host parameters
 	cfg := &config.DatabaseConfig{
 		Host:            "localhost",
@@ -154,7 +154,7 @@ func TestConnection_NewConnection_WithHostConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
 }
 
-func TestConnection_NewConnection_WithHostConfigNoSSLMode(t *testing.T) {
+func TestConnectionNewConnectionWithHostConfigNoSSLMode(t *testing.T) {
 	// Configuration without sslmode should omit the parameter from the DSN
 	cfg := &config.DatabaseConfig{
 		Host:            "localhost",
@@ -177,7 +177,7 @@ func TestConnection_NewConnection_WithHostConfigNoSSLMode(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
 }
 
-func TestConnection_NewConnection_Success(t *testing.T) {
+func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -213,7 +213,7 @@ func TestConnection_NewConnection_Success(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
-func TestConnection_NewConnection_InvalidConfig(t *testing.T) {
+func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 	// Test with invalid configuration that causes parsing to fail
 	cfg := &config.DatabaseConfig{
 		ConnectionString: "invalid-connection-string-format",
@@ -228,7 +228,7 @@ func TestConnection_NewConnection_InvalidConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to parse PostgreSQL config")
 }
 
-func TestStatement_QueryAndQueryRow(t *testing.T) {
+func TestStatementQueryAndQueryRow(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -266,7 +266,7 @@ func TestStatement_QueryAndQueryRow(t *testing.T) {
 	require.NoError(t, psRow.Close())
 }
 
-func TestTransaction_QueryPrepareAndExec(t *testing.T) {
+func TestTransactionQueryPrepareAndExec(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -317,7 +317,7 @@ func TestTransaction_QueryPrepareAndExec(t *testing.T) {
 	require.NoError(t, trx.Commit())
 }
 
-func TestTransaction_PrepareError(t *testing.T) {
+func TestTransactionPrepareError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
@@ -341,7 +341,7 @@ func TestTransaction_PrepareError(t *testing.T) {
 	require.NoError(t, trx.Rollback())
 }
 
-func TestConnection_CreateMigrationTable(t *testing.T) {
+func TestConnectionCreateMigrationTable(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -361,7 +361,7 @@ func TestConnection_CreateMigrationTable(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_QueryOperations_ErrorHandling(t *testing.T) {
+func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -392,7 +392,7 @@ func TestConnection_QueryOperations_ErrorHandling(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestConnection_TransactionOperations_ErrorHandling(t *testing.T) {
+func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()

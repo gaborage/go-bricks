@@ -137,7 +137,7 @@ func TestParameterTypes(t *testing.T) {
 	assert.Equal(t, "name", bodyTag.JSONName)
 }
 
-func TestParseValidationTags_PointerAndUnexported(t *testing.T) {
+func TestParseValidationTagsPointerAndUnexported(t *testing.T) {
 	type embedded struct {
 		Exported string `json:"exported" validate:"required"`
 		hidden   string
@@ -151,7 +151,7 @@ func TestParseValidationTags_PointerAndUnexported(t *testing.T) {
 	assert.True(t, tags[0].Required)
 }
 
-func TestParseValidationTags_NonStruct(t *testing.T) {
+func TestParseValidationTagsNonStruct(t *testing.T) {
 	tags := ParseValidationTags(reflect.TypeOf(42))
 	assert.Empty(t, tags)
 }
@@ -185,7 +185,7 @@ func TestTagInfoAdditionalAccessors(t *testing.T) {
 	assert.Equal(t, "3", tag.Constraints["min_len"], "original constraints should not change")
 }
 
-func TestParseValidateTag_IgnoresEmptySegments(t *testing.T) {
+func TestParseValidateTagIgnoresEmptySegments(t *testing.T) {
 	constraints := make(map[string]string)
 	parseValidateTag("required,,min=3, ,max=10", constraints)
 

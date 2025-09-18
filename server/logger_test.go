@@ -53,7 +53,7 @@ func (e *recEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e
 func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
 
 // Test that the request logger logs the same trace_id as the response meta.traceId
-func TestRequestLogger_UsesSameTraceIDAsResponse(t *testing.T) {
+func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
 	e.Use(Logger(recLog))
@@ -83,7 +83,7 @@ func TestRequestLogger_UsesSameTraceIDAsResponse(t *testing.T) {
 	require.Equal(t, traceID, recLog.last.fields["trace_id"])
 }
 
-func TestRequestLogger_LogsTraceparentWhenInboundPresent(t *testing.T) {
+func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
 	e.Use(Logger(recLog))
@@ -106,7 +106,7 @@ func TestRequestLogger_LogsTraceparentWhenInboundPresent(t *testing.T) {
 	require.Equal(t, inboundTP, recLog.last.fields["traceparent"])
 }
 
-func TestRequestLogger_SkipsHealthAndReady(t *testing.T) {
+func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
 	e.Use(Logger(recLog))

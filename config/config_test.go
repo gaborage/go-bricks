@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoad_Defaults(t *testing.T) {
+func TestLoadWithDefaults(t *testing.T) {
 	// Clear any environment variables that might affect the test
 	clearEnvironmentVariables()
 
@@ -51,7 +51,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.False(t, cfg.Log.Pretty)
 }
 
-func TestLoad_WithEnvironmentVariables(t *testing.T) {
+func TestLoadWithEnvironmentVariables(t *testing.T) {
 	// Clear environment variables first
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
@@ -93,7 +93,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
 }
 
-func TestLoad_InvalidEnvironmentVariables(t *testing.T) {
+func TestLoadInvalidEnvironmentVariables(t *testing.T) {
 	baseEnv := map[string]string{
 		"DATABASE_DATABASE": "testdb",
 		"DATABASE_USERNAME": "testuser",
@@ -147,7 +147,7 @@ func TestLoad_InvalidEnvironmentVariables(t *testing.T) {
 	}
 }
 
-func TestLoad_ValidationFailure(t *testing.T) {
+func TestLoadValidationFailure(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Set invalid configuration that should fail validation
@@ -162,7 +162,7 @@ func TestLoad_ValidationFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid configuration")
 }
 
-func TestLoadDefaults(t *testing.T) {
+func TestLoadDefaultsInternalFunction(t *testing.T) {
 	// Create a new koanf instance for testing
 	k := koanf.New(".")
 
@@ -192,7 +192,7 @@ func TestLoadDefaults(t *testing.T) {
 	assert.False(t, k.Bool("log.pretty"))
 }
 
-func TestLoad_EdgeCases(t *testing.T) {
+func TestLoadEdgeCases(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	t.Run("empty_string_values", func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestLoad_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestLoad_CustomConfiguration(t *testing.T) {
+func TestLoadCustomConfiguration(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	t.Run("custom_config_via_environment", func(t *testing.T) {
@@ -405,7 +405,7 @@ func clearEnvironmentVariables() {
 	}
 }
 
-func TestLoad_DatabaseDisabled(t *testing.T) {
+func TestLoadDatabaseDisabled(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Explicitly disable database by clearing defaults
@@ -427,7 +427,7 @@ func TestLoad_DatabaseDisabled(t *testing.T) {
 	assert.Equal(t, "info", cfg.Log.Level)
 }
 
-func TestLoad_DatabasePartialConfig(t *testing.T) {
+func TestLoadDatabasePartialConfig(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Set partial database config (should fail)
@@ -441,7 +441,7 @@ func TestLoad_DatabasePartialConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid database type")
 }
 
-func TestLoad_DatabaseCompleteConfig(t *testing.T) {
+func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Set complete database config with all required fields
@@ -474,7 +474,7 @@ func TestLoad_DatabaseCompleteConfig(t *testing.T) {
 // configuration requires additional complexity that is beyond the 80/20 scope
 // The core conditional validation functionality works as intended
 
-func TestLoad_DatabaseDisabledByDefault(t *testing.T) {
+func TestLoadDatabaseDisabledByDefault(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Don't set any database environment variables
@@ -496,7 +496,7 @@ func TestLoad_DatabaseDisabledByDefault(t *testing.T) {
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 }
 
-func TestLoad_DatabaseEnabledByExplicitConfig(t *testing.T) {
+func TestLoadDatabaseEnabledByExplicitConfig(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	// Database is now disabled by default - must explicitly configure

@@ -4,13 +4,13 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
 func TestNewModuleRegistry(t *testing.T) {
@@ -34,7 +34,7 @@ func TestNewModuleRegistry(t *testing.T) {
 	assert.NotNil(t, registry.messagingRegistry)
 }
 
-func TestModuleRegistry_Register_Success(t *testing.T) {
+func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -56,7 +56,7 @@ func TestModuleRegistry_Register_Success(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Register_InitError(t *testing.T) {
+func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -79,7 +79,7 @@ func TestModuleRegistry_Register_InitError(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_RegisterRoutes(t *testing.T) {
+func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -102,21 +102,24 @@ func TestModuleRegistry_RegisterRoutes(t *testing.T) {
 	require.NoError(t, registry.Register(module1))
 	require.NoError(t, registry.Register(module2))
 
-	// Create Echo instance
-	e := echo.New()
+	serverCfg := &config.Config{}
+	registrarServer := server.New(serverCfg, log)
+	registrar := registrarServer.ModuleGroup()
+
+	matcher := mock.MatchedBy(func(r server.RouteRegistrar) bool { return r != nil })
 
 	// Setup route registration expectations
-	module1.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
-	module2.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), e).Return()
+	module1.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), matcher).Return()
+	module2.On("RegisterRoutes", mock.AnythingOfType("*server.HandlerRegistry"), matcher).Return()
 
 	// Call RegisterRoutes
-	registry.RegisterRoutes(e)
+	registry.RegisterRoutes(registrar)
 
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_RegisterMessaging_NoRegistry(t *testing.T) {
+func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		DB:        &MockDatabase{},
@@ -138,7 +141,7 @@ func TestModuleRegistry_RegisterMessaging_NoRegistry(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_NoModules(t *testing.T) {
+func TestModuleRegistryShutdownNoModules(t *testing.T) {
 	log := logger.New("debug", true)
 	registry := NewModuleRegistry(&ModuleDeps{Logger: log})
 
@@ -146,7 +149,7 @@ func TestModuleRegistry_Shutdown_NoModules(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
+func TestModuleRegistryShutdownWithModules(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,
@@ -175,7 +178,7 @@ func TestModuleRegistry_Shutdown_WithModules(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
+func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,
@@ -205,7 +208,7 @@ func TestModuleRegistry_Shutdown_WithErrors(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistry_Shutdown_SingleModule(t *testing.T) {
+func TestModuleRegistryShutdownSingleModule(t *testing.T) {
 	log := logger.New("debug", true)
 	deps := &ModuleDeps{
 		Logger: log,

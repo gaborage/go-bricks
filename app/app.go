@@ -36,6 +36,7 @@ type ServerRunner interface {
 	Start() error
 	Shutdown(ctx context.Context) error
 	Echo() *echo.Echo
+	ModuleGroup() server.RouteRegistrar
 }
 
 // OSSignalHandler implements SignalHandler using the real OS signal package
@@ -257,7 +258,7 @@ func (a *App) Run() error {
 		return fmt.Errorf("failed to register messaging infrastructure: %w", err)
 	}
 
-	a.registry.RegisterRoutes(a.server.Echo())
+	a.registry.RegisterRoutes(a.server.ModuleGroup())
 
 	go func() {
 		if err := a.server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {

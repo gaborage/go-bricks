@@ -14,7 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-func TestValidateDatabaseType_Success(t *testing.T) {
+func TestValidateDatabaseTypeSuccess(t *testing.T) {
 	tests := []struct {
 		name   string
 		dbType string
@@ -37,7 +37,7 @@ func TestValidateDatabaseType_Success(t *testing.T) {
 	}
 }
 
-func TestValidateDatabaseType_Failure(t *testing.T) {
+func TestValidateDatabaseTypeFailure(t *testing.T) {
 	tests := []struct {
 		name          string
 		dbType        string
@@ -82,7 +82,7 @@ func TestGetSupportedDatabaseTypes(t *testing.T) {
 	assert.Contains(t, types, "oracle")
 }
 
-func TestNewConnection_UnsupportedType(t *testing.T) {
+func TestNewConnectionUnsupportedType(t *testing.T) {
 	log := logger.New("debug", true)
 	cfg := &config.DatabaseConfig{
 		Type:     "unsupported",
@@ -98,7 +98,7 @@ func TestNewConnection_UnsupportedType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported database type: unsupported")
 }
 
-func TestNewConnection_PostgreSQL_ConfigValidation(t *testing.T) {
+func TestNewConnectionPostgreSQLConfigValidation(t *testing.T) {
 	log := logger.New("debug", true)
 
 	// Test with invalid config that should fail during connection
@@ -117,7 +117,7 @@ func TestNewConnection_PostgreSQL_ConfigValidation(t *testing.T) {
 	assert.Nil(t, conn)
 }
 
-func TestNewConnection_Oracle_ConfigValidation(t *testing.T) {
+func TestNewConnectionOracleConfigValidation(t *testing.T) {
 	log := logger.New("debug", true)
 
 	// Test with invalid config that should fail during connection
@@ -141,7 +141,7 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "oracle", Oracle)
 }
 
-func TestValidateDatabaseType_EdgeCases(t *testing.T) {
+func TestValidateDatabaseTypeEdgeCases(t *testing.T) {
 	tests := []struct {
 		name   string
 		dbType string
@@ -187,7 +187,7 @@ func TestValidateDatabaseType_EdgeCases(t *testing.T) {
 }
 
 // Test that the factory wraps connections with tracking using sqlmock
-func TestNewConnection_ReturnsTrackedConnection(t *testing.T) {
+func TestNewConnectionReturnsTrackedConnection(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
