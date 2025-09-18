@@ -22,10 +22,13 @@ import (
 
 // Test constants for common values
 const (
-	testHealthRoute = "/health"
-	testReadyRoute  = "/ready"
-	testAPIV1Path   = "/api/v1"
-	testPingPath    = "/ping"
+	testReadyRoute    = "/ready"
+	testAPIV1Path     = "/api/v1"
+	apiTestURL        = "/api/v1/test"
+	healthRoute       = "/health"
+	customHealthRoute = "/custom-health"
+	apiRoute          = "/api/v1/status"
+	statusRoute       = "/status"
 )
 
 type testLogger struct {
@@ -160,7 +163,7 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	require.NotNil(t, e.Validator)
 
 	// Test default health endpoints
-	assertHealthEndpoints(t, srv, testHealthRoute, testReadyRoute)
+	assertHealthEndpoints(t, srv, healthRoute, testReadyRoute)
 }
 
 func TestServerStartAndShutdown(t *testing.T) {
@@ -204,6 +207,7 @@ func TestServerEchoReturnsUnderlyingInstance(t *testing.T) {
 
 func TestPathNormalization(t *testing.T) {
 	t.Run("normalizeBasePath", func(t *testing.T) {
+
 		tests := []struct {
 			name     string
 			input    string
@@ -214,9 +218,9 @@ func TestPathNormalization(t *testing.T) {
 			{"adds leading slash", "api", "/api"},
 			{"removes trailing slash", "/api/", "/api"},
 			{"handles multiple trailing slashes", "/api///", "/api"},
-			{"handles path with subdirectories", "api/v1/test", "/api/v1/test"},
-			{"handles path with subdirectories and trailing slash", "/api/v1/test/", "/api/v1/test"},
-			{"handles already normalized path", "/api/v1", "/api/v1"},
+			{"handles path with subdirectories", "api/v1/test", apiTestURL},
+			{"handles path with subdirectories and trailing slash", "/api/v1/test/", apiTestURL},
+			{"handles already normalized path", testAPIV1Path, testAPIV1Path},
 		}
 
 		for _, tt := range tests {
@@ -234,11 +238,11 @@ func TestPathNormalization(t *testing.T) {
 			defaultRoute string
 			expected     string
 		}{
-			{"empty route uses default", "", "/health", "/health"},
-			{"adds leading slash to route", "custom-health", "/health", "/custom-health"},
-			{"preserves route with leading slash", "/custom-health", "/health", "/custom-health"},
-			{"handles root route", "/", "/health", "/"},
-			{"handles complex route path", "/api/v1/status", "/health", "/api/v1/status"},
+			{"empty route uses default", "", healthRoute, healthRoute},
+			{"adds leading slash to route", "custom-health", healthRoute, customHealthRoute},
+			{"preserves route with leading slash", customHealthRoute, healthRoute, customHealthRoute},
+			{"handles root route", "/", healthRoute, "/"},
+			{"handles complex route path", apiRoute, healthRoute, apiRoute},
 		}
 
 		for _, tt := range tests {
@@ -256,11 +260,11 @@ func TestPathNormalization(t *testing.T) {
 			route    string
 			expected string
 		}{
-			{"empty base path returns route as-is", "", "/health", "/health"},
-			{"combines base path with route", "/api", "/health", "/api/health"},
+			{"empty base path returns route as-is", "", healthRoute, healthRoute},
+			{"combines base path with route", "/api", healthRoute, "/api/health"},
 			{"handles root route with base path", "/api", "/", "/api"},
-			{"handles complex paths", "/api/v1", "/users/:id", "/api/v1/users/:id"},
-			{"handles root base path", "/", "/health", "/health"},
+			{"handles complex paths", testAPIV1Path, "/users/:id", "/api/v1/users/:id"},
+			{"handles root base path", "/", healthRoute, healthRoute},
 		}
 
 		for _, tt := range tests {
@@ -311,19 +315,19 @@ func TestServerConfiguration(t *testing.T) {
 			healthRoute:        "",
 			readyRoute:         "",
 			expectedBasePath:   "",
-			expectedHealthPath: "/health",
-			expectedReadyPath:  "/ready",
-			finalHealthPath:    "/health",
-			finalReadyPath:     "/ready",
+			expectedHealthPath: healthRoute,
+			expectedReadyPath:  testReadyRoute,
+			finalHealthPath:    healthRoute,
+			finalReadyPath:     testReadyRoute,
 		},
 		{
 			name:               "base path normalization",
 			basePath:           "api/v1/",
 			healthRoute:        "",
 			readyRoute:         "",
-			expectedBasePath:   "/api/v1",
-			expectedHealthPath: "/health",
-			expectedReadyPath:  "/ready",
+			expectedBasePath:   testAPIV1Path,
+			expectedHealthPath: healthRoute,
+			expectedReadyPath:  testReadyRoute,
 			finalHealthPath:    "/api/v1/health",
 			finalReadyPath:     "/api/v1/ready",
 		},
@@ -333,18 +337,18 @@ func TestServerConfiguration(t *testing.T) {
 			healthRoute:        "status",
 			readyRoute:         "ping",
 			expectedBasePath:   "",
-			expectedHealthPath: "/status",
+			expectedHealthPath: statusRoute,
 			expectedReadyPath:  "/ping",
-			finalHealthPath:    "/status",
+			finalHealthPath:    statusRoute,
 			finalReadyPath:     "/ping",
 		},
 		{
 			name:               "custom routes with base path",
-			basePath:           "/api/v1",
-			healthRoute:        "/status",
+			basePath:           testAPIV1Path,
+			healthRoute:        statusRoute,
 			readyRoute:         "/ping",
-			expectedBasePath:   "/api/v1",
-			expectedHealthPath: "/status",
+			expectedBasePath:   testAPIV1Path,
+			expectedHealthPath: statusRoute,
 			expectedReadyPath:  "/ping",
 			finalHealthPath:    "/api/v1/status",
 			finalReadyPath:     "/api/v1/ping",
@@ -364,8 +368,8 @@ func TestServerConfiguration(t *testing.T) {
 			assertHealthEndpoints(t, server, tt.finalHealthPath, tt.finalReadyPath)
 
 			// Test wrong paths return 404
-			if tt.finalHealthPath != testHealthRoute {
-				assertHTTPGetResponse(t, server, testHealthRoute, http.StatusNotFound)
+			if tt.finalHealthPath != healthRoute {
+				assertHTTPGetResponse(t, server, healthRoute, http.StatusNotFound)
 			}
 			if tt.finalReadyPath != testReadyRoute {
 				assertHTTPGetResponse(t, server, testReadyRoute, http.StatusNotFound)
@@ -398,7 +402,7 @@ func TestModuleGroupBehavior(t *testing.T) {
 			{"no base path", "", "/ping", "/ping"},
 			{"with base path", "/api", "/ping", "/api/ping"},
 			{"root base path", "/", "/ping", "/ping"},
-			{"versioned api", "/api/v1", "/test", "/api/v1/test"},
+			{"versioned api", testAPIV1Path, "/test", apiTestURL},
 		}
 
 		for _, tt := range tests {
@@ -438,7 +442,7 @@ func TestModuleGroupBehavior(t *testing.T) {
 		assertHTTPGetResponse(t, server, testAPIV1Path+"/dedup", http.StatusOK, "dedup")
 
 		// Test FullPath method
-		assert.Equal(t, "/api/v1/test", nested.FullPath("/test"))
+		assert.Equal(t, apiTestURL, nested.FullPath("/test"))
 		assert.Equal(t, "/api", group.FullPath("/"))
 	})
 }
