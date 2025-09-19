@@ -7,32 +7,41 @@ import (
 	"go-bricks/tools/openapi/internal/models"
 )
 
+const (
+	defaultTitle              = "Test API"
+	defaultVersion            = "1.0.0"
+	defaultDescription        = "Test description"
+	usersAPIPath              = "/users"
+	generateFailedErrorMsg    = "Generate() failed: %v"
+	resultNotExpectedErrorMsg = "Expected %q, got %q"
+)
+
 func TestNew(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+	gen := New(defaultTitle, defaultVersion, defaultDescription)
 
 	if gen == nil {
 		t.Fatal("New() returned nil")
 	}
 
-	if gen.title != "Test API" {
+	if gen.title != defaultTitle {
 		t.Errorf("Expected title 'Test API', got '%s'", gen.title)
 	}
 	if gen.version != "1.0.0" {
 		t.Errorf("Expected version '1.0.0', got '%s'", gen.version)
 	}
-	if gen.description != "Test description" {
+	if gen.description != defaultDescription {
 		t.Errorf("Expected description 'Test description', got '%s'", gen.description)
 	}
 }
 
-func TestGenerate_EmptyProject(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+func TestGenerateEmptyProject(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	project := &models.Project{}
 
 	spec, err := gen.Generate(project)
 
 	if err != nil {
-		t.Fatalf("Generate() failed: %v", err)
+		t.Fatalf(generateFailedErrorMsg, err)
 	}
 
 	// Check basic structure
@@ -53,7 +62,7 @@ func TestGenerate_EmptyProject(t *testing.T) {
 	}
 }
 
-func TestGenerate_WithProjectMetadata(t *testing.T) {
+func TestGenerateWithProjectMetadata(t *testing.T) {
 	gen := New("Default API", "0.1.0", "Default description")
 	project := &models.Project{
 		Name:        "Custom API",
@@ -65,7 +74,7 @@ func TestGenerate_WithProjectMetadata(t *testing.T) {
 	spec, err := gen.Generate(project)
 
 	if err != nil {
-		t.Fatalf("Generate() failed: %v", err)
+		t.Fatalf(generateFailedErrorMsg, err)
 	}
 
 	// Should use project metadata over defaults
@@ -80,8 +89,8 @@ func TestGenerate_WithProjectMetadata(t *testing.T) {
 	}
 }
 
-func TestGenerate_WithRoutes(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+func TestGenerateWithRoutes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	project := &models.Project{
 		Modules: []models.Module{
 			{
@@ -97,7 +106,7 @@ func TestGenerate_WithRoutes(t *testing.T) {
 					},
 					{
 						Method: "POST",
-						Path:   "/users",
+						Path:   usersAPIPath,
 						Tags:   []string{"users", "creation"},
 					},
 				},
@@ -108,7 +117,7 @@ func TestGenerate_WithRoutes(t *testing.T) {
 	spec, err := gen.Generate(project)
 
 	if err != nil {
-		t.Fatalf("Generate() failed: %v", err)
+		t.Fatalf(generateFailedErrorMsg, err)
 	}
 
 	// Check routes are present
@@ -155,7 +164,7 @@ func TestGenerate_WithRoutes(t *testing.T) {
 }
 
 func TestGetOperationID(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
 		name     string
@@ -175,7 +184,7 @@ func TestGetOperationID(t *testing.T) {
 			name: "without handler name",
 			route: &models.Route{
 				Method: "POST",
-				Path:   "/users",
+				Path:   usersAPIPath,
 			},
 			expected: "post_users",
 		},
@@ -193,14 +202,14 @@ func TestGetOperationID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gen.getOperationID(tt.route)
 			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
+				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
 		})
 	}
 }
 
 func TestGetSummary(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
 		name     string
@@ -211,7 +220,7 @@ func TestGetSummary(t *testing.T) {
 			name: "with summary",
 			route: &models.Route{
 				Method:  "GET",
-				Path:    "/users",
+				Path:    usersAPIPath,
 				Summary: "List all users",
 			},
 			expected: "List all users",
@@ -220,7 +229,7 @@ func TestGetSummary(t *testing.T) {
 			name: "without summary",
 			route: &models.Route{
 				Method: "POST",
-				Path:   "/users",
+				Path:   usersAPIPath,
 			},
 			expected: "POST /users",
 		},
@@ -230,14 +239,14 @@ func TestGetSummary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gen.getSummary(tt.route)
 			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
+				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
 		})
 	}
 }
 
 func TestGetResponseDescription(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
 		method   string
@@ -255,22 +264,22 @@ func TestGetResponseDescription(t *testing.T) {
 		t.Run(tt.method, func(t *testing.T) {
 			result := gen.getResponseDescription(tt.method)
 			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
+				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
 		})
 	}
 }
 
 func TestGetAllRoutes(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	project := &models.Project{
 		Modules: []models.Module{
 			{
 				Name: "users",
 				Routes: []models.Route{
-					{Method: "GET", Path: "/users"},
-					{Method: "POST", Path: "/users"},
+					{Method: "GET", Path: usersAPIPath},
+					{Method: "POST", Path: usersAPIPath},
 				},
 			},
 			{
@@ -304,8 +313,8 @@ func TestGetAllRoutes(t *testing.T) {
 }
 
 // Test that the generated YAML is valid and parseable
-func TestGenerate_ValidYAML(t *testing.T) {
-	gen := New("Test API", "1.0.0", "Test description")
+func TestGenerateValidYAML(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	project := &models.Project{
 		Modules: []models.Module{
 			{
@@ -326,7 +335,7 @@ func TestGenerate_ValidYAML(t *testing.T) {
 	spec, err := gen.Generate(project)
 
 	if err != nil {
-		t.Fatalf("Generate() failed: %v", err)
+		t.Fatalf(generateFailedErrorMsg, err)
 	}
 
 	// Basic YAML structure validation

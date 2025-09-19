@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+const (
+	outputFileName = "openapi.yaml"
+)
+
 func TestValidateGenerateOptions(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
@@ -20,7 +24,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 			name: "valid options",
 			opts: &GenerateOptions{
 				ProjectRoot: tempDir,
-				OutputFile:  "openapi.yaml",
+				OutputFile:  outputFileName,
 				Format:      "yaml",
 			},
 			wantErr: false,
@@ -29,7 +33,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 			name: "nonexistent project root",
 			opts: &GenerateOptions{
 				ProjectRoot: "/nonexistent/path",
-				OutputFile:  "openapi.yaml",
+				OutputFile:  outputFileName,
 				Format:      "yaml",
 			},
 			wantErr: true,
@@ -38,7 +42,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 			name: "invalid format",
 			opts: &GenerateOptions{
 				ProjectRoot: tempDir,
-				OutputFile:  "openapi.yaml",
+				OutputFile:  outputFileName,
 				Format:      "xml",
 			},
 			wantErr: true,
@@ -47,7 +51,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 			name: "json format",
 			opts: &GenerateOptions{
 				ProjectRoot: tempDir,
-				OutputFile:  "openapi.yaml",
+				OutputFile:  outputFileName,
 				Format:      "json",
 			},
 			wantErr: false,
@@ -64,7 +68,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 	}
 }
 
-func TestValidateGenerateOptions_AutoExtension(t *testing.T) {
+func TestValidateGenerateOptionsAutoExtension(t *testing.T) {
 	tempDir := t.TempDir()
 
 	tests := []struct {
@@ -87,7 +91,7 @@ func TestValidateGenerateOptions_AutoExtension(t *testing.T) {
 		},
 		{
 			name:           "yaml format with extension",
-			initialFile:    "openapi.yaml",
+			initialFile:    outputFileName,
 			format:         "yaml",
 			expectedSuffix: ".yaml",
 		},
@@ -161,12 +165,12 @@ func TestRunGenerate(t *testing.T) {
 	}
 }
 
-func TestRunGenerate_DirectoryCreation(t *testing.T) {
+func TestRunGenerateDirectoryCreation(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
 
 	// Use a nested path that doesn't exist yet
-	outputFile := filepath.Join(tempDir, "docs", "api", "openapi.yaml")
+	outputFile := filepath.Join(tempDir, "docs", "api", outputFileName)
 
 	opts := &GenerateOptions{
 		ProjectRoot: tempDir,
@@ -191,9 +195,9 @@ func TestRunGenerate_DirectoryCreation(t *testing.T) {
 	}
 }
 
-func TestRunGenerate_Verbose(t *testing.T) {
+func TestRunGenerateVerbose(t *testing.T) {
 	tempDir := t.TempDir()
-	outputFile := filepath.Join(tempDir, "openapi.yaml")
+	outputFile := filepath.Join(tempDir, outputFileName)
 
 	opts := &GenerateOptions{
 		ProjectRoot: tempDir,
