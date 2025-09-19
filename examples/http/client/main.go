@@ -67,7 +67,7 @@ func simpleExample(log logger.Logger) {
 }
 
 func builderExample(log logger.Logger) {
-	// Create client using builder pattern
+	// Create client using builder pattern with modern Go practices
 	client := httpClient.NewBuilder(log).
 		WithTimeout(10*time.Second).
 		WithBasicAuth("user", "password").
@@ -75,8 +75,8 @@ func builderExample(log logger.Logger) {
 		WithDefaultHeader("Accept", "application/json").
 		Build()
 
-	// POST request with JSON body
-	postData := map[string]interface{}{
+	// POST request with JSON body using modern 'any' type alias
+	postData := map[string]any{
 		"name":  "John Doe",
 		"email": "john@example.com",
 	}
@@ -105,9 +105,9 @@ func builderExample(log logger.Logger) {
 	fmt.Printf("Elapsed: %v\n", resp.Stats.ElapsedTime)
 
 	// Parse response
-	var response map[string]interface{}
+	var response map[string]any
 	if err := json.Unmarshal(resp.Body, &response); err == nil {
-		if data, ok := response["json"].(map[string]interface{}); ok {
+		if data, ok := response["json"].(map[string]any); ok {
 			fmt.Printf("Posted data: %+v\n", data)
 		}
 	}
