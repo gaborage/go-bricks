@@ -126,23 +126,46 @@ func isGoVersionSupported(version string) bool {
 }
 
 func checkProjectStructure(projectRoot string) error {
-	// Check if directory exists
-	if _, err := os.Stat(projectRoot); os.IsNotExist(err) {
-		return fmt.Errorf("directory does not exist: %s", projectRoot)
-	}
-
-	// Look for typical Go project files
-	goFiles, err := filepath.Glob(filepath.Join(projectRoot, "*.go"))
+	// Resolve to absolute path and validate
+	absRoot, err := resolveProjectPath(projectRoot)
 	if err != nil {
-		return fmt.Errorf("failed to check for Go files: %w", err)
+		return err
 	}
 
-	subDirs, err := filepath.Glob(filepath.Join(projectRoot, "*", "*.go"))
+	if err := validatePath(absRoot); err != nil {
+		return err
+	}
+
+	// Use filepath.WalkDir for more thorough Go file discovery
+	var goFilesFound bool
+	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // Skip directories with permission issues
+		}
+
+		// Skip hidden directories and vendor/node_modules
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Check for .go files (excluding test files for basic validation)
+		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+			goFilesFound = true
+			return filepath.SkipAll // Found at least one, we can stop searching
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("failed to check subdirectories: %w", err)
+		return fmt.Errorf("failed to walk project directory: %w", err)
 	}
 
-	if len(goFiles) == 0 && len(subDirs) == 0 {
+	if !goFilesFound {
 		return fmt.Errorf("no Go files found in project")
 	}
 
@@ -152,10 +175,10 @@ func checkProjectStructure(projectRoot string) error {
 // checkGoBricksCompatibility performs basic compatibility check with go-bricks framework
 // This is a placeholder implementation that will be expanded in Phase 1
 func checkGoBricksCompatibility(goModPath string, verbose bool) error {
-	// Validate and clean the file path to prevent path traversal attacks
-	cleanPath := filepath.Clean(goModPath)
-	if !filepath.IsAbs(cleanPath) {
-		return fmt.Errorf("go.mod path must be absolute")
+	// Resolve to absolute path for security and consistency
+	cleanPath, err := resolveProjectPath(goModPath)
+	if err != nil {
+		return err
 	}
 
 	// Ensure the path ends with "go.mod" to prevent reading arbitrary files
@@ -185,5 +208,30 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 	// - Module interface validation
 	// - Route descriptor version checking
 
+	return nil
+}
+
+// resolveProjectPath converts a relative project path to absolute path
+func resolveProjectPath(projectRoot string) (string, error) {
+	cleanPath := filepath.Clean(projectRoot)
+	if filepath.IsAbs(cleanPath) {
+		return cleanPath, nil
+	}
+
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve absolute path for %s: %w", projectRoot, err)
+	}
+
+	return absPath, nil
+}
+
+// validatePath ensures the path exists and is accessible
+func validatePath(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", path)
+	} else if err != nil {
+		return fmt.Errorf("failed to access path %s: %w", path, err)
+	}
 	return nil
 }

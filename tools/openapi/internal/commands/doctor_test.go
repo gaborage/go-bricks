@@ -329,6 +329,161 @@ func TestNewDoctorCommand(t *testing.T) {
 	}
 }
 
+func TestResolveProjectPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		projectRoot string
+		expectError bool
+		checkResult func(t *testing.T, result string)
+	}{
+		{
+			name:        "absolute path unchanged",
+			projectRoot: "/tmp/test",
+			expectError: false,
+			checkResult: func(t *testing.T, result string) {
+				if result != "/tmp/test" {
+					t.Errorf("Expected /tmp/test, got %s", result)
+				}
+			},
+		},
+		{
+			name:        "relative path converted",
+			projectRoot: ".",
+			expectError: false,
+			checkResult: func(t *testing.T, result string) {
+				if !filepath.IsAbs(result) {
+					t.Errorf("Expected absolute path, got %s", result)
+				}
+			},
+		},
+		{
+			name:        "relative subdirectory",
+			projectRoot: "./subdir",
+			expectError: false,
+			checkResult: func(t *testing.T, result string) {
+				if !filepath.IsAbs(result) {
+					t.Errorf("Expected absolute path, got %s", result)
+				}
+				if !strings.HasSuffix(result, "subdir") {
+					t.Errorf("Expected path ending with 'subdir', got %s", result)
+				}
+			},
+		},
+		{
+			name:        "path cleaning",
+			projectRoot: "/tmp/test/../project",
+			expectError: false,
+			checkResult: func(t *testing.T, result string) {
+				if result != "/tmp/project" {
+					t.Errorf("Expected /tmp/project, got %s", result)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := resolveProjectPath(tt.projectRoot)
+			assertError(t, err, tt.expectError)
+			if !tt.expectError && tt.checkResult != nil {
+				tt.checkResult(t, result)
+			}
+		})
+	}
+}
+
+func TestValidatePath(t *testing.T) {
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name        string
+		path        string
+		expectError bool
+	}{
+		{
+			name:        "existing directory",
+			path:        tempDir,
+			expectError: false,
+		},
+		{
+			name:        "nonexistent path",
+			path:        "/nonexistent/path",
+			expectError: true,
+		},
+		{
+			name:        "empty path",
+			path:        "",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePath(tt.path)
+			assertError(t, err, tt.expectError)
+		})
+	}
+}
+
+func TestCheckGoBricksCompatibilityWithRelativePaths(t *testing.T) {
+	// Create a temporary directory and go.mod
+	tempDir := t.TempDir()
+	goModContent := `module test-project
+
+go 1.21
+
+require go-bricks v1.0.0
+`
+	goModPath := filepath.Join(tempDir, "go.mod")
+	err := os.WriteFile(goModPath, []byte(goModContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test go.mod: %v", err)
+	}
+
+	// Change to temp directory to test relative paths
+	originalWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	defer func() {
+		os.Chdir(originalWd)
+	}()
+
+	err = os.Chdir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		goModPath   string
+		expectError bool
+	}{
+		{
+			name:        "relative path - should work now",
+			goModPath:   "./go.mod",
+			expectError: false,
+		},
+		{
+			name:        "current directory go.mod",
+			goModPath:   "go.mod",
+			expectError: false,
+		},
+		{
+			name:        "absolute path",
+			goModPath:   goModPath,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkGoBricksCompatibility(tt.goModPath, false)
+			assertError(t, err, tt.expectError)
+		})
+	}
+}
+
 func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -336,12 +491,6 @@ func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
 		expectError bool
 		errorMsg    string
 	}{
-		{
-			name:        "relative path",
-			goModPath:   "./go.mod",
-			expectError: true,
-			errorMsg:    "go.mod path must be absolute",
-		},
 		{
 			name:        "path traversal attempt",
 			goModPath:   "/tmp/../etc/passwd",
@@ -372,6 +521,78 @@ func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckProjectStructureWithRelativePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
+
+	// Change to parent directory to test relative paths
+	parentDir := filepath.Dir(tempDir)
+	originalWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	defer func() {
+		os.Chdir(originalWd)
+	}()
+
+	err = os.Chdir(parentDir)
+	if err != nil {
+		t.Fatalf("Failed to change to parent directory: %v", err)
+	}
+
+	// Test with relative path
+	relativePath := "./" + filepath.Base(tempDir)
+	err = checkProjectStructure(relativePath)
+	assertError(t, err, false)
+}
+
+func TestCheckProjectStructureWithDeepDirectories(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create nested directory structure
+	deepDir := filepath.Join(tempDir, "internal", "handlers", "v1")
+	err := os.MkdirAll(deepDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create deep directory: %v", err)
+	}
+
+	// Create Go file in deep directory
+	createTestGoFile(t, deepDir, "handler.go", "package v1")
+
+	// Should find Go files even in deeply nested directories
+	err = checkProjectStructure(tempDir)
+	assertError(t, err, false)
+}
+
+func TestCheckProjectStructureSkipsVendorAndHidden(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create vendor directory with Go files (should be skipped)
+	vendorDir := filepath.Join(tempDir, "vendor")
+	err := os.MkdirAll(vendorDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create vendor directory: %v", err)
+	}
+	createTestGoFile(t, vendorDir, "vendor.go", "package vendor")
+
+	// Create hidden directory with Go files (should be skipped)
+	hiddenDir := filepath.Join(tempDir, ".git")
+	err = os.MkdirAll(hiddenDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create .git directory: %v", err)
+	}
+	createTestGoFile(t, hiddenDir, "git.go", "package git")
+
+	// Should report no Go files found since vendor and hidden dirs are skipped
+	err = checkProjectStructure(tempDir)
+	assertError(t, err, true) // Should error because no valid Go files found
+
+	// Now add a valid Go file
+	createTestGoFile(t, tempDir, "main.go", "package main")
+	err = checkProjectStructure(tempDir)
+	assertError(t, err, false) // Should succeed now
 }
 
 func TestRunDoctorMissingGoMod(t *testing.T) {
