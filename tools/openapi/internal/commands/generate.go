@@ -15,7 +15,6 @@ import (
 type GenerateOptions struct {
 	ProjectRoot string
 	OutputFile  string
-	Format      string
 	Verbose     bool
 }
 
@@ -29,15 +28,12 @@ func NewGenerateCommand() *cobra.Command {
 		Long: `Analyzes a go-bricks service and generates an OpenAPI 3.0.1 specification.
 
 The tool discovers modules, analyzes route registrations and type definitions,
-and produces a comprehensive API specification with validation constraints.`,
+and produces a comprehensive YAML API specification with validation constraints.`,
 		Example: `  # Generate spec for current directory
   go-bricks-openapi generate
 
   # Generate spec for specific project
-  go-bricks-openapi generate -project ./my-service -output docs/openapi.yaml
-
-  # Generate JSON format
-  go-bricks-openapi generate -format json`,
+  go-bricks-openapi generate -project ./my-service -output docs/openapi.yaml`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runGenerate(opts)
 		},
@@ -46,7 +42,6 @@ and produces a comprehensive API specification with validation constraints.`,
 	// Flags
 	cmd.Flags().StringVarP(&opts.ProjectRoot, "project", "p", ".", "Project root directory")
 	cmd.Flags().StringVarP(&opts.OutputFile, "output", "o", "openapi.yaml", "Output file path")
-	cmd.Flags().StringVarP(&opts.Format, "format", "f", "yaml", "Output format (yaml|json)")
 	cmd.Flags().BoolVarP(&opts.Verbose, "verbose", "v", false, "Verbose output")
 
 	return cmd
@@ -60,7 +55,6 @@ func runGenerate(opts *GenerateOptions) error {
 
 	fmt.Printf("Generating OpenAPI spec for project: %s\n", opts.ProjectRoot)
 	fmt.Printf("Output file: %s\n", opts.OutputFile)
-	fmt.Printf("Format: %s\n", opts.Format)
 
 	// For now, create a basic project structure
 	// In Phase 2, this will be replaced with actual project analysis
@@ -101,24 +95,10 @@ func validateGenerateOptions(opts *GenerateOptions) error {
 		return fmt.Errorf("project root does not exist: %s", opts.ProjectRoot)
 	}
 
-	// Validate format
-	switch opts.Format {
-	case "yaml", "yml", "json":
-		// Valid formats
-	default:
-		return fmt.Errorf("unsupported format: %s (supported: yaml, json)", opts.Format)
-	}
-
-	// Ensure output file has correct extension
+	// Ensure output file has .yaml extension
 	ext := filepath.Ext(opts.OutputFile)
 	if ext == "" {
-		// Add extension based on format
-		switch opts.Format {
-		case "json":
-			opts.OutputFile += ".json"
-		default:
-			opts.OutputFile += ".yaml"
-		}
+		opts.OutputFile += ".yaml"
 	}
 
 	return nil

@@ -152,7 +152,18 @@ func checkProjectStructure(projectRoot string) error {
 // checkGoBricksCompatibility performs basic compatibility check with go-bricks framework
 // This is a placeholder implementation that will be expanded in Phase 1
 func checkGoBricksCompatibility(goModPath string, verbose bool) error {
-	content, err := os.ReadFile(goModPath)
+	// Validate and clean the file path to prevent path traversal attacks
+	cleanPath := filepath.Clean(goModPath)
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("go.mod path must be absolute")
+	}
+
+	// Ensure the path ends with "go.mod" to prevent reading arbitrary files
+	if filepath.Base(cleanPath) != "go.mod" {
+		return fmt.Errorf("invalid go.mod path: must end with 'go.mod'")
+	}
+
+	content, err := os.ReadFile(cleanPath)
 	if err != nil {
 		return fmt.Errorf("failed to read go.mod: %w", err)
 	}

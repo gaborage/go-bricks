@@ -247,7 +247,10 @@ func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (str
 	if err != nil {
 		return "", err
 	}
-	encoder.Close()
+
+	if err := encoder.Close(); err != nil {
+		return "", fmt.Errorf("failed to close YAML encoder: %w", err)
+	}
 
 	return buf.String(), nil
 }
