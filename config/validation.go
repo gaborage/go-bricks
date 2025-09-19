@@ -45,6 +45,10 @@ func Validate(cfg *Config) error {
 	return nil
 }
 
+// validateApp validates the application configuration in cfg.
+// It requires Name and Version to be non-empty, Env to be one of
+// EnvDevelopment, EnvStaging, or EnvProduction, and RateLimit to be > 0.
+// Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("app name is required")
@@ -115,6 +119,13 @@ func validateDatabase(cfg *DatabaseConfig) error {
 	return applyDatabasePoolDefaults(cfg)
 }
 
+// validateDatabaseWithConnectionString validates database settings when a connection
+// string is provided and applies defaults for query-related fields when zero.
+// It checks (and returns an error for) an explicit database Type that is not allowed,
+// an invalid optional Port, non-positive MaxConns, and negative values for
+// MaxQueryLength or SlowQueryThreshold. If MaxQueryLength or SlowQueryThreshold
+// are zero they are set to defaultMaxQueryLength and defaultSlowQueryThreshold,
+// respectively. The cfg argument is mutated for those default assignments.
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	if cfg.Type != "" {
 		if err := validateDatabaseType(cfg.Type); err != nil {
@@ -147,6 +158,9 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	return nil
 }
 
+// validateDatabaseType validates that dbType is one of the supported database type
+// constants (PostgreSQL or Oracle). It returns nil when dbType is valid and an
+// error describing the invalid value and the allowed types when it is not.
 func validateDatabaseType(dbType string) error {
 	validTypes := []string{PostgreSQL, Oracle}
 	if !slices.Contains(validTypes, dbType) {
@@ -190,6 +204,14 @@ func validateRequiredDatabasePort(port int) error {
 	return nil
 }
 
+// applyDatabasePoolDefaults sets sensible defaults and validates database pool/query settings on cfg.
+// 
+// It modifies cfg in-place:
+// - MaxConns: if 0, sets to 25; if negative, returns an error.
+// - MaxQueryLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
+// - SlowQueryThreshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
+//
+// Returns an error when any value is invalid; otherwise returns nil.
 func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg.MaxConns == 0 {
 		cfg.MaxConns = 25
@@ -214,6 +236,8 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
+// validateLog validates that cfg.Level is one of the supported log levels.
+// It returns an error listing the allowed values if the level is invalid.
 func validateLog(cfg *LogConfig) error {
 	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
 	if !slices.Contains(validLevels, cfg.Level) {

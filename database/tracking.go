@@ -31,6 +31,10 @@ type TrackingContext struct {
 	Settings trackingSettings
 }
 
+// newTrackingSettings creates trackingSettings populated from cfg.
+// If cfg is nil or a numeric field is non-positive, sensible defaults are used:
+// `defaultSlowQueryThreshold` for slowQueryThreshold and `defaultMaxQueryLength` for maxQueryLength.
+// The LogQueryParameters flag from cfg is copied into logQueryParameters.
 func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 	settings := trackingSettings{
 		slowQueryThreshold: defaultSlowQueryThreshold,
@@ -61,7 +65,10 @@ type TrackedDB struct {
 	settings trackingSettings
 }
 
-// NewTrackedDB creates a new tracked database connection
+// NewTrackedDB creates a TrackedDB that wraps the provided *sql.DB to record query and
+// execution metrics (durations, truncated queries, optional parameter logging).
+// It uses log for emitting structured logs, vendor to identify the database type, and
+// derives per-connection tracking settings from cfg (when non-nil) to override defaults.
 func NewTrackedDB(db *sql.DB, log logger.Logger, vendor string, cfg *config.DatabaseConfig) *TrackedDB {
 	return &TrackedDB{
 		DB:       db,
@@ -265,7 +272,9 @@ type TrackedConnection struct {
 	settings trackingSettings
 }
 
-// NewTrackedConnection creates a new tracked database connection that wraps any Interface implementation
+// NewTrackedConnection returns a database.Interface that wraps conn and records query/operation
+// metrics and logs. The wrapper delegates all calls to the provided conn, uses conn.DatabaseType()
+// as the vendor identifier, and derives per-connection tracking settings from cfg via newTrackingSettings.
 func NewTrackedConnection(conn database.Interface, log logger.Logger, cfg *config.DatabaseConfig) database.Interface {
 	return &TrackedConnection{
 		conn:     conn,
@@ -396,7 +405,12 @@ func (tc *TrackedConnection) trackOperation(ctx context.Context, query string, a
 	trackDBOperation(ctx, trackingCtx, query, args, start, err)
 }
 
-// trackDBOperation is a shared function to record database operation metrics
+// trackDBOperation records timing and outcome metrics for a database operation and emits a structured log entry.
+// It is a no-op if tc or tc.Logger is nil. The function:
+// - measures elapsed time since start and increments global DB counters with the elapsed nanoseconds,
+// - truncates the query to tc.Settings.maxQueryLength and, when enabled, attaches sanitized query parameters,
+// - logs sql.ErrNoRows at Debug level (not treated as an error), other errors at Error level,
+// - logs a Warn when the elapsed time exceeds tc.Settings.slowQueryThreshold, otherwise logs a Debug completion message.
 func trackDBOperation(ctx context.Context, tc *TrackingContext, query string, args []any, start time.Time, err error) {
 	// Guard against nil tracking context or logger with no-op default
 	if tc == nil || tc.Logger == nil {
@@ -443,6 +457,11 @@ func trackDBOperation(ctx context.Context, tc *TrackingContext, query string, ar
 	}
 }
 
+// truncateString returns value truncated to at most maxLen characters.
+// If maxLen <= 0 or value is already shorter than or equal to maxLen, the
+// original string is returned. When maxLen <= 3 the function returns the
+// first maxLen characters (no ellipsis); otherwise it returns the first
+// maxLen-3 characters followed by "..." to indicate truncation.
 func truncateString(value string, maxLen int) string {
 	if maxLen <= 0 || len(value) <= maxLen {
 		return value
@@ -453,6 +472,12 @@ func truncateString(value string, maxLen int) string {
 	return value[:maxLen-3] + "..."
 }
 
+// sanitizeArgs returns a sanitized copy of the provided argument slice suitable for logging.
+//
+// If args is empty, it returns nil. String values are truncated using truncateString with
+// maxLen; byte slices are replaced with the placeholder "<bytes len=N>"; all other values
+// are formatted with "%v" and then truncated using truncateString. The returned slice has
+// the same length and element order as the input (unless args is empty).
 func sanitizeArgs(args []any, maxLen int) []any {
 	if len(args) == 0 {
 		return nil

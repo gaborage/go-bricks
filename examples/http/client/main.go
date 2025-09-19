@@ -38,6 +38,11 @@ func main() {
 	retryExample(log)
 }
 
+// simpleExample creates a basic HTTP client and issues a GET request to https://httpbin.org/get,
+// printing the response status, elapsed time, and response body length to standard output.
+// 
+// If the request fails with a network error, it prints a "Network error" message; for other
+// failures it prints a generic "Request failed" message.
 func simpleExample(log logger.Logger) {
 	// Create a simple client
 	client := httpClient.NewClient(log)
@@ -66,6 +71,10 @@ func simpleExample(log logger.Logger) {
 	fmt.Printf("Response body length: %d bytes\n", len(resp.Body))
 }
 
+// builderExample demonstrates building an HTTP client with common defaults and using it
+// to POST a JSON payload to https://httpbin.org/post. It marshals a map[string]any body,
+// sends the request, prints the response status and elapsed time, and—if the response
+// contains a top-level "json" object—prints the echoed posted data.
 func builderExample(log logger.Logger) {
 	// Create client using builder pattern with modern Go practices
 	client := httpClient.NewBuilder(log).
