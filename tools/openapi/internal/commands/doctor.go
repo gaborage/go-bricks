@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/semver"
 )
 
 // DoctorOptions holds options for the doctor command
@@ -55,8 +57,9 @@ func runDoctor(opts *DoctorOptions) error {
 	var hasErrors bool
 
 	// Check Go version
-	fmt.Printf("📋 Go Version: %s\n", runtime.Version())
-	if !isGoVersionSupported() {
+	goVersion := runtime.Version()
+	fmt.Printf("📋 Go Version: %s\n", goVersion)
+	if !isGoVersionSupported(goVersion) {
 		fmt.Println("❌ Go version 1.21+ required")
 		hasErrors = true
 	} else {
@@ -79,7 +82,14 @@ func runDoctor(opts *DoctorOptions) error {
 		hasErrors = true
 	} else {
 		fmt.Println("✅ go.mod found")
-		//TODO: Check go-bricks version in Phase 1
+
+		// Basic go-bricks version check (expanded in Phase 1)
+		if err := checkGoBricksCompatibility(goModPath, opts.Verbose); err != nil {
+			if opts.Verbose {
+				fmt.Printf("⚠️  go-bricks compatibility: %v\n", err)
+			}
+			// Non-fatal for now - just warn in verbose mode
+		}
 	}
 
 	// Check build environment
@@ -96,11 +106,23 @@ func runDoctor(opts *DoctorOptions) error {
 	return nil
 }
 
-func isGoVersionSupported() bool {
-	version := runtime.Version()
-	// Simple check for go1.21+
-	// In production, would use semver parsing
-	return version >= "go1.21"
+func isGoVersionSupported(version string) bool {
+	// Convert Go version (e.g., "go1.21.5") to semver format (e.g., "v1.21.5")
+	if !strings.HasPrefix(version, "go") {
+		return false
+	}
+
+	// Remove "go" prefix and add "v" prefix for semver
+	semverVersion := "v" + strings.TrimPrefix(version, "go")
+
+	// Check if version is valid semver format
+	if !semver.IsValid(semverVersion) {
+		return false
+	}
+
+	// Compare with minimum required version (1.21.0)
+	minVersion := "v1.21.0"
+	return semver.Compare(semverVersion, minVersion) >= 0
 }
 
 func checkProjectStructure(projectRoot string) error {
@@ -123,6 +145,34 @@ func checkProjectStructure(projectRoot string) error {
 	if len(goFiles) == 0 && len(subDirs) == 0 {
 		return fmt.Errorf("no Go files found in project")
 	}
+
+	return nil
+}
+
+// checkGoBricksCompatibility performs basic compatibility check with go-bricks framework
+// This is a placeholder implementation that will be expanded in Phase 1
+func checkGoBricksCompatibility(goModPath string, verbose bool) error {
+	content, err := os.ReadFile(goModPath)
+	if err != nil {
+		return fmt.Errorf("failed to read go.mod: %w", err)
+	}
+
+	goModContent := string(content)
+
+	// Basic check for go-bricks presence
+	if !strings.Contains(goModContent, "go-bricks") {
+		return fmt.Errorf("go-bricks dependency not found in go.mod")
+	}
+
+	if verbose {
+		fmt.Println("✅ go-bricks dependency detected")
+	}
+
+	// Phase 1 will add:
+	// - Semantic version parsing of go-bricks version
+	// - Compatibility matrix checking
+	// - Module interface validation
+	// - Route descriptor version checking
 
 	return nil
 }
