@@ -39,17 +39,20 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type            string        `koanf:"type"` // "postgresql" or "oracle"
-	Host            string        `koanf:"host"`
-	Port            int           `koanf:"port"`
-	Database        string        `koanf:"database"`
-	Username        string        `koanf:"username"`
-	Password        string        `koanf:"password"`
-	SSLMode         string        `koanf:"ssl_mode"`
-	MaxConns        int32         `koanf:"max_conns"`
-	MaxIdleConns    int32         `koanf:"max_idle_conns"`
-	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime"`
-	ConnMaxIdleTime time.Duration `koanf:"conn_max_idle_time"`
+	Type               string        `koanf:"type"` // "postgresql" or "oracle"
+	Host               string        `koanf:"host"`
+	Port               int           `koanf:"port"`
+	Database           string        `koanf:"database"`
+	Username           string        `koanf:"username"`
+	Password           string        `koanf:"password"`
+	SSLMode            string        `koanf:"ssl_mode"`
+	MaxConns           int32         `koanf:"max_conns"`
+	MaxIdleConns       int32         `koanf:"max_idle_conns"`
+	ConnMaxLifetime    time.Duration `koanf:"conn_max_lifetime"`
+	ConnMaxIdleTime    time.Duration `koanf:"conn_max_idle_time"`
+	SlowQueryThreshold time.Duration `koanf:"slow_query_threshold"`
+	MaxQueryLength     int           `koanf:"max_query_length"`
+	LogQueryParameters bool          `koanf:"log_query_parameters"`
 
 	// Oracle-specific settings
 	ServiceName string `koanf:"service_name"` // Oracle service name

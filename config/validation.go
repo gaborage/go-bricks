@@ -2,7 +2,14 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"time"
+)
+
+const (
+	defaultSlowQueryThreshold = 200 * time.Millisecond
+	defaultMaxQueryLength     = 1000
 )
 
 // Database type constants
@@ -48,7 +55,7 @@ func validateApp(cfg *AppConfig) error {
 	}
 
 	validEnvs := []string{EnvDevelopment, EnvStaging, EnvProduction}
-	if !contains(validEnvs, cfg.Env) {
+	if !slices.Contains(validEnvs, cfg.Env) {
 		return fmt.Errorf("invalid environment: %s (must be one of: %s)",
 			cfg.Env, strings.Join(validEnvs, ", "))
 	}
@@ -123,12 +130,26 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 		return fmt.Errorf("max connections must be positive")
 	}
 
+	if cfg.MaxQueryLength < 0 {
+		return fmt.Errorf("max query length must be zero or positive")
+	}
+	if cfg.MaxQueryLength == 0 {
+		cfg.MaxQueryLength = defaultMaxQueryLength
+	}
+
+	if cfg.SlowQueryThreshold < 0 {
+		return fmt.Errorf("slow query threshold must be zero or positive")
+	}
+	if cfg.SlowQueryThreshold == 0 {
+		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	}
+
 	return nil
 }
 
 func validateDatabaseType(dbType string) error {
 	validTypes := []string{PostgreSQL, Oracle}
-	if !contains(validTypes, dbType) {
+	if !slices.Contains(validTypes, dbType) {
 		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
 			dbType, strings.Join(validTypes, ", "))
 	}
@@ -176,24 +197,29 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		return fmt.Errorf("max connections must be positive")
 	}
 
+	if cfg.MaxQueryLength < 0 {
+		return fmt.Errorf("max query length must be zero or positive")
+	}
+	if cfg.MaxQueryLength == 0 {
+		cfg.MaxQueryLength = defaultMaxQueryLength
+	}
+
+	if cfg.SlowQueryThreshold < 0 {
+		return fmt.Errorf("slow query threshold must be zero or positive")
+	}
+	if cfg.SlowQueryThreshold == 0 {
+		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	}
+
 	return nil
 }
 
 func validateLog(cfg *LogConfig) error {
 	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
-	if !contains(validLevels, cfg.Level) {
+	if !slices.Contains(validLevels, cfg.Level) {
 		return fmt.Errorf("invalid log level: %s (must be one of: %s)",
 			cfg.Level, strings.Join(validLevels, ", "))
 	}
 
 	return nil
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

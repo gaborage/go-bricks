@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -10,13 +11,15 @@ import (
 const (
 	testConnectionString = "postgresql://user:pass@localhost/db"
 	testOracleHost       = "oracle.example.com"
+	testAppName          = "test-app"
+	testAppVersion       = "v1.0.0"
 )
 
 func TestValidateValidConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      "test-app",
-			Version:   "v1.0.0",
+			Name:      testAppName,
+			Version:   testAppVersion,
 			Env:       EnvDevelopment,
 			RateLimit: 100,
 		},
@@ -50,8 +53,8 @@ func TestValidateAppSuccess(t *testing.T) {
 		{
 			name: "development_environment",
 			cfg: AppConfig{
-				Name:      "test-app",
-				Version:   "v1.0.0",
+				Name:      testAppName,
+				Version:   testAppVersion,
 				Env:       EnvDevelopment,
 				RateLimit: 100,
 			},
@@ -78,7 +81,7 @@ func TestValidateAppSuccess(t *testing.T) {
 			name: "minimum_rate_limit",
 			cfg: AppConfig{
 				Name:      "min-app",
-				Version:   "v1.0.0",
+				Version:   testAppVersion,
 				Env:       EnvDevelopment,
 				RateLimit: 1,
 			},
@@ -103,7 +106,7 @@ func TestValidateAppFailures(t *testing.T) {
 			name: "empty_name",
 			cfg: AppConfig{
 				Name:      "",
-				Version:   "v1.0.0",
+				Version:   testAppVersion,
 				Env:       EnvDevelopment,
 				RateLimit: 100,
 			},
@@ -112,7 +115,7 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "empty_version",
 			cfg: AppConfig{
-				Name:      "test-app",
+				Name:      testAppName,
 				Version:   "",
 				Env:       EnvDevelopment,
 				RateLimit: 100,
@@ -122,8 +125,8 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "invalid_environment",
 			cfg: AppConfig{
-				Name:      "test-app",
-				Version:   "v1.0.0",
+				Name:      testAppName,
+				Version:   testAppVersion,
 				Env:       "invalid",
 				RateLimit: 100,
 			},
@@ -132,8 +135,8 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "zero_rate_limit",
 			cfg: AppConfig{
-				Name:      "test-app",
-				Version:   "v1.0.0",
+				Name:      testAppName,
+				Version:   testAppVersion,
 				Env:       EnvDevelopment,
 				RateLimit: 0,
 			},
@@ -142,8 +145,8 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "negative_rate_limit",
 			cfg: AppConfig{
-				Name:      "test-app",
-				Version:   "v1.0.0",
+				Name:      testAppName,
+				Version:   testAppVersion,
 				Env:       EnvDevelopment,
 				RateLimit: -1,
 			},
@@ -538,7 +541,7 @@ func TestValidateNestedErrors(t *testing.T) {
 			cfg: Config{
 				App: AppConfig{
 					Name:      "",
-					Version:   "v1.0.0",
+					Version:   testAppVersion,
 					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
@@ -563,8 +566,8 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "server_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      "test-app",
-					Version:   "v1.0.0",
+					Name:      testAppName,
+					Version:   testAppVersion,
 					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
@@ -589,8 +592,8 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "database_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      "test-app",
-					Version:   "v1.0.0",
+					Name:      testAppName,
+					Version:   testAppVersion,
 					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
@@ -615,8 +618,8 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "log_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      "test-app",
-					Version:   "v1.0.0",
+					Name:      testAppName,
+					Version:   testAppVersion,
 					Env:       EnvDevelopment,
 					RateLimit: 100,
 				},
@@ -695,7 +698,7 @@ func TestContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := contains(tt.slice, tt.item)
+			result := slices.Contains(tt.slice, tt.item)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -946,8 +949,8 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 func TestValidateDatabaseDisabledConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      "test-app",
-			Version:   "v1.0.0",
+			Name:      testAppName,
+			Version:   testAppVersion,
 			Env:       EnvDevelopment,
 			RateLimit: 100,
 		},

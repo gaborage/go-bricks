@@ -197,7 +197,7 @@ func TestNewConnectionReturnsTrackedConnection(t *testing.T) {
 	log := logger.New("debug", true)
 
 	// Test that NewTrackedConnection creates the correct wrapper
-	tracked := NewTrackedConnection(simpleConn, log)
+	tracked := NewTrackedConnection(simpleConn, log, &config.DatabaseConfig{})
 
 	require.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
@@ -226,7 +226,7 @@ func TestFactoryIntegrationWithTracking(t *testing.T) {
 
 	// Create connection and wrap with tracking
 	simpleConn := &simpleConnection{db: db}
-	tracked := NewTrackedConnection(simpleConn, log)
+	tracked := NewTrackedConnection(simpleConn, log, &config.DatabaseConfig{})
 
 	// Verify that operations are tracked
 	initialCounter := logger.GetDBCounter(ctx)
@@ -251,15 +251,15 @@ type simpleConnection struct {
 	db *sql.DB
 }
 
-func (c *simpleConnection) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (c *simpleConnection) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return c.db.QueryContext(ctx, query, args...)
 }
 
-func (c *simpleConnection) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (c *simpleConnection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return c.db.QueryRowContext(ctx, query, args...)
 }
 
-func (c *simpleConnection) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (c *simpleConnection) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return c.db.ExecContext(ctx, query, args...)
 }
 
@@ -291,9 +291,9 @@ func (c *simpleConnection) Health(ctx context.Context) error {
 	return c.db.PingContext(ctx)
 }
 
-func (c *simpleConnection) Stats() (map[string]interface{}, error) {
+func (c *simpleConnection) Stats() (map[string]any, error) {
 	stats := c.db.Stats()
-	return map[string]interface{}{
+	return map[string]any{
 		"open_connections": stats.OpenConnections,
 		"in_use":           stats.InUse,
 	}, nil
@@ -320,15 +320,15 @@ type simpleStatement struct {
 	stmt *sql.Stmt
 }
 
-func (s *simpleStatement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+func (s *simpleStatement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	return s.stmt.QueryContext(ctx, args...)
 }
 
-func (s *simpleStatement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+func (s *simpleStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
 	return s.stmt.QueryRowContext(ctx, args...)
 }
 
-func (s *simpleStatement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+func (s *simpleStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	return s.stmt.ExecContext(ctx, args...)
 }
 
@@ -340,15 +340,15 @@ type simpleTransaction struct {
 	tx *sql.Tx
 }
 
-func (t *simpleTransaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (t *simpleTransaction) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return t.tx.QueryContext(ctx, query, args...)
 }
 
-func (t *simpleTransaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (t *simpleTransaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return t.tx.QueryRowContext(ctx, query, args...)
 }
 
-func (t *simpleTransaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (t *simpleTransaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return t.tx.ExecContext(ctx, query, args...)
 }
 

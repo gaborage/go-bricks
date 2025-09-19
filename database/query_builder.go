@@ -2,6 +2,7 @@
 package database
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -135,22 +136,15 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 // BuildLimitOffset creates LIMIT/OFFSET clause based on vendor
 func (qb *QueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder {
 	switch qb.vendor {
-	case PostgreSQL:
-		// PostgreSQL supports LIMIT and OFFSET
-		if limit > 0 {
-			query = query.Limit(uint64(limit))
-		}
-		if offset > 0 {
-			query = query.Offset(uint64(offset))
-		}
-		return query
 	case Oracle:
-		// Oracle doesn't support LIMIT clause, use FETCH FIRST for modern versions (12c+)
-		// For now, return the original query and let the application handle pagination differently
-		// TODO: Implement proper Oracle pagination
+		// Oracle uses OFFSET ... ROWS FETCH NEXT ... ROWS ONLY semantics (12c+)
+		oracleSuffix := buildOraclePaginationClause(limit, offset)
+		if oracleSuffix != "" {
+			query = query.Suffix(oracleSuffix)
+		}
 		return query
 	default:
-		// Default behavior
+		// PostgreSQL and other databases support standard LIMIT and OFFSET
 		if limit > 0 {
 			query = query.Limit(uint64(limit))
 		}
@@ -161,8 +155,24 @@ func (qb *QueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, of
 	}
 }
 
+func buildOraclePaginationClause(limit, offset int) string {
+	if limit <= 0 && offset <= 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, 2)
+	if offset > 0 {
+		parts = append(parts, fmt.Sprintf("OFFSET %d ROWS", offset))
+	}
+	if limit > 0 {
+		parts = append(parts, fmt.Sprintf("FETCH NEXT %d ROWS ONLY", limit))
+	}
+
+	return strings.Join(parts, " ")
+}
+
 // BuildUpsert creates an UPSERT/MERGE query based on vendor
-func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]interface{}) (query string, args []interface{}, err error) {
+func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	switch qb.vendor {
 	case PostgreSQL:
 		// PostgreSQL uses ON CONFLICT ... DO UPDATE
@@ -222,7 +232,7 @@ func (qb *QueryBuilder) BuildUUIDGeneration() string {
 }
 
 // BuildBooleanValue converts Go boolean to vendor-specific boolean representation
-func (qb *QueryBuilder) BuildBooleanValue(value bool) interface{} {
+func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
 	switch qb.vendor {
 	case PostgreSQL:
 		return value // PostgreSQL has native boolean support

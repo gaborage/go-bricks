@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/oracle"
@@ -28,18 +29,16 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	}
 
 	// Wrap the connection with performance tracking
-	return NewTrackedConnection(conn, log), nil
+	return NewTrackedConnection(conn, log, cfg), nil
 }
 
 // ValidateDatabaseType checks if the database type is supported
 func ValidateDatabaseType(dbType string) error {
 	supportedTypes := []string{PostgreSQL, Oracle}
-	for _, supported := range supportedTypes {
-		if dbType == supported {
-			return nil
-		}
+	if !slices.Contains(supportedTypes, dbType) {
+		return fmt.Errorf("unsupported database type: %s (supported: %v)", dbType, supportedTypes)
 	}
-	return fmt.Errorf("unsupported database type: %s (supported: %v)", dbType, supportedTypes)
+	return nil
 }
 
 // GetSupportedDatabaseTypes returns a list of supported database types

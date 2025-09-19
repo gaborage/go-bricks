@@ -5,64 +5,101 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
-	// SlowQueryThreshold defines the duration above which queries are considered slow
-	SlowQueryThreshold = 200 * time.Millisecond
-	// MaxQueryLength defines the maximum length of query strings in logs to prevent unbounded payloads
-	MaxQueryLength = 1000
+	defaultSlowQueryThreshold = 200 * time.Millisecond
+	defaultMaxQueryLength     = 1000
 )
+
+type trackingSettings struct {
+	slowQueryThreshold time.Duration
+	maxQueryLength     int
+	logQueryParameters bool
+}
+
+// TrackingContext groups tracking-related parameters to reduce function parameter count
+type TrackingContext struct {
+	Logger   logger.Logger
+	Vendor   string
+	Settings trackingSettings
+}
+
+func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
+	settings := trackingSettings{
+		slowQueryThreshold: defaultSlowQueryThreshold,
+		maxQueryLength:     defaultMaxQueryLength,
+		logQueryParameters: false,
+	}
+
+	if cfg == nil {
+		return settings
+	}
+
+	if cfg.SlowQueryThreshold > 0 {
+		settings.slowQueryThreshold = cfg.SlowQueryThreshold
+	}
+	if cfg.MaxQueryLength > 0 {
+		settings.maxQueryLength = cfg.MaxQueryLength
+	}
+	settings.logQueryParameters = cfg.LogQueryParameters
+
+	return settings
+}
 
 // TrackedDB wraps sql.DB to provide request-scoped performance tracking
 type TrackedDB struct {
 	*sql.DB
-	logger logger.Logger
-	vendor string
+	logger   logger.Logger
+	vendor   string
+	settings trackingSettings
 }
 
 // NewTrackedDB creates a new tracked database connection
-func NewTrackedDB(db *sql.DB, log logger.Logger, vendor string) *TrackedDB {
+func NewTrackedDB(db *sql.DB, log logger.Logger, vendor string, cfg *config.DatabaseConfig) *TrackedDB {
 	return &TrackedDB{
-		DB:     db,
-		logger: log,
-		vendor: vendor,
+		DB:       db,
+		logger:   log,
+		vendor:   vendor,
+		settings: newTrackingSettings(cfg),
 	}
 }
 
 // QueryContext executes a query with context and tracks performance
-func (db *TrackedDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (db *TrackedDB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 
 	// Track performance metrics
-	db.trackQuery(ctx, query, start, err)
+	db.trackQuery(ctx, query, args, start, err)
 
 	return rows, err
 }
 
 // QueryRowContext executes a single row query with context and tracks performance
-func (db *TrackedDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (db *TrackedDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	start := time.Now()
 	row := db.DB.QueryRowContext(ctx, query, args...)
 
 	// Track performance metrics (error will be checked when row is scanned)
-	db.trackQuery(ctx, query, start, nil)
+	db.trackQuery(ctx, query, args, start, nil)
 
 	return row
 }
 
 // ExecContext executes a query without returning rows and tracks performance
-func (db *TrackedDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (db *TrackedDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := db.DB.ExecContext(ctx, query, args...)
 
 	// Track performance metrics
-	db.trackQuery(ctx, query, start, err)
+	db.trackQuery(ctx, query, args, start, err)
 
 	return result, err
 }
@@ -72,15 +109,15 @@ type BasicStatement struct {
 	*sql.Stmt
 }
 
-func (s *BasicStatement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+func (s *BasicStatement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	return s.QueryContext(ctx, args...)
 }
 
-func (s *BasicStatement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
 	return s.QueryRowContext(ctx, args...)
 }
 
-func (s *BasicStatement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+func (s *BasicStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	return s.ExecContext(ctx, args...)
 }
 
@@ -94,150 +131,174 @@ func (db *TrackedDB) PrepareContext(ctx context.Context, query string) (database
 	stmt, err := db.DB.PrepareContext(ctx, query)
 
 	// Track performance metrics
-	db.trackQuery(ctx, "PREPARE: "+query, start, err)
+	db.trackQuery(ctx, "PREPARE: "+query, nil, start, err)
 
 	if stmt != nil {
-		return &TrackedStmt{Statement: &BasicStatement{stmt}, logger: db.logger, vendor: db.vendor}, nil
+		return &TrackedStmt{Statement: &BasicStatement{stmt}, logger: db.logger, vendor: db.vendor, settings: db.settings, query: query}, nil
 	}
 
 	return nil, err
 }
 
 // trackQuery records database operation metrics
-func (db *TrackedDB) trackQuery(ctx context.Context, query string, start time.Time, err error) {
-	trackDBOperation(ctx, db.logger, db.vendor, query, start, err)
+func (db *TrackedDB) trackQuery(ctx context.Context, query string, args []any, start time.Time, err error) {
+	tc := &TrackingContext{
+		Logger:   db.logger,
+		Vendor:   db.vendor,
+		Settings: db.settings,
+	}
+	trackDBOperation(ctx, tc, query, args, start, err)
 }
 
 // TrackedStmt wraps database.Statement to provide performance tracking for prepared statements
 type TrackedStmt struct {
 	database.Statement
-	logger logger.Logger
-	vendor string
+	logger   logger.Logger
+	vendor   string
+	settings trackingSettings
+	query    string
 }
 
 // Query executes a prepared query with context and tracks performance
-func (s *TrackedStmt) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+func (s *TrackedStmt) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := s.Statement.Query(ctx, args...)
 
 	// Track performance metrics
-	s.trackStmt(ctx, "STMT_QUERY", start, err)
+	s.trackStmt(ctx, "STMT_QUERY", args, start, err)
 
 	return rows, err
 }
 
 // QueryRow executes a prepared single row query with context and tracks performance
-func (s *TrackedStmt) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+func (s *TrackedStmt) QueryRow(ctx context.Context, args ...any) *sql.Row {
 	start := time.Now()
 	row := s.Statement.QueryRow(ctx, args...)
 
 	// Track performance metrics
-	s.trackStmt(ctx, "STMT_QUERY_ROW", start, nil)
+	s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, nil)
 
 	return row
 }
 
 // Exec executes a prepared statement with context and tracks performance
-func (s *TrackedStmt) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+func (s *TrackedStmt) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := s.Statement.Exec(ctx, args...)
 
 	// Track performance metrics
-	s.trackStmt(ctx, "STMT_EXEC", start, err)
+	s.trackStmt(ctx, "STMT_EXEC", args, start, err)
 
 	return result, err
 }
 
 // trackStmt records prepared statement metrics
-func (s *TrackedStmt) trackStmt(ctx context.Context, operation string, start time.Time, err error) {
-	trackDBOperation(ctx, s.logger, s.vendor, operation, start, err)
+func (s *TrackedStmt) trackStmt(ctx context.Context, operation string, args []any, start time.Time, err error) {
+	op := operation
+	if s.query != "" {
+		op = operation + ": " + s.query
+	}
+	tc := &TrackingContext{
+		Logger:   s.logger,
+		Vendor:   s.vendor,
+		Settings: s.settings,
+	}
+	trackDBOperation(ctx, tc, op, args, start, err)
 }
 
 // TrackedTx wraps sql.Tx to provide performance tracking for transactions
 type TrackedTx struct {
 	*sql.Tx
-	logger logger.Logger
-	vendor string
+	logger   logger.Logger
+	vendor   string
+	settings trackingSettings
 }
 
 // QueryContext executes a query within a transaction with context and tracks performance
-func (tx *TrackedTx) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (tx *TrackedTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := tx.Tx.QueryContext(ctx, query, args...)
 
 	// Track performance metrics
-	tx.trackTx(ctx, query, start, err)
+	tx.trackTx(ctx, query, args, start, err)
 
 	return rows, err
 }
 
 // QueryRowContext executes a single row query within a transaction and tracks performance
-func (tx *TrackedTx) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (tx *TrackedTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	start := time.Now()
 	row := tx.Tx.QueryRowContext(ctx, query, args...)
 
 	// Track performance metrics
-	tx.trackTx(ctx, query, start, nil)
+	tx.trackTx(ctx, query, args, start, nil)
 
 	return row
 }
 
 // ExecContext executes a query within a transaction and tracks performance
-func (tx *TrackedTx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (tx *TrackedTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := tx.Tx.ExecContext(ctx, query, args...)
 
 	// Track performance metrics
-	tx.trackTx(ctx, query, start, err)
+	tx.trackTx(ctx, query, args, start, err)
 
 	return result, err
 }
 
 // trackTx records transaction operation metrics
-func (tx *TrackedTx) trackTx(ctx context.Context, query string, start time.Time, err error) {
-	trackDBOperation(ctx, tx.logger, tx.vendor, query, start, err)
+func (tx *TrackedTx) trackTx(ctx context.Context, query string, args []any, start time.Time, err error) {
+	tc := &TrackingContext{
+		Logger:   tx.logger,
+		Vendor:   tx.vendor,
+		Settings: tx.settings,
+	}
+	trackDBOperation(ctx, tc, query, args, start, err)
 }
 
 // TrackedConnection wraps database.Interface to provide performance tracking
 type TrackedConnection struct {
-	conn   database.Interface
-	logger logger.Logger
-	vendor string
+	conn     database.Interface
+	logger   logger.Logger
+	vendor   string
+	settings trackingSettings
 }
 
 // NewTrackedConnection creates a new tracked database connection that wraps any Interface implementation
-func NewTrackedConnection(conn database.Interface, log logger.Logger) database.Interface {
+func NewTrackedConnection(conn database.Interface, log logger.Logger, cfg *config.DatabaseConfig) database.Interface {
 	return &TrackedConnection{
-		conn:   conn,
-		logger: log,
-		vendor: conn.DatabaseType(),
+		conn:     conn,
+		logger:   log,
+		vendor:   conn.DatabaseType(),
+		settings: newTrackingSettings(cfg),
 	}
 }
 
 // Query executes a query that returns rows with tracking
-func (tc *TrackedConnection) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (tc *TrackedConnection) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := tc.conn.Query(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, start, err)
+	tc.trackOperation(ctx, query, args, start, err)
 	return rows, err
 }
 
 // QueryRow executes a query that returns at most one row with tracking
-func (tc *TrackedConnection) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (tc *TrackedConnection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	start := time.Now()
 	row := tc.conn.QueryRow(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, start, nil)
+	tc.trackOperation(ctx, query, args, start, nil)
 	return row
 }
 
 // Exec executes a query without returning any rows with tracking
-func (tc *TrackedConnection) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (tc *TrackedConnection) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := tc.conn.Exec(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, start, err)
+	tc.trackOperation(ctx, query, args, start, err)
 	return result, err
 }
 
@@ -246,17 +307,18 @@ func (tc *TrackedConnection) Prepare(ctx context.Context, query string) (databas
 	start := time.Now()
 	stmt, err := tc.conn.Prepare(ctx, query)
 
-	tc.trackOperation(ctx, "PREPARE: "+query, start, err)
+	tc.trackOperation(ctx, "PREPARE: "+query, nil, start, err)
 
 	if err != nil {
 		return nil, err
 	}
 
 	return &TrackedStatement{
-		stmt:   stmt,
-		logger: tc.logger,
-		vendor: tc.vendor,
-		query:  query,
+		stmt:     stmt,
+		logger:   tc.logger,
+		vendor:   tc.vendor,
+		settings: tc.settings,
+		query:    query,
 	}, nil
 }
 
@@ -268,9 +330,10 @@ func (tc *TrackedConnection) Begin(ctx context.Context) (database.Tx, error) {
 	}
 
 	return &TrackedTransaction{
-		tx:     tx,
-		logger: tc.logger,
-		vendor: tc.vendor,
+		tx:       tx,
+		logger:   tc.logger,
+		vendor:   tc.vendor,
+		settings: tc.settings,
 	}, nil
 }
 
@@ -282,9 +345,10 @@ func (tc *TrackedConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 	}
 
 	return &TrackedTransaction{
-		tx:     tx,
-		logger: tc.logger,
-		vendor: tc.vendor,
+		tx:       tx,
+		logger:   tc.logger,
+		vendor:   tc.vendor,
+		settings: tc.settings,
 	}, nil
 }
 
@@ -294,7 +358,7 @@ func (tc *TrackedConnection) Health(ctx context.Context) error {
 }
 
 // Stats returns database connection statistics (no tracking needed)
-func (tc *TrackedConnection) Stats() (map[string]interface{}, error) {
+func (tc *TrackedConnection) Stats() (map[string]any, error) {
 	return tc.conn.Stats()
 }
 
@@ -318,19 +382,24 @@ func (tc *TrackedConnection) CreateMigrationTable(ctx context.Context) error {
 	start := time.Now()
 	err := tc.conn.CreateMigrationTable(ctx)
 
-	tc.trackOperation(ctx, "CREATE_MIGRATION_TABLE", start, err)
+	tc.trackOperation(ctx, "CREATE_MIGRATION_TABLE", nil, start, err)
 	return err
 }
 
 // trackOperation records database operation metrics
-func (tc *TrackedConnection) trackOperation(ctx context.Context, query string, start time.Time, err error) {
-	trackDBOperation(ctx, tc.logger, tc.vendor, query, start, err)
+func (tc *TrackedConnection) trackOperation(ctx context.Context, query string, args []any, start time.Time, err error) {
+	trackingCtx := &TrackingContext{
+		Logger:   tc.logger,
+		Vendor:   tc.vendor,
+		Settings: tc.settings,
+	}
+	trackDBOperation(ctx, trackingCtx, query, args, start, err)
 }
 
 // trackDBOperation is a shared function to record database operation metrics
-func trackDBOperation(ctx context.Context, log logger.Logger, vendor, query string, start time.Time, err error) {
-	// Guard against nil logger with no-op default
-	if log == nil {
+func trackDBOperation(ctx context.Context, tc *TrackingContext, query string, args []any, start time.Time, err error) {
+	// Guard against nil tracking context or logger with no-op default
+	if tc == nil || tc.Logger == nil {
 		return
 	}
 
@@ -342,17 +411,23 @@ func trackDBOperation(ctx context.Context, log logger.Logger, vendor, query stri
 
 	// Truncate query string to safe max length to avoid unbounded payloads
 	truncatedQuery := query
-	if len(query) > MaxQueryLength {
-		truncatedQuery = query[:MaxQueryLength] + "..."
+	if tc.Settings.maxQueryLength > 0 && len(query) > tc.Settings.maxQueryLength {
+		truncatedQuery = truncateString(query, tc.Settings.maxQueryLength)
 	}
 
 	// Log query execution details
-	logEvent := log.WithContext(ctx).WithFields(map[string]interface{}{
-		"vendor":      vendor,
+	logEvent := tc.Logger.WithContext(ctx).WithFields(map[string]any{
+		"vendor":      tc.Vendor,
 		"duration_ms": elapsed.Milliseconds(),
 		"duration_ns": elapsed.Nanoseconds(),
 		"query":       truncatedQuery,
 	})
+
+	if tc.Settings.logQueryParameters && len(args) > 0 {
+		logEvent = logEvent.WithFields(map[string]any{
+			"args": sanitizeArgs(args, tc.Settings.maxQueryLength),
+		})
+	}
 
 	if err != nil {
 		// Treat sql.ErrNoRows specially - not an actual error, log as debug
@@ -361,45 +436,77 @@ func trackDBOperation(ctx context.Context, log logger.Logger, vendor, query stri
 		} else {
 			logEvent.Error().Err(err).Msg("Database operation error")
 		}
-	} else if elapsed > SlowQueryThreshold {
+	} else if elapsed > tc.Settings.slowQueryThreshold {
 		logEvent.Warn().Msgf("Slow database operation detected (%s)", elapsed)
 	} else {
 		logEvent.Debug().Msg("Database operation executed")
 	}
 }
 
+func truncateString(value string, maxLen int) string {
+	if maxLen <= 0 || len(value) <= maxLen {
+		return value
+	}
+	if maxLen <= 3 {
+		return value[:maxLen]
+	}
+	return value[:maxLen-3] + "..."
+}
+
+func sanitizeArgs(args []any, maxLen int) []any {
+	if len(args) == 0 {
+		return nil
+	}
+	sanitized := make([]any, len(args))
+	for i, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			sanitized[i] = truncateString(v, maxLen)
+		case []byte:
+			sanitized[i] = fmt.Sprintf("<bytes len=%d>", len(v))
+		default:
+			sanitized[i] = truncateString(fmt.Sprintf("%v", v), maxLen)
+		}
+	}
+	return sanitized
+}
+
 // TrackedStatement wraps database.Statement to provide performance tracking
 type TrackedStatement struct {
-	stmt   database.Statement
-	logger logger.Logger
-	vendor string
-	query  string
+	stmt     database.Statement
+	logger   logger.Logger
+	vendor   string
+	query    string
+	settings trackingSettings
 }
 
 // Query executes a prepared query with tracking
-func (ts *TrackedStatement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+func (ts *TrackedStatement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := ts.stmt.Query(ctx, args...)
 
-	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_QUERY: "+ts.query, start, err)
+	tc := &TrackingContext{Logger: ts.logger, Vendor: ts.vendor, Settings: ts.settings}
+	trackDBOperation(ctx, tc, "STMT_QUERY: "+ts.query, args, start, err)
 	return rows, err
 }
 
 // QueryRow executes a prepared query that returns a single row with tracking
-func (ts *TrackedStatement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+func (ts *TrackedStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
 	start := time.Now()
 	row := ts.stmt.QueryRow(ctx, args...)
 
-	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_QUERY_ROW: "+ts.query, start, nil)
+	tc := &TrackingContext{Logger: ts.logger, Vendor: ts.vendor, Settings: ts.settings}
+	trackDBOperation(ctx, tc, "STMT_QUERY_ROW: "+ts.query, args, start, nil)
 	return row
 }
 
 // Exec executes a prepared statement with tracking
-func (ts *TrackedStatement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+func (ts *TrackedStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := ts.stmt.Exec(ctx, args...)
 
-	trackDBOperation(ctx, ts.logger, ts.vendor, "STMT_EXEC: "+ts.query, start, err)
+	tc := &TrackingContext{Logger: ts.logger, Vendor: ts.vendor, Settings: ts.settings}
+	trackDBOperation(ctx, tc, "STMT_EXEC: "+ts.query, args, start, err)
 	return result, err
 }
 
@@ -410,35 +517,39 @@ func (ts *TrackedStatement) Close() error {
 
 // TrackedTransaction wraps database.Tx to provide performance tracking
 type TrackedTransaction struct {
-	tx     database.Tx
-	logger logger.Logger
-	vendor string
+	tx       database.Tx
+	logger   logger.Logger
+	vendor   string
+	settings trackingSettings
 }
 
 // Query executes a query within the transaction with tracking
-func (tt *TrackedTransaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (tt *TrackedTransaction) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := tt.tx.Query(ctx, query, args...)
 
-	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_QUERY: "+query, start, err)
+	tc := &TrackingContext{Logger: tt.logger, Vendor: tt.vendor, Settings: tt.settings}
+	trackDBOperation(ctx, tc, "TX_QUERY: "+query, args, start, err)
 	return rows, err
 }
 
 // QueryRow executes a query that returns a single row within the transaction with tracking
-func (tt *TrackedTransaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (tt *TrackedTransaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	start := time.Now()
 	row := tt.tx.QueryRow(ctx, query, args...)
 
-	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_QUERY_ROW: "+query, start, nil)
+	tc := &TrackingContext{Logger: tt.logger, Vendor: tt.vendor, Settings: tt.settings}
+	trackDBOperation(ctx, tc, "TX_QUERY_ROW: "+query, args, start, nil)
 	return row
 }
 
 // Exec executes a query without returning rows within the transaction with tracking
-func (tt *TrackedTransaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (tt *TrackedTransaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := tt.tx.Exec(ctx, query, args...)
 
-	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_EXEC: "+query, start, err)
+	tc := &TrackingContext{Logger: tt.logger, Vendor: tt.vendor, Settings: tt.settings}
+	trackDBOperation(ctx, tc, "TX_EXEC: "+query, args, start, err)
 	return result, err
 }
 
@@ -447,17 +558,19 @@ func (tt *TrackedTransaction) Prepare(ctx context.Context, query string) (databa
 	start := time.Now()
 	stmt, err := tt.tx.Prepare(ctx, query)
 
-	trackDBOperation(ctx, tt.logger, tt.vendor, "TX_PREPARE: "+query, start, err)
+	tc := &TrackingContext{Logger: tt.logger, Vendor: tt.vendor, Settings: tt.settings}
+	trackDBOperation(ctx, tc, "TX_PREPARE: "+query, nil, start, err)
 
 	if err != nil {
 		return nil, err
 	}
 
 	return &TrackedStatement{
-		stmt:   stmt,
-		logger: tt.logger,
-		vendor: tt.vendor,
-		query:  query,
+		stmt:     stmt,
+		logger:   tt.logger,
+		vendor:   tt.vendor,
+		query:    query,
+		settings: tt.settings,
 	}, nil
 }
 
