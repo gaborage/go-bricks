@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go-bricks/tools/openapi/internal/generator"
-	"go-bricks/tools/openapi/internal/models"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/generator"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 // GenerateOptions holds options for the generate command

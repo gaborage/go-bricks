@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go-bricks/tools/openapi/internal/models"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 // OpenAPIGenerator creates OpenAPI specifications from project models

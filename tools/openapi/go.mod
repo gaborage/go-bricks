@@ -1,4 +1,4 @@
-module go-bricks/tools/openapi
+module github.com/gaborage/go-bricks/tools/openapi
 
 go 1.25.0
 

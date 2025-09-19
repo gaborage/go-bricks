@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"go-bricks/tools/openapi/internal/models"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 const (
