@@ -43,7 +43,7 @@ jobs:
       run: go mod download
 
     - name: Run tests
-      run: make test-coverage
+      run: go test -race -coverprofile=coverage.out
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
