@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	testConnectionString = "postgresql://user:pass@localhost/db"
-	testOracleHost       = "oracle.example.com"
-	testAppName          = "test-app"
-	testAppVersion       = "v1.0.0"
+	testConnectionString        = "postgresql://user:pass@localhost/db"
+	testOracleHost              = "oracle.example.com"
+	testAppName                 = "test-app"
+	testAppVersion              = "v1.0.0"
+	errMaxConnectionsPositive   = "max connections must be positive"
 )
 
 func TestValidateValidConfig(t *testing.T) {
@@ -460,7 +461,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Username: "testuser",
 				MaxConns: -1,
 			},
-			expectedError: "max connections must be positive",
+			expectedError: errMaxConnectionsPositive,
 		},
 	}
 
@@ -901,7 +902,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				MaxConns:         0,
 			},
 			expectError:   true,
-			errorContains: "max connections must be positive",
+			errorContains: errMaxConnectionsPositive,
 		},
 		{
 			name: "invalid_database_type",
@@ -969,4 +970,190 @@ func TestValidateDatabaseDisabledConfig(t *testing.T) {
 
 	err := Validate(cfg)
 	assert.NoError(t, err, "Validation should pass with empty database config")
+}
+
+func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "connection_string_with_negative_max_query_length",
+			config: DatabaseConfig{
+				ConnectionString: testConnectionString,
+				MaxConns:         25,
+				MaxQueryLength:   -1,
+			},
+			expectError:   true,
+			errorContains: "max query length must be zero or positive",
+		},
+		{
+			name: "connection_string_with_zero_max_query_length_applies_default",
+			config: DatabaseConfig{
+				ConnectionString: testConnectionString,
+				MaxConns:         25,
+				MaxQueryLength:   0,
+			},
+			expectError: false,
+		},
+		{
+			name: "connection_string_with_negative_slow_query_threshold",
+			config: DatabaseConfig{
+				ConnectionString:   testConnectionString,
+				MaxConns:           25,
+				SlowQueryThreshold: -1 * time.Millisecond,
+			},
+			expectError:   true,
+			errorContains: "slow query threshold must be zero or positive",
+		},
+		{
+			name: "connection_string_with_zero_slow_query_threshold_applies_default",
+			config: DatabaseConfig{
+				ConnectionString:   testConnectionString,
+				MaxConns:           25,
+				SlowQueryThreshold: 0,
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			} else {
+				assert.NoError(t, err)
+				// Verify defaults were applied
+				if tt.config.MaxQueryLength == 0 {
+					assert.Equal(t, defaultMaxQueryLength, tt.config.MaxQueryLength)
+				}
+				if tt.config.SlowQueryThreshold == 0 {
+					assert.Equal(t, defaultSlowQueryThreshold, tt.config.SlowQueryThreshold)
+				}
+			}
+		})
+	}
+}
+
+func assertValidationError(t *testing.T, err error, errorContains string) {
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), errorContains)
+}
+
+func assertValidationSuccess(t *testing.T, err error, config *DatabaseConfig) {
+	assert.NoError(t, err)
+	// Verify defaults were applied
+	if config.MaxConns == 0 {
+		assert.Equal(t, int32(25), config.MaxConns)
+	}
+	if config.MaxQueryLength == 0 {
+		assert.Equal(t, defaultMaxQueryLength, config.MaxQueryLength)
+	}
+	if config.SlowQueryThreshold == 0 {
+		assert.Equal(t, defaultSlowQueryThreshold, config.SlowQueryThreshold)
+	}
+}
+
+func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "negative_max_conns_error",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: -1,
+			},
+			expectError:   true,
+			errorContains: errMaxConnectionsPositive,
+		},
+		{
+			name: "zero_max_conns_applies_default",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				MaxConns: 0,
+			},
+			expectError: false,
+		},
+		{
+			name: "negative_max_query_length_error",
+			config: DatabaseConfig{
+				Type:           PostgreSQL,
+				Host:           "localhost",
+				Port:           5432,
+				Database:       "testdb",
+				Username:       "testuser",
+				MaxConns:       25,
+				MaxQueryLength: -1,
+			},
+			expectError:   true,
+			errorContains: "max query length must be zero or positive",
+		},
+		{
+			name: "zero_max_query_length_applies_default",
+			config: DatabaseConfig{
+				Type:           PostgreSQL,
+				Host:           "localhost",
+				Port:           5432,
+				Database:       "testdb",
+				Username:       "testuser",
+				MaxConns:       25,
+				MaxQueryLength: 0,
+			},
+			expectError: false,
+		},
+		{
+			name: "negative_slow_query_threshold_error",
+			config: DatabaseConfig{
+				Type:               PostgreSQL,
+				Host:               "localhost",
+				Port:               5432,
+				Database:           "testdb",
+				Username:           "testuser",
+				MaxConns:           25,
+				SlowQueryThreshold: -1 * time.Millisecond,
+			},
+			expectError:   true,
+			errorContains: "slow query threshold must be zero or positive",
+		},
+		{
+			name: "zero_slow_query_threshold_applies_default",
+			config: DatabaseConfig{
+				Type:               PostgreSQL,
+				Host:               "localhost",
+				Port:               5432,
+				Database:           "testdb",
+				Username:           "testuser",
+				MaxConns:           25,
+				SlowQueryThreshold: 0,
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
 }
