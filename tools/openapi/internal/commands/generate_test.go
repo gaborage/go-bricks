@@ -5,11 +5,65 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
 	outputFileName = "openapi.yaml"
 )
+
+// OpenAPISpec represents the basic structure of an OpenAPI specification for testing
+type OpenAPISpec struct {
+	OpenAPI    string         `yaml:"openapi"`
+	Info       OpenAPIInfo    `yaml:"info"`
+	Paths      map[string]any `yaml:"paths"`
+	Components map[string]any `yaml:"components"`
+}
+
+// OpenAPIInfo represents the info section of an OpenAPI specification
+type OpenAPIInfo struct {
+	Title       string `yaml:"title"`
+	Version     string `yaml:"version"`
+	Description string `yaml:"description"`
+}
+
+// validateOpenAPISpec parses YAML content and validates OpenAPI structure
+func validateOpenAPISpec(t *testing.T, content []byte, expectedTitle, expectedVersion string) {
+	t.Helper()
+
+	var spec OpenAPISpec
+	err := yaml.Unmarshal(content, &spec)
+	if err != nil {
+		t.Fatalf("Failed to parse YAML: %v", err)
+	}
+
+	// Validate OpenAPI version
+	if spec.OpenAPI != "3.0.1" {
+		t.Errorf("Expected OpenAPI version '3.0.1', got '%s'", spec.OpenAPI)
+	}
+
+	// Validate info section
+	if spec.Info.Title != expectedTitle {
+		t.Errorf("Expected title '%s', got '%s'", expectedTitle, spec.Info.Title)
+	}
+	if spec.Info.Version != expectedVersion {
+		t.Errorf("Expected version '%s', got '%s'", expectedVersion, spec.Info.Version)
+	}
+	if spec.Info.Description == "" {
+		t.Error("Missing description in info section")
+	}
+
+	// Validate paths section exists
+	if spec.Paths == nil {
+		t.Error("Missing paths section")
+	}
+
+	// Validate components section exists
+	if spec.Components == nil {
+		t.Error("Missing components section")
+	}
+}
 
 func TestValidateGenerateOptions(t *testing.T) {
 	// Create a temporary directory for testing
@@ -139,29 +193,25 @@ func TestRunGenerate(t *testing.T) {
 		t.Error("Output file was not created")
 	}
 
-	// Read and check the content
+	// Read and validate the generated OpenAPI specification
 	content, err := os.ReadFile(outputFile)
 	if err != nil {
 		t.Fatalf("Failed to read output file: %v", err)
 	}
 
-	contentStr := string(content)
+	// Validate OpenAPI structure using YAML parsing
+	validateOpenAPISpec(t, content, "Go-Bricks API", "1.0.0")
 
-	// Check basic OpenAPI structure
-	if !strings.Contains(contentStr, "openapi: 3.0.1") {
-		t.Error("Missing OpenAPI version")
+	// Additional validation for empty project (should have empty paths)
+	var spec OpenAPISpec
+	err = yaml.Unmarshal(content, &spec)
+	if err != nil {
+		t.Fatalf("Failed to parse YAML for additional validation: %v", err)
 	}
-	if !strings.Contains(contentStr, "title: Go-Bricks API") {
-		t.Error("Missing title")
-	}
-	if !strings.Contains(contentStr, "version: 1.0.0") {
-		t.Error("Missing version")
-	}
-	if !strings.Contains(contentStr, "paths:\n  {}") {
-		t.Error("Should have empty paths for no modules")
-	}
-	if !strings.Contains(contentStr, "components:") {
-		t.Error("Missing components section")
+
+	// For an empty project, paths should be an empty map
+	if len(spec.Paths) != 0 {
+		t.Errorf("Expected empty paths for project with no modules, got %d paths", len(spec.Paths))
 	}
 }
 

@@ -1,10 +1,13 @@
 package generator
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
+	"gopkg.in/yaml.v3"
 )
 
 // OpenAPIGenerator creates OpenAPI specifications from project models
@@ -12,6 +15,28 @@ type OpenAPIGenerator struct {
 	title       string
 	version     string
 	description string
+}
+
+// OpenAPIInfo represents the info section of an OpenAPI specification
+type OpenAPIInfo struct {
+	Title       string `yaml:"title"`
+	Version     string `yaml:"version"`
+	Description string `yaml:"description"`
+}
+
+// OpenAPISchema represents a schema definition
+type OpenAPISchema struct {
+	Type        string                      `yaml:"type"`
+	Properties  map[string]*OpenAPIProperty `yaml:"properties,omitempty"`
+	Required    []string                    `yaml:"required,omitempty"`
+	Description string                      `yaml:"description,omitempty"`
+}
+
+// OpenAPIProperty represents a schema property
+type OpenAPIProperty struct {
+	Type        string `yaml:"type,omitempty"`
+	Description string `yaml:"description,omitempty"`
+	Ref         string `yaml:"$ref,omitempty"`
 }
 
 // New creates a new OpenAPI generator
@@ -31,27 +56,42 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 		project = &models.Project{}
 	}
 
-	// Header
+	// Header with proper YAML marshaling
 	sb.WriteString("openapi: 3.0.1\n")
-	sb.WriteString("info:\n")
-	sb.WriteString(fmt.Sprintf("  title: %s\n", g.getTitle(project)))
-	sb.WriteString(fmt.Sprintf("  version: %s\n", g.getVersion(project)))
-	sb.WriteString(fmt.Sprintf("  description: %s\n", g.getDescription(project)))
+
+	// Marshal info section safely
+	info := OpenAPIInfo{
+		Title:       g.getTitle(project),
+		Version:     g.getVersion(project),
+		Description: g.getDescription(project),
+	}
+
+	infoYAML, err := g.marshalYAMLSection("info", info)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal info section: %w", err)
+	}
+	sb.WriteString(infoYAML)
 
 	// Paths
 	sb.WriteString("paths:\n")
-	if len(g.getAllRoutes(project)) == 0 {
+	allRoutes := g.getAllRoutes(project)
+	if len(allRoutes) == 0 {
 		sb.WriteString("  {}\n")
 	} else {
-		for _, route := range g.getAllRoutes(project) {
-			g.writeRoute(&sb, &route)
-		}
+		g.writePaths(&sb, allRoutes)
 	}
 
-	// Components
-	sb.WriteString("components:\n")
-	sb.WriteString("  schemas:\n")
-	g.writeStandardSchemas(&sb)
+	// Components with proper YAML marshaling
+	schemas := g.createStandardSchemas()
+	components := map[string]any{
+		"schemas": schemas,
+	}
+
+	componentsYAML, err := g.marshalYAMLSection("components", components)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal components section: %w", err)
+	}
+	sb.WriteString(componentsYAML)
 
 	return sb.String(), nil
 }
@@ -89,11 +129,41 @@ func (g *OpenAPIGenerator) getAllRoutes(project *models.Project) []models.Route 
 	return routes
 }
 
-// writeRoute writes a single route to the string builder
-func (g *OpenAPIGenerator) writeRoute(sb *strings.Builder, route *models.Route) {
+// groupRoutesByPath groups routes by their path to avoid duplicate path keys in OpenAPI spec
+func (g *OpenAPIGenerator) groupRoutesByPath(routes []models.Route) map[string][]models.Route {
+	pathGroups := make(map[string][]models.Route)
+	for i := range routes {
+		path := routes[i].Path
+		pathGroups[path] = append(pathGroups[path], routes[i])
+	}
+	return pathGroups
+}
+
+// writePaths writes all paths with grouped routes to avoid duplicate path keys
+func (g *OpenAPIGenerator) writePaths(sb *strings.Builder, routes []models.Route) {
+	pathGroups := g.groupRoutesByPath(routes)
+
+	// Sort paths for consistent output
+	paths := make([]string, 0, len(pathGroups))
+	for path := range pathGroups {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	// Write each path with all its methods
+	for _, path := range paths {
+		fmt.Fprintf(sb, "  %s:\n", path)
+		routesForPath := pathGroups[path]
+		for i := range routesForPath {
+			g.writeMethod(sb, &routesForPath[i])
+		}
+	}
+}
+
+// writeMethod writes a single HTTP method under a path
+func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route) {
 	method := strings.ToLower(route.Method)
 
-	fmt.Fprintf(sb, "  %s:\n", route.Path)
 	fmt.Fprintf(sb, "    %s:\n", method)
 	fmt.Fprintf(sb, "      operationId: %s\n", g.getOperationID(route))
 	fmt.Fprintf(sb, "      summary: %s\n", g.getSummary(route))
@@ -162,35 +232,56 @@ func (g *OpenAPIGenerator) getResponseDescription(method string) string {
 	}
 }
 
-// writeStandardSchemas writes common response schemas
-func (g *OpenAPIGenerator) writeStandardSchemas(sb *strings.Builder) {
-	sb.WriteString("    SuccessResponse:\n")
-	sb.WriteString("      type: object\n")
-	sb.WriteString("      properties:\n")
-	sb.WriteString("        data:\n")
-	sb.WriteString("          type: object\n")
-	sb.WriteString("          description: Response data\n")
-	sb.WriteString("        meta:\n")
-	sb.WriteString("          type: object\n")
-	sb.WriteString("          description: Response metadata\n")
-	sb.WriteString("    ErrorResponse:\n")
-	sb.WriteString("      type: object\n")
-	sb.WriteString("      properties:\n")
-	sb.WriteString("        error:\n")
-	sb.WriteString("          type: object\n")
-	sb.WriteString("          properties:\n")
-	sb.WriteString("            code:\n")
-	sb.WriteString("              type: string\n")
-	sb.WriteString("              description: Error code\n")
-	sb.WriteString("            message:\n")
-	sb.WriteString("              type: string\n")
-	sb.WriteString("              description: Error message\n")
-	sb.WriteString("          required:\n")
-	sb.WriteString("            - code\n")
-	sb.WriteString("            - message\n")
-	sb.WriteString("        meta:\n")
-	sb.WriteString("          type: object\n")
-	sb.WriteString("          description: Response metadata\n")
-	sb.WriteString("      required:\n")
-	sb.WriteString("        - error\n")
+// marshalYAMLSection marshals a section with proper indentation
+func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (string, error) {
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+
+	// Create a map with the section name as key
+	section := map[string]any{
+		sectionName: data,
+	}
+
+	err := encoder.Encode(section)
+	if err != nil {
+		return "", err
+	}
+	encoder.Close()
+
+	return buf.String(), nil
+}
+
+// createStandardSchemas creates common response schemas using proper structs
+func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
+	return map[string]*OpenAPISchema{
+		"SuccessResponse": {
+			Type: "object",
+			Properties: map[string]*OpenAPIProperty{
+				"data": {
+					Type:        "object",
+					Description: "Response data",
+				},
+				"meta": {
+					Type:        "object",
+					Description: "Response metadata",
+				},
+			},
+		},
+		"ErrorResponse": {
+			Type: "object",
+			Properties: map[string]*OpenAPIProperty{
+				"error": {
+					Type: "object",
+					// Note: nested properties would need recursive handling for full OpenAPI spec
+					Description: "Error details with code and message",
+				},
+				"meta": {
+					Type:        "object",
+					Description: "Response metadata",
+				},
+			},
+			Required: []string{"error"},
+		},
+	}
 }
