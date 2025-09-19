@@ -27,6 +27,10 @@ func New(title, version, description string) *OpenAPIGenerator {
 func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	var sb strings.Builder
 
+	if project == nil {
+		project = &models.Project{}
+	}
+
 	// Header
 	sb.WriteString("openapi: 3.0.1\n")
 	sb.WriteString("info:\n")
