@@ -12,10 +12,23 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+const (
+	goModFile = "go.mod"
+)
+
+var (
+	runtimeVersionFn = runtime.Version
+	statFn           = os.Stat
+	readFileFn       = os.ReadFile
+	evalSymlinksFn   = filepath.EvalSymlinks
+	walkDirFn        = filepath.WalkDir
+)
+
 // DoctorOptions holds options for the doctor command
 type DoctorOptions struct {
 	ProjectRoot string
 	Verbose     bool
+	GoVersion   string
 }
 
 // NewDoctorCommand creates the doctor command
@@ -57,7 +70,10 @@ func runDoctor(opts *DoctorOptions) error {
 	var hasErrors bool
 
 	// Check Go version
-	goVersion := runtime.Version()
+	goVersion := opts.GoVersion
+	if goVersion == "" {
+		goVersion = runtimeVersionFn()
+	}
 	fmt.Printf("📋 Go Version: %s\n", goVersion)
 	if !isGoVersionSupported(goVersion) {
 		fmt.Println("❌ Go version 1.21+ required")
@@ -76,8 +92,8 @@ func runDoctor(opts *DoctorOptions) error {
 	}
 
 	// Check go.mod
-	goModPath := filepath.Join(opts.ProjectRoot, "go.mod")
-	if _, err := os.Stat(goModPath); err != nil {
+	goModPath := filepath.Join(opts.ProjectRoot, goModFile)
+	if _, err := statFn(goModPath); err != nil {
 		fmt.Println("❌ No go.mod found")
 		hasErrors = true
 	} else {
@@ -138,7 +154,7 @@ func checkProjectStructure(projectRoot string) error {
 
 	// Use filepath.WalkDir for more thorough Go file discovery
 	var goFilesFound bool
-	err = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+	err = walkDirFn(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // Skip directories with permission issues
 		}
@@ -181,7 +197,7 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 		return err
 	}
 
-	content, err := os.ReadFile(cleanPath)
+	content, err := readFileFn(cleanPath)
 	if err != nil {
 		return fmt.Errorf("failed to read go.mod: %w", err)
 	}
@@ -223,7 +239,7 @@ func resolveProjectPath(projectRoot string) (string, error) {
 
 // validatePath ensures the path exists and is accessible
 func validatePath(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if _, err := statFn(path); os.IsNotExist(err) {
 		return fmt.Errorf("path does not exist: %s", path)
 	} else if err != nil {
 		return fmt.Errorf("failed to access path %s: %w", path, err)
@@ -234,6 +250,11 @@ func validatePath(path string) error {
 // validateAndResolvePath securely validates and resolves a go.mod file path
 // to prevent path traversal attacks (addresses G304 security warning)
 func validateAndResolvePath(goModPath string) (string, error) {
+	// Additional security: check for null bytes and other suspicious patterns early
+	if strings.Contains(goModPath, "\x00") {
+		return "", fmt.Errorf("invalid path: contains null byte")
+	}
+
 	// Clean and resolve to absolute path
 	cleanPath := filepath.Clean(goModPath)
 	absPath, err := filepath.Abs(cleanPath)
@@ -243,18 +264,13 @@ func validateAndResolvePath(goModPath string) (string, error) {
 
 	// Security validation: ensure the path ends with "go.mod"
 	// This prevents reading arbitrary files
-	if filepath.Base(absPath) != "go.mod" {
+	if filepath.Base(absPath) != goModFile {
 		return "", fmt.Errorf("invalid go.mod path: must end with 'go.mod'")
-	}
-
-	// Additional security: check for null bytes and other suspicious patterns
-	if strings.Contains(goModPath, "\x00") {
-		return "", fmt.Errorf("invalid path: contains null byte")
 	}
 
 	// Evaluate any symbolic links to get the final path
 	// This prevents symlink-based attacks
-	realPath, err := filepath.EvalSymlinks(absPath)
+	realPath, err := evalSymlinksFn(absPath)
 	if err != nil {
 		// If EvalSymlinks fails, it might be because the file doesn't exist
 		// In that case, we still want to validate the path structure
@@ -265,7 +281,7 @@ func validateAndResolvePath(goModPath string) (string, error) {
 	}
 
 	// Final check: ensure the resolved path still ends with go.mod
-	if filepath.Base(realPath) != "go.mod" {
+	if filepath.Base(realPath) != goModFile {
 		return "", fmt.Errorf("security violation: resolved path does not end with go.mod")
 	}
 

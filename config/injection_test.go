@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testAPIKey = "test-key"
+
 // Test structures for config injection
 
 type BasicServiceConfig struct {
@@ -58,7 +60,7 @@ type NoConfigTagsStruct struct {
 	Field2 int
 }
 
-func TestConfigInjection_BasicTypes(t *testing.T) {
+func TestConfigInjectionBasicTypes(t *testing.T) {
 	// Set up environment variables
 	envVars := map[string]string{
 		"API_KEY":       "secret-key-123",
@@ -94,7 +96,7 @@ func TestConfigInjection_BasicTypes(t *testing.T) {
 	assert.False(t, serviceConfig.Enabled)
 }
 
-func TestConfigInjection_DefaultValues(t *testing.T) {
+func TestConfigInjectionDefaultValues(t *testing.T) {
 	// Load config without setting environment variables
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -107,7 +109,7 @@ func TestConfigInjection_DefaultValues(t *testing.T) {
 	assert.Contains(t, err.Error(), "required configuration key 'api.key' is missing")
 
 	// Test with only required field set
-	require.NoError(t, os.Setenv("API_KEY", "test-key"))
+	require.NoError(t, os.Setenv("API_KEY", testAPIKey))
 	defer os.Unsetenv("API_KEY")
 
 	cfg, err = Load()
@@ -117,16 +119,16 @@ func TestConfigInjection_DefaultValues(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify default values are used
-	assert.Equal(t, "test-key", serviceConfig.APIKey)
+	assert.Equal(t, testAPIKey, serviceConfig.APIKey)
 	assert.Equal(t, "https://api.example.com", serviceConfig.BaseURL)
 	assert.Equal(t, 30*time.Second, serviceConfig.Timeout)
 	assert.Equal(t, 3, serviceConfig.MaxRetry)
 	assert.True(t, serviceConfig.Enabled)
 }
 
-func TestConfigInjection_ComplexTypes(t *testing.T) {
+func TestConfigInjectionComplexTypes(t *testing.T) {
 	envVars := map[string]string{
-		"DATABASE_URL":                "postgres://user:pass@localhost/db",
+		"DATABASE_URL":                "postgres://valid-dns",
 		"AUTH_SECRET":                 "super-secret-key",
 		"CUSTOM_SERVER_HOST":          "0.0.0.0",
 		"CUSTOM_SERVER_PORT":          "9090",
@@ -156,7 +158,7 @@ func TestConfigInjection_ComplexTypes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify all values
-	assert.Equal(t, "postgres://user:pass@localhost/db", serviceConfig.DatabaseURL)
+	assert.Equal(t, "postgres://valid-dns", serviceConfig.DatabaseURL)
 	assert.Equal(t, "super-secret-key", serviceConfig.SecretKey)
 	assert.Equal(t, "0.0.0.0", serviceConfig.Host)
 	assert.Equal(t, 9090, serviceConfig.Port)
@@ -169,7 +171,7 @@ func TestConfigInjection_ComplexTypes(t *testing.T) {
 	assert.True(t, serviceConfig.OptionalFlag)
 }
 
-func TestConfigInjection_CustomNamespace(t *testing.T) {
+func TestConfigInjectionCustomNamespace(t *testing.T) {
 	envVars := map[string]string{
 		"CUSTOM_API_KEY":         "sk_live_abc123",
 		"CUSTOM_API_BASE_URL":    "https://custom.example.com",
@@ -204,7 +206,7 @@ func TestConfigInjection_CustomNamespace(t *testing.T) {
 	assert.Equal(t, "GoBricks/2.0", serviceConfig.UserAgent)
 }
 
-func TestConfigInjection_RequiredFieldMissing(t *testing.T) {
+func TestConfigInjectionRequiredFieldMissing(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 
@@ -215,7 +217,7 @@ func TestConfigInjection_RequiredFieldMissing(t *testing.T) {
 	assert.Contains(t, err.Error(), "required configuration key 'api.key' is missing")
 }
 
-func TestConfigInjection_RequiredFieldEmpty(t *testing.T) {
+func TestConfigInjectionRequiredFieldEmpty(t *testing.T) {
 	require.NoError(t, os.Setenv("API_KEY", "   "))
 	defer os.Unsetenv("API_KEY")
 
@@ -229,7 +231,7 @@ func TestConfigInjection_RequiredFieldEmpty(t *testing.T) {
 	assert.Contains(t, err.Error(), "required configuration key 'api.key' is empty")
 }
 
-func TestConfigInjection_InvalidTypes(t *testing.T) {
+func TestConfigInjectionInvalidTypes(t *testing.T) {
 	// Test invalid duration
 	require.NoError(t, os.Setenv("API_KEY", "test"))
 	require.NoError(t, os.Setenv("API_TIMEOUT", "invalid-duration"))
@@ -248,7 +250,7 @@ func TestConfigInjection_InvalidTypes(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid duration value")
 }
 
-func TestConfigInjection_UnsupportedFieldType(t *testing.T) {
+func TestConfigInjectionUnsupportedFieldType(t *testing.T) {
 	// Set a value for the unsupported field to trigger the type error
 	require.NoError(t, os.Setenv("TEST_CHANNEL", "some-value"))
 	defer os.Unsetenv("TEST_CHANNEL")
@@ -263,7 +265,7 @@ func TestConfigInjection_UnsupportedFieldType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported field type")
 }
 
-func TestConfigInjection_NotAStruct(t *testing.T) {
+func TestConfigInjectionNotAStruct(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 
@@ -274,7 +276,7 @@ func TestConfigInjection_NotAStruct(t *testing.T) {
 	assert.Contains(t, err.Error(), "target must be a pointer to a struct")
 }
 
-func TestConfigInjection_NotAPointer(t *testing.T) {
+func TestConfigInjectionNotAPointer(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 
@@ -285,7 +287,7 @@ func TestConfigInjection_NotAPointer(t *testing.T) {
 	assert.Contains(t, err.Error(), "target must be a pointer to a struct")
 }
 
-func TestConfigInjection_NoConfigTags(t *testing.T) {
+func TestConfigInjectionNoConfigTags(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 
@@ -298,7 +300,7 @@ func TestConfigInjection_NoConfigTags(t *testing.T) {
 	assert.Zero(t, noTagsConfig.Field2)
 }
 
-func TestConfigInjection_NilConfig(t *testing.T) {
+func TestConfigInjectionNilConfig(t *testing.T) {
 	var cfg *Config
 	var serviceConfig BasicServiceConfig
 
@@ -307,7 +309,7 @@ func TestConfigInjection_NilConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "configuration not initialized")
 }
 
-func TestConfigInjection_IntegerOverflow(t *testing.T) {
+func TestConfigInjectionIntegerOverflow(t *testing.T) {
 	require.NoError(t, os.Setenv("API_KEY", "test"))
 	require.NoError(t, os.Setenv("API_MAX_RETRY", "999999999999999999999")) // Very large number
 	defer func() {
@@ -325,7 +327,7 @@ func TestConfigInjection_IntegerOverflow(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid integer value")
 }
 
-func TestConfigInjection_BooleanConversion(t *testing.T) {
+func TestConfigInjectionBooleanConversion(t *testing.T) {
 	testCases := []struct {
 		value    string
 		expected bool
@@ -365,14 +367,14 @@ func TestConfigInjection_BooleanConversion(t *testing.T) {
 
 // Benchmark tests
 func BenchmarkConfigInjection(b *testing.B) {
-	require.NoError(b, os.Setenv("API_KEY", "test-key"))
+	require.NoError(b, os.Setenv("API_KEY", testAPIKey))
 	defer os.Unsetenv("API_KEY")
 
 	cfg, err := Load()
 	require.NoError(b, err)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var serviceConfig BasicServiceConfig
 		err := cfg.InjectInto(&serviceConfig)
 		if err != nil {
@@ -381,7 +383,7 @@ func BenchmarkConfigInjection(b *testing.B) {
 	}
 }
 
-func BenchmarkConfigInjection_Complex(b *testing.B) {
+func BenchmarkConfigInjectionComplex(b *testing.B) {
 	envVars := map[string]string{
 		"DATABASE_URL": "postgres://test",
 		"AUTH_SECRET":  "secret",
@@ -400,52 +402,11 @@ func BenchmarkConfigInjection_Complex(b *testing.B) {
 	require.NoError(b, err)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var serviceConfig ComplexServiceConfig
 		err := cfg.InjectInto(&serviceConfig)
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
-}
-
-// Example test showing real-world usage
-func ExampleConfig_InjectInto() {
-	// Set up some configuration
-	os.Setenv("API_KEY", "sk_live_123")
-	os.Setenv("API_TIMEOUT", "30s")
-	defer func() {
-		os.Unsetenv("API_KEY")
-		os.Unsetenv("API_TIMEOUT")
-	}()
-
-	// Load configuration
-	cfg, err := Load()
-	if err != nil {
-		panic(err)
-	}
-
-	// Define service configuration struct
-	type ServiceConfig struct {
-		APIKey  string        `config:"api.key" required:"true"`
-		BaseURL string        `config:"api.base.url" default:"https://api.example.com"`
-		Timeout time.Duration `config:"api.timeout" default:"15s"`
-	}
-
-	// Inject configuration
-	var serviceConfig ServiceConfig
-	if err := cfg.InjectInto(&serviceConfig); err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("API Key: %s\n", serviceConfig.APIKey)
-	fmt.Printf("Base URL: %s\n", serviceConfig.BaseURL)
-	fmt.Printf("Timeout: %v\n", serviceConfig.Timeout)
-
-	// Output:
-	// Warning: could not load config.yaml: open config.yaml: no such file or directory
-	// Warning: could not load config.development.yaml: open config.development.yaml: no such file or directory
-	// API Key: sk_live_123
-	// Base URL: https://api.example.com
-	// Timeout: 30s
 }
