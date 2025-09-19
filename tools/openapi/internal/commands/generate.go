@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/gaborage/go-bricks/tools/openapi/internal/generator"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 // GenerateOptions holds options for the generate command
@@ -59,26 +62,32 @@ func runGenerate(opts *GenerateOptions) error {
 	fmt.Printf("Output file: %s\n", opts.OutputFile)
 	fmt.Printf("Format: %s\n", opts.Format)
 
-	// TODO: Implement actual generation logic in Phase 1
-	// For now, create a placeholder spec to validate the pipeline
+	// For now, create a basic project structure
+	// In Phase 2, this will be replaced with actual project analysis
+	project := &models.Project{
+		Name:        "Go-Bricks API",
+		Version:     "1.0.0",
+		Description: "Generated API specification",
+		Modules:     []models.Module{}, // Empty for now - will be populated via static analysis
+	}
 
-	placeholder := `openapi: 3.0.1
-info:
-  title: Go-Bricks API
-  version: 1.0.0
-  description: Generated API specification
-paths: {}
-components:
-  schemas: {}
-`
+	if opts.Verbose {
+		fmt.Printf("Discovered %d modules\n", len(project.Modules))
+	}
 
-	// Ensure output directory exists
-	if err := os.MkdirAll(filepath.Dir(opts.OutputFile), 0755); err != nil {
+	// Generate OpenAPI spec
+	gen := generator.New("Go-Bricks API", "1.0.0", "Generated API specification")
+	specContent, err := gen.Generate(project)
+	if err != nil {
+		return fmt.Errorf("failed to generate spec: %w", err)
+	}
+
+	// Write to file
+	if err := os.MkdirAll(filepath.Dir(opts.OutputFile), 0750); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Write placeholder spec
-	if err := os.WriteFile(opts.OutputFile, []byte(placeholder), 0600); err != nil {
+	if err := os.WriteFile(opts.OutputFile, []byte(specContent), 0600); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
 

@@ -1,0 +1,102 @@
+name: OpenAPI Tool CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/openapi/**'
+      - '.github/workflows/openapi-tool.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'tools/openapi/**'
+      - '.github/workflows/openapi-tool.yml'
+
+defaults:
+  run:
+    working-directory: tools/openapi
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.21
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-openapi-tool-${{ hashFiles('tools/openapi/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-openapi-tool-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: make test-coverage
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        flags: openapi-tool
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.21
+
+    - name: Install golangci-lint
+      run: make dev-deps
+
+    - name: Run linting
+      run: make lint
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.21
+
+    - name: Install gosec
+      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+    - name: Run Gosec Security Scanner
+      run: gosec ./...
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 1.21
+
+    - name: Build and validate CLI
+      run: make validate-cli
+
+    - name: Verify go mod
+      run: |
+        go mod tidy
+        git diff --exit-code go.mod go.sum

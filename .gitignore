@@ -21,5 +21,8 @@
 
 !wiki/*
 
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
+
 # ...even if they are in subdirectories
 !*/

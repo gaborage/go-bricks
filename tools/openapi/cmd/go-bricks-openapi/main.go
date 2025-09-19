@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go-bricks/tools/openapi/internal/commands"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/commands"
 )
 
 var version = "dev" // Will be set during build
