@@ -1,10 +1,13 @@
 package commands
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"io/fs"
 )
 
 // Test constants to avoid string duplication
@@ -14,6 +17,8 @@ const (
 	msgFailedToCreate  = "Failed to create test file: %v"
 	testMainGoFile     = "main.go"
 	packageMainContent = "package main"
+	goVersion          = "go1.21.0"
+	msgUnexpectedError = "Unexpected error: %v"
 )
 
 // Helper function to assert error expectations
@@ -45,7 +50,7 @@ func TestIsGoVersionSupported(t *testing.T) {
 	}{
 		{
 			name:     "supported version - go1.21.0",
-			version:  "go1.21.0",
+			version:  goVersion,
 			expected: true,
 		},
 		{
@@ -80,7 +85,7 @@ func TestIsGoVersionSupported(t *testing.T) {
 		},
 		{
 			name:     "edge case - exactly minimum version",
-			version:  "go1.21.0", // semver requires patch version
+			version:  goVersion, // semver requires patch version
 			expected: true,
 		},
 		{
@@ -175,7 +180,7 @@ require (
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create temporary go.mod file
-			goModPath := filepath.Join(tempDir, "go.mod")
+			goModPath := filepath.Join(tempDir, goModFile)
 			err := os.WriteFile(goModPath, []byte(tt.goModContent), 0644)
 			if err != nil {
 				t.Fatalf("Failed to create test go.mod: %v", err)
@@ -244,7 +249,7 @@ go 1.21
 
 require go-bricks v1.0.0
 `
-	err := os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte(goModContent), 0644)
+	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(goModContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create go.mod: %v", err)
 	}
@@ -434,7 +439,7 @@ go 1.21
 
 require go-bricks v1.0.0
 `
-	goModPath := filepath.Join(tempDir, "go.mod")
+	goModPath := filepath.Join(tempDir, goModFile)
 	err := os.WriteFile(goModPath, []byte(goModContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test go.mod: %v", err)
@@ -466,7 +471,7 @@ require go-bricks v1.0.0
 		},
 		{
 			name:        "current directory go.mod",
-			goModPath:   "go.mod",
+			goModPath:   goModFile,
 			expectError: false,
 		},
 		{
@@ -652,5 +657,131 @@ func TestCheckProjectStructureErrors(t *testing.T) {
 			err := checkProjectStructure(dir)
 			assertError(t, err, tt.expectError)
 		})
+	}
+}
+
+func TestRunDoctorUnsupportedGoVersion(t *testing.T) {
+	tempDir := t.TempDir()
+	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
+	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(`module test
+
+go 1.21
+
+require go-bricks v1.0.0
+`), 0644)
+	if err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+
+	opts := &DoctorOptions{
+		ProjectRoot: tempDir,
+		GoVersion:   "go1.20.5",
+	}
+
+	err = runDoctor(opts)
+	assertError(t, err, true)
+}
+
+func TestRunDoctorWarnsAboutMissingGoBricks(t *testing.T) {
+	tempDir := t.TempDir()
+	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
+	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(`module test
+
+go 1.21
+
+require github.com/spf13/cobra v1.8.0
+`), 0644)
+	if err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+
+	opts := &DoctorOptions{
+		ProjectRoot: tempDir,
+		GoVersion:   goVersion,
+		Verbose:     true,
+	}
+
+	err = runDoctor(opts)
+	assertError(t, err, false)
+}
+
+func TestCheckProjectStructureWalkError(t *testing.T) {
+	tempDir := t.TempDir()
+	originalWalk := walkDirFn
+	walkDirFn = func(string, fs.WalkDirFunc) error {
+		return errors.New("walk failure")
+	}
+	t.Cleanup(func() { walkDirFn = originalWalk })
+
+	err := checkProjectStructure(tempDir)
+	if err == nil {
+		t.Fatal("Expected error from checkProjectStructure when walkDir fails")
+	}
+	if !strings.Contains(err.Error(), "failed to walk project directory") {
+		t.Errorf(msgUnexpectedError, err)
+	}
+}
+
+func TestValidatePathPropagatesStatError(t *testing.T) {
+	originalStat := statFn
+	statFn = func(string) (os.FileInfo, error) {
+		return nil, errors.New("permission denied")
+	}
+	t.Cleanup(func() { statFn = originalStat })
+
+	err := validatePath("/restricted/path")
+	if err == nil {
+		t.Fatal("Expected error from validatePath when stat fails")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf(msgUnexpectedError, err)
+	}
+}
+
+func TestValidateAndResolvePathSymlinkError(t *testing.T) {
+	originalEval := evalSymlinksFn
+	evalSymlinksFn = func(string) (string, error) {
+		return "", errors.New("symlink loop")
+	}
+	t.Cleanup(func() { evalSymlinksFn = originalEval })
+
+	_, err := validateAndResolvePath(filepath.Join(t.TempDir(), goModFile))
+	if err == nil {
+		t.Fatal("Expected error from validateAndResolvePath when EvalSymlinks fails")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve symbolic links") {
+		t.Errorf(msgUnexpectedError, err)
+	}
+}
+
+func TestValidateAndResolvePathNullByte(t *testing.T) {
+	_, err := validateAndResolvePath("go\x00.mod")
+	if err == nil {
+		t.Fatal("Expected error for path containing null byte")
+	}
+	if !strings.Contains(err.Error(), "invalid path") {
+		t.Errorf(msgUnexpectedError, err)
+	}
+}
+
+func TestCheckGoBricksCompatibilityReadError(t *testing.T) {
+	originalRead := readFileFn
+	readFileFn = func(string) ([]byte, error) {
+		return nil, errors.New("boom")
+	}
+	t.Cleanup(func() { readFileFn = originalRead })
+
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, goModFile)
+	if err := os.WriteFile(path, []byte("module test\n"), 0644); err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+
+	err := checkGoBricksCompatibility(path, false)
+	if err == nil {
+		t.Fatal("Expected error when reading go.mod fails")
+	}
+	if !strings.Contains(err.Error(), "failed to read go.mod") {
+		t.Errorf(msgUnexpectedError, err)
 	}
 }

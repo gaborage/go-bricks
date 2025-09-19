@@ -205,7 +205,7 @@ func validateRequiredDatabasePort(port int) error {
 }
 
 // applyDatabasePoolDefaults sets sensible defaults and validates database pool/query settings on cfg.
-// 
+//
 // It modifies cfg in-place:
 // - MaxConns: if 0, sets to 25; if negative, returns an error.
 // - MaxQueryLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
