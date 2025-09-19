@@ -155,6 +155,10 @@ func (qb *QueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, of
 	}
 }
 
+// buildOraclePaginationClause builds an Oracle-compatible pagination suffix.
+// It returns an empty string if both limit and offset are non-positive.
+// When provided, offset yields "OFFSET {offset} ROWS", limit yields "FETCH NEXT {limit} ROWS ONLY",
+// and both are joined with a space (e.g. "OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY").
 func buildOraclePaginationClause(limit, offset int) string {
 	if limit <= 0 && offset <= 0 {
 		return ""
