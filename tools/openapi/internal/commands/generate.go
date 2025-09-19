@@ -35,7 +35,7 @@ and produces a comprehensive API specification with validation constraints.`,
 
   # Generate JSON format
   go-bricks-openapi generate -format json`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return runGenerate(opts)
 		},
 	}
@@ -78,7 +78,7 @@ components:
 	}
 
 	// Write placeholder spec
-	if err := os.WriteFile(opts.OutputFile, []byte(placeholder), 0644); err != nil {
+	if err := os.WriteFile(opts.OutputFile, []byte(placeholder), 0600); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
 

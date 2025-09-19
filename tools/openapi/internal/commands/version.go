@@ -13,7 +13,7 @@ func NewVersionCommand(version string) *cobra.Command {
 		Use:   "version",
 		Short: "Show version information",
 		Long:  "Display version information for go-bricks-openapi tool",
-		Run: func(cmd *cobra.Command, args []string) {
+		Run: func(_ *cobra.Command, _ []string) {
 			printVersion(version)
 		},
 	}

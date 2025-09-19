@@ -36,7 +36,7 @@ Checks include:
 
   # Check specific project
   go-bricks-openapi doctor -project ./my-service`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return runDoctor(opts)
 		},
 	}

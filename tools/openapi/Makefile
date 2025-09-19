@@ -1,0 +1,64 @@
+.PHONY: help build test lint fmt tidy clean install demo check
+
+# Binary name
+BINARY_NAME := go-bricks-openapi
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
+# Default target
+help: ## Show this help message
+	@echo "go-bricks-openapi tool commands:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-15s %s\n", $$1, $$2}'
+
+build: ## Build the CLI tool
+	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME) ./cmd/go-bricks-openapi
+
+test: ## Run all tests
+	go test -race ./...
+
+test-coverage: ## Run tests with coverage
+	go test -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+lint: ## Run golangci-lint
+	golangci-lint run
+
+fmt: ## Format Go code
+	go fmt ./...
+
+tidy: ## Tidy Go modules
+	go mod tidy
+
+clean: ## Clean build cache and binaries
+	go clean -cache -testcache
+	rm -f $(BINARY_NAME) coverage.out coverage.html
+
+install: build ## Install the CLI tool locally
+	go install -ldflags "-X main.version=$(VERSION)" ./cmd/go-bricks-openapi
+
+demo: build ## Run demo generation on example service
+	./$(BINARY_NAME) doctor --project ../../
+	./$(BINARY_NAME) generate --project ../../examples/openapi-demo --output ../../examples/openapi-demo/generated-openapi.yaml
+	@echo "✓ Generated spec at ../../examples/openapi-demo/generated-openapi.yaml"
+
+validate-cli: build ## Validate CLI commands work correctly
+	./$(BINARY_NAME) version
+	./$(BINARY_NAME) --help
+	./$(BINARY_NAME) doctor --project ../../
+	@echo "✓ CLI validation passed"
+
+check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pre-commit checks)
+
+# Development helpers
+dev-deps: ## Install development dependencies
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Release helpers
+release-dry-run: ## Test release build without publishing
+	@echo "Testing release build for version: $(VERSION)"
+	GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME)-linux-amd64 ./cmd/go-bricks-openapi
+	GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME)-darwin-amd64 ./cmd/go-bricks-openapi
+	GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME)-darwin-arm64 ./cmd/go-bricks-openapi
+	GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME)-windows-amd64.exe ./cmd/go-bricks-openapi
+	@echo "✓ Release builds completed"
+	@ls -la $(BINARY_NAME)-*
+	@rm -f $(BINARY_NAME)-*
