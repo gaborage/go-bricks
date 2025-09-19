@@ -11,6 +11,7 @@ import (
 
 const (
 	outputFileName = "openapi.yaml"
+	testYAMLFile   = "test.yaml"
 )
 
 // OpenAPISpec represents the basic structure of an OpenAPI specification for testing
@@ -79,7 +80,6 @@ func TestValidateGenerateOptions(t *testing.T) {
 			opts: &GenerateOptions{
 				ProjectRoot: tempDir,
 				OutputFile:  outputFileName,
-				Format:      "yaml",
 			},
 			wantErr: false,
 		},
@@ -88,27 +88,8 @@ func TestValidateGenerateOptions(t *testing.T) {
 			opts: &GenerateOptions{
 				ProjectRoot: "/nonexistent/path",
 				OutputFile:  outputFileName,
-				Format:      "yaml",
 			},
 			wantErr: true,
-		},
-		{
-			name: "invalid format",
-			opts: &GenerateOptions{
-				ProjectRoot: tempDir,
-				OutputFile:  outputFileName,
-				Format:      "xml",
-			},
-			wantErr: true,
-		},
-		{
-			name: "json format",
-			opts: &GenerateOptions{
-				ProjectRoot: tempDir,
-				OutputFile:  outputFileName,
-				Format:      "json",
-			},
-			wantErr: false,
 		},
 	}
 
@@ -128,25 +109,16 @@ func TestValidateGenerateOptionsAutoExtension(t *testing.T) {
 	tests := []struct {
 		name           string
 		initialFile    string
-		format         string
 		expectedSuffix string
 	}{
 		{
-			name:           "yaml format without extension",
+			name:           "without extension",
 			initialFile:    "openapi",
-			format:         "yaml",
 			expectedSuffix: ".yaml",
 		},
 		{
-			name:           "json format without extension",
-			initialFile:    "openapi",
-			format:         "json",
-			expectedSuffix: ".json",
-		},
-		{
-			name:           "yaml format with extension",
+			name:           "with extension",
 			initialFile:    outputFileName,
-			format:         "yaml",
 			expectedSuffix: ".yaml",
 		},
 	}
@@ -156,7 +128,6 @@ func TestValidateGenerateOptionsAutoExtension(t *testing.T) {
 			opts := &GenerateOptions{
 				ProjectRoot: tempDir,
 				OutputFile:  tt.initialFile,
-				Format:      tt.format,
 			}
 
 			err := validateGenerateOptions(opts)
@@ -179,7 +150,6 @@ func TestRunGenerate(t *testing.T) {
 	opts := &GenerateOptions{
 		ProjectRoot: tempDir,
 		OutputFile:  outputFile,
-		Format:      "yaml",
 		Verbose:     false,
 	}
 
@@ -225,7 +195,6 @@ func TestRunGenerateDirectoryCreation(t *testing.T) {
 	opts := &GenerateOptions{
 		ProjectRoot: tempDir,
 		OutputFile:  outputFile,
-		Format:      "yaml",
 		Verbose:     false,
 	}
 
@@ -252,7 +221,6 @@ func TestRunGenerateVerbose(t *testing.T) {
 	opts := &GenerateOptions{
 		ProjectRoot: tempDir,
 		OutputFile:  outputFile,
-		Format:      "yaml",
 		Verbose:     true, // Test verbose mode
 	}
 
@@ -302,13 +270,131 @@ func TestNewGenerateCommand(t *testing.T) {
 		t.Error("Missing --output flag")
 	}
 
-	formatFlag := cmd.Flags().Lookup("format")
-	if formatFlag == nil {
-		t.Error("Missing --format flag")
-	}
-
 	verboseFlag := cmd.Flags().Lookup("verbose")
 	if verboseFlag == nil {
 		t.Error("Missing --verbose flag")
+	}
+}
+
+func TestValidateGenerateOptionsEdgeCases(t *testing.T) {
+	tempDir := t.TempDir()
+
+	t.Run("file with existing yaml extension", func(t *testing.T) {
+		opts := &GenerateOptions{
+			ProjectRoot: tempDir,
+			OutputFile:  testYAMLFile,
+		}
+		err := validateGenerateOptions(opts)
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("auto extension for yaml format", func(t *testing.T) {
+		opts := &GenerateOptions{
+			ProjectRoot: tempDir,
+			OutputFile:  "test",
+		}
+		err := validateGenerateOptions(opts)
+		if err != nil {
+			t.Errorf("Expected no error, got: %v", err)
+		}
+		if !strings.HasSuffix(opts.OutputFile, ".yaml") {
+			t.Errorf("Expected .yaml extension to be added, got: %s", opts.OutputFile)
+		}
+	})
+}
+
+func TestRunGenerateErrorCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) *GenerateOptions
+		wantErr bool
+	}{
+		{
+			name: "generator error simulation",
+			setup: func(t *testing.T) *GenerateOptions {
+				tempDir := t.TempDir()
+				return &GenerateOptions{
+					ProjectRoot: tempDir,
+					OutputFile:  filepath.Join(tempDir, testYAMLFile),
+					Verbose:     false,
+				}
+			},
+			wantErr: false, // This should succeed with current implementation
+		},
+		{
+			name: "directory creation permission error simulation",
+			setup: func(t *testing.T) *GenerateOptions {
+				tempDir := t.TempDir()
+				// Try to create in a read-only directory to simulate permission error
+				readOnlyDir := filepath.Join(tempDir, "readonly")
+				err := os.MkdirAll(readOnlyDir, 0755)
+				if err != nil {
+					t.Skip("Failed to create test directory")
+				}
+				// Make directory read-only
+				err = os.Chmod(readOnlyDir, 0444)
+				if err != nil {
+					t.Skip("Failed to make directory read-only")
+				}
+
+				return &GenerateOptions{
+					ProjectRoot: tempDir,
+					OutputFile:  filepath.Join(readOnlyDir, "nested", testYAMLFile),
+					Verbose:     false,
+				}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := tt.setup(t)
+			err := runGenerate(opts)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("runGenerate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRunGenerateYAMLFormat(t *testing.T) {
+	tempDir := t.TempDir()
+	outputFile := filepath.Join(tempDir, testYAMLFile)
+
+	opts := &GenerateOptions{
+		ProjectRoot: tempDir,
+		OutputFile:  outputFile,
+		Verbose:     true,
+	}
+
+	err := runGenerate(opts)
+	if err != nil {
+		t.Fatalf("runGenerate() failed for YAML format: %v", err)
+	}
+
+	// Check that file was created
+	if _, err := os.Stat(outputFile); os.IsNotExist(err) {
+		t.Error("YAML output file was not created")
+	}
+
+	// Read file and verify content
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read YAML output file: %v", err)
+	}
+
+	// Verify YAML format output
+	contentStr := string(content)
+	if !strings.Contains(contentStr, "openapi: 3.0.1") {
+		t.Error("Output should contain openapi version")
+	}
+	if !strings.Contains(contentStr, "info:") {
+		t.Error("Output should contain info section")
+	}
+	if !strings.Contains(contentStr, "title: Go-Bricks API") {
+		t.Error("Output should contain API title")
 	}
 }

@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,8 @@ const (
 	msgExpectedError   = "Expected error but got none"
 	msgExpectedNoError = "Expected no error but got: %v"
 	msgFailedToCreate  = "Failed to create test file: %v"
+	testMainGoFile     = "main.go"
+	packageMainContent = "package main"
 )
 
 // Helper function to assert error expectations
@@ -197,7 +200,7 @@ func TestCheckGoBricksCompatibilityFileNotFound(t *testing.T) {
 
 func TestCheckProjectStructureValidProject(t *testing.T) {
 	tempDir := t.TempDir()
-	createTestGoFile(t, tempDir, "main.go", "package main")
+	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
 
 	err := checkProjectStructure(tempDir)
 	assertError(t, err, false)
@@ -247,7 +250,7 @@ require go-bricks v1.0.0
 	}
 
 	// Create a test Go file
-	err = os.WriteFile(filepath.Join(tempDir, "main.go"), []byte("package main"), 0644)
+	err = os.WriteFile(filepath.Join(tempDir, testMainGoFile), []byte(packageMainContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create main.go: %v", err)
 	}
@@ -323,5 +326,110 @@ func TestNewDoctorCommand(t *testing.T) {
 	verboseFlag := cmd.Flags().Lookup("verbose")
 	if verboseFlag == nil {
 		t.Error("Missing --verbose flag")
+	}
+}
+
+func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		goModPath   string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "relative path",
+			goModPath:   "./go.mod",
+			expectError: true,
+			errorMsg:    "go.mod path must be absolute",
+		},
+		{
+			name:        "path traversal attempt",
+			goModPath:   "/tmp/../etc/passwd",
+			expectError: true,
+			errorMsg:    "invalid go.mod path: must end with 'go.mod'",
+		},
+		{
+			name:        "invalid filename",
+			goModPath:   "/tmp/notgomod.txt",
+			expectError: true,
+			errorMsg:    "invalid go.mod path: must end with 'go.mod'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkGoBricksCompatibility(tt.goModPath, false)
+			if !tt.expectError {
+				t.Errorf("Expected no error, got: %v", err)
+				return
+			}
+			if err == nil {
+				t.Error("Expected error but got none")
+				return
+			}
+			if !strings.Contains(err.Error(), tt.errorMsg) {
+				t.Errorf("Expected error containing %q, got: %v", tt.errorMsg, err)
+			}
+		})
+	}
+}
+
+func TestRunDoctorMissingGoMod(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a test Go file but no go.mod
+	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
+
+	opts := &DoctorOptions{
+		ProjectRoot: tempDir,
+		Verbose:     false,
+	}
+
+	err := runDoctor(opts)
+	if err == nil {
+		t.Error("Expected error for missing go.mod, but got none")
+	}
+}
+
+func TestCheckProjectStructureErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) string
+		expectError bool
+	}{
+		{
+			name: "glob error simulation - empty directory",
+			setup: func(t *testing.T) string {
+				tempDir := t.TempDir()
+				// Create a directory with no Go files to trigger the "no Go files found" error
+				return tempDir
+			},
+			expectError: true,
+		},
+		{
+			name: "directory with only non-Go files",
+			setup: func(t *testing.T) string {
+				tempDir := t.TempDir()
+				// Create some non-Go files
+				err := os.WriteFile(filepath.Join(tempDir, "README.md"), []byte("# Test"), 0644)
+				if err != nil {
+					t.Fatalf(msgFailedToCreate, err)
+				}
+				err = os.WriteFile(filepath.Join(tempDir, "config.json"), []byte("{}"), 0644)
+				if err != nil {
+					t.Fatalf(msgFailedToCreate, err)
+				}
+				return tempDir
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := tt.setup(t)
+			err := checkProjectStructure(dir)
+			assertError(t, err, tt.expectError)
+		})
 	}
 }

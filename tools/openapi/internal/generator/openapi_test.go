@@ -537,3 +537,162 @@ func TestGenerateValidYAML(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateNilProject(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	// Test with nil project to cover the nil check branch
+	spec, err := gen.Generate(nil)
+	if err != nil {
+		t.Fatalf("Generate() with nil project failed: %v", err)
+	}
+
+	// Should still produce valid spec with defaults
+	parsed := validateBasicOpenAPIStructure(t, spec, defaultTitle, "1.0.0")
+
+	// Should have empty paths
+	if len(parsed.Paths) != 0 {
+		t.Errorf("Expected empty paths for nil project, got %d paths", len(parsed.Paths))
+	}
+}
+
+func TestMarshalYAMLSectionErrorCases(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	// Test marshaling of complex nested structures to ensure proper error handling
+	complexData := map[string]any{
+		"nested": map[string]any{
+			"level1": map[string]any{
+				"level2": "value",
+			},
+		},
+	}
+
+	result, err := gen.marshalYAMLSection("test", complexData)
+	if err != nil {
+		t.Errorf("marshalYAMLSection should handle complex data, got error: %v", err)
+	}
+
+	if !strings.Contains(result, "test:") {
+		t.Error("Result should contain section name")
+	}
+	if !strings.Contains(result, "nested:") {
+		t.Error("Result should contain nested structure")
+	}
+}
+
+func TestGettersWithEmptyValues(t *testing.T) {
+	gen := New("", "", "")
+
+	tests := []struct {
+		name     string
+		project  *models.Project
+		testFunc func(*models.Project) string
+		expected string
+	}{
+		{
+			name:     "empty title with empty project",
+			project:  &models.Project{},
+			testFunc: func(p *models.Project) string { return gen.getTitle(p) },
+			expected: "", // Empty title from generator should be preserved
+		},
+		{
+			name:     "empty version with empty project",
+			project:  &models.Project{},
+			testFunc: func(p *models.Project) string { return gen.getVersion(p) },
+			expected: "", // Empty version from generator should be preserved
+		},
+		{
+			name:     "empty description with empty project",
+			project:  &models.Project{},
+			testFunc: func(p *models.Project) string { return gen.getDescription(p) },
+			expected: "", // Empty description from generator should be preserved
+		},
+		{
+			name:     "project overrides empty generator title",
+			project:  &models.Project{Name: "Project Title"},
+			testFunc: func(p *models.Project) string { return gen.getTitle(p) },
+			expected: "Project Title",
+		},
+		{
+			name:     "project overrides empty generator version",
+			project:  &models.Project{Version: "2.0.0"},
+			testFunc: func(p *models.Project) string { return gen.getVersion(p) },
+			expected: "2.0.0",
+		},
+		{
+			name:     "project overrides empty generator description",
+			project:  &models.Project{Description: "Project Description"},
+			testFunc: func(p *models.Project) string { return gen.getDescription(p) },
+			expected: "Project Description",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.testFunc(tt.project)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestCreateStandardSchemas(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	schemas := gen.createStandardSchemas()
+
+	// Test that standard schemas are created correctly
+	if len(schemas) != 2 {
+		t.Errorf("Expected 2 schemas, got %d", len(schemas))
+	}
+
+	t.Run("SuccessResponse schema", func(t *testing.T) {
+		validateSuccessResponseSchema(t, schemas)
+	})
+
+	t.Run("ErrorResponse schema", func(t *testing.T) {
+		validateErrorResponseSchema(t, schemas)
+	})
+}
+
+func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
+	t.Helper()
+	successSchema, exists := schemas["SuccessResponse"]
+	if !exists {
+		t.Error("Missing SuccessResponse schema")
+		return
+	}
+
+	if successSchema.Type != "object" {
+		t.Errorf("Expected SuccessResponse type 'object', got %s", successSchema.Type)
+	}
+	if len(successSchema.Properties) != 2 {
+		t.Errorf("Expected SuccessResponse to have 2 properties, got %d", len(successSchema.Properties))
+	}
+	if _, hasData := successSchema.Properties["data"]; !hasData {
+		t.Error("SuccessResponse should have 'data' property")
+	}
+	if _, hasMeta := successSchema.Properties["meta"]; !hasMeta {
+		t.Error("SuccessResponse should have 'meta' property")
+	}
+}
+
+func validateErrorResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
+	t.Helper()
+	errorSchema, exists := schemas["ErrorResponse"]
+	if !exists {
+		t.Error("Missing ErrorResponse schema")
+		return
+	}
+
+	if errorSchema.Type != "object" {
+		t.Errorf("Expected ErrorResponse type 'object', got %s", errorSchema.Type)
+	}
+	if len(errorSchema.Properties) != 2 {
+		t.Errorf("Expected ErrorResponse to have 2 properties, got %d", len(errorSchema.Properties))
+	}
+	if len(errorSchema.Required) != 1 || errorSchema.Required[0] != "error" {
+		t.Errorf("Expected ErrorResponse to have 'error' as required field, got %v", errorSchema.Required)
+	}
+}
