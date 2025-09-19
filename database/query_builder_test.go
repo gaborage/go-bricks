@@ -11,8 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Helper function to convert []interface{} to []driver.Value for sqlmock
-func convertToDriverValues(args []interface{}) []driver.Value {
+// Test SQL constants to avoid duplication
+const (
+	insertIntoUsers = "INSERT INTO users"
+)
+
+// Helper function to convert []any to []driver.Value for sqlmock
+func convertToDriverValues(args []any) []driver.Value {
 	values := make([]driver.Value, len(args))
 	for i, arg := range args {
 		values[i] = arg
@@ -112,13 +117,13 @@ func TestQueryBuilderInsert(t *testing.T) {
 			name:     "postgresql",
 			vendor:   PostgreSQL,
 			table:    "users",
-			expected: "INSERT INTO users",
+			expected: insertIntoUsers,
 		},
 		{
 			name:     "oracle",
 			vendor:   Oracle,
 			table:    "users",
-			expected: "INSERT INTO users",
+			expected: insertIntoUsers,
 		},
 	}
 
@@ -269,44 +274,50 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 
 func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 	tests := []struct {
-		name         string
-		vendor       string
-		limit        int
-		offset       int
-		expectLimit  bool
-		expectOffset bool
+		name        string
+		vendor      string
+		limit       int
+		offset      int
+		expected    []string
+		notExpected []string
 	}{
 		{
-			name:         "postgresql_limit_offset",
-			vendor:       PostgreSQL,
-			limit:        10,
-			offset:       5,
-			expectLimit:  true,
-			expectOffset: true,
+			name:     "postgresql_limit_offset",
+			vendor:   PostgreSQL,
+			limit:    10,
+			offset:   5,
+			expected: []string{"LIMIT 10", "OFFSET 5"},
 		},
 		{
-			name:         "postgresql_limit_only",
-			vendor:       PostgreSQL,
-			limit:        10,
-			offset:       0,
-			expectLimit:  true,
-			expectOffset: false,
+			name:        "postgresql_limit_only",
+			vendor:      PostgreSQL,
+			limit:       10,
+			offset:      0,
+			expected:    []string{"LIMIT 10"},
+			notExpected: []string{"OFFSET"},
 		},
 		{
-			name:         "oracle_no_limit_offset",
-			vendor:       Oracle,
-			limit:        10,
-			offset:       5,
-			expectLimit:  false, // Oracle doesn't use LIMIT
-			expectOffset: false,
+			name:        "oracle_offset_fetch",
+			vendor:      Oracle,
+			limit:       10,
+			offset:      5,
+			expected:    []string{"OFFSET 5 ROWS", "FETCH NEXT 10 ROWS ONLY"},
+			notExpected: []string{"LIMIT"},
 		},
 		{
-			name:         "zero_values",
-			vendor:       PostgreSQL,
-			limit:        0,
-			offset:       0,
-			expectLimit:  false,
-			expectOffset: false,
+			name:        "zero_values",
+			vendor:      PostgreSQL,
+			limit:       0,
+			offset:      0,
+			notExpected: []string{"LIMIT", "OFFSET", "FETCH NEXT"},
+		},
+		{
+			name:        "oracle_offset_only",
+			vendor:      Oracle,
+			limit:       0,
+			offset:      7,
+			expected:    []string{"OFFSET 7 ROWS"},
+			notExpected: []string{"FETCH NEXT", "LIMIT"},
 		},
 	}
 
@@ -319,16 +330,11 @@ func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 			sql, _, err := query.ToSql()
 			require.NoError(t, err)
 
-			if tt.expectLimit {
-				assert.Contains(t, sql, "LIMIT")
-			} else {
-				assert.NotContains(t, sql, "LIMIT")
+			for _, fragment := range tt.expected {
+				assert.Contains(t, sql, fragment)
 			}
-
-			if tt.expectOffset {
-				assert.Contains(t, sql, "OFFSET")
-			} else {
-				assert.NotContains(t, sql, "OFFSET")
+			for _, fragment := range tt.notExpected {
+				assert.NotContains(t, sql, fragment)
 			}
 		})
 	}
@@ -422,7 +428,7 @@ func TestQueryBuilderBuildBooleanValue(t *testing.T) {
 		name     string
 		vendor   string
 		value    bool
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "postgresql_true",
@@ -563,11 +569,11 @@ func TestQueryBuilderQuoteOracleColumnsNonOracle(t *testing.T) {
 func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
-	insertColumns := map[string]interface{}{
+	insertColumns := map[string]any{
 		"id":   1,
 		"name": "test",
 	}
-	updateColumns := map[string]interface{}{
+	updateColumns := map[string]any{
 		"name": "updated",
 	}
 	conflictColumns := []string{"id"}
@@ -577,7 +583,7 @@ func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, sql)
 	assert.NotEmpty(t, args)
-	assert.Contains(t, sql, "INSERT INTO users")
+	assert.Contains(t, sql, insertIntoUsers)
 	assert.Contains(t, sql, "ON CONFLICT")
 	assert.Contains(t, sql, "DO UPDATE SET")
 }
@@ -585,11 +591,11 @@ func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
 func TestQueryBuilderBuildUpsertOracle(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
-	insertColumns := map[string]interface{}{
+	insertColumns := map[string]any{
 		"id":   1,
 		"name": "test",
 	}
-	updateColumns := map[string]interface{}{
+	updateColumns := map[string]any{
 		"name": "updated",
 	}
 	conflictColumns := []string{"id"}
@@ -605,11 +611,11 @@ func TestQueryBuilderBuildUpsertOracle(t *testing.T) {
 func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
 	qb := NewQueryBuilder("unknown")
 
-	insertColumns := map[string]interface{}{
+	insertColumns := map[string]any{
 		"id":   1,
 		"name": "test",
 	}
-	updateColumns := map[string]interface{}{
+	updateColumns := map[string]any{
 		"name": "updated",
 	}
 	conflictColumns := []string{"id"}
@@ -784,13 +790,13 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 	defer resultRows.Close()
 
 	// Verify we got expected data
-	var results []map[string]interface{}
+	var results []map[string]any
 	for resultRows.Next() {
 		var id int
 		var name, title string
 		err = resultRows.Scan(&id, &name, &title)
 		require.NoError(t, err)
-		results = append(results, map[string]interface{}{
+		results = append(results, map[string]any{
 			"id":    id,
 			"name":  name,
 			"title": title,
