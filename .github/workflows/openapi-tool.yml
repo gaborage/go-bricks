@@ -55,17 +55,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
-
+    
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version: 1.25
-
-    - name: Install golangci-lint
-      run: make dev-deps
-
-    - name: Run linting
-      run: make lint
+    
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9
+      with:
+        version: latest
+        args: --timeout=5m --skip-dirs=tools,examples
 
   security:
     runs-on: ubuntu-latest
