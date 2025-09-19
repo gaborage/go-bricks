@@ -6,6 +6,34 @@ import (
 	"testing"
 )
 
+// Test constants to avoid string duplication
+const (
+	msgExpectedError   = "Expected error but got none"
+	msgExpectedNoError = "Expected no error but got: %v"
+	msgFailedToCreate  = "Failed to create test file: %v"
+)
+
+// Helper function to assert error expectations
+func assertError(t *testing.T, err error, expectError bool) {
+	t.Helper()
+	if expectError && err == nil {
+		t.Error(msgExpectedError)
+	}
+	if !expectError && err != nil {
+		t.Errorf(msgExpectedNoError, err)
+	}
+}
+
+// Helper function to create a test Go file
+func createTestGoFile(t *testing.T, dir, filename, content string) {
+	t.Helper()
+	filePath := filepath.Join(dir, filename)
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+}
+
 func TestIsGoVersionSupported(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -152,13 +180,7 @@ require (
 
 			// Test the function
 			err = checkGoBricksCompatibility(goModPath, tt.verbose)
-
-			if tt.expectError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
+			assertError(t, err, tt.expectError)
 
 			// Clean up
 			os.Remove(goModPath)
@@ -166,85 +188,46 @@ require (
 	}
 }
 
-func TestCheckGoBricksCompatibility_FileNotFound(t *testing.T) {
+func TestCheckGoBricksCompatibilityFileNotFound(t *testing.T) {
 	err := checkGoBricksCompatibility("/nonexistent/go.mod", false)
 	if err == nil {
 		t.Error("Expected error for nonexistent file, but got none")
 	}
 }
 
-func TestCheckProjectStructure(t *testing.T) {
-	tests := []struct {
-		name        string
-		setupFunc   func(t *testing.T) string
-		expectError bool
-	}{
-		{
-			name: "valid project with go files",
-			setupFunc: func(t *testing.T) string {
-				tempDir := t.TempDir()
-				// Create a test Go file
-				err := os.WriteFile(filepath.Join(tempDir, "main.go"), []byte("package main"), 0644)
-				if err != nil {
-					t.Fatalf("Failed to create test file: %v", err)
-				}
-				return tempDir
-			},
-			expectError: false,
-		},
-		{
-			name: "valid project with go files in subdirectory",
-			setupFunc: func(t *testing.T) string {
-				tempDir := t.TempDir()
-				subDir := filepath.Join(tempDir, "internal")
-				err := os.MkdirAll(subDir, 0755)
-				if err != nil {
-					t.Fatalf("Failed to create subdirectory: %v", err)
-				}
-				// Create a test Go file in subdirectory
-				err = os.WriteFile(filepath.Join(subDir, "handler.go"), []byte("package internal"), 0644)
-				if err != nil {
-					t.Fatalf("Failed to create test file: %v", err)
-				}
-				return tempDir
-			},
-			expectError: false,
-		},
-		{
-			name: "nonexistent directory",
-			setupFunc: func(_ *testing.T) string {
-				return "/nonexistent/directory"
-			},
-			expectError: true,
-		},
-		{
-			name: "directory with no go files",
-			setupFunc: func(t *testing.T) string {
-				tempDir := t.TempDir()
-				// Create a non-Go file
-				err := os.WriteFile(filepath.Join(tempDir, "README.md"), []byte("# Test"), 0644)
-				if err != nil {
-					t.Fatalf("Failed to create test file: %v", err)
-				}
-				return tempDir
-			},
-			expectError: true,
-		},
+func TestCheckProjectStructureValidProject(t *testing.T) {
+	tempDir := t.TempDir()
+	createTestGoFile(t, tempDir, "main.go", "package main")
+
+	err := checkProjectStructure(tempDir)
+	assertError(t, err, false)
+}
+
+func TestCheckProjectStructureValidProjectWithSubdirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "internal")
+	err := os.MkdirAll(subDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create subdirectory: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			projectRoot := tt.setupFunc(t)
-			err := checkProjectStructure(projectRoot)
+	createTestGoFile(t, subDir, "handler.go", "package internal")
 
-			if tt.expectError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-		})
-	}
+	err = checkProjectStructure(tempDir)
+	assertError(t, err, false)
+}
+
+func TestCheckProjectStructureNonexistentDirectory(t *testing.T) {
+	err := checkProjectStructure("/nonexistent/directory")
+	assertError(t, err, true)
+}
+
+func TestCheckProjectStructureNoGoFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	createTestGoFile(t, tempDir, "README.md", "# Test")
+
+	err := checkProjectStructure(tempDir)
+	assertError(t, err, true)
 }
 
 func TestRunDoctor(t *testing.T) {
@@ -303,13 +286,7 @@ require go-bricks v1.0.0
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runDoctor(tt.opts)
-
-			if tt.expectError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
+			assertError(t, err, tt.expectError)
 		})
 	}
 }
