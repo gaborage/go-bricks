@@ -230,7 +230,7 @@ func (m *ConfigInjectionModule) handleGetConfig(_ struct{}, _ server.HandlerCont
 func main() {
 	// Set up environment variables for demonstration
 	envVars := map[string]string{
-		"CUSTOM_API_KEY":                 "sk_live_abc123xyz789",
+		"CUSTOM_API_KEY":                 "example-api-key-1234567890",
 		"CUSTOM_API_BASE_URL":            "https://api.production.com",
 		"CUSTOM_API_TIMEOUT":             "45s",
 		"CUSTOM_API_MAX_RETRIES":         "5",
@@ -238,8 +238,8 @@ func main() {
 		"CUSTOM_API_RATE_LIMIT":          "200",
 		"CUSTOM_API_USER_AGENT":          "MyApp/2.0",
 		"CUSTOM_PAYMENT_PROVIDER_URL":    "https://payment.stripe.com",
-		"CUSTOM_PAYMENT_API_KEY":         "pk_live_payment_key_123",
-		"CUSTOM_PAYMENT_WEBHOOK_SECRET":  "whsec_webhook_secret_456",
+		"CUSTOM_PAYMENT_API_KEY":         "example-api-key-123",
+		"CUSTOM_PAYMENT_WEBHOOK_SECRET":  "example-webhook-secret",
 		"CUSTOM_PAYMENT_CONNECT_TIMEOUT": "5s",
 		"CUSTOM_PAYMENT_REQUEST_TIMEOUT": "60s",
 		"CUSTOM_PAYMENT_MAX_RETRIES":     "2",
