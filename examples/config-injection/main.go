@@ -18,7 +18,6 @@ import (
 // and have them automatically injected during initialization.
 type ExternalAPIService struct {
 	// Configuration is injected based on struct tags
-	APIKey     string        `config:"custom.api.key" required:"true"`
 	BaseURL    string        `config:"custom.api.base.url" default:"https://api.example.com"`
 	Timeout    time.Duration `config:"custom.api.timeout" default:"30s"`
 	MaxRetries int           `config:"custom.api.max.retries" default:"3"`
@@ -31,7 +30,6 @@ type ExternalAPIService struct {
 func (s *ExternalAPIService) CallThirdPartyAPI(ctx context.Context, endpoint string, data map[string]interface{}) (map[string]interface{}, error) {
 	// Service can now use its configuration directly without needing it passed as parameters
 	fmt.Printf("Making API call to %s%s\n", s.BaseURL, endpoint)
-	fmt.Printf("Using API Key: %s (first 10 chars)\n", s.APIKey[:minInt(10, len(s.APIKey))])
 	fmt.Printf("Timeout: %v, Max Retries: %d, Rate Limit: %d\n", s.Timeout, s.MaxRetries, s.RateLimit)
 	if len(data) > 0 {
 		fmt.Printf("Payload: %v\n", data)
@@ -61,7 +59,6 @@ func (s *ExternalAPIService) CallThirdPartyAPI(ctx context.Context, endpoint str
 // PaymentServiceConfig shows a focused config struct for a specific service domain
 type PaymentServiceConfig struct {
 	ProviderURL    string        `config:"custom.payment.provider.url" required:"true"`
-	APIKey         string        `config:"custom.payment.api.key" required:"true"`
 	WebhookSecret  string        `config:"custom.payment.webhook.secret" required:"true"`
 	ConnectTimeout time.Duration `config:"custom.payment.connect.timeout" default:"10s"`
 	RequestTimeout time.Duration `config:"custom.payment.request.timeout" default:"30s"`
@@ -89,7 +86,6 @@ func (p *PaymentService) ProcessPayment(ctx context.Context, amount int64, curre
 
 	fmt.Printf("Processing payment: %d %s\n", amount, currency)
 	fmt.Printf("Provider: %s (sandbox: %v)\n", p.config.ProviderURL, p.config.EnableSandbox)
-	fmt.Printf("Using API Key: %s... (masked)\n", p.config.APIKey[:minInt(8, len(p.config.APIKey))])
 	fmt.Printf("Timeouts - Connect: %v, Request: %v\n", p.config.ConnectTimeout, p.config.RequestTimeout)
 
 	// Simulate payment processing while respecting context cancellation
@@ -295,12 +291,4 @@ func main() {
 	if err := application.Run(); err != nil && err != http.ErrServerClosed {
 		log.Printf("Application failed: %v", err)
 	}
-}
-
-// Helper functions
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
