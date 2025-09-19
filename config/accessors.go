@@ -16,6 +16,8 @@ const (
 
 	// Error message constants to avoid duplication while preserving context
 	errMsgRequiredKeyInvalid      = "required configuration key '%s' is invalid: %w"
+	errMsgRequiredKeyMissing      = "required configuration key '%s' is missing"
+	errMsgConfigNotInitialized    = "configuration not initialized"
 	errMsgUnsupportedType         = "unsupported type %T"
 	errMsgUnsupportedSignedType   = "unsupported signed int type %T"
 	errMsgUnsupportedUnsignedType = "unsupported unsigned int type %T"
@@ -99,7 +101,7 @@ func (c *Config) GetBool(key string, defaultVal ...bool) bool {
 // GetRequiredString retrieves a required string value from the configuration.
 func (c *Config) GetRequiredString(key string) (string, error) {
 	if c == nil || c.k == nil || !c.k.Exists(key) {
-		return "", fmt.Errorf("required configuration key '%s' is missing", key)
+		return "", fmt.Errorf(errMsgRequiredKeyMissing, key)
 	}
 
 	val := strings.TrimSpace(c.k.String(key))
@@ -168,7 +170,7 @@ func (c *Config) GetRequiredBool(key string) (bool, error) {
 // Unmarshal unmarshals a configuration section into the provided struct.
 func (c *Config) Unmarshal(key string, out any) error {
 	if c == nil || c.k == nil {
-		return fmt.Errorf("configuration not initialized")
+		return errors.New(errMsgConfigNotInitialized)
 	}
 	return c.k.Unmarshal(key, out)
 }
@@ -210,10 +212,10 @@ func (c *Config) rawValue(key string) (any, bool) {
 
 func (c *Config) rawRequiredValue(key string) (any, error) {
 	if c == nil || c.k == nil {
-		return nil, fmt.Errorf("configuration not initialized")
+		return nil, errors.New(errMsgConfigNotInitialized)
 	}
 	if !c.k.Exists(key) {
-		return nil, fmt.Errorf("required configuration key '%s' is missing", key)
+		return nil, fmt.Errorf(errMsgRequiredKeyMissing, key)
 	}
 	return c.k.Get(key), nil
 }
@@ -393,11 +395,11 @@ func floatToInt64(value float64) (int64, error) {
 // Supported field types: string, int, int64, float64, bool, time.Duration
 func (c *Config) InjectInto(target any) error {
 	if c == nil || c.k == nil {
-		return fmt.Errorf("configuration not initialized")
+		return errors.New(errMsgConfigNotInitialized)
 	}
 
 	rv := reflect.ValueOf(target)
-	if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
+	if rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
 		return fmt.Errorf("target must be a pointer to a struct, got %T", target)
 	}
 
@@ -460,7 +462,7 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 	}
 
 	if required {
-		return nil, false, fmt.Errorf("required configuration key '%s' is missing", configKey)
+		return nil, false, fmt.Errorf(errMsgRequiredKeyMissing, configKey)
 	}
 
 	if hasDefault {
@@ -473,44 +475,58 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 func (c *Config) assignFieldValue(field reflect.Value, configKey string, required bool, value any) error {
 	switch field.Kind() { //nolint:exhaustive // injection supports a controlled subset of kinds
 	case reflect.String:
-		strVal, err := c.convertToString(value, configKey, required)
-		if err != nil {
-			return err
-		}
-		field.SetString(strVal)
-
+		return c.assignStringField(field, configKey, required, value)
 	case reflect.Int, reflect.Int64:
-		intVal, err := c.convertToInt64(value, configKey)
-		if err != nil {
-			return err
-		}
-		if field.Kind() == reflect.Int {
-			if intVal > int64(maxInt) || intVal < int64(minInt) {
-				return fmt.Errorf("value %d for key '%s' overflows int", intVal, configKey)
-			}
-			field.SetInt(intVal)
-		} else {
-			field.SetInt(intVal)
-		}
-
+		return c.assignIntegerField(field, configKey, value)
 	case reflect.Float64:
-		floatVal, err := c.convertToFloat64(value, configKey)
-		if err != nil {
-			return err
-		}
-		field.SetFloat(floatVal)
-
+		return c.assignFloatField(field, configKey, value)
 	case reflect.Bool:
-		boolVal, err := c.convertToBool(value, configKey)
-		if err != nil {
-			return err
-		}
-		field.SetBool(boolVal)
-
+		return c.assignBoolField(field, configKey, value)
 	default:
 		return fmt.Errorf("unsupported field type %s for key '%s'", field.Type(), configKey)
 	}
+}
 
+// Type-specific field assignment methods to reduce cognitive complexity
+
+func (c *Config) assignStringField(field reflect.Value, configKey string, required bool, value any) error {
+	strVal, err := c.convertToString(value, configKey, required)
+	if err != nil {
+		return err
+	}
+	field.SetString(strVal)
+	return nil
+}
+
+func (c *Config) assignIntegerField(field reflect.Value, configKey string, value any) error {
+	intVal, err := c.convertToInt64(value, configKey)
+	if err != nil {
+		return err
+	}
+	if field.Kind() == reflect.Int {
+		if intVal > int64(maxInt) || intVal < int64(minInt) {
+			return fmt.Errorf("value %d for key '%s' overflows int", intVal, configKey)
+		}
+	}
+	field.SetInt(intVal)
+	return nil
+}
+
+func (c *Config) assignFloatField(field reflect.Value, configKey string, value any) error {
+	floatVal, err := c.convertToFloat64(value, configKey)
+	if err != nil {
+		return err
+	}
+	field.SetFloat(floatVal)
+	return nil
+}
+
+func (c *Config) assignBoolField(field reflect.Value, configKey string, value any) error {
+	boolVal, err := c.convertToBool(value, configKey)
+	if err != nil {
+		return err
+	}
+	field.SetBool(boolVal)
 	return nil
 }
 
