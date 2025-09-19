@@ -5,8 +5,12 @@ permissions:
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'tools/**'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - 'tools/**'
 
 jobs:
   test:
