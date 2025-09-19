@@ -17,6 +17,18 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+// Test constants to avoid string duplication
+const (
+	testAPIKey         = "X-API-Key"
+	testAPIValue       = "test-key"
+	testUserAgent      = "User-Agent"
+	testAgentValue     = "test-agent"
+	testIntercepted    = "X-Intercepted"
+	testCustomTrace    = "custom-trace-123"
+	testContentTypeHdr = "Content-Type"
+	testJSONType       = "application/json"
+)
+
 // createTestLogger creates a logger that outputs to a buffer for testing
 func createTestLogger() logger.Logger {
 	return logger.New("info", false)
@@ -78,15 +90,15 @@ func TestBuilder(t *testing.T) {
 
 	t.Run("with default headers", func(t *testing.T) {
 		client := NewBuilder(log).
-			WithDefaultHeader("X-API-Key", "test-key").
-			WithDefaultHeader("User-Agent", "test-agent").
+			WithDefaultHeader(testAPIKey, testAPIValue).
+			WithDefaultHeader(testUserAgent, testAgentValue).
 			Build()
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with interceptors", func(t *testing.T) {
 		reqInterceptor := func(_ context.Context, req *nethttp.Request) error {
-			req.Header.Set("X-Intercepted", "true")
+			req.Header.Set(testIntercepted, "true")
 			return nil
 		}
 
@@ -100,6 +112,148 @@ func TestBuilder(t *testing.T) {
 			WithResponseInterceptor(respInterceptor).
 			Build()
 		assert.NotNil(t, client)
+	})
+
+	t.Run("with trace ID header", func(t *testing.T) {
+		customHeader := "X-Custom-Trace-ID"
+		builtClient := NewBuilder(log).
+			WithTraceIDHeader(customHeader).
+			Build()
+
+		// Assert against the client's config since tests are in the same package
+		clientImpl := builtClient.(*client)
+		assert.Equal(t, customHeader, clientImpl.config.TraceIDHeader)
+	})
+
+	t.Run("with trace ID header empty string", func(t *testing.T) {
+		builtClient := NewBuilder(log).
+			WithTraceIDHeader("").
+			Build()
+
+		// Empty string should not change the default
+		clientImpl := builtClient.(*client)
+		assert.Equal(t, HeaderXRequestID, clientImpl.config.TraceIDHeader)
+	})
+
+	t.Run("with custom trace ID generator", func(t *testing.T) {
+		var generatorCallCount int32
+		customGenerator := func() string {
+			atomic.AddInt32(&generatorCallCount, 1)
+			return testCustomTrace
+		}
+
+		builtClient := NewBuilder(log).
+			WithTraceIDGenerator(customGenerator).
+			Build()
+
+		clientImpl := builtClient.(*client)
+		assert.NotNil(t, clientImpl.config.NewTraceID)
+
+		// Test that the custom generator is actually used
+		traceID := clientImpl.config.NewTraceID()
+		assert.Equal(t, testCustomTrace, traceID)
+		assert.Equal(t, int32(1), atomic.LoadInt32(&generatorCallCount))
+	})
+
+	t.Run("with nil trace ID generator", func(t *testing.T) {
+		builtClient := NewBuilder(log).
+			WithTraceIDGenerator(nil).
+			Build()
+
+		// nil generator should not change the default
+		clientImpl := builtClient.(*client)
+		assert.NotNil(t, clientImpl.config.NewTraceID)
+	})
+
+	t.Run("with custom trace ID extractor", func(t *testing.T) {
+		type contextKey string
+		const customTraceKey contextKey = "custom-trace"
+
+		customExtractor := func(ctx context.Context) (string, bool) {
+			if val := ctx.Value(customTraceKey); val != nil {
+				return val.(string), true
+			}
+			return "", false
+		}
+
+		builtClient := NewBuilder(log).
+			WithTraceIDExtractor(customExtractor).
+			Build()
+
+		clientImpl := builtClient.(*client)
+		assert.NotNil(t, clientImpl.config.TraceIDExtractor)
+
+		// Test the custom extractor logic
+		ctx := context.WithValue(context.Background(), customTraceKey, "extracted-123")
+		traceID, found := clientImpl.config.TraceIDExtractor(ctx)
+		assert.True(t, found)
+		assert.Equal(t, "extracted-123", traceID)
+
+		// Test fallback behavior
+		emptyCtx := context.Background()
+		_, found = clientImpl.config.TraceIDExtractor(emptyCtx)
+		assert.False(t, found)
+	})
+
+	t.Run("with nil trace ID extractor", func(t *testing.T) {
+		builtClient := NewBuilder(log).
+			WithTraceIDExtractor(nil).
+			Build()
+
+		// nil extractor should not change the default
+		clientImpl := builtClient.(*client)
+		assert.NotNil(t, clientImpl.config.TraceIDExtractor)
+	})
+
+	t.Run("with W3C trace enabled", func(t *testing.T) {
+		builtClient := NewBuilder(log).
+			WithW3CTrace(true).
+			Build()
+
+		clientImpl := builtClient.(*client)
+		assert.True(t, clientImpl.config.EnableW3CTrace)
+	})
+
+	t.Run("with W3C trace disabled", func(t *testing.T) {
+		builtClient := NewBuilder(log).
+			WithW3CTrace(false).
+			Build()
+
+		clientImpl := builtClient.(*client)
+		assert.False(t, clientImpl.config.EnableW3CTrace)
+	})
+
+	t.Run("combined trace configuration", func(t *testing.T) {
+		var generatorCalls int32
+		customGenerator := func() string {
+			atomic.AddInt32(&generatorCalls, 1)
+			return fmt.Sprintf("trace-%d", atomic.LoadInt32(&generatorCalls))
+		}
+
+		customExtractor := func(_ context.Context) (string, bool) {
+			return "extracted-from-ctx", true
+		}
+
+		builtClient := NewBuilder(log).
+			WithTraceIDHeader("X-My-Trace").
+			WithTraceIDGenerator(customGenerator).
+			WithTraceIDExtractor(customExtractor).
+			WithW3CTrace(false).
+			Build()
+
+		clientImpl := builtClient.(*client)
+		assert.Equal(t, "X-My-Trace", clientImpl.config.TraceIDHeader)
+		assert.False(t, clientImpl.config.EnableW3CTrace)
+
+		// Test that extractor takes precedence over generator
+		traceID, found := clientImpl.config.TraceIDExtractor(context.Background())
+		assert.True(t, found)
+		assert.Equal(t, "extracted-from-ctx", traceID)
+
+		// Generator should still work when called directly
+		generatedID := clientImpl.config.NewTraceID()
+		assert.Equal(t, "trace-1", generatedID)
+		assert.Equal(t, int32(1), atomic.LoadInt32(&generatorCalls))
 	})
 }
 
@@ -182,7 +336,7 @@ func TestClientHeaders(t *testing.T) {
 
 	t.Run("request headers", func(t *testing.T) {
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			assert.Equal(t, testJSONType, r.Header.Get(testContentTypeHdr))
 			assert.Equal(t, "test-value", r.Header.Get("X-Custom-Header"))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
@@ -192,8 +346,8 @@ func TestClientHeaders(t *testing.T) {
 		req := &Request{
 			URL: server.URL,
 			Headers: map[string]string{
-				"Content-Type":    "application/json",
-				"X-Custom-Header": "test-value",
+				testContentTypeHdr: testJSONType,
+				"X-Custom-Header":  "test-value",
 			},
 		}
 
@@ -203,15 +357,15 @@ func TestClientHeaders(t *testing.T) {
 
 	t.Run("default headers", func(t *testing.T) {
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			assert.Equal(t, "test-agent", r.Header.Get("User-Agent"))
-			assert.Equal(t, "test-key", r.Header.Get("X-API-Key"))
+			assert.Equal(t, testAgentValue, r.Header.Get(testUserAgent))
+			assert.Equal(t, testAPIValue, r.Header.Get(testAPIKey))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
 
 		client := NewBuilder(log).
-			WithDefaultHeader("User-Agent", "test-agent").
-			WithDefaultHeader("X-API-Key", "test-key").
+			WithDefaultHeader(testUserAgent, testAgentValue).
+			WithDefaultHeader(testAPIKey, testAPIValue).
 			Build()
 
 		req := &Request{URL: server.URL}
@@ -222,19 +376,19 @@ func TestClientHeaders(t *testing.T) {
 
 	t.Run("request headers override defaults", func(t *testing.T) {
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			assert.Equal(t, "custom-agent", r.Header.Get("User-Agent"))
+			assert.Equal(t, "custom-agent", r.Header.Get(testUserAgent))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
 
 		client := NewBuilder(log).
-			WithDefaultHeader("User-Agent", "default-agent").
+			WithDefaultHeader(testUserAgent, "default-agent").
 			Build()
 
 		req := &Request{
 			URL: server.URL,
 			Headers: map[string]string{
-				"User-Agent": "custom-agent",
+				testUserAgent: "custom-agent",
 			},
 		}
 
@@ -297,7 +451,7 @@ func TestDefaultContentTypeWhenBodyPresent(t *testing.T) {
 	log := createTestLogger()
 	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		// Content-Type should default to application/json when body is present
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, testJSONType, r.Header.Get(testContentTypeHdr))
 		w.WriteHeader(nethttp.StatusOK)
 	}))
 	defer server.Close()
@@ -318,13 +472,13 @@ func TestClientInterceptors(t *testing.T) {
 
 	t.Run("request interceptor", func(t *testing.T) {
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
-			assert.Equal(t, "intercepted", r.Header.Get("X-Intercepted"))
+			assert.Equal(t, "intercepted", r.Header.Get(testIntercepted))
 			w.WriteHeader(nethttp.StatusOK)
 		}))
 		defer server.Close()
 
 		reqInterceptor := func(_ context.Context, req *nethttp.Request) error {
-			req.Header.Set("X-Intercepted", "intercepted")
+			req.Header.Set(testIntercepted, "intercepted")
 			return nil
 		}
 
@@ -575,7 +729,7 @@ func TestTraceIDPropagation(t *testing.T) {
 	})
 
 	t.Run("preserves existing X-Request-ID header", func(t *testing.T) {
-		expectedTraceID := "custom-trace-123"
+		expectedTraceID := testCustomTrace
 		var requestHeaders nethttp.Header
 		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 			requestHeaders = r.Header.Clone()
