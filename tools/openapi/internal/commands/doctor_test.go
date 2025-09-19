@@ -14,6 +14,7 @@ const (
 	msgFailedToCreate  = "Failed to create test file: %v"
 	testMainGoFile     = "main.go"
 	packageMainContent = "package main"
+	goModFile          = "go.mod"
 )
 
 // Helper function to assert error expectations
@@ -175,7 +176,7 @@ require (
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create temporary go.mod file
-			goModPath := filepath.Join(tempDir, "go.mod")
+			goModPath := filepath.Join(tempDir, goModFile)
 			err := os.WriteFile(goModPath, []byte(tt.goModContent), 0644)
 			if err != nil {
 				t.Fatalf("Failed to create test go.mod: %v", err)
@@ -244,7 +245,7 @@ go 1.21
 
 require go-bricks v1.0.0
 `
-	err := os.WriteFile(filepath.Join(tempDir, "go.mod"), []byte(goModContent), 0644)
+	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(goModContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create go.mod: %v", err)
 	}
@@ -434,7 +435,7 @@ go 1.21
 
 require go-bricks v1.0.0
 `
-	goModPath := filepath.Join(tempDir, "go.mod")
+	goModPath := filepath.Join(tempDir, goModFile)
 	err := os.WriteFile(goModPath, []byte(goModContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test go.mod: %v", err)
@@ -466,7 +467,7 @@ require go-bricks v1.0.0
 		},
 		{
 			name:        "current directory go.mod",
-			goModPath:   "go.mod",
+			goModPath:   goModFile,
 			expectError: false,
 		},
 		{

@@ -7,6 +7,8 @@
 # Ignore everything
 *
 
+.gomodcache/
+
 # But not these files...
 !/.gitignore
 

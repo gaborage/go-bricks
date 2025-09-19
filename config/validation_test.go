@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	testConnectionString        = "postgresql://user:pass@localhost/db"
-	testOracleHost              = "oracle.example.com"
-	testAppName                 = "test-app"
-	testAppVersion              = "v1.0.0"
-	errMaxConnectionsPositive   = "max connections must be positive"
+	testConnectionString      = "postgresql://user:pass@localhost/db"
+	testOracleHost            = "oracle.example.com"
+	testAppName               = "test-app"
+	testAppVersion            = "v1.0.0"
+	errMaxConnectionsPositive = "max connections must be positive"
 )
 
 func TestValidateValidConfig(t *testing.T) {

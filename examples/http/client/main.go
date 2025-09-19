@@ -40,7 +40,7 @@ func main() {
 
 // simpleExample creates a basic HTTP client and issues a GET request to https://httpbin.org/get,
 // printing the response status, elapsed time, and response body length to standard output.
-// 
+//
 // If the request fails with a network error, it prints a "Network error" message; for other
 // failures it prints a generic "Request failed" message.
 func simpleExample(log logger.Logger) {
