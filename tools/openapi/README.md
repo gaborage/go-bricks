@@ -23,5 +23,8 @@ go-bricks-openapi doctor -project .
 
 ## Requirements
 
-- Go 1.21+
-- go-bricks v1.2.0+ (when available)
+- Go 1.25+
+- go-bricks v0.5.0+
+
+## Post Release
+GOPROXY=https://proxy.golang.org GO111MODULE=on go get github.com/gaborage/go-bricks@vX.Y.Z
