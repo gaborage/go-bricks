@@ -597,10 +597,6 @@ func (a *ProjectAnalyzer) parsePackage(filePath, packageName string) (files map[
 		return pkg.Files, nil
 	}
 
-	for _, pkg := range pkgs {
-		return pkg.Files, nil
-	}
-
 	return nil, fmt.Errorf("package %s not found in %s", packageName, dir)
 }
 
