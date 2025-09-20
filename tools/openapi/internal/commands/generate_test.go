@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	outputFileName = "openapi.yaml"
-	testYAMLFile   = "test.yaml"
-	validProjectMsg = "Valid project with modules should generate complete spec"
-	emptyProjectMsg = "Empty project should generate spec with empty paths"
+	outputFileName       = "openapi.yaml"
+	testYAMLFile         = "test.yaml"
+	generateCmdFailedMsg = "runGenerate() failed: %v"
+	specFile             = "spec.yaml"
+	docsApiSpecFile      = "docs/api/spec.yaml"
 )
 
 // OpenAPISpec represents the basic structure of an OpenAPI specification for testing
@@ -157,7 +158,7 @@ func TestRunGenerate(t *testing.T) {
 
 	err := runGenerate(opts)
 	if err != nil {
-		t.Fatalf("runGenerate() failed: %v", err)
+		t.Fatalf(generateCmdFailedMsg, err)
 	}
 
 	// Check that the file was created
@@ -202,7 +203,7 @@ func TestRunGenerateDirectoryCreation(t *testing.T) {
 
 	err := runGenerate(opts)
 	if err != nil {
-		t.Fatalf("runGenerate() failed: %v", err)
+		t.Fatalf(generateCmdFailedMsg, err)
 	}
 
 	// Check that the nested directories were created
@@ -512,7 +513,7 @@ func (m *TestModule) Init(deps interface{}) error { return nil }`
 			opts := tt.setup(testDir)
 			err := runGenerate(opts)
 			if err != nil {
-				t.Fatalf("runGenerate() failed: %v", err)
+				t.Fatalf(generateCmdFailedMsg, err)
 			}
 
 			tt.validate(t, opts.OutputFile)
@@ -563,12 +564,12 @@ func TestGenerateOptionsValidation(t *testing.T) {
 		{
 			name:         "no extension gets yaml",
 			initialFile:  "spec",
-			expectedFile: "spec.yaml",
+			expectedFile: specFile,
 		},
 		{
 			name:         "yaml extension preserved",
-			initialFile:  "spec.yaml",
-			expectedFile: "spec.yaml",
+			initialFile:  specFile,
+			expectedFile: specFile,
 		},
 		{
 			name:         "yml extension preserved",
@@ -637,12 +638,12 @@ func TestValidateGenerateOptionsExtensionHandling(t *testing.T) {
 		{
 			name:     "complex path no extension",
 			input:    "docs/api/spec",
-			expected: "docs/api/spec.yaml",
+			expected: docsApiSpecFile,
 		},
 		{
 			name:     "complex path with extension",
-			input:    "docs/api/spec.yaml",
-			expected: "docs/api/spec.yaml",
+			input:    docsApiSpecFile,
+			expected: docsApiSpecFile,
 		},
 		{
 			name:     "single character name",
@@ -685,15 +686,15 @@ func TestGenerateCommandFlagValidation(t *testing.T) {
 		t.Errorf("Expected command use 'generate', got '%s'", cmd.Use)
 	}
 
-	if len(cmd.Short) == 0 {
+	if cmd.Short == "" {
 		t.Error("Command should have short description")
 	}
 
-	if len(cmd.Long) == 0 {
+	if cmd.Long == "" {
 		t.Error("Command should have long description")
 	}
 
-	if len(cmd.Example) == 0 {
+	if cmd.Example == "" {
 		t.Error("Command should have examples")
 	}
 

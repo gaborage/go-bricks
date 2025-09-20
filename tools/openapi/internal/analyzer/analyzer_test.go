@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
@@ -33,8 +34,11 @@ const (
 	testFileName   = "test.go"
 
 	// Test error message formats
-	expectedGotFormat = "Expected %q, got %q"
-	parseFailedFormat = "Failed to parse content: %v"
+	expectedGotFormat       = "Expected %q, got %q"
+	parseFailedFormat       = "Failed to parse content: %v"
+	expectedOneModuleFormat = "Expected 1 module, got %d"
+	expectedTwoRoutesFormat = "Expected 2 routes, got %d"
+	testServerImportPath    = "github.com/gaborage/go-bricks/server"
 )
 
 // createTestModuleFile creates a test Go file that represents a go-bricks module
@@ -212,7 +216,7 @@ func TestAnalyzeProject(t *testing.T) {
 
 	// Should have discovered one module
 	if len(project.Modules) != 1 {
-		t.Errorf("Expected 1 module, got %d", len(project.Modules))
+		t.Errorf(expectedOneModuleFormat, len(project.Modules))
 	}
 
 	if len(project.Modules) > 0 {
@@ -238,7 +242,7 @@ func validateDiscoveredModule(t *testing.T, module *models.Module) {
 
 	// Should have discovered routes
 	if len(module.Routes) != 2 {
-		t.Errorf("Expected 2 routes, got %d", len(module.Routes))
+		t.Errorf(expectedTwoRoutesFormat, len(module.Routes))
 	}
 
 	// Validate routes
@@ -261,25 +265,35 @@ func validateDiscoveredRoute(t *testing.T, route *models.Route) {
 	// Check specific routes
 	switch route.Path {
 	case getUserRoute:
-		if route.Method != "GET" {
-			t.Errorf("Expected GET method for %s, got %s", getUserRoute, route.Method)
-		}
-		if route.HandlerName != testHandlerName {
-			t.Errorf("Expected handler name '%s', got '%s'", testHandlerName, route.HandlerName)
-		}
+		assertGetRoute(t, route)
 	case createUserRoute:
-		if route.Method != "POST" {
-			t.Errorf("Expected POST method for %s, got %s", createUserRoute, route.Method)
-		}
-		if route.Summary != testSummary {
-			t.Errorf("Expected summary '%s', got '%s'", testSummary, route.Summary)
-		}
-		if route.Description != testDescription {
-			t.Errorf("Expected description '%s', got '%s'", testDescription, route.Description)
-		}
-		if !slices.Contains(route.Tags, testTag1) || !slices.Contains(route.Tags, testTag2) {
-			t.Errorf("Expected tags to contain '%s' and '%s', got %v", testTag1, testTag2, route.Tags)
-		}
+		assertCreateRoute(t, route)
+	}
+}
+
+func assertGetRoute(t *testing.T, route *models.Route) {
+	t.Helper()
+	if route.Method != "GET" {
+		t.Errorf("Expected GET method for %s, got %s", getUserRoute, route.Method)
+	}
+	if route.HandlerName != testHandlerName {
+		t.Errorf("Expected handler name '%s', got '%s'", testHandlerName, route.HandlerName)
+	}
+}
+
+func assertCreateRoute(t *testing.T, route *models.Route) {
+	t.Helper()
+	if route.Method != "POST" {
+		t.Errorf("Expected POST method for %s, got %s", createUserRoute, route.Method)
+	}
+	if route.Summary != testSummary {
+		t.Errorf("Expected summary '%s', got '%s'", testSummary, route.Summary)
+	}
+	if route.Description != testDescription {
+		t.Errorf("Expected description '%s', got '%s'", testDescription, route.Description)
+	}
+	if !slices.Contains(route.Tags, testTag1) || !slices.Contains(route.Tags, testTag2) {
+		t.Errorf("Expected tags to contain '%s' and '%s', got %v", testTag1, testTag2, route.Tags)
 	}
 }
 
@@ -359,6 +373,7 @@ func TestIsHTTPMethod(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.method, func(t *testing.T) {
 			result := analyzer.isHTTPMethod(tt.method)
 			if result != tt.expected {
@@ -369,21 +384,10 @@ func TestIsHTTPMethod(t *testing.T) {
 }
 
 func containsSubstring(str, substr string) bool {
-	return str != "" && substr != "" &&
-		(str == substr ||
-			(len(str) > len(substr) &&
-				(str[:len(substr)] == substr ||
-					str[len(str)-len(substr):] == substr ||
-					findSubstring(str, substr))))
-}
-
-func findSubstring(str, substr string) bool {
-	for i := 0; i <= len(str)-len(substr); i++ {
-		if str[i:i+len(substr)] == substr {
-			return true
-		}
+	if str == "" || substr == "" {
+		return false
 	}
-	return false
+	return strings.Contains(str, substr)
 }
 
 // Additional comprehensive test coverage
@@ -425,6 +429,7 @@ func TestExtractCommentDescription(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var commentGroup *ast.CommentGroup
 			if tt.comments != nil {
@@ -470,6 +475,7 @@ func TestExtractStringFromExpr(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.extractStringFromExpr(tt.expr)
 			if result != tt.expected {
@@ -520,6 +526,7 @@ func TestExtractPathFromArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.extractPathFromArg(tt.arg)
 			if result != tt.expected {
@@ -608,6 +615,7 @@ func TestIsModuleDepsField(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.isModuleDepsField(tt.field)
 			if result != tt.expected {
@@ -682,6 +690,7 @@ func TestIsMethodOnStruct(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.isMethodOnStruct(tt.recv, tt.structName)
 			if result != tt.expected {
@@ -710,7 +719,7 @@ const singleConst = "/single"`
 	// Parse the content
 	astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, constContent, parser.ParseComments)
 	if err != nil {
-		t.Fatalf("Failed to parse test content: %v", err)
+		t.Fatalf(parseFailedFormat, err)
 	}
 
 	// Extract constants
@@ -775,6 +784,7 @@ package test`,
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
@@ -803,7 +813,9 @@ func TestAnalyzeProjectEdgeCases(t *testing.T) {
 
 	t.Run("project with no go files", func(t *testing.T) {
 		emptyDir := filepath.Join(tempDir, "empty")
-		os.MkdirAll(emptyDir, 0755)
+		if err := os.MkdirAll(emptyDir, 0755); err != nil {
+			t.Fatalf("failed to create empty directory: %v", err)
+		}
 
 		// Create analyzer with empty directory
 		emptyAnalyzer := New(emptyDir)
@@ -951,7 +963,9 @@ func TestDiscoverModulesErrorHandling(t *testing.T) {
 	invalidFile := filepath.Join(tempDir, "invalid.go")
 	invalidContent := `package test
 func invalid syntax {`
-	os.WriteFile(invalidFile, []byte(invalidContent), 0644)
+	if err := os.WriteFile(invalidFile, []byte(invalidContent), 0644); err != nil {
+		t.Fatalf("failed to write invalid content: %v", err)
+	}
 
 	// This should not fail completely but should handle the parse error gracefully
 	// Create analyzer with temp directory
@@ -985,7 +999,9 @@ func (m *Module) Name() string { return "test" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {}
 `
-	os.WriteFile(moduleFile, []byte(moduleContent), 0644)
+	if err := os.WriteFile(moduleFile, []byte(moduleContent), 0644); err != nil {
+		t.Fatalf("failed to write module file: %v", err)
+	}
 
 	// This should successfully analyze the file
 	_, err := analyzer.analyzeGoFile(moduleFile)
@@ -1057,8 +1073,12 @@ func (m *Module) createUser() {}
 `
 
 	// Write both files
-	os.WriteFile(moduleFile, []byte(moduleContent), 0644)
-	os.WriteFile(routesFile, []byte(routesContent), 0644)
+	if err := os.WriteFile(moduleFile, []byte(moduleContent), 0644); err != nil {
+		t.Fatalf("failed to write module file: %v", err)
+	}
+	if err := os.WriteFile(routesFile, []byte(routesContent), 0644); err != nil {
+		t.Fatalf("failed to write routes file: %v", err)
+	}
 
 	// Analyze the module file
 	analyzer := New(tempDir)
@@ -1083,7 +1103,7 @@ func (m *Module) createUser() {}
 
 	// Verify routes are discovered from the separate routes.go file
 	if len(module.Routes) != 2 {
-		t.Fatalf("Expected 2 routes, got %d", len(module.Routes))
+		t.Fatalf(expectedTwoRoutesFormat, len(module.Routes))
 	}
 
 	// Check first route (GET)
@@ -1171,6 +1191,7 @@ func TestValidateProjectPath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			err := analyzer.validateProjectPath(tt.path)
 			if (err != nil) != tt.wantErr {
@@ -1186,8 +1207,10 @@ func TestValidateGoFilePath(t *testing.T) {
 	analyzer := New(tempDir)
 
 	// Create a test Go file
-	testFile := filepath.Join(tempDir, "test.go")
-	os.WriteFile(testFile, []byte("package test"), 0644)
+	testFile := filepath.Join(tempDir, testFileName)
+	if err := os.WriteFile(testFile, []byte("package test"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
 
 	tests := []struct {
 		name    string
@@ -1217,6 +1240,7 @@ func TestValidateGoFilePath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			err := analyzer.validateGoFilePath(tt.path)
 			if (err != nil) != tt.wantErr {
@@ -1231,46 +1255,26 @@ func TestParsePackageErrorHandling(t *testing.T) {
 	tempDir := t.TempDir()
 	analyzer := New(tempDir)
 
-	t.Run("valid package", func(t *testing.T) {
-		// Create a valid package first to test normal behavior
-		pkgDir := filepath.Join(tempDir, "validpkg")
-		os.MkdirAll(pkgDir, 0755)
+	// Test with a non-existent path
+	_, err := analyzer.parsePackage("/non/existent/path", "test")
+	if err == nil {
+		t.Error("Expected an error for non-existent path, got nil")
+	}
 
-		validFile := filepath.Join(pkgDir, "valid.go")
-		validContent := `package validpkg
+	// Test with a directory that doesn't contain the package
+	otherPkgDir := filepath.Join(tempDir, "other")
+	if err := os.Mkdir(otherPkgDir, 0755); err != nil {
+		t.Fatalf("failed to mkdir: %v", err)
+	}
+	otherFile := filepath.Join(otherPkgDir, "other.go")
+	if err := os.WriteFile(otherFile, []byte("package other"), 0644); err != nil {
+		t.Fatalf("failed to write other.go: %v", err)
+	}
 
-func ValidFunction() string {
-	return "valid"
-}`
-		os.WriteFile(validFile, []byte(validContent), 0644)
-
-		pkg, err := analyzer.parsePackage(validFile, "validpkg")
-		if err != nil {
-			t.Errorf("parsePackage failed for valid package: %v", err)
-		}
-		if pkg == nil {
-			t.Error("parsePackage should return package for valid syntax")
-		}
-	})
-
-	t.Run("package with syntax errors", func(t *testing.T) {
-		// Create a directory that looks like a package but has parse errors
-		pkgDir := filepath.Join(tempDir, "badpkg")
-		os.MkdirAll(pkgDir, 0755)
-
-		// Create a file with syntax errors
-		badFile := filepath.Join(pkgDir, "bad.go")
-		badContent := `package badpkg
-func invalid syntax {`
-		os.WriteFile(badFile, []byte(badContent), 0644)
-
-		// parsePackage should return an error for parse failures
-		pkg, err := analyzer.parsePackage(badFile, "badpkg")
-		if err == nil && pkg == nil {
-			t.Error("parsePackage should return either package or error, got neither")
-		}
-		// Either error or package is acceptable - both are valid responses
-	})
+	_, err = analyzer.parsePackage(otherFile, "test")
+	if err == nil {
+		t.Error("Expected an error for package not found, got nil")
+	}
 }
 
 // TestExtractModuleFromASTComplexCases tests complex module extraction scenarios
@@ -1395,6 +1399,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
@@ -1460,7 +1465,9 @@ func (m *UserModule) listUsers() {}
 func (m *UserModule) createUser() {}`
 
 	moduleFile := filepath.Join(tempDir, "usermodule.go")
-	os.WriteFile(moduleFile, []byte(moduleContent), 0644)
+	if err := os.WriteFile(moduleFile, []byte(moduleContent), 0644); err != nil {
+		t.Fatalf("failed to write usermodule.go: %v", err)
+	}
 
 	analyzer := New(tempDir)
 	project, err := analyzer.AnalyzeProject()
@@ -1470,7 +1477,7 @@ func (m *UserModule) createUser() {}`
 	}
 
 	if len(project.Modules) != 1 {
-		t.Errorf("Expected 1 module, got %d", len(project.Modules))
+		t.Errorf(expectedOneModuleFormat, len(project.Modules))
 	}
 
 	if len(project.Modules) > 0 {
@@ -1510,7 +1517,7 @@ func (m *Module) InvalidRegisterRoutes() {}`
 
 	astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, content, parser.ParseComments)
 	if err != nil {
-		t.Fatalf("Failed to parse test content: %v", err)
+		t.Fatalf(parseFailedFormat, err)
 	}
 
 	requiredMethods := map[string]bool{
@@ -1549,43 +1556,44 @@ func TestExtractImportAliases(t *testing.T) {
 		name       string
 		content    string
 		importPath string
-		expected   []string
+		expected   map[string]struct{}
 	}{
 		{
 			name: "standard import",
 			content: `package test
 import "github.com/gaborage/go-bricks/server"`,
-			importPath: "github.com/gaborage/go-bricks/server",
-			expected: []string{"server"},
+			importPath: testServerImportPath,
+			expected:   map[string]struct{}{"server": {}},
 		},
 		{
 			name: "aliased import",
 			content: `package test
 import srv "github.com/gaborage/go-bricks/server"`,
-			importPath: "github.com/gaborage/go-bricks/server",
-			expected: []string{"srv"},
+			importPath: testServerImportPath,
+			expected:   map[string]struct{}{"srv": {}},
 		},
 		{
 			name: "dot import",
 			content: `package test
 import . "github.com/gaborage/go-bricks/server"`,
-			importPath: "github.com/gaborage/go-bricks/server",
-			expected: []string{"server"}, // dot imports fall back to base name
+			importPath: testServerImportPath,
+			expected:   map[string]struct{}{"server": {}}, // dot imports fall back to base name
 		},
 		{
 			name: "no matching import",
 			content: `package test
 import "fmt"`,
-			importPath: "github.com/gaborage/go-bricks/server",
-			expected: []string{},
+			importPath: testServerImportPath,
+			expected:   map[string]struct{}{},
 		},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
-				t.Fatalf("Failed to parse test content: %v", err)
+				t.Fatalf(parseFailedFormat, err)
 			}
 
 			aliases := analyzer.extractImportAliases(astFile, tt.importPath)
@@ -1593,7 +1601,7 @@ import "fmt"`,
 				t.Errorf("Expected %d aliases, got %d", len(tt.expected), len(aliases))
 			}
 
-			for _, expectedAlias := range tt.expected {
+			for expectedAlias := range tt.expected {
 				if _, exists := aliases[expectedAlias]; !exists {
 					t.Errorf("Expected alias '%s' not found", expectedAlias)
 				}
@@ -1607,22 +1615,22 @@ func TestProjectMetadataExtraction(t *testing.T) {
 	tempDir := t.TempDir()
 
 	tests := []struct {
-		name        string
+		name         string
 		goModContent string
 		expectedName string
 	}{
 		{
-			name:        "github module",
+			name:         "github module",
 			goModContent: "module github.com/user/my-awesome-service\n\ngo 1.21",
 			expectedName: "My-awesome-service API",
 		},
 		{
-			name:        "simple module name",
+			name:         "simple module name",
 			goModContent: "module myservice\n\ngo 1.21",
 			expectedName: "Myservice API",
 		},
 		{
-			name:        "complex path",
+			name:         "complex path",
 			goModContent: "module internal/tools/api-generator\n\ngo 1.21",
 			expectedName: "Api-generator API",
 		},
@@ -1713,10 +1721,11 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
-				t.Fatalf("Failed to parse content: %v", err)
+				t.Fatalf(parseFailedFormat, err)
 			}
 
 			result, _ := analyzer.extractModuleFromAST(astFile, "/test/file.go")
@@ -1789,7 +1798,9 @@ import "fmt"
 func Helper() {
 	fmt.Println("This is not a module")
 }`
-		os.WriteFile(nonModuleFile, []byte(nonModuleContent), 0644)
+		if err := os.WriteFile(nonModuleFile, []byte(nonModuleContent), 0644); err != nil {
+			t.Fatalf("failed to write helper.go: %v", err)
+		}
 
 		module, err := analyzer.analyzeGoFile(nonModuleFile)
 		if err != nil {
@@ -1819,7 +1830,9 @@ type ComplexStruct struct {
 func (c *ComplexStruct) SomeMethod() string {
 	return "not a module"
 }`
-		os.WriteFile(complexFile, []byte(complexContent), 0644)
+		if err := os.WriteFile(complexFile, []byte(complexContent), 0644); err != nil {
+			t.Fatalf("failed to write complex.go: %v", err)
+		}
 
 		module, err := analyzer.analyzeGoFile(complexFile)
 		if err != nil {
@@ -2027,12 +2040,12 @@ func (m *Module) Shutdown() error {
 }`
 
 	// Write package files
-	err = os.WriteFile(filepath.Join(pkg1Dir, "module.go"), []byte(pkg1Content), 0644)
+	err = os.WriteFile(filepath.Join(pkg1Dir, moduleFileName), []byte(pkg1Content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write package1 file: %v", err)
 	}
 
-	err = os.WriteFile(filepath.Join(pkg2Dir, "module.go"), []byte(pkg2Content), 0644)
+	err = os.WriteFile(filepath.Join(pkg2Dir, moduleFileName), []byte(pkg2Content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to write package2 file: %v", err)
 	}

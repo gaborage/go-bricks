@@ -58,74 +58,91 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	return project, nil
 }
 
-// discoverProjectMetadata extracts project information from go.mod and main files
+// discoverProjectMetadata extracts project information from go.mod
 func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
-	// Try to read go.mod for module name
 	goModPath := filepath.Join(a.projectRoot, "go.mod")
 	if err := a.validateProjectPath(goModPath); err != nil {
 		return // Skip if path validation fails
 	}
 	// #nosec G304 - goModPath is validated to be within project root
-	if content, err := os.ReadFile(goModPath); err == nil {
-		for line := range strings.SplitSeq(string(content), "\n") {
-			if strings.HasPrefix(line, "module ") {
-				moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
-				// Extract just the last part as the project name
-				parts := strings.Split(moduleName, "/")
-				if len(parts) > 0 {
-					name := parts[len(parts)-1]
-					if name != "" {
-						project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
-					}
+	content, err := os.ReadFile(goModPath)
+	if err != nil {
+		return
+	}
+	a.parseGoModForProjectName(project, content)
+}
+
+// parseGoModForProjectName extracts the project name from go.mod content
+func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, content []byte) {
+	for line := range strings.SplitSeq(string(content), "\n") {
+		if strings.HasPrefix(line, "module ") {
+			moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
+			// Extract just the last part as the project name
+			parts := strings.Split(moduleName, "/")
+			if len(parts) > 0 {
+				name := parts[len(parts)-1]
+				if name != "" {
+					project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
 				}
-				break
 			}
+			break
 		}
 	}
 }
 
 // discoverModules finds all go-bricks modules in the project
 func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
-	var modules []models.Module
-	seen := make(map[string]bool)
+	d := &moduleDiscoverer{
+		analyzer: a,
+		modules:  []models.Module{},
+		seen:     make(map[string]bool),
+	}
 
-	err := filepath.Walk(a.projectRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors to continue discovery
-		}
+	err := filepath.Walk(a.projectRoot, d.walk)
+	return d.modules, err
+}
 
-		// Skip vendor, .git, and other common directories
-		if info.IsDir() && (info.Name() == "vendor" || info.Name() == ".git" ||
-			strings.HasPrefix(info.Name(), ".") || info.Name() == "node_modules") {
-			return filepath.SkipDir
-		}
+// moduleDiscoverer holds the state for module discovery
+type moduleDiscoverer struct {
+	analyzer *ProjectAnalyzer
+	modules  []models.Module
+	seen     map[string]bool
+}
 
-		// Only process Go files
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+// walk is the callback function for filepath.Walk to discover modules
+func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error {
+	if err != nil {
+		return nil // Skip errors to continue discovery
+	}
 
-		// Parse the Go file
-		module, err := a.analyzeGoFile(path)
-		if err != nil {
-			// Log error but continue processing other files
-			return nil
-		}
+	if info.IsDir() && shouldSkipDir(info.Name()) {
+		return filepath.SkipDir
+	}
 
-		if module != nil {
-			// Create a stable key for deduplication using package name
-			// Since Package field represents the unique package name
-			key := module.Package
-			if !seen[key] {
-				modules = append(modules, *module)
-				seen[key] = true
-			}
-		}
-
+	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 		return nil
-	})
+	}
 
-	return modules, err
+	module, err := d.analyzer.analyzeGoFile(path)
+	if err != nil {
+		// Log error but continue processing other files
+		return nil
+	}
+
+	if module != nil {
+		key := module.Package
+		if !d.seen[key] {
+			d.modules = append(d.modules, *module)
+			d.seen[key] = true
+		}
+	}
+
+	return nil
+}
+
+// shouldSkipDir checks if a directory should be skipped during discovery
+func shouldSkipDir(name string) bool {
+	return name == "vendor" || name == ".git" || strings.HasPrefix(name, ".") || name == "node_modules"
 }
 
 // analyzeGoFile parses a Go file and extracts module information
@@ -163,12 +180,26 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error)
 
 // extractModuleFromAST checks if the AST contains a go-bricks module
 func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath string) (module *models.Module, structName string) {
-	var (
-		hasModuleStruct bool
-	)
+	structName = a.findModuleStruct(astFile, filePath)
+	if structName == "" {
+		return nil, ""
+	}
+
+	// Use package name as module name and extract package-level description
+	moduleDescription := a.extractPackageDescription(astFile)
 	packageName := astFile.Name.Name
 
-	// Look for struct types that might implement the Module interface
+	module = &models.Module{
+		Name:        packageName,
+		Package:     packageName,
+		Description: moduleDescription,
+		Routes:      []models.Route{},
+	}
+	return module, structName
+}
+
+// findModuleStruct iterates through declarations to find a go-bricks module struct
+func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) string {
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -187,35 +218,11 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 
 			// Check if this struct has methods that indicate it's a Module
 			if a.hasModuleMethods(astFile, typeSpec.Name.Name, filePath) {
-				hasModuleStruct = true
-				structName = typeSpec.Name.Name
-				break
-			}
-
-			if hasModuleStruct {
-				break
+				return typeSpec.Name.Name
 			}
 		}
-
-		if hasModuleStruct {
-			break
-		}
 	}
-
-	if !hasModuleStruct {
-		return nil, ""
-	}
-
-	// Use package name as module name and extract package-level description
-	moduleDescription := a.extractPackageDescription(astFile)
-
-	module = &models.Module{
-		Name:        packageName,
-		Package:     packageName,
-		Description: moduleDescription,
-		Routes:      []models.Route{},
-	}
-	return module, structName
+	return ""
 }
 
 // hasModuleMethods checks if the struct has methods indicating it's a go-bricks module
@@ -433,23 +440,24 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 		return
 	}
 
-	methodName := selExpr.Sel.Name
-	switch methodName {
+	switch selExpr.Sel.Name {
 	case "WithTags":
 		route.Tags = a.extractStringLiterals(callExpr.Args)
 	case "WithSummary":
-		if len(callExpr.Args) > 0 {
-			if lit, ok := callExpr.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				route.Summary = strings.Trim(lit.Value, `"`)
-			}
-		}
+		route.Summary = a.extractStringFromFirstArg(callExpr)
 	case "WithDescription":
-		if len(callExpr.Args) > 0 {
-			if lit, ok := callExpr.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				route.Description = strings.Trim(lit.Value, `"`)
-			}
+		route.Description = a.extractStringFromFirstArg(callExpr)
+	}
+}
+
+// extractStringFromFirstArg extracts a string from the first argument of a call expression
+func (a *ProjectAnalyzer) extractStringFromFirstArg(callExpr *ast.CallExpr) string {
+	if len(callExpr.Args) > 0 {
+		if lit, ok := callExpr.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			return strings.Trim(lit.Value, `"`)
 		}
 	}
+	return ""
 }
 
 // extractStringLiterals extracts string literals from function arguments
@@ -511,18 +519,23 @@ func (a *ProjectAnalyzer) extractConstants(astFile *ast.File) {
 		}
 
 		for _, spec := range genDecl.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+			a.processConstSpec(spec)
+		}
+	}
+}
 
-			// Extract const name and value
-			for i, name := range valueSpec.Names {
-				if i < len(valueSpec.Values) {
-					if value := a.extractStringFromExpr(valueSpec.Values[i]); value != "" {
-						a.constants[name.Name] = value
-					}
-				}
+// processConstSpec processes a constant spec to extract constant values
+func (a *ProjectAnalyzer) processConstSpec(spec ast.Spec) {
+	valueSpec, ok := spec.(*ast.ValueSpec)
+	if !ok {
+		return
+	}
+
+	// Extract const name and value
+	for i, name := range valueSpec.Names {
+		if i < len(valueSpec.Values) {
+			if value := a.extractStringFromExpr(valueSpec.Values[i]); value != "" {
+				a.constants[name.Name] = value
 			}
 		}
 	}
@@ -633,23 +646,28 @@ func (a *ProjectAnalyzer) collectMethodFlagsFromFile(astFile *ast.File, structNa
 			continue
 		}
 
-		switch funcDecl.Name.Name {
-		case "Name":
-			if a.isValidNameSignature(funcDecl) {
-				flags["Name"] = true
-			}
-		case "Init":
-			if a.isValidInitSignature(funcDecl, appAliases) {
-				flags["Init"] = true
-			}
-		case "RegisterRoutes":
-			if a.isValidRegisterRoutesSignature(funcDecl, serverAliases) {
-				flags["RegisterRoutes"] = true
-			}
-		case "Shutdown":
-			if a.isValidShutdownSignature(funcDecl) {
-				flags["Shutdown"] = true
-			}
+		a.checkMethodSignature(funcDecl, flags, serverAliases, appAliases)
+	}
+}
+
+// checkMethodSignature checks a single method's signature and updates flags
+func (a *ProjectAnalyzer) checkMethodSignature(funcDecl *ast.FuncDecl, flags map[string]bool, serverAliases, appAliases map[string]struct{}) {
+	switch funcDecl.Name.Name {
+	case "Name":
+		if a.isValidNameSignature(funcDecl) {
+			flags["Name"] = true
+		}
+	case "Init":
+		if a.isValidInitSignature(funcDecl, appAliases) {
+			flags["Init"] = true
+		}
+	case "RegisterRoutes":
+		if a.isValidRegisterRoutesSignature(funcDecl, serverAliases) {
+			flags["RegisterRoutes"] = true
+		}
+	case "Shutdown":
+		if a.isValidShutdownSignature(funcDecl) {
+			flags["Shutdown"] = true
 		}
 	}
 }
