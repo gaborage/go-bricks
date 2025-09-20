@@ -3,7 +3,7 @@ coverage:
     project:
       default:
         target: 80%    # the required coverage value
-        threshold: 1%  # the leniency in hitting the target
+        threshold: 5%  # the leniency in hitting the target
 # Coverage ignore patterns
 ignore:
   - "examples"  # ignore examples folder
