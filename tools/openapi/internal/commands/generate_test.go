@@ -14,7 +14,7 @@ const (
 	testYAMLFile         = "test.yaml"
 	generateCmdFailedMsg = "runGenerate() failed: %v"
 	specFile             = "spec.yaml"
-	docsApiSpecFile      = "docs/api/spec.yaml"
+	docsAPISpecFile      = "docs/api/spec.yaml"
 )
 
 // OpenAPISpec represents the basic structure of an OpenAPI specification for testing
@@ -638,12 +638,12 @@ func TestValidateGenerateOptionsExtensionHandling(t *testing.T) {
 		{
 			name:     "complex path no extension",
 			input:    "docs/api/spec",
-			expected: docsApiSpecFile,
+			expected: docsAPISpecFile,
 		},
 		{
 			name:     "complex path with extension",
-			input:    docsApiSpecFile,
-			expected: docsApiSpecFile,
+			input:    docsAPISpecFile,
+			expected: docsAPISpecFile,
 		},
 		{
 			name:     "single character name",
