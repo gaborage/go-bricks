@@ -74,7 +74,8 @@ func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 
 // parseGoModForProjectName extracts the project name from go.mod content
 func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, content []byte) {
-	for line := range strings.SplitSeq(string(content), "\n") {
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
 		if strings.HasPrefix(line, "module ") {
 			moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
 			// Extract just the last part as the project name
@@ -787,22 +788,29 @@ func (a *ProjectAnalyzer) aliasContains(aliases map[string]struct{}, name, defau
 
 // validateProjectPath validates that a path is within the project root and safe to read
 func (a *ProjectAnalyzer) validateProjectPath(path string) error {
-	// Clean the path to resolve any .. or . components
-	cleanPath := filepath.Clean(path)
-
 	// Get absolute paths for comparison
 	absProjectRoot, err := filepath.Abs(a.projectRoot)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute project root: %w", err)
 	}
 
-	absPath, err := filepath.Abs(cleanPath)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Ensure the path is within the project root
-	if !strings.HasPrefix(absPath, absProjectRoot) {
+	// Clean both paths to resolve any .. or . components
+	cleanProjectRoot := filepath.Clean(absProjectRoot)
+	cleanPath := filepath.Clean(absPath)
+
+	// Compute relative path from project root to target path
+	relPath, err := filepath.Rel(cleanProjectRoot, cleanPath)
+	if err != nil {
+		return fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	// Reject any path that begins with ".." or equals ".."
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 		return errors.New("path is outside project root")
 	}
 
@@ -811,19 +819,40 @@ func (a *ProjectAnalyzer) validateProjectPath(path string) error {
 
 // validateGoFilePath validates that a Go file path is safe to read
 func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
-	// First validate it's within the project
-	if err := a.validateProjectPath(filePath); err != nil {
-		return err
+	// Get absolute paths for comparison
+	absProjectRoot, err := filepath.Abs(a.projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute project root: %w", err)
 	}
 
-	// Ensure it's a .go file
-	if !strings.HasSuffix(filePath, ".go") {
-		return errors.New("not a Go file")
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Ensure it's not attempting directory traversal
-	if strings.Contains(filePath, "..") {
+	// Clean both paths to resolve any .. or . components
+	cleanProjectRoot := filepath.Clean(absProjectRoot)
+	cleanPath := filepath.Clean(absPath)
+
+	// Compute relative path from project root to target path
+	relPath, err := filepath.Rel(cleanProjectRoot, cleanPath)
+	if err != nil {
+		return fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	// Reject any path that begins with ".." or equals ".."
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return errors.New("path is outside project root")
+	}
+
+	// Reject paths where the relative path contains ".." segments
+	if strings.Contains(relPath, "..") {
 		return errors.New("path contains directory traversal")
+	}
+
+	// Ensure the cleaned path has a .go suffix
+	if !strings.HasSuffix(cleanPath, ".go") {
+		return errors.New("not a Go file")
 	}
 
 	return nil
