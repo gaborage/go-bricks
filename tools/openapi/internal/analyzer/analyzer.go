@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -61,6 +62,10 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 	// Try to read go.mod for module name
 	goModPath := filepath.Join(a.projectRoot, "go.mod")
+	if err := a.validateProjectPath(goModPath); err != nil {
+		return // Skip if path validation fails
+	}
+	// #nosec G304 - goModPath is validated to be within project root
 	if content, err := os.ReadFile(goModPath); err == nil {
 		for line := range strings.SplitSeq(string(content), "\n") {
 			if strings.HasPrefix(line, "module ") {
@@ -118,6 +123,11 @@ func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 
 // analyzeGoFile parses a Go file and extracts module information
 func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error) {
+	if err := a.validateGoFilePath(filePath); err != nil {
+		return nil, fmt.Errorf("invalid file path %s: %w", filePath, err)
+	}
+
+	// #nosec G304 - filePath is validated to be a .go file within project root
 	src, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
@@ -755,4 +765,48 @@ func (a *ProjectAnalyzer) aliasContains(aliases map[string]struct{}, name, defau
 	}
 	_, ok := aliases[name]
 	return ok
+}
+
+// validateProjectPath validates that a path is within the project root and safe to read
+func (a *ProjectAnalyzer) validateProjectPath(path string) error {
+	// Clean the path to resolve any .. or . components
+	cleanPath := filepath.Clean(path)
+
+	// Get absolute paths for comparison
+	absProjectRoot, err := filepath.Abs(a.projectRoot)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute project root: %w", err)
+	}
+
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Ensure the path is within the project root
+	if !strings.HasPrefix(absPath, absProjectRoot) {
+		return errors.New("path is outside project root")
+	}
+
+	return nil
+}
+
+// validateGoFilePath validates that a Go file path is safe to read
+func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
+	// First validate it's within the project
+	if err := a.validateProjectPath(filePath); err != nil {
+		return err
+	}
+
+	// Ensure it's a .go file
+	if !strings.HasSuffix(filePath, ".go") {
+		return errors.New("not a Go file")
+	}
+
+	// Ensure it's not attempting directory traversal
+	if strings.Contains(filePath, "..") {
+		return errors.New("path contains directory traversal")
+	}
+
+	return nil
 }
