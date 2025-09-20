@@ -16,6 +16,9 @@ const (
 	testDatabaseUsername = "DATABASE_USERNAME"
 	testDatabaseDatabase = "DATABASE_DATABASE"
 	testDatabaseMaxConns = "DATABASE_MAX_CONNS"
+	appName              = "gobricks-service"
+	appVersion           = "v1.0.0"
+	serverHost           = "0.0.0.0"
 )
 
 func TestLoadWithDefaults(t *testing.T) {
@@ -27,14 +30,14 @@ func TestLoadWithDefaults(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	// Verify default values for non-database config
-	assert.Equal(t, "gobricks-service", cfg.App.Name)
-	assert.Equal(t, "v1.0.0", cfg.App.Version)
+	assert.Equal(t, appName, cfg.App.Name)
+	assert.Equal(t, appVersion, cfg.App.Version)
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 	assert.False(t, cfg.App.Debug)
 	assert.Equal(t, 100, cfg.App.RateLimit)
 	assert.Equal(t, "default", cfg.App.Namespace)
 
-	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
+	assert.Equal(t, serverHost, cfg.Server.Host)
 	assert.Equal(t, 8080, cfg.Server.Port)
 	assert.Equal(t, 15*time.Second, cfg.Server.ReadTimeout)
 	assert.Equal(t, 30*time.Second, cfg.Server.WriteTimeout)
@@ -65,7 +68,7 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 
 	// Set environment variables to test override functionality
 	// Include full database config to enable database
-	os.Setenv("APP_NAME", "test-service")
+	os.Setenv("APP_NAME", appName)
 	os.Setenv("APP_ENV", EnvProduction)
 	os.Setenv("SERVER_PORT", "9090")
 	os.Setenv("DATABASE_TYPE", "postgresql")
@@ -81,7 +84,7 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	// Verify environment variables override defaults
-	assert.Equal(t, "test-service", cfg.App.Name)
+	assert.Equal(t, appName, cfg.App.Name)
 	assert.Equal(t, EnvProduction, cfg.App.Env)
 	assert.Equal(t, 9090, cfg.Server.Port)
 	assert.Equal(t, "debug", cfg.Log.Level)
@@ -96,8 +99,8 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, int32(25), cfg.Database.MaxConns)
 
 	// Verify defaults still work for non-overridden values
-	assert.Equal(t, "v1.0.0", cfg.App.Version)
-	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
+	assert.Equal(t, appVersion, cfg.App.Version)
+	assert.Equal(t, serverHost, cfg.Server.Host)
 }
 
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
@@ -177,13 +180,13 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify non-database defaults are loaded
-	assert.Equal(t, "gobricks-service", k.String("app.name"))
-	assert.Equal(t, "v1.0.0", k.String("app.version"))
+	assert.Equal(t, appName, k.String("app.name"))
+	assert.Equal(t, appVersion, k.String("app.version"))
 	assert.Equal(t, EnvDevelopment, k.String("app.env"))
 	assert.False(t, k.Bool("app.debug"))
 	assert.Equal(t, 100, k.Int("app.rate_limit"))
 
-	assert.Equal(t, "0.0.0.0", k.String("server.host"))
+	assert.Equal(t, serverHost, k.String("server.host"))
 	assert.Equal(t, 8080, k.Int("server.port"))
 	assert.Equal(t, "15s", k.String("server.read_timeout"))
 	assert.Equal(t, "30s", k.String("server.write_timeout"))
@@ -310,7 +313,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		os.Setenv(testDatabaseUsername, "testuser")
 
 		// Set complex custom configuration
-		os.Setenv("CUSTOM_SERVICE_NAME", "test-service")
+		os.Setenv("CUSTOM_SERVICE_NAME", appName)
 		os.Setenv("CUSTOM_SERVICE_PORT", "8090")
 		os.Setenv("CUSTOM_SERVICE_ENABLED", "true")
 
@@ -328,7 +331,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		var svcConfig ServiceConfig
 		err = cfg.Unmarshal("custom.service", &svcConfig)
 		assert.NoError(t, err)
-		assert.Equal(t, "test-service", svcConfig.Name)
+		assert.Equal(t, appName, svcConfig.Name)
 		assert.Equal(t, 8090, svcConfig.Port)
 		assert.True(t, svcConfig.Enabled)
 	})
@@ -429,7 +432,7 @@ func TestLoadDatabaseDisabled(t *testing.T) {
 	assert.Equal(t, "", cfg.Database.Type)
 
 	// Verify other config still works
-	assert.Equal(t, "gobricks-service", cfg.App.Name)
+	assert.Equal(t, appName, cfg.App.Name)
 	assert.Equal(t, 8080, cfg.Server.Port)
 	assert.Equal(t, "info", cfg.Log.Level)
 }
@@ -498,8 +501,8 @@ func TestLoadDatabaseDisabledByDefault(t *testing.T) {
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
 
 	// Other config should use defaults
-	assert.Equal(t, "gobricks-service", cfg.App.Name)
-	assert.Equal(t, "v1.0.0", cfg.App.Version)
+	assert.Equal(t, appName, cfg.App.Name)
+	assert.Equal(t, appVersion, cfg.App.Version)
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 }
 

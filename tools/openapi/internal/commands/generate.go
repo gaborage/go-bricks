@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/gaborage/go-bricks/tools/openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks/tools/openapi/internal/generator"
-	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 // GenerateOptions holds options for the generate command
@@ -56,17 +56,18 @@ func runGenerate(opts *GenerateOptions) error {
 	fmt.Printf("Generating OpenAPI spec for project: %s\n", opts.ProjectRoot)
 	fmt.Printf("Output file: %s\n", opts.OutputFile)
 
-	// For now, create a basic project structure
-	// In Phase 2, this will be replaced with actual project analysis
-	project := &models.Project{
-		Name:        "Go-Bricks API",
-		Version:     "1.0.0",
-		Description: "Generated API specification",
-		Modules:     []models.Module{}, // Empty for now - will be populated via static analysis
+	// Analyze the project to discover modules and routes
+	projectAnalyzer := analyzer.New(opts.ProjectRoot)
+	project, err := projectAnalyzer.AnalyzeProject()
+	if err != nil {
+		return fmt.Errorf("failed to analyze project: %w", err)
 	}
 
 	if opts.Verbose {
 		fmt.Printf("Discovered %d modules\n", len(project.Modules))
+		for _, module := range project.Modules {
+			fmt.Printf("  Module: %s (%s) with %d routes\n", module.Name, module.Package, len(module.Routes))
+		}
 	}
 
 	// Generate OpenAPI spec
