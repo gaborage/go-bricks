@@ -1829,3 +1829,243 @@ func (c *ComplexStruct) SomeMethod() string {
 		t.Logf("Complex struct detection result: %v", module != nil)
 	})
 }
+
+// TestDiscoverModulesDeduplication verifies that modules are deduplicated by package name
+func TestDiscoverModulesDeduplication(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create a package with multiple Go files that both contain a module
+	testDir := filepath.Join(tempDir, "testmodule")
+	err := os.MkdirAll(testDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// First file with a module
+	file1Content := `package testmodule
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/labstack/echo/v4"
+)
+
+type Module struct {
+	deps *app.ModuleDeps
+}
+
+func (m *Module) Name() string {
+	return "testmodule"
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.deps = deps
+	return nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	// Routes from file 1
+}
+
+func (m *Module) Shutdown() error {
+	return nil
+}`
+
+	// Second file with same module (different content but same package)
+	file2Content := `package testmodule
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/labstack/echo/v4"
+)
+
+type Module struct {
+	deps *app.ModuleDeps
+}
+
+func (m *Module) Name() string {
+	return "testmodule"
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.deps = deps
+	return nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	// Routes from file 2
+}
+
+func (m *Module) Shutdown() error {
+	return nil
+}`
+
+	// Write both files
+	file1Path := filepath.Join(testDir, "module1.go")
+	file2Path := filepath.Join(testDir, "module2.go")
+
+	err = os.WriteFile(file1Path, []byte(file1Content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write file1: %v", err)
+	}
+
+	err = os.WriteFile(file2Path, []byte(file2Content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write file2: %v", err)
+	}
+
+	// Create analyzer and discover modules
+	analyzer := New(tempDir)
+	modules, err := analyzer.discoverModules()
+	if err != nil {
+		t.Fatalf("discoverModules failed: %v", err)
+	}
+
+	// Should only find ONE module, not two, due to deduplication by package name
+	if len(modules) != 1 {
+		t.Errorf("Expected 1 module, got %d", len(modules))
+		for i, mod := range modules {
+			t.Logf("Module %d: Name=%s, Package=%s", i, mod.Name, mod.Package)
+		}
+	}
+
+	// Verify the module has the correct package name
+	if len(modules) > 0 {
+		module := modules[0]
+		if module.Package != "testmodule" {
+			t.Errorf("Expected module package 'testmodule', got '%s'", module.Package)
+		}
+		if module.Name != "testmodule" {
+			t.Errorf("Expected module name 'testmodule', got '%s'", module.Name)
+		}
+	}
+}
+
+// TestConstantsNoLeakageBetweenPackages verifies that constants from one package don't leak into another
+func TestConstantsNoLeakageBetweenPackages(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create first package with a constant
+	pkg1Dir := filepath.Join(tempDir, "package1")
+	err := os.MkdirAll(pkg1Dir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create package1 directory: %v", err)
+	}
+
+	pkg1Content := `package package1
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/labstack/echo/v4"
+)
+
+const PackageConstant = "/package1/path"
+
+type Module struct {
+	deps *app.ModuleDeps
+}
+
+func (m *Module) Name() string {
+	return "package1"
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.deps = deps
+	return nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, PackageConstant, m.getHandler)
+}
+
+func (m *Module) getHandler() {}
+
+func (m *Module) Shutdown() error {
+	return nil
+}`
+
+	// Create second package with same constant name but different value
+	pkg2Dir := filepath.Join(tempDir, "package2")
+	err = os.MkdirAll(pkg2Dir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create package2 directory: %v", err)
+	}
+
+	pkg2Content := `package package2
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/labstack/echo/v4"
+)
+
+const PackageConstant = "/package2/path"
+
+type Module struct {
+	deps *app.ModuleDeps
+}
+
+func (m *Module) Name() string {
+	return "package2"
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.deps = deps
+	return nil
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, PackageConstant, m.getHandler)
+}
+
+func (m *Module) getHandler() {}
+
+func (m *Module) Shutdown() error {
+	return nil
+}`
+
+	// Write package files
+	err = os.WriteFile(filepath.Join(pkg1Dir, "module.go"), []byte(pkg1Content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write package1 file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(pkg2Dir, "module.go"), []byte(pkg2Content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write package2 file: %v", err)
+	}
+
+	// Analyze the project
+	analyzer := New(tempDir)
+	modules, err := analyzer.discoverModules()
+	if err != nil {
+		t.Fatalf("discoverModules failed: %v", err)
+	}
+
+	// Should find both modules
+	if len(modules) != 2 {
+		t.Errorf("Expected 2 modules, got %d", len(modules))
+		for i, mod := range modules {
+			t.Logf("Module %d: Name=%s, Package=%s, Routes=%d", i, mod.Name, mod.Package, len(mod.Routes))
+		}
+		return
+	}
+
+	// Verify each module has the correct routes with proper path resolution
+	for _, module := range modules {
+		if len(module.Routes) != 1 {
+			t.Errorf("Module %s should have 1 route, got %d", module.Name, len(module.Routes))
+			continue
+		}
+
+		route := module.Routes[0]
+		expectedPath := "/" + module.Package + "/path"
+
+		if route.Path != expectedPath {
+			t.Errorf("Module %s route path should be %s, got %s", module.Name, expectedPath, route.Path)
+			t.Logf("This would indicate constants leakage between packages")
+		}
+	}
+}

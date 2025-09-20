@@ -87,6 +87,7 @@ func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 // discoverModules finds all go-bricks modules in the project
 func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 	var modules []models.Module
+	seen := make(map[string]bool)
 
 	err := filepath.Walk(a.projectRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -112,7 +113,13 @@ func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 		}
 
 		if module != nil {
-			modules = append(modules, *module)
+			// Create a stable key for deduplication using package name
+			// Since Package field represents the unique package name
+			key := module.Package
+			if !seen[key] {
+				modules = append(modules, *module)
+				seen[key] = true
+			}
 		}
 
 		return nil
@@ -174,8 +181,7 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 				continue
 			}
 
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
+			if _, ok := typeSpec.Type.(*ast.StructType); !ok {
 				continue
 			}
 
@@ -184,11 +190,6 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 				hasModuleStruct = true
 				structName = typeSpec.Name.Name
 				break
-			}
-
-			// Additional check - look for deps field of type *app.ModuleDeps
-			if slices.ContainsFunc(structType.Fields.List, a.isModuleDepsField) {
-				hasModuleStruct = true
 			}
 
 			if hasModuleStruct {
@@ -290,6 +291,9 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 	}
 
 	var routes []models.Route
+
+	// Reset constants map to prevent leakage from previous packages
+	a.constants = make(map[string]string)
 
 	// First collect constants so paths can be resolved regardless of declaration order
 	for _, file := range files {
