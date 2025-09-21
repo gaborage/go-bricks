@@ -12,6 +12,7 @@ import (
 const (
 	PostgreSQL = "postgresql"
 	Oracle     = "oracle"
+	MongoDB    = "mongodb"
 )
 
 // QueryBuilder provides vendor-specific SQL query building
@@ -31,6 +32,9 @@ func NewQueryBuilder(vendor string) *QueryBuilder {
 	case Oracle:
 		// Oracle uses :1, :2, ... placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Colon)
+	case MongoDB:
+		// MongoDB doesn't use SQL placeholders, but maintain interface compatibility
+		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)
 	default:
 		// Default to question mark placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)

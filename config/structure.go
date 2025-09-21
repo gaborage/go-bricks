@@ -39,7 +39,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type               string        `koanf:"type"` // "postgresql" or "oracle"
+	Type               string        `koanf:"type"` // "postgresql", "oracle", or "mongodb"
 	Host               string        `koanf:"host"`
 	Port               int           `koanf:"port"`
 	Database           string        `koanf:"database"`
@@ -57,6 +57,12 @@ type DatabaseConfig struct {
 	// Oracle-specific settings
 	ServiceName string `koanf:"service_name"` // Oracle service name
 	SID         string `koanf:"sid"`          // Oracle SID
+
+	// MongoDB-specific settings
+	ReplicaSet     string `koanf:"replica_set"`     // MongoDB replica set name
+	AuthSource     string `koanf:"auth_source"`     // Authentication database
+	ReadPreference string `koanf:"read_preference"` // Primary, secondary, etc.
+	WriteConcern   string `koanf:"write_concern"`   // Majority, acknowledged, etc.
 
 	// Connection string override (if needed)
 	ConnectionString string `koanf:"connection_string"`
