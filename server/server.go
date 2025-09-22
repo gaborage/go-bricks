@@ -173,7 +173,7 @@ func (s *Server) healthCheck(c echo.Context) error {
 
 func (s *Server) readyCheck(c echo.Context) error {
 	// This will be extended in App to check DB connection
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	return c.JSON(http.StatusOK, map[string]any{
 		"status": "ready",
 		"time":   time.Now().Unix(),
 	})

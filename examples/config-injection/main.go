@@ -27,7 +27,7 @@ type ExternalAPIService struct {
 }
 
 // CallThirdPartyAPI demonstrates calling an external API with injected config
-func (s *ExternalAPIService) CallThirdPartyAPI(ctx context.Context, endpoint string, data map[string]interface{}) (map[string]interface{}, error) {
+func (s *ExternalAPIService) CallThirdPartyAPI(ctx context.Context, endpoint string, data map[string]any) (map[string]any, error) {
 	// Service can now use its configuration directly without needing it passed as parameters
 	fmt.Printf("Making API call to %s%s\n", s.BaseURL, endpoint)
 	fmt.Printf("Timeout: %v, Max Retries: %d, Rate Limit: %d\n", s.Timeout, s.MaxRetries, s.RateLimit)
@@ -42,10 +42,10 @@ func (s *ExternalAPIService) CallThirdPartyAPI(ctx context.Context, endpoint str
 		return nil, ctx.Err()
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"status":  "success",
 		"message": "API call completed",
-		"config_used": map[string]interface{}{
+		"config_used": map[string]any{
 			"base_url":    s.BaseURL,
 			"timeout":     s.Timeout.String(),
 			"max_retries": s.MaxRetries,
@@ -145,12 +145,12 @@ func (m *ConfigInjectionModule) Init(deps *app.ModuleDeps) error {
 
 // Request/Response types
 type APICallRequest struct {
-	Endpoint string                 `json:"endpoint" validate:"required"`
-	Data     map[string]interface{} `json:"data"`
+	Endpoint string         `json:"endpoint" validate:"required"`
+	Data     map[string]any `json:"data"`
 }
 
 type APICallResponse struct {
-	Result map[string]interface{} `json:"result"`
+	Result map[string]any `json:"result"`
 }
 
 type PaymentRequest struct {
@@ -205,9 +205,9 @@ func (m *ConfigInjectionModule) handlePayment(req PaymentRequest, ctx server.Han
 	}, nil
 }
 
-func (m *ConfigInjectionModule) handleGetConfig(_ struct{}, _ server.HandlerContext) (map[string]interface{}, server.IAPIError) {
-	return map[string]interface{}{
-		"api_config": map[string]interface{}{
+func (m *ConfigInjectionModule) handleGetConfig(_ struct{}, _ server.HandlerContext) (map[string]any, server.IAPIError) {
+	return map[string]any{
+		"api_config": map[string]any{
 			"base_url":    m.apiService.BaseURL,
 			"timeout":     m.apiService.Timeout.String(),
 			"max_retries": m.apiService.MaxRetries,
@@ -215,7 +215,7 @@ func (m *ConfigInjectionModule) handleGetConfig(_ struct{}, _ server.HandlerCont
 			"rate_limit":  m.apiService.RateLimit,
 			"user_agent":  m.apiService.UserAgent,
 		},
-		"payment_config": map[string]interface{}{
+		"payment_config": map[string]any{
 			"provider_url":    m.paymentService.config.ProviderURL,
 			"connect_timeout": m.paymentService.config.ConnectTimeout.String(),
 			"request_timeout": m.paymentService.config.RequestTimeout.String(),

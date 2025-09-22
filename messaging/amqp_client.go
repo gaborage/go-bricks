@@ -387,14 +387,14 @@ type amqpHeaderAccessor struct {
 	headers amqp.Table
 }
 
-func (a *amqpHeaderAccessor) Get(key string) interface{} {
+func (a *amqpHeaderAccessor) Get(key string) any {
 	if a.headers == nil {
 		return nil
 	}
 	return a.headers[key]
 }
 
-func (a *amqpHeaderAccessor) Set(key string, value interface{}) {
+func (a *amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
 		a.headers = amqp.Table{}
 	}

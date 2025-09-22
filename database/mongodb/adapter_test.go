@@ -197,7 +197,7 @@ func TestBuildUpdateOptions(t *testing.T) {
 		{
 			name: "with array filters",
 			input: &database.UpdateOptions{
-				ArrayFilters: []interface{}{bson.M{"elem.score": bson.M{"$gte": 80}}},
+				ArrayFilters: []any{bson.M{"elem.score": bson.M{"$gte": 80}}},
 			},
 			expected: func(opts *options.UpdateOptions) bool {
 				return opts != nil // ArrayFilters are currently commented out due to type compatibility
@@ -544,7 +544,7 @@ func TestConnectionInterfaceCompliance(t *testing.T) {
 func TestParseExpireAfterSeconds(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected *int32
 	}{
 		{

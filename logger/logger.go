@@ -98,7 +98,7 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 }
 
 // WithContext returns a logger with context information attached.
-func (l *ZeroLogger) WithContext(ctx interface{}) Logger {
+func (l *ZeroLogger) WithContext(ctx any) Logger {
 	if c, ok := ctx.(context.Context); ok {
 		zl := zerolog.Ctx(c)
 		if zl == nil || zl.GetLevel() == zerolog.Disabled {
@@ -110,7 +110,7 @@ func (l *ZeroLogger) WithContext(ctx interface{}) Logger {
 }
 
 // WithFields returns a logger with additional fields attached to all log entries.
-func (l *ZeroLogger) WithFields(fields map[string]interface{}) Logger {
+func (l *ZeroLogger) WithFields(fields map[string]any) Logger {
 	// Filter sensitive data from fields before adding them
 	if l.filter != nil {
 		fields = l.filter.FilterFields(fields)

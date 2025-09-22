@@ -67,15 +67,15 @@ func (f *SensitiveDataFilter) FilterString(key, value string) string {
 	return value
 }
 
-// FilterValue filters sensitive data from interface{} values
-func (f *SensitiveDataFilter) FilterValue(key string, value interface{}) interface{} {
+// FilterValue filters sensitive data from any values
+func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
 	if f.isSensitiveField(key) {
 		return f.config.MaskValue
 	}
 
-	// Handle map[string]interface{} recursively
-	if m, ok := value.(map[string]interface{}); ok {
-		filtered := make(map[string]interface{})
+	// Handle map[string]any recursively
+	if m, ok := value.(map[string]any); ok {
+		filtered := make(map[string]any)
 		for k, v := range m {
 			filtered[k] = f.FilterValue(k, v)
 		}
@@ -91,8 +91,8 @@ func (f *SensitiveDataFilter) FilterValue(key string, value interface{}) interfa
 }
 
 // FilterFields filters a map of fields for sensitive data
-func (f *SensitiveDataFilter) FilterFields(fields map[string]interface{}) map[string]interface{} {
-	filtered := make(map[string]interface{})
+func (f *SensitiveDataFilter) FilterFields(fields map[string]any) map[string]any {
+	filtered := make(map[string]any)
 	for key, value := range fields {
 		filtered[key] = f.FilterValue(key, value)
 	}
@@ -155,7 +155,7 @@ func (f *SensitiveDataFilter) maskURL(urlStr string) string {
 }
 
 // filterStruct filters sensitive fields in struct values using reflection
-func (f *SensitiveDataFilter) filterStruct(value interface{}) interface{} {
+func (f *SensitiveDataFilter) filterStruct(value any) any {
 	val := reflect.ValueOf(value)
 	typ := reflect.TypeOf(value)
 
@@ -172,7 +172,7 @@ func (f *SensitiveDataFilter) filterStruct(value interface{}) interface{} {
 	}
 
 	// Create a map representation of the struct with filtered values
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 	for i := 0; i < val.NumField(); i++ {
 		field := typ.Field(i)
 		fieldValue := val.Field(i)

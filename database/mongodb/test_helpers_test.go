@@ -23,29 +23,29 @@ import (
 // testLogger implements logger.Logger for testing
 type testLogger struct{}
 
-func (l *testLogger) Info() logger.LogEvent                             { return &testLogEvent{} }
-func (l *testLogger) Error() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) Debug() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) Warn() logger.LogEvent                             { return &testLogEvent{} }
-func (l *testLogger) Fatal() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) WithContext(_ interface{}) logger.Logger           { return l }
-func (l *testLogger) WithFields(_ map[string]interface{}) logger.Logger { return l }
+func (l *testLogger) Info() logger.LogEvent                     { return &testLogEvent{} }
+func (l *testLogger) Error() logger.LogEvent                    { return &testLogEvent{} }
+func (l *testLogger) Debug() logger.LogEvent                    { return &testLogEvent{} }
+func (l *testLogger) Warn() logger.LogEvent                     { return &testLogEvent{} }
+func (l *testLogger) Fatal() logger.LogEvent                    { return &testLogEvent{} }
+func (l *testLogger) WithContext(_ any) logger.Logger           { return l }
+func (l *testLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
 // testLogEvent implements logger.LogEvent for testing
 type testLogEvent struct{}
 
-func (e *testLogEvent) Str(_, _ string) logger.LogEvent                   { return e }
-func (e *testLogEvent) Int(_ string, _ int) logger.LogEvent               { return e }
-func (e *testLogEvent) Int64(_ string, _ int64) logger.LogEvent           { return e }
-func (e *testLogEvent) Uint64(_ string, _ uint64) logger.LogEvent         { return e }
-func (e *testLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent     { return e }
-func (e *testLogEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e }
-func (e *testLogEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
-func (e *testLogEvent) Err(_ error) logger.LogEvent                       { return e }
+func (e *testLogEvent) Str(_, _ string) logger.LogEvent               { return e }
+func (e *testLogEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *testLogEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *testLogEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *testLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *testLogEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
+func (e *testLogEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *testLogEvent) Err(_ error) logger.LogEvent                   { return e }
 func (e *testLogEvent) Msg(_ string) {
 	// No-op implementation for testing
 }
-func (e *testLogEvent) Msgf(_ string, _ ...interface{}) {
+func (e *testLogEvent) Msgf(_ string, _ ...any) {
 	// No-op implementation for testing
 }
 
@@ -59,7 +59,7 @@ func MockSuccessResponse() bson.D {
 }
 
 // MockInsertResponse creates a mock response for insert operations
-func MockInsertResponse(insertedID interface{}) bson.D {
+func MockInsertResponse(insertedID any) bson.D {
 	return bson.D{
 		{Key: "ok", Value: 1},
 		{Key: "insertedId", Value: insertedID},
@@ -67,7 +67,7 @@ func MockInsertResponse(insertedID interface{}) bson.D {
 }
 
 // MockUpdateResponse creates a mock response for update operations
-func MockUpdateResponse(matched, modified int64, upsertedID interface{}) bson.D {
+func MockUpdateResponse(matched, modified int64, upsertedID any) bson.D {
 	response := bson.D{
 		{Key: "ok", Value: 1},
 		{Key: "n", Value: matched},          // matchedCount in wire protocol
@@ -376,7 +376,7 @@ func AssertFindOptions(t *testing.T, builder *Builder, expected *BuilderExpectat
 }
 
 // CompareBSON performs deep comparison of BSON documents
-func CompareBSON(t *testing.T, expected, actual interface{}) {
+func CompareBSON(t *testing.T, expected, actual any) {
 	t.Helper()
 	if !reflect.DeepEqual(expected, actual) {
 		t.Errorf("BSON documents differ:\nExpected: %+v\nActual: %+v", expected, actual)
@@ -463,7 +463,7 @@ func UserAnalyticsBuilder() *Builder {
 			},
 			"user_count":   bson.M{"$sum": 1},
 			"avg_age":      bson.M{"$avg": "$age"},
-			"active_users": bson.M{"$sum": bson.M{"$cond": []interface{}{bson.M{"$eq": []interface{}{"$status", "active"}}, 1, 0}}},
+			"active_users": bson.M{"$sum": bson.M{"$cond": []any{bson.M{"$eq": []any{"$status", "active"}}, 1, 0}}},
 			"total_logins": bson.M{"$sum": "$login_count"},
 		}).
 		AddSort(bson.D{{Key: "user_count", Value: -1}}).
@@ -610,7 +610,7 @@ func AssertConnectionState(t *testing.T, conn *Connection, _ string) {
 }
 
 // AssertTLSConfig verifies TLS configuration properties
-func AssertTLSConfig(t *testing.T, tlsConfig interface{}, expected *TLSTestCase) {
+func AssertTLSConfig(t *testing.T, tlsConfig any, expected *TLSTestCase) {
 	t.Helper()
 
 	if expected.ExpectNilConfig {

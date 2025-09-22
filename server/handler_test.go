@@ -124,7 +124,7 @@ func TestWrapHandlerValidationError(t *testing.T) {
 		ve, hasCamel := resp.Error.Details["validationErrors"]
 		require.True(t, hasCamel, "details must include validationErrors key")
 		// should be a list of field errors
-		_, ok := ve.([]interface{})
+		_, ok := ve.([]any)
 		assert.True(t, ok, "validationErrors must be an array of errors")
 	}
 }
@@ -356,7 +356,7 @@ func TestFormatSuccessResponseWithStatusDefaultsWhenZero(t *testing.T) {
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 
-	data, ok := resp.Data.(map[string]interface{})
+	data, ok := resp.Data.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "true", data["ok"])
 	assert.NotEmpty(t, resp.Meta["traceId"])
@@ -366,7 +366,7 @@ func TestFormatSuccessResponseWithStatusDefaultsWhenZero(t *testing.T) {
 // failingValidator returns a fixed error for any input, to exercise non-ValidationError path
 type failingValidator struct{ err error }
 
-func (v failingValidator) Validate(_ interface{}) error { return v.err }
+func (v failingValidator) Validate(_ any) error { return v.err }
 
 func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 	e := echo.New()

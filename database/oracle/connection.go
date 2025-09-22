@@ -94,17 +94,17 @@ type Statement struct {
 }
 
 // Query executes a prepared query with arguments
-func (s *Statement) Query(ctx context.Context, args ...interface{}) (*sql.Rows, error) {
+func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	return s.stmt.QueryContext(ctx, args...)
 }
 
 // QueryRow executes a prepared query that returns a single row
-func (s *Statement) QueryRow(ctx context.Context, args ...interface{}) *sql.Row {
+func (s *Statement) QueryRow(ctx context.Context, args ...any) *sql.Row {
 	return s.stmt.QueryRowContext(ctx, args...)
 }
 
 // Exec executes a prepared statement with arguments
-func (s *Statement) Exec(ctx context.Context, args ...interface{}) (sql.Result, error) {
+func (s *Statement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	return s.stmt.ExecContext(ctx, args...)
 }
 
@@ -119,17 +119,17 @@ type Transaction struct {
 }
 
 // Query executes a query within the transaction
-func (t *Transaction) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (t *Transaction) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return t.tx.QueryContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that returns a single row within the transaction
-func (t *Transaction) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return t.tx.QueryRowContext(ctx, query, args...)
 }
 
 // Exec executes a query without returning rows within the transaction
-func (t *Transaction) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (t *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return t.tx.ExecContext(ctx, query, args...)
 }
 
@@ -153,17 +153,17 @@ func (t *Transaction) Rollback() error {
 }
 
 // Query executes a query that returns rows
-func (c *Connection) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return c.db.QueryContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return c.db.QueryRowContext(ctx, query, args...)
 }
 
 // Exec executes a query without returning any rows
-func (c *Connection) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+func (c *Connection) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return c.db.ExecContext(ctx, query, args...)
 }
 
@@ -203,9 +203,9 @@ func (c *Connection) Health(ctx context.Context) error {
 }
 
 // Stats returns database connection statistics
-func (c *Connection) Stats() (map[string]interface{}, error) {
+func (c *Connection) Stats() (map[string]any, error) {
 	stats := c.db.Stats()
-	return map[string]interface{}{
+	return map[string]any{
 		"max_open_connections": stats.MaxOpenConnections,
 		"open_connections":     stats.OpenConnections,
 		"in_use":               stats.InUse,

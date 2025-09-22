@@ -236,7 +236,7 @@ func TestLoggerWithContext(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		ctx      interface{}
+		ctx      any
 		expected string // expected behavior description
 	}{
 		{
@@ -307,11 +307,11 @@ func TestLoggerWithFields(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		fields map[string]interface{}
+		fields map[string]any
 	}{
 		{
 			name: "basic_fields",
-			fields: map[string]interface{}{
+			fields: map[string]any{
 				"username": "john_doe",
 				"action":   "login",
 				"count":    42,
@@ -319,7 +319,7 @@ func TestLoggerWithFields(t *testing.T) {
 		},
 		{
 			name: "sensitive_fields",
-			fields: map[string]interface{}{
+			fields: map[string]any{
 				"username": "john_doe",
 				"password": "secret123",
 				"api_key":  "super_secret_key",
@@ -327,11 +327,11 @@ func TestLoggerWithFields(t *testing.T) {
 		},
 		{
 			name:   "empty_fields",
-			fields: map[string]interface{}{},
+			fields: map[string]any{},
 		},
 		{
 			name: "mixed_types",
-			fields: map[string]interface{}{
+			fields: map[string]any{
 				"string_field": "value",
 				"int_field":    123,
 				"float_field":  3.14,
@@ -341,8 +341,8 @@ func TestLoggerWithFields(t *testing.T) {
 		},
 		{
 			name: "nested_map",
-			fields: map[string]interface{}{
-				"user": map[string]interface{}{
+			fields: map[string]any{
+				"user": map[string]any{
 					"name":     "john",
 					"password": "secret",
 				},
@@ -389,7 +389,7 @@ func TestLoggerWithFieldsNilFilter(t *testing.T) {
 		filter: nil,
 	}
 
-	fields := map[string]interface{}{
+	fields := map[string]any{
 		"username": "john_doe",
 		"password": "secret123",
 	}

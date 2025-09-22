@@ -25,11 +25,11 @@ func (c *Cursor) TryNext(ctx context.Context) bool {
 	return c.cursor.TryNext(ctx)
 }
 
-func (c *Cursor) Decode(val interface{}) error {
+func (c *Cursor) Decode(val any) error {
 	return c.cursor.Decode(val)
 }
 
-func (c *Cursor) All(ctx context.Context, results interface{}) error {
+func (c *Cursor) All(ctx context.Context, results any) error {
 	return c.cursor.All(ctx, results)
 }
 
@@ -57,7 +57,7 @@ type SingleResult struct {
 // Ensure SingleResult implements DocumentResult interface
 var _ database.DocumentResult = (*SingleResult)(nil)
 
-func (r *SingleResult) Decode(v interface{}) error {
+func (r *SingleResult) Decode(v any) error {
 	return r.result.Decode(v)
 }
 
@@ -85,7 +85,7 @@ func (r *UpdateResult) UpsertedCount() int64 {
 	return r.result.UpsertedCount
 }
 
-func (r *UpdateResult) UpsertedID() interface{} {
+func (r *UpdateResult) UpsertedID() any {
 	return r.result.UpsertedID
 }
 
@@ -129,7 +129,7 @@ func (r *BulkWriteResult) UpsertedCount() int64 {
 	return r.result.UpsertedCount
 }
 
-func (r *BulkWriteResult) UpsertedIDs() map[int64]interface{} {
+func (r *BulkWriteResult) UpsertedIDs() map[int64]any {
 	return r.result.UpsertedIDs
 }
 
@@ -149,7 +149,7 @@ func (c *ChangeStreamWrapper) TryNext(ctx context.Context) bool {
 	return c.stream.TryNext(ctx)
 }
 
-func (c *ChangeStreamWrapper) Decode(val interface{}) error {
+func (c *ChangeStreamWrapper) Decode(val any) error {
 	return c.stream.Decode(val)
 }
 
@@ -167,20 +167,20 @@ func (c *ChangeStreamWrapper) ResumeToken() bson.Raw {
 
 // WriteModel implementations for common write operations
 type InsertOneModel struct {
-	Document interface{}
+	Document any
 }
 
-func (m *InsertOneModel) GetModel() interface{} {
+func (m *InsertOneModel) GetModel() any {
 	return mongo.NewInsertOneModel().SetDocument(m.Document)
 }
 
 type UpdateOneModel struct {
-	Filter interface{}
-	Update interface{}
+	Filter any
+	Update any
 	Upsert *bool
 }
 
-func (m *UpdateOneModel) GetModel() interface{} {
+func (m *UpdateOneModel) GetModel() any {
 	model := mongo.NewUpdateOneModel().SetFilter(m.Filter).SetUpdate(m.Update)
 	if m.Upsert != nil {
 		model.SetUpsert(*m.Upsert)
@@ -189,12 +189,12 @@ func (m *UpdateOneModel) GetModel() interface{} {
 }
 
 type UpdateManyModel struct {
-	Filter interface{}
-	Update interface{}
+	Filter any
+	Update any
 	Upsert *bool
 }
 
-func (m *UpdateManyModel) GetModel() interface{} {
+func (m *UpdateManyModel) GetModel() any {
 	model := mongo.NewUpdateManyModel().SetFilter(m.Filter).SetUpdate(m.Update)
 	if m.Upsert != nil {
 		model.SetUpsert(*m.Upsert)
@@ -203,28 +203,28 @@ func (m *UpdateManyModel) GetModel() interface{} {
 }
 
 type DeleteOneModel struct {
-	Filter interface{}
+	Filter any
 }
 
-func (m *DeleteOneModel) GetModel() interface{} {
+func (m *DeleteOneModel) GetModel() any {
 	return mongo.NewDeleteOneModel().SetFilter(m.Filter)
 }
 
 type DeleteManyModel struct {
-	Filter interface{}
+	Filter any
 }
 
-func (m *DeleteManyModel) GetModel() interface{} {
+func (m *DeleteManyModel) GetModel() any {
 	return mongo.NewDeleteManyModel().SetFilter(m.Filter)
 }
 
 type ReplaceOneModel struct {
-	Filter      interface{}
-	Replacement interface{}
+	Filter      any
+	Replacement any
 	Upsert      *bool
 }
 
-func (m *ReplaceOneModel) GetModel() interface{} {
+func (m *ReplaceOneModel) GetModel() any {
 	model := mongo.NewReplaceOneModel().SetFilter(m.Filter).SetReplacement(m.Replacement)
 	if m.Upsert != nil {
 		model.SetUpsert(*m.Upsert)

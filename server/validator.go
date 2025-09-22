@@ -35,7 +35,7 @@ func (v *Validator) GetValidator() *validator.Validate {
 }
 
 // Validate performs validation on the provided struct and returns any validation errors.
-func (v *Validator) Validate(i interface{}) error {
+func (v *Validator) Validate(i any) error {
 	if err := v.validate.Struct(i); err != nil {
 		// Handle validation errors (field-specific errors)
 		var validationErrors validator.ValidationErrors

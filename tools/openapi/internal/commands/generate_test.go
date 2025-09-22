@@ -478,7 +478,7 @@ func TestRunGenerateComplexScenarios(t *testing.T) {
 type TestModule struct{}
 
 func (m *TestModule) Name() string { return "testmod" }
-func (m *TestModule) Init(deps interface{}) error { return nil }`
+func (m *TestModule) Init(deps any) error { return nil }`
 				moduleFile := filepath.Join(dir, "testmod.go")
 				os.WriteFile(moduleFile, []byte(moduleContent), 0644)
 

@@ -24,21 +24,21 @@ type IAPIError interface {
 	ErrorCode() string
 	Message() string
 	HTTPStatus() int
-	Details() map[string]interface{}
+	Details() map[string]any
 }
 
 // APIResponse represents the standardized API response format.
 type APIResponse struct {
-	Data  interface{}            `json:"data,omitempty"`
-	Error *APIErrorResponse      `json:"error,omitempty"`
-	Meta  map[string]interface{} `json:"meta"`
+	Data  any               `json:"data,omitempty"`
+	Error *APIErrorResponse `json:"error,omitempty"`
+	Meta  map[string]any    `json:"meta"`
 }
 
 // APIErrorResponse represents the error portion of an API response.
 type APIErrorResponse struct {
-	Code    string                 `json:"code"`
-	Message string                 `json:"message"`
-	Details map[string]interface{} `json:"details,omitempty"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
 }
 
 // HandlerFunc defines the new handler signature that focuses on business logic.
@@ -112,7 +112,7 @@ func WrapHandler[T any, R any](
 // bindRequest binds request data from various sources to the target struct.
 //
 //nolint:gocyclo // Coordinating multiple binding sources; readability preferred.
-func (rb *RequestBinder) bindRequest(c echo.Context, target interface{}) error {
+func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
 
@@ -334,11 +334,11 @@ func parseTime(s string) (time.Time, error) {
 }
 
 // formatSuccessResponse formats a successful response with standardized structure.
-func formatSuccessResponse(c echo.Context, data interface{}) error {
+func formatSuccessResponse(c echo.Context, data any) error {
 	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
@@ -348,7 +348,7 @@ func formatSuccessResponse(c echo.Context, data interface{}) error {
 }
 
 // formatSuccessResponseWithStatus formats a successful response with a custom status and headers.
-func formatSuccessResponseWithStatus(c echo.Context, data interface{}, status int, headers http.Header) error {
+func formatSuccessResponseWithStatus(c echo.Context, data any, status int, headers http.Header) error {
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -363,7 +363,7 @@ func formatSuccessResponseWithStatus(c echo.Context, data interface{}, status in
 	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
@@ -387,7 +387,7 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 
 	response := APIResponse{
 		Error: errorResp,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"traceId":   getTraceID(c),
 		},
@@ -624,7 +624,7 @@ func getCallerPackage() string {
 }
 
 // extractHandlerName gets the function name from a handler function
-func extractHandlerName(handler interface{}) string {
+func extractHandlerName(handler any) string {
 	if handler == nil {
 		return ""
 	}

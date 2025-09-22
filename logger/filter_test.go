@@ -542,9 +542,9 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 
 	t.Run("struct_with_interface_field", func(t *testing.T) {
 		type TestStruct struct {
-			Username string      `json:"username"`
-			Password string      `json:"password"`
-			Data     interface{} `json:"data"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Data     any    `json:"data"`
 		}
 
 		input := TestStruct{
@@ -727,11 +727,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 	})
 
 	t.Run("struct_field_that_cannot_interface", func(t *testing.T) {
-		// Create a struct with a field that cannot be interface{}d
+		// Create a struct with a field that cannot be anyd
 		type TestStruct struct {
 			Name     string `json:"name"`
 			Password string `json:"password"`
-			// Note: In Go, all exported fields can be interface{}d, so this
+			// Note: In Go, all exported fields can be anyd, so this
 			// test is mainly for the CanInterface() check coverage
 		}
 
