@@ -13,9 +13,10 @@ import (
 
 // Transaction implements the database.Tx interface for MongoDB
 type Transaction struct {
-	session  mongo.Session
-	database *mongo.Database
-	logger   logger.Logger
+	session   mongo.Session
+	database  *mongo.Database
+	logger    logger.Logger
+	parentCtx context.Context
 }
 
 // Query executes a query within the transaction (not applicable for MongoDB)
@@ -41,28 +42,36 @@ func (t *Transaction) Prepare(_ context.Context, _ string) (database.Statement, 
 
 // Commit commits the MongoDB transaction
 func (t *Transaction) Commit() error {
-	ctx := context.Background()
-	err := t.session.CommitTransaction(ctx)
+	// Create session context from parent context
+	sessionCtx := mongo.NewSessionContext(t.parentCtx, t.session)
+
+	err := t.session.CommitTransaction(sessionCtx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to commit MongoDB transaction")
+		// Still need to end session even if commit fails
+		t.session.EndSession(sessionCtx)
 		return fmt.Errorf("failed to commit MongoDB transaction: %w", err)
 	}
 
-	t.session.EndSession(ctx)
+	// End session after successful commit
+	t.session.EndSession(sessionCtx)
 	t.logger.Debug().Msg("MongoDB transaction committed successfully")
 	return nil
 }
 
 // Rollback rolls back the MongoDB transaction
 func (t *Transaction) Rollback() error {
-	ctx := context.Background()
-	err := t.session.AbortTransaction(ctx)
+	// Create session context from parent context
+	sessionCtx := mongo.NewSessionContext(t.parentCtx, t.session)
+
+	err := t.session.AbortTransaction(sessionCtx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to rollback MongoDB transaction")
 		// Continue with session cleanup even if abort fails
 	}
 
-	t.session.EndSession(ctx)
+	// Always end session, even if abort failed
+	t.session.EndSession(sessionCtx)
 	if err != nil {
 		return fmt.Errorf("failed to rollback MongoDB transaction: %w", err)
 	}

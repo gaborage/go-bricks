@@ -117,6 +117,10 @@ func validateDatabase(cfg *DatabaseConfig) error {
 		return err
 	}
 
+	if err := validateVendorSpecificFields(cfg); err != nil {
+		return err
+	}
+
 	return applyDatabasePoolDefaults(cfg)
 }
 
@@ -138,8 +142,11 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 		return err
 	}
 
-	if cfg.MaxConns <= 0 {
+	if cfg.MaxConns < 0 {
 		return fmt.Errorf("max connections must be positive")
+	}
+	if cfg.MaxConns == 0 {
+		cfg.MaxConns = 25
 	}
 
 	if cfg.MaxQueryLength < 0 {
@@ -154,6 +161,11 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	}
 	if cfg.SlowQueryThreshold == 0 {
 		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	}
+
+	// Validate vendor-specific fields even with connection string
+	if err := validateVendorSpecificFields(cfg); err != nil {
+		return err
 	}
 
 	return nil
@@ -235,6 +247,75 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	}
 
 	return nil
+}
+
+// validateVendorSpecificFields validates database vendor-specific configuration fields
+func validateVendorSpecificFields(cfg *DatabaseConfig) error {
+	switch cfg.Type {
+	case MongoDB:
+		return validateMongoDBFields(cfg)
+	case PostgreSQL, Oracle:
+		// No vendor-specific validation needed for PostgreSQL/Oracle currently
+		return nil
+	default:
+		// Unknown database type should have been caught by validateDatabaseType
+		return nil
+	}
+}
+
+// validateMongoDBFields validates MongoDB-specific configuration fields
+func validateMongoDBFields(cfg *DatabaseConfig) error {
+	if cfg.ReadPreference != "" {
+		if err := validateMongoDBReadPreference(cfg.ReadPreference); err != nil {
+			return err
+		}
+	}
+
+	if cfg.WriteConcern != "" {
+		if err := validateMongoDBWriteConcern(cfg.WriteConcern); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMongoDBReadPreference validates MongoDB read preference values
+func validateMongoDBReadPreference(pref string) error {
+	validPreferences := []string{
+		"primary",
+		"primarypreferred", "primaryPreferred",
+		"secondary",
+		"secondarypreferred", "secondaryPreferred",
+		"nearest",
+	}
+
+	prefLower := strings.ToLower(pref)
+	for _, valid := range validPreferences {
+		if strings.EqualFold(valid, prefLower) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid MongoDB read preference: %s (must be one of: primary, primaryPreferred, secondary, secondaryPreferred, nearest)", pref)
+}
+
+// validateMongoDBWriteConcern validates MongoDB write concern values
+func validateMongoDBWriteConcern(concern string) error {
+	validConcerns := []string{
+		"majority",
+		"acknowledged",
+		"unacknowledged",
+	}
+
+	concernLower := strings.ToLower(concern)
+	for _, valid := range validConcerns {
+		if strings.EqualFold(valid, concernLower) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged)", concern)
 }
 
 // validateLog validates that cfg.Level is one of the supported log levels.

@@ -3,6 +3,7 @@ package database
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -33,8 +34,7 @@ func NewQueryBuilder(vendor string) *QueryBuilder {
 		// Oracle uses :1, :2, ... placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Colon)
 	case MongoDB:
-		// MongoDB doesn't use SQL placeholders, but maintain interface compatibility
-		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)
+		panic("QueryBuilder is SQL-only; do not construct for MongoDB")
 	default:
 		// Default to question mark placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)
@@ -185,9 +185,17 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 	case PostgreSQL:
 		// PostgreSQL uses ON CONFLICT ... DO UPDATE
 		insertQuery := qb.Insert(table)
-		for col, val := range insertColumns {
-			insertQuery = insertQuery.Columns(col).Values(val)
+		// deterministic order
+		cols := make([]string, 0, len(insertColumns))
+		for c := range insertColumns {
+			cols = append(cols, c)
 		}
+		sort.Strings(cols)
+		vals := make([]any, 0, len(cols))
+		for _, c := range cols {
+			vals = append(vals, insertColumns[c])
+		}
+		insertQuery = insertQuery.Columns(cols...).Values(vals...)
 
 		// Build conflict resolution
 		conflictClause := "ON CONFLICT (" + strings.Join(conflictColumns, ", ") + ") DO UPDATE SET "
