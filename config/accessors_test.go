@@ -33,6 +33,10 @@ func setupTestConfig(t *testing.T, data map[string]any) *Config {
 	return &Config{k: k}
 }
 
+// ========================================
+// BASIC ACCESSOR TESTS
+// ========================================
+
 func TestGetString(t *testing.T) {
 	cfg := setupTestConfig(t, map[string]any{
 		name:           "test-service",
@@ -70,6 +74,10 @@ func TestGetNumericAndBool(t *testing.T) {
 	assert.True(t, cfg.GetBool("custom.missing_bool", true))
 }
 
+// ========================================
+// REQUIRED ACCESSOR TESTS
+// ========================================
+
 func TestRequiredAccessors(t *testing.T) {
 	cfg := setupTestConfig(t, map[string]any{
 		port:       "8080",
@@ -106,6 +114,10 @@ func TestRequiredAccessors(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, vBool)
 }
+
+// ========================================
+// NIL CONFIG AND UTILITY TESTS
+// ========================================
 
 func TestNilConfigAccessors(t *testing.T) {
 	cfg := &Config{}
@@ -210,6 +222,11 @@ func TestFloatConversionEdgeCases(t *testing.T) {
 	_, err = floatToInt64(math.Inf(1))
 	assert.Error(t, err)
 }
+
+// TestTypeConversions provides comprehensive coverage for type conversion functions
+// ========================================
+// TYPE CONVERSION TESTS
+// ========================================
 
 // TestTypeConversions provides comprehensive coverage for type conversion functions
 func TestTypeConversions(t *testing.T) {
@@ -512,6 +529,11 @@ func TestTypeConversions(t *testing.T) {
 		}
 	})
 }
+
+// TestRequiredAccessorErrorPaths ensures all error paths in required getters are covered
+// ========================================
+// ERROR PATH AND EDGE CASE TESTS
+// ========================================
 
 // TestRequiredAccessorErrorPaths ensures all error paths in required getters are covered
 func TestRequiredAccessorErrorPaths(t *testing.T) {
