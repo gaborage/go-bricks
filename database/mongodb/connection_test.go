@@ -11,39 +11,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// testLogger implements logger.Logger for testing
-type testLogger struct{}
-
-func (l *testLogger) Info() logger.LogEvent                             { return &testLogEvent{} }
-func (l *testLogger) Error() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) Debug() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) Warn() logger.LogEvent                             { return &testLogEvent{} }
-func (l *testLogger) Fatal() logger.LogEvent                            { return &testLogEvent{} }
-func (l *testLogger) WithContext(_ interface{}) logger.Logger           { return l }
-func (l *testLogger) WithFields(_ map[string]interface{}) logger.Logger { return l }
-
-// testLogEvent implements logger.LogEvent for testing
-type testLogEvent struct{}
-
-func (e *testLogEvent) Str(_, _ string) logger.LogEvent                   { return e }
-func (e *testLogEvent) Int(_ string, _ int) logger.LogEvent               { return e }
-func (e *testLogEvent) Int64(_ string, _ int64) logger.LogEvent           { return e }
-func (e *testLogEvent) Uint64(_ string, _ uint64) logger.LogEvent         { return e }
-func (e *testLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent     { return e }
-func (e *testLogEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e }
-func (e *testLogEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
-func (e *testLogEvent) Err(_ error) logger.LogEvent                       { return e }
-func (e *testLogEvent) Msg(_ string) {
-	// No-op implementation for testing
-}
-func (e *testLogEvent) Msgf(_ string, _ ...interface{}) {
-	// No-op implementation for testing
-}
 
 func TestBuildMongoURI(t *testing.T) {
 	tests := []struct {
@@ -184,32 +154,8 @@ func TestConnectionDatabaseType(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("database type", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		mt.Cleanup(func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		})
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
-
-		assert.Equal(mt, "mongodb", conn.DatabaseType())
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
+		AssertConnectionState(t, conn, "test")
 	})
 }
 
@@ -217,31 +163,7 @@ func TestConnectionGetMigrationTable(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("migration table name", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		mt.Cleanup(func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		})
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
-
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 		assert.Equal(mt, "schema_migrations", conn.GetMigrationTable())
 	})
 }
@@ -250,31 +172,7 @@ func TestConnectionSQLCompatibilityMethods(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("SQL compatibility", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		mt.Cleanup(func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		})
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
-
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 		ctx := context.Background()
 
 		// Test Query method returns error
@@ -305,33 +203,10 @@ func TestConnectionHealth(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("health check", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		defer func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		}()
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 
 		// Test health check
-		err = conn.Health(context.Background())
+		err := conn.Health(context.Background())
 		assert.NoError(t, err)
 	})
 }
@@ -340,30 +215,7 @@ func TestConnectionStats(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("stats", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		mt.Cleanup(func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		})
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 
 		// Mock server status and database stats using helpers
 		mt.AddMockResponses(MockServerStatus(1, 999))
@@ -396,7 +248,7 @@ func TestConnectionStats(t *testing.T) {
 }
 
 func TestNewConnectionConfigValidation(t *testing.T) {
-	log := &testLogger{}
+	log := CreateTestLogger()
 
 	t.Run("connection string takes precedence", func(t *testing.T) {
 		cfg := &config.DatabaseConfig{
@@ -578,19 +430,15 @@ func setupFailingTLSMocks() func() {
 }
 
 func TestNewConnectionWithTLSModes(t *testing.T) {
-	log := &testLogger{}
+	log := CreateTestLogger()
 
 	t.Run("successful TLS modes", func(t *testing.T) {
 		successfulModes := []string{"disable", "require", "verify-full"}
 
 		for _, sslMode := range successfulModes {
 			t.Run(sslMode+" TLS", func(t *testing.T) {
-				cfg := &config.DatabaseConfig{
-					Host:     "localhost",
-					Port:     27017,
-					Database: "test",
-					SSLMode:  sslMode,
-				}
+				cfg := DefaultTestConfig()
+				cfg.SSLMode = sslMode
 
 				var capturedOptions *options.ClientOptions
 				restoreMocks := setupSuccessfulTLSMocks(&capturedOptions)
@@ -605,12 +453,8 @@ func TestNewConnectionWithTLSModes(t *testing.T) {
 	})
 
 	t.Run("invalid TLS mode", func(t *testing.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-			SSLMode:  "invalid",
-		}
+		cfg := DefaultTestConfig()
+		cfg.SSLMode = "invalid"
 
 		restoreMocks := setupFailingTLSMocks()
 		defer restoreMocks()
@@ -626,30 +470,7 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("create migration table", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		defer func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		}()
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 
 		// Mock that collection doesn't exist using helper
 		mt.AddMockResponses(MockEmptyCollectionList(GetTestDatabase()))
@@ -658,40 +479,17 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 		mt.AddMockResponses(MockSuccessResponse())
 		mt.AddMockResponses(MockSuccessResponse())
 
-		err = conn.CreateMigrationTable(context.Background())
+		err := conn.CreateMigrationTable(context.Background())
 		assert.NoError(t, err)
 	})
 
 	mt.Run("migration table already exists", func(mt *mtest.T) {
-		cfg := &config.DatabaseConfig{
-			Host:     "localhost",
-			Port:     27017,
-			Database: "test",
-		}
-		log := &testLogger{}
-
-		// Mock successful connection
-		originalConnect := connectMongoDB
-		originalPing := pingMongoDB
-		defer func() {
-			connectMongoDB = originalConnect
-			pingMongoDB = originalPing
-		}()
-
-		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-			return mt.Client, nil
-		}
-		pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-			return nil
-		}
-
-		conn, err := NewConnection(cfg, log)
-		require.NoError(mt, err)
+		conn := SetupMockConnection(t, mt, DefaultTestConfig(), CreateTestLogger())
 
 		// Mock that collection exists using helper
 		mt.AddMockResponses(MockCollectionExists(GetTestDatabase(), "schema_migrations"))
 
-		err = conn.CreateMigrationTable(context.Background())
+		err := conn.CreateMigrationTable(context.Background())
 		assert.NoError(t, err) // Should not error if already exists
 	})
 }

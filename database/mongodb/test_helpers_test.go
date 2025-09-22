@@ -1,15 +1,53 @@
 package mongodb
 
 import (
+	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/database"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// Test Logger Implementation
+// Shared test logger types to avoid duplication across test files
+
+// testLogger implements logger.Logger for testing
+type testLogger struct{}
+
+func (l *testLogger) Info() logger.LogEvent                             { return &testLogEvent{} }
+func (l *testLogger) Error() logger.LogEvent                            { return &testLogEvent{} }
+func (l *testLogger) Debug() logger.LogEvent                            { return &testLogEvent{} }
+func (l *testLogger) Warn() logger.LogEvent                             { return &testLogEvent{} }
+func (l *testLogger) Fatal() logger.LogEvent                            { return &testLogEvent{} }
+func (l *testLogger) WithContext(_ interface{}) logger.Logger           { return l }
+func (l *testLogger) WithFields(_ map[string]interface{}) logger.Logger { return l }
+
+// testLogEvent implements logger.LogEvent for testing
+type testLogEvent struct{}
+
+func (e *testLogEvent) Str(_, _ string) logger.LogEvent                   { return e }
+func (e *testLogEvent) Int(_ string, _ int) logger.LogEvent               { return e }
+func (e *testLogEvent) Int64(_ string, _ int64) logger.LogEvent           { return e }
+func (e *testLogEvent) Uint64(_ string, _ uint64) logger.LogEvent         { return e }
+func (e *testLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent     { return e }
+func (e *testLogEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e }
+func (e *testLogEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
+func (e *testLogEvent) Err(_ error) logger.LogEvent                       { return e }
+func (e *testLogEvent) Msg(_ string) {
+	// No-op implementation for testing
+}
+func (e *testLogEvent) Msgf(_ string, _ ...interface{}) {
+	// No-op implementation for testing
+}
 
 // MockResponseHelpers provides reusable mock responses for MongoDB testing
 // These helpers encapsulate common MongoDB wire protocol response patterns
@@ -481,6 +519,120 @@ func BoolPtr(v bool) *bool {
 // StringPtr creates a string pointer for testing
 func StringPtr(v string) *string {
 	return &v
+}
+
+// Connection Test Setup Helpers
+// Shared connection setup functions to reduce duplication across test files
+
+// DefaultTestConfig returns a standard test database configuration
+func DefaultTestConfig() *config.DatabaseConfig {
+	return &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     27017,
+		Database: "test",
+	}
+}
+
+// SetupMockConnection creates a test connection with mocked MongoDB functions
+func SetupMockConnection(t *testing.T, mt *mtest.T, cfg *config.DatabaseConfig, log logger.Logger) *Connection {
+	t.Helper()
+
+	// Mock successful connection
+	originalConnect := connectMongoDB
+	originalPing := pingMongoDB
+	t.Cleanup(func() {
+		connectMongoDB = originalConnect
+		pingMongoDB = originalPing
+	})
+
+	connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
+		return mt.Client, nil
+	}
+	pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
+		return nil
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	return conn.(*Connection)
+}
+
+// MockConnectionFuncs mocks the global connection functions and returns restore function
+func MockConnectionFuncs(client *mongo.Client, pingErr error) (restore func()) {
+	originalConnect := connectMongoDB
+	originalPing := pingMongoDB
+
+	connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
+		return client, nil
+	}
+	pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
+		return pingErr
+	}
+
+	return func() {
+		connectMongoDB = originalConnect
+		pingMongoDB = originalPing
+	}
+}
+
+// Connection Test Case Structures
+// Following the pattern from builder_test.go for table-driven tests
+
+// ConnectionTestCase represents a table-driven test case for connection tests
+type ConnectionTestCase struct {
+	Name          string
+	Config        *config.DatabaseConfig
+	ExpectedURI   string
+	ExpectedError bool
+	MockSetup     func() func() // Returns cleanup function
+	Validation    func(*testing.T, *Connection, error)
+}
+
+// TLSTestCase represents a test case for TLS configuration
+type TLSTestCase struct {
+	Name                 string
+	SSLMode              string
+	ExpectError          bool
+	ExpectedInsecureSkip *bool
+	ExpectedServerName   *string
+	ExpectNilConfig      bool
+}
+
+// Connection Assertion Helpers
+// Following the pattern from builder assertion helpers
+
+// AssertConnectionState verifies connection properties
+func AssertConnectionState(t *testing.T, conn *Connection, _ string) {
+	t.Helper()
+	assert.Equal(t, "mongodb", conn.DatabaseType())
+	assert.Equal(t, "schema_migrations", conn.GetMigrationTable())
+	// Add more state assertions as needed
+}
+
+// AssertTLSConfig verifies TLS configuration properties
+func AssertTLSConfig(t *testing.T, tlsConfig interface{}, expected *TLSTestCase) {
+	t.Helper()
+
+	if expected.ExpectNilConfig {
+		assert.Nil(t, tlsConfig)
+		return
+	}
+
+	require.NotNil(t, tlsConfig)
+	// Additional TLS-specific assertions would go here
+}
+
+// AssertMongoURI verifies that the generated URI matches expected format
+func AssertMongoURI(t *testing.T, expected, actual string) {
+	t.Helper()
+	assert.Equal(t, expected, actual, "MongoDB URI mismatch")
+}
+
+// Helper Functions for Connection Testing
+
+// CreateTestLogger returns a standard test logger instance
+func CreateTestLogger() logger.Logger {
+	return &testLogger{}
 }
 
 // Note: setupTestConnection is defined in adapter_test.go and connection_test.go

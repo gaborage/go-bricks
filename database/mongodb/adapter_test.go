@@ -219,7 +219,7 @@ func setupTestConnection(t *testing.T, mt *mtest.T) *Connection {
 		Port:     27017,
 		Database: "test",
 	}
-	log := &testLogger{}
+	log := CreateTestLogger()
 
 	// Mock successful connection
 	originalConnect := connectMongoDB
