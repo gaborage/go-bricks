@@ -482,3 +482,118 @@ func TestConnectionMetadata(t *testing.T) {
 	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
 	assert.NoError(t, c.Close())
 }
+
+func TestConnectionValidationIntegration(t *testing.T) {
+	log := logger.New("debug", true)
+
+	tests := []struct {
+		name          string
+		config        *config.DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid config with service name should pass validation but fail connection",
+			config: &config.DatabaseConfig{
+				Type:     "oracle",
+				Host:     "localhost",
+				Port:     1521,
+				Username: "testuser",
+				Password: "testpass",
+				Service:  config.ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError:   true,
+			errorContains: oraclePingErrorMsg, // Connection fails, not validation
+		},
+		{
+			name: "valid config with SID should pass validation but fail connection",
+			config: &config.DatabaseConfig{
+				Type:     "oracle",
+				Host:     "localhost",
+				Port:     1521,
+				Username: "testuser",
+				Password: "testpass",
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: oraclePingErrorMsg, // Connection fails, not validation
+		},
+		{
+			name: "valid config with database name should pass validation but fail connection",
+			config: &config.DatabaseConfig{
+				Type:     "oracle",
+				Host:     "localhost",
+				Port:     1521,
+				Username: "testuser",
+				Password: "testpass",
+				Database: "XE",
+			},
+			expectError:   true,
+			errorContains: oraclePingErrorMsg, // Connection fails, not validation
+		},
+		{
+			name: "invalid config with no connection identifier should fail validation",
+			config: &config.DatabaseConfig{
+				Type:     "oracle",
+				Host:     "localhost",
+				Port:     1521,
+				Username: "testuser",
+				Password: "testpass",
+				// No Service.Name, SID, or Database
+			},
+			expectError:   true,
+			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+		},
+		{
+			name: "invalid config with multiple identifiers should fail validation",
+			config: &config.DatabaseConfig{
+				Type:     "oracle",
+				Host:     "localhost",
+				Port:     1521,
+				Username: "testuser",
+				Password: "testpass",
+				Service:  config.ServiceConfig{Name: "XEPDB1"},
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// First validate the configuration (this is what we're testing)
+			err := config.Validate(&config.Config{
+				App: config.AppConfig{
+					Name:    "test-app",
+					Version: "v1.0.0",
+					Env:     "development",
+					Rate:    config.RateConfig{Limit: 100},
+				},
+				Server: config.ServerConfig{
+					Port:         8080,
+					ReadTimeout:  15 * time.Second,
+					WriteTimeout: 30 * time.Second,
+				},
+				Database: *tt.config,
+				Log: config.LogConfig{
+					Level: "info",
+				},
+			})
+
+			if tt.errorContains == oraclePingErrorMsg {
+				// Config validation should pass, only connection should fail
+				assert.NoError(t, err, "Configuration validation should pass")
+
+				// Now attempt to create connection (this should fail with connection error)
+				_, connErr := NewConnection(tt.config, log)
+				assert.Error(t, connErr)
+				assert.Contains(t, connErr.Error(), tt.errorContains)
+			} else {
+				// Config validation should fail
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			}
+		})
+	}
+}

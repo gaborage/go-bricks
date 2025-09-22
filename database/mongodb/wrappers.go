@@ -130,7 +130,14 @@ func (r *BulkWriteResult) UpsertedCount() int64 {
 }
 
 func (r *BulkWriteResult) UpsertedIDs() map[int64]any {
-	return r.result.UpsertedIDs
+	if r.result.UpsertedIDs == nil {
+		return nil
+	}
+	out := make(map[int64]any, len(r.result.UpsertedIDs))
+	for k, v := range r.result.UpsertedIDs {
+		out[int64(k)] = v
+	}
+	return out
 }
 
 // ChangeStreamWrapper wraps mongo.ChangeStream to implement ChangeStream interface

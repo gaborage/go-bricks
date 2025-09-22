@@ -357,10 +357,12 @@ func formatSuccessResponseWithStatus(c echo.Context, data any, status int, heade
 			c.Response().Header().Add(k, v)
 		}
 	}
+
+	ensureTraceParentHeader(c)
 	if status == http.StatusNoContent {
 		return c.NoContent(http.StatusNoContent)
 	}
-	ensureTraceParentHeader(c)
+
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]any{

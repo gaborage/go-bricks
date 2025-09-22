@@ -623,10 +623,6 @@ func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
 	}
 
 	mongoOpts := options.Index()
-	// Background option is deprecated in MongoDB 4.2+
-	// if opts.Background != nil {
-	//     mongoOpts.SetBackground(*opts.Background)
-	// }
 	if opts.ExpireAfterSeconds != nil {
 		// Additional validation: ensure we never pass negative values to MongoDB
 		if *opts.ExpireAfterSeconds >= 0 {
@@ -692,10 +688,9 @@ func buildUpdateOptions(opts *database.UpdateOptions) *options.UpdateOptions {
 	}
 
 	mongoOpts := options.Update()
-	// TODO: Fix ArrayFilters type compatibility
-	// if len(opts.ArrayFilters) > 0 {
-	//     mongoOpts.SetArrayFilters(opts.ArrayFilters)
-	// }
+	if len(opts.ArrayFilters) > 0 {
+		mongoOpts.SetArrayFilters(options.ArrayFilters{Filters: opts.ArrayFilters})
+	}
 	if opts.BypassDocumentValidation != nil {
 		mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
 	}

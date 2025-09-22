@@ -350,10 +350,7 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	}
 
 	if err := ch.Confirm(false); err != nil {
-		err := ch.Close()
-		if err != nil {
-			return err
-		}
+		_ = ch.Close()
 		return err
 	}
 

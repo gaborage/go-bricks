@@ -11,6 +11,7 @@ import (
 const (
 	testConnectionString        = "postgresql://user:pass@localhost/db"
 	testMongoDBConnectionString = "mongodb://localhost:27017/testdb"
+	testOracleConnectionString  = "oracle://user:pass@localhost:1521/XEPDB1"
 	testOracleHost              = "oracle.example.com"
 	testAppName                 = "test-app"
 	testAppVersion              = "v1.0.0"
@@ -88,6 +89,15 @@ func TestValidateAppSuccess(t *testing.T) {
 				Rate:    RateConfig{Limit: 1},
 			},
 		},
+		{
+			name: "zero_rate_limit_disabled",
+			cfg: AppConfig{
+				Name:    "no-limit-app",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 0},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -135,16 +145,6 @@ func TestValidateAppFailures(t *testing.T) {
 			expectedError: "invalid environment: invalid",
 		},
 		{
-			name: "zero_rate_limit",
-			cfg: AppConfig{
-				Name:    testAppName,
-				Version: testAppVersion,
-				Env:     EnvDevelopment,
-				Rate:    RateConfig{Limit: 0},
-			},
-			expectedError: "rate limit must be positive",
-		},
-		{
 			name: "negative_rate_limit",
 			cfg: AppConfig{
 				Name:    testAppName,
@@ -152,7 +152,7 @@ func TestValidateAppFailures(t *testing.T) {
 				Env:     EnvDevelopment,
 				Rate:    RateConfig{Limit: -1},
 			},
-			expectedError: "rate limit must be positive",
+			expectedError: "rate limit must be non-negative",
 		},
 	}
 
@@ -1374,6 +1374,189 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB write concern",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateOracleFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid Oracle config with service name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid Oracle config with SID",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				SID:      "XE",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid Oracle config with database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+			},
+			expectError: false,
+		},
+		{
+			name: "Oracle config with no connection identifier",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				// No Service.Name, SID, or Database
+			},
+			expectError:   true,
+			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+		},
+		{
+			name: "Oracle config with service name and SID",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID), exactly one is required",
+		},
+		{
+			name: "Oracle config with service name and database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, database name), exactly one is required",
+		},
+		{
+			name: "Oracle config with SID and database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (SID, database name), exactly one is required",
+		},
+		{
+			name: "Oracle config with all three connection identifiers",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID, database name), exactly one is required",
+		},
+		{
+			name: "non-Oracle type should not validate Oracle fields",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Service:  ServiceConfig{Name: "XEPDB1"}, // This should be ignored for PostgreSQL
+				SID:      "XE",                          // This should be ignored for PostgreSQL
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateOracleWithConnectionString(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid Oracle with connection string and valid service name",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				Service:          ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError: false,
+		},
+		{
+			name: "Oracle with connection string but multiple identifiers",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				Service:          ServiceConfig{Name: "XEPDB1"},
+				SID:              "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured",
+		},
+		{
+			name: "Oracle with connection string but no identifiers",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				// No Service.Name, SID, or Database
+			},
+			expectError:   true,
+			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
 		},
 	}
 

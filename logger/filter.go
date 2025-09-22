@@ -73,9 +73,13 @@ func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
 		return f.config.MaskValue
 	}
 
+	if value == nil {
+		return nil
+	}
+
 	// Handle map[string]any recursively
 	if m, ok := value.(map[string]any); ok {
-		filtered := make(map[string]any)
+		filtered := make(map[string]any, len(m))
 		for k, v := range m {
 			filtered[k] = f.FilterValue(k, v)
 		}
@@ -83,7 +87,8 @@ func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
 	}
 
 	// Handle struct recursively using reflection
-	if reflect.TypeOf(value).Kind() == reflect.Struct {
+	t := reflect.TypeOf(value)
+	if t.Kind() == reflect.Struct {
 		return f.filterStruct(value)
 	}
 
@@ -156,46 +161,76 @@ func (f *SensitiveDataFilter) maskURL(urlStr string) string {
 
 // filterStruct filters sensitive fields in struct values using reflection
 func (f *SensitiveDataFilter) filterStruct(value any) any {
+	if value == nil {
+		return nil
+	}
+
+	structVal, structType := f.extractStructValue(value)
+	if !structVal.IsValid() {
+		return value
+	}
+
+	return f.buildFilteredStructMap(structVal, structType)
+}
+
+// extractStructValue handles pointer dereferencing and validates struct type
+func (f *SensitiveDataFilter) extractStructValue(value any) (reflect.Value, reflect.Type) {
 	val := reflect.ValueOf(value)
 	typ := reflect.TypeOf(value)
 
+	// Handle pointer types
 	if typ.Kind() == reflect.Ptr {
 		if val.IsNil() {
-			return value
+			return reflect.Value{}, nil
 		}
 		val = val.Elem()
 		typ = typ.Elem()
 	}
 
+	// Validate it's a struct
 	if typ.Kind() != reflect.Struct {
-		return value
+		return reflect.Value{}, nil
 	}
 
-	// Create a map representation of the struct with filtered values
+	return val, typ
+}
+
+// buildFilteredStructMap creates a map representation with filtered field values
+func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, structType reflect.Type) map[string]any {
 	result := make(map[string]any)
-	for i := 0; i < val.NumField(); i++ {
-		field := typ.Field(i)
-		fieldValue := val.Field(i)
+
+	for i := 0; i < structVal.NumField(); i++ {
+		field := structType.Field(i)
+		fieldValue := structVal.Field(i)
 
 		// Skip unexported fields
 		if !field.IsExported() {
 			continue
 		}
 
-		fieldName := field.Name
-		// Use json tag if available
-		if tag := field.Tag.Get("json"); tag != "" && tag != "-" {
-			if idx := strings.Index(tag, ","); idx != -1 {
-				fieldName = tag[:idx]
-			} else {
-				fieldName = tag
-			}
+		// Only process fields that can be converted to interface{}
+		if !fieldValue.CanInterface() {
+			continue
 		}
 
-		if fieldValue.CanInterface() {
-			result[fieldName] = f.FilterValue(fieldName, fieldValue.Interface())
-		}
+		fieldName := f.extractFieldName(field)
+		result[fieldName] = f.FilterValue(fieldName, fieldValue.Interface())
 	}
 
 	return result
+}
+
+// extractFieldName determines the field name to use, preferring json tags
+func (f *SensitiveDataFilter) extractFieldName(field reflect.StructField) string {
+	tag := field.Tag.Get("json")
+	if tag == "" || tag == "-" {
+		return field.Name
+	}
+
+	// Handle comma-separated json tags (e.g., "name,omitempty")
+	if idx := strings.Index(tag, ","); idx != -1 {
+		return tag[:idx]
+	}
+
+	return tag
 }

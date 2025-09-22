@@ -63,6 +63,9 @@ func quoteDSN(value string) string {
 
 // NewConnection creates a new PostgreSQL connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("database configuration is required")
+	}
 	var dsn string
 	if cfg.ConnectionString != "" {
 		dsn = cfg.ConnectionString

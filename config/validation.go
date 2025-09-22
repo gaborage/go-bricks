@@ -49,7 +49,7 @@ func Validate(cfg *Config) error {
 
 // validateApp validates the application configuration in cfg.
 // It requires Name and Version to be non-empty, Env to be one of
-// EnvDevelopment, EnvStaging, or EnvProduction, and RateLimit to be > 0.
+// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be > 0.
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
@@ -66,8 +66,8 @@ func validateApp(cfg *AppConfig) error {
 			cfg.Env, strings.Join(validEnvs, ", "))
 	}
 
-	if cfg.Rate.Limit <= 0 {
-		return fmt.Errorf("rate limit must be positive")
+	if cfg.Rate.Limit < 0 {
+		return fmt.Errorf("rate limit must be non-negative")
 	}
 
 	return nil
@@ -176,7 +176,9 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 		return err
 	}
 
-	if cfg.Database == "" {
+	// For Oracle, database name is optional if Service.Name or SID is provided
+	// Oracle-specific validation will provide more detailed error messages
+	if cfg.Type != Oracle && cfg.Database == "" {
 		return fmt.Errorf("database name is required")
 	}
 
@@ -238,8 +240,10 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	switch cfg.Type {
 	case MongoDB:
 		return validateMongoDBFields(cfg)
-	case PostgreSQL, Oracle:
-		// No vendor-specific validation needed for PostgreSQL/Oracle currently
+	case Oracle:
+		return validateOracleFields(cfg)
+	case PostgreSQL:
+		// No vendor-specific validation needed for PostgreSQL currently
 		return nil
 	default:
 		// Unknown database type should have been caught by validateDatabaseType
@@ -303,6 +307,46 @@ func validateMongoDBWriteConcern(concern string) error {
 	}
 
 	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged, or a non-negative integer)", concern)
+}
+
+// validateOracleFields validates Oracle-specific configuration fields.
+// It ensures that exactly one of Service.Name, SID, or Database is configured,
+// mirroring the DSN selection logic in database/oracle/connection.go.
+func validateOracleFields(cfg *DatabaseConfig) error {
+	serviceSet := cfg.Service.Name != ""
+	sidSet := cfg.SID != ""
+	databaseSet := cfg.Database != ""
+
+	count := 0
+	if serviceSet {
+		count++
+	}
+	if sidSet {
+		count++
+	}
+	if databaseSet {
+		count++
+	}
+
+	if count == 0 {
+		return fmt.Errorf("oracle configuration requires exactly one of: service name, SID, or database name")
+	}
+
+	if count > 1 {
+		configured := make([]string, 0, 3)
+		if serviceSet {
+			configured = append(configured, "service name")
+		}
+		if sidSet {
+			configured = append(configured, "SID")
+		}
+		if databaseSet {
+			configured = append(configured, "database name")
+		}
+		return fmt.Errorf("oracle configuration has multiple connection identifiers configured (%s), exactly one is required", strings.Join(configured, ", "))
+	}
+
+	return nil
 }
 
 // validateLog validates that cfg.Level is one of the supported log levels.
