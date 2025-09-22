@@ -135,7 +135,7 @@ func (r *BulkWriteResult) UpsertedIDs() map[int64]any {
 	}
 	out := make(map[int64]any, len(r.result.UpsertedIDs))
 	for k, v := range r.result.UpsertedIDs {
-		out[int64(k)] = v
+		out[k] = v
 	}
 	return out
 }

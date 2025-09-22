@@ -213,7 +213,7 @@ func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, st
 			continue
 		}
 
-		fieldName := f.extractFieldName(field)
+		fieldName := f.extractFieldName(&field)
 		result[fieldName] = f.FilterValue(fieldName, fieldValue.Interface())
 	}
 
@@ -221,7 +221,7 @@ func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, st
 }
 
 // extractFieldName determines the field name to use, preferring json tags
-func (f *SensitiveDataFilter) extractFieldName(field reflect.StructField) string {
+func (f *SensitiveDataFilter) extractFieldName(field *reflect.StructField) string {
 	tag := field.Tag.Get("json")
 	if tag == "" || tag == "-" {
 		return field.Name
