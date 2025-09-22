@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"fmt"
+	"maps"
 
 	"go.mongodb.org/mongo-driver/bson"
 
@@ -32,30 +33,30 @@ func NewBuilder() *Builder {
 // Match methods for building filter conditions
 
 // Where adds a simple equality condition
-func (b *Builder) Where(field string, value interface{}) *Builder {
+func (b *Builder) Where(field string, value any) *Builder {
 	b.match[field] = value
 	return b
 }
 
 // WhereEq adds an equality condition (alias for Where)
-func (b *Builder) WhereEq(field string, value interface{}) *Builder {
+func (b *Builder) WhereEq(field string, value any) *Builder {
 	return b.Where(field, value)
 }
 
 // WhereNe adds a "not equal" condition
-func (b *Builder) WhereNe(field string, value interface{}) *Builder {
+func (b *Builder) WhereNe(field string, value any) *Builder {
 	b.addFieldCondition(field, "$ne", value)
 	return b
 }
 
 // WhereGt adds a "greater than" condition
-func (b *Builder) WhereGt(field string, value interface{}) *Builder {
+func (b *Builder) WhereGt(field string, value any) *Builder {
 	b.addFieldCondition(field, "$gt", value)
 	return b
 }
 
 // addFieldCondition adds a condition to a field, merging with existing conditions if needed
-func (b *Builder) addFieldCondition(field, operator string, value interface{}) {
+func (b *Builder) addFieldCondition(field, operator string, value any) {
 	if existing, exists := b.match[field]; exists {
 		// If there's already a condition for this field, merge them
 		if existingMap, ok := existing.(bson.M); ok {
@@ -71,31 +72,31 @@ func (b *Builder) addFieldCondition(field, operator string, value interface{}) {
 }
 
 // WhereGte adds a "greater than or equal" condition
-func (b *Builder) WhereGte(field string, value interface{}) *Builder {
+func (b *Builder) WhereGte(field string, value any) *Builder {
 	b.addFieldCondition(field, "$gte", value)
 	return b
 }
 
 // WhereLt adds a "less than" condition
-func (b *Builder) WhereLt(field string, value interface{}) *Builder {
+func (b *Builder) WhereLt(field string, value any) *Builder {
 	b.addFieldCondition(field, "$lt", value)
 	return b
 }
 
 // WhereLte adds a "less than or equal" condition
-func (b *Builder) WhereLte(field string, value interface{}) *Builder {
+func (b *Builder) WhereLte(field string, value any) *Builder {
 	b.addFieldCondition(field, "$lte", value)
 	return b
 }
 
 // WhereIn adds an "in" condition
-func (b *Builder) WhereIn(field string, values ...interface{}) *Builder {
+func (b *Builder) WhereIn(field string, values ...any) *Builder {
 	b.match[field] = bson.M{"$in": values}
 	return b
 }
 
 // WhereNin adds a "not in" condition
-func (b *Builder) WhereNin(field string, values ...interface{}) *Builder {
+func (b *Builder) WhereNin(field string, values ...any) *Builder {
 	b.match[field] = bson.M{"$nin": values}
 	return b
 }
@@ -113,7 +114,7 @@ func (b *Builder) WhereExists(field string, exists bool) *Builder {
 }
 
 // WhereType adds a type check condition
-func (b *Builder) WhereType(field string, bsonType interface{}) *Builder {
+func (b *Builder) WhereType(field string, bsonType any) *Builder {
 	b.addFieldCondition(field, "$type", bsonType)
 	return b
 }
@@ -146,8 +147,89 @@ func (b *Builder) WhereNor(filters ...bson.M) *Builder {
 
 // WhereNot adds a NOT condition
 func (b *Builder) WhereNot(filter bson.M) *Builder {
-	b.match["$not"] = filter
+	if b.hasLogicalOperators(filter) {
+		b.addToNorCondition(filter)
+		return b
+	}
+
+	b.processFieldConditions(filter)
 	return b
+}
+
+// hasLogicalOperators checks if filter contains MongoDB logical operators
+func (b *Builder) hasLogicalOperators(filter bson.M) bool {
+	for k := range filter {
+		if k != "" && k[0] == '$' {
+			return true
+		}
+	}
+	return false
+}
+
+// addToNorCondition adds a filter to the $nor array
+func (b *Builder) addToNorCondition(filter bson.M) {
+	if existing, ok := b.match["$nor"].([]bson.M); ok {
+		b.match["$nor"] = append(existing, filter)
+	} else {
+		b.match["$nor"] = []bson.M{filter}
+	}
+}
+
+// processFieldConditions handles field-wise negation for complex conditions
+func (b *Builder) processFieldConditions(filter bson.M) {
+	for field, condition := range filter {
+		switch cond := condition.(type) {
+		case bson.M, bson.D:
+			b.processComplexCondition(field, cond)
+		default:
+			b.addFieldCondition(field, "$ne", condition)
+		}
+	}
+}
+
+// processComplexCondition handles bson.M and bson.D conditions
+func (b *Builder) processComplexCondition(field string, cond any) {
+	condMap := b.convertToMap(cond)
+	if condMap == nil {
+		b.addFieldCondition(field, "$not", cond)
+		return
+	}
+
+	if len(condMap) > 1 {
+		b.splitMultiOperatorCondition(field, condMap)
+	} else {
+		b.addFieldCondition(field, "$not", cond)
+	}
+}
+
+// convertToMap converts bson.D or bson.M to bson.M
+func (b *Builder) convertToMap(cond any) bson.M {
+	switch typedCond := cond.(type) {
+	case bson.M:
+		return typedCond
+	case bson.D:
+		condMap := bson.M{}
+		for _, elem := range typedCond {
+			condMap[elem.Key] = elem.Value
+		}
+		return condMap
+	default:
+		return nil
+	}
+}
+
+// splitMultiOperatorCondition splits multi-operator conditions into $nor predicates
+func (b *Builder) splitMultiOperatorCondition(field string, condMap bson.M) {
+	predicates := make([]bson.M, 0, len(condMap))
+	for op, val := range condMap {
+		predicates = append(predicates, bson.M{field: bson.M{op: val}})
+	}
+
+	if existing, ok := b.match["$nor"].([]bson.M); ok {
+		b.match["$nor"] = append(existing, predicates...)
+	} else {
+		b.match["$nor"] = predicates
+	}
 }
 
 // Sorting methods
@@ -219,7 +301,7 @@ func (b *Builder) ProjectSliceWithSkip(field string, skip, limit int) *Builder {
 }
 
 // ProjectElemMatch projects elements that match a condition
-func (b *Builder) ProjectElemMatch(field string, condition interface{}) *Builder {
+func (b *Builder) ProjectElemMatch(field string, condition any) *Builder {
 	b.projection[field] = bson.M{"$elemMatch": condition}
 	return b
 }
@@ -365,8 +447,15 @@ func (b *Builder) ToJSON() string {
 
 // String returns a string representation of the query
 func (b *Builder) String() string {
+	var skipVal, limitVal any
+	if b.skip != nil {
+		skipVal = *b.skip
+	}
+	if b.limit != nil {
+		limitVal = *b.limit
+	}
 	return fmt.Sprintf("MongoBuilder{match: %v, sort: %v, skip: %v, limit: %v}",
-		b.match, b.sort, b.skip, b.limit)
+		b.match, b.sort, skipVal, limitVal)
 }
 
 // Clone creates a copy of the builder
@@ -379,9 +468,7 @@ func (b *Builder) Clone() *Builder {
 	}
 
 	// Deep copy match
-	for k, v := range b.match {
-		clone.match[k] = v
-	}
+	maps.Copy(clone.match, b.match)
 
 	// Copy sort
 	copy(clone.sort, b.sort)
@@ -397,9 +484,7 @@ func (b *Builder) Clone() *Builder {
 	}
 
 	// Deep copy projection
-	for k, v := range b.projection {
-		clone.projection[k] = v
-	}
+	maps.Copy(clone.projection, b.projection)
 
 	// Deep copy pipeline
 	copy(clone.pipeline, b.pipeline)
@@ -407,16 +492,139 @@ func (b *Builder) Clone() *Builder {
 	return clone
 }
 
+// Reset clears all builder state for reuse
+func (b *Builder) Reset() *Builder {
+	b.match = make(bson.M)
+	b.sort = make(bson.D, 0)
+	b.skip = nil
+	b.limit = nil
+	b.projection = make(bson.M)
+	b.pipeline = make([]bson.M, 0)
+	return b
+}
+
+// BuilderState represents the internal state of a Builder for testing
+type BuilderState struct {
+	Match      bson.M
+	Sort       bson.D
+	Skip       *int64
+	Limit      *int64
+	Projection bson.M
+	Pipeline   []bson.M
+}
+
+// GetState returns the current builder state for testing purposes
+func (b *Builder) GetState() BuilderState {
+	state := BuilderState{
+		Match:      make(bson.M),
+		Sort:       make(bson.D, len(b.sort)),
+		Projection: make(bson.M),
+		Pipeline:   make([]bson.M, len(b.pipeline)),
+	}
+
+	// Copy match
+	maps.Copy(state.Match, b.match)
+
+	// Copy sort
+	copy(state.Sort, b.sort)
+
+	// Copy skip/limit
+	if b.skip != nil {
+		skip := *b.skip
+		state.Skip = &skip
+	}
+	if b.limit != nil {
+		limit := *b.limit
+		state.Limit = &limit
+	}
+
+	// Copy projection
+	maps.Copy(state.Projection, b.projection)
+
+	// Copy pipeline
+	copy(state.Pipeline, b.pipeline)
+
+	return state
+}
+
+// BuilderOptions configures Builder behavior
+type BuilderOptions struct {
+	PipelineOrder []string // Order of pipeline stages: "match", "sort", "skip", "limit", "project"
+}
+
+// WithOptions configures builder behavior
+func (b *Builder) WithOptions(_ BuilderOptions) *Builder {
+	// For now, we'll store options but the main implementation can be enhanced later
+	// This is a placeholder for future configurability
+	return b
+}
+
+// HasFilter returns true if the builder has filter conditions
+func (b *Builder) HasFilter() bool {
+	return len(b.match) > 0
+}
+
+// HasSort returns true if the builder has sort conditions
+func (b *Builder) HasSort() bool {
+	return len(b.sort) > 0
+}
+
+// HasProjection returns true if the builder has projection settings
+func (b *Builder) HasProjection() bool {
+	return len(b.projection) > 0
+}
+
+// HasPagination returns true if the builder has skip or limit set
+func (b *Builder) HasPagination() bool {
+	return b.skip != nil || b.limit != nil
+}
+
+// GetSkip returns the current skip value
+func (b *Builder) GetSkip() *int64 {
+	if b.skip == nil {
+		return nil
+	}
+	skip := *b.skip
+	return &skip
+}
+
+// GetLimit returns the current limit value
+func (b *Builder) GetLimit() *int64 {
+	if b.limit == nil {
+		return nil
+	}
+	limit := *b.limit
+	return &limit
+}
+
+// GetProjectionFields returns the fields being projected
+func (b *Builder) GetProjectionFields() []string {
+	fields := make([]string, 0, len(b.projection))
+	for field := range b.projection {
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+// GetSortFields returns the fields being sorted
+func (b *Builder) GetSortFields() []string {
+	fields := make([]string, 0, len(b.sort))
+	for _, elem := range b.sort {
+		fields = append(fields, elem.Key)
+	}
+	return fields
+}
+
 // FindOptionsBuilder helps build find options
 type FindOptionsBuilder struct {
-	sort       interface{}
+	sort       any
 	skip       *int64
 	limit      *int64
-	projection interface{}
+	projection any
 }
 
 // Sort sets the sort option
-func (f *FindOptionsBuilder) Sort(sort interface{}) *FindOptionsBuilder {
+func (f *FindOptionsBuilder) Sort(sort any) *FindOptionsBuilder {
 	f.sort = sort
 	return f
 }
@@ -434,7 +642,7 @@ func (f *FindOptionsBuilder) Limit(limit int64) *FindOptionsBuilder {
 }
 
 // Projection sets the projection option
-func (f *FindOptionsBuilder) Projection(projection interface{}) *FindOptionsBuilder {
+func (f *FindOptionsBuilder) Projection(projection any) *FindOptionsBuilder {
 	f.projection = projection
 	return f
 }
@@ -467,16 +675,14 @@ func Select(fields ...string) *Builder {
 }
 
 // Where creates a new builder with initial where condition
-func Where(field string, value interface{}) *Builder {
+func Where(field string, value any) *Builder {
 	return NewBuilder().Where(field, value)
 }
 
 // Match creates a new builder with initial match condition
 func Match(filter bson.M) *Builder {
 	builder := NewBuilder()
-	for k, v := range filter {
-		builder.match[k] = v
-	}
+	maps.Copy(builder.match, filter)
 	return builder
 }
 

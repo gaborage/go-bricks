@@ -2,7 +2,9 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -104,6 +106,39 @@ func (c *Connection) DropIndex(ctx context.Context, collection, name string) err
 	return nil
 }
 
+// parseIndexOptions extracts index options from a BSON document
+func parseIndexOptions(index bson.M) *database.IndexOptions {
+	opts := &database.IndexOptions{}
+
+	if name, ok := index["name"].(string); ok {
+		opts.Name = &name
+	}
+	if unique, ok := index["unique"].(bool); ok {
+		opts.Unique = &unique
+	}
+	if sparse, ok := index["sparse"].(bool); ok {
+		opts.Sparse = &sparse
+	}
+	if expireValue, exists := index["expireAfterSeconds"]; exists {
+		if expireAfterSeconds := parseExpireAfterSeconds(expireValue); expireAfterSeconds != nil {
+			opts.ExpireAfterSeconds = expireAfterSeconds
+		}
+	}
+	if partialFilterExpression, ok := index["partialFilterExpression"]; ok {
+		opts.PartialFilterExpression = partialFilterExpression
+	}
+
+	return opts
+}
+
+// buildIndexModel creates an IndexModel from a BSON document
+func buildIndexModel(index bson.M) database.IndexModel {
+	return database.IndexModel{
+		Keys:    index["key"],
+		Options: parseIndexOptions(index),
+	}
+}
+
 // ListIndexes lists all indexes on the specified collection
 func (c *Connection) ListIndexes(ctx context.Context, collection string) ([]database.IndexModel, error) {
 	coll := c.database.Collection(collection)
@@ -120,30 +155,7 @@ func (c *Connection) ListIndexes(ctx context.Context, collection string) ([]data
 			return nil, fmt.Errorf("failed to decode index info: %w", err)
 		}
 
-		model := database.IndexModel{
-			Keys: index["key"],
-		}
-
-		// Extract common index options
-		opts := &database.IndexOptions{}
-		if name, ok := index["name"].(string); ok {
-			opts.Name = &name
-		}
-		if unique, ok := index["unique"].(bool); ok {
-			opts.Unique = &unique
-		}
-		if sparse, ok := index["sparse"].(bool); ok {
-			opts.Sparse = &sparse
-		}
-		if expireAfterSeconds, ok := index["expireAfterSeconds"].(int32); ok {
-			opts.ExpireAfterSeconds = &expireAfterSeconds
-		}
-		if partialFilterExpression, ok := index["partialFilterExpression"]; ok {
-			opts.PartialFilterExpression = partialFilterExpression
-		}
-
-		model.Options = opts
-		indexes = append(indexes, model)
+		indexes = append(indexes, buildIndexModel(index))
 	}
 
 	if err := cursor.Err(); err != nil {
@@ -151,6 +163,54 @@ func (c *Connection) ListIndexes(ctx context.Context, collection string) ([]data
 	}
 
 	return indexes, nil
+}
+
+// isInt32InRange checks if a numeric value fits within MongoDB's valid expireAfterSeconds range
+func isInt32InRange(value float64) bool {
+	// MongoDB requires expireAfterSeconds to be in range [0, 2147483647]
+	return value >= 0 && value <= math.MaxInt32
+}
+
+// safeConvertToInt32 converts a numeric value to int32 with range checking
+func safeConvertToInt32(value float64) *int32 {
+	if !isInt32InRange(value) {
+		return nil
+	}
+	result := int32(value)
+	return &result
+}
+
+// parseExpireAfterSeconds safely parses expireAfterSeconds from various numeric types
+// MongoDB servers can return this value as int32, int64, float64, or json.Number
+// MongoDB requires expireAfterSeconds to be in range [0, 2147483647]
+func parseExpireAfterSeconds(value interface{}) *int32 {
+	switch v := value.(type) {
+	case int32:
+		// Validate that int32 values are in MongoDB's valid range
+		if v < 0 {
+			return nil
+		}
+		return &v
+	case int64:
+		return safeConvertToInt32(float64(v))
+	case float64:
+		return safeConvertToInt32(math.Round(v))
+	case json.Number:
+		return parseJSONNumber(v)
+	default:
+		return nil
+	}
+}
+
+// parseJSONNumber handles json.Number parsing with int/float fallback
+func parseJSONNumber(num json.Number) *int32 {
+	if intVal, err := num.Int64(); err == nil {
+		return safeConvertToInt32(float64(intVal))
+	}
+	if floatVal, err := num.Float64(); err == nil {
+		return safeConvertToInt32(math.Round(floatVal))
+	}
+	return nil
 }
 
 // Aggregate performs aggregation on the specified collection
@@ -568,7 +628,10 @@ func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
 	//     mongoOpts.SetBackground(*opts.Background)
 	// }
 	if opts.ExpireAfterSeconds != nil {
-		mongoOpts.SetExpireAfterSeconds(*opts.ExpireAfterSeconds)
+		// Additional validation: ensure we never pass negative values to MongoDB
+		if *opts.ExpireAfterSeconds >= 0 {
+			mongoOpts.SetExpireAfterSeconds(*opts.ExpireAfterSeconds)
+		}
 	}
 	if opts.Name != nil {
 		mongoOpts.SetName(*opts.Name)

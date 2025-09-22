@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,6 +118,10 @@ func validateDatabase(cfg *DatabaseConfig) error {
 		return err
 	}
 
+	if err := validateVendorSpecificFields(cfg); err != nil {
+		return err
+	}
+
 	return applyDatabasePoolDefaults(cfg)
 }
 
@@ -138,22 +143,13 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 		return err
 	}
 
-	if cfg.MaxConns <= 0 {
-		return fmt.Errorf("max connections must be positive")
+	if err := applyDatabasePoolDefaults(cfg); err != nil {
+		return err
 	}
 
-	if cfg.MaxQueryLength < 0 {
-		return fmt.Errorf("max query length must be zero or positive")
-	}
-	if cfg.MaxQueryLength == 0 {
-		cfg.MaxQueryLength = defaultMaxQueryLength
-	}
-
-	if cfg.SlowQueryThreshold < 0 {
-		return fmt.Errorf("slow query threshold must be zero or positive")
-	}
-	if cfg.SlowQueryThreshold == 0 {
-		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	// Validate vendor-specific fields even with connection string
+	if err := validateVendorSpecificFields(cfg); err != nil {
+		return err
 	}
 
 	return nil
@@ -192,7 +188,7 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 }
 
 func validateOptionalDatabasePort(port int) error {
-	if port > 0 && port > 65535 {
+	if port < 0 || port > 65535 {
 		return fmt.Errorf("invalid database port: %d", port)
 	}
 	return nil
@@ -235,6 +231,78 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	}
 
 	return nil
+}
+
+// validateVendorSpecificFields validates database vendor-specific configuration fields
+func validateVendorSpecificFields(cfg *DatabaseConfig) error {
+	switch cfg.Type {
+	case MongoDB:
+		return validateMongoDBFields(cfg)
+	case PostgreSQL, Oracle:
+		// No vendor-specific validation needed for PostgreSQL/Oracle currently
+		return nil
+	default:
+		// Unknown database type should have been caught by validateDatabaseType
+		return nil
+	}
+}
+
+// validateMongoDBFields validates MongoDB-specific configuration fields
+func validateMongoDBFields(cfg *DatabaseConfig) error {
+	if cfg.ReadPreference != "" {
+		if err := validateMongoDBReadPreference(cfg.ReadPreference); err != nil {
+			return err
+		}
+	}
+
+	if cfg.WriteConcern != "" {
+		if err := validateMongoDBWriteConcern(cfg.WriteConcern); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMongoDBReadPreference validates MongoDB read preference values
+func validateMongoDBReadPreference(pref string) error {
+	validPreferences := map[string]struct{}{
+		"primary":            {},
+		"primarypreferred":   {},
+		"secondary":          {},
+		"secondarypreferred": {},
+		"nearest":            {},
+	}
+
+	if _, ok := validPreferences[strings.ToLower(pref)]; ok {
+		return nil
+	}
+
+	return fmt.Errorf("invalid MongoDB read preference: %s (must be one of: primary, primaryPreferred, secondary, secondaryPreferred, nearest)", pref)
+}
+
+// validateMongoDBWriteConcern validates MongoDB write concern values
+func validateMongoDBWriteConcern(concern string) error {
+	// First, try to parse as a non-negative integer
+	if num, err := strconv.Atoi(concern); err == nil && num >= 0 {
+		return nil
+	}
+
+	// Check for valid textual concerns (case-insensitive)
+	validConcerns := []string{
+		"majority",
+		"acknowledged",
+		"unacknowledged",
+	}
+
+	concernLower := strings.ToLower(concern)
+	for _, valid := range validConcerns {
+		if strings.EqualFold(valid, concernLower) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged, or a non-negative integer)", concern)
 }
 
 // validateLog validates that cfg.Level is one of the supported log levels.

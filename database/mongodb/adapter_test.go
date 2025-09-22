@@ -2,6 +2,8 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
+	"math"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -217,7 +219,7 @@ func setupTestConnection(t *testing.T, mt *mtest.T) *Connection {
 		Port:     27017,
 		Database: "test",
 	}
-	log := &testLogger{}
+	log := CreateTestLogger()
 
 	// Mock successful connection
 	originalConnect := connectMongoDB
@@ -240,7 +242,7 @@ func setupTestConnection(t *testing.T, mt *mtest.T) *Connection {
 	return conn.(*Connection)
 }
 
-func TestConnection_Collection(t *testing.T) {
+func TestConnectionCollection(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("get collection", func(mt *mtest.T) {
@@ -252,7 +254,7 @@ func TestConnection_Collection(t *testing.T) {
 	})
 }
 
-func TestConnection_CreateCollection(t *testing.T) {
+func TestConnectionCreateCollection(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("create collection", func(mt *mtest.T) {
@@ -281,7 +283,7 @@ func TestConnection_CreateCollection(t *testing.T) {
 	})
 }
 
-func TestConnection_DropCollection(t *testing.T) {
+func TestConnectionDropCollection(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("drop collection", func(mt *mtest.T) {
@@ -295,7 +297,7 @@ func TestConnection_DropCollection(t *testing.T) {
 	})
 }
 
-func TestConnection_CreateIndex(t *testing.T) {
+func TestConnectionCreateIndex(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("create index", func(mt *mtest.T) {
@@ -317,7 +319,7 @@ func TestConnection_CreateIndex(t *testing.T) {
 	})
 }
 
-func TestConnection_RunCommand(t *testing.T) {
+func TestConnectionRunCommand(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("run command", func(mt *mtest.T) {
@@ -336,7 +338,7 @@ func TestConnection_RunCommand(t *testing.T) {
 	})
 }
 
-func TestCollection_InsertOne(t *testing.T) {
+func TestCollectionInsertOne(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("insert one document", func(mt *mtest.T) {
@@ -370,7 +372,7 @@ func TestCollection_InsertOne(t *testing.T) {
 	})
 }
 
-func TestCollection_FindOne(t *testing.T) {
+func TestCollectionFindOne(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("find one document", func(mt *mtest.T) {
@@ -379,7 +381,7 @@ func TestCollection_FindOne(t *testing.T) {
 
 		// Mock find response using helper
 		userDoc := MockUser("507f1f77bcf86cd799439011", "test")
-		mt.AddMockResponses(MockFindResponse(TestNamespace("test_collection"), userDoc))
+		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("test_collection"), userDoc))
 
 		filter := bson.M{"name": "test"}
 		result := collection.FindOne(context.Background(), filter, nil)
@@ -392,7 +394,7 @@ func TestCollection_FindOne(t *testing.T) {
 	})
 }
 
-func TestCollection_UpdateOne(t *testing.T) {
+func TestCollectionUpdateOne(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("update one document", func(mt *mtest.T) {
@@ -413,7 +415,7 @@ func TestCollection_UpdateOne(t *testing.T) {
 	})
 }
 
-func TestCollection_DeleteOne(t *testing.T) {
+func TestCollectionDeleteOne(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("delete one document", func(mt *mtest.T) {
@@ -431,7 +433,7 @@ func TestCollection_DeleteOne(t *testing.T) {
 	})
 }
 
-func TestCollection_CountDocuments(t *testing.T) {
+func TestCollectionCountDocuments(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("count documents", func(mt *mtest.T) {
@@ -439,7 +441,7 @@ func TestCollection_CountDocuments(t *testing.T) {
 		collection := conn.Collection("test_collection")
 
 		// Mock count response using helper (CountDocuments uses aggregation internally)
-		mt.AddMockResponses(MockCountResponse(TestNamespace("test_collection"), 5))
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 5))
 
 		filter := bson.M{"status": "active"}
 		count, err := collection.CountDocuments(context.Background(), filter, nil)
@@ -448,7 +450,7 @@ func TestCollection_CountDocuments(t *testing.T) {
 	})
 }
 
-func TestConnection_BeginTransaction(t *testing.T) {
+func TestConnectionBeginTransaction(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("begin transaction", func(mt *mtest.T) {
@@ -463,12 +465,63 @@ func TestConnection_BeginTransaction(t *testing.T) {
 		assert.IsType(t, &Transaction{}, tx)
 
 		// Clean up transaction to avoid session leak
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
 		err = tx.Rollback()
 		assert.NoError(t, err)
 	})
 }
 
-func TestConnection_InterfaceCompliance(t *testing.T) {
+func TestTransactionCommitAndRollback(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("transaction commit", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock session start and transaction start
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+		tx, err := conn.Begin(context.Background())
+		assert.NoError(t, err)
+		assert.NotNil(t, tx)
+
+		// Cast to MongoDB Transaction to verify proper session context usage
+		mongoTx, ok := tx.(*Transaction)
+		assert.True(t, ok)
+		assert.NotNil(t, mongoTx.session)
+		assert.NotNil(t, mongoTx.parentCtx)
+
+		// Mock transaction commit
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+		err = tx.Commit()
+		assert.NoError(t, err)
+	})
+
+	mt.Run("transaction rollback", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock session start and transaction start
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+		tx, err := conn.Begin(context.Background())
+		assert.NoError(t, err)
+		assert.NotNil(t, tx)
+
+		// Cast to MongoDB Transaction to verify proper session context usage
+		mongoTx, ok := tx.(*Transaction)
+		assert.True(t, ok)
+		assert.NotNil(t, mongoTx.session)
+		assert.NotNil(t, mongoTx.parentCtx)
+
+		// Mock transaction abort
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+		err = tx.Rollback()
+		assert.NoError(t, err)
+	})
+}
+
+func TestConnectionInterfaceCompliance(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("interface compliance", func(mt *mtest.T) {
@@ -486,4 +539,141 @@ func TestConnection_InterfaceCompliance(t *testing.T) {
 		assert.True(t, ok)
 		assert.NotNil(t, docDB)
 	})
+}
+
+func TestParseExpireAfterSeconds(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected *int32
+	}{
+		{
+			name:     "int32 value",
+			input:    int32(3600),
+			expected: func() *int32 { v := int32(3600); return &v }(),
+		},
+		{
+			name:     "int32 negative value (should be rejected)",
+			input:    int32(-1),
+			expected: nil,
+		},
+		{
+			name:     "int32 zero value",
+			input:    int32(0),
+			expected: func() *int32 { v := int32(0); return &v }(),
+		},
+		{
+			name:     "int64 value in range",
+			input:    int64(7200),
+			expected: func() *int32 { v := int32(7200); return &v }(),
+		},
+		{
+			name:     "int64 negative value (should be rejected)",
+			input:    int64(-100),
+			expected: nil,
+		},
+		{
+			name:     "int64 value max int32",
+			input:    int64(math.MaxInt32),
+			expected: func() *int32 { v := int32(math.MaxInt32); return &v }(),
+		},
+		{
+			name:     "int64 value min int32 (negative, should be rejected)",
+			input:    int64(math.MinInt32),
+			expected: nil,
+		},
+		{
+			name:     "int64 value out of range (too large)",
+			input:    int64(math.MaxInt32) + 1,
+			expected: nil,
+		},
+		{
+			name:     "int64 value out of range (too small)",
+			input:    int64(math.MinInt32) - 1,
+			expected: nil,
+		},
+		{
+			name:     "float64 value",
+			input:    float64(1800.0),
+			expected: func() *int32 { v := int32(1800); return &v }(),
+		},
+		{
+			name:     "float64 negative value (should be rejected)",
+			input:    float64(-123.5),
+			expected: nil,
+		},
+		{
+			name:     "float64 value with rounding",
+			input:    float64(1800.6),
+			expected: func() *int32 { v := int32(1801); return &v }(),
+		},
+		{
+			name:     "float64 value with rounding down",
+			input:    float64(1800.4),
+			expected: func() *int32 { v := int32(1800); return &v }(),
+		},
+		{
+			name:     "float64 value out of range",
+			input:    float64(math.MaxInt32) + 1000.0,
+			expected: nil,
+		},
+		{
+			name:     "json.Number as integer",
+			input:    json.Number("900"),
+			expected: func() *int32 { v := int32(900); return &v }(),
+		},
+		{
+			name:     "json.Number negative integer (should be rejected)",
+			input:    json.Number("-500"),
+			expected: nil,
+		},
+		{
+			name:     "json.Number as float",
+			input:    json.Number("900.7"),
+			expected: func() *int32 { v := int32(901); return &v }(),
+		},
+		{
+			name:     "json.Number negative float (should be rejected)",
+			input:    json.Number("-123.7"),
+			expected: nil,
+		},
+		{
+			name:     "json.Number invalid",
+			input:    json.Number("invalid"),
+			expected: nil,
+		},
+		{
+			name:     "json.Number out of range",
+			input:    json.Number("9999999999999"),
+			expected: nil,
+		},
+		{
+			name:     "unsupported type (string)",
+			input:    "3600",
+			expected: nil,
+		},
+		{
+			name:     "unsupported type (bool)",
+			input:    true,
+			expected: nil,
+		},
+		{
+			name:     "nil value",
+			input:    nil,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseExpireAfterSeconds(tt.input)
+
+			if tt.expected == nil {
+				assert.Nil(t, result, "Expected nil result for input: %v", tt.input)
+			} else {
+				require.NotNil(t, result, "Expected non-nil result for input: %v", tt.input)
+				assert.Equal(t, *tt.expected, *result, "Expected %d, got %d for input: %v", *tt.expected, *result, tt.input)
+			}
+		})
+	}
 }
