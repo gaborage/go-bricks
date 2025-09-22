@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	testConnectionString      = "postgresql://user:pass@localhost/db"
-	testOracleHost            = "oracle.example.com"
-	testAppName               = "test-app"
-	testAppVersion            = "v1.0.0"
-	errMaxConnectionsPositive = "max connections must be positive"
+	testConnectionString        = "postgresql://user:pass@localhost/db"
+	testMongoDBConnectionString = "mongodb://localhost:27017/testdb"
+	testOracleHost              = "oracle.example.com"
+	testAppName                 = "test-app"
+	testAppVersion              = "v1.0.0"
+	errMaxConnectionsPositive   = "max connections must be positive"
 )
 
 func TestValidateValidConfig(t *testing.T) {
@@ -896,13 +897,12 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			errorContains: "invalid database type",
 		},
 		{
-			name: "connection_string_missing_max_conns_errors",
+			name: "connection_string_missing_max_conns_applies_default",
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
 				MaxConns:         0,
 			},
-			expectError:   true,
-			errorContains: errMaxConnectionsPositive,
+			expectError: false, // Should apply default of 25
 		},
 		{
 			name: "invalid_database_type",
@@ -1143,6 +1143,231 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				SlowQueryThreshold: 0,
 			},
 			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateMongoDBFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid MongoDB config with read preference and write concern",
+			config: DatabaseConfig{
+				Type:           MongoDB,
+				Host:           "localhost",
+				Port:           27017,
+				Database:       "testdb",
+				Username:       "testuser",
+				ReadPreference: "primary",
+				WriteConcern:   "majority",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid MongoDB config with primaryPreferred",
+			config: DatabaseConfig{
+				Type:           MongoDB,
+				Host:           "localhost",
+				Port:           27017,
+				Database:       "testdb",
+				Username:       "testuser",
+				ReadPreference: "primaryPreferred",
+				WriteConcern:   "acknowledged",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid MongoDB config with case insensitive read preference",
+			config: DatabaseConfig{
+				Type:           MongoDB,
+				Host:           "localhost",
+				Port:           27017,
+				Database:       "testdb",
+				Username:       "testuser",
+				ReadPreference: "SECONDARY",
+				WriteConcern:   "MAJORITY",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid MongoDB config without optional fields",
+			config: DatabaseConfig{
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid read preference",
+			config: DatabaseConfig{
+				Type:           MongoDB,
+				Host:           "localhost",
+				Port:           27017,
+				Database:       "testdb",
+				Username:       "testuser",
+				ReadPreference: "invalid",
+			},
+			expectError:   true,
+			errorContains: "invalid MongoDB read preference: invalid",
+		},
+		{
+			name: "invalid write concern",
+			config: DatabaseConfig{
+				Type:         MongoDB,
+				Host:         "localhost",
+				Port:         27017,
+				Database:     "testdb",
+				Username:     "testuser",
+				WriteConcern: "invalid",
+			},
+			expectError:   true,
+			errorContains: "invalid MongoDB write concern: invalid",
+		},
+		{
+			name: "non-MongoDB type should not validate MongoDB fields",
+			config: DatabaseConfig{
+				Type:           PostgreSQL,
+				Host:           "localhost",
+				Port:           5432,
+				Database:       "testdb",
+				Username:       "testuser",
+				ReadPreference: "invalid", // This should be ignored for PostgreSQL
+				WriteConcern:   "invalid", // This should be ignored for PostgreSQL
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateMongoDBReadPreference(t *testing.T) {
+	tests := []struct {
+		name        string
+		preference  string
+		expectError bool
+	}{
+		{"primary", "primary", false},
+		{"primaryPreferred", "primaryPreferred", false},
+		{"primarypreferred lowercase", "primarypreferred", false},
+		{"secondary", "secondary", false},
+		{"secondaryPreferred", "secondaryPreferred", false},
+		{"secondarypreferred lowercase", "secondarypreferred", false},
+		{"nearest", "nearest", false},
+		{"NEAREST uppercase", "NEAREST", false},
+		{"mixed case", "PrimaryPreferred", false},
+		{"invalid preference", "invalid", true},
+		{"empty string", "", true},
+		{"typo in primary", "primari", true},
+		{"typo in secondary", "secundary", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMongoDBReadPreference(tt.preference)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid MongoDB read preference")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateMongoDBWriteConcern(t *testing.T) {
+	tests := []struct {
+		name        string
+		concern     string
+		expectError bool
+	}{
+		{"majority", "majority", false},
+		{"acknowledged", "acknowledged", false},
+		{"unacknowledged", "unacknowledged", false},
+		{"MAJORITY uppercase", "MAJORITY", false},
+		{"Acknowledged mixed case", "Acknowledged", false},
+		{"invalid concern", "invalid", true},
+		{"empty string", "", true},
+		{"typo in majority", "majorty", true},
+		{"numeric string", "1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMongoDBWriteConcern(tt.concern)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid MongoDB write concern")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateMongoDBWithConnectionString(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid MongoDB with connection string and valid read preference",
+			config: DatabaseConfig{
+				Type:             MongoDB,
+				ConnectionString: testMongoDBConnectionString,
+				ReadPreference:   "primary",
+				WriteConcern:     "majority",
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid read preference with connection string",
+			config: DatabaseConfig{
+				Type:             MongoDB,
+				ConnectionString: testMongoDBConnectionString,
+				ReadPreference:   "invalid",
+			},
+			expectError:   true,
+			errorContains: "invalid MongoDB read preference",
+		},
+		{
+			name: "invalid write concern with connection string",
+			config: DatabaseConfig{
+				Type:             MongoDB,
+				ConnectionString: testMongoDBConnectionString,
+				WriteConcern:     "invalid",
+			},
+			expectError:   true,
+			errorContains: "invalid MongoDB write concern",
 		},
 	}
 

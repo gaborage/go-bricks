@@ -179,7 +179,7 @@ func TestParseWriteConcern(t *testing.T) {
 	}
 }
 
-func TestConnection_DatabaseType(t *testing.T) {
+func TestConnectionDatabaseType(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("database type", func(mt *mtest.T) {
@@ -212,7 +212,7 @@ func TestConnection_DatabaseType(t *testing.T) {
 	})
 }
 
-func TestConnection_GetMigrationTable(t *testing.T) {
+func TestConnectionGetMigrationTable(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("migration table name", func(mt *mtest.T) {
@@ -245,7 +245,7 @@ func TestConnection_GetMigrationTable(t *testing.T) {
 	})
 }
 
-func TestConnection_SQLCompatibilityMethods(t *testing.T) {
+func TestConnectionSQLCompatibilityMethods(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("SQL compatibility", func(mt *mtest.T) {
@@ -300,7 +300,7 @@ func TestConnection_SQLCompatibilityMethods(t *testing.T) {
 	})
 }
 
-func TestConnection_Health(t *testing.T) {
+func TestConnectionHealth(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("health check", func(mt *mtest.T) {
@@ -335,7 +335,7 @@ func TestConnection_Health(t *testing.T) {
 	})
 }
 
-func TestConnection_Stats(t *testing.T) {
+func TestConnectionStats(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("stats", func(mt *mtest.T) {
@@ -375,7 +375,7 @@ func TestConnection_Stats(t *testing.T) {
 	})
 }
 
-func TestNewConnection_ConfigValidation(t *testing.T) {
+func TestNewConnectionConfigValidation(t *testing.T) {
 	log := &testLogger{}
 
 	t.Run("connection string takes precedence", func(t *testing.T) {
@@ -426,7 +426,7 @@ func TestNewConnection_ConfigValidation(t *testing.T) {
 	})
 }
 
-func TestConnection_CreateMigrationTable(t *testing.T) {
+func TestConnectionCreateMigrationTable(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("create migration table", func(mt *mtest.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -60,7 +61,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		opts.SetMinPoolSize(minPoolSize)
 	}
 	if cfg.ConnMaxLifetime > 0 {
-		opts.SetMaxConnIdleTime(cfg.ConnMaxLifetime)
+		opts.SetMaxConnIdleTime(cfg.ConnMaxIdleTime)
 	}
 
 	// Set read preference
@@ -121,10 +122,10 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 
 	// Add credentials if provided
 	if cfg.Username != "" {
-		uri.WriteString(cfg.Username)
+		uri.WriteString(url.QueryEscape(cfg.Username))
 		if cfg.Password != "" {
 			uri.WriteString(":")
-			uri.WriteString(cfg.Password)
+			uri.WriteString(url.QueryEscape(cfg.Password))
 		}
 		uri.WriteString("@")
 	}
@@ -148,6 +149,13 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 	}
 	if cfg.AuthSource != "" {
 		params = append(params, "authSource="+cfg.AuthSource)
+	}
+
+	switch strings.ToLower(cfg.SSLMode) {
+	case "require", "verify-ca", "verify-full":
+		params = append(params, "tls=true")
+	case "disable":
+		params = append(params, "tls=false")
 	}
 
 	if len(params) > 0 {
@@ -238,9 +246,10 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database
 	}
 
 	return &Transaction{
-		session:  session,
-		database: c.database,
-		logger:   c.logger,
+		session:   session,
+		database:  c.database,
+		logger:    c.logger,
+		parentCtx: ctx,
 	}, nil
 }
 

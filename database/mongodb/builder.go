@@ -146,7 +146,10 @@ func (b *Builder) WhereNor(filters ...bson.M) *Builder {
 
 // WhereNot adds a NOT condition
 func (b *Builder) WhereNot(filter bson.M) *Builder {
-	b.match["$not"] = filter
+	// Apply $not to each field in the filter
+	for field, condition := range filter {
+		b.match[field] = bson.M{"$not": condition}
+	}
 	return b
 }
 
