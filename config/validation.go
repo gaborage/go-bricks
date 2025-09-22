@@ -16,6 +16,7 @@ const (
 const (
 	PostgreSQL = "postgresql"
 	Oracle     = "oracle"
+	MongoDB    = "mongodb"
 )
 
 // Environment constants
@@ -159,10 +160,10 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 }
 
 // validateDatabaseType validates that dbType is one of the supported database type
-// constants (PostgreSQL or Oracle). It returns nil when dbType is valid and an
+// constants (PostgreSQL, Oracle, or MongoDB). It returns nil when dbType is valid and an
 // error describing the invalid value and the allowed types when it is not.
 func validateDatabaseType(dbType string) error {
-	validTypes := []string{PostgreSQL, Oracle}
+	validTypes := []string{PostgreSQL, Oracle, MongoDB}
 	if !slices.Contains(validTypes, dbType) {
 		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
 			dbType, strings.Join(validTypes, ", "))
