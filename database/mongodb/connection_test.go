@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,11 +14,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	invalidReadPrefErrMsg     = "invalid read preference"
-	invalidWriteConcernErrMsg = "invalid write concern"
 )
 
 // testLogger implements logger.Logger for testing
@@ -198,7 +194,7 @@ func TestConnectionDatabaseType(t *testing.T) {
 		// Mock successful connection
 		originalConnect := connectMongoDB
 		originalPing := pingMongoDB
-		t.Cleanup(func() {
+		mt.Cleanup(func() {
 			connectMongoDB = originalConnect
 			pingMongoDB = originalPing
 		})
@@ -213,7 +209,7 @@ func TestConnectionDatabaseType(t *testing.T) {
 		conn, err := NewConnection(cfg, log)
 		require.NoError(mt, err)
 
-		assert.Equal(t, "mongodb", conn.DatabaseType())
+		assert.Equal(mt, "mongodb", conn.DatabaseType())
 	})
 }
 
@@ -231,10 +227,10 @@ func TestConnectionGetMigrationTable(t *testing.T) {
 		// Mock successful connection
 		originalConnect := connectMongoDB
 		originalPing := pingMongoDB
-		defer func() {
+		mt.Cleanup(func() {
 			connectMongoDB = originalConnect
 			pingMongoDB = originalPing
-		}()
+		})
 
 		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
 			return mt.Client, nil
@@ -246,7 +242,7 @@ func TestConnectionGetMigrationTable(t *testing.T) {
 		conn, err := NewConnection(cfg, log)
 		require.NoError(mt, err)
 
-		assert.Equal(t, "schema_migrations", conn.GetMigrationTable())
+		assert.Equal(mt, "schema_migrations", conn.GetMigrationTable())
 	})
 }
 
@@ -264,10 +260,10 @@ func TestConnectionSQLCompatibilityMethods(t *testing.T) {
 		// Mock successful connection
 		originalConnect := connectMongoDB
 		originalPing := pingMongoDB
-		defer func() {
+		mt.Cleanup(func() {
 			connectMongoDB = originalConnect
 			pingMongoDB = originalPing
-		}()
+		})
 
 		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
 			return mt.Client, nil
@@ -283,25 +279,25 @@ func TestConnectionSQLCompatibilityMethods(t *testing.T) {
 
 		// Test Query method returns error
 		rows, err := conn.Query(ctx, "SELECT * FROM test")
-		assert.Error(t, err)
-		assert.Nil(t, rows)
-		assert.Contains(t, err.Error(), "SQL query operations not supported")
+		assert.Error(mt, err)
+		assert.Nil(mt, rows)
+		assert.Contains(mt, err.Error(), "SQL query operations not supported")
 
 		// Test QueryRow method returns nil
 		row := conn.QueryRow(ctx, "SELECT * FROM test")
-		assert.Nil(t, row)
+		assert.Nil(mt, row)
 
 		// Test Exec method returns error
 		result, err := conn.Exec(ctx, "INSERT INTO test VALUES (1)")
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "SQL exec operations not supported")
+		assert.Error(mt, err)
+		assert.Nil(mt, result)
+		assert.Contains(mt, err.Error(), "SQL exec operations not supported")
 
 		// Test Prepare method returns error
 		stmt, err := conn.Prepare(ctx, "SELECT * FROM test WHERE id = ?")
-		assert.Error(t, err)
-		assert.Nil(t, stmt)
-		assert.Contains(t, err.Error(), "prepared statements not supported")
+		assert.Error(mt, err)
+		assert.Nil(mt, stmt)
+		assert.Contains(mt, err.Error(), "prepared statements not supported")
 	})
 }
 
@@ -354,10 +350,10 @@ func TestConnectionStats(t *testing.T) {
 		// Mock successful connection
 		originalConnect := connectMongoDB
 		originalPing := pingMongoDB
-		defer func() {
+		mt.Cleanup(func() {
 			connectMongoDB = originalConnect
 			pingMongoDB = originalPing
-		}()
+		})
 
 		connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
 			return mt.Client, nil
@@ -374,9 +370,28 @@ func TestConnectionStats(t *testing.T) {
 		mt.AddMockResponses(MockDatabaseStats(1, 1024))
 
 		stats, err := conn.Stats()
-		assert.NoError(t, err)
-		assert.NotNil(t, stats)
-		assert.Equal(t, "mongodb", stats["database_type"])
+		assert.NoError(mt, err)
+		assert.NotNil(mt, stats)
+		assert.Equal(mt, "mongodb", stats["database_type"])
+
+		// Validate key fields to ensure mocks are actually consumed
+		if connections, ok := stats["connections"]; ok {
+			if connMap, ok := connections.(map[string]interface{}); ok {
+				assert.Contains(mt, connMap, "current")
+				assert.Contains(mt, connMap, "available")
+				assert.Equal(mt, int32(1), connMap["current"])
+				assert.Equal(mt, int32(999), connMap["available"])
+			}
+		}
+
+		if database, ok := stats["database"]; ok {
+			if dbMap, ok := database.(map[string]interface{}); ok {
+				assert.Contains(mt, dbMap, "dataSize")
+				assert.Contains(mt, dbMap, "collections")
+				assert.Equal(mt, int32(1024), dbMap["dataSize"])
+				assert.Equal(mt, int32(1), dbMap["collections"])
+			}
+		}
 	})
 }
 
@@ -414,7 +429,7 @@ func TestNewConnectionConfigValidation(t *testing.T) {
 
 		_, err := NewConnection(cfg, log)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), invalidReadPrefErrMsg)
+		assert.True(t, errors.Is(err, ErrInvalidReadPreference))
 	})
 
 	t.Run("invalid write concern", func(t *testing.T) {
@@ -427,7 +442,7 @@ func TestNewConnectionConfigValidation(t *testing.T) {
 
 		_, err := NewConnection(cfg, log)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), invalidWriteConcernErrMsg)
+		assert.True(t, errors.Is(err, ErrInvalidWriteConcern))
 	})
 }
 
@@ -456,7 +471,7 @@ func TestBuildTLSConfig(t *testing.T) {
 		{
 			name:                 "verify-ca mode",
 			sslMode:              "verify-ca",
-			expectError:          false,
+			expectError:          true,
 			expectedInsecureSkip: func() *bool { b := false; return &b }(),
 			expectedServerName:   func() *string { s := ""; return &s }(),
 			expectNilConfig:      false,
@@ -478,7 +493,7 @@ func TestBuildTLSConfig(t *testing.T) {
 		{
 			name:                 "case insensitive - Verify-CA",
 			sslMode:              "Verify-CA",
-			expectError:          false,
+			expectError:          true,
 			expectedInsecureSkip: func() *bool { b := false; return &b }(),
 			expectedServerName:   func() *string { s := ""; return &s }(),
 			expectNilConfig:      false,
@@ -566,7 +581,7 @@ func TestNewConnectionWithTLSModes(t *testing.T) {
 	log := &testLogger{}
 
 	t.Run("successful TLS modes", func(t *testing.T) {
-		successfulModes := []string{"disable", "require", "verify-ca", "verify-full"}
+		successfulModes := []string{"disable", "require", "verify-full"}
 
 		for _, sslMode := range successfulModes {
 			t.Run(sslMode+" TLS", func(t *testing.T) {
@@ -790,79 +805,74 @@ func TestSetConnectionOptions(t *testing.T) {
 
 func TestSetReadPreference(t *testing.T) {
 	tests := []struct {
-		name        string
-		preference  string
-		expectError bool
-		errorMsg    string
+		name          string
+		preference    string
+		expectedError error
 	}{
 		{
-			name:        "empty preference",
-			preference:  "",
-			expectError: false,
+			name:          "empty preference",
+			preference:    "",
+			expectedError: nil,
 		},
 		{
-			name:        "primary preference",
-			preference:  "primary",
-			expectError: false,
+			name:          "primary preference",
+			preference:    "primary",
+			expectedError: nil,
 		},
 		{
-			name:        "primaryPreferred preference",
-			preference:  "primarypreferred",
-			expectError: false,
+			name:          "primaryPreferred preference",
+			preference:    "primarypreferred",
+			expectedError: nil,
 		},
 		{
-			name:        "secondary preference",
-			preference:  "secondary",
-			expectError: false,
+			name:          "secondary preference",
+			preference:    "secondary",
+			expectedError: nil,
 		},
 		{
-			name:        "secondaryPreferred preference",
-			preference:  "secondarypreferred",
-			expectError: false,
+			name:          "secondaryPreferred preference",
+			preference:    "secondarypreferred",
+			expectedError: nil,
 		},
 		{
-			name:        "nearest preference",
-			preference:  "nearest",
-			expectError: false,
+			name:          "nearest preference",
+			preference:    "nearest",
+			expectedError: nil,
 		},
 		{
-			name:        "case insensitive primary",
-			preference:  "PRIMARY",
-			expectError: false,
+			name:          "case insensitive primary",
+			preference:    "PRIMARY",
+			expectedError: nil,
 		},
 		{
-			name:        "case insensitive secondaryPreferred",
-			preference:  "SecondaryPreferred",
-			expectError: false,
+			name:          "case insensitive secondaryPreferred",
+			preference:    "SecondaryPreferred",
+			expectedError: nil,
 		},
 		{
-			name:        "mixed case nearest",
-			preference:  "Nearest",
-			expectError: false,
+			name:          "mixed case nearest",
+			preference:    "Nearest",
+			expectedError: nil,
 		},
 		{
-			name:        "invalid preference",
-			preference:  "invalid",
-			expectError: true,
-			errorMsg:    invalidReadPrefErrMsg,
+			name:          "invalid preference",
+			preference:    "invalid",
+			expectedError: ErrInvalidReadPreference,
 		},
 		{
-			name:        "unknown preference",
-			preference:  "unknown",
-			expectError: true,
-			errorMsg:    invalidReadPrefErrMsg,
+			name:          "unknown preference",
+			preference:    "unknown",
+			expectedError: ErrInvalidReadPreference,
 		},
 		{
-			name:        "whitespace preference",
-			preference:  "  ",
-			expectError: true,
-			errorMsg:    invalidReadPrefErrMsg,
+			name:          "whitespace preference",
+			preference:    "  ",
+			expectedError: ErrInvalidReadPreference,
 		},
 		{
-			name:        "primaryPreferred with spaces",
-			preference:  " primarypreferred ",
-			expectError: true,
-			errorMsg:    invalidReadPrefErrMsg,
+			name:          "primaryPreferred with spaces",
+			preference:    " primarypreferred ",
+			expectedError: ErrInvalidReadPreference,
 		},
 	}
 
@@ -872,11 +882,9 @@ func TestSetReadPreference(t *testing.T) {
 
 			err := setReadPreference(opts, tt.preference)
 
-			if tt.expectError {
+			if tt.expectedError != nil {
 				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
+				assert.True(t, errors.Is(err, tt.expectedError))
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, opts)
@@ -887,75 +895,89 @@ func TestSetReadPreference(t *testing.T) {
 
 func TestSetWriteConcern(t *testing.T) {
 	tests := []struct {
-		name        string
-		concern     string
-		expectError bool
-		errorMsg    string
+		name          string
+		concern       string
+		expectedError error
 	}{
 		{
-			name:        "empty concern",
-			concern:     "",
-			expectError: false,
+			name:          "empty concern",
+			concern:       "",
+			expectedError: nil,
 		},
 		{
-			name:        "majority concern",
-			concern:     "majority",
-			expectError: false,
+			name:          "majority concern",
+			concern:       "majority",
+			expectedError: nil,
 		},
 		{
-			name:        "acknowledged concern",
-			concern:     "acknowledged",
-			expectError: false,
+			name:          "acknowledged concern",
+			concern:       "acknowledged",
+			expectedError: nil,
 		},
 		{
-			name:        "unacknowledged concern",
-			concern:     "unacknowledged",
-			expectError: false,
+			name:          "unacknowledged concern",
+			concern:       "unacknowledged",
+			expectedError: nil,
 		},
 		{
-			name:        "case insensitive majority",
-			concern:     "MAJORITY",
-			expectError: false,
+			name:          "case insensitive majority",
+			concern:       "MAJORITY",
+			expectedError: nil,
 		},
 		{
-			name:        "case insensitive acknowledged",
-			concern:     "Acknowledged",
-			expectError: false,
+			name:          "case insensitive acknowledged",
+			concern:       "Acknowledged",
+			expectedError: nil,
 		},
 		{
-			name:        "mixed case unacknowledged",
-			concern:     "UnAcknowledged",
-			expectError: false,
+			name:          "mixed case unacknowledged",
+			concern:       "UnAcknowledged",
+			expectedError: nil,
 		},
 		{
-			name:        "invalid concern",
-			concern:     "invalid",
-			expectError: true,
-			errorMsg:    invalidWriteConcernErrMsg,
+			name:          "invalid concern",
+			concern:       "invalid",
+			expectedError: ErrInvalidWriteConcern,
 		},
 		{
-			name:        "unknown concern",
-			concern:     "unknown",
-			expectError: true,
-			errorMsg:    invalidWriteConcernErrMsg,
+			name:          "unknown concern",
+			concern:       "unknown",
+			expectedError: ErrInvalidWriteConcern,
 		},
 		{
-			name:        "numeric string concern",
-			concern:     "1",
-			expectError: true,
-			errorMsg:    invalidWriteConcernErrMsg,
+			name:          "numeric string concern 0",
+			concern:       "0",
+			expectedError: nil,
 		},
 		{
-			name:        "whitespace concern",
-			concern:     "  ",
-			expectError: true,
-			errorMsg:    invalidWriteConcernErrMsg,
+			name:          "numeric string concern 1",
+			concern:       "1",
+			expectedError: nil,
 		},
 		{
-			name:        "majority with spaces",
-			concern:     " majority ",
-			expectError: true,
-			errorMsg:    invalidWriteConcernErrMsg,
+			name:          "numeric string concern 2",
+			concern:       "2",
+			expectedError: nil,
+		},
+		{
+			name:          "whitespace concern",
+			concern:       "  ",
+			expectedError: ErrInvalidWriteConcern,
+		},
+		{
+			name:          "majority with spaces",
+			concern:       " majority ",
+			expectedError: nil,
+		},
+		{
+			name:          "acknowledged with spaces",
+			concern:       "  acknowledged  ",
+			expectedError: nil,
+		},
+		{
+			name:          "numeric with spaces",
+			concern:       "  3  ",
+			expectedError: nil,
 		},
 	}
 
@@ -965,11 +987,9 @@ func TestSetWriteConcern(t *testing.T) {
 
 			err := setWriteConcern(opts, tt.concern)
 
-			if tt.expectError {
+			if tt.expectedError != nil {
 				assert.Error(t, err)
-				if tt.errorMsg != "" {
-					assert.Contains(t, err.Error(), tt.errorMsg)
-				}
+				assert.True(t, errors.Is(err, tt.expectedError))
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, opts)

@@ -142,25 +142,8 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 		return err
 	}
 
-	if cfg.MaxConns < 0 {
-		return fmt.Errorf("max connections must be positive")
-	}
-	if cfg.MaxConns == 0 {
-		cfg.MaxConns = 25
-	}
-
-	if cfg.MaxQueryLength < 0 {
-		return fmt.Errorf("max query length must be zero or positive")
-	}
-	if cfg.MaxQueryLength == 0 {
-		cfg.MaxQueryLength = defaultMaxQueryLength
-	}
-
-	if cfg.SlowQueryThreshold < 0 {
-		return fmt.Errorf("slow query threshold must be zero or positive")
-	}
-	if cfg.SlowQueryThreshold == 0 {
-		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	if err := applyDatabasePoolDefaults(cfg); err != nil {
+		return err
 	}
 
 	// Validate vendor-specific fields even with connection string

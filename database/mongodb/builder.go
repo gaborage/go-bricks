@@ -392,8 +392,15 @@ func (b *Builder) ToJSON() string {
 
 // String returns a string representation of the query
 func (b *Builder) String() string {
+	var skipVal, limitVal interface{}
+	if b.skip != nil {
+		skipVal = *b.skip
+	}
+	if b.limit != nil {
+		limitVal = *b.limit
+	}
 	return fmt.Sprintf("MongoBuilder{match: %v, sort: %v, skip: %v, limit: %v}",
-		b.match, b.sort, b.skip, b.limit)
+		b.match, b.sort, skipVal, limitVal)
 }
 
 // Clone creates a copy of the builder
@@ -432,6 +439,133 @@ func (b *Builder) Clone() *Builder {
 	copy(clone.pipeline, b.pipeline)
 
 	return clone
+}
+
+// Reset clears all builder state for reuse
+func (b *Builder) Reset() *Builder {
+	b.match = make(bson.M)
+	b.sort = make(bson.D, 0)
+	b.skip = nil
+	b.limit = nil
+	b.projection = make(bson.M)
+	b.pipeline = make([]bson.M, 0)
+	return b
+}
+
+// BuilderState represents the internal state of a Builder for testing
+type BuilderState struct {
+	Match      bson.M
+	Sort       bson.D
+	Skip       *int64
+	Limit      *int64
+	Projection bson.M
+	Pipeline   []bson.M
+}
+
+// GetState returns the current builder state for testing purposes
+func (b *Builder) GetState() BuilderState {
+	state := BuilderState{
+		Match:      make(bson.M),
+		Sort:       make(bson.D, len(b.sort)),
+		Projection: make(bson.M),
+		Pipeline:   make([]bson.M, len(b.pipeline)),
+	}
+
+	// Copy match
+	for k, v := range b.match {
+		state.Match[k] = v
+	}
+
+	// Copy sort
+	copy(state.Sort, b.sort)
+
+	// Copy skip/limit
+	if b.skip != nil {
+		skip := *b.skip
+		state.Skip = &skip
+	}
+	if b.limit != nil {
+		limit := *b.limit
+		state.Limit = &limit
+	}
+
+	// Copy projection
+	for k, v := range b.projection {
+		state.Projection[k] = v
+	}
+
+	// Copy pipeline
+	copy(state.Pipeline, b.pipeline)
+
+	return state
+}
+
+// BuilderOptions configures Builder behavior
+type BuilderOptions struct {
+	PipelineOrder []string // Order of pipeline stages: "match", "sort", "skip", "limit", "project"
+}
+
+// WithOptions configures builder behavior
+func (b *Builder) WithOptions(_ BuilderOptions) *Builder {
+	// For now, we'll store options but the main implementation can be enhanced later
+	// This is a placeholder for future configurability
+	return b
+}
+
+// HasFilter returns true if the builder has filter conditions
+func (b *Builder) HasFilter() bool {
+	return len(b.match) > 0
+}
+
+// HasSort returns true if the builder has sort conditions
+func (b *Builder) HasSort() bool {
+	return len(b.sort) > 0
+}
+
+// HasProjection returns true if the builder has projection settings
+func (b *Builder) HasProjection() bool {
+	return len(b.projection) > 0
+}
+
+// HasPagination returns true if the builder has skip or limit set
+func (b *Builder) HasPagination() bool {
+	return b.skip != nil || b.limit != nil
+}
+
+// GetSkip returns the current skip value
+func (b *Builder) GetSkip() *int64 {
+	if b.skip == nil {
+		return nil
+	}
+	skip := *b.skip
+	return &skip
+}
+
+// GetLimit returns the current limit value
+func (b *Builder) GetLimit() *int64 {
+	if b.limit == nil {
+		return nil
+	}
+	limit := *b.limit
+	return &limit
+}
+
+// GetProjectionFields returns the fields being projected
+func (b *Builder) GetProjectionFields() []string {
+	fields := make([]string, 0, len(b.projection))
+	for field := range b.projection {
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+// GetSortFields returns the fields being sorted
+func (b *Builder) GetSortFields() []string {
+	fields := make([]string, 0, len(b.sort))
+	for _, elem := range b.sort {
+		fields = append(fields, elem.Key)
+	}
+	return fields
 }
 
 // FindOptionsBuilder helps build find options

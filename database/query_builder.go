@@ -197,8 +197,10 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		}
 		insertQuery = insertQuery.Columns(cols...).Values(vals...)
 
-		// Build conflict resolution
-		conflictClause := "ON CONFLICT (" + strings.Join(conflictColumns, ", ") + ") DO UPDATE SET "
+		// Build conflict resolution (deterministic order)
+		cc := append([]string{}, conflictColumns...)
+		sort.Strings(cc)
+		conflictClause := "ON CONFLICT (" + strings.Join(cc, ", ") + ") DO UPDATE SET "
 		var setParts []string
 		updateCols := make([]string, 0, len(updateColumns))
 		for c := range updateColumns {

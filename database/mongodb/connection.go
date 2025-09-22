@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,12 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
+)
+
+// Sentinel errors for MongoDB configuration validation
+var (
+	ErrInvalidReadPreference = errors.New("invalid read preference")
+	ErrInvalidWriteConcern   = errors.New("invalid write concern")
 )
 
 // Connection implements the database.Interface for MongoDB
@@ -184,12 +192,11 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 	// Add query parameters
 	var params []string
 	if cfg.ReplicaSet != "" {
-		params = append(params, "replicaSet="+cfg.ReplicaSet)
+		params = append(params, "replicaSet="+url.QueryEscape(cfg.ReplicaSet))
 	}
 	if cfg.AuthSource != "" {
-		params = append(params, "authSource="+cfg.AuthSource)
+		params = append(params, "authSource="+url.QueryEscape(cfg.AuthSource))
 	}
-	// Note: TLS configuration is now handled via SetTLSConfig() in NewConnection()
 
 	if len(params) > 0 {
 		uri.WriteString("?")
@@ -206,14 +213,8 @@ func buildTLSConfig(sslMode string) (*tls.Config, error) {
 		// No TLS configuration needed
 		return nil, nil
 	case "verify-ca":
-		// Verify certificate authority but skip hostname verification
-		// This is achieved by setting InsecureSkipVerify to false (to verify CA)
-		// and providing a custom verification function that skips hostname checks
-		return &tls.Config{
-			InsecureSkipVerify: false,
-			MinVersion:         tls.VersionTLS12,
-			ServerName:         "", // Empty ServerName disables hostname verification
-		}, nil
+		// Unsupported in this implementation
+		return nil, fmt.Errorf("SSL mode 'verify-ca' is not supported in this implementation")
 	case "verify-full", "require":
 		// Verify both certificate authority and hostname (most secure)
 		// This is the default behavior when InsecureSkipVerify is false
@@ -240,22 +241,33 @@ func parseReadPreference(pref string) (*readpref.ReadPref, error) {
 	case "nearest":
 		return readpref.Nearest(), nil
 	default:
-		return nil, fmt.Errorf("unknown read preference: %s", pref)
+		return nil, ErrInvalidReadPreference
 	}
 }
 
 // parseWriteConcern converts string to MongoDB write concern
 func parseWriteConcern(concern string) (*writeconcern.WriteConcern, error) {
-	switch strings.ToLower(concern) {
+	// Trim whitespace and convert to lowercase
+	trimmed := strings.TrimSpace(concern)
+	lower := strings.ToLower(trimmed)
+
+	// Handle predefined write concern names
+	switch lower {
 	case "majority":
 		return writeconcern.Majority(), nil
 	case "acknowledged":
 		return &writeconcern.WriteConcern{W: 1}, nil
 	case "unacknowledged":
 		return &writeconcern.WriteConcern{W: 0}, nil
-	default:
-		return nil, fmt.Errorf("unknown write concern: %s", concern)
 	}
+
+	// Try to parse as a non-negative integer
+	if n, err := strconv.Atoi(trimmed); err == nil && n >= 0 {
+		return &writeconcern.WriteConcern{W: n}, nil
+	}
+
+	// Return error for invalid write concern
+	return nil, ErrInvalidWriteConcern
 }
 
 // Query executes a MongoDB query (not applicable for document databases)
