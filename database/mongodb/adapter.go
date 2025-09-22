@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -587,20 +588,20 @@ func (c *Collection) Watch(ctx context.Context, pipeline any, opts *database.Cha
 		if opts.BatchSize != nil {
 			mongoOpts.SetBatchSize(*opts.BatchSize)
 		}
-		// TODO: Fix FullDocument type compatibility
-		// if opts.FullDocument != nil {
-		//     mongoOpts.SetFullDocument(*opts.FullDocument)
-		// }
+		if opts.FullDocument != nil {
+			mongoOpts.SetFullDocument(options.FullDocument(*opts.FullDocument))
+		}
 		if opts.MaxAwaitTime != nil {
 			mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
 		}
 		if opts.ResumeAfter != nil {
 			mongoOpts.SetResumeAfter(opts.ResumeAfter)
 		}
-		// TODO: Fix StartAtOperationTime type compatibility
-		// if opts.StartAtOperationTime != nil {
-		//     mongoOpts.SetStartAtOperationTime(opts.StartAtOperationTime)
-		// }
+		if opts.StartAtOperationTime != nil {
+			if timestamp, ok := opts.StartAtOperationTime.(*primitive.Timestamp); ok {
+				mongoOpts.SetStartAtOperationTime(timestamp)
+			}
+		}
 		if opts.StartAfter != nil {
 			mongoOpts.SetStartAfter(opts.StartAfter)
 		}

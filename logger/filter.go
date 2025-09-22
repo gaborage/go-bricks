@@ -43,7 +43,7 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 		config = DefaultFilterConfig()
 	}
 	if config.MaskValue == "" {
-		config.MaskValue = "***"
+		config.MaskValue = DefaultMaskValue
 	}
 	return &SensitiveDataFilter{config: config}
 }
@@ -77,27 +77,81 @@ func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
 		return nil
 	}
 
-	// Handle map[string]any recursively
+	return f.filterByType(key, value)
+}
+
+// filterByType dispatches to appropriate handler based on value type
+func (f *SensitiveDataFilter) filterByType(key string, value any) any {
+	// Handle typed map first (most common case)
 	if m, ok := value.(map[string]any); ok {
-		filtered := make(map[string]any, len(m))
-		for k, v := range m {
-			filtered[k] = f.FilterValue(k, v)
-		}
-		return filtered
+		return f.filterStringMap(m)
 	}
 
-	// Handle struct recursively using reflection
-	t := reflect.TypeOf(value)
-	if t.Kind() == reflect.Struct {
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() { //nolint:exhaustive // default case handles all other types
+	case reflect.Slice, reflect.Array:
+		return f.filterSliceOrArray(key, rv)
+	case reflect.Struct:
 		return f.filterStruct(value)
+	case reflect.Pointer:
+		if rv.Type().Elem().Kind() == reflect.Struct {
+			return f.filterStruct(value)
+		}
+		return value
+	default:
+		// All other types pass through unchanged
+		return value
+	}
+}
+
+// filterStringMap handles map[string]any filtering
+func (f *SensitiveDataFilter) filterStringMap(m map[string]any) map[string]any {
+	filtered := make(map[string]any, len(m))
+	for k, v := range m {
+		filtered[k] = f.FilterValue(k, v)
+	}
+	return filtered
+}
+
+// filterSliceOrArray handles slice and array filtering
+func (f *SensitiveDataFilter) filterSliceOrArray(key string, rv reflect.Value) any {
+	length := rv.Len()
+	filtered := make([]any, length)
+	hasChanges := false
+
+	for i := range length {
+		elemVal := rv.Index(i)
+		elem := elemVal.Interface()
+
+		var filteredElem any
+		if f.isStructType(elemVal.Type()) {
+			filteredElem = f.filterStruct(elem)
+			hasChanges = true // Struct filtering always creates a map
+		} else {
+			filteredElem = f.FilterValue(key, elem)
+			if filteredElem != elem {
+				hasChanges = true
+			}
+		}
+		filtered[i] = filteredElem
 	}
 
-	return value
+	// If no changes were made, return the original slice to preserve type
+	if !hasChanges {
+		return rv.Interface()
+	}
+
+	return filtered
+}
+
+// isStructType checks if a type is a struct or pointer to struct
+func (f *SensitiveDataFilter) isStructType(t reflect.Type) bool {
+	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct)
 }
 
 // FilterFields filters a map of fields for sensitive data
 func (f *SensitiveDataFilter) FilterFields(fields map[string]any) map[string]any {
-	filtered := make(map[string]any)
+	filtered := make(map[string]any, len(fields))
 	for key, value := range fields {
 		filtered[key] = f.FilterValue(key, value)
 	}
@@ -179,7 +233,7 @@ func (f *SensitiveDataFilter) extractStructValue(value any) (reflect.Value, refl
 	typ := reflect.TypeOf(value)
 
 	// Handle pointer types
-	if typ.Kind() == reflect.Ptr {
+	for typ.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return reflect.Value{}, nil
 		}
@@ -197,7 +251,8 @@ func (f *SensitiveDataFilter) extractStructValue(value any) (reflect.Value, refl
 
 // buildFilteredStructMap creates a map representation with filtered field values
 func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, structType reflect.Type) map[string]any {
-	result := make(map[string]any)
+	// Pre-allocate result map with capacity for all fields to reduce allocations
+	result := make(map[string]any, structVal.NumField())
 
 	for i := 0; i < structVal.NumField(); i++ {
 		field := structType.Field(i)
@@ -213,7 +268,12 @@ func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, st
 			continue
 		}
 
+		// Extract field name (empty string means skip)
 		fieldName := f.extractFieldName(&field)
+		if fieldName == "" {
+			continue
+		}
+
 		result[fieldName] = f.FilterValue(fieldName, fieldValue.Interface())
 	}
 
@@ -221,15 +281,28 @@ func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, st
 }
 
 // extractFieldName determines the field name to use, preferring json tags
+// Returns empty string to signal the field should be skipped
 func (f *SensitiveDataFilter) extractFieldName(field *reflect.StructField) string {
 	tag := field.Tag.Get("json")
-	if tag == "" || tag == "-" {
+
+	// Skip fields marked with json:"-"
+	if tag == "-" {
+		return ""
+	}
+
+	// Use struct field name if no json tag
+	if tag == "" {
 		return field.Name
 	}
 
 	// Handle comma-separated json tags (e.g., "name,omitempty")
 	if idx := strings.Index(tag, ","); idx != -1 {
-		return tag[:idx]
+		fieldName := tag[:idx]
+		// Use struct field name if tag part is empty (e.g., ",omitempty")
+		if fieldName == "" {
+			return field.Name
+		}
+		return fieldName
 	}
 
 	return tag
