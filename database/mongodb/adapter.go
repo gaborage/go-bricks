@@ -165,9 +165,10 @@ func (c *Connection) ListIndexes(ctx context.Context, collection string) ([]data
 	return indexes, nil
 }
 
-// isInt32InRange checks if a numeric value fits within int32 range
+// isInt32InRange checks if a numeric value fits within MongoDB's valid expireAfterSeconds range
 func isInt32InRange(value float64) bool {
-	return value <= math.MaxInt32 && value >= math.MinInt32
+	// MongoDB requires expireAfterSeconds to be in range [0, 2147483647]
+	return value >= 0 && value <= math.MaxInt32
 }
 
 // safeConvertToInt32 converts a numeric value to int32 with range checking
@@ -181,9 +182,14 @@ func safeConvertToInt32(value float64) *int32 {
 
 // parseExpireAfterSeconds safely parses expireAfterSeconds from various numeric types
 // MongoDB servers can return this value as int32, int64, float64, or json.Number
+// MongoDB requires expireAfterSeconds to be in range [0, 2147483647]
 func parseExpireAfterSeconds(value interface{}) *int32 {
 	switch v := value.(type) {
 	case int32:
+		// Validate that int32 values are in MongoDB's valid range
+		if v < 0 {
+			return nil
+		}
 		return &v
 	case int64:
 		return safeConvertToInt32(float64(v))
@@ -622,7 +628,10 @@ func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
 	//     mongoOpts.SetBackground(*opts.Background)
 	// }
 	if opts.ExpireAfterSeconds != nil {
-		mongoOpts.SetExpireAfterSeconds(*opts.ExpireAfterSeconds)
+		// Additional validation: ensure we never pass negative values to MongoDB
+		if *opts.ExpireAfterSeconds >= 0 {
+			mongoOpts.SetExpireAfterSeconds(*opts.ExpireAfterSeconds)
+		}
 	}
 	if opts.Name != nil {
 		mongoOpts.SetName(*opts.Name)

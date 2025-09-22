@@ -204,7 +204,7 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 }
 
 func validateOptionalDatabasePort(port int) error {
-	if port > 0 && port > 65535 {
+	if port < 0 || port > 65535 {
 		return fmt.Errorf("invalid database port: %d", port)
 	}
 	return nil
@@ -282,19 +282,16 @@ func validateMongoDBFields(cfg *DatabaseConfig) error {
 
 // validateMongoDBReadPreference validates MongoDB read preference values
 func validateMongoDBReadPreference(pref string) error {
-	validPreferences := []string{
-		"primary",
-		"primarypreferred", "primaryPreferred",
-		"secondary",
-		"secondarypreferred", "secondaryPreferred",
-		"nearest",
+	validPreferences := map[string]struct{}{
+		"primary":            {},
+		"primarypreferred":   {},
+		"secondary":          {},
+		"secondarypreferred": {},
+		"nearest":            {},
 	}
 
-	prefLower := strings.ToLower(pref)
-	for _, valid := range validPreferences {
-		if strings.EqualFold(valid, prefLower) {
-			return nil
-		}
+	if _, ok := validPreferences[strings.ToLower(pref)]; ok {
+		return nil
 	}
 
 	return fmt.Errorf("invalid MongoDB read preference: %s (must be one of: primary, primaryPreferred, secondary, secondaryPreferred, nearest)", pref)

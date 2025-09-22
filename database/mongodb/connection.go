@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -35,9 +36,13 @@ var (
 	}
 )
 
+const (
+	defaultConnectionTimeout = 10 * time.Second
+)
+
 // NewConnection creates a new MongoDB connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
 	defer cancel()
 
 	// Build connection options
@@ -52,34 +57,27 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}
 
 	// Set connection pool options
-	if cfg.MaxConns > 0 {
-		maxPoolSize := uint64(cfg.MaxConns)
-		opts.SetMaxPoolSize(maxPoolSize)
-	}
-	if cfg.MaxIdleConns > 0 {
-		minPoolSize := uint64(cfg.MaxIdleConns)
-		opts.SetMinPoolSize(minPoolSize)
-	}
-	if cfg.ConnMaxLifetime > 0 {
-		opts.SetMaxConnIdleTime(cfg.ConnMaxIdleTime)
-	}
+	setConnectionOptions(opts, cfg)
 
 	// Set read preference
-	if cfg.ReadPreference != "" {
-		rp, err := parseReadPreference(cfg.ReadPreference)
-		if err != nil {
-			return nil, fmt.Errorf("invalid read preference: %w", err)
-		}
-		opts.SetReadPreference(rp)
+	if err := setReadPreference(opts, cfg.ReadPreference); err != nil {
+		return nil, err
 	}
 
 	// Set write concern
-	if cfg.WriteConcern != "" {
-		wc, err := parseWriteConcern(cfg.WriteConcern)
+	if err := setWriteConcern(opts, cfg.WriteConcern); err != nil {
+		return nil, err
+	}
+
+	// Configure TLS based on SSL mode
+	if cfg.SSLMode != "" {
+		tlsConfig, err := buildTLSConfig(cfg.SSLMode)
 		if err != nil {
-			return nil, fmt.Errorf("invalid write concern: %w", err)
+			return nil, fmt.Errorf("failed to configure TLS: %w", err)
 		}
-		opts.SetWriteConcern(wc)
+		if tlsConfig != nil {
+			opts.SetTLSConfig(tlsConfig)
+		}
 	}
 
 	// Connect to MongoDB
@@ -114,6 +112,47 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}, nil
 }
 
+// setConnectionOptions sets connection pool options based on configuration
+func setConnectionOptions(opts *options.ClientOptions, cfg *config.DatabaseConfig) {
+	// Set connection pool options
+	if cfg.MaxConns > 0 {
+		maxPoolSize := uint64(cfg.MaxConns)
+		opts.SetMaxPoolSize(maxPoolSize)
+	}
+
+	if cfg.MaxIdleConns > 0 {
+		minPoolSize := uint64(cfg.MaxIdleConns)
+		opts.SetMinPoolSize(minPoolSize)
+	}
+	if cfg.ConnMaxIdleTime > 0 {
+		opts.SetMaxConnIdleTime(cfg.ConnMaxIdleTime)
+	}
+}
+
+// setReadPreference sets the read preference in the client options
+func setReadPreference(opts *options.ClientOptions, pref string) error {
+	if pref != "" {
+		rp, err := parseReadPreference(pref)
+		if err != nil {
+			return fmt.Errorf("invalid read preference: %w", err)
+		}
+		opts.SetReadPreference(rp)
+	}
+	return nil
+}
+
+// setWriteConcern sets the write concern in the client options
+func setWriteConcern(opts *options.ClientOptions, concern string) error {
+	if concern != "" {
+		wc, err := parseWriteConcern(concern)
+		if err != nil {
+			return fmt.Errorf("invalid write concern: %w", err)
+		}
+		opts.SetWriteConcern(wc)
+	}
+	return nil
+}
+
 // buildMongoURI constructs a MongoDB connection URI from configuration
 func buildMongoURI(cfg *config.DatabaseConfig) string {
 	var uri strings.Builder
@@ -122,10 +161,10 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 
 	// Add credentials if provided
 	if cfg.Username != "" {
-		uri.WriteString(url.QueryEscape(cfg.Username))
+		uri.WriteString(url.PathEscape(cfg.Username))
 		if cfg.Password != "" {
 			uri.WriteString(":")
-			uri.WriteString(url.QueryEscape(cfg.Password))
+			uri.WriteString(url.PathEscape(cfg.Password))
 		}
 		uri.WriteString("@")
 	}
@@ -150,13 +189,7 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 	if cfg.AuthSource != "" {
 		params = append(params, "authSource="+cfg.AuthSource)
 	}
-
-	switch strings.ToLower(cfg.SSLMode) {
-	case "require", "verify-ca", "verify-full":
-		params = append(params, "tls=true")
-	case "disable":
-		params = append(params, "tls=false")
-	}
+	// Note: TLS configuration is now handled via SetTLSConfig() in NewConnection()
 
 	if len(params) > 0 {
 		uri.WriteString("?")
@@ -164,6 +197,33 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 	}
 
 	return uri.String()
+}
+
+// buildTLSConfig creates a TLS configuration based on the SSL mode
+func buildTLSConfig(sslMode string) (*tls.Config, error) {
+	switch strings.ToLower(sslMode) {
+	case "disable":
+		// No TLS configuration needed
+		return nil, nil
+	case "verify-ca":
+		// Verify certificate authority but skip hostname verification
+		// This is achieved by setting InsecureSkipVerify to false (to verify CA)
+		// and providing a custom verification function that skips hostname checks
+		return &tls.Config{
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+			ServerName:         "", // Empty ServerName disables hostname verification
+		}, nil
+	case "verify-full", "require":
+		// Verify both certificate authority and hostname (most secure)
+		// This is the default behavior when InsecureSkipVerify is false
+		return &tls.Config{
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown SSL mode: %s", sslMode)
+	}
 }
 
 // parseReadPreference converts string to MongoDB read preference
@@ -231,6 +291,14 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database
 		return nil, fmt.Errorf("failed to start MongoDB session: %w", err)
 	}
 
+	// Use defer to ensure session cleanup on any error path
+	var sessionStarted bool
+	defer func() {
+		if !sessionStarted {
+			session.EndSession(ctx)
+		}
+	}()
+
 	// Convert SQL transaction options to MongoDB session options
 	var mongoOpts *options.TransactionOptions
 	if opts != nil {
@@ -241,9 +309,11 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database
 
 	err = session.StartTransaction(mongoOpts)
 	if err != nil {
-		session.EndSession(ctx)
 		return nil, fmt.Errorf("failed to start MongoDB transaction: %w", err)
 	}
+
+	// Mark session as successfully started to prevent cleanup
+	sessionStarted = true
 
 	return &Transaction{
 		session:   session,

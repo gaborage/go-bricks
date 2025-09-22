@@ -146,10 +146,34 @@ func (b *Builder) WhereNor(filters ...bson.M) *Builder {
 
 // WhereNot adds a NOT condition
 func (b *Builder) WhereNot(filter bson.M) *Builder {
-	// Apply $not to each field in the filter
-	for field, condition := range filter {
-		b.match[field] = bson.M{"$not": condition}
+	// If the filter contains operator keys (e.g., $or/$and), negate the whole filter via $nor
+	hasOp := false
+	for k := range filter {
+		if k != "" && k[0] == '$' {
+			hasOp = true
+			break
+		}
 	}
+
+	if hasOp {
+		if existing, ok := b.match["$nor"].([]bson.M); ok {
+			b.match["$nor"] = append(existing, filter)
+		} else {
+			b.match["$nor"] = []bson.M{filter}
+		}
+		return b
+	}
+
+	// Field-wise negation: wrap operator documents with $not; turn equality into $ne
+	for field, condition := range filter {
+		switch cond := condition.(type) {
+		case bson.M, bson.D:
+			b.addFieldCondition(field, "$not", cond)
+		default:
+			b.addFieldCondition(field, "$ne", condition)
+		}
+	}
+
 	return b
 }
 

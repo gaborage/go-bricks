@@ -553,9 +553,24 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 			expected: func() *int32 { v := int32(3600); return &v }(),
 		},
 		{
+			name:     "int32 negative value (should be rejected)",
+			input:    int32(-1),
+			expected: nil,
+		},
+		{
+			name:     "int32 zero value",
+			input:    int32(0),
+			expected: func() *int32 { v := int32(0); return &v }(),
+		},
+		{
 			name:     "int64 value in range",
 			input:    int64(7200),
 			expected: func() *int32 { v := int32(7200); return &v }(),
+		},
+		{
+			name:     "int64 negative value (should be rejected)",
+			input:    int64(-100),
+			expected: nil,
 		},
 		{
 			name:     "int64 value max int32",
@@ -563,9 +578,9 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 			expected: func() *int32 { v := int32(math.MaxInt32); return &v }(),
 		},
 		{
-			name:     "int64 value min int32",
+			name:     "int64 value min int32 (negative, should be rejected)",
 			input:    int64(math.MinInt32),
-			expected: func() *int32 { v := int32(math.MinInt32); return &v }(),
+			expected: nil,
 		},
 		{
 			name:     "int64 value out of range (too large)",
@@ -581,6 +596,11 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 			name:     "float64 value",
 			input:    float64(1800.0),
 			expected: func() *int32 { v := int32(1800); return &v }(),
+		},
+		{
+			name:     "float64 negative value (should be rejected)",
+			input:    float64(-123.5),
+			expected: nil,
 		},
 		{
 			name:     "float64 value with rounding",
@@ -603,9 +623,19 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 			expected: func() *int32 { v := int32(900); return &v }(),
 		},
 		{
+			name:     "json.Number negative integer (should be rejected)",
+			input:    json.Number("-500"),
+			expected: nil,
+		},
+		{
 			name:     "json.Number as float",
 			input:    json.Number("900.7"),
 			expected: func() *int32 { v := int32(901); return &v }(),
+		},
+		{
+			name:     "json.Number negative float (should be rejected)",
+			input:    json.Number("-123.7"),
+			expected: nil,
 		},
 		{
 			name:     "json.Number invalid",

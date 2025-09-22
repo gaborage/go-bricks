@@ -200,7 +200,12 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		// Build conflict resolution
 		conflictClause := "ON CONFLICT (" + strings.Join(conflictColumns, ", ") + ") DO UPDATE SET "
 		var setParts []string
-		for col := range updateColumns {
+		updateCols := make([]string, 0, len(updateColumns))
+		for c := range updateColumns {
+			updateCols = append(updateCols, c)
+		}
+		sort.Strings(updateCols)
+		for _, col := range updateCols {
 			setParts = append(setParts, col+" = EXCLUDED."+col)
 		}
 		conflictClause += strings.Join(setParts, ", ")
