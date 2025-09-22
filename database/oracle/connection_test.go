@@ -17,6 +17,12 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	oraclePingErrorMsg = "failed to ping Oracle database"
+	selectQuery        = "SELECT name FROM dual WHERE id = :1"
+	insertQuery        = "INSERT INTO dual(id, name) VALUES (:1, :2)"
+)
+
 func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -120,7 +126,7 @@ func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 
 	// We expect an error because the database doesn't exist, but the error should be connection-related, not config-related
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
 
 func TestConnectionNewConnectionWithServiceName(t *testing.T) {
@@ -130,7 +136,7 @@ func TestConnectionNewConnectionWithServiceName(t *testing.T) {
 		Port:            1521,
 		Username:        "testuser",
 		Password:        "testpass",
-		ServiceName:     "XEPDB1",
+		Service:         config.ServiceConfig{Name: "XEPDB1"},
 		MaxConns:        25,
 		MaxIdleConns:    10,
 		ConnMaxLifetime: time.Hour,
@@ -144,7 +150,7 @@ func TestConnectionNewConnectionWithServiceName(t *testing.T) {
 
 	// We expect an error because the database doesn't exist
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
 
 func TestConnectionNewConnectionWithSID(t *testing.T) {
@@ -168,7 +174,7 @@ func TestConnectionNewConnectionWithSID(t *testing.T) {
 
 	// We expect an error because the database doesn't exist
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
 
 func TestConnectionNewConnectionWithDatabase(t *testing.T) {
@@ -192,7 +198,7 @@ func TestConnectionNewConnectionWithDatabase(t *testing.T) {
 
 	// We expect an error because the database doesn't exist
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping Oracle database")
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
 }
 
 func TestConnectionNewConnectionSuccess(t *testing.T) {
@@ -214,7 +220,7 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 		Port:            1521,
 		Username:        "stub",
 		Password:        "secret",
-		ServiceName:     "XEPDB1",
+		Service:         config.ServiceConfig{Name: "XEPDB1"},
 		MaxConns:        4,
 		MaxIdleConns:    2,
 		ConnMaxLifetime: 45 * time.Second,
@@ -294,12 +300,12 @@ func TestOracleStatementQueryAndQueryRow(t *testing.T) {
 	rows.Close()
 	require.NoError(t, ps.Close())
 
-	mock.ExpectPrepare(regexp.QuoteMeta("SELECT name FROM dual WHERE id = :1")).
+	mock.ExpectPrepare(regexp.QuoteMeta(selectQuery)).
 		ExpectQuery().
 		WithArgs(5).
 		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("beta"))
 
-	stmtRow, err := db.PrepareContext(context.Background(), "SELECT name FROM dual WHERE id = :1")
+	stmtRow, err := db.PrepareContext(context.Background(), selectQuery)
 	require.NoError(t, err)
 	psRow := &Statement{stmt: stmtRow}
 
@@ -329,11 +335,11 @@ func TestOracleTransactionQueryPrepareExec(t *testing.T) {
 	require.NoError(t, err)
 	rows.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM dual WHERE id = :1")).
+	mock.ExpectQuery(regexp.QuoteMeta(selectQuery)).
 		WithArgs(11).
 		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("gamma"))
 
-	row := trx.QueryRow(context.Background(), "SELECT name FROM dual WHERE id = :1", 11)
+	row := trx.QueryRow(context.Background(), selectQuery, 11)
 	var name string
 	require.NoError(t, row.Scan(&name))
 	assert.Equal(t, "gamma", name)
@@ -345,12 +351,12 @@ func TestOracleTransactionQueryPrepareExec(t *testing.T) {
 	_, err = trx.Exec(context.Background(), "UPDATE dual SET name = :1 WHERE id = :2", "delta", 11)
 	require.NoError(t, err)
 
-	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO dual(id, name) VALUES (:1, :2)"))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO dual(id, name) VALUES (:1, :2)")).
+	mock.ExpectPrepare(regexp.QuoteMeta(insertQuery))
+	mock.ExpectExec(regexp.QuoteMeta(insertQuery)).
 		WithArgs(12, "epsilon").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	stmt, err := trx.Prepare(context.Background(), "INSERT INTO dual(id, name) VALUES (:1, :2)")
+	stmt, err := trx.Prepare(context.Background(), insertQuery)
 	require.NoError(t, err)
 	_, err = stmt.Exec(context.Background(), 12, "epsilon")
 	require.NoError(t, err)

@@ -20,10 +20,10 @@ const (
 func TestValidateValidConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      testAppName,
-			Version:   testAppVersion,
-			Env:       EnvDevelopment,
-			RateLimit: 100,
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
 			Port:         8080,
@@ -55,37 +55,37 @@ func TestValidateAppSuccess(t *testing.T) {
 		{
 			name: "development_environment",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 		},
 		{
 			name: "staging_environment",
 			cfg: AppConfig{
-				Name:      "staging-app",
-				Version:   "v2.0.0",
-				Env:       EnvStaging,
-				RateLimit: 200,
+				Name:    "staging-app",
+				Version: "v2.0.0",
+				Env:     EnvStaging,
+				Rate:    RateConfig{Limit: 200},
 			},
 		},
 		{
 			name: "production_environment",
 			cfg: AppConfig{
-				Name:      "prod-app",
-				Version:   "v3.0.0",
-				Env:       EnvProduction,
-				RateLimit: 500,
+				Name:    "prod-app",
+				Version: "v3.0.0",
+				Env:     EnvProduction,
+				Rate:    RateConfig{Limit: 500},
 			},
 		},
 		{
 			name: "minimum_rate_limit",
 			cfg: AppConfig{
-				Name:      "min-app",
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 1,
+				Name:    "min-app",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 1},
 			},
 		},
 	}
@@ -107,50 +107,50 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "empty_name",
 			cfg: AppConfig{
-				Name:      "",
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    "",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "app name is required",
 		},
 		{
 			name: "empty_version",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   "",
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: "",
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "app version is required",
 		},
 		{
 			name: "invalid_environment",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       "invalid",
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "invalid",
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "invalid environment: invalid",
 		},
 		{
 			name: "zero_rate_limit",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 0,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 0},
 			},
 			expectedError: "rate limit must be positive",
 		},
 		{
 			name: "negative_rate_limit",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: -1,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: -1},
 			},
 			expectedError: "rate limit must be positive",
 		},
@@ -542,10 +542,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "app_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      "",
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    "",
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -568,10 +568,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "server_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         0,
@@ -594,10 +594,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "database_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -620,10 +620,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "log_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -950,10 +950,10 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 func TestValidateDatabaseDisabledConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      testAppName,
-			Version:   testAppVersion,
-			Env:       EnvDevelopment,
-			RateLimit: 100,
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
 			Port:         8080,

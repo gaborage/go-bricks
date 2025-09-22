@@ -69,7 +69,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.version":    "v1.0.0",
 		"app.env":        EnvDevelopment,
 		"app.debug":      false,
-		"app.rate_limit": 100,
+		"app.rate.limit": 100,
 		"app.namespace":  "default",
 
 		"server.host":               "0.0.0.0",

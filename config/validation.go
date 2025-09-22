@@ -66,7 +66,7 @@ func validateApp(cfg *AppConfig) error {
 			cfg.Env, strings.Join(validEnvs, ", "))
 	}
 
-	if cfg.RateLimit <= 0 {
+	if cfg.Rate.Limit <= 0 {
 		return fmt.Errorf("rate limit must be positive")
 	}
 

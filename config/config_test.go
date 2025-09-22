@@ -34,7 +34,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, appVersion, cfg.App.Version)
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 	assert.False(t, cfg.App.Debug)
-	assert.Equal(t, 100, cfg.App.RateLimit)
+	assert.Equal(t, 100, cfg.App.Rate.Limit)
 	assert.Equal(t, "default", cfg.App.Namespace)
 
 	assert.Equal(t, serverHost, cfg.Server.Host)
@@ -184,7 +184,7 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, appVersion, k.String("app.version"))
 	assert.Equal(t, EnvDevelopment, k.String("app.env"))
 	assert.False(t, k.Bool("app.debug"))
-	assert.Equal(t, 100, k.Int("app.rate_limit"))
+	assert.Equal(t, 100, k.Int("app.rate.limit"))
 
 	assert.Equal(t, serverHost, k.String("server.host"))
 	assert.Equal(t, 8080, k.Int("server.port"))
