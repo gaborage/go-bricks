@@ -134,13 +134,13 @@ func MockProduct(id, name string, price float64) bson.D {
 
 // Test namespace helpers
 
-// TestNamespace creates a consistent namespace for test operations
-func TestNamespace(collection string) string {
+// CreateTestNamespace creates a consistent namespace for test operations
+func CreateTestNamespace(collection string) string {
 	return "test." + collection
 }
 
-// TestDatabase returns the standard test database name
-func TestDatabase() string {
+// GetTestDatabase returns the standard test database name
+func GetTestDatabase() string {
 	return "test"
 }
 

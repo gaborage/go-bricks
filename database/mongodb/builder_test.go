@@ -824,7 +824,7 @@ func TestBuilderIntegrationWithMongoDB(t *testing.T) {
 			MockProductFromTestData(TestProducts[0]),
 			MockProductFromTestData(TestProducts[1]),
 		}
-		mt.AddMockResponses(MockFindResponse(TestNamespace("products"), productDocs...))
+		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("products"), productDocs...))
 
 		// Execute query
 		filter := builder.ToFilter()
@@ -858,7 +858,7 @@ func TestBuilderIntegrationWithMongoDB(t *testing.T) {
 			MockOrderFromTestData(TestOrders[0]),
 			MockOrderFromTestData(TestOrders[1]),
 		}
-		mt.AddMockResponses(MockFindResponse(TestNamespace("orders"), aggregateResults...))
+		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("orders"), aggregateResults...))
 
 		// Execute aggregation
 		pipeline := builder.ToPipeline()
@@ -912,7 +912,7 @@ func TestBuilderIntegrationWithMongoDB(t *testing.T) {
 			WhereGte("created_at", TestDate)
 
 		// Mock count response
-		mt.AddMockResponses(MockCountResponse(TestNamespace("orders"), 42))
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("orders"), 42))
 
 		// Execute count
 		filter := builder.ToFilter()
@@ -1141,6 +1141,73 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 		filter := builder.ToFilter()
 		norConditions := filter[NorOp].([]bson.M)
 		assert.Len(t, norConditions, 2)
+	})
+
+	t.Run("WhereNot with multi-operator field conditions", func(t *testing.T) {
+		// Test NOT with multi-operator field conditions (should use $nor with split predicates)
+		builder := NewBuilder().WhereNot(bson.M{
+			"price": bson.M{
+				"$gt": 10,
+				"$lt": 100,
+			},
+		})
+
+		filter := builder.ToFilter()
+		assert.Contains(t, filter, NorOp)
+		norConditions := filter[NorOp].([]bson.M)
+		assert.Len(t, norConditions, 2)
+
+		// Verify the split predicates
+		expectedPredicates := []bson.M{
+			{"price": bson.M{"$gt": 10}},
+			{"price": bson.M{"$lt": 100}},
+		}
+		assert.ElementsMatch(t, expectedPredicates, norConditions)
+	})
+
+	t.Run("WhereNot with single-operator field conditions", func(t *testing.T) {
+		// Test NOT with single-operator field conditions (should use $not)
+		builder := NewBuilder().WhereNot(bson.M{
+			"status": bson.M{"$in": []string{"active", "pending"}},
+		})
+
+		filter := builder.ToFilter()
+		assert.Equal(t, bson.M{
+			"status": bson.M{
+				"$not": bson.M{"$in": []string{"active", "pending"}},
+			},
+		}, filter)
+	})
+
+	t.Run("WhereNot with mixed multi and single operator conditions", func(t *testing.T) {
+		// Test NOT with both multi-operator and single-operator fields
+		builder := NewBuilder().WhereNot(bson.M{
+			"price": bson.M{
+				"$gt":  10,
+				"$lte": 100,
+			},
+			"status": bson.M{"$ne": "deleted"},
+			"name":   "test",
+		})
+
+		filter := builder.ToFilter()
+		assert.Contains(t, filter, NorOp)
+		assert.Contains(t, filter, "status")
+		assert.Contains(t, filter, "name")
+
+		// Multi-operator field should be split into $nor predicates
+		norConditions := filter[NorOp].([]bson.M)
+		assert.Len(t, norConditions, 2)
+		expectedPredicates := []bson.M{
+			{"price": bson.M{"$gt": 10}},
+			{"price": bson.M{"$lte": 100}},
+		}
+		assert.ElementsMatch(t, expectedPredicates, norConditions)
+
+		// Single-operator field should use $not
+		assert.Equal(t, bson.M{"$not": bson.M{"$ne": "deleted"}}, filter["status"])
+		// Simple equality should use $ne
+		assert.Equal(t, bson.M{"$ne": "test"}, filter["name"])
 	})
 
 	t.Run("empty logical operators", func(t *testing.T) {

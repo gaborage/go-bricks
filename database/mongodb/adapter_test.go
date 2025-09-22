@@ -381,7 +381,7 @@ func TestCollectionFindOne(t *testing.T) {
 
 		// Mock find response using helper
 		userDoc := MockUser("507f1f77bcf86cd799439011", "test")
-		mt.AddMockResponses(MockFindResponse(TestNamespace("test_collection"), userDoc))
+		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("test_collection"), userDoc))
 
 		filter := bson.M{"name": "test"}
 		result := collection.FindOne(context.Background(), filter, nil)
@@ -441,7 +441,7 @@ func TestCollectionCountDocuments(t *testing.T) {
 		collection := conn.Collection("test_collection")
 
 		// Mock count response using helper (CountDocuments uses aggregation internally)
-		mt.AddMockResponses(MockCountResponse(TestNamespace("test_collection"), 5))
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 5))
 
 		filter := bson.M{"status": "active"}
 		count, err := collection.CountDocuments(context.Background(), filter, nil)

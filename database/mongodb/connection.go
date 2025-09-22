@@ -48,69 +48,27 @@ const (
 	defaultConnectionTimeout = 10 * time.Second
 )
 
+// ConnectionBuilder helps build MongoDB client options step by step
+type ConnectionBuilder struct {
+	config *config.DatabaseConfig
+	logger logger.Logger
+}
+
 // NewConnection creates a new MongoDB connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
-	defer cancel()
+	builder := &ConnectionBuilder{config: cfg, logger: log}
 
-	// Build connection options
-	opts := options.Client()
-
-	// Set URI
-	if cfg.ConnectionString != "" {
-		opts.ApplyURI(cfg.ConnectionString)
-	} else {
-		uri := buildMongoURI(cfg)
-		opts.ApplyURI(uri)
-	}
-
-	// Set connection pool options
-	setConnectionOptions(opts, cfg)
-
-	// Set read preference
-	if err := setReadPreference(opts, cfg.ReadPreference); err != nil {
-		return nil, err
-	}
-
-	// Set write concern
-	if err := setWriteConcern(opts, cfg.WriteConcern); err != nil {
-		return nil, err
-	}
-
-	// Configure TLS based on SSL mode
-	if cfg.SSLMode != "" {
-		tlsConfig, err := buildTLSConfig(cfg.SSLMode)
-		if err != nil {
-			return nil, fmt.Errorf("failed to configure TLS: %w", err)
-		}
-		if tlsConfig != nil {
-			opts.SetTLSConfig(tlsConfig)
-		}
-	}
-
-	// Connect to MongoDB
-	client, err := connectMongoDB(ctx, opts)
+	opts, err := builder.buildConnectionOptions()
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
+		return nil, err
 	}
 
-	// Test connection
-	if err := pingMongoDB(ctx, client); err != nil {
-		if closeErr := client.Disconnect(ctx); closeErr != nil {
-			log.Error().Err(closeErr).Msg("Failed to disconnect MongoDB client after ping failure")
-		}
-		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
+	client, mongoDB, err := builder.connectAndValidate(opts)
+	if err != nil {
+		return nil, err
 	}
 
-	// Get database
-	mongoDB := client.Database(cfg.Database)
-
-	log.Info().
-		Str("host", cfg.Host).
-		Int("port", cfg.Port).
-		Str("database", cfg.Database).
-		Str("replica_set", cfg.ReplicaSet).
-		Msg("Connected to MongoDB")
+	builder.logConnection()
 
 	return &Connection{
 		client:   client,
@@ -118,6 +76,124 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		config:   cfg,
 		logger:   log,
 	}, nil
+}
+
+// buildConnectionOptions creates and configures MongoDB client options
+func (cb *ConnectionBuilder) buildConnectionOptions() (*options.ClientOptions, error) {
+	opts := options.Client()
+
+	// Configure URI
+	cb.configureURI(opts)
+
+	// Configure connection pool
+	setConnectionOptions(opts, cb.config)
+
+	// Configure read preference
+	if err := setReadPreference(opts, cb.config.ReadPreference); err != nil {
+		return nil, err
+	}
+
+	// Configure write concern
+	if err := setWriteConcern(opts, cb.config.WriteConcern); err != nil {
+		return nil, err
+	}
+
+	// Configure TLS
+	if err := cb.configureTLS(opts); err != nil {
+		return nil, err
+	}
+
+	return opts, nil
+}
+
+// configureURI sets the connection URI in client options
+func (cb *ConnectionBuilder) configureURI(opts *options.ClientOptions) {
+	if cb.config.ConnectionString != "" {
+		opts.ApplyURI(cb.config.ConnectionString)
+	} else {
+		uri := buildMongoURI(cb.config)
+		opts.ApplyURI(uri)
+	}
+}
+
+// configureTLS sets up TLS configuration if SSL mode is specified
+func (cb *ConnectionBuilder) configureTLS(opts *options.ClientOptions) error {
+	if cb.config.SSLMode == "" {
+		return nil
+	}
+
+	tlsConfig, err := buildTLSConfig(cb.config.SSLMode)
+	if err != nil {
+		return fmt.Errorf("failed to configure TLS: %w", err)
+	}
+
+	if tlsConfig != nil {
+		opts.SetTLSConfig(tlsConfig)
+	}
+
+	return nil
+}
+
+// connectAndValidate establishes connection and validates it
+func (cb *ConnectionBuilder) connectAndValidate(opts *options.ClientOptions) (*mongo.Client, *mongo.Database, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
+	defer cancel()
+
+	client, err := connectMongoDB(ctx, opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
+	}
+
+	if err := cb.validateConnection(ctx, client); err != nil {
+		cb.cleanupFailedConnection(ctx, client)
+		return nil, nil, err
+	}
+
+	mongoDB := client.Database(cb.resolveDatabase())
+
+	return client, mongoDB, nil
+}
+
+// validateConnection tests the MongoDB connection
+func (cb *ConnectionBuilder) validateConnection(ctx context.Context, client *mongo.Client) error {
+	if err := pingMongoDB(ctx, client); err != nil {
+		return fmt.Errorf("failed to ping MongoDB: %w", err)
+	}
+	return nil
+}
+
+// cleanupFailedConnection safely disconnects client on failure
+func (cb *ConnectionBuilder) cleanupFailedConnection(ctx context.Context, client *mongo.Client) {
+	if closeErr := client.Disconnect(ctx); closeErr != nil {
+		cb.logger.Error().Err(closeErr).Msg("Failed to disconnect MongoDB client after ping failure")
+	}
+}
+
+// resolveDatabase determines the database name from config or connection string
+func (cb *ConnectionBuilder) resolveDatabase() string {
+	if cb.config.Database != "" {
+		return cb.config.Database
+	}
+
+	if cb.config.ConnectionString != "" {
+		if u, err := url.Parse(cb.config.ConnectionString); err == nil {
+			if p := strings.TrimPrefix(u.Path, "/"); p != "" {
+				return p
+			}
+		}
+	}
+
+	return ""
+}
+
+// logConnection logs successful connection information
+func (cb *ConnectionBuilder) logConnection() {
+	cb.logger.Info().
+		Str("host", cb.config.Host).
+		Int("port", cb.config.Port).
+		Str("database", cb.config.Database).
+		Str("replica_set", cb.config.ReplicaSet).
+		Msg("Connected to MongoDB")
 }
 
 // setConnectionOptions sets connection pool options based on configuration
@@ -128,10 +204,6 @@ func setConnectionOptions(opts *options.ClientOptions, cfg *config.DatabaseConfi
 		opts.SetMaxPoolSize(maxPoolSize)
 	}
 
-	if cfg.MaxIdleConns > 0 {
-		minPoolSize := uint64(cfg.MaxIdleConns)
-		opts.SetMinPoolSize(minPoolSize)
-	}
 	if cfg.ConnMaxIdleTime > 0 {
 		opts.SetMaxConnIdleTime(cfg.ConnMaxIdleTime)
 	}
@@ -271,18 +343,18 @@ func parseWriteConcern(concern string) (*writeconcern.WriteConcern, error) {
 }
 
 // Query executes a MongoDB query (not applicable for document databases)
-func (c *Connection) Query(_ context.Context, _ string, _ ...interface{}) (*sql.Rows, error) {
+func (c *Connection) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
 	return nil, fmt.Errorf("SQL query operations not supported for MongoDB")
 }
 
 // QueryRow executes a MongoDB query returning a single row (not applicable)
-func (c *Connection) QueryRow(_ context.Context, _ string, _ ...interface{}) *sql.Row {
+func (c *Connection) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
 	// MongoDB doesn't support SQL queries, this is for interface compatibility
 	return nil
 }
 
 // Exec executes a MongoDB command (not applicable for document databases)
-func (c *Connection) Exec(_ context.Context, _ string, _ ...interface{}) (sql.Result, error) {
+func (c *Connection) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) {
 	return nil, fmt.Errorf("SQL exec operations not supported for MongoDB")
 }
 
@@ -341,26 +413,26 @@ func (c *Connection) Health(ctx context.Context) error {
 }
 
 // Stats returns MongoDB connection statistics
-func (c *Connection) Stats() (map[string]interface{}, error) {
+func (c *Connection) Stats() (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stats := make(map[string]interface{})
+	stats := make(map[string]any)
 
 	// Get server status
-	var serverStatus map[string]interface{}
-	err := c.database.RunCommand(ctx, map[string]interface{}{"serverStatus": 1}).Decode(&serverStatus)
+	var serverStatus map[string]any
+	err := c.database.RunCommand(ctx, map[string]any{"serverStatus": 1}).Decode(&serverStatus)
 	if err != nil {
 		c.logger.Warn().Err(err).Msg("Failed to get MongoDB server status")
 	} else {
-		if connections, ok := serverStatus["connections"].(map[string]interface{}); ok {
+		if connections, ok := serverStatus["connections"].(map[string]any); ok {
 			stats["connections"] = connections
 		}
 	}
 
 	// Get database stats
-	var dbStats map[string]interface{}
-	err = c.database.RunCommand(ctx, map[string]interface{}{"dbStats": 1}).Decode(&dbStats)
+	var dbStats map[string]any
+	err = c.database.RunCommand(ctx, map[string]any{"dbStats": 1}).Decode(&dbStats)
 	if err != nil {
 		c.logger.Warn().Err(err).Msg("Failed to get MongoDB database stats")
 	} else {
@@ -399,7 +471,7 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 	collectionName := c.GetMigrationTable()
 
 	// Check if collection exists
-	collections, err := c.database.ListCollectionNames(ctx, map[string]interface{}{"name": collectionName})
+	collections, err := c.database.ListCollectionNames(ctx, map[string]any{"name": collectionName})
 	if err != nil {
 		return fmt.Errorf("failed to list collections: %w", err)
 	}
@@ -411,20 +483,20 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 
 	// Create collection with schema validation
 	opts := options.CreateCollection()
-	opts.SetValidator(map[string]interface{}{
-		"$jsonSchema": map[string]interface{}{
+	opts.SetValidator(map[string]any{
+		"$jsonSchema": map[string]any{
 			"bsonType": "object",
 			"required": []string{"version", "description", "applied_at"},
-			"properties": map[string]interface{}{
-				"version": map[string]interface{}{
+			"properties": map[string]any{
+				"version": map[string]any{
 					"bsonType":    "string",
 					"description": "Migration version identifier",
 				},
-				"description": map[string]interface{}{
+				"description": map[string]any{
 					"bsonType":    "string",
 					"description": "Migration description",
 				},
-				"applied_at": map[string]interface{}{
+				"applied_at": map[string]any{
 					"bsonType":    "date",
 					"description": "Timestamp when migration was applied",
 				},
@@ -439,7 +511,7 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 
 	// Create unique index on version
 	indexModel := mongo.IndexModel{
-		Keys:    map[string]interface{}{"version": 1},
+		Keys:    map[string]any{"version": 1},
 		Options: options.Index().SetUnique(true),
 	}
 

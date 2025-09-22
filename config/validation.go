@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -282,6 +283,12 @@ func validateMongoDBReadPreference(pref string) error {
 
 // validateMongoDBWriteConcern validates MongoDB write concern values
 func validateMongoDBWriteConcern(concern string) error {
+	// First, try to parse as a non-negative integer
+	if num, err := strconv.Atoi(concern); err == nil && num >= 0 {
+		return nil
+	}
+
+	// Check for valid textual concerns (case-insensitive)
 	validConcerns := []string{
 		"majority",
 		"acknowledged",
@@ -295,7 +302,7 @@ func validateMongoDBWriteConcern(concern string) error {
 		}
 	}
 
-	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged)", concern)
+	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged, or a non-negative integer)", concern)
 }
 
 // validateLog validates that cfg.Level is one of the supported log levels.

@@ -1316,7 +1316,13 @@ func TestValidateMongoDBWriteConcern(t *testing.T) {
 		{"invalid concern", "invalid", true},
 		{"empty string", "", true},
 		{"typo in majority", "majorty", true},
-		{"numeric string", "1", true},
+		{"numeric string 0", "0", false},
+		{"numeric string 1", "1", false},
+		{"numeric string 2", "2", false},
+		{"numeric string large", "100", false},
+		{"negative numeric string", "-1", true},
+		{"non-numeric string", "abc", true},
+		{"mixed alphanumeric", "1abc", true},
 	}
 
 	for _, tt := range tests {

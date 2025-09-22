@@ -652,7 +652,7 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 		require.NoError(mt, err)
 
 		// Mock that collection doesn't exist using helper
-		mt.AddMockResponses(MockEmptyCollectionList(TestDatabase()))
+		mt.AddMockResponses(MockEmptyCollectionList(GetTestDatabase()))
 
 		// Mock successful collection and index creation using helpers
 		mt.AddMockResponses(MockSuccessResponse())
@@ -689,7 +689,7 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 		require.NoError(mt, err)
 
 		// Mock that collection exists using helper
-		mt.AddMockResponses(MockCollectionExists(TestDatabase(), "schema_migrations"))
+		mt.AddMockResponses(MockCollectionExists(GetTestDatabase(), "schema_migrations"))
 
 		err = conn.CreateMigrationTable(context.Background())
 		assert.NoError(t, err) // Should not error if already exists
