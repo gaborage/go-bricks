@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -415,9 +416,7 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 	}
 
 	if options.Headers != nil {
-		for k, v := range options.Headers {
-			publishing.Headers[k] = v
-		}
+		maps.Copy(publishing.Headers, options.Headers)
 	}
 
 	// Inject trace headers using centralized trace package

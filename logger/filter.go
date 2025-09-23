@@ -5,8 +5,14 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"unsafe"
 
 	"github.com/rs/zerolog"
+)
+
+const (
+	// DefaultMaxDepth is the default maximum recursion depth for filtering
+	DefaultMaxDepth = 8
 )
 
 // FilterConfig defines the configuration for sensitive data filtering
@@ -69,6 +75,12 @@ func (f *SensitiveDataFilter) FilterString(key, value string) string {
 
 // FilterValue filters sensitive data from any values
 func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
+	visited := make(map[uintptr]struct{})
+	return f.filterValueWithProtection(key, value, visited, DefaultMaxDepth)
+}
+
+// filterValueWithProtection performs filtering with cycle detection and depth limiting
+func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, visited map[uintptr]struct{}, maxDepth int) any {
 	if f.isSensitiveField(key) {
 		return f.config.MaskValue
 	}
@@ -77,25 +89,30 @@ func (f *SensitiveDataFilter) FilterValue(key string, value any) any {
 		return nil
 	}
 
-	return f.filterByType(key, value)
+	// Check depth limit
+	if maxDepth <= 0 {
+		return value
+	}
+
+	return f.filterByTypeWithProtection(key, value, visited, maxDepth)
 }
 
-// filterByType dispatches to appropriate handler based on value type
-func (f *SensitiveDataFilter) filterByType(key string, value any) any {
+// filterByTypeWithProtection dispatches to appropriate handler with cycle detection
+func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, visited map[uintptr]struct{}, maxDepth int) any {
 	// Handle typed map first (most common case)
 	if m, ok := value.(map[string]any); ok {
-		return f.filterStringMap(m)
+		return f.filterStringMapWithProtection(m, visited, maxDepth)
 	}
 
 	rv := reflect.ValueOf(value)
 	switch rv.Kind() { //nolint:exhaustive // default case handles all other types
 	case reflect.Slice, reflect.Array:
-		return f.filterSliceOrArray(key, rv)
+		return f.filterSliceOrArrayWithProtection(key, rv, visited, maxDepth)
 	case reflect.Struct:
-		return f.filterStruct(value)
-	case reflect.Ptr:
+		return f.filterStructWithProtection(value, visited, maxDepth)
+	case reflect.Pointer:
 		if !rv.IsNil() && rv.Type().Elem().Kind() == reflect.Struct {
-			return f.filterStruct(value)
+			return f.filterStructWithProtection(value, visited, maxDepth)
 		}
 		return value
 	default:
@@ -104,31 +121,41 @@ func (f *SensitiveDataFilter) filterByType(key string, value any) any {
 	}
 }
 
-// filterStringMap handles map[string]any filtering
-func (f *SensitiveDataFilter) filterStringMap(m map[string]any) map[string]any {
+// filterStringMapWithProtection handles map[string]any filtering with cycle detection
+func (f *SensitiveDataFilter) filterStringMapWithProtection(m map[string]any, visited map[uintptr]struct{}, maxDepth int) map[string]any {
 	filtered := make(map[string]any, len(m))
 	for k, v := range m {
-		filtered[k] = f.FilterValue(k, v)
+		filtered[k] = f.filterValueWithProtection(k, v, visited, maxDepth-1)
 	}
 	return filtered
 }
 
-// filterSliceOrArray handles slice and array filtering
-func (f *SensitiveDataFilter) filterSliceOrArray(key string, rv reflect.Value) any {
+// filterSliceOrArrayWithProtection handles slice and array filtering with cycle detection
+func (f *SensitiveDataFilter) filterSliceOrArrayWithProtection(key string, rv reflect.Value, visited map[uintptr]struct{}, maxDepth int) any {
+	// Check if we can get a pointer to track this slice/array for cycles
+	if rv.CanAddr() {
+		ptr := uintptr(unsafe.Pointer(rv.UnsafeAddr()))
+		if _, exists := visited[ptr]; exists {
+			return rv.Interface() // Return original if cycle detected
+		}
+		visited[ptr] = struct{}{}
+		defer delete(visited, ptr)
+	}
+
 	length := rv.Len()
 	filtered := make([]any, length)
 	hasChanges := false
 
-	for i := 0; i < length; i++ {
+	for i := range length {
 		elemVal := rv.Index(i)
 		elem := elemVal.Interface()
 
 		var filteredElem any
 		if f.isStructType(elemVal.Type()) {
-			filteredElem = f.filterStruct(elem)
+			filteredElem = f.filterStructWithProtection(elem, visited, maxDepth-1)
 			hasChanges = true // Struct filtering always creates a map
 		} else {
-			filteredElem = f.FilterValue(key, elem)
+			filteredElem = f.filterValueWithProtection(key, elem, visited, maxDepth-1)
 			if filteredElem != elem {
 				hasChanges = true
 			}
@@ -146,7 +173,7 @@ func (f *SensitiveDataFilter) filterSliceOrArray(key string, rv reflect.Value) a
 
 // isStructType checks if a type is a struct or pointer to struct
 func (f *SensitiveDataFilter) isStructType(t reflect.Type) bool {
-	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct)
+	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct)
 }
 
 // FilterFields filters a map of fields for sensitive data
@@ -246,42 +273,77 @@ func (f *SensitiveDataFilter) buildMaskedURL(parsed *url.URL, username string) s
 
 // filterStruct filters sensitive fields in struct values using reflection
 func (f *SensitiveDataFilter) filterStruct(value any) any {
+	visited := make(map[uintptr]struct{})
+	return f.filterStructWithProtection(value, visited, DefaultMaxDepth)
+}
+
+// filterStructWithProtection filters sensitive fields with cycle detection and depth limiting
+func (f *SensitiveDataFilter) filterStructWithProtection(value any, visited map[uintptr]struct{}, maxDepth int) any {
 	if value == nil {
 		return nil
 	}
 
-	structVal, structType := f.extractStructValue(value)
+	// Check depth limit
+	if maxDepth <= 0 {
+		return value
+	}
+
+	structVal, structType, ptr := f.extractStructValueWithPointer(value)
 	if !structVal.IsValid() {
 		return value
 	}
 
-	return f.buildFilteredStructMap(structVal, structType)
+	// Check for cycles using the pointer
+	if ptr != 0 {
+		if _, exists := visited[ptr]; exists {
+			return value // Return original if cycle detected
+		}
+		visited[ptr] = struct{}{}
+		defer delete(visited, ptr)
+	}
+
+	return f.buildFilteredStructMapWithProtection(structVal, structType, visited, maxDepth)
 }
 
-// extractStructValue handles pointer dereferencing and validates struct type
-func (f *SensitiveDataFilter) extractStructValue(value any) (reflect.Value, reflect.Type) {
+// extractStructValueWithPointer handles pointer dereferencing and returns tracking pointer
+func (f *SensitiveDataFilter) extractStructValueWithPointer(value any) (reflect.Value, reflect.Type, uintptr) {
 	val := reflect.ValueOf(value)
 	typ := reflect.TypeOf(value)
+	var trackingPtr uintptr
 
-	// Handle pointer types
-	for typ.Kind() == reflect.Ptr {
+	// Handle pointer types and capture the first non-nil pointer for tracking
+	for typ.Kind() == reflect.Pointer {
 		if val.IsNil() {
-			return reflect.Value{}, nil
+			return reflect.Value{}, nil, 0
 		}
+
+		// Capture the pointer value for cycle detection on the first pointer
+		if trackingPtr == 0 && val.CanAddr() {
+			trackingPtr = val.Pointer()
+		} else if trackingPtr == 0 {
+			// If we can't get address, use the pointer value directly
+			trackingPtr = val.Pointer()
+		}
+
 		val = val.Elem()
 		typ = typ.Elem()
 	}
 
-	// Validate it's a struct
-	if typ.Kind() != reflect.Struct {
-		return reflect.Value{}, nil
+	// If we have a struct value that can be addressed and we haven't captured a pointer yet
+	if trackingPtr == 0 && val.CanAddr() {
+		trackingPtr = uintptr(unsafe.Pointer(val.UnsafeAddr()))
 	}
 
-	return val, typ
+	// Validate it's a struct
+	if typ.Kind() != reflect.Struct {
+		return reflect.Value{}, nil, 0
+	}
+
+	return val, typ, trackingPtr
 }
 
-// buildFilteredStructMap creates a map representation with filtered field values
-func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, structType reflect.Type) map[string]any {
+// buildFilteredStructMapWithProtection creates a map representation with cycle detection
+func (f *SensitiveDataFilter) buildFilteredStructMapWithProtection(structVal reflect.Value, structType reflect.Type, visited map[uintptr]struct{}, maxDepth int) map[string]any {
 	// Pre-allocate result map with capacity for all fields to reduce allocations
 	result := make(map[string]any, structVal.NumField())
 
@@ -305,7 +367,7 @@ func (f *SensitiveDataFilter) buildFilteredStructMap(structVal reflect.Value, st
 			continue
 		}
 
-		result[fieldName] = f.FilterValue(fieldName, fieldValue.Interface())
+		result[fieldName] = f.filterValueWithProtection(fieldName, fieldValue.Interface(), visited, maxDepth-1)
 	}
 
 	return result
