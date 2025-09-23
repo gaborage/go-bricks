@@ -37,6 +37,9 @@ const (
 )
 
 // MockDatabase implements the database.Interface for testing
+// Deprecated: Use github.com/gaborage/go-bricks/testing/mocks.MockDatabase instead
+// This internal mock will be removed in a future version.
+// For migration examples, see examples/testing/
 type MockDatabase struct {
 	mock.Mock
 }
@@ -150,6 +153,9 @@ func (m *MockTimeoutProvider) WithTimeout(parent context.Context, timeout time.D
 }
 
 // MockMessagingClient implements the messaging.Client for testing
+// Deprecated: Use github.com/gaborage/go-bricks/testing/mocks.MockMessagingClient or MockAMQPClient instead
+// This internal mock will be removed in a future version.
+// For migration examples, see examples/testing/
 type MockMessagingClient struct {
 	mock.Mock
 }
