@@ -23,49 +23,158 @@ const (
 	insertQuery        = "INSERT INTO dual(id, name) VALUES (:1, :2)"
 )
 
-func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
+type ConnectionTestData struct {
+	name          string
+	config        *config.DatabaseConfig
+	expectError   bool
+	errorContains string
+}
+
+// =============================================================================
+// Test Helper Functions
+// =============================================================================
+
+// setupMockConnection creates a mock database connection with logger for testing
+func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
-
 	c := &Connection{db: db, logger: logger.New("disabled", true)}
+	return db, mock, c
+}
+
+// createStandardPoolConfig returns a standard pool configuration for testing
+func createStandardPoolConfig() config.PoolConfig {
+	return config.PoolConfig{
+		Max: config.PoolMaxConfig{
+			Connections: 25,
+		},
+		Idle: config.PoolIdleConfig{
+			Connections: 10,
+			Time:        30 * time.Minute,
+		},
+		Lifetime: config.LifetimeConfig{
+			Max: time.Hour,
+		},
+	}
+}
+
+// createOracleConfig creates a test Oracle database configuration
+func createOracleConfig(connType, value string) *config.DatabaseConfig {
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Pool:     createStandardPoolConfig(),
+	}
+
+	switch connType {
+	case "connection_string":
+		cfg.ConnectionString = value
+		cfg.Host = ""
+		cfg.Port = 0
+		cfg.Username = ""
+		cfg.Password = ""
+	case "service_name":
+		cfg.Oracle = config.OracleConfig{
+			Service: config.ServiceConfig{Name: value},
+		}
+	case "sid":
+		cfg.Oracle = config.OracleConfig{
+			Service: config.ServiceConfig{SID: value},
+		}
+	case "database":
+		cfg.Database = value
+	}
+
+	return cfg
+}
+
+// testConnectionExpectedError tests that a connection attempt fails with expected error
+func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
+	log := logger.New("debug", true)
+	_, err := NewConnection(cfg, log)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+}
+
+// setupMockStatementOperations sets up common mock expectations for statement operations
+func setupMockStatementOperations(mock sqlmock.Sqlmock) {
+	// Health check
+	mock.ExpectPing()
+
+	// Basic Exec operation
+	mock.ExpectExec("INSERT INTO t").WithArgs("a").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Query operation
+	rows := sqlmock.NewRows([]string{"id"}).AddRow(1)
+	mock.ExpectQuery("SELECT id FROM t").WillReturnRows(rows)
+
+	// QueryRow operation
+	rows = sqlmock.NewRows([]string{"now"}).AddRow(time.Now())
+	mock.ExpectQuery("SELECT CURRENT_TIMESTAMP").WillReturnRows(rows)
+
+	// Prepare operation
+	mock.ExpectPrepare("UPDATE t SET x").ExpectExec().WithArgs("b", 1).WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+// setupMockTransactionOperations sets up common mock expectations for transaction operations
+func setupMockTransactionOperations(mock sqlmock.Sqlmock) {
+	// Begin + transaction query + commit
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT 1 FROM dual").WillReturnRows(sqlmock.NewRows([]string{"x"}).AddRow(1))
+	mock.ExpectCommit()
+
+	// BeginTx + rollback
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+}
+
+// setupMockMetaOperations sets up common mock expectations for metadata operations
+func setupMockMetaOperations(mock sqlmock.Sqlmock) {
+	// CreateMigrationTable expects two PL/SQL blocks
+	mock.ExpectExec("BEGIN").WillReturnResult(driver.RowsAffected(0))
+	mock.ExpectExec("BEGIN").WillReturnResult(driver.RowsAffected(0))
+
+	// Close operation
+	mock.ExpectClose()
+}
+
+func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
+	db, mock, c := setupMockConnection(t)
+	defer db.Close()
 
 	ctx := context.Background()
 
-	// Health
-	mock.ExpectPing()
+	// Set up all mock expectations
+	setupMockStatementOperations(mock)
+	setupMockTransactionOperations(mock)
+	setupMockMetaOperations(mock)
+
+	// Execute Health check
 	require.NoError(t, c.Health(ctx))
 
-	// Exec
-	mock.ExpectExec("INSERT INTO t").WithArgs("a").WillReturnResult(sqlmock.NewResult(1, 1))
-	_, err = c.Exec(ctx, "INSERT INTO t(x) VALUES(?)", "a")
+	// Execute Exec operation
+	_, err := c.Exec(ctx, "INSERT INTO t(x) VALUES(?)", "a")
 	require.NoError(t, err)
 
-	// Query
-	rows := sqlmock.NewRows([]string{"id"}).AddRow(1)
-	mock.ExpectQuery("SELECT id FROM t").WillReturnRows(rows)
+	// Execute Query operation
 	rs, err := c.Query(ctx, "SELECT id FROM t")
 	require.NoError(t, err)
 	assert.True(t, rs.Next())
 	_ = rs.Close()
 
-	// QueryRow
-	rows = sqlmock.NewRows([]string{"now"}).AddRow(time.Now())
-	mock.ExpectQuery("SELECT CURRENT_TIMESTAMP").WillReturnRows(rows)
+	// Execute QueryRow operation
 	_ = c.QueryRow(ctx, "SELECT CURRENT_TIMESTAMP")
 
-	// Prepare + Statement Exec
-	mock.ExpectPrepare("UPDATE t SET x").ExpectExec().WithArgs("b", 1).WillReturnResult(sqlmock.NewResult(0, 1))
+	// Execute Prepare + Statement operations
 	st, err := c.Prepare(ctx, "UPDATE t SET x=:1 WHERE id=:2")
 	require.NoError(t, err)
 	_, err = st.Exec(ctx, "b", 1)
 	require.NoError(t, err)
 	require.NoError(t, st.Close())
 
-	// Begin + Tx methods
-	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT 1 FROM dual").WillReturnRows(sqlmock.NewRows([]string{"x"}).AddRow(1))
-	mock.ExpectCommit()
+	// Execute transaction operations
 	tx, err := c.Begin(ctx)
 	require.NoError(t, err)
 	rs2, err := tx.Query(ctx, "SELECT 1 FROM dual")
@@ -73,34 +182,29 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	_ = rs2.Close()
 	require.NoError(t, tx.Commit())
 
-	// BeginTx + rollback
-	mock.ExpectBegin()
-	mock.ExpectRollback()
+	// Execute BeginTx + rollback
 	tx2, err := c.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault})
 	require.NoError(t, err)
 	require.NoError(t, tx2.Rollback())
 
-	// Stats
+	// Test Stats
 	m, err := c.Stats()
 	require.NoError(t, err)
 	assert.Contains(t, m, "max_open_connections")
 	assert.Contains(t, m, "open_connections")
 	assert.Contains(t, m, "wait_duration")
 
-	// Meta
+	// Test metadata methods
 	assert.Equal(t, "oracle", c.DatabaseType())
 	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
 
-	// CreateMigrationTable should run two Execs
-	mock.ExpectExec("BEGIN").WillReturnResult(driver.RowsAffected(0))
-	mock.ExpectExec("BEGIN").WillReturnResult(driver.RowsAffected(0))
+	// Test CreateMigrationTable
 	require.NoError(t, c.CreateMigrationTable(ctx))
 
-	// Close
-	mock.ExpectClose()
+	// Test Close
 	require.NoError(t, c.Close())
 
-	// Verify expectations
+	// Verify all expectations were met
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -109,96 +213,23 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 // =============================================================================
 
 func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
-	// Test configuration with connection string
-	cfg := &config.DatabaseConfig{
-		ConnectionString: "oracle://user:pass@localhost:1521/XE",
-		MaxConns:         25,
-		MaxIdleConns:     10,
-		ConnMaxLifetime:  time.Hour,
-		ConnMaxIdleTime:  30 * time.Minute,
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	// but we can test the configuration parsing part
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist, but the error should be connection-related, not config-related
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+	cfg := createOracleConfig("connection_string", "oracle://user:pass@localhost:1521/XE")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionWithServiceName(t *testing.T) {
-	// Test configuration with ServiceName
-	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		Service:         config.ServiceConfig{Name: "XEPDB1"},
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+	cfg := createOracleConfig("service_name", "XEPDB1")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionWithSID(t *testing.T) {
-	// Test configuration with SID
-	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		SID:             "XE",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+	cfg := createOracleConfig("sid", "XE")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionWithDatabase(t *testing.T) {
-	// Test configuration with Database (fallback when no ServiceName or SID)
-	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		Database:        "XE",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+	cfg := createOracleConfig("database", "XE")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionSuccess(t *testing.T) {
@@ -216,14 +247,26 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 	})
 
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "stub",
-		Password:        "secret",
-		Service:         config.ServiceConfig{Name: "XEPDB1"},
-		MaxConns:        4,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: 45 * time.Second,
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: "XEPDB1",
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -237,21 +280,16 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 }
 
 func TestConnectionCreateMigrationTable(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
-
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 
 	ctx := context.Background()
 
 	// Mock the CREATE TABLE execution (two PL/SQL blocks)
-	mock.ExpectExec(`BEGIN`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`BEGIN`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`BEGIN`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`BEGIN`).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err = c.CreateMigrationTable(ctx)
+	err := c.CreateMigrationTable(ctx)
 	assert.NoError(t, err)
 
 	// Verify all expectations were met
@@ -259,19 +297,15 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 }
 
 func TestConnectionCreateMigrationTableFirstError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
-
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 
 	ctx := context.Background()
 
 	// Mock the first PL/SQL block to fail
-	mock.ExpectExec(`BEGIN`).
-		WillReturnError(sql.ErrConnDone)
+	mock.ExpectExec(`BEGIN`).WillReturnError(sql.ErrConnDone)
 
-	err = c.CreateMigrationTable(ctx)
+	err := c.CreateMigrationTable(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to create Oracle migration table")
 
@@ -391,21 +425,16 @@ func TestOracleTransactionPrepareError(t *testing.T) {
 }
 
 func TestConnectionCreateMigrationTableSecondError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
-
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 
 	ctx := context.Background()
 
 	// Mock the first PL/SQL block to succeed, second to fail
-	mock.ExpectExec(`BEGIN`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`BEGIN`).
-		WillReturnError(sql.ErrTxDone)
+	mock.ExpectExec(`BEGIN`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`BEGIN`).WillReturnError(sql.ErrTxDone)
 
-	err = c.CreateMigrationTable(ctx)
+	err := c.CreateMigrationTable(ctx)
 	assert.Error(t, err)
 
 	// Verify all expectations were met
@@ -413,11 +442,9 @@ func TestConnectionCreateMigrationTableSecondError(t *testing.T) {
 }
 
 func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 	ctx := context.Background()
 
 	// Test Query error
@@ -444,16 +471,14 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 }
 
 func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 	ctx := context.Background()
 
 	// Test Begin error
 	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
-	_, err = c.Begin(ctx)
+	_, err := c.Begin(ctx)
 	assert.Error(t, err)
 
 	// Test BeginTx error
@@ -471,12 +496,9 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 }
 
 func TestConnectionMetadata(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 	mock.ExpectClose()
-
-	c := &Connection{db: db, logger: logger.New("disabled", true)}
 
 	assert.Equal(t, "oracle", c.DatabaseType())
 	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
@@ -486,12 +508,7 @@ func TestConnectionMetadata(t *testing.T) {
 func TestConnectionValidationIntegration(t *testing.T) {
 	log := logger.New("debug", true)
 
-	tests := []struct {
-		name          string
-		config        *config.DatabaseConfig
-		expectError   bool
-		errorContains string
-	}{
+	tests := []ConnectionTestData{
 		{
 			name: "valid config with service name should pass validation but fail connection",
 			config: &config.DatabaseConfig{
@@ -500,10 +517,14 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				Service:  config.ServiceConfig{Name: "XEPDB1"},
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						Name: "XEPDB1",
+					},
+				},
 			},
 			expectError:   true,
-			errorContains: oraclePingErrorMsg, // Connection fails, not validation
+			errorContains: oraclePingErrorMsg,
 		},
 		{
 			name: "valid config with SID should pass validation but fail connection",
@@ -513,7 +534,11 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				SID:      "XE",
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						SID: "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: oraclePingErrorMsg, // Connection fails, not validation
@@ -539,7 +564,6 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
 			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
@@ -552,8 +576,12 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				Service:  config.ServiceConfig{Name: "XEPDB1"},
-				SID:      "XE",
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						Name: "XEPDB1",
+						SID:  "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured",
@@ -571,9 +599,13 @@ func TestConnectionValidationIntegration(t *testing.T) {
 					Rate:    config.RateConfig{Limit: 100},
 				},
 				Server: config.ServerConfig{
-					Port:         8080,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 8080,
+					Timeout: config.TimeoutConfig{
+						Read:       15 * time.Second,
+						Write:      30 * time.Second,
+						Middleware: 5 * time.Second,
+						Shutdown:   10 * time.Second,
+					},
 				},
 				Database: *tt.config,
 				Log: config.LogConfig{

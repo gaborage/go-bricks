@@ -49,7 +49,7 @@ func Validate(cfg *Config) error {
 
 // validateApp validates the application configuration in cfg.
 // It requires Name and Version to be non-empty, Env to be one of
-// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be > 0.
+// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be non-negative.
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
@@ -70,6 +70,10 @@ func validateApp(cfg *AppConfig) error {
 		return fmt.Errorf("rate limit must be non-negative")
 	}
 
+	if cfg.Rate.Burst < 0 {
+		return fmt.Errorf("rate burst must be non-negative")
+	}
+
 	return nil
 }
 
@@ -78,12 +82,20 @@ func validateServer(cfg *ServerConfig) error {
 		return fmt.Errorf("invalid port: %d (must be 1-65535)", cfg.Port)
 	}
 
-	if cfg.ReadTimeout <= 0 {
+	if cfg.Timeout.Read <= 0 {
 		return fmt.Errorf("read timeout must be positive")
 	}
 
-	if cfg.WriteTimeout <= 0 {
+	if cfg.Timeout.Write <= 0 {
 		return fmt.Errorf("write timeout must be positive")
+	}
+
+	if cfg.Timeout.Middleware <= 0 {
+		return fmt.Errorf("middleware timeout must be positive")
+	}
+
+	if cfg.Timeout.Shutdown <= 0 {
+		return fmt.Errorf("shutdown timeout must be positive")
 	}
 
 	return nil
@@ -128,9 +140,9 @@ func validateDatabase(cfg *DatabaseConfig) error {
 // validateDatabaseWithConnectionString validates database settings when a connection
 // string is provided and applies defaults for query-related fields when zero.
 // It checks (and returns an error for) an explicit database Type that is not allowed,
-// an invalid optional Port, non-positive MaxConns, and negative values for
-// MaxQueryLength or SlowQueryThreshold. If MaxQueryLength or SlowQueryThreshold
-// are zero they are set to defaultMaxQueryLength and defaultSlowQueryThreshold,
+// an invalid optional Port, and negative values for Pool/Query fields.
+// Pool.Max.Connections defaults to 25 when 0; Query.Log.MaxLength and Query.Slow.Threshold
+// default to the respective constants when 0. Negative values are rejected.
 // respectively. The cfg argument is mutated for those default assignments.
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	if cfg.Type != "" {
@@ -206,30 +218,34 @@ func validateRequiredDatabasePort(port int) error {
 // applyDatabasePoolDefaults sets sensible defaults and validates database pool/query settings on cfg.
 //
 // It modifies cfg in-place:
-// - MaxConns: if 0, sets to 25; if negative, returns an error.
-// - MaxQueryLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
-// - SlowQueryThreshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
+// - Pool.Max.Connections: if 0, sets to 25; if negative, returns an error.
+// - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
+// - Query.Slow.Threshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
-	if cfg.MaxConns == 0 {
-		cfg.MaxConns = 25
-	} else if cfg.MaxConns < 0 {
-		return fmt.Errorf("max connections must be positive")
+	if cfg.Pool.Max.Connections == 0 {
+		cfg.Pool.Max.Connections = 25
+	} else if cfg.Pool.Max.Connections < 0 {
+		return fmt.Errorf("max connections must be non-negative")
 	}
 
-	if cfg.MaxQueryLength < 0 {
-		return fmt.Errorf("max query length must be zero or positive")
-	}
-	if cfg.MaxQueryLength == 0 {
-		cfg.MaxQueryLength = defaultMaxQueryLength
+	if cfg.Pool.Idle.Connections < 0 {
+		return fmt.Errorf("max idle connections must be non-negative")
 	}
 
-	if cfg.SlowQueryThreshold < 0 {
-		return fmt.Errorf("slow query threshold must be zero or positive")
+	if cfg.Query.Log.MaxLength < 0 {
+		return fmt.Errorf("max query length must be non-negative")
 	}
-	if cfg.SlowQueryThreshold == 0 {
-		cfg.SlowQueryThreshold = defaultSlowQueryThreshold
+	if cfg.Query.Log.MaxLength == 0 {
+		cfg.Query.Log.MaxLength = defaultMaxQueryLength
+	}
+
+	if cfg.Query.Slow.Threshold < 0 {
+		return fmt.Errorf("slow query threshold must be non-negative")
+	}
+	if cfg.Query.Slow.Threshold == 0 {
+		cfg.Query.Slow.Threshold = defaultSlowQueryThreshold
 	}
 
 	return nil
@@ -253,14 +269,14 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 
 // validateMongoDBFields validates MongoDB-specific configuration fields
 func validateMongoDBFields(cfg *DatabaseConfig) error {
-	if cfg.ReadPreference != "" {
-		if err := validateMongoDBReadPreference(cfg.ReadPreference); err != nil {
+	if cfg.Mongo.Replica.ReadPreference != "" {
+		if err := validateMongoDBReadPreference(cfg.Mongo.Replica.ReadPreference); err != nil {
 			return err
 		}
 	}
 
-	if cfg.WriteConcern != "" {
-		if err := validateMongoDBWriteConcern(cfg.WriteConcern); err != nil {
+	if cfg.Mongo.Concern.Write != "" {
+		if err := validateMongoDBWriteConcern(cfg.Mongo.Concern.Write); err != nil {
 			return err
 		}
 	}
@@ -313,8 +329,8 @@ func validateMongoDBWriteConcern(concern string) error {
 // It ensures that exactly one of Service.Name, SID, or Database is configured,
 // mirroring the DSN selection logic in database/oracle/connection.go.
 func validateOracleFields(cfg *DatabaseConfig) error {
-	serviceSet := cfg.Service.Name != ""
-	sidSet := cfg.SID != ""
+	serviceSet := cfg.Oracle.Service.Name != ""
+	sidSet := cfg.Oracle.Service.SID != ""
 	databaseSet := cfg.Database != ""
 
 	count := 0

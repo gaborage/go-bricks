@@ -44,25 +44,35 @@ func TestBuildMongoURI(t *testing.T) {
 		{
 			name: "with replica set",
 			config: &config.DatabaseConfig{
-				Host:       "localhost",
-				Port:       27017,
-				Database:   "testdb",
-				Username:   "user",
-				Password:   "pass",
-				ReplicaSet: "rs0",
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "user",
+				Password: "pass",
+				Mongo: config.MongoConfig{
+					Replica: config.ReplicaConfig{
+						Set: "rs0",
+					},
+				},
 			},
 			expected: "mongodb://user:pass@localhost:27017/testdb?replicaSet=rs0",
 		},
 		{
 			name: "with auth source and replica set",
 			config: &config.DatabaseConfig{
-				Host:       "localhost",
-				Port:       27017,
-				Database:   "testdb",
-				Username:   "user",
-				Password:   "pass",
-				ReplicaSet: "rs0",
-				AuthSource: "admin",
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "user",
+				Password: "pass",
+				Mongo: config.MongoConfig{
+					Replica: config.ReplicaConfig{
+						Set: "rs0",
+					},
+					Auth: config.AuthConfig{
+						Source: "admin",
+					},
+				},
 			},
 			expected: "mongodb://user:pass@localhost:27017/testdb?replicaSet=rs0&authSource=admin",
 		},
@@ -273,10 +283,14 @@ func TestNewConnectionConfigValidation(t *testing.T) {
 
 	t.Run("invalid read preference", func(t *testing.T) {
 		cfg := &config.DatabaseConfig{
-			Host:           "localhost",
-			Port:           27017,
-			Database:       "test",
-			ReadPreference: "invalid",
+			Host:     "localhost",
+			Port:     27017,
+			Database: "test",
+			Mongo: config.MongoConfig{
+				Replica: config.ReplicaConfig{
+					ReadPreference: "invalid",
+				},
+			},
 		}
 
 		_, err := NewConnection(cfg, log)
@@ -286,10 +300,14 @@ func TestNewConnectionConfigValidation(t *testing.T) {
 
 	t.Run("invalid write concern", func(t *testing.T) {
 		cfg := &config.DatabaseConfig{
-			Host:         "localhost",
-			Port:         27017,
-			Database:     "test",
-			WriteConcern: "invalid",
+			Host:     "localhost",
+			Port:     27017,
+			Database: "test",
+			Mongo: config.MongoConfig{
+				Concern: config.ConcernConfig{
+					Write: "invalid",
+				},
+			},
 		}
 
 		_, err := NewConnection(cfg, log)
@@ -438,7 +456,7 @@ func TestNewConnectionWithTLSModes(t *testing.T) {
 		for _, sslMode := range successfulModes {
 			t.Run(sslMode+" TLS", func(t *testing.T) {
 				cfg := DefaultTestConfig()
-				cfg.SSLMode = sslMode
+				cfg.TLS.Mode = sslMode
 
 				var capturedOptions *options.ClientOptions
 				restoreMocks := setupSuccessfulTLSMocks(&capturedOptions)
@@ -454,7 +472,7 @@ func TestNewConnectionWithTLSModes(t *testing.T) {
 
 	t.Run("invalid TLS mode", func(t *testing.T) {
 		cfg := DefaultTestConfig()
-		cfg.SSLMode = "invalid"
+		cfg.TLS.Mode = "invalid"
 
 		restoreMocks := setupFailingTLSMocks()
 		defer restoreMocks()
@@ -516,7 +534,11 @@ func TestSetConnectionOptions(t *testing.T) {
 			config: &config.DatabaseConfig{
 				Host:     "localhost",
 				Database: "test",
-				MaxConns: 100,
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: 100,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)
@@ -527,9 +549,13 @@ func TestSetConnectionOptions(t *testing.T) {
 		{
 			name: "max idle connections only",
 			config: &config.DatabaseConfig{
-				Host:         "localhost",
-				Database:     "test",
-				MaxIdleConns: 10,
+				Host:     "localhost",
+				Database: "test",
+				Pool: config.PoolConfig{
+					Idle: config.PoolIdleConfig{
+						Connections: 10,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)
@@ -538,9 +564,13 @@ func TestSetConnectionOptions(t *testing.T) {
 		{
 			name: "connection max idle time only",
 			config: &config.DatabaseConfig{
-				Host:            "localhost",
-				Database:        "test",
-				ConnMaxIdleTime: 5 * time.Minute,
+				Host:     "localhost",
+				Database: "test",
+				Pool: config.PoolConfig{
+					Idle: config.PoolIdleConfig{
+						Time: 5 * time.Minute,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)
@@ -549,11 +579,17 @@ func TestSetConnectionOptions(t *testing.T) {
 		{
 			name: "all connection options set",
 			config: &config.DatabaseConfig{
-				Host:            "localhost",
-				Database:        "test",
-				MaxConns:        50,
-				MaxIdleConns:    20,
-				ConnMaxIdleTime: 10 * time.Minute,
+				Host:     "localhost",
+				Database: "test",
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: 50,
+					},
+					Idle: config.PoolIdleConfig{
+						Connections: 20,
+						Time:        10 * time.Minute,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)
@@ -562,11 +598,17 @@ func TestSetConnectionOptions(t *testing.T) {
 		{
 			name: "zero values ignored",
 			config: &config.DatabaseConfig{
-				Host:            "localhost",
-				Database:        "test",
-				MaxConns:        0,
-				MaxIdleConns:    0,
-				ConnMaxIdleTime: 0,
+				Host:     "localhost",
+				Database: "test",
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: 0,
+					},
+					Idle: config.PoolIdleConfig{
+						Connections: 0,
+						Time:        0,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)
@@ -576,10 +618,17 @@ func TestSetConnectionOptions(t *testing.T) {
 		{
 			name: "negative values",
 			config: &config.DatabaseConfig{
-				Host:         "localhost",
-				Database:     "test",
-				MaxConns:     -1,
-				MaxIdleConns: -1,
+				Host:     "localhost",
+				Database: "test",
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: -1,
+					},
+					Idle: config.PoolIdleConfig{
+						Connections: -5,
+						Time:        -1,
+					},
+				},
 			},
 			validate: func(t *testing.T, opts *options.ClientOptions) {
 				assert.NotNil(t, opts)

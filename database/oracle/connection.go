@@ -36,10 +36,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 		dsn = cfg.ConnectionString
 	} else {
 		// Build Oracle DSN
-		if cfg.Service.Name != "" {
-			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Service.Name, cfg.Username, cfg.Password, nil)
-		} else if cfg.SID != "" {
-			urlOpts := map[string]string{"SID": cfg.SID}
+		if cfg.Oracle.Service.Name != "" {
+			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Oracle.Service.Name, cfg.Username, cfg.Password, nil)
+		} else if cfg.Oracle.Service.SID != "" {
+			urlOpts := map[string]string{"SID": cfg.Oracle.Service.SID}
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, "", cfg.Username, cfg.Password, urlOpts)
 		} else {
 			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, nil)
@@ -53,10 +53,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}
 
 	// Configure connection pool
-	db.SetMaxOpenConns(int(cfg.MaxConns))
-	db.SetMaxIdleConns(int(cfg.MaxIdleConns))
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	db.SetMaxOpenConns(int(cfg.Pool.Max.Connections))
+	db.SetMaxIdleConns(int(cfg.Pool.Idle.Connections))
+	db.SetConnMaxLifetime(cfg.Pool.Lifetime.Max)
+	db.SetConnMaxIdleTime(cfg.Pool.Idle.Time)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -72,10 +72,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	ev := log.Info().
 		Str("host", cfg.Host).
 		Int("port", cfg.Port)
-	if cfg.Service.Name != "" {
-		ev = ev.Str("service_name", cfg.Service.Name)
-	} else if cfg.SID != "" {
-		ev = ev.Str("sid", cfg.SID)
+	if cfg.Oracle.Service.Name != "" {
+		ev = ev.Str("service_name", cfg.Oracle.Service.Name)
+	} else if cfg.Oracle.Service.SID != "" {
+		ev = ev.Str("sid", cfg.Oracle.Service.SID)
 	} else {
 		ev = ev.Str("database", cfg.Database)
 	}

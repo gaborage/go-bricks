@@ -93,9 +93,9 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	SetupMiddlewares(e, log, cfg)
 
 	// Initialize server with path configuration
-	basePath := normalizeBasePath(cfg.Server.BasePath)
-	healthRoute := normalizeRoutePath(cfg.Server.HealthRoute, "/health")
-	readyRoute := normalizeRoutePath(cfg.Server.ReadyRoute, "/ready")
+	basePath := normalizeBasePath(cfg.Server.Path.Base)
+	healthRoute := normalizeRoutePath(cfg.Server.Path.Health, "/health")
+	readyRoute := normalizeRoutePath(cfg.Server.Path.Ready, "/ready")
 
 	s := &Server{
 		echo:        e,
@@ -151,9 +151,11 @@ func (s *Server) Start() error {
 		Msg("Starting server...")
 
 	server := &http.Server{
-		Addr:         addr,
-		ReadTimeout:  s.cfg.Server.ReadTimeout,
-		WriteTimeout: s.cfg.Server.WriteTimeout,
+		Addr:              addr,
+		ReadTimeout:       s.cfg.Server.Timeout.Read,
+		WriteTimeout:      s.cfg.Server.Timeout.Write,
+		IdleTimeout:       s.cfg.Server.Timeout.Idle,
+		ReadHeaderTimeout: s.cfg.Server.Timeout.Read,
 	}
 
 	return s.echo.StartServer(server)

@@ -52,7 +52,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 
 	// Timeout
 	e.Use(middleware.TimeoutWithConfig(middleware.TimeoutConfig{
-		Timeout: cfg.Server.MiddlewareTimeout,
+		Timeout: cfg.Server.Timeout.Middleware,
 	}))
 
 	// Gzip

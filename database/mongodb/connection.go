@@ -89,12 +89,12 @@ func (cb *ConnectionBuilder) buildConnectionOptions() (*options.ClientOptions, e
 	setConnectionOptions(opts, cb.config)
 
 	// Configure read preference
-	if err := setReadPreference(opts, cb.config.ReadPreference); err != nil {
+	if err := setReadPreference(opts, cb.config.Mongo.Replica.ReadPreference); err != nil {
 		return nil, err
 	}
 
 	// Configure write concern
-	if err := setWriteConcern(opts, cb.config.WriteConcern); err != nil {
+	if err := setWriteConcern(opts, cb.config.Mongo.Concern.Write); err != nil {
 		return nil, err
 	}
 
@@ -118,11 +118,11 @@ func (cb *ConnectionBuilder) configureURI(opts *options.ClientOptions) {
 
 // configureTLS sets up TLS configuration if SSL mode is specified
 func (cb *ConnectionBuilder) configureTLS(opts *options.ClientOptions) error {
-	if cb.config.SSLMode == "" {
+	if cb.config.TLS.Mode == "" {
 		return nil
 	}
 
-	tlsConfig, err := buildTLSConfig(cb.config.SSLMode)
+	tlsConfig, err := buildTLSConfig(cb.config.TLS.Mode)
 	if err != nil {
 		return fmt.Errorf("failed to configure TLS: %w", err)
 	}
@@ -192,20 +192,27 @@ func (cb *ConnectionBuilder) logConnection() {
 		Str("host", cb.config.Host).
 		Int("port", cb.config.Port).
 		Str("database", cb.config.Database).
-		Str("replica_set", cb.config.ReplicaSet).
+		Str("replica_set", cb.config.Mongo.Replica.Set).
 		Msg("Connected to MongoDB")
 }
 
 // setConnectionOptions sets connection pool options based on configuration
 func setConnectionOptions(opts *options.ClientOptions, cfg *config.DatabaseConfig) {
 	// Set connection pool options
-	if cfg.MaxConns > 0 {
-		maxPoolSize := uint64(cfg.MaxConns)
+	if cfg.Pool.Max.Connections > 0 {
+		// Safe conversion from int32 to uint64 - already checked for > 0
+		maxPoolSize := uint64(cfg.Pool.Max.Connections) // #nosec G115
 		opts.SetMaxPoolSize(maxPoolSize)
 	}
 
-	if cfg.ConnMaxIdleTime > 0 {
-		opts.SetMaxConnIdleTime(cfg.ConnMaxIdleTime)
+	if cfg.Pool.Idle.Time > 0 {
+		opts.SetMaxConnIdleTime(cfg.Pool.Idle.Time)
+	}
+
+	if cfg.Pool.Idle.Connections > 0 {
+		// Safe conversion from int32 to uint64 - already checked for > 0
+		minPoolSize := uint64(cfg.Pool.Idle.Connections) // #nosec G115
+		opts.SetMinPoolSize(minPoolSize)
 	}
 }
 
@@ -249,8 +256,13 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 		uri.WriteString("@")
 	}
 
-	// Add host:port
-	uri.WriteString(cfg.Host)
+	// Add host:port (bracket IPv6 literals)
+	host := cfg.Host
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") && !strings.HasSuffix(host, "]") {
+		host = "[" + host + "]"
+	}
+	uri.WriteString(host)
+
 	if cfg.Port > 0 {
 		uri.WriteString(fmt.Sprintf(":%d", cfg.Port))
 	}
@@ -263,11 +275,11 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 
 	// Add query parameters
 	var params []string
-	if cfg.ReplicaSet != "" {
-		params = append(params, "replicaSet="+url.QueryEscape(cfg.ReplicaSet))
+	if cfg.Mongo.Replica.Set != "" {
+		params = append(params, "replicaSet="+url.QueryEscape(cfg.Mongo.Replica.Set))
 	}
-	if cfg.AuthSource != "" {
-		params = append(params, "authSource="+url.QueryEscape(cfg.AuthSource))
+	if cfg.Mongo.Auth.Source != "" {
+		params = append(params, "authSource="+url.QueryEscape(cfg.Mongo.Auth.Source))
 	}
 
 	if len(params) > 0 {

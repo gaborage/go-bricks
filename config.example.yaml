@@ -1,0 +1,153 @@
+# Example configuration file demonstrating both standard and custom configurations
+
+# Standard framework configurations
+app:
+  name: my-service
+  version: v1.0.0
+  env: development
+  debug: true
+  namespace: default
+  rate:
+    limit: 100
+    burst: 200
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  timeout:
+    read: 15s
+    write: 30s
+    idle: 60s
+    middleware: 5s
+    shutdown: 10s
+  path:
+    base: ""          # Global prefix for all routes (e.g., "/api/v1")
+    health: /health   # Custom health endpoint path
+    ready: /ready     # Custom readiness endpoint path
+
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: myapp_db
+  username: myapp_user
+  password: myapp_password
+
+  connectionstring: ""  # Optional: override with full connection string
+
+  pool:
+    max:
+      connections: 25
+    idle:
+      connections: 5
+      time: 5m
+    lifetime:
+      max: 30m
+
+  query:
+    slow:
+      threshold: 100ms
+      enabled: true
+    log:
+      parameters: true
+      maxlength: 1000
+
+  tls:
+    mode: disable
+    cert: ""
+    key: ""
+    ca: ""
+
+  # Oracle-specific configuration
+  oracle:
+    service:
+      name: ORCL
+      sid: ""
+
+  # MongoDB-specific configuration
+  mongo:
+    replica:
+      set: rs0
+      readpreference: primary
+    auth:
+      source: admin
+    concern:
+      write: majority
+
+log:
+  level: debug
+  pretty: true
+  output:
+    format: json
+    file: ""
+
+messaging:
+  broker:
+    url: amqp://localhost:5672/
+    virtualhost: /
+  routing:
+    exchange: my-exchange
+    key: my-routing-key
+  headers:
+    x-app-name: my-service
+    x-environment: development
+
+# Custom configurations - add your application-specific settings here
+custom:
+  # Feature flags
+  flags:
+    home:
+      v2: 
+        enabled: true
+
+  # Service-specific configurations
+  service:
+    api:
+      endpoint: https://api.example.com/v1
+      # DO NOT commit real secrets to config files; prefer env vars or secret stores.
+      key: your-api-key-here
+    timeout: 30s
+    retries: 
+      max: 3
+      delay: 5s
+    batch: 
+      size: 100
+
+  # Cache settings
+  cache:
+    redis:
+      url: localhost:6379
+      ttl: 5m
+      entries:
+        max: 10000
+
+  # Notification settings
+  notifications:
+    email:
+      enabled: true
+      smtp:
+        host: smtp.example.com
+        port: 587
+        from: noreply@example.com
+
+    slack:
+      enabled: false
+      webhook:
+        url: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+      channel: "#alerts"
+
+  # Security settings
+  security:
+    jwt:
+      secret: your-secret-key-here
+      expiry: 24h
+    password:
+      length:
+        min: 8
+        max: 64
+    2fa:
+      required: false
+    origins:
+      allowed:
+      - http://localhost:3000
+      - https://app.example.com
