@@ -582,30 +582,7 @@ func (c *Collection) BulkWrite(ctx context.Context, models []database.WriteModel
 
 // Watch creates a change stream for the collection
 func (c *Collection) Watch(ctx context.Context, pipeline any, opts *database.ChangeStreamOptions) (database.ChangeStream, error) {
-	var mongoOpts *options.ChangeStreamOptions
-	if opts != nil {
-		mongoOpts = options.ChangeStream()
-		if opts.BatchSize != nil {
-			mongoOpts.SetBatchSize(*opts.BatchSize)
-		}
-		if opts.FullDocument != nil {
-			mongoOpts.SetFullDocument(options.FullDocument(*opts.FullDocument))
-		}
-		if opts.MaxAwaitTime != nil {
-			mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
-		}
-		if opts.ResumeAfter != nil {
-			mongoOpts.SetResumeAfter(opts.ResumeAfter)
-		}
-		if opts.StartAtOperationTime != nil {
-			if timestamp, ok := opts.StartAtOperationTime.(*primitive.Timestamp); ok {
-				mongoOpts.SetStartAtOperationTime(timestamp)
-			}
-		}
-		if opts.StartAfter != nil {
-			mongoOpts.SetStartAfter(opts.StartAfter)
-		}
-	}
+	mongoOpts := buildChangeStreamOptions(opts)
 
 	stream, err := c.collection.Watch(ctx, pipeline, mongoOpts)
 	if err != nil {
@@ -697,6 +674,36 @@ func buildUpdateOptions(opts *database.UpdateOptions) *options.UpdateOptions {
 	}
 	if opts.Upsert != nil {
 		mongoOpts.SetUpsert(*opts.Upsert)
+	}
+	return mongoOpts
+}
+
+// buildChangeStreamOptions creates MongoDB change stream options from database.ChangeStreamOptions
+func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.ChangeStreamOptions {
+	if opts == nil {
+		return nil
+	}
+
+	mongoOpts := options.ChangeStream()
+	if opts.BatchSize != nil {
+		mongoOpts.SetBatchSize(*opts.BatchSize)
+	}
+	if opts.FullDocument != nil {
+		mongoOpts.SetFullDocument(options.FullDocument(*opts.FullDocument))
+	}
+	if opts.MaxAwaitTime != nil {
+		mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
+	}
+	if opts.ResumeAfter != nil {
+		mongoOpts.SetResumeAfter(opts.ResumeAfter)
+	}
+	if opts.StartAtOperationTime != nil {
+		if timestamp, ok := opts.StartAtOperationTime.(*primitive.Timestamp); ok {
+			mongoOpts.SetStartAtOperationTime(timestamp)
+		}
+	}
+	if opts.StartAfter != nil {
+		mongoOpts.SetStartAfter(opts.StartAfter)
 	}
 	return mongoOpts
 }

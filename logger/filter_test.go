@@ -14,6 +14,7 @@ const (
 	expectedMaskedPwdMsg     = "Expected password to be masked, got '%v'"
 	expectedMaskedMapMsg     = "Expected result to be a map"
 	expectedPreservedNameMsg = "Expected name field to remain unfiltered"
+	unexpectedValueMsg       = "Expected '%s', got '%s'"
 )
 
 func TestDefaultFilterConfig(t *testing.T) {
@@ -24,7 +25,7 @@ func TestDefaultFilterConfig(t *testing.T) {
 	}
 
 	if config.MaskValue != DefaultMaskValue {
-		t.Errorf("Expected default mask value '***', got '%s'", config.MaskValue)
+		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, config.MaskValue)
 	}
 
 	// Test that common sensitive fields are included
@@ -43,7 +44,7 @@ func TestNewSensitiveDataFilter(t *testing.T) {
 		t.Fatal("NewSensitiveDataFilter should not return nil")
 	}
 	if filter.config.MaskValue != DefaultMaskValue {
-		t.Errorf("Expected default mask value '***', got '%s'", filter.config.MaskValue)
+		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, filter.config.MaskValue)
 	}
 
 	// Test custom config
@@ -66,13 +67,13 @@ func TestFilterString(t *testing.T) {
 	// Test sensitive field masking (complete masking for security)
 	result := filter.FilterString("password", "mysecret")
 	if result != DefaultMaskValue {
-		t.Errorf("Expected '***', got '%s'", result)
+		t.Errorf(unexpectedValueMsg, DefaultMaskValue, result)
 	}
 
 	// Test non-sensitive field
 	result = filter.FilterString("username", testUserDoe)
 	if result != testUserDoe {
-		t.Errorf("Expected '%s', got '%s'", testUserDoe, result)
+		t.Errorf(unexpectedValueMsg, testUserDoe, result)
 	}
 
 	// Test URL masking (clean masking without URL encoding)
@@ -91,7 +92,7 @@ func TestFilterValue(t *testing.T) {
 	// Test sensitive value masking
 	result := filter.FilterValue("password", "secret123")
 	if result != DefaultMaskValue {
-		t.Errorf("Expected '***', got '%v'", result)
+		t.Errorf("Expected '%s', got '%v'", DefaultMaskValue, result)
 	}
 
 	// Test non-sensitive value
@@ -153,7 +154,7 @@ func TestMaskURL(t *testing.T) {
 	result := filter.maskURL("amqp://user:secret@rabbitmq.example.com/vhost")
 	expected := "amqp://user:" + DefaultMaskValue + "@rabbitmq.example.com/vhost"
 	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+		t.Errorf(unexpectedValueMsg, expected, result)
 	}
 
 	// Test URL without password

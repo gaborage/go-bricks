@@ -28,7 +28,7 @@ func DefaultFilterConfig() *FilterConfig {
 			"credential", "credentials",
 			"broker_url", "database_url", "db_url",
 		},
-		MaskValue: "***",
+		MaskValue: DefaultMaskValue,
 	}
 }
 
@@ -203,9 +203,10 @@ func (f *SensitiveDataFilter) maskURL(urlStr string) string {
 
 	// Mask password in user info
 	if parsed.User != nil {
-		if password, hasPassword := parsed.User.Password(); hasPassword {
-			// Simple and elegant: just replace the actual password with mask
-			return strings.Replace(urlStr, ":"+password+"@", ":"+f.config.MaskValue+"@", 1)
+		if _, hasPassword := parsed.User.Password(); hasPassword {
+			username := parsed.User.Username()
+			parsed.User = url.UserPassword(username, f.config.MaskValue)
+			return parsed.String()
 		}
 	}
 

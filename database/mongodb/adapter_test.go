@@ -677,3 +677,69 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildChangeStreamOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *database.ChangeStreamOptions
+		expected func(*options.ChangeStreamOptions) bool
+	}{
+		{
+			name:  testNilInput,
+			input: nil,
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts == nil
+			},
+		},
+		{
+			name:  testEmptyOptions,
+			input: &database.ChangeStreamOptions{},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with batch size",
+			input: &database.ChangeStreamOptions{
+				BatchSize: database.Int32Ptr(100),
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with full document",
+			input: &database.ChangeStreamOptions{
+				FullDocument: database.StringPtr("updateLookup"),
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with resume after",
+			input: &database.ChangeStreamOptions{
+				ResumeAfter: bson.M{"_id": "test"},
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with start after",
+			input: &database.ChangeStreamOptions{
+				StartAfter: bson.M{"_id": "test"},
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildChangeStreamOptions(tt.input)
+			assert.True(t, tt.expected(result), "Unexpected result for test case: %s", tt.name)
+		})
+	}
+}
