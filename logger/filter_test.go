@@ -11,6 +11,8 @@ const (
 	testUserDoe              = "test_user_john_doe"
 	testNameJohn             = "john"
 	testEmail                = "john@example.com"
+	testAPIKey               = "REDACTED_API_KEY_FOR_TESTING"
+	testAPIKeyShort          = "REDACTED_KEY"
 	expectedMaskedPwdMsg     = "Expected password to be masked, got '%v'"
 	expectedMaskedMapMsg     = "Expected result to be a map"
 	expectedPreservedNameMsg = "Expected name field to remain unfiltered"
@@ -127,7 +129,7 @@ func TestFilterFields(t *testing.T) {
 	input := map[string]any{
 		"username": testUserDoe,
 		"password": testPassword,
-		"api_key":  "test_api_1234567890",
+		"api_key":  testAPIKey,
 		"email":    testEmail,
 	}
 
@@ -202,7 +204,7 @@ func TestFilterValueStructFiltering(t *testing.T) {
 		Username: "test_user_john_doe",
 		Password: "test_secret123",
 		Email:    testEmail,
-		APIKey:   "test_api_123456",
+		APIKey:   testAPIKeyShort,
 	}
 
 	result := filter.FilterValue("user", input)

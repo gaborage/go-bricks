@@ -93,8 +93,8 @@ func (f *SensitiveDataFilter) filterByType(key string, value any) any {
 		return f.filterSliceOrArray(key, rv)
 	case reflect.Struct:
 		return f.filterStruct(value)
-	case reflect.Pointer:
-		if rv.Type().Elem().Kind() == reflect.Struct {
+	case reflect.Ptr:
+		if !rv.IsNil() && rv.Type().Elem().Kind() == reflect.Struct {
 			return f.filterStruct(value)
 		}
 		return value
@@ -119,7 +119,7 @@ func (f *SensitiveDataFilter) filterSliceOrArray(key string, rv reflect.Value) a
 	filtered := make([]any, length)
 	hasChanges := false
 
-	for i := range length {
+	for i := 0; i < length; i++ {
 		elemVal := rv.Index(i)
 		elem := elemVal.Interface()
 
@@ -146,7 +146,7 @@ func (f *SensitiveDataFilter) filterSliceOrArray(key string, rv reflect.Value) a
 
 // isStructType checks if a type is a struct or pointer to struct
 func (f *SensitiveDataFilter) isStructType(t reflect.Type) bool {
-	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct)
+	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct)
 }
 
 // FilterFields filters a map of fields for sensitive data
@@ -205,13 +205,43 @@ func (f *SensitiveDataFilter) maskURL(urlStr string) string {
 	if parsed.User != nil {
 		if _, hasPassword := parsed.User.Password(); hasPassword {
 			username := parsed.User.Username()
-			parsed.User = url.UserPassword(username, f.config.MaskValue)
-			return parsed.String()
+			return f.buildMaskedURL(parsed, username)
 		}
 	}
 
 	// No password to mask, return original URL
 	return urlStr
+}
+
+// buildMaskedURL constructs a URL with masked password while preserving structure
+func (f *SensitiveDataFilter) buildMaskedURL(parsed *url.URL, username string) string {
+	var b strings.Builder
+
+	// Scheme and authority
+	b.WriteString(parsed.Scheme)
+	b.WriteString("://")
+
+	// User info with masked password
+	b.WriteString(username)
+	b.WriteByte(':')
+	b.WriteString(f.config.MaskValue)
+	b.WriteByte('@')
+	b.WriteString(parsed.Host)
+
+	// Preserve encoded path, query and fragment parts
+	if p := parsed.EscapedPath(); p != "" {
+		b.WriteString(p)
+	}
+	if q := parsed.RawQuery; q != "" {
+		b.WriteByte('?')
+		b.WriteString(q)
+	}
+	if frag := parsed.Fragment; frag != "" {
+		b.WriteByte('#')
+		b.WriteString(frag)
+	}
+
+	return b.String()
 }
 
 // filterStruct filters sensitive fields in struct values using reflection
@@ -234,7 +264,7 @@ func (f *SensitiveDataFilter) extractStructValue(value any) (reflect.Value, refl
 	typ := reflect.TypeOf(value)
 
 	// Handle pointer types
-	for typ.Kind() == reflect.Pointer {
+	for typ.Kind() == reflect.Ptr {
 		if val.IsNil() {
 			return reflect.Value{}, nil
 		}
