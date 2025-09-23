@@ -15,7 +15,7 @@ const (
 	// Environment variable keys reused across tests
 	testDatabaseUsername = "DATABASE_USERNAME"
 	testDatabaseDatabase = "DATABASE_DATABASE"
-	testDatabaseMaxConns = "DATABASE_MAX_CONNS"
+	testDatabaseMaxConns = "DATABASE_POOL_MAX_CONNECTIONS"
 	appName              = "gobricks-service"
 	appVersion           = "v1.0.0"
 	serverHost           = "0.0.0.0"
@@ -35,14 +35,16 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, EnvDevelopment, cfg.App.Env)
 	assert.False(t, cfg.App.Debug)
 	assert.Equal(t, 100, cfg.App.Rate.Limit)
+	assert.Equal(t, 200, cfg.App.Rate.Burst)
 	assert.Equal(t, "default", cfg.App.Namespace)
 
 	assert.Equal(t, serverHost, cfg.Server.Host)
 	assert.Equal(t, 8080, cfg.Server.Port)
-	assert.Equal(t, 15*time.Second, cfg.Server.ReadTimeout)
-	assert.Equal(t, 30*time.Second, cfg.Server.WriteTimeout)
-	assert.Equal(t, 5*time.Second, cfg.Server.MiddlewareTimeout)
-	assert.Equal(t, 10*time.Second, cfg.Server.ShutdownTimeout)
+	assert.Equal(t, 15*time.Second, cfg.Server.Timeout.Read)
+	assert.Equal(t, 30*time.Second, cfg.Server.Timeout.Write)
+	assert.Equal(t, 60*time.Second, cfg.Server.Timeout.Idle)
+	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
+	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
 
 	// Database should be disabled by default (no defaults provided)
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
@@ -51,14 +53,16 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 0, cfg.Database.Port)
 	assert.Equal(t, "", cfg.Database.Database)
 	assert.Equal(t, "", cfg.Database.Username)
-	assert.Equal(t, "", cfg.Database.SSLMode)
-	assert.Equal(t, int32(0), cfg.Database.MaxConns)
-	assert.Equal(t, int32(0), cfg.Database.MaxIdleConns)
-	assert.Equal(t, time.Duration(0), cfg.Database.ConnMaxLifetime)
-	assert.Equal(t, time.Duration(0), cfg.Database.ConnMaxIdleTime)
+	assert.Equal(t, "", cfg.Database.TLS.Mode)
+	assert.Equal(t, int32(0), cfg.Database.Pool.Max.Connections)
+	assert.Equal(t, int32(0), cfg.Database.Pool.Idle.Connections)
+	assert.Equal(t, time.Duration(0), cfg.Database.Pool.Lifetime.Max)
+	assert.Equal(t, time.Duration(0), cfg.Database.Pool.Idle.Time)
 
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
+	assert.Equal(t, "json", cfg.Log.Output.Format)
+	assert.Equal(t, "", cfg.Log.Output.File)
 }
 
 func TestLoadWithEnvironmentVariables(t *testing.T) {
@@ -96,7 +100,7 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)
 	assert.Equal(t, "testuser", cfg.Database.Username)
-	assert.Equal(t, int32(25), cfg.Database.MaxConns)
+	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections)
 
 	// Verify defaults still work for non-overridden values
 	assert.Equal(t, appVersion, cfg.App.Version)
@@ -185,21 +189,27 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, EnvDevelopment, k.String("app.env"))
 	assert.False(t, k.Bool("app.debug"))
 	assert.Equal(t, 100, k.Int("app.rate.limit"))
+	assert.Equal(t, 200, k.Int("app.rate.burst"))
 
 	assert.Equal(t, serverHost, k.String("server.host"))
 	assert.Equal(t, 8080, k.Int("server.port"))
-	assert.Equal(t, "15s", k.String("server.read_timeout"))
-	assert.Equal(t, "30s", k.String("server.write_timeout"))
+	assert.Equal(t, "15s", k.String("server.timeout.read"))
+	assert.Equal(t, "30s", k.String("server.timeout.write"))
+	assert.Equal(t, "60s", k.String("server.timeout.idle"))
+	assert.Equal(t, "5s", k.String("server.timeout.middleware"))
+	assert.Equal(t, "10s", k.String("server.timeout.shutdown"))
 
 	// Database defaults should NOT be provided
 	assert.Equal(t, "", k.String("database.type"))
 	assert.Equal(t, "", k.String("database.host"))
 	assert.Equal(t, 0, k.Int("database.port"))
-	assert.Equal(t, "", k.String("database.ssl_mode"))
-	assert.Equal(t, 0, k.Int("database.max_conns"))
+	assert.Equal(t, "", k.String("database.tls.mode"))
+	assert.Equal(t, 0, k.Int("database.pool.max.connections"))
 
 	assert.Equal(t, "info", k.String("log.level"))
 	assert.False(t, k.Bool("log.pretty"))
+	assert.Equal(t, "json", k.String("log.output.format"))
+	assert.Equal(t, "", k.String("log.output.file"))
 }
 
 func TestLoadEdgeCases(t *testing.T) {
@@ -387,17 +397,18 @@ func TestLoadCustomConfiguration(t *testing.T) {
 // Helper function to clear environment variables that might affect tests
 func clearEnvironmentVariables() {
 	envVars := []string{
-		"APP_NAME", "APP_VERSION", "APP_ENV", "APP_DEBUG", "APP_RATE_LIMIT", "APP_NAMESPACE",
-		"SERVER_HOST", "SERVER_PORT", "SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT",
-		"SERVER_MIDDLEWARE_TIMEOUT", "SERVER_SHUTDOWN_TIMEOUT",
+		"APP_NAME", "APP_VERSION", "APP_ENV", "APP_DEBUG", "APP_RATE_LIMIT", "APP_RATE_BURST", "APP_NAMESPACE",
+		"SERVER_HOST", "SERVER_PORT", "SERVER_TIMEOUT_READ", "SERVER_TIMEOUT_WRITE",
+		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
+		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY",
 		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
-		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_SSL_MODE",
-		testDatabaseMaxConns, "DATABASE_MAX_IDLE_CONNS",
-		"DATABASE_CONN_MAX_LIFETIME", "DATABASE_CONN_MAX_IDLE_TIME",
-		"DATABASE_SERVICE_NAME", "DATABASE_SID", "DATABASE_CONNECTION_STRING",
-		"LOG_LEVEL", "LOG_PRETTY",
-		"MESSAGING_BROKER_URL", "MESSAGING_EXCHANGE", "MESSAGING_ROUTING_KEY",
-		"MESSAGING_VIRTUAL_HOST",
+		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_TLS_MODE",
+		testDatabaseMaxConns, "DATABASE_POOL_IDLE_CONNECTIONS",
+		"DATABASE_POOL_LIFETIME_MAX", "DATABASE_POOL_IDLE_TIME",
+		"DATABASE_ORACLE_SERVICE_NAME", "DATABASE_ORACLE_SERVICE_SID", "DATABASE_CONNECTIONSTRING",
+		"LOG_LEVEL", "LOG_PRETTY", "LOG_OUTPUT_FORMAT", "LOG_OUTPUT_FILE",
+		"MESSAGING_BROKER_URL", "MESSAGING_ROUTING_EXCHANGE", "MESSAGING_ROUTING_KEY",
+		"MESSAGING_BROKER_VIRTUALHOST",
 	}
 
 	for _, envVar := range envVars {
@@ -473,11 +484,11 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)
 	assert.Equal(t, "testuser", cfg.Database.Username)
-	assert.Equal(t, int32(25), cfg.Database.MaxConns)
+	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections)
 
 	// Verify database fields that should be zero/empty since no defaults
-	assert.Equal(t, "", cfg.Database.SSLMode)            // No default provided
-	assert.Equal(t, int32(0), cfg.Database.MaxIdleConns) // No default provided
+	assert.Equal(t, "", cfg.Database.TLS.Mode)                    // No default provided
+	assert.Equal(t, int32(0), cfg.Database.Pool.Idle.Connections) // No default provided
 }
 
 // TestLoad_DatabaseConnectionStringOnly test removed - connection string
@@ -524,9 +535,25 @@ func TestLoadDatabaseEnabledByExplicitConfig(t *testing.T) {
 
 	// Database should be enabled by explicit configuration
 	assert.True(t, IsDatabaseConfigured(&cfg.Database))
-	assert.Equal(t, "postgresql", cfg.Database.Type)   // From env
-	assert.Equal(t, "localhost", cfg.Database.Host)    // From env
-	assert.Equal(t, "testdb", cfg.Database.Database)   // From env
-	assert.Equal(t, "testuser", cfg.Database.Username) // From env
-	assert.Equal(t, int32(25), cfg.Database.MaxConns)  // From env
+	assert.Equal(t, "postgresql", cfg.Database.Type)              // From env
+	assert.Equal(t, "localhost", cfg.Database.Host)               // From env
+	assert.Equal(t, "testdb", cfg.Database.Database)              // From env
+	assert.Equal(t, "testuser", cfg.Database.Username)            // From env
+	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections) // From env
+}
+
+func TestLoadBasePathConfig(t *testing.T) {
+	defer clearEnvironmentVariables()
+
+	os.Setenv("SERVER_PATH_BASE", "/api/v1")
+	os.Setenv("SERVER_PATH_HEALTH", "/healthz")
+	os.Setenv("SERVER_PATH_READY", "/readyz")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, "/api/v1", cfg.Server.Path.Base)
+	assert.Equal(t, "/healthz", cfg.Server.Path.Health)
+	assert.Equal(t, "/readyz", cfg.Server.Path.Ready)
 }

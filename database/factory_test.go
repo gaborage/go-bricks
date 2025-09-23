@@ -386,7 +386,11 @@ func TestNewConnectionSuccessfulPostgreSQLMocked(t *testing.T) {
 		Database: "testdb",
 		Username: "testuser",
 		Password: "testpass",
-		MaxConns: 25,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+		},
 	}
 
 	// This will fail due to no real database, but it exercises the NewConnection code path
@@ -408,8 +412,16 @@ func TestNewConnectionSuccessfulOracleMocked(t *testing.T) {
 		Database: "ORCL",
 		Username: "testuser",
 		Password: "testpass",
-		MaxConns: 25,
-		Service:  config.ServiceConfig{Name: "ORCL"},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+		},
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: "ORCL",
+			},
+		},
 	}
 
 	// This will fail due to no real database, but it exercises the NewConnection code path
@@ -453,7 +465,11 @@ func TestNewConnectionWithDifferentDatabaseTypes(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			}
 
 			conn, err := NewConnection(cfg, log)
@@ -505,8 +521,12 @@ func TestNewConnectionSuccessPath(t *testing.T) {
 
 	// Test that NewTrackedConnection works (this is called from NewConnection)
 	tracked := NewTrackedConnection(simpleConn, log, &config.DatabaseConfig{
-		Type:     "postgresql",
-		MaxConns: 25,
+		Type: "postgresql",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+		},
 	})
 	require.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
@@ -535,10 +555,21 @@ func TestNewConnectionSuccessfulWrapping(t *testing.T) {
 	// Test the wrapping part of NewConnection by calling NewTrackedConnection directly
 	// This exercises the same code path that NewConnection uses on success
 	cfg := &config.DatabaseConfig{
-		Type:               "postgresql",
-		MaxConns:           25,
-		MaxQueryLength:     1000,
-		SlowQueryThreshold: 200 * time.Millisecond,
+		Type: "postgresql",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+		},
+		Query: config.QueryConfig{
+			Log: config.QueryLogConfig{
+				MaxLength: 1000,
+			},
+			Slow: config.SlowQueryConfig{
+				Threshold: 200 * time.Millisecond,
+				Enabled:   true,
+			},
+		},
 	}
 
 	tracked := NewTrackedConnection(mockConn, log, cfg)
@@ -598,7 +629,11 @@ func TestNewConnectionCodePaths(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: config.PoolConfig{
+					Max: config.PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			}
 
 			conn, err := NewConnection(cfg, log)

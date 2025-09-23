@@ -69,21 +69,28 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.version":    "v1.0.0",
 		"app.env":        EnvDevelopment,
 		"app.debug":      false,
-		"app.rate.limit": 100,
 		"app.namespace":  "default",
+		"app.rate.limit": 100,
+		"app.rate.burst": 200,
 
 		"server.host":               "0.0.0.0",
 		"server.port":               8080,
-		"server.read_timeout":       "15s",
-		"server.write_timeout":      "30s",
-		"server.middleware_timeout": "5s",
-		"server.shutdown_timeout":   "10s",
+		"server.timeout.read":       "15s",
+		"server.timeout.write":      "30s",
+		"server.timeout.idle":       "60s",
+		"server.timeout.middleware": "5s",
+		"server.timeout.shutdown":   "10s",
+		"server.path.base":          "",
+		"server.path.health":        "/health",
+		"server.path.ready":         "/ready",
 
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured
 
-		"log.level":  "info",
-		"log.pretty": false,
+		"log.level":         "info",
+		"log.pretty":        false,
+		"log.output.format": "json",
+		"log.output.file":   "",
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

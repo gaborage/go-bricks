@@ -46,13 +46,13 @@ func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 		return settings
 	}
 
-	if cfg.SlowQueryThreshold > 0 {
-		settings.slowQueryThreshold = cfg.SlowQueryThreshold
+	if cfg.Query.Slow.Threshold > 0 {
+		settings.slowQueryThreshold = cfg.Query.Slow.Threshold
 	}
-	if cfg.MaxQueryLength > 0 {
-		settings.maxQueryLength = cfg.MaxQueryLength
+	if cfg.Query.Log.MaxLength > 0 {
+		settings.maxQueryLength = cfg.Query.Log.MaxLength
 	}
-	settings.logQueryParameters = cfg.LogQueryParameters
+	settings.logQueryParameters = cfg.Query.Log.Parameters
 
 	return settings
 }

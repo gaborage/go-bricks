@@ -112,10 +112,18 @@ func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 	// Test configuration with connection string
 	cfg := &config.DatabaseConfig{
 		ConnectionString: "postgres://user:pass@localhost/testdb?sslmode=disable",
-		MaxConns:         25,
-		MaxIdleConns:     10,
-		ConnMaxLifetime:  time.Hour,
-		ConnMaxIdleTime:  30 * time.Minute,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -132,16 +140,26 @@ func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 func TestConnectionNewConnectionWithHostConfig(t *testing.T) {
 	// Test configuration with individual host parameters
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            5432,
-		Username:        "testuser",
-		Password:        "testpass",
-		Database:        "testdb",
-		SSLMode:         "disable",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		TLS: config.TLSConfig{
+			Mode: "disable",
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -157,15 +175,23 @@ func TestConnectionNewConnectionWithHostConfig(t *testing.T) {
 func TestConnectionNewConnectionWithHostConfigNoSSLMode(t *testing.T) {
 	// Configuration without sslmode should omit the parameter from the DSN
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            5432,
-		Username:        "testuser",
-		Password:        "testpass",
-		Database:        "testdb",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -192,15 +218,23 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 	})
 
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            5432,
-		Username:        "stubuser",
-		Password:        "stubpass",
-		Database:        "stubdb",
-		MaxConns:        5,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: 30 * time.Second,
-		ConnMaxIdleTime: 15 * time.Second,
+		Host:     "localhost",
+		Port:     5432,
+		Username: "stubuser",
+		Password: "stubpass",
+		Database: "stubdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        15 * time.Second,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 30 * time.Second,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)

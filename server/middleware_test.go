@@ -31,7 +31,9 @@ func TestSetupMiddlewares(t *testing.T) {
 					Rate: config.RateConfig{Limit: 100},
 				},
 				Server: config.ServerConfig{
-					MiddlewareTimeout: 30 * time.Second,
+					Timeout: config.TimeoutConfig{
+						Middleware: 30 * time.Second,
+					},
 				},
 			},
 		},
@@ -42,7 +44,9 @@ func TestSetupMiddlewares(t *testing.T) {
 					Rate: config.RateConfig{Limit: 0},
 				},
 				Server: config.ServerConfig{
-					MiddlewareTimeout: 30 * time.Second,
+					Timeout: config.TimeoutConfig{
+						Middleware: 30 * time.Second,
+					},
 				},
 			},
 		},
@@ -97,7 +101,9 @@ func TestMiddlewareOrder(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
-			MiddlewareTimeout: 30 * time.Second,
+			Timeout: config.TimeoutConfig{
+				Middleware: 30 * time.Second,
+			},
 		},
 	}
 
@@ -163,7 +169,9 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
-			MiddlewareTimeout: 30 * time.Second,
+			Timeout: config.TimeoutConfig{
+				Middleware: 30 * time.Second,
+			},
 		},
 	}
 
@@ -205,7 +213,9 @@ func TestGzipMiddleware(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
-			MiddlewareTimeout: 30 * time.Second,
+			Timeout: config.TimeoutConfig{
+				Middleware: 30 * time.Second,
+			},
 		},
 	}
 
@@ -253,7 +263,9 @@ func TestRecoveryMiddleware(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
-			MiddlewareTimeout: 30 * time.Second,
+			Timeout: config.TimeoutConfig{
+				Middleware: 30 * time.Second,
+			},
 		},
 	}
 
@@ -283,7 +295,9 @@ func TestSecurityHeaders(t *testing.T) {
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
-			MiddlewareTimeout: 30 * time.Second,
+			Timeout: config.TimeoutConfig{
+				Middleware: 30 * time.Second,
+			},
 		},
 	}
 

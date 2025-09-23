@@ -23,6 +23,13 @@ const (
 	insertQuery        = "INSERT INTO dual(id, name) VALUES (:1, :2)"
 )
 
+type ConnectionTestData struct {
+	name          string
+	config        *config.DatabaseConfig
+	expectError   bool
+	errorContains string
+}
+
 func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -112,10 +119,18 @@ func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 	// Test configuration with connection string
 	cfg := &config.DatabaseConfig{
 		ConnectionString: "oracle://user:pass@localhost:1521/XE",
-		MaxConns:         25,
-		MaxIdleConns:     10,
-		ConnMaxLifetime:  time.Hour,
-		ConnMaxIdleTime:  30 * time.Minute,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -132,15 +147,27 @@ func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 func TestConnectionNewConnectionWithServiceName(t *testing.T) {
 	// Test configuration with ServiceName
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		Service:         config.ServiceConfig{Name: "XEPDB1"},
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: "XEPDB1",
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -156,15 +183,27 @@ func TestConnectionNewConnectionWithServiceName(t *testing.T) {
 func TestConnectionNewConnectionWithSID(t *testing.T) {
 	// Test configuration with SID
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		SID:             "XE",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				SID: "XE",
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -180,15 +219,23 @@ func TestConnectionNewConnectionWithSID(t *testing.T) {
 func TestConnectionNewConnectionWithDatabase(t *testing.T) {
 	// Test configuration with Database (fallback when no ServiceName or SID)
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "testuser",
-		Password:        "testpass",
-		Database:        "XE",
-		MaxConns:        25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 30 * time.Minute,
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "XE",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 25,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 10,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -216,14 +263,26 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 	})
 
 	cfg := &config.DatabaseConfig{
-		Host:            "localhost",
-		Port:            1521,
-		Username:        "stub",
-		Password:        "secret",
-		Service:         config.ServiceConfig{Name: "XEPDB1"},
-		MaxConns:        4,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: 45 * time.Second,
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: "XEPDB1",
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
 	}
 
 	log := logger.New("debug", true)
@@ -486,12 +545,7 @@ func TestConnectionMetadata(t *testing.T) {
 func TestConnectionValidationIntegration(t *testing.T) {
 	log := logger.New("debug", true)
 
-	tests := []struct {
-		name          string
-		config        *config.DatabaseConfig
-		expectError   bool
-		errorContains string
-	}{
+	tests := []ConnectionTestData{
 		{
 			name: "valid config with service name should pass validation but fail connection",
 			config: &config.DatabaseConfig{
@@ -500,10 +554,14 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				Service:  config.ServiceConfig{Name: "XEPDB1"},
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						Name: "XEPDB1",
+					},
+				},
 			},
 			expectError:   true,
-			errorContains: oraclePingErrorMsg, // Connection fails, not validation
+			errorContains: oraclePingErrorMsg,
 		},
 		{
 			name: "valid config with SID should pass validation but fail connection",
@@ -513,7 +571,11 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				SID:      "XE",
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						SID: "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: oraclePingErrorMsg, // Connection fails, not validation
@@ -539,7 +601,6 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
 			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
@@ -552,8 +613,12 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Port:     1521,
 				Username: "testuser",
 				Password: "testpass",
-				Service:  config.ServiceConfig{Name: "XEPDB1"},
-				SID:      "XE",
+				Oracle: config.OracleConfig{
+					Service: config.ServiceConfig{
+						Name: "XEPDB1",
+						SID:  "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured",
@@ -571,9 +636,13 @@ func TestConnectionValidationIntegration(t *testing.T) {
 					Rate:    config.RateConfig{Limit: 100},
 				},
 				Server: config.ServerConfig{
-					Port:         8080,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 8080,
+					Timeout: config.TimeoutConfig{
+						Read:       15 * time.Second,
+						Write:      30 * time.Second,
+						Middleware: 5 * time.Second,
+						Shutdown:   10 * time.Second,
+					},
 				},
 				Database: *tt.config,
 				Log: config.LogConfig{

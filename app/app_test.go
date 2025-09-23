@@ -318,7 +318,9 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 			Port: 5432,
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "amqp://localhost:5672",
+			Broker: config.BrokerConfig{
+				URL: "amqp://guest:guest@localhost:5672/",
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -889,7 +891,9 @@ func TestAppNewWithConfigUsesConnectors(t *testing.T) {
 			Username: "user",
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "amqp://broker",
+			Broker: config.BrokerConfig{
+				URL: "amqp://broker",
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -909,7 +913,7 @@ func TestAppNewWithConfigUsesConnectors(t *testing.T) {
 		},
 		MessagingClientFactory: func(url string, _ logger.Logger) messaging.Client {
 			messagingCalled = true
-			assert.Equal(t, cfg.Messaging.BrokerURL, url)
+			assert.Equal(t, cfg.Messaging.Broker.URL, url)
 			return msgMock
 		},
 	}
@@ -1007,7 +1011,9 @@ func TestAppNewWithConfigDatabaseAndMessagingEnabled(t *testing.T) {
 			Port: 5432,
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "amqp://test-broker:5672",
+			Broker: config.BrokerConfig{
+				URL: "amqp://test-broker:5672",
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -1057,7 +1063,9 @@ func TestAppNewWithConfigDatabaseOnlyEnabled(t *testing.T) {
 			Port: 5432,
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "", // Empty means disabled
+			Broker: config.BrokerConfig{
+				URL: "", // Empty means disabled
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -1095,7 +1103,9 @@ func TestAppNewWithConfigMessagingOnlyEnabled(t *testing.T) {
 			// Empty database config means disabled
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "amqp://test-broker:5672",
+			Broker: config.BrokerConfig{
+				URL: "amqp://test-broker:5672",
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -1173,7 +1183,9 @@ func TestAppNewWithConfigNeitherEnabled(t *testing.T) {
 			// Empty database config means disabled
 		},
 		Messaging: config.MessagingConfig{
-			BrokerURL: "", // Empty means disabled
+			Broker: config.BrokerConfig{
+				URL: "", // Empty means disabled
+			},
 		},
 		Log: config.LogConfig{
 			Level:  "info",
@@ -1253,7 +1265,9 @@ func TestAppIsMessagingEnabled(t *testing.T) {
 			name: "enabled with broker URL",
 			config: &config.Config{
 				Messaging: config.MessagingConfig{
-					BrokerURL: "amqp://localhost:5672",
+					Broker: config.BrokerConfig{
+						URL: "amqp://localhost:5672",
+					},
 				},
 			},
 			expected: true,
@@ -1262,7 +1276,9 @@ func TestAppIsMessagingEnabled(t *testing.T) {
 			name: "disabled when empty",
 			config: &config.Config{
 				Messaging: config.MessagingConfig{
-					BrokerURL: "",
+					Broker: config.BrokerConfig{
+						URL: "",
+					},
 				},
 			},
 			expected: false,
@@ -1287,7 +1303,7 @@ func TestAppReadyCheckDatabaseDisabled(t *testing.T) {
 		App:       config.AppConfig{Name: appName, Version: appVersion, Env: "test"},
 		Server:    config.ServerConfig{Host: "localhost", Port: 8080},
 		Database:  config.DatabaseConfig{}, // Empty means disabled
-		Messaging: config.MessagingConfig{BrokerURL: ""},
+		Messaging: config.MessagingConfig{Broker: config.BrokerConfig{URL: ""}},
 		Log:       config.LogConfig{Level: "info", Pretty: false},
 	}
 

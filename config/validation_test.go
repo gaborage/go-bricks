@@ -27,9 +27,13 @@ func TestValidateValidConfig(t *testing.T) {
 			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
-			Port:         8080,
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 30 * time.Second,
+			Port: 8080,
+			Timeout: TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
 		},
 		Database: DatabaseConfig{
 			Type:     "postgresql",
@@ -37,7 +41,11 @@ func TestValidateValidConfig(t *testing.T) {
 			Port:     5432,
 			Database: "testdb",
 			Username: "testuser",
-			MaxConns: 25,
+			Pool: PoolConfig{
+				Max: PoolMaxConfig{
+					Connections: 25,
+				},
+			},
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -173,33 +181,49 @@ func TestValidateServerSuccess(t *testing.T) {
 		{
 			name: "standard_config",
 			cfg: ServerConfig{
-				Port:         8080,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
 			},
 		},
 		{
 			name: "minimum_port",
 			cfg: ServerConfig{
-				Port:         1,
-				ReadTimeout:  1 * time.Second,
-				WriteTimeout: 1 * time.Second,
+				Port: 1,
+				Timeout: TimeoutConfig{
+					Read:       1 * time.Second,
+					Write:      1 * time.Second,
+					Middleware: 1 * time.Second,
+					Shutdown:   1 * time.Second,
+				},
 			},
 		},
 		{
 			name: "maximum_port",
 			cfg: ServerConfig{
-				Port:         65535,
-				ReadTimeout:  1 * time.Hour,
-				WriteTimeout: 2 * time.Hour,
+				Port: 65535,
+				Timeout: TimeoutConfig{
+					Read:       1 * time.Hour,
+					Write:      2 * time.Hour,
+					Middleware: 30 * time.Second,
+					Shutdown:   1 * time.Minute,
+				},
 			},
 		},
 		{
 			name: "common_ports",
 			cfg: ServerConfig{
-				Port:         3000,
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 20 * time.Second,
+				Port: 3000,
+				Timeout: TimeoutConfig{
+					Read:       10 * time.Second,
+					Write:      20 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
 			},
 		},
 	}
@@ -221,63 +245,83 @@ func TestValidateServerFailures(t *testing.T) {
 		{
 			name: "zero_port",
 			cfg: ServerConfig{
-				Port:         0,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Port: 0,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
 			},
 			expectedError: "invalid port: 0",
 		},
 		{
 			name: "negative_port",
 			cfg: ServerConfig{
-				Port:         -1,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Port: -1,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
 			},
 			expectedError: "invalid port: -1",
 		},
 		{
 			name: "port_too_high",
 			cfg: ServerConfig{
-				Port:         65536,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Port: 65536,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
 			},
 			expectedError: "invalid port: 65536",
 		},
 		{
 			name: "zero_read_timeout",
 			cfg: ServerConfig{
-				Port:         8080,
-				ReadTimeout:  0,
-				WriteTimeout: 30 * time.Second,
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:  0,
+					Write: 30 * time.Second,
+				},
 			},
 			expectedError: "read timeout must be positive",
 		},
 		{
 			name: "negative_read_timeout",
 			cfg: ServerConfig{
-				Port:         8080,
-				ReadTimeout:  -1 * time.Second,
-				WriteTimeout: 30 * time.Second,
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:  -1 * time.Second,
+					Write: 30 * time.Second,
+				},
 			},
 			expectedError: "read timeout must be positive",
 		},
 		{
 			name: "zero_write_timeout",
 			cfg: ServerConfig{
-				Port:         8080,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: 0,
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:  15 * time.Second,
+					Write: 0,
+				},
 			},
 			expectedError: "write timeout must be positive",
 		},
 		{
 			name: "negative_write_timeout",
 			cfg: ServerConfig{
-				Port:         8080,
-				ReadTimeout:  15 * time.Second,
-				WriteTimeout: -1 * time.Second,
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:  15 * time.Second,
+					Write: -1 * time.Second,
+				},
 			},
 			expectedError: "write timeout must be positive",
 		},
@@ -305,7 +349,11 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 		},
 		{
@@ -316,7 +364,11 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
-				MaxConns: 50,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 50,
+					},
+				},
 			},
 		},
 		{
@@ -327,7 +379,11 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 				Port:     1,
 				Database: "d",
 				Username: "u",
-				MaxConns: 1,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 1,
+					},
+				},
 			},
 		},
 		{
@@ -338,7 +394,11 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 0, // Should get set to default (25)
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 0, // Should get set to default (25)
+					},
+				},
 			},
 		},
 		{
@@ -349,7 +409,11 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 				Port:     65535,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 100,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 100,
+					},
+				},
 			},
 		},
 	}
@@ -376,7 +440,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     3306,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "invalid database type: mysql",
 		},
@@ -388,7 +456,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "database host is required",
 		},
@@ -400,7 +472,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     0,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "invalid database port: 0",
 		},
@@ -412,7 +488,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     -1,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "invalid database port: -1",
 		},
@@ -424,7 +504,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     65536,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "invalid database port: 65536",
 		},
@@ -436,7 +520,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     5432,
 				Database: "",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "database name is required",
 		},
@@ -448,7 +536,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectedError: "database username is required",
 		},
@@ -460,7 +552,11 @@ func TestValidateDatabaseFailures(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: -1,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: -1,
+					},
+				},
 			},
 			expectedError: errMaxConnectionsPositive,
 		},
@@ -548,9 +644,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
-					Port:         8080,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 8080,
+					Timeout: TimeoutConfig{
+						Read:  15 * time.Second,
+						Write: 30 * time.Second,
+					},
 				},
 				Database: DatabaseConfig{
 					Type:     PostgreSQL,
@@ -558,7 +656,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Port:     5432,
 					Database: "testdb",
 					Username: "testuser",
-					MaxConns: 25,
+					Pool: PoolConfig{
+						Max: PoolMaxConfig{
+							Connections: 25,
+						},
+					},
 				},
 				Log: LogConfig{Level: "info"},
 			},
@@ -574,9 +676,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
-					Port:         0,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 0,
+					Timeout: TimeoutConfig{
+						Read:  15 * time.Second,
+						Write: 30 * time.Second,
+					},
 				},
 				Database: DatabaseConfig{
 					Type:     PostgreSQL,
@@ -584,7 +688,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Port:     5432,
 					Database: "testdb",
 					Username: "testuser",
-					MaxConns: 25,
+					Pool: PoolConfig{
+						Max: PoolMaxConfig{
+							Connections: 25,
+						},
+					},
 				},
 				Log: LogConfig{Level: "info"},
 			},
@@ -600,9 +708,13 @@ func TestValidateNestedErrors(t *testing.T) {
 					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
-					Port:         8080,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 8080,
+					Timeout: TimeoutConfig{
+						Read:       15 * time.Second,
+						Write:      30 * time.Second,
+						Middleware: 5 * time.Second,
+						Shutdown:   10 * time.Second,
+					},
 				},
 				Database: DatabaseConfig{
 					Type:     "invalid",
@@ -610,7 +722,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Port:     5432,
 					Database: "testdb",
 					Username: "testuser",
-					MaxConns: 25,
+					Pool: PoolConfig{
+						Max: PoolMaxConfig{
+							Connections: 25,
+						},
+					},
 				},
 				Log: LogConfig{Level: "info"},
 			},
@@ -626,9 +742,13 @@ func TestValidateNestedErrors(t *testing.T) {
 					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
-					Port:         8080,
-					ReadTimeout:  15 * time.Second,
-					WriteTimeout: 30 * time.Second,
+					Port: 8080,
+					Timeout: TimeoutConfig{
+						Read:       15 * time.Second,
+						Write:      30 * time.Second,
+						Middleware: 5 * time.Second,
+						Shutdown:   10 * time.Second,
+					},
 				},
 				Database: DatabaseConfig{
 					Type:     PostgreSQL,
@@ -636,7 +756,11 @@ func TestValidateNestedErrors(t *testing.T) {
 					Port:     5432,
 					Database: "testdb",
 					Username: "testuser",
-					MaxConns: 25,
+					Pool: PoolConfig{
+						Max: PoolMaxConfig{
+							Connections: 25,
+						},
+					},
 				},
 				Log: LogConfig{Level: "invalid"},
 			},
@@ -840,7 +964,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 0, // Gets set to default (25)
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 0, // Should get set to default (25)
+					},
+				},
 			},
 			expectError: false, // Now passes with default
 		},
@@ -852,7 +980,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -864,7 +996,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
-				MaxConns: 50,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 50,
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -872,7 +1008,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			name: "connection_string_minimal_config_passes",
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
-				MaxConns:         25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -881,7 +1021,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
 				Port:             70000,
-				MaxConns:         25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid database port",
@@ -891,7 +1035,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
 				Type:             "invalid",
-				MaxConns:         25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid database type",
@@ -900,7 +1048,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 			name: "connection_string_missing_max_conns_applies_default",
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
-				MaxConns:         0,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 0,
+					},
+				},
 			},
 			expectError: false, // Should apply default of 25
 		},
@@ -912,7 +1064,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				Port:     3306,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid database type: mysql",
@@ -925,7 +1081,11 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				Port:     70000, // Invalid port
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 25,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid database port",
@@ -956,9 +1116,13 @@ func TestValidateDatabaseDisabledConfig(t *testing.T) {
 			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
-			Port:         8080,
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 30 * time.Second,
+			Port: 8080,
+			Timeout: TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
 		},
 		Database: DatabaseConfig{
 			// Empty database config - should skip validation
@@ -983,8 +1147,16 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 			name: "connection_string_with_negative_max_query_length",
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
-				MaxConns:         25,
-				MaxQueryLength:   -1,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Log: QueryLogConfig{
+						MaxLength: -1,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "max query length must be zero or positive",
@@ -993,17 +1165,33 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 			name: "connection_string_with_zero_max_query_length_applies_default",
 			config: DatabaseConfig{
 				ConnectionString: testConnectionString,
-				MaxConns:         25,
-				MaxQueryLength:   0,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Log: QueryLogConfig{
+						MaxLength: 0,
+					},
+				},
 			},
 			expectError: false,
 		},
 		{
 			name: "connection_string_with_negative_slow_query_threshold",
 			config: DatabaseConfig{
-				ConnectionString:   testConnectionString,
-				MaxConns:           25,
-				SlowQueryThreshold: -1 * time.Millisecond,
+				ConnectionString: testConnectionString,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Slow: SlowQueryConfig{
+						Threshold: -1 * time.Millisecond,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "slow query threshold must be zero or positive",
@@ -1011,9 +1199,17 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 		{
 			name: "connection_string_with_zero_slow_query_threshold_applies_default",
 			config: DatabaseConfig{
-				ConnectionString:   testConnectionString,
-				MaxConns:           25,
-				SlowQueryThreshold: 0,
+				ConnectionString: testConnectionString,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Slow: SlowQueryConfig{
+						Threshold: 0,
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1028,11 +1224,11 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				// Verify defaults were applied
-				if tt.config.MaxQueryLength == 0 {
-					assert.Equal(t, defaultMaxQueryLength, tt.config.MaxQueryLength)
+				if tt.config.Query.Log.MaxLength == 0 {
+					assert.Equal(t, defaultMaxQueryLength, tt.config.Query.Log.MaxLength)
 				}
-				if tt.config.SlowQueryThreshold == 0 {
-					assert.Equal(t, defaultSlowQueryThreshold, tt.config.SlowQueryThreshold)
+				if tt.config.Query.Slow.Threshold == 0 {
+					assert.Equal(t, defaultSlowQueryThreshold, tt.config.Query.Slow.Threshold)
 				}
 			}
 		})
@@ -1047,14 +1243,14 @@ func assertValidationError(t *testing.T, err error, errorContains string) {
 func assertValidationSuccess(t *testing.T, err error, config *DatabaseConfig) {
 	assert.NoError(t, err)
 	// Verify defaults were applied
-	if config.MaxConns == 0 {
-		assert.Equal(t, int32(25), config.MaxConns)
+	if config.Pool.Max.Connections == 0 {
+		assert.Equal(t, int32(25), config.Pool.Max.Connections)
 	}
-	if config.MaxQueryLength == 0 {
-		assert.Equal(t, defaultMaxQueryLength, config.MaxQueryLength)
+	if config.Query.Log.MaxLength == 0 {
+		assert.Equal(t, defaultMaxQueryLength, config.Query.Log.MaxLength)
 	}
-	if config.SlowQueryThreshold == 0 {
-		assert.Equal(t, defaultSlowQueryThreshold, config.SlowQueryThreshold)
+	if config.Query.Slow.Threshold == 0 {
+		assert.Equal(t, defaultSlowQueryThreshold, config.Query.Slow.Threshold)
 	}
 }
 
@@ -1073,7 +1269,11 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: -1,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: -1,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: errMaxConnectionsPositive,
@@ -1086,20 +1286,32 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				MaxConns: 0,
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 0,
+					},
+				},
 			},
 			expectError: false,
 		},
 		{
 			name: "negative_max_query_length_error",
 			config: DatabaseConfig{
-				Type:           PostgreSQL,
-				Host:           "localhost",
-				Port:           5432,
-				Database:       "testdb",
-				Username:       "testuser",
-				MaxConns:       25,
-				MaxQueryLength: -1,
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Log: QueryLogConfig{
+						MaxLength: -1,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "max query length must be zero or positive",
@@ -1107,26 +1319,42 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 		{
 			name: "zero_max_query_length_applies_default",
 			config: DatabaseConfig{
-				Type:           PostgreSQL,
-				Host:           "localhost",
-				Port:           5432,
-				Database:       "testdb",
-				Username:       "testuser",
-				MaxConns:       25,
-				MaxQueryLength: 0,
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Log: QueryLogConfig{
+						MaxLength: 0,
+					},
+				},
 			},
 			expectError: false,
 		},
 		{
 			name: "negative_slow_query_threshold_error",
 			config: DatabaseConfig{
-				Type:               PostgreSQL,
-				Host:               "localhost",
-				Port:               5432,
-				Database:           "testdb",
-				Username:           "testuser",
-				MaxConns:           25,
-				SlowQueryThreshold: -1 * time.Millisecond,
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Slow: SlowQueryConfig{
+						Threshold: -1 * time.Millisecond,
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "slow query threshold must be zero or positive",
@@ -1134,13 +1362,21 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 		{
 			name: "zero_slow_query_threshold_applies_default",
 			config: DatabaseConfig{
-				Type:               PostgreSQL,
-				Host:               "localhost",
-				Port:               5432,
-				Database:           "testdb",
-				Username:           "testuser",
-				MaxConns:           25,
-				SlowQueryThreshold: 0,
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{
+						Connections: 25,
+					},
+				},
+				Query: QueryConfig{
+					Slow: SlowQueryConfig{
+						Threshold: 0,
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1168,39 +1404,57 @@ func TestValidateMongoDBFields(t *testing.T) {
 		{
 			name: "valid MongoDB config with read preference and write concern",
 			config: DatabaseConfig{
-				Type:           MongoDB,
-				Host:           "localhost",
-				Port:           27017,
-				Database:       "testdb",
-				Username:       "testuser",
-				ReadPreference: "primary",
-				WriteConcern:   "majority",
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Concern: ConcernConfig{
+						Write: "majority",
+					},
+					Replica: ReplicaConfig{
+						ReadPreference: "primary",
+					},
+				},
 			},
 			expectError: false,
 		},
 		{
 			name: "valid MongoDB config with primaryPreferred",
 			config: DatabaseConfig{
-				Type:           MongoDB,
-				Host:           "localhost",
-				Port:           27017,
-				Database:       "testdb",
-				Username:       "testuser",
-				ReadPreference: "primaryPreferred",
-				WriteConcern:   "acknowledged",
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Concern: ConcernConfig{
+						Write: "acknowledged",
+					},
+					Replica: ReplicaConfig{
+						ReadPreference: "primaryPreferred",
+					},
+				},
 			},
 			expectError: false,
 		},
 		{
 			name: "valid MongoDB config with case insensitive read preference",
 			config: DatabaseConfig{
-				Type:           MongoDB,
-				Host:           "localhost",
-				Port:           27017,
-				Database:       "testdb",
-				Username:       "testuser",
-				ReadPreference: "SECONDARY",
-				WriteConcern:   "MAJORITY",
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Concern: ConcernConfig{
+						Write: "MAJORITY",
+					},
+					Replica: ReplicaConfig{
+						ReadPreference: "SECONDARY",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1218,12 +1472,16 @@ func TestValidateMongoDBFields(t *testing.T) {
 		{
 			name: "invalid read preference",
 			config: DatabaseConfig{
-				Type:           MongoDB,
-				Host:           "localhost",
-				Port:           27017,
-				Database:       "testdb",
-				Username:       "testuser",
-				ReadPreference: "invalid",
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Replica: ReplicaConfig{
+						ReadPreference: "invalid",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB read preference: invalid",
@@ -1231,12 +1489,16 @@ func TestValidateMongoDBFields(t *testing.T) {
 		{
 			name: "invalid write concern",
 			config: DatabaseConfig{
-				Type:         MongoDB,
-				Host:         "localhost",
-				Port:         27017,
-				Database:     "testdb",
-				Username:     "testuser",
-				WriteConcern: "invalid",
+				Type:     MongoDB,
+				Host:     "localhost",
+				Port:     27017,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Concern: ConcernConfig{
+						Write: "invalid",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB write concern: invalid",
@@ -1244,13 +1506,19 @@ func TestValidateMongoDBFields(t *testing.T) {
 		{
 			name: "non-MongoDB type should not validate MongoDB fields",
 			config: DatabaseConfig{
-				Type:           PostgreSQL,
-				Host:           "localhost",
-				Port:           5432,
-				Database:       "testdb",
-				Username:       "testuser",
-				ReadPreference: "invalid", // This should be ignored for PostgreSQL
-				WriteConcern:   "invalid", // This should be ignored for PostgreSQL
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Mongo: MongoConfig{
+					Replica: ReplicaConfig{
+						ReadPreference: "invalid",
+					},
+					Concern: ConcernConfig{
+						Write: "invalid",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1350,8 +1618,14 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 			config: DatabaseConfig{
 				Type:             MongoDB,
 				ConnectionString: testMongoDBConnectionString,
-				ReadPreference:   "primary",
-				WriteConcern:     "majority",
+				Mongo: MongoConfig{
+					Replica: ReplicaConfig{
+						ReadPreference: "primary",
+					},
+					Concern: ConcernConfig{
+						Write: "majority",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1360,7 +1634,11 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 			config: DatabaseConfig{
 				Type:             MongoDB,
 				ConnectionString: testMongoDBConnectionString,
-				ReadPreference:   "invalid",
+				Mongo: MongoConfig{
+					Replica: ReplicaConfig{
+						ReadPreference: "invalid",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB read preference",
@@ -1370,7 +1648,11 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 			config: DatabaseConfig{
 				Type:             MongoDB,
 				ConnectionString: testMongoDBConnectionString,
-				WriteConcern:     "invalid",
+				Mongo: MongoConfig{
+					Concern: ConcernConfig{
+						Write: "invalid",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB write concern",
@@ -1403,7 +1685,11 @@ func TestValidateOracleFields(t *testing.T) {
 				Host:     testOracleHost,
 				Port:     1521,
 				Username: "oracleuser",
-				Service:  ServiceConfig{Name: "XEPDB1"},
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1414,7 +1700,11 @@ func TestValidateOracleFields(t *testing.T) {
 				Host:     testOracleHost,
 				Port:     1521,
 				Username: "oracleuser",
-				SID:      "XE",
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						SID: "XE",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1448,8 +1738,12 @@ func TestValidateOracleFields(t *testing.T) {
 				Host:     testOracleHost,
 				Port:     1521,
 				Username: "oracleuser",
-				Service:  ServiceConfig{Name: "XEPDB1"},
-				SID:      "XE",
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+						SID:  "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID), exactly one is required",
@@ -1462,7 +1756,11 @@ func TestValidateOracleFields(t *testing.T) {
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
-				Service:  ServiceConfig{Name: "XEPDB1"},
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured (service name, database name), exactly one is required",
@@ -1475,7 +1773,11 @@ func TestValidateOracleFields(t *testing.T) {
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
-				SID:      "XE",
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						SID: "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured (SID, database name), exactly one is required",
@@ -1488,8 +1790,12 @@ func TestValidateOracleFields(t *testing.T) {
 				Port:     1521,
 				Database: "XE",
 				Username: "oracleuser",
-				Service:  ServiceConfig{Name: "XEPDB1"},
-				SID:      "XE",
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+						SID:  "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID, database name), exactly one is required",
@@ -1502,8 +1808,12 @@ func TestValidateOracleFields(t *testing.T) {
 				Port:     5432,
 				Database: "testdb",
 				Username: "testuser",
-				Service:  ServiceConfig{Name: "XEPDB1"}, // This should be ignored for PostgreSQL
-				SID:      "XE",                          // This should be ignored for PostgreSQL
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1", // This should be ignored for PostgreSQL
+						SID:  "XE",     // This should be ignored for PostgreSQL
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1533,7 +1843,11 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
-				Service:          ServiceConfig{Name: "XEPDB1"},
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+					},
+				},
 			},
 			expectError: false,
 		},
@@ -1542,8 +1856,12 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
-				Service:          ServiceConfig{Name: "XEPDB1"},
-				SID:              "XE",
+				Oracle: OracleConfig{
+					Service: ServiceConfig{
+						Name: "XEPDB1",
+						SID:  "XE",
+					},
+				},
 			},
 			expectError:   true,
 			errorContains: "oracle configuration has multiple connection identifiers configured",

@@ -105,13 +105,17 @@ func newTestConfig(basePath, healthRoute, readyRoute string) *config.Config {
 			Env:     "development",
 		},
 		Server: config.ServerConfig{
-			Host:         "127.0.0.1",
-			Port:         0,
-			ReadTimeout:  50 * time.Millisecond,
-			WriteTimeout: 50 * time.Millisecond,
-			BasePath:     basePath,
-			HealthRoute:  healthRoute,
-			ReadyRoute:   readyRoute,
+			Host: "127.0.0.1",
+			Port: 0,
+			Timeout: config.TimeoutConfig{
+				Read:  50 * time.Millisecond,
+				Write: 50 * time.Millisecond,
+			},
+			Path: config.PathConfig{
+				Base:   basePath,
+				Health: healthRoute,
+				Ready:  readyRoute,
+			},
 		},
 	}
 }

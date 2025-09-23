@@ -502,7 +502,7 @@ func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 	t.Parallel()
 	log := logger.New("debug", true)
 	ctx := context.Background()
-	settings := newTrackingSettings(&config.DatabaseConfig{SlowQueryThreshold: defaultSlowQueryThreshold})
+	settings := newTrackingSettings(&config.DatabaseConfig{Query: config.QueryConfig{Slow: config.SlowQueryConfig{Threshold: defaultSlowQueryThreshold}}})
 
 	slowStart := time.Now().Add(-settings.slowQueryThreshold - 10*time.Millisecond)
 

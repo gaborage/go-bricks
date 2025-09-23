@@ -78,8 +78,8 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 			fmt.Sprintf("dbname=%s", quoteDSN(cfg.Database)),
 		}
 
-		if cfg.SSLMode != "" {
-			parts = append(parts, fmt.Sprintf("sslmode=%s", cfg.SSLMode))
+		if cfg.TLS.Mode != "" {
+			parts = append(parts, fmt.Sprintf("sslmode=%s", cfg.TLS.Mode))
 		}
 
 		dsn = strings.Join(parts, " ")
@@ -95,10 +95,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	db := openPostgresDB(pgxConfig)
 
 	// Configure connection pool
-	db.SetMaxOpenConns(int(cfg.MaxConns))
-	db.SetMaxIdleConns(int(cfg.MaxIdleConns))
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	db.SetMaxOpenConns(int(cfg.Pool.Max.Connections))
+	db.SetMaxIdleConns(int(cfg.Pool.Idle.Connections))
+	db.SetConnMaxLifetime(cfg.Pool.Lifetime.Max)
+	db.SetConnMaxIdleTime(cfg.Pool.Idle.Time)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

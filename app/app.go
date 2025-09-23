@@ -78,7 +78,7 @@ func isDatabaseEnabled(cfg *config.Config) bool {
 
 // isMessagingEnabled determines if messaging should be initialized based on config
 func isMessagingEnabled(cfg *config.Config) bool {
-	return cfg.Messaging.BrokerURL != ""
+	return cfg.Messaging.Broker.URL != ""
 }
 
 func resolveDatabase(cfg *config.Config, log logger.Logger, opts *Options) (database.Interface, error) {
@@ -129,10 +129,10 @@ func resolveMessaging(cfg *config.Config, log logger.Logger, opts *Options) mess
 	}
 
 	log.Info().
-		Str("broker_url", cfg.Messaging.BrokerURL).
+		Str("broker_url", cfg.Messaging.Broker.URL).
 		Msg("Initializing AMQP messaging client")
 
-	return factory(cfg.Messaging.BrokerURL, log)
+	return factory(cfg.Messaging.Broker.URL, log)
 }
 
 func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
