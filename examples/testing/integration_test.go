@@ -22,9 +22,12 @@ import (
 )
 
 const (
-	userEventsExchangeName = "user.events"
-	userNotificationsQueue = "user.notifications"
-	userCreated            = "user.created"
+	userEventsExchangeName  = "user.events"
+	userNotificationsQueue  = "user.notifications"
+	userCreated             = "user.created"
+	userDeleted             = "user.deleted"
+	userUpdated             = "user.updated"
+	usersWildcardRoutingKey = "user.*"
 )
 
 // Example complete module for demonstration
@@ -72,7 +75,7 @@ func (m *UserModule) RegisterMessaging(registry messaging.RegistryInterface) {
 	registry.RegisterBinding(&messaging.BindingDeclaration{
 		Queue:      userNotificationsQueue,
 		Exchange:   userEventsExchangeName,
-		RoutingKey: "user.*",
+		RoutingKey: usersWildcardRoutingKey,
 	})
 
 	registry.RegisterPublisher(&messaging.PublisherDeclaration{

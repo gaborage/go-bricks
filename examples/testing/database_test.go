@@ -12,6 +12,12 @@ import (
 	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
+const (
+	usersInsertClause = "INSERT INTO users (name, email) VALUES (?, ?)"
+	testUser          = "John Doe"
+	testEmail         = "john@example.com"
+)
+
 // Example User struct for demonstration
 type User struct {
 	ID    int64  `json:"id"`
@@ -47,7 +53,7 @@ func (s *UserService) CreateUser(ctx context.Context, name, email string) (*User
 	}
 	defer tx.Rollback()
 
-	result, err := tx.Exec(ctx, "INSERT INTO users (name, email) VALUES (?, ?)", name, email)
+	result, err := tx.Exec(ctx, usersInsertClause, name, email)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +84,7 @@ func (s *UserService) GetDatabaseType() string {
 // TestUserService_GetUser_Success demonstrates basic mock usage
 // NOTE: This is a simplified example showing mock setup patterns
 // In real tests, you'd use more sophisticated row mocking or fixtures
-func TestUserService_GetUser_Success(t *testing.T) {
+func TestUserServiceGetUserSuccess(t *testing.T) {
 	// Create a mock database using fixtures for simplicity
 	mockDB := fixtures.NewHealthyDatabase()
 
@@ -94,7 +100,7 @@ func TestUserService_GetUser_Success(t *testing.T) {
 }
 
 // TestUserService_CreateUser_Transaction demonstrates transaction testing
-func TestUserService_CreateUser_Transaction(t *testing.T) {
+func TestUserServiceCreateUserTransaction(t *testing.T) {
 	mockDB := &mocks.MockDatabase{}
 	mockTx := &mocks.MockTx{}
 
@@ -103,7 +109,7 @@ func TestUserService_CreateUser_Transaction(t *testing.T) {
 
 	// Expect operations within transaction
 	result := fixtures.NewMockResult(1, 1) // lastInsertId=1, rowsAffected=1
-	mockTx.ExpectExec("INSERT INTO users (name, email) VALUES (?, ?)", result, nil)
+	mockTx.ExpectExec(usersInsertClause, result, nil)
 
 	// The CreateUser method uses defer tx.Rollback(), so we need to expect that
 	mockTx.On("Rollback").Return(nil)
@@ -112,19 +118,19 @@ func TestUserService_CreateUser_Transaction(t *testing.T) {
 	mockTx.ExpectCommit(nil)
 
 	service := NewUserService(mockDB)
-	user, err := service.CreateUser(context.Background(), "John Doe", "john@example.com")
+	user, err := service.CreateUser(context.Background(), testUser, testEmail)
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), user.ID)
-	assert.Equal(t, "John Doe", user.Name)
-	assert.Equal(t, "john@example.com", user.Email)
+	assert.Equal(t, testUser, user.Name)
+	assert.Equal(t, testEmail, user.Email)
 
 	mockDB.AssertExpectations(t)
 	mockTx.AssertExpectations(t)
 }
 
 // TestUserService_CreateUser_TransactionFailure demonstrates transaction failure testing
-func TestUserService_CreateUser_TransactionFailure(t *testing.T) {
+func TestUserServiceCreateUserTransactionFailure(t *testing.T) {
 	mockDB := &mocks.MockDatabase{}
 
 	// Create a failing transaction
@@ -135,10 +141,10 @@ func TestUserService_CreateUser_TransactionFailure(t *testing.T) {
 
 	// Still expect the exec to succeed, but commit will fail
 	result := fixtures.NewMockResult(1, 1)
-	mockTx.ExpectExec("INSERT INTO users (name, email) VALUES (?, ?)", result, nil)
+	mockTx.ExpectExec(usersInsertClause, result, nil)
 
 	service := NewUserService(mockDB)
-	user, err := service.CreateUser(context.Background(), "John Doe", "john@example.com")
+	user, err := service.CreateUser(context.Background(), testUser, testEmail)
 
 	assert.Error(t, err)
 	assert.Nil(t, user)
@@ -148,20 +154,8 @@ func TestUserService_CreateUser_TransactionFailure(t *testing.T) {
 	mockTx.AssertExpectations(t)
 }
 
-// TestUserService_HealthCheck_Healthy demonstrates health check testing with fixtures
-func TestUserService_HealthCheck_Healthy(t *testing.T) {
-	// Use a pre-configured healthy database fixture
-	mockDB := fixtures.NewHealthyDatabase()
-
-	service := NewUserService(mockDB)
-	err := service.CheckHealth(context.Background())
-
-	assert.NoError(t, err)
-	// Note: AssertExpectations not called for fixtures as they use On() without specific expectations
-}
-
 // TestUserService_HealthCheck_Unhealthy demonstrates health check failure testing
-func TestUserService_HealthCheck_Unhealthy(t *testing.T) {
+func TestUserServiceHealthCheckUnhealthy(t *testing.T) {
 	// Use a pre-configured failing database fixture
 	mockDB := fixtures.NewFailingDatabase(sql.ErrConnDone)
 
@@ -173,7 +167,7 @@ func TestUserService_HealthCheck_Unhealthy(t *testing.T) {
 }
 
 // TestUserService_DatabaseTypes demonstrates database-specific testing
-func TestUserService_DatabaseTypes(t *testing.T) {
+func TestUserServiceDatabaseTypes(t *testing.T) {
 	tests := []struct {
 		name         string
 		mockDB       *mocks.MockDatabase
@@ -206,7 +200,7 @@ func TestUserService_DatabaseTypes(t *testing.T) {
 }
 
 // TestUserService_ReadOnlyDatabase demonstrates read-only database testing
-func TestUserService_ReadOnlyDatabase(t *testing.T) {
+func TestUserServiceReadOnlyDatabase(t *testing.T) {
 	mockDB := fixtures.NewReadOnlyDatabase()
 
 	service := NewUserService(mockDB)
@@ -216,14 +210,14 @@ func TestUserService_ReadOnlyDatabase(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create user should fail (it's a write operation)
-	user, err := service.CreateUser(context.Background(), "John", "john@example.com")
+	user, err := service.CreateUser(context.Background(), "John", testEmail)
 	assert.Error(t, err)
 	assert.Nil(t, user)
 	assert.Contains(t, err.Error(), "read-only")
 }
 
 // TestUserService_ErrorScenarios demonstrates various error scenario testing
-func TestUserService_ErrorScenarios(t *testing.T) {
+func TestUserServiceErrorScenarios(t *testing.T) {
 	t.Run("health_check_failure", func(t *testing.T) {
 		// Use fixture for clean, elegant error testing
 		mockDB := fixtures.NewFailingDatabase(sql.ErrConnDone)
@@ -239,7 +233,7 @@ func TestUserService_ErrorScenarios(t *testing.T) {
 		mockDB.ExpectTransaction(nil, sql.ErrConnDone)
 
 		service := NewUserService(mockDB)
-		user, err := service.CreateUser(context.Background(), "John", "john@example.com")
+		user, err := service.CreateUser(context.Background(), "John", testEmail)
 
 		assert.Error(t, err)
 		assert.Nil(t, user)

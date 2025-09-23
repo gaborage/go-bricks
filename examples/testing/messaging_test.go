@@ -48,7 +48,7 @@ func (s *EventService) PublishUserCreated(ctx context.Context, userID int64, nam
 		return err
 	}
 
-	return s.client.Publish(ctx, "user.events", data)
+	return s.client.Publish(ctx, userEventsExchangeName, data)
 }
 
 func (s *EventService) StartConsuming(ctx context.Context, queue string) (<-chan amqp.Delivery, error) {
@@ -92,30 +92,30 @@ func (h *UserMessageHandler) GetProcessedEvents() []string {
 
 // Test Examples
 
-// TestEventService_PublishUserCreated_Success demonstrates basic messaging mock usage
-func TestEventService_PublishUserCreated_Success(t *testing.T) {
+// TestEventServicePublishUserCreatedSuccess demonstrates basic messaging mock usage
+func TestEventServicePublishUserCreatedSuccess(t *testing.T) {
 	mockClient := &mocks.MockMessagingClient{}
 
 	// Set up expectations
 	expectedData, _ := json.Marshal(UserCreatedEvent{
 		UserID: 1,
-		Name:   "John Doe",
-		Email:  "john@example.com",
+		Name:   testUser,
+		Email:  testEmail,
 	})
 
-	mockClient.ExpectPublish("user.events", expectedData, nil)
+	mockClient.ExpectPublish(userEventsExchangeName, expectedData, nil)
 	mockClient.ExpectIsReady(true)
 
 	// Test the service
 	service := NewEventService(mockClient)
-	err := service.PublishUserCreated(context.Background(), 1, "John Doe", "john@example.com")
+	err := service.PublishUserCreated(context.Background(), 1, testUser, testEmail)
 
 	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
 
-// TestEventService_PublishUserCreated_Failure demonstrates failure scenario testing
-func TestEventService_PublishUserCreated_Failure(t *testing.T) {
+// TestEventServicePublishUserCreatedFailure demonstrates failure scenario testing
+func TestEventServicePublishUserCreatedFailure(t *testing.T) {
 	mockClient := &mocks.MockMessagingClient{}
 
 	// Set up failure expectation
@@ -123,18 +123,18 @@ func TestEventService_PublishUserCreated_Failure(t *testing.T) {
 	mockClient.ExpectPublishAny(publishErr)
 
 	service := NewEventService(mockClient)
-	err := service.PublishUserCreated(context.Background(), 1, "John Doe", "john@example.com")
+	err := service.PublishUserCreated(context.Background(), 1, testUser, testEmail)
 
 	assert.Error(t, err)
 	assert.Equal(t, publishErr, err)
 	mockClient.AssertExpectations(t)
 }
 
-// TestEventService_ConsumeMessages demonstrates message simulation
-func TestEventService_ConsumeMessages(t *testing.T) {
+// TestEventServiceConsumeMessages demonstrates message simulation
+func TestEventServiceConsumeMessages(t *testing.T) {
 	// Create a mock client with pre-loaded messages
 	messages := [][]byte{
-		[]byte(`{"event_type": "user.created", "user_id": 1}`),
+		[]byte(`{"event_type": userCreatedExchangeName, "user_id": 1}`),
 		[]byte(`{"event_type": "user.updated", "user_id": 1}`),
 	}
 	mockClient := fixtures.NewMessageSimulator(messages...)
@@ -163,25 +163,25 @@ messageLoop:
 	}
 
 	assert.Len(t, receivedMessages, 2)
-	assert.Contains(t, string(receivedMessages[0]), "user.created")
-	assert.Contains(t, string(receivedMessages[1]), "user.updated")
+	assert.Contains(t, string(receivedMessages[0]), userCreated)
+	assert.Contains(t, string(receivedMessages[1]), userUpdated)
 }
 
-// TestEventService_MessageSimulation demonstrates real-time message simulation
-func TestEventService_MessageSimulation(t *testing.T) {
+// TestEventServiceMessageSimulation demonstrates real-time message simulation
+func TestEventServiceMessageSimulation(t *testing.T) {
 	mockClient := fixtures.NewWorkingMessagingClient()
 
 	service := NewEventService(mockClient)
 
 	// Start consuming
-	deliveries, err := service.StartConsuming(context.Background(), "user.events")
+	deliveries, err := service.StartConsuming(context.Background(), userEventsExchangeName)
 	assert.NoError(t, err)
 
 	// Simulate messages after consumption starts
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		mockClient.SimulateMessage("user.events", []byte(`{"event_type": "user.created", "user_id": 1}`))
-		mockClient.SimulateMessage("user.events", []byte(`{"event_type": "user.deleted", "user_id": 2}`))
+		mockClient.SimulateMessage(userEventsExchangeName, []byte(`{"event_type": "user.created", "user_id": 1}`))
+		mockClient.SimulateMessage(userEventsExchangeName, []byte(`{"event_type": "user.deleted", "user_id": 2}`))
 	}()
 
 	// Collect messages
@@ -198,12 +198,12 @@ func TestEventService_MessageSimulation(t *testing.T) {
 	}
 
 	assert.Len(t, receivedMessages, 2)
-	assert.Contains(t, string(receivedMessages[0]), "user.created")
-	assert.Contains(t, string(receivedMessages[1]), "user.deleted")
+	assert.Contains(t, string(receivedMessages[0]), userCreated)
+	assert.Contains(t, string(receivedMessages[1]), userDeleted)
 }
 
-// TestUserMessageHandler_Handle demonstrates message handler testing
-func TestUserMessageHandler_Handle(t *testing.T) {
+// TestUserMessageHandlerHandle demonstrates message handler testing
+func TestUserMessageHandlerHandle(t *testing.T) {
 	handler := NewUserMessageHandler()
 
 	// Create mock deliveries using fixtures
@@ -222,13 +222,13 @@ func TestUserMessageHandler_Handle(t *testing.T) {
 	// Verify processing
 	processedEvents := handler.GetProcessedEvents()
 	assert.Len(t, processedEvents, 3)
-	assert.Equal(t, "user.created", processedEvents[0])
-	assert.Equal(t, "user.updated", processedEvents[1])
-	assert.Equal(t, "user.deleted", processedEvents[2])
+	assert.Equal(t, userCreated, processedEvents[0])
+	assert.Equal(t, userUpdated, processedEvents[1])
+	assert.Equal(t, userDeleted, processedEvents[2])
 }
 
-// TestUserMessageHandler_HandleInvalidJSON demonstrates error handling
-func TestUserMessageHandler_HandleInvalidJSON(t *testing.T) {
+// TestUserMessageHandlerHandleInvalidJSON demonstrates error handling
+func TestUserMessageHandlerHandleInvalidJSON(t *testing.T) {
 	handler := NewUserMessageHandler()
 
 	// Create delivery with invalid JSON
@@ -242,8 +242,8 @@ func TestUserMessageHandler_HandleInvalidJSON(t *testing.T) {
 	assert.Empty(t, processedEvents)
 }
 
-// TestEventService_ConnectionFailures demonstrates connection failure testing
-func TestEventService_ConnectionFailures(t *testing.T) {
+// TestEventServiceConnectionFailures demonstrates connection failure testing
+func TestEventServiceConnectionFailures(t *testing.T) {
 	t.Run("client_not_ready", func(t *testing.T) {
 		mockClient := fixtures.NewDisconnectedMessagingClient()
 
@@ -257,7 +257,7 @@ func TestEventService_ConnectionFailures(t *testing.T) {
 		mockClient := fixtures.NewFailingMessagingClient(0) // Fail immediately
 
 		service := NewEventService(mockClient)
-		err := service.PublishUserCreated(context.Background(), 1, "John", "john@example.com")
+		err := service.PublishUserCreated(context.Background(), 1, "John", testEmail)
 
 		assert.Error(t, err)
 	})
@@ -268,7 +268,7 @@ func TestEventService_ConnectionFailures(t *testing.T) {
 		service := NewEventService(mockClient)
 
 		// First two calls should succeed
-		err1 := service.PublishUserCreated(context.Background(), 1, "John", "john@example.com")
+		err1 := service.PublishUserCreated(context.Background(), 1, "John", testEmail)
 		err2 := service.PublishUserCreated(context.Background(), 2, "Jane", "jane@example.com")
 
 		assert.NoError(t, err1)
@@ -280,36 +280,36 @@ func TestEventService_ConnectionFailures(t *testing.T) {
 	})
 }
 
-// TestAMQPClient_Infrastructure demonstrates AMQP infrastructure testing
-func TestAMQPClient_Infrastructure(t *testing.T) {
+// TestAMQPClientInfrastructure demonstrates AMQP infrastructure testing
+func TestAMQPClientInfrastructure(t *testing.T) {
 	mockAMQP := fixtures.NewWorkingAMQPClient()
 
 	// Test exchange declaration
-	err := mockAMQP.DeclareExchange("user.events", "topic", true, false, false, false)
+	err := mockAMQP.DeclareExchange(userEventsExchangeName, "topic", true, false, false, false)
 	assert.NoError(t, err)
 
 	// Test queue declaration
-	err = mockAMQP.DeclareQueue("user.notifications", true, false, false, false)
+	err = mockAMQP.DeclareQueue(userNotificationsQueue, true, false, false, false)
 	assert.NoError(t, err)
 
 	// Test binding
-	err = mockAMQP.BindQueue("user.notifications", "user.events", "user.*")
+	err = mockAMQP.BindQueue(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey)
 	assert.NoError(t, err)
 
 	// Verify infrastructure state
-	assert.True(t, mockAMQP.IsExchangeDeclared("user.events"))
-	assert.True(t, mockAMQP.IsQueueDeclared("user.notifications"))
-	assert.True(t, mockAMQP.IsQueueBound("user.notifications", "user.events", "user.*"))
+	assert.True(t, mockAMQP.IsExchangeDeclared(userEventsExchangeName))
+	assert.True(t, mockAMQP.IsQueueDeclared(userNotificationsQueue))
+	assert.True(t, mockAMQP.IsQueueBound(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey))
 }
 
-// TestAMQPClient_PublishToExchange demonstrates exchange publishing
-func TestAMQPClient_PublishToExchange(t *testing.T) {
+// TestAMQPClientPublishToExchange demonstrates exchange publishing
+func TestAMQPClientPublishToExchange(t *testing.T) {
 	mockAMQP := mocks.NewMockAMQPClient()
 
 	// Set up expectation for publishing to exchange
 	options := messaging.PublishOptions{
-		Exchange:   "user.events",
-		RoutingKey: "user.created",
+		Exchange:   userEventsExchangeName,
+		RoutingKey: userCreated,
 		Headers:    map[string]any{"content-type": "application/json"},
 	}
 	data := []byte(`{"user_id": 1, "name": "John"}`)
@@ -323,14 +323,14 @@ func TestAMQPClient_PublishToExchange(t *testing.T) {
 	mockAMQP.AssertExpectations(t)
 }
 
-// TestRegistry_Infrastructure demonstrates registry testing
-func TestRegistry_Infrastructure(t *testing.T) {
+// TestRegistryInfrastructure demonstrates registry testing
+func TestRegistryInfrastructure(t *testing.T) {
 	mockRegistry := fixtures.NewWorkingRegistry()
 
 	// Register infrastructure
-	exchange := fixtures.NewExchangeDeclaration("user.events", "topic")
-	queue := fixtures.NewQueueDeclaration("user.notifications")
-	binding := fixtures.NewBindingDeclaration("user.notifications", "user.events", "user.*")
+	exchange := fixtures.NewExchangeDeclaration(userEventsExchangeName, "topic")
+	queue := fixtures.NewQueueDeclaration(userNotificationsQueue)
+	binding := fixtures.NewBindingDeclaration(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey)
 
 	mockRegistry.RegisterExchange(exchange)
 	mockRegistry.RegisterQueue(queue)
@@ -348,14 +348,14 @@ func TestRegistry_Infrastructure(t *testing.T) {
 
 	// Verify registrations
 	exchanges := mockRegistry.GetExchanges()
-	assert.Contains(t, exchanges, "user.events")
+	assert.Contains(t, exchanges, userEventsExchangeName)
 
 	queues := mockRegistry.GetQueues()
-	assert.Contains(t, queues, "user.notifications")
+	assert.Contains(t, queues, userNotificationsQueue)
 
 	bindings := mockRegistry.GetBindings()
 	assert.Len(t, bindings, 1)
-	assert.Equal(t, "user.*", bindings[0].RoutingKey)
+	assert.Equal(t, usersWildcardRoutingKey, bindings[0].RoutingKey)
 
 	mockRegistry.AssertExpectations(t)
 }
