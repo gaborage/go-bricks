@@ -21,6 +21,10 @@
 
 !Makefile
 
+# Example files
+!.env.example
+!config.example.yaml
+
 !wiki/*
 
 !.github/workflows/*.yml
