@@ -12,8 +12,62 @@ import (
 	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
+// Database type constants
+const (
+	MockDatabaseType     = "mock"
+	PostgresDatabaseType = "postgres"
+	OracleDatabaseType   = "oracle"
+	MongoDBDatabaseType  = "mongodb"
+)
+
+// Database stats field constants
+const (
+	OpenConnectionsField = "open_connections"
+	InUseField          = "in_use"
+	IdleField           = "idle"
+)
+
+// Migration table constants
+const (
+	DefaultMigrationTable = "schema_migrations"
+	OracleMigrationTable  = "SCHEMA_MIGRATIONS"
+)
+
+// Default database stats values
+const (
+	DefaultOpenConnections = 1
+	DefaultInUse          = 0
+	DefaultIdle           = 1
+)
+
 // DatabaseFixtures provides helper functions for creating pre-configured database mocks
 // and SQL result builders for consistent testing.
+
+// getDefaultStats returns the default database statistics map used across fixtures
+func getDefaultStats() map[string]any {
+	return map[string]any{
+		OpenConnectionsField: DefaultOpenConnections,
+		InUseField:          DefaultInUse,
+		IdleField:           DefaultIdle,
+	}
+}
+
+// createFailingRow creates a *sql.Row that will return the specified error when scanned
+func createFailingRow(err error) *sql.Row {
+	// Create a mock database connection that will return an error
+	db, sqlMock, mockErr := sqlmock.New()
+	if mockErr != nil {
+		panic(mockErr) // This should never happen in tests
+	}
+	defer db.Close()
+
+	// Setup the expectation to return an error
+	sqlMock.ExpectQuery(".*").WillReturnError(err)
+
+	// Execute the query to get the actual row
+	row := db.QueryRowContext(context.Background(), "SELECT")
+	return row
+}
 
 // NewHealthyDatabase creates a mock database that responds positively to health checks
 // and basic operations. This is useful for testing happy path scenarios.
@@ -22,12 +76,8 @@ func NewHealthyDatabase() *mocks.MockDatabase {
 
 	// Setup healthy responses
 	mockDB.ExpectHealthCheck(true)
-	mockDB.ExpectDatabaseType("mock")
-	mockDB.ExpectStats(map[string]any{
-		"open_connections": 1,
-		"in_use":           0,
-		"idle":             1,
-	}, nil)
+	mockDB.ExpectDatabaseType(MockDatabaseType)
+	mockDB.ExpectStats(getDefaultStats(), nil)
 
 	return mockDB
 }
@@ -44,6 +94,9 @@ func NewFailingDatabase(err error) *mocks.MockDatabase {
 	// Setup failing responses
 	mockDB.ExpectHealthCheck(false)
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return((*sql.Rows)(nil), err)
+	// For QueryRow, we need to return a valid row that will fail when scanned
+	failingRow := createFailingRow(err)
+	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(failingRow)
 	mockDB.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(nil, err)
 	mockDB.On("Begin", mock.Anything).Return((*mocks.MockTx)(nil), err)
 
@@ -55,14 +108,14 @@ func NewFailingDatabase(err error) *mocks.MockDatabase {
 //
 // Example:
 //
-//	data := map[string][]interface{}{
+//	data := map[string][]any{
 //	  "SELECT * FROM users": {
-//	    []interface{}{1, "John", "john@example.com"},
-//	    []interface{}{2, "Jane", "jane@example.com"},
+//	    []any{1, "John", "john@example.com"},
+//	    []any{2, "Jane", "jane@example.com"},
 //	  },
 //	}
 //	mockDB := fixtures.NewDatabaseWithData(data)
-func NewDatabaseWithData(data map[string][]interface{}) *mocks.MockDatabase {
+func NewDatabaseWithData(data map[string][]any) *mocks.MockDatabase {
 	mockDB := NewHealthyDatabase()
 
 	for query, rowData := range data {
@@ -70,16 +123,16 @@ func NewDatabaseWithData(data map[string][]interface{}) *mocks.MockDatabase {
 			continue
 		}
 		// Assume first row defines column structure
-		firstRow := rowData[0].([]interface{})
+		firstRow := rowData[0].([]any)
 		columns := make([]string, len(firstRow))
 		for i := range firstRow {
 			columns[i] = "col" + string(rune('A'+i)) // Generate column names like "colA", "colB"
 		}
 
 		// Convert the data to the correct format
-		rowsData := make([][]interface{}, len(rowData))
+		rowsData := make([][]any, len(rowData))
 		for i, row := range rowData {
-			rowsData[i] = row.([]interface{})
+			rowsData[i] = row.([]any)
 		}
 		rows := NewMockRows(columns, rowsData)
 		if rows.Err() != nil {
@@ -117,12 +170,12 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 //
 //	rows := fixtures.NewMockRows(
 //	  []string{"id", "name", "email"},
-//	  [][]interface{}{
+//	  [][]any{
 //	    {1, "John", "john@example.com"},
 //	    {2, "Jane", "jane@example.com"},
 //	  },
 //	)
-func NewMockRows(columns []string, rows [][]interface{}) *sql.Rows {
+func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	// Create a mock database connection
 	db, sqlMock, err := sqlmock.New()
 	if err != nil {
@@ -194,10 +247,6 @@ func NewSuccessfulTransaction() *mocks.MockTx {
 	mockTx := &mocks.MockTx{}
 	mockTx.ExpectSuccessfulTransaction()
 
-	// Allow operations within the transaction
-	mockTx.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(&sql.Rows{}, nil)
-	mockTx.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(NewMockResult(1, 1), nil)
-
 	return mockTx
 }
 
@@ -210,10 +259,6 @@ func NewFailedTransaction(commitErr error) *mocks.MockTx {
 	mockTx := &mocks.MockTx{}
 	mockTx.ExpectFailedTransaction(commitErr)
 
-	// Allow operations within the transaction
-	mockTx.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(&sql.Rows{}, nil)
-	mockTx.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(NewMockResult(1, 1), nil)
-
 	return mockTx
 }
 
@@ -225,13 +270,9 @@ func NewPostgreSQLDatabase() *mocks.MockDatabase {
 
 	// Setup healthy responses for PostgreSQL
 	mockDB.ExpectHealthCheck(true)
-	mockDB.ExpectDatabaseType("postgres")
-	mockDB.ExpectStats(map[string]any{
-		"open_connections": 1,
-		"in_use":           0,
-		"idle":             1,
-	}, nil)
-	mockDB.On("GetMigrationTable").Return("schema_migrations")
+	mockDB.ExpectDatabaseType(PostgresDatabaseType)
+	mockDB.ExpectStats(getDefaultStats(), nil)
+	mockDB.On("GetMigrationTable").Return(DefaultMigrationTable)
 
 	return mockDB
 }
@@ -242,13 +283,9 @@ func NewOracleDatabase() *mocks.MockDatabase {
 
 	// Setup healthy responses for Oracle
 	mockDB.ExpectHealthCheck(true)
-	mockDB.ExpectDatabaseType("oracle")
-	mockDB.ExpectStats(map[string]any{
-		"open_connections": 1,
-		"in_use":           0,
-		"idle":             1,
-	}, nil)
-	mockDB.On("GetMigrationTable").Return("SCHEMA_MIGRATIONS")
+	mockDB.ExpectDatabaseType(OracleDatabaseType)
+	mockDB.ExpectStats(getDefaultStats(), nil)
+	mockDB.On("GetMigrationTable").Return(OracleMigrationTable)
 
 	return mockDB
 }
@@ -259,13 +296,9 @@ func NewMongoDatabase() *mocks.MockDatabase {
 
 	// Setup healthy responses for MongoDB
 	mockDB.ExpectHealthCheck(true)
-	mockDB.ExpectDatabaseType("mongodb")
-	mockDB.ExpectStats(map[string]any{
-		"open_connections": 1,
-		"in_use":           0,
-		"idle":             1,
-	}, nil)
-	mockDB.On("GetMigrationTable").Return("schema_migrations")
+	mockDB.ExpectDatabaseType(MongoDBDatabaseType)
+	mockDB.ExpectStats(getDefaultStats(), nil)
+	mockDB.On("GetMigrationTable").Return(DefaultMigrationTable)
 
 	return mockDB
 }

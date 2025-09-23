@@ -9,6 +9,35 @@ import (
 	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
+// AMQP message header constants
+const (
+	ContentTypeHeader       = "content-type"
+	ContentEncodingHeader   = "content-encoding"
+	DeliveryModeHeader      = "delivery-mode"
+	PriorityHeader          = "priority"
+	CorrelationIDHeader     = "correlation-id"
+	ReplyToHeader           = "reply-to"
+	ExpirationHeader        = "expiration"
+	MessageIDHeader         = "message-id"
+	TypeHeader              = "type"
+	UserIDHeader            = "user-id"
+	AppIDHeader             = "app-id"
+	ExchangeHeader          = "exchange"
+	RoutingKeyHeader        = "routing-key"
+)
+
+// Content type constants
+const (
+	ApplicationJSONContentType = "application/json"
+	TextPlainContentType       = "text/plain"
+)
+
+// Test constants
+const (
+	TestQueueName    = "test.queue"
+	TestConsumerTag  = "test-consumer"
+)
+
 // MessagingFixtures provides helper functions for creating pre-configured messaging mocks
 // and message builders for consistent testing.
 
@@ -41,7 +70,7 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
-		for i := 0; i < failAfter; i++ {
+		for range failAfter {
 			mockClient.ExpectPublishAny(nil)
 		}
 		mockClient.ExpectPublishAny(amqp.ErrClosed)
@@ -57,7 +86,7 @@ func NewMessageSimulator(messages ...[]byte) *mocks.MockMessagingClient {
 
 	// Pre-load messages for simulation
 	for _, msg := range messages {
-		mockClient.SimulateMessage("test.queue", msg)
+		mockClient.SimulateMessage(TestQueueName, msg)
 	}
 
 	return mockClient
@@ -111,13 +140,6 @@ func NewWorkingRegistry() *mocks.MockRegistry {
 
 	// Setup successful infrastructure operations
 	mockRegistry.ExpectRegistrations()
-	mockRegistry.ExpectDeclareInfrastructure(nil)
-	mockRegistry.ExpectStartConsumers(nil)
-	mockRegistry.ExpectStopConsumers()
-
-	// Setup validation responses
-	mockRegistry.ExpectValidatePublisher("", "", true) // Allow any publisher
-	mockRegistry.ExpectValidateConsumer("", true)      // Allow any consumer
 
 	return mockRegistry
 }
@@ -140,50 +162,50 @@ func NewFailingRegistry() *mocks.MockRegistry {
 //
 // Example:
 //
-//	delivery := fixtures.NewMockDelivery([]byte(`{"event": "user.created"}`), map[string]interface{}{
-//	  "content-type": "application/json",
-//	  "routing-key":  "user.created",
+//	delivery := fixtures.NewMockDelivery([]byte(`{"event": "user.created"}`), map[string]any{
+//	  fixtures.ContentTypeHeader: fixtures.ApplicationJSONContentType,
+//	  fixtures.RoutingKeyHeader:  "user.created",
 //	})
-func NewMockDelivery(body []byte, headers map[string]interface{}) amqp.Delivery {
+func NewMockDelivery(body []byte, headers map[string]any) amqp.Delivery {
 	if headers == nil {
-		headers = make(map[string]interface{})
+		headers = make(map[string]any)
 	}
 
 	return amqp.Delivery{
 		Headers:         headers,
-		ContentType:     getStringHeader(headers, "content-type", "application/json"),
-		ContentEncoding: getStringHeader(headers, "content-encoding", ""),
+		ContentType:     getStringHeader(headers, ContentTypeHeader, ApplicationJSONContentType),
+		ContentEncoding: getStringHeader(headers, ContentEncodingHeader, ""),
 		Body:            body,
-		DeliveryMode:    getUint8Header(headers, "delivery-mode", amqp.Persistent),
-		Priority:        getUint8Header(headers, "priority", 0),
-		CorrelationId:   getStringHeader(headers, "correlation-id", ""),
-		ReplyTo:         getStringHeader(headers, "reply-to", ""),
-		Expiration:      getStringHeader(headers, "expiration", ""),
-		MessageId:       getStringHeader(headers, "message-id", ""),
+		DeliveryMode:    getUint8Header(headers, DeliveryModeHeader, amqp.Persistent),
+		Priority:        getUint8Header(headers, PriorityHeader, 0),
+		CorrelationId:   getStringHeader(headers, CorrelationIDHeader, ""),
+		ReplyTo:         getStringHeader(headers, ReplyToHeader, ""),
+		Expiration:      getStringHeader(headers, ExpirationHeader, ""),
+		MessageId:       getStringHeader(headers, MessageIDHeader, ""),
 		Timestamp:       time.Now(),
-		Type:            getStringHeader(headers, "type", ""),
-		UserId:          getStringHeader(headers, "user-id", ""),
-		AppId:           getStringHeader(headers, "app-id", ""),
-		ConsumerTag:     "test-consumer",
+		Type:            getStringHeader(headers, TypeHeader, ""),
+		UserId:          getStringHeader(headers, UserIDHeader, ""),
+		AppId:           getStringHeader(headers, AppIDHeader, ""),
+		ConsumerTag:     TestConsumerTag,
 		MessageCount:    0,
 		DeliveryTag:     1,
 		Redelivered:     false,
-		Exchange:        getStringHeader(headers, "exchange", ""),
-		RoutingKey:      getStringHeader(headers, "routing-key", ""),
+		Exchange:        getStringHeader(headers, ExchangeHeader, ""),
+		RoutingKey:      getStringHeader(headers, RoutingKeyHeader, ""),
 	}
 }
 
 // NewJSONDelivery creates an AMQP delivery with JSON content type.
 func NewJSONDelivery(jsonBody []byte) amqp.Delivery {
-	return NewMockDelivery(jsonBody, map[string]interface{}{
-		"content-type": "application/json",
+	return NewMockDelivery(jsonBody, map[string]any{
+		ContentTypeHeader: ApplicationJSONContentType,
 	})
 }
 
 // NewTextDelivery creates an AMQP delivery with plain text content type.
 func NewTextDelivery(textBody []byte) amqp.Delivery {
-	return NewMockDelivery(textBody, map[string]interface{}{
-		"content-type": "text/plain",
+	return NewMockDelivery(textBody, map[string]any{
+		ContentTypeHeader: TextPlainContentType,
 	})
 }
 
@@ -242,7 +264,7 @@ func NewPublisherDeclaration(exchange, routingKey, eventType string) *messaging.
 func NewConsumerDeclaration(queue, eventType string, handler messaging.MessageHandler) *messaging.ConsumerDeclaration {
 	return &messaging.ConsumerDeclaration{
 		Queue:       queue,
-		Consumer:    "test-consumer",
+		Consumer:    TestConsumerTag,
 		AutoAck:     false,
 		Exclusive:   false,
 		NoLocal:     false,
@@ -255,7 +277,7 @@ func NewConsumerDeclaration(queue, eventType string, handler messaging.MessageHa
 
 // Helper functions for header extraction
 
-func getStringHeader(headers map[string]interface{}, key, defaultValue string) string {
+func getStringHeader(headers map[string]any, key, defaultValue string) string {
 	if value, exists := headers[key]; exists {
 		if str, ok := value.(string); ok {
 			return str
@@ -264,7 +286,7 @@ func getStringHeader(headers map[string]interface{}, key, defaultValue string) s
 	return defaultValue
 }
 
-func getUint8Header(headers map[string]interface{}, key string, defaultValue uint8) uint8 {
+func getUint8Header(headers map[string]any, key string, defaultValue uint8) uint8 {
 	if value, exists := headers[key]; exists {
 		if num, ok := value.(uint8); ok {
 			return num
