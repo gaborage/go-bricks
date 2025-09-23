@@ -112,7 +112,7 @@ func TestUserServiceCreateUserTransaction(t *testing.T) {
 	mockTx.ExpectExec(usersInsertClause, result, nil)
 
 	// The CreateUser method uses defer tx.Rollback(), so we need to expect that
-	mockTx.On("Rollback").Return(nil)
+	mockTx.ExpectRollback(nil)
 
 	// And then expect commit to be called explicitly
 	mockTx.ExpectCommit(nil)

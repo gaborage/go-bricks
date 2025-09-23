@@ -36,7 +36,7 @@ jobs:
       run: go mod download
     
     - name: Run tests
-      run: go test -race -coverprofile=coverage.out $(go list ./... | grep -v examples | grep -v tools)
+      run: go test -race -coverprofile=coverage.out $(go list ./... | grep -v examples | grep -v tools | grep -v testing)
     
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7

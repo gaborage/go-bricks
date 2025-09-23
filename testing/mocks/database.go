@@ -39,6 +39,9 @@ func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) 
 // Exec implements types.Interface
 func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	arguments := m.Called(ctx, query, args)
+	if arguments.Get(0) == nil {
+		return nil, arguments.Error(1)
+	}
 	return arguments.Get(0).(sql.Result), arguments.Error(1)
 }
 
@@ -69,10 +72,15 @@ func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.
 	return arguments.Get(0).(types.Tx), arguments.Error(1)
 }
 
-// Health implements types.Interface
-func (m *MockDatabase) Health(ctx context.Context) error {
+// noopWithError is a helper to avoid code duplication in Health
+func (m *MockDatabase) noopWithError(ctx context.Context) error {
 	arguments := m.Called(ctx)
 	return arguments.Error(0)
+}
+
+// Health implements types.Interface
+func (m *MockDatabase) Health(ctx context.Context) error {
+	return m.noopWithError(ctx)
 }
 
 // Stats implements types.Interface
@@ -87,22 +95,25 @@ func (m *MockDatabase) Close() error {
 	return arguments.Error(0)
 }
 
-// DatabaseType implements types.Interface
-func (m *MockDatabase) DatabaseType() string {
+// noop is a helper to avoid code duplication in DatabaseType and GetMigrationTable
+func (m *MockDatabase) noop() string {
 	arguments := m.Called()
 	return arguments.String(0)
+}
+
+// DatabaseType implements types.Interface
+func (m *MockDatabase) DatabaseType() string {
+	return m.noop()
 }
 
 // GetMigrationTable implements types.Interface
 func (m *MockDatabase) GetMigrationTable() string {
-	arguments := m.Called()
-	return arguments.String(0)
+	return m.noop()
 }
 
 // CreateMigrationTable implements types.Interface
 func (m *MockDatabase) CreateMigrationTable(ctx context.Context) error {
-	arguments := m.Called(ctx)
-	return arguments.Error(0)
+	return m.noopWithError(ctx)
 }
 
 // Helper methods for common testing scenarios
@@ -110,9 +121,9 @@ func (m *MockDatabase) CreateMigrationTable(ctx context.Context) error {
 // ExpectHealthCheck sets up a health check expectation
 func (m *MockDatabase) ExpectHealthCheck(healthy bool) *mock.Call {
 	if healthy {
-		return m.On("Health", mock.Anything).Return(nil)
+		return m.On("noopWithError", mock.Anything).Return(nil)
 	}
-	return m.On("Health", mock.Anything).Return(sql.ErrConnDone)
+	return m.On("noopWithError", mock.Anything).Return(sql.ErrConnDone)
 }
 
 // ExpectQuery sets up a query expectation with the provided rows and error
@@ -132,7 +143,7 @@ func (m *MockDatabase) ExpectTransaction(tx types.Tx, err error) *mock.Call {
 
 // ExpectDatabaseType sets up a database type expectation
 func (m *MockDatabase) ExpectDatabaseType(dbType string) *mock.Call {
-	return m.On("DatabaseType").Return(dbType)
+	return m.On("noop").Return(dbType)
 }
 
 // ExpectStats sets up a stats expectation with the provided stats and error

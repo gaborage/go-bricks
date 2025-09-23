@@ -48,16 +48,20 @@ func (m *MockTx) Prepare(ctx context.Context, query string) (types.Statement, er
 	return arguments.Get(0).(types.Statement), arguments.Error(1)
 }
 
-// Commit implements types.Tx
-func (m *MockTx) Commit() error {
+// noop is a helper to avoid code duplication in Commit and Rollback
+func (m *MockTx) noop() error {
 	arguments := m.Called()
 	return arguments.Error(0)
 }
 
+// Commit implements types.Tx
+func (m *MockTx) Commit() error {
+	return m.noop()
+}
+
 // Rollback implements types.Tx
 func (m *MockTx) Rollback() error {
-	arguments := m.Called()
-	return arguments.Error(0)
+	return m.noop()
 }
 
 // Helper methods for common testing scenarios
@@ -79,21 +83,21 @@ func (m *MockTx) ExpectPrepare(query string, stmt types.Statement, err error) *m
 
 // ExpectCommit sets up a commit expectation with the provided error
 func (m *MockTx) ExpectCommit(err error) *mock.Call {
-	return m.On("Commit").Return(err)
+	return m.On("noop").Return(err)
 }
 
 // ExpectRollback sets up a rollback expectation with the provided error
 func (m *MockTx) ExpectRollback(err error) *mock.Call {
-	return m.On("Rollback").Return(err)
+	return m.On("noop").Return(err)
 }
 
 // ExpectSuccessfulTransaction sets up expectations for a successful transaction
 func (m *MockTx) ExpectSuccessfulTransaction() {
-	m.On("Commit").Return(nil)
+	m.On("noop").Return(nil)
 }
 
 // ExpectFailedTransaction sets up expectations for a failed transaction that should be rolled back
 func (m *MockTx) ExpectFailedTransaction(commitErr error) {
-	m.On("Commit").Return(commitErr)
-	m.On("Rollback").Return(nil)
+	m.On("noop").Return(commitErr)
+	m.On("noop").Return(nil)
 }

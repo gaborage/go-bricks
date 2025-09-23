@@ -11,19 +11,19 @@ import (
 
 // AMQP message header constants
 const (
-	ContentTypeHeader       = "content-type"
-	ContentEncodingHeader   = "content-encoding"
-	DeliveryModeHeader      = "delivery-mode"
-	PriorityHeader          = "priority"
-	CorrelationIDHeader     = "correlation-id"
-	ReplyToHeader           = "reply-to"
-	ExpirationHeader        = "expiration"
-	MessageIDHeader         = "message-id"
-	TypeHeader              = "type"
-	UserIDHeader            = "user-id"
-	AppIDHeader             = "app-id"
-	ExchangeHeader          = "exchange"
-	RoutingKeyHeader        = "routing-key"
+	ContentTypeHeader     = "content-type"
+	ContentEncodingHeader = "content-encoding"
+	DeliveryModeHeader    = "delivery-mode"
+	PriorityHeader        = "priority"
+	CorrelationIDHeader   = "correlation-id"
+	ReplyToHeader         = "reply-to"
+	ExpirationHeader      = "expiration"
+	MessageIDHeader       = "message-id"
+	TypeHeader            = "type"
+	UserIDHeader          = "user-id"
+	AppIDHeader           = "app-id"
+	ExchangeHeader        = "exchange"
+	RoutingKeyHeader      = "routing-key"
 )
 
 // Content type constants
@@ -34,8 +34,8 @@ const (
 
 // Test constants
 const (
-	TestQueueName    = "test.queue"
-	TestConsumerTag  = "test-consumer"
+	TestQueueName   = "test.queue"
+	TestConsumerTag = "test-consumer"
 )
 
 // MessagingFixtures provides helper functions for creating pre-configured messaging mocks
@@ -108,9 +108,9 @@ func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 	mockClient := mocks.NewMockAMQPClient()
 
 	// Setup successful responses for infrastructure operations
-	mockClient.ExpectDeclareExchange("", "", true, false, false, false, nil) // Allow any exchange
-	mockClient.ExpectDeclareQueue("", true, false, false, false, nil)        // Allow any queue
-	mockClient.ExpectBindQueue("", "", "", nil)                              // Allow any binding
+	mockClient.ExpectDeclareExchangeAny(nil) // Allow any exchange
+	mockClient.ExpectDeclareQueueAny(nil)    // Allow any queue
+	mockClient.ExpectBindQueueAny(nil)       // Allow any binding
 
 	// Setup successful messaging operations
 	mockClient.ExpectIsReady(true)
@@ -124,10 +124,10 @@ func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 func NewFailingAMQPClient() *mocks.MockAMQPClient {
 	mockClient := mocks.NewMockAMQPClient()
 
-	infraErr := amqp.Error{Code: 404, Reason: "NOT_FOUND"}
-	mockClient.ExpectDeclareExchange("", "", true, false, false, false, &infraErr)
-	mockClient.ExpectDeclareQueue("", true, false, false, false, &infraErr)
-	mockClient.ExpectBindQueue("", "", "", &infraErr)
+	infraErr := amqp.Error{Code: 500, Reason: "INTERNAL_ERROR"}
+	mockClient.ExpectDeclareExchangeAny(&infraErr)
+	mockClient.ExpectDeclareQueueAny(&infraErr)
+	mockClient.ExpectBindQueueAny(&infraErr)
 
 	return mockClient
 }

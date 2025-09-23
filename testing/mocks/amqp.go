@@ -61,33 +61,48 @@ func (m *MockAMQPClient) ConsumeFromQueue(ctx context.Context, options messaging
 
 // DeclareQueue implements messaging.AMQPClient
 func (m *MockAMQPClient) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool) error {
-	m.mu.Lock()
-	m.declaredQueues[name] = true
-	m.mu.Unlock()
-
 	arguments := m.Called(name, durable, autoDelete, exclusive, noWait)
-	return arguments.Error(0)
+	err := arguments.Error(0)
+
+	// Only update state if the operation succeeded
+	if err == nil {
+		m.mu.Lock()
+		m.declaredQueues[name] = true
+		m.mu.Unlock()
+	}
+
+	return err
 }
 
 // DeclareExchange implements messaging.AMQPClient
 func (m *MockAMQPClient) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool) error {
-	m.mu.Lock()
-	m.declaredExchanges[name] = true
-	m.mu.Unlock()
-
 	arguments := m.Called(name, kind, durable, autoDelete, internal, noWait)
-	return arguments.Error(0)
+	err := arguments.Error(0)
+
+	// Only update state if the operation succeeded
+	if err == nil {
+		m.mu.Lock()
+		m.declaredExchanges[name] = true
+		m.mu.Unlock()
+	}
+
+	return err
 }
 
 // BindQueue implements messaging.AMQPClient
 func (m *MockAMQPClient) BindQueue(queue, exchange, routingKey string) error {
-	bindingKey := queue + ":" + exchange + ":" + routingKey
-	m.mu.Lock()
-	m.bindings[bindingKey] = true
-	m.mu.Unlock()
-
 	arguments := m.Called(queue, exchange, routingKey)
-	return arguments.Error(0)
+	err := arguments.Error(0)
+
+	// Only update state if the operation succeeded
+	if err == nil {
+		bindingKey := queue + ":" + exchange + ":" + routingKey
+		m.mu.Lock()
+		m.bindings[bindingKey] = true
+		m.mu.Unlock()
+	}
+
+	return err
 }
 
 // Helper methods for testing scenarios
@@ -151,4 +166,19 @@ func (m *MockAMQPClient) ExpectDeclareExchange(name, kind string, durable, autoD
 // ExpectBindQueue sets up a bind queue expectation
 func (m *MockAMQPClient) ExpectBindQueue(queue, exchange, routingKey string, err error) *mock.Call {
 	return m.On("BindQueue", queue, exchange, routingKey).Return(err)
+}
+
+// ExpectDeclareExchangeAny sets up a declare exchange expectation for any parameters
+func (m *MockAMQPClient) ExpectDeclareExchangeAny(err error) *mock.Call {
+	return m.On("DeclareExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
+}
+
+// ExpectDeclareQueueAny sets up a declare queue expectation for any parameters
+func (m *MockAMQPClient) ExpectDeclareQueueAny(err error) *mock.Call {
+	return m.On("DeclareQueue", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
+}
+
+// ExpectBindQueueAny sets up a bind queue expectation for any parameters
+func (m *MockAMQPClient) ExpectBindQueueAny(err error) *mock.Call {
+	return m.On("BindQueue", mock.Anything, mock.Anything, mock.Anything).Return(err)
 }

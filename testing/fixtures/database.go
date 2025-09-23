@@ -23,8 +23,8 @@ const (
 // Database stats field constants
 const (
 	OpenConnectionsField = "open_connections"
-	InUseField          = "in_use"
-	IdleField           = "idle"
+	InUseField           = "in_use"
+	IdleField            = "idle"
 )
 
 // Migration table constants
@@ -36,8 +36,8 @@ const (
 // Default database stats values
 const (
 	DefaultOpenConnections = 1
-	DefaultInUse          = 0
-	DefaultIdle           = 1
+	DefaultInUse           = 0
+	DefaultIdle            = 1
 )
 
 // DatabaseFixtures provides helper functions for creating pre-configured database mocks
@@ -47,8 +47,8 @@ const (
 func getDefaultStats() map[string]any {
 	return map[string]any{
 		OpenConnectionsField: DefaultOpenConnections,
-		InUseField:          DefaultInUse,
-		IdleField:           DefaultIdle,
+		InUseField:           DefaultInUse,
+		IdleField:            DefaultIdle,
 	}
 }
 
