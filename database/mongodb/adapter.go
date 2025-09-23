@@ -214,6 +214,23 @@ func parseJSONNumber(num json.Number) *int32 {
 	return nil
 }
 
+// validateAndMapFullDocument validates and maps known FullDocument string values to options.FullDocument
+// Returns the mapped value and a boolean indicating if the mapping was successful
+func validateAndMapFullDocument(value string) (options.FullDocument, bool) {
+	switch value {
+	case "default":
+		return options.Default, true
+	case "updateLookup":
+		return options.UpdateLookup, true
+	case "whenAvailable":
+		return options.WhenAvailable, true
+	case "required":
+		return options.Required, true
+	default:
+		return "", false
+	}
+}
+
 // Aggregate performs aggregation on the specified collection
 func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline any, opts *database.AggregateOptions) (database.DocumentCursor, error) {
 	coll := c.database.Collection(collection)
@@ -689,7 +706,9 @@ func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.Chang
 		mongoOpts.SetBatchSize(*opts.BatchSize)
 	}
 	if opts.FullDocument != nil {
-		mongoOpts.SetFullDocument(options.FullDocument(*opts.FullDocument))
+		if fullDocValue, valid := validateAndMapFullDocument(*opts.FullDocument); valid {
+			mongoOpts.SetFullDocument(fullDocValue)
+		}
 	}
 	if opts.MaxAwaitTime != nil {
 		mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
@@ -698,8 +717,11 @@ func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.Chang
 		mongoOpts.SetResumeAfter(opts.ResumeAfter)
 	}
 	if opts.StartAtOperationTime != nil {
-		if timestamp, ok := opts.StartAtOperationTime.(*primitive.Timestamp); ok {
+		switch timestamp := opts.StartAtOperationTime.(type) {
+		case *primitive.Timestamp:
 			mongoOpts.SetStartAtOperationTime(timestamp)
+		case primitive.Timestamp:
+			mongoOpts.SetStartAtOperationTime(&timestamp)
 		}
 	}
 	if opts.StartAfter != nil {
