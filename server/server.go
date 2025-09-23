@@ -151,9 +151,11 @@ func (s *Server) Start() error {
 		Msg("Starting server...")
 
 	server := &http.Server{
-		Addr:         addr,
-		ReadTimeout:  s.cfg.Server.Timeout.Read,
-		WriteTimeout: s.cfg.Server.Timeout.Write,
+		Addr:              addr,
+		ReadTimeout:       s.cfg.Server.Timeout.Read,
+		WriteTimeout:      s.cfg.Server.Timeout.Write,
+		IdleTimeout:       s.cfg.Server.Timeout.Idle,
+		ReadHeaderTimeout: s.cfg.Server.Timeout.Read,
 	}
 
 	return s.echo.StartServer(server)

@@ -239,7 +239,7 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		timeoutProvider: timeoutProvider,
 	}
 
-	srv.Echo().GET("/ready", app.readyCheck)
+	srv.Echo().GET(cfg.Server.Path.Base+cfg.Server.Path.Ready, app.readyCheck)
 
 	return app, nil
 }

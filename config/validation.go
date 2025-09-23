@@ -49,7 +49,7 @@ func Validate(cfg *Config) error {
 
 // validateApp validates the application configuration in cfg.
 // It requires Name and Version to be non-empty, Env to be one of
-// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be > 0.
+// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be non-negative.
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
@@ -140,9 +140,9 @@ func validateDatabase(cfg *DatabaseConfig) error {
 // validateDatabaseWithConnectionString validates database settings when a connection
 // string is provided and applies defaults for query-related fields when zero.
 // It checks (and returns an error for) an explicit database Type that is not allowed,
-// an invalid optional Port, non-positive MaxConns, and negative values for
-// MaxQueryLength or SlowQueryThreshold. If MaxQueryLength or SlowQueryThreshold
-// are zero they are set to defaultMaxQueryLength and defaultSlowQueryThreshold,
+// an invalid optional Port, and negative values for Pool/Query fields.
+// Pool.Max.Connections defaults to 25 when 0; Query.Log.MaxLength and Query.Slow.Threshold
+// default to the respective constants when 0. Negative values are rejected.
 // respectively. The cfg argument is mutated for those default assignments.
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	if cfg.Type != "" {
@@ -227,22 +227,22 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg.Pool.Max.Connections == 0 {
 		cfg.Pool.Max.Connections = 25
 	} else if cfg.Pool.Max.Connections < 0 {
-		return fmt.Errorf("max connections must be positive")
+		return fmt.Errorf("max connections must be non-negative")
 	}
 
 	if cfg.Pool.Idle.Connections < 0 {
-		return fmt.Errorf("max idle connections must be zero or positive")
+		return fmt.Errorf("max idle connections must be non-negative")
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {
-		return fmt.Errorf("max query length must be zero or positive")
+		return fmt.Errorf("max query length must be non-negative")
 	}
 	if cfg.Query.Log.MaxLength == 0 {
 		cfg.Query.Log.MaxLength = defaultMaxQueryLength
 	}
 
 	if cfg.Query.Slow.Threshold < 0 {
-		return fmt.Errorf("slow query threshold must be zero or positive")
+		return fmt.Errorf("slow query threshold must be non-negative")
 	}
 	if cfg.Query.Slow.Threshold == 0 {
 		cfg.Query.Slow.Threshold = defaultSlowQueryThreshold

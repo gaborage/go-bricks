@@ -408,43 +408,15 @@ func TestAppReadyCheckHealthy(t *testing.T) {
 	app, mockDB, mockMessaging := createTestApp(t)
 
 	// Setup mocks for healthy state
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{
-		"open_connections": 5,
-		"max_connections":  25,
-	}, nil)
-	mockMessaging.On("IsReady").Return(true)
+	setupHealthyMocks(mockDB, mockMessaging)
 
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err)
+	// Create test request and execute
+	c, rec := createReadyCheckRequest()
+	response := executeReadyCheckAndParseResponse(t, app, c, rec)
 
 	// Verify response
 	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "healthy", response["database"])
-	assert.Equal(t, "healthy", response["messaging"])
-	assert.NotNil(t, response["time"])
-	assert.NotNil(t, response["db_stats"])
-	assert.NotNil(t, response["app"])
-
-	// Verify app details
-	appDetails := response["app"].(map[string]any)
-	assert.Equal(t, appName, appDetails["name"])
-	assert.Equal(t, "test", appDetails["environment"])
-	assert.Equal(t, appVersion, appDetails["version"])
+	verifyHealthyResponse(t, response, "healthy", "healthy")
 
 	mockDB.AssertExpectations(t)
 	mockMessaging.AssertExpectations(t)
@@ -455,27 +427,14 @@ func TestAppReadyCheckUnhealthyDatabase(t *testing.T) {
 
 	// Setup mocks for unhealthy database
 	expectedErr := errors.New("database connection failed")
-	mockDB.On("Health", mock.Anything).Return(expectedErr)
-	mockMessaging.On("IsReady").Return(true)
+	setupUnhealthyDatabaseMocks(mockDB, mockMessaging, expectedErr)
 
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err) // Handler should not return error, but HTTP status should be 503
+	// Create test request and execute
+	c, rec := createReadyCheckRequest()
+	response := executeReadyCheckAndParseResponse(t, app, c, rec)
 
 	// Verify response
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
 	assert.Equal(t, "not ready", response["status"])
 	assert.Equal(t, "unhealthy", response["database"])
 	assert.Equal(t, "database connection failed", response["error"])
@@ -1375,4 +1334,61 @@ func TestAppReadyCheckMessagingDisabled(t *testing.T) {
 	assert.Equal(t, appVersion, appDetails["version"])
 
 	mockDB.AssertExpectations(t)
+}
+
+// =============================================================================
+// Test Helper Functions for Ready Check Tests
+// =============================================================================
+
+// createReadyCheckRequest creates a standardized HTTP request for ready check tests
+func createReadyCheckRequest() (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	return c, rec
+}
+
+// executeReadyCheckAndParseResponse executes ready check and returns parsed JSON response
+func executeReadyCheckAndParseResponse(t *testing.T, app *App, c echo.Context, rec *httptest.ResponseRecorder) map[string]any {
+	err := app.readyCheck(c)
+	require.NoError(t, err)
+
+	var response map[string]any
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	return response
+}
+
+// setupHealthyMocks configures mocks for a healthy system state
+func setupHealthyMocks(mockDB *MockDatabase, mockMessaging *MockMessagingClient) {
+	mockDB.On("Health", mock.Anything).Return(nil)
+	mockDB.On("Stats").Return(map[string]any{
+		"open_connections": 5,
+		"max_connections":  25,
+	}, nil)
+	mockMessaging.On("IsReady").Return(true)
+}
+
+// setupUnhealthyDatabaseMocks configures mocks for an unhealthy database state
+func setupUnhealthyDatabaseMocks(mockDB *MockDatabase, mockMessaging *MockMessagingClient, dbError error) {
+	mockDB.On("Health", mock.Anything).Return(dbError)
+	mockMessaging.On("IsReady").Return(true)
+}
+
+// verifyHealthyResponse verifies the structure of a healthy ready check response
+func verifyHealthyResponse(t *testing.T, response map[string]any, expectedDBState, expectedMessagingState string) {
+	assert.Equal(t, "ready", response["status"])
+	assert.Equal(t, expectedDBState, response["database"])
+	assert.Equal(t, expectedMessagingState, response["messaging"])
+	assert.NotNil(t, response["time"])
+	assert.NotNil(t, response["db_stats"])
+	assert.NotNil(t, response["app"])
+
+	// Verify app details
+	appDetails := response["app"].(map[string]any)
+	assert.Equal(t, appName, appDetails["name"])
+	assert.Equal(t, "test", appDetails["environment"])
+	assert.Equal(t, appVersion, appDetails["version"])
 }

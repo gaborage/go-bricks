@@ -18,86 +18,178 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
+const (
+	postgrePingErrorMsg = "failed to ping PostgreSQL database"
+	insertPartsClause   = "INSERT INTO parts(id, name) VALUES ($1, $2)"
+)
+
+// =============================================================================
+// Test Helper Functions
+// =============================================================================
+
+// setupMockConnection creates a mock database connection with logger for testing
+func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
-
 	c := &Connection{db: db, logger: logger.New("disabled", true)}
+	return db, mock, c
+}
+
+// createStandardPoolConfig returns a standard pool configuration for testing
+func createStandardPoolConfig() config.PoolConfig {
+	return config.PoolConfig{
+		Max: config.PoolMaxConfig{
+			Connections: 25,
+		},
+		Idle: config.PoolIdleConfig{
+			Connections: 10,
+			Time:        30 * time.Minute,
+		},
+		Lifetime: config.LifetimeConfig{
+			Max: time.Hour,
+		},
+	}
+}
+
+// createPostgreSQLConfig creates a test PostgreSQL database configuration
+func createPostgreSQLConfig(connType, value string) *config.DatabaseConfig {
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool:     createStandardPoolConfig(),
+	}
+
+	switch connType {
+	case "connection_string":
+		cfg.ConnectionString = value
+		cfg.Host = ""
+		cfg.Port = 0
+		cfg.Username = ""
+		cfg.Password = ""
+		cfg.Database = ""
+	case "host_config":
+		cfg.TLS = config.TLSConfig{Mode: "disable"}
+	case "host_config_no_ssl":
+		// Keep default TLS config (no mode specified)
+	}
+
+	return cfg
+}
+
+// testConnectionExpectedError tests that a connection attempt fails with expected error
+func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
+	log := logger.New("debug", true)
+	_, err := NewConnection(cfg, log)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), postgrePingErrorMsg)
+}
+
+// setupMockStatementOperations sets up common mock expectations for PostgreSQL statement operations
+func setupMockStatementOperations(mock sqlmock.Sqlmock) {
+	// Health check
+	mock.ExpectPing()
+
+	// Basic Exec operation
+	mock.ExpectExec("INSERT INTO items").WithArgs("a").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Query operation
+	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "x")
+	mock.ExpectQuery("SELECT id, name FROM items").WillReturnRows(rows)
+
+	// QueryRow operation
+	rows = sqlmock.NewRows([]string{"now"}).AddRow(time.Now())
+	mock.ExpectQuery(`SELECT NOW\(\)`).WillReturnRows(rows)
+
+	// Prepare operation
+	mock.ExpectPrepare("UPDATE items SET name").ExpectExec().WithArgs("b", 1).WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+// setupMockTransactionOperations sets up common mock expectations for PostgreSQL transaction operations
+func setupMockTransactionOperations(mock sqlmock.Sqlmock) {
+	// Begin + transaction exec + commit
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM items").WithArgs(1).WillReturnResult(driver.RowsAffected(1))
+	mock.ExpectCommit()
+
+	// BeginTx + rollback
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+}
+
+// setupMockMetaOperations sets up common mock expectations for PostgreSQL metadata operations
+func setupMockMetaOperations(mock sqlmock.Sqlmock) {
+	// Close operation
+	mock.ExpectClose()
+}
+
+func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
+	db, mock, c := setupMockConnection(t)
+	defer db.Close()
 
 	ctx := context.Background()
 
-	// Health
-	mock.ExpectPing()
+	// Set up all mock expectations
+	setupMockStatementOperations(mock)
+	setupMockTransactionOperations(mock)
+	setupMockMetaOperations(mock)
+
+	// Execute Health check
 	require.NoError(t, c.Health(ctx))
 
-	// Exec
-	mock.ExpectExec("INSERT INTO items").WithArgs("a").WillReturnResult(sqlmock.NewResult(1, 1))
-	_, err = c.Exec(ctx, "INSERT INTO items(name) VALUES($1)", "a")
+	// Execute Exec operation
+	_, err := c.Exec(ctx, "INSERT INTO items(name) VALUES($1)", "a")
 	require.NoError(t, err)
 
-	// Query
-	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "x")
-	mock.ExpectQuery("SELECT id, name FROM items").WillReturnRows(rows)
+	// Execute Query operation
 	rs, err := c.Query(ctx, "SELECT id, name FROM items")
 	require.NoError(t, err)
 	assert.True(t, rs.Next())
 	_ = rs.Close()
 
-	// QueryRow
-	rows = sqlmock.NewRows([]string{"now"}).AddRow(time.Now())
-	mock.ExpectQuery(`SELECT NOW\(\)`).WillReturnRows(rows)
+	// Execute QueryRow operation
 	_ = c.QueryRow(ctx, "SELECT NOW()")
 
-	// Prepare + Statement Exec
-	mock.ExpectPrepare("UPDATE items SET name").ExpectExec().WithArgs("b", 1).WillReturnResult(sqlmock.NewResult(0, 1))
+	// Execute Prepare + Statement operations
 	st, err := c.Prepare(ctx, "UPDATE items SET name=$1 WHERE id=$2")
 	require.NoError(t, err)
 	_, err = st.Exec(ctx, "b", 1)
 	require.NoError(t, err)
 	require.NoError(t, st.Close())
 
-	// Begin + Tx methods
-	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM items").WithArgs(1).WillReturnResult(driver.RowsAffected(1))
-	mock.ExpectCommit()
+	// Execute transaction operations
 	tx, err := c.Begin(ctx)
 	require.NoError(t, err)
 	_, err = tx.Exec(ctx, "DELETE FROM items WHERE id=$1", 1)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 
-	// BeginTx + rollback
-	mock.ExpectBegin()
-	mock.ExpectRollback()
+	// Execute BeginTx + rollback
 	opts := &sql.TxOptions{Isolation: sql.LevelDefault}
 	tx2, err := c.BeginTx(ctx, opts)
-	// ensure tx2 is non-nil and rollback works
 	require.NoError(t, err)
 	require.NoError(t, tx2.Rollback())
 
-	// Stats
+	// Test Stats
 	m, err := c.Stats()
 	require.NoError(t, err)
 	assert.Contains(t, m, "max_open_connections")
 	assert.Contains(t, m, "open_connections")
 	assert.Contains(t, m, "wait_duration")
 
-	// Close
-	mock.ExpectClose()
+	// Test Close
 	require.NoError(t, c.Close())
 
-	// Verify all expectations
+	// Verify all expectations were met
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestConnectionMetadata(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 	mock.ExpectClose()
-
-	c := &Connection{db: db, logger: logger.New("disabled", true)}
 
 	assert.Equal(t, "postgresql", c.DatabaseType())
 	assert.Equal(t, "flyway_schema_history", c.GetMigrationTable())
@@ -109,98 +201,18 @@ func TestConnectionMetadata(t *testing.T) {
 // =============================================================================
 
 func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
-	// Test configuration with connection string
-	cfg := &config.DatabaseConfig{
-		ConnectionString: "postgres://user:pass@localhost/testdb?sslmode=disable",
-		Pool: config.PoolConfig{
-			Max: config.PoolMaxConfig{
-				Connections: 25,
-			},
-			Idle: config.PoolIdleConfig{
-				Connections: 10,
-				Time:        30 * time.Minute,
-			},
-			Lifetime: config.LifetimeConfig{
-				Max: time.Hour,
-			},
-		},
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	// but we can test the configuration parsing part
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist, but the error should be connection-related, not config-related
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
+	cfg := createPostgreSQLConfig("connection_string", "postgres://user:pass@localhost/testdb?sslmode=disable")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionWithHostConfig(t *testing.T) {
-	// Test configuration with individual host parameters
-	cfg := &config.DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		Username: "testuser",
-		Password: "testpass",
-		Database: "testdb",
-		TLS: config.TLSConfig{
-			Mode: "disable",
-		},
-		Pool: config.PoolConfig{
-			Max: config.PoolMaxConfig{
-				Connections: 25,
-			},
-			Idle: config.PoolIdleConfig{
-				Connections: 10,
-				Time:        30 * time.Minute,
-			},
-			Lifetime: config.LifetimeConfig{
-				Max: time.Hour,
-			},
-		},
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database
-	_, err := NewConnection(cfg, log)
-
-	// We expect an error because the database doesn't exist
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
+	cfg := createPostgreSQLConfig("host_config", "")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionWithHostConfigNoSSLMode(t *testing.T) {
-	// Configuration without sslmode should omit the parameter from the DSN
-	cfg := &config.DatabaseConfig{
-		Host:     "localhost",
-		Port:     5432,
-		Username: "testuser",
-		Password: "testpass",
-		Database: "testdb",
-		Pool: config.PoolConfig{
-			Max: config.PoolMaxConfig{
-				Connections: 25,
-			},
-			Idle: config.PoolIdleConfig{
-				Connections: 10,
-				Time:        30 * time.Minute,
-			},
-			Lifetime: config.LifetimeConfig{
-				Max: time.Hour,
-			},
-		},
-	}
-
-	log := logger.New("debug", true)
-
-	// This will fail because we're not connecting to a real database, but should parse successfully
-	_, err := NewConnection(cfg, log)
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to ping PostgreSQL database")
+	cfg := createPostgreSQLConfig("host_config_no_ssl", "")
+	testConnectionExpectedError(t, cfg)
 }
 
 func TestConnectionNewConnectionSuccess(t *testing.T) {
@@ -336,12 +348,12 @@ func TestTransactionQueryPrepareAndExec(t *testing.T) {
 	_, err = trx.Exec(ctx, "UPDATE parts SET name = $1 WHERE id = $2", "updated", 9)
 	require.NoError(t, err)
 
-	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO parts(id, name) VALUES ($1, $2)"))
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO parts(id, name) VALUES ($1, $2)")).
+	mock.ExpectPrepare(regexp.QuoteMeta(insertPartsClause))
+	mock.ExpectExec(regexp.QuoteMeta(insertPartsClause)).
 		WithArgs(10, "new").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	stmt, err := trx.Prepare(ctx, "INSERT INTO parts(id, name) VALUES ($1, $2)")
+	stmt, err := trx.Prepare(ctx, insertPartsClause)
 	require.NoError(t, err)
 	_, err = stmt.Exec(ctx, 10, "new")
 	require.NoError(t, err)
@@ -376,19 +388,15 @@ func TestTransactionPrepareError(t *testing.T) {
 }
 
 func TestConnectionCreateMigrationTable(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
-
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 
 	ctx := context.Background()
 
 	// Mock the CREATE TABLE execution
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS flyway_schema_history`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS flyway_schema_history`).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err = c.CreateMigrationTable(ctx)
+	err := c.CreateMigrationTable(ctx)
 	assert.NoError(t, err)
 
 	// Verify all expectations were met
@@ -396,11 +404,9 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 }
 
 func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 	ctx := context.Background()
 
 	// Test Query error
@@ -427,16 +433,14 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 }
 
 func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	db, mock, c := setupMockConnection(t)
 	defer db.Close()
 
-	c := &Connection{db: db, logger: logger.New("debug", true)}
 	ctx := context.Background()
 
 	// Test Begin error
 	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
-	_, err = c.Begin(ctx)
+	_, err := c.Begin(ctx)
 	assert.Error(t, err)
 
 	// Test BeginTx error

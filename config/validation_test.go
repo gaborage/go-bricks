@@ -9,49 +9,17 @@ import (
 )
 
 const (
-	testConnectionString        = "postgresql://user:pass@localhost/db"
-	testMongoDBConnectionString = "mongodb://localhost:27017/testdb"
-	testOracleConnectionString  = "oracle://user:pass@localhost:1521/XEPDB1"
-	testOracleHost              = "oracle.example.com"
-	testAppName                 = "test-app"
-	testAppVersion              = "v1.0.0"
-	errMaxConnectionsPositive   = "max connections must be positive"
+	testConnectionString         = "postgresql://user:pass@localhost/db"
+	testMongoDBConnectionString  = "mongodb://localhost:27017/testdb"
+	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
+	testOracleHost               = "oracle.example.com"
+	testAppName                  = "test-app"
+	testAppVersion               = "v1.0.0"
+	errMaxConnectionsNonNegative = "max connections must be non-negative"
 )
 
 func TestValidateValidConfig(t *testing.T) {
-	cfg := &Config{
-		App: AppConfig{
-			Name:    testAppName,
-			Version: testAppVersion,
-			Env:     EnvDevelopment,
-			Rate:    RateConfig{Limit: 100},
-		},
-		Server: ServerConfig{
-			Port: 8080,
-			Timeout: TimeoutConfig{
-				Read:       15 * time.Second,
-				Write:      30 * time.Second,
-				Middleware: 5 * time.Second,
-				Shutdown:   10 * time.Second,
-			},
-		},
-		Database: DatabaseConfig{
-			Type:     "postgresql",
-			Host:     "localhost",
-			Port:     5432,
-			Database: "testdb",
-			Username: "testuser",
-			Pool: PoolConfig{
-				Max: PoolMaxConfig{
-					Connections: 25,
-				},
-			},
-		},
-		Log: LogConfig{
-			Level: "info",
-		},
-	}
-
+	cfg := createValidFullConfig()
 	err := Validate(cfg)
 	assert.NoError(t, err)
 }
@@ -558,7 +526,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: errMaxConnectionsPositive,
+			expectedError: errMaxConnectionsNonNegative,
 		},
 	}
 
@@ -1159,7 +1127,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "max query length must be zero or positive",
+			errorContains: "max query length must be non-negative",
 		},
 		{
 			name: "connection_string_with_zero_max_query_length_applies_default",
@@ -1194,7 +1162,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "slow query threshold must be zero or positive",
+			errorContains: "slow query threshold must be non-negative",
 		},
 		{
 			name: "connection_string_with_zero_slow_query_threshold_applies_default",
@@ -1276,7 +1244,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: errMaxConnectionsPositive,
+			errorContains: errMaxConnectionsNonNegative,
 		},
 		{
 			name: "zero_max_conns_applies_default",
@@ -1314,7 +1282,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "max query length must be zero or positive",
+			errorContains: "max query length must be non-negative",
 		},
 		{
 			name: "zero_max_query_length_applies_default",
@@ -1357,7 +1325,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "slow query threshold must be zero or positive",
+			errorContains: "slow query threshold must be non-negative",
 		},
 		{
 			name: "zero_slow_query_threshold_applies_default",
@@ -1887,5 +1855,65 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 				assertValidationSuccess(t, err, &tt.config)
 			}
 		})
+	}
+}
+
+// =============================================================================
+// Test Helper Functions
+// =============================================================================
+
+// createValidAppConfig returns a valid AppConfig for testing
+func createValidAppConfig() AppConfig {
+	return AppConfig{
+		Name:    testAppName,
+		Version: testAppVersion,
+		Env:     EnvDevelopment,
+		Rate:    RateConfig{Limit: 100},
+	}
+}
+
+// createValidServerConfig returns a valid ServerConfig for testing
+func createValidServerConfig() ServerConfig {
+	return ServerConfig{
+		Port: 8080,
+		Timeout: TimeoutConfig{
+			Read:       15 * time.Second,
+			Write:      30 * time.Second,
+			Middleware: 5 * time.Second,
+			Shutdown:   10 * time.Second,
+		},
+	}
+}
+
+// createValidDatabaseConfig returns a valid DatabaseConfig for testing
+func createValidDatabaseConfig() DatabaseConfig {
+	return DatabaseConfig{
+		Type:     PostgreSQL,
+		Host:     "localhost",
+		Port:     5432,
+		Database: "testdb",
+		Username: "testuser",
+		Pool: PoolConfig{
+			Max: PoolMaxConfig{
+				Connections: 25,
+			},
+		},
+	}
+}
+
+// createValidLogConfig returns a valid LogConfig for testing
+func createValidLogConfig() LogConfig {
+	return LogConfig{
+		Level: "info",
+	}
+}
+
+// createValidFullConfig returns a complete valid Config for testing
+func createValidFullConfig() *Config {
+	return &Config{
+		App:      createValidAppConfig(),
+		Server:   createValidServerConfig(),
+		Database: createValidDatabaseConfig(),
+		Log:      createValidLogConfig(),
 	}
 }

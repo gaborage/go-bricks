@@ -83,7 +83,7 @@ log:
 
 messaging:
   broker:
-    url: amqp://guest:guest@localhost:5672/
+    url: amqp://localhost:5672/
     virtualhost: /
   routing:
     exchange: my-exchange
@@ -104,6 +104,7 @@ custom:
   service:
     api:
       endpoint: https://api.example.com/v1
+      # DO NOT commit real secrets to config files; prefer env vars or secret stores.
       key: your-api-key-here
     timeout: 30s
     retries: 

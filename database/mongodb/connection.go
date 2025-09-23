@@ -208,6 +208,12 @@ func setConnectionOptions(opts *options.ClientOptions, cfg *config.DatabaseConfi
 	if cfg.Pool.Idle.Time > 0 {
 		opts.SetMaxConnIdleTime(cfg.Pool.Idle.Time)
 	}
+
+	if cfg.Pool.Idle.Connections > 0 {
+		// Safe conversion from int32 to uint64 - already checked for > 0
+		minPoolSize := uint64(cfg.Pool.Idle.Connections) // #nosec G115
+		opts.SetMinPoolSize(minPoolSize)
+	}
 }
 
 // setReadPreference sets the read preference in the client options
@@ -250,8 +256,13 @@ func buildMongoURI(cfg *config.DatabaseConfig) string {
 		uri.WriteString("@")
 	}
 
-	// Add host:port
-	uri.WriteString(cfg.Host)
+	// Add host:port (bracket IPv6 literals)
+	host := cfg.Host
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") && !strings.HasSuffix(host, "]") {
+		host = "[" + host + "]"
+	}
+	uri.WriteString(host)
+
 	if cfg.Port > 0 {
 		uri.WriteString(fmt.Sprintf(":%d", cfg.Port))
 	}

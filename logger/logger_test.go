@@ -13,6 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	originalLoggerErrorMsg = "should return original logger"
+	maskedValue            = "[MASKED]"
+)
+
 func TestNew(t *testing.T) {
 	// Capture original stdout to restore later
 	originalStdout := os.Stdout
@@ -247,22 +252,22 @@ func TestLoggerWithContext(t *testing.T) {
 		{
 			name:     "valid_context_without_logger",
 			ctx:      context.Background(),
-			expected: "should return original logger",
+			expected: originalLoggerErrorMsg,
 		},
 		{
 			name:     "context_with_disabled_logger",
 			ctx:      zerolog.New(io.Discard).Level(zerolog.Disabled).WithContext(context.Background()),
-			expected: "should return original logger",
+			expected: originalLoggerErrorMsg,
 		},
 		{
 			name:     "non_context_interface",
 			ctx:      "not a context",
-			expected: "should return original logger",
+			expected: originalLoggerErrorMsg,
 		},
 		{
 			name:     "nil_context",
 			ctx:      nil,
-			expected: "should return original logger",
+			expected: originalLoggerErrorMsg,
 		},
 	}
 
@@ -502,28 +507,28 @@ func TestSensitiveDataFilterRun(_ *testing.T) {
 func TestFilterValueEdgeCases(t *testing.T) {
 	config := &FilterConfig{
 		SensitiveFields: []string{"password", "secret", "token"},
-		MaskValue:       "[MASKED]",
+		MaskValue:       maskedValue,
 	}
 	filter := NewSensitiveDataFilter(config)
 
 	// Test with nil values
 	t.Run("nil_value", func(t *testing.T) {
 		result := filter.FilterValue("password", nil)
-		assert.Equal(t, "[MASKED]", result)
+		assert.Equal(t, maskedValue, result)
 	})
 
 	// Test with empty slice
 	t.Run("empty_slice", func(t *testing.T) {
 		result := filter.FilterValue("secrets", []string{})
 		// If the field name contains sensitive keywords, it should be masked
-		assert.Equal(t, "[MASKED]", result)
+		assert.Equal(t, maskedValue, result)
 	})
 
 	// Test with empty array
 	t.Run("empty_array", func(t *testing.T) {
 		result := filter.FilterValue("tokens", [0]string{})
 		// If the field name contains sensitive keywords, it should be masked
-		assert.Equal(t, "[MASKED]", result)
+		assert.Equal(t, maskedValue, result)
 	})
 
 	// Test with complex nested structure
