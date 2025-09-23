@@ -19,7 +19,7 @@ func (lea *LogEventAdapter) Msg(msg string) {
 }
 
 // Msgf logs a formatted message
-func (lea *LogEventAdapter) Msgf(format string, args ...interface{}) {
+func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 	lea.event.Msgf(format, args...)
 }
 
@@ -56,8 +56,8 @@ func (lea *LogEventAdapter) Dur(key string, d time.Duration) LogEvent {
 	return &LogEventAdapter{event: lea.event.Dur(key, d), filter: lea.filter}
 }
 
-// Interface adds an interface{} field to the log event
-func (lea *LogEventAdapter) Interface(key string, i interface{}) LogEvent {
+// Interface adds an any field to the log event
+func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 	if lea.filter != nil {
 		i = lea.filter.FilterValue(key, i)
 	}

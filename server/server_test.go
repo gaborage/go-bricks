@@ -73,10 +73,10 @@ func (l *testLogger) Error() logger.LogEvent { return &testLogEvent{logger: l, l
 func (l *testLogger) Debug() logger.LogEvent { return &testLogEvent{logger: l, level: "debug"} }
 func (l *testLogger) Warn() logger.LogEvent  { return &testLogEvent{logger: l, level: "warn"} }
 func (l *testLogger) Fatal() logger.LogEvent { return &testLogEvent{logger: l, level: "fatal"} }
-func (l *testLogger) WithContext(interface{}) logger.Logger {
+func (l *testLogger) WithContext(any) logger.Logger {
 	return l
 }
-func (l *testLogger) WithFields(map[string]interface{}) logger.Logger {
+func (l *testLogger) WithFields(map[string]any) logger.Logger {
 	return l
 }
 
@@ -86,15 +86,15 @@ func (e *testLogEvent) Msg(msg string) {
 	e.logger.entries = append(e.logger.entries, fmt.Sprintf("%s:%s", e.level, msg))
 }
 
-func (e *testLogEvent) Msgf(format string, args ...interface{})       { e.Msg(fmt.Sprintf(format, args...)) }
-func (e *testLogEvent) Err(error) logger.LogEvent                     { return e }
-func (e *testLogEvent) Str(string, string) logger.LogEvent            { return e }
-func (e *testLogEvent) Int(string, int) logger.LogEvent               { return e }
-func (e *testLogEvent) Int64(string, int64) logger.LogEvent           { return e }
-func (e *testLogEvent) Uint64(string, uint64) logger.LogEvent         { return e }
-func (e *testLogEvent) Dur(string, time.Duration) logger.LogEvent     { return e }
-func (e *testLogEvent) Interface(string, interface{}) logger.LogEvent { return e }
-func (e *testLogEvent) Bytes(string, []byte) logger.LogEvent          { return e }
+func (e *testLogEvent) Msgf(format string, args ...any)           { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *testLogEvent) Err(error) logger.LogEvent                 { return e }
+func (e *testLogEvent) Str(string, string) logger.LogEvent        { return e }
+func (e *testLogEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *testLogEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *testLogEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *testLogEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *testLogEvent) Interface(string, any) logger.LogEvent     { return e }
+func (e *testLogEvent) Bytes(string, []byte) logger.LogEvent      { return e }
 
 // Test helpers for common setup patterns
 func newTestConfig(basePath, healthRoute, readyRoute string) *config.Config {

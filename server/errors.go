@@ -11,7 +11,7 @@ type BaseAPIError struct {
 	code       string
 	message    string
 	httpStatus int
-	details    map[string]interface{}
+	details    map[string]any
 }
 
 // NewBaseAPIError creates a new base API error.
@@ -20,7 +20,7 @@ func NewBaseAPIError(code, message string, httpStatus int) *BaseAPIError {
 		code:       code,
 		message:    message,
 		httpStatus: httpStatus,
-		details:    make(map[string]interface{}),
+		details:    make(map[string]any),
 	}
 }
 
@@ -50,7 +50,7 @@ func (e *BaseAPIError) Details() map[string]any {
 }
 
 // WithDetails adds details to the error.
-func (e *BaseAPIError) WithDetails(key string, value interface{}) *BaseAPIError {
+func (e *BaseAPIError) WithDetails(key string, value any) *BaseAPIError {
 	e.details[key] = value
 	return e
 }

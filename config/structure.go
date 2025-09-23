@@ -18,12 +18,22 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name      string `koanf:"name"`
-	Version   string `koanf:"version"`
-	Env       string `koanf:"env"`
-	Debug     bool   `koanf:"debug"`
-	RateLimit int    `koanf:"rate_limit"`
-	Namespace string `koanf:"namespace"`
+	Name      string     `koanf:"name"`
+	Version   string     `koanf:"version"`
+	Env       string     `koanf:"env"`
+	Debug     bool       `koanf:"debug"`
+	Rate      RateConfig `koanf:"rate"`
+	Namespace string     `koanf:"namespace"`
+}
+
+// RateConfig contains rate limiting configuration
+type RateConfig struct {
+	Limit int `koanf:"limit"`
+}
+
+// ServiceConfig contains Oracle service configuration
+type ServiceConfig struct {
+	Name string `koanf:"name"`
 }
 
 type ServerConfig struct {
@@ -55,8 +65,8 @@ type DatabaseConfig struct {
 	LogQueryParameters bool          `koanf:"log_query_parameters"`
 
 	// Oracle-specific settings
-	ServiceName string `koanf:"service_name"` // Oracle service name
-	SID         string `koanf:"sid"`          // Oracle SID
+	Service ServiceConfig `koanf:"service"` // Oracle service configuration
+	SID     string        `koanf:"sid"`     // Oracle SID
 
 	// MongoDB-specific settings
 	ReplicaSet     string `koanf:"replica_set"`     // MongoDB replica set name

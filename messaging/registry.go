@@ -31,43 +31,43 @@ type Registry struct {
 
 // ExchangeDeclaration defines an exchange to be declared
 type ExchangeDeclaration struct {
-	Name       string                 // Exchange name
-	Type       string                 // Exchange type (direct, topic, fanout, headers)
-	Durable    bool                   // Survive server restart
-	AutoDelete bool                   // Delete when no longer used
-	Internal   bool                   // Internal exchange
-	NoWait     bool                   // Do not wait for server confirmation
-	Args       map[string]interface{} // Additional arguments
+	Name       string         // Exchange name
+	Type       string         // Exchange type (direct, topic, fanout, headers)
+	Durable    bool           // Survive server restart
+	AutoDelete bool           // Delete when no longer used
+	Internal   bool           // Internal exchange
+	NoWait     bool           // Do not wait for server confirmation
+	Args       map[string]any // Additional arguments
 }
 
 // QueueDeclaration defines a queue to be declared
 type QueueDeclaration struct {
-	Name       string                 // Queue name
-	Durable    bool                   // Survive server restart
-	AutoDelete bool                   // Delete when no consumers
-	Exclusive  bool                   // Only accessible by declaring connection
-	NoWait     bool                   // Do not wait for server confirmation
-	Args       map[string]interface{} // Additional arguments
+	Name       string         // Queue name
+	Durable    bool           // Survive server restart
+	AutoDelete bool           // Delete when no consumers
+	Exclusive  bool           // Only accessible by declaring connection
+	NoWait     bool           // Do not wait for server confirmation
+	Args       map[string]any // Additional arguments
 }
 
 // BindingDeclaration defines a queue-to-exchange binding
 type BindingDeclaration struct {
-	Queue      string                 // Queue name
-	Exchange   string                 // Exchange name
-	RoutingKey string                 // Routing key pattern
-	NoWait     bool                   // Do not wait for server confirmation
-	Args       map[string]interface{} // Additional arguments
+	Queue      string         // Queue name
+	Exchange   string         // Exchange name
+	RoutingKey string         // Routing key pattern
+	NoWait     bool           // Do not wait for server confirmation
+	Args       map[string]any // Additional arguments
 }
 
 // PublisherDeclaration defines what a module publishes
 type PublisherDeclaration struct {
-	Exchange    string                 // Target exchange
-	RoutingKey  string                 // Default routing key
-	EventType   string                 // Event type identifier
-	Description string                 // Human-readable description
-	Mandatory   bool                   // Message must be routed to a queue
-	Immediate   bool                   // Message must be delivered immediately
-	Headers     map[string]interface{} // Default headers
+	Exchange    string         // Target exchange
+	RoutingKey  string         // Default routing key
+	EventType   string         // Event type identifier
+	Description string         // Human-readable description
+	Mandatory   bool           // Message must be routed to a queue
+	Immediate   bool           // Message must be delivered immediately
+	Headers     map[string]any // Default headers
 }
 
 // ConsumerDeclaration defines what a module consumes and how to handle messages
@@ -379,7 +379,7 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 
 // handleMessages processes messages from a consumer and routes them to the handler.
 func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
-	log := r.logger.WithFields(map[string]interface{}{
+	log := r.logger.WithFields(map[string]any{
 		"queue":      consumer.Queue,
 		"consumer":   consumer.Consumer,
 		"event_type": consumer.EventType,
@@ -416,7 +416,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, accessor)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
-	tlog := log.WithFields(map[string]interface{}{"trace_id": traceID})
+	tlog := log.WithFields(map[string]any{"trace_id": traceID})
 
 	tlog.Debug().
 		Str("message_id", delivery.MessageId).
@@ -470,14 +470,14 @@ type amqpDeliveryAccessor struct {
 	headers amqp.Table
 }
 
-func (a *amqpDeliveryAccessor) Get(key string) interface{} {
+func (a *amqpDeliveryAccessor) Get(key string) any {
 	if a.headers == nil {
 		return nil
 	}
 	return a.headers[key]
 }
 
-func (a *amqpDeliveryAccessor) Set(_ string, _ interface{}) {
+func (a *amqpDeliveryAccessor) Set(_ string, _ any) {
 	// Read-only accessor for delivery headers
 	// This is intentionally a no-op as we don't modify incoming message headers
 }

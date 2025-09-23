@@ -147,7 +147,7 @@ func TestPublishOptions(t *testing.T) {
 	options := PublishOptions{
 		Exchange:   "test-exchange",
 		RoutingKey: "test.route",
-		Headers:    map[string]interface{}{"test": "value"},
+		Headers:    map[string]any{"test": "value"},
 		Mandatory:  true,
 		Immediate:  false,
 	}

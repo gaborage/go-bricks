@@ -106,8 +106,8 @@ func allZero(b []byte) bool {
 
 // HeaderAccessor provides a simple interface for reading and writing headers
 type HeaderAccessor interface {
-	Get(key string) interface{}
-	Set(key string, value interface{})
+	Get(key string) any
+	Set(key string, value any)
 }
 
 // InjectMode controls how headers are written by InjectIntoHeaders
@@ -248,8 +248,8 @@ func headerString(headers HeaderAccessor, key string) string {
 	return ""
 }
 
-// safeToString safely converts interface{} to string, handling []byte
-func safeToString(value interface{}) string {
+// safeToString safely converts any to string, handling []byte
+func safeToString(value any) string {
 	if value == nil {
 		return ""
 	}

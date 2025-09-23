@@ -110,8 +110,8 @@ func TestInjectIntoHeadersWithOptionsPreserveFillsMissing(t *testing.T) {
 // Minimal http header accessor for tests
 type httpHeaderAccessor struct{ h nethttp.Header }
 
-func (a *httpHeaderAccessor) Get(key string) interface{} { return a.h.Get(key) }
-func (a *httpHeaderAccessor) Set(key string, value interface{}) {
+func (a *httpHeaderAccessor) Get(key string) any { return a.h.Get(key) }
+func (a *httpHeaderAccessor) Set(key string, value any) {
 	switch v := value.(type) {
 	case string:
 		a.h.Set(key, v)
@@ -123,23 +123,23 @@ func (a *httpHeaderAccessor) Set(key string, value interface{}) {
 // Additional tests merged from trace_extra_test.go
 
 // Simple map-based HeaderAccessor for tests
-type mapAccessor struct{ m map[string]interface{} }
+type mapAccessor struct{ m map[string]any }
 
-func (a *mapAccessor) Get(key string) interface{} {
+func (a *mapAccessor) Get(key string) any {
 	if a.m == nil {
 		return nil
 	}
 	return a.m[key]
 }
-func (a *mapAccessor) Set(key string, value interface{}) {
+func (a *mapAccessor) Set(key string, value any) {
 	if a.m == nil {
-		a.m = map[string]interface{}{}
+		a.m = map[string]any{}
 	}
 	a.m[key] = value
 }
 
 func TestExtractFromHeadersAllPresent(t *testing.T) {
-	acc := &mapAccessor{m: map[string]interface{}{
+	acc := &mapAccessor{m: map[string]any{
 		HeaderXRequestID:  "rid-123",
 		HeaderTraceParent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		HeaderTraceState:  "vendor=a:b",
@@ -161,7 +161,7 @@ func TestExtractFromHeadersAllPresent(t *testing.T) {
 }
 
 func TestExtractFromHeadersDeriveIDFromParent(t *testing.T) {
-	acc := &mapAccessor{m: map[string]interface{}{
+	acc := &mapAccessor{m: map[string]any{
 		HeaderTraceParent: "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01",
 	}}
 	ctx := ExtractFromHeaders(context.Background(), acc)
@@ -181,7 +181,7 @@ func TestInjectIntoHeadersForceMode(t *testing.T) {
 	ctx := WithTraceParent(context.Background(), "00-aabbccddeeffaabbccddeeffaabbccdd-1122334455667788-01")
 	ctx = WithTraceState(ctx, "vendor=test")
 
-	acc := &mapAccessor{m: map[string]interface{}{}}
+	acc := &mapAccessor{m: map[string]any{}}
 	InjectIntoHeaders(ctx, acc) // wrapper (force mode)
 
 	assert.Equal(t, "aabbccddeeffaabbccddeeffaabbccdd", acc.m[HeaderXRequestID])
@@ -191,7 +191,7 @@ func TestInjectIntoHeadersForceMode(t *testing.T) {
 
 func TestComputeHelpers(t *testing.T) {
 	// computeTraceParent: header > context > generated
-	acc := &mapAccessor{m: map[string]interface{}{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
+	acc := &mapAccessor{m: map[string]any{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
 	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", computeTraceParent(context.Background(), acc))
 
 	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
@@ -203,7 +203,7 @@ func TestComputeHelpers(t *testing.T) {
 	assert.True(t, ok)
 
 	// computeTraceIDPreserve: header > context > derived > generated
-	acc2 := &mapAccessor{m: map[string]interface{}{HeaderXRequestID: "hdr-id"}}
+	acc2 := &mapAccessor{m: map[string]any{HeaderXRequestID: "hdr-id"}}
 	assert.Equal(t, "hdr-id", computeTraceIDPreserve(context.Background(), acc2, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
 
 	ctx2 := WithTraceID(context.Background(), "ctx-id")
@@ -217,7 +217,7 @@ func TestComputeHelpers(t *testing.T) {
 }
 
 func TestHeaderStringAndSafeToString(t *testing.T) {
-	acc := &mapAccessor{m: map[string]interface{}{HeaderXRequestID: []byte("bytes-id")}}
+	acc := &mapAccessor{m: map[string]any{HeaderXRequestID: []byte("bytes-id")}}
 	assert.Equal(t, "bytes-id", headerString(acc, HeaderXRequestID))
 	assert.Equal(t, "", headerString(&mapAccessor{}, "missing"))
 

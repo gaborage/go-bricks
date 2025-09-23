@@ -20,18 +20,18 @@ type Transaction struct {
 }
 
 // Query executes a query within the transaction (not applicable for MongoDB)
-func (t *Transaction) Query(_ context.Context, _ string, _ ...interface{}) (*sql.Rows, error) {
+func (t *Transaction) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
 	return nil, fmt.Errorf("SQL query operations not supported for MongoDB transactions")
 }
 
 // QueryRow executes a query returning a single row within the transaction (not applicable)
-func (t *Transaction) QueryRow(_ context.Context, _ string, _ ...interface{}) *sql.Row {
+func (t *Transaction) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
 	// MongoDB doesn't support SQL queries, this is for interface compatibility
 	return nil
 }
 
 // Exec executes a command within the transaction (not applicable for MongoDB)
-func (t *Transaction) Exec(_ context.Context, _ string, _ ...interface{}) (sql.Result, error) {
+func (t *Transaction) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) {
 	return nil, fmt.Errorf("SQL exec operations not supported for MongoDB transactions")
 }
 

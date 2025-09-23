@@ -64,12 +64,12 @@ func Load() (*Config, error) {
 }
 
 func loadDefaults(k *koanf.Koanf) error {
-	defaults := map[string]interface{}{
+	defaults := map[string]any{
 		"app.name":       "gobricks-service",
 		"app.version":    "v1.0.0",
 		"app.env":        EnvDevelopment,
 		"app.debug":      false,
-		"app.rate_limit": 100,
+		"app.rate.limit": 100,
 		"app.namespace":  "default",
 
 		"server.host":               "0.0.0.0",

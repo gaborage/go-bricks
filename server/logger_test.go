@@ -38,19 +38,19 @@ func (r *recLogger) Fatal() logger.LogEvent {
 	r.last = &recEvent{fields: map[string]string{}}
 	return r.last
 }
-func (r *recLogger) WithContext(_ interface{}) logger.Logger           { return r }
-func (r *recLogger) WithFields(_ map[string]interface{}) logger.Logger { return r }
+func (r *recLogger) WithContext(_ any) logger.Logger           { return r }
+func (r *recLogger) WithFields(_ map[string]any) logger.Logger { return r }
 
-func (e *recEvent) Msg(_ string)                                      {}
-func (e *recEvent) Msgf(_ string, _ ...interface{})                   {}
-func (e *recEvent) Err(_ error) logger.LogEvent                       { return e }
-func (e *recEvent) Str(k, v string) logger.LogEvent                   { e.fields[k] = v; return e }
-func (e *recEvent) Int(_ string, _ int) logger.LogEvent               { return e }
-func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent           { return e }
-func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent         { return e }
-func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent     { return e }
-func (e *recEvent) Interface(_ string, _ interface{}) logger.LogEvent { return e }
-func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent          { return e }
+func (e *recEvent) Msg(_ string)                                  {}
+func (e *recEvent) Msgf(_ string, _ ...any)                       {}
+func (e *recEvent) Err(_ error) logger.LogEvent                   { return e }
+func (e *recEvent) Str(k, v string) logger.LogEvent               { e.fields[k] = v; return e }
+func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
+func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 
 // Test that the request logger logs the same trace_id as the response meta.traceId
 func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {

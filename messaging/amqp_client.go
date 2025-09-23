@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -350,10 +351,7 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	}
 
 	if err := ch.Confirm(false); err != nil {
-		err := ch.Close()
-		if err != nil {
-			return err
-		}
+		_ = ch.Close()
 		return err
 	}
 
@@ -387,14 +385,14 @@ type amqpHeaderAccessor struct {
 	headers amqp.Table
 }
 
-func (a *amqpHeaderAccessor) Get(key string) interface{} {
+func (a *amqpHeaderAccessor) Get(key string) any {
 	if a.headers == nil {
 		return nil
 	}
 	return a.headers[key]
 }
 
-func (a *amqpHeaderAccessor) Set(key string, value interface{}) {
+func (a *amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
 		a.headers = amqp.Table{}
 	}
@@ -418,9 +416,7 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 	}
 
 	if options.Headers != nil {
-		for k, v := range options.Headers {
-			publishing.Headers[k] = v
-		}
+		maps.Copy(publishing.Headers, options.Headers)
 	}
 
 	// Inject trace headers using centralized trace package

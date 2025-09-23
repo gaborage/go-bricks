@@ -27,7 +27,7 @@ func TestLogEventAdapterMsg(t *testing.T) {
 	logger.Info().Msg("test message")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -43,7 +43,7 @@ func TestLogEventAdapterMsgf(t *testing.T) {
 	logger.Info().Msgf("test %s with %d", "message", 42)
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -61,7 +61,7 @@ func TestLogEventAdapterErr(t *testing.T) {
 	logger.Error().Err(testErr).Msg("error occurred")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -78,7 +78,7 @@ func TestLogEventAdapterStr(t *testing.T) {
 	logger.Info().Str("username", "john_doe").Msg("user action")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func TestLogEventAdapterInt(t *testing.T) {
 	logger.Info().Int("count", 42).Msg("processing items")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -111,7 +111,7 @@ func TestLogEventAdapterInt64(t *testing.T) {
 	logger.Info().Int64("timestamp", 1640995200).Msg("event occurred")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -127,7 +127,7 @@ func TestLogEventAdapterUint64(t *testing.T) {
 	logger.Info().Uint64("size", 1024).Msg("file processed")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -144,7 +144,7 @@ func TestLogEventAdapterDur(t *testing.T) {
 	logger.Info().Dur("processing_time", duration).Msg("request completed")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -156,7 +156,7 @@ func TestLogEventAdapterDur(t *testing.T) {
 func TestLogEventAdapterInterface(t *testing.T) {
 	logger, buf := createTestLogger()
 
-	// Create a log event with an interface{} field
+	// Create a log event with an any field
 	data := map[string]string{
 		"key1": "value1",
 		"key2": "value2",
@@ -164,12 +164,12 @@ func TestLogEventAdapterInterface(t *testing.T) {
 	logger.Info().Interface("data", data).Msg("structured data")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
 	// Verify the interface field
-	dataField, ok := logEntry["data"].(map[string]interface{})
+	dataField, ok := logEntry["data"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "value1", dataField["key1"])
 	assert.Equal(t, "value2", dataField["key2"])
@@ -184,7 +184,7 @@ func TestLogEventAdapterBytes(t *testing.T) {
 	logger.Info().Bytes("payload", data).Msg("binary payload")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -207,7 +207,7 @@ func TestLogEventAdapterChainedFields(t *testing.T) {
 		Msg("failed operation")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -235,7 +235,7 @@ func TestZeroLoggerInfo(t *testing.T) {
 	// Send a message and verify level
 	event.Msg("info message")
 
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 	assert.Equal(t, "info", logEntry["level"])
@@ -256,7 +256,7 @@ func TestZeroLoggerError(t *testing.T) {
 	// Send a message and verify level
 	event.Msg("error message")
 
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 	assert.Equal(t, "error", logEntry["level"])
@@ -277,7 +277,7 @@ func TestZeroLoggerDebug(t *testing.T) {
 	// Send a message and verify level
 	event.Msg("debug message")
 
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 	assert.Equal(t, "debug", logEntry["level"])
@@ -298,7 +298,7 @@ func TestZeroLoggerWarn(t *testing.T) {
 	// Send a message and verify level
 	event.Msg("warning message")
 
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 	assert.Equal(t, "warn", logEntry["level"])
@@ -393,7 +393,7 @@ func TestLogEventAdapterEdgeCases(t *testing.T) {
 			assert.NotEmpty(t, buf.String())
 
 			// Parse and verify basic structure
-			var logEntry map[string]interface{}
+			var logEntry map[string]any
 			err := json.Unmarshal(buf.Bytes(), &logEntry)
 			require.NoError(t, err)
 			assert.Equal(t, "test message", logEntry["message"])
@@ -416,7 +416,7 @@ func TestLogEventAdapterLargeValues(t *testing.T) {
 		Msg("large values test")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -438,7 +438,7 @@ func TestLogEventAdapterSpecialCharacters(t *testing.T) {
 		Msg("special characters test")
 
 	// Parse the JSON output
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal(buf.Bytes(), &logEntry)
 	require.NoError(t, err)
 
@@ -507,7 +507,7 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		output := buf.String()
 
 		// Parse JSON to verify filtering
-		var logEntry map[string]interface{}
+		var logEntry map[string]any
 		err := json.Unmarshal(buf.Bytes(), &logEntry)
 		require.NoError(t, err)
 
@@ -521,10 +521,10 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		buf.Reset()
 
 		// Test Interface method with sensitive data - should trigger filter path
-		sensitiveData := map[string]interface{}{
+		sensitiveData := map[string]any{
 			"username": "john_doe",
 			"api_key":  "super_secret_key",
-			"config": map[string]interface{}{
+			"config": map[string]any{
 				"theme":  "dark",
 				"secret": "nested_secret",
 			},
@@ -537,19 +537,19 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		output := buf.String()
 
 		// Parse JSON to verify filtering
-		var logEntry map[string]interface{}
+		var logEntry map[string]any
 		err := json.Unmarshal(buf.Bytes(), &logEntry)
 		require.NoError(t, err)
 
 		// Verify filtering worked on nested data
-		userData, ok := logEntry["user_data"].(map[string]interface{})
+		userData, ok := logEntry["user_data"].(map[string]any)
 		require.True(t, ok)
 
 		assert.Equal(t, "john_doe", userData["username"])
 		assert.Equal(t, "[FILTERED]", userData["api_key"])
 
 		// Check nested map filtering
-		config, ok := userData["config"].(map[string]interface{})
+		config, ok := userData["config"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "dark", config["theme"])
 		assert.Equal(t, "[FILTERED]", config["secret"])
@@ -571,7 +571,7 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		// Both Str and Interface should pass through without filtering
 		loggerNoFilter.Info().
 			Str("password", "visible_password").
-			Interface("data", map[string]interface{}{
+			Interface("data", map[string]any{
 				"secret": "visible_secret",
 			}).
 			Msg("no filtering")
@@ -579,14 +579,14 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		output := buf.String()
 
 		// Parse JSON
-		var logEntry map[string]interface{}
+		var logEntry map[string]any
 		err := json.Unmarshal(buf.Bytes(), &logEntry)
 		require.NoError(t, err)
 
 		// Without filter, sensitive data should be visible
 		assert.Equal(t, "visible_password", logEntry["password"])
 
-		data, ok := logEntry["data"].(map[string]interface{})
+		data, ok := logEntry["data"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "visible_secret", data["secret"])
 

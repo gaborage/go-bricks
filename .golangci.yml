@@ -91,6 +91,7 @@ linters:
           - gosec
           - ineffassign
           - rowserrcheck
+          - govet  # Allow unkeyed bson.D fields in tests
         path: _test\.go
       - linters:
           - gocyclo

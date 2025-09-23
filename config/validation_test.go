@@ -11,6 +11,7 @@ import (
 const (
 	testConnectionString        = "postgresql://user:pass@localhost/db"
 	testMongoDBConnectionString = "mongodb://localhost:27017/testdb"
+	testOracleConnectionString  = "oracle://user:pass@localhost:1521/XEPDB1"
 	testOracleHost              = "oracle.example.com"
 	testAppName                 = "test-app"
 	testAppVersion              = "v1.0.0"
@@ -20,10 +21,10 @@ const (
 func TestValidateValidConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      testAppName,
-			Version:   testAppVersion,
-			Env:       EnvDevelopment,
-			RateLimit: 100,
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
 			Port:         8080,
@@ -55,37 +56,46 @@ func TestValidateAppSuccess(t *testing.T) {
 		{
 			name: "development_environment",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 		},
 		{
 			name: "staging_environment",
 			cfg: AppConfig{
-				Name:      "staging-app",
-				Version:   "v2.0.0",
-				Env:       EnvStaging,
-				RateLimit: 200,
+				Name:    "staging-app",
+				Version: "v2.0.0",
+				Env:     EnvStaging,
+				Rate:    RateConfig{Limit: 200},
 			},
 		},
 		{
 			name: "production_environment",
 			cfg: AppConfig{
-				Name:      "prod-app",
-				Version:   "v3.0.0",
-				Env:       EnvProduction,
-				RateLimit: 500,
+				Name:    "prod-app",
+				Version: "v3.0.0",
+				Env:     EnvProduction,
+				Rate:    RateConfig{Limit: 500},
 			},
 		},
 		{
 			name: "minimum_rate_limit",
 			cfg: AppConfig{
-				Name:      "min-app",
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 1,
+				Name:    "min-app",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 1},
+			},
+		},
+		{
+			name: "zero_rate_limit_disabled",
+			cfg: AppConfig{
+				Name:    "no-limit-app",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 0},
 			},
 		},
 	}
@@ -107,52 +117,42 @@ func TestValidateAppFailures(t *testing.T) {
 		{
 			name: "empty_name",
 			cfg: AppConfig{
-				Name:      "",
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    "",
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "app name is required",
 		},
 		{
 			name: "empty_version",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   "",
-				Env:       EnvDevelopment,
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: "",
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "app version is required",
 		},
 		{
 			name: "invalid_environment",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       "invalid",
-				RateLimit: 100,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "invalid",
+				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "invalid environment: invalid",
 		},
 		{
-			name: "zero_rate_limit",
-			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: 0,
-			},
-			expectedError: "rate limit must be positive",
-		},
-		{
 			name: "negative_rate_limit",
 			cfg: AppConfig{
-				Name:      testAppName,
-				Version:   testAppVersion,
-				Env:       EnvDevelopment,
-				RateLimit: -1,
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: -1},
 			},
-			expectedError: "rate limit must be positive",
+			expectedError: "rate limit must be non-negative",
 		},
 	}
 
@@ -542,10 +542,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "app_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      "",
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    "",
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -568,10 +568,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "server_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         0,
@@ -594,10 +594,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "database_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -620,10 +620,10 @@ func TestValidateNestedErrors(t *testing.T) {
 			name: "log_config_error",
 			cfg: Config{
 				App: AppConfig{
-					Name:      testAppName,
-					Version:   testAppVersion,
-					Env:       EnvDevelopment,
-					RateLimit: 100,
+					Name:    testAppName,
+					Version: testAppVersion,
+					Env:     EnvDevelopment,
+					Rate:    RateConfig{Limit: 100},
 				},
 				Server: ServerConfig{
 					Port:         8080,
@@ -950,10 +950,10 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 func TestValidateDatabaseDisabledConfig(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
-			Name:      testAppName,
-			Version:   testAppVersion,
-			Env:       EnvDevelopment,
-			RateLimit: 100,
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
 		},
 		Server: ServerConfig{
 			Port:         8080,
@@ -1374,6 +1374,189 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 			},
 			expectError:   true,
 			errorContains: "invalid MongoDB write concern",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateOracleFields(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid Oracle config with service name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid Oracle config with SID",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				SID:      "XE",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid Oracle config with database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+			},
+			expectError: false,
+		},
+		{
+			name: "Oracle config with no connection identifier",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				// No Service.Name, SID, or Database
+			},
+			expectError:   true,
+			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+		},
+		{
+			name: "Oracle config with service name and SID",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID), exactly one is required",
+		},
+		{
+			name: "Oracle config with service name and database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, database name), exactly one is required",
+		},
+		{
+			name: "Oracle config with SID and database name",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (SID, database name), exactly one is required",
+		},
+		{
+			name: "Oracle config with all three connection identifiers",
+			config: DatabaseConfig{
+				Type:     Oracle,
+				Host:     testOracleHost,
+				Port:     1521,
+				Database: "XE",
+				Username: "oracleuser",
+				Service:  ServiceConfig{Name: "XEPDB1"},
+				SID:      "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID, database name), exactly one is required",
+		},
+		{
+			name: "non-Oracle type should not validate Oracle fields",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Service:  ServiceConfig{Name: "XEPDB1"}, // This should be ignored for PostgreSQL
+				SID:      "XE",                          // This should be ignored for PostgreSQL
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assertValidationError(t, err, tt.errorContains)
+			} else {
+				assertValidationSuccess(t, err, &tt.config)
+			}
+		})
+	}
+}
+
+func TestValidateOracleWithConnectionString(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid Oracle with connection string and valid service name",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				Service:          ServiceConfig{Name: "XEPDB1"},
+			},
+			expectError: false,
+		},
+		{
+			name: "Oracle with connection string but multiple identifiers",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				Service:          ServiceConfig{Name: "XEPDB1"},
+				SID:              "XE",
+			},
+			expectError:   true,
+			errorContains: "oracle configuration has multiple connection identifiers configured",
+		},
+		{
+			name: "Oracle with connection string but no identifiers",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: testOracleConnectionString,
+				// No Service.Name, SID, or Database
+			},
+			expectError:   true,
+			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
 		},
 	}
 

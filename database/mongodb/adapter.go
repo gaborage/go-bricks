@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -183,7 +184,7 @@ func safeConvertToInt32(value float64) *int32 {
 // parseExpireAfterSeconds safely parses expireAfterSeconds from various numeric types
 // MongoDB servers can return this value as int32, int64, float64, or json.Number
 // MongoDB requires expireAfterSeconds to be in range [0, 2147483647]
-func parseExpireAfterSeconds(value interface{}) *int32 {
+func parseExpireAfterSeconds(value any) *int32 {
 	switch v := value.(type) {
 	case int32:
 		// Validate that int32 values are in MongoDB's valid range
@@ -213,8 +214,25 @@ func parseJSONNumber(num json.Number) *int32 {
 	return nil
 }
 
+// validateAndMapFullDocument validates and maps known FullDocument string values to options.FullDocument
+// Returns the mapped value and a boolean indicating if the mapping was successful
+func validateAndMapFullDocument(value string) (options.FullDocument, bool) {
+	switch value {
+	case "default":
+		return options.Default, true
+	case "updateLookup":
+		return options.UpdateLookup, true
+	case "whenAvailable":
+		return options.WhenAvailable, true
+	case "required":
+		return options.Required, true
+	default:
+		return "", false
+	}
+}
+
 // Aggregate performs aggregation on the specified collection
-func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline interface{}, opts *database.AggregateOptions) (database.DocumentCursor, error) {
+func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline any, opts *database.AggregateOptions) (database.DocumentCursor, error) {
 	coll := c.database.Collection(collection)
 
 	var mongoOpts *options.AggregateOptions
@@ -243,7 +261,7 @@ func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline 
 }
 
 // RunCommand executes a database command
-func (c *Connection) RunCommand(ctx context.Context, command interface{}) database.DocumentResult {
+func (c *Connection) RunCommand(ctx context.Context, command any) database.DocumentResult {
 	result := c.database.RunCommand(ctx, command)
 	return &SingleResult{result: result}
 }
@@ -258,7 +276,7 @@ type Collection struct {
 var _ database.DocumentCollection = (*Collection)(nil)
 
 // InsertOne inserts a single document
-func (c *Collection) InsertOne(ctx context.Context, document interface{}, opts *database.InsertOneOptions) (interface{}, error) {
+func (c *Collection) InsertOne(ctx context.Context, document any, opts *database.InsertOneOptions) (any, error) {
 	var mongoOpts *options.InsertOneOptions
 	if opts != nil {
 		mongoOpts = options.InsertOne()
@@ -276,7 +294,7 @@ func (c *Collection) InsertOne(ctx context.Context, document interface{}, opts *
 }
 
 // FindOne finds a single document
-func (c *Collection) FindOne(ctx context.Context, filter interface{}, opts *database.FindOneOptions) database.DocumentResult {
+func (c *Collection) FindOne(ctx context.Context, filter any, opts *database.FindOneOptions) database.DocumentResult {
 	var mongoOpts *options.FindOneOptions
 	if opts != nil {
 		mongoOpts = options.FindOne()
@@ -305,7 +323,7 @@ func (c *Collection) FindOne(ctx context.Context, filter interface{}, opts *data
 }
 
 // UpdateOne updates a single document
-func (c *Collection) UpdateOne(ctx context.Context, filter, update interface{}, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
+func (c *Collection) UpdateOne(ctx context.Context, filter, update any, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
 	mongoOpts := buildUpdateOptions(opts)
 
 	result, err := c.collection.UpdateOne(ctx, filter, update, mongoOpts)
@@ -317,7 +335,7 @@ func (c *Collection) UpdateOne(ctx context.Context, filter, update interface{}, 
 }
 
 // ReplaceOne replaces a single document
-func (c *Collection) ReplaceOne(ctx context.Context, filter, replacement interface{}, opts *database.ReplaceOptions) (database.DocumentUpdateResult, error) {
+func (c *Collection) ReplaceOne(ctx context.Context, filter, replacement any, opts *database.ReplaceOptions) (database.DocumentUpdateResult, error) {
 	var mongoOpts *options.ReplaceOptions
 	if opts != nil {
 		mongoOpts = options.Replace()
@@ -338,7 +356,7 @@ func (c *Collection) ReplaceOne(ctx context.Context, filter, replacement interfa
 }
 
 // DeleteOne deletes a single document
-func (c *Collection) DeleteOne(ctx context.Context, filter interface{}, _ *database.DeleteOptions) (database.DocumentDeleteResult, error) {
+func (c *Collection) DeleteOne(ctx context.Context, filter any, _ *database.DeleteOptions) (database.DocumentDeleteResult, error) {
 	result, err := c.collection.DeleteOne(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete document: %w", err)
@@ -348,7 +366,7 @@ func (c *Collection) DeleteOne(ctx context.Context, filter interface{}, _ *datab
 }
 
 // InsertMany inserts multiple documents
-func (c *Collection) InsertMany(ctx context.Context, documents []interface{}, opts *database.InsertManyOptions) ([]interface{}, error) {
+func (c *Collection) InsertMany(ctx context.Context, documents []any, opts *database.InsertManyOptions) ([]any, error) {
 	var mongoOpts *options.InsertManyOptions
 	if opts != nil {
 		mongoOpts = options.InsertMany()
@@ -369,7 +387,7 @@ func (c *Collection) InsertMany(ctx context.Context, documents []interface{}, op
 }
 
 // Find finds multiple documents
-func (c *Collection) Find(ctx context.Context, filter interface{}, opts *database.FindOptions) (database.DocumentCursor, error) {
+func (c *Collection) Find(ctx context.Context, filter any, opts *database.FindOptions) (database.DocumentCursor, error) {
 	mongoOpts := buildFindOptions(opts)
 
 	cursor, err := c.collection.Find(ctx, filter, mongoOpts)
@@ -381,7 +399,7 @@ func (c *Collection) Find(ctx context.Context, filter interface{}, opts *databas
 }
 
 // UpdateMany updates multiple documents
-func (c *Collection) UpdateMany(ctx context.Context, filter, update interface{}, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
+func (c *Collection) UpdateMany(ctx context.Context, filter, update any, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
 	mongoOpts := buildUpdateOptions(opts)
 
 	result, err := c.collection.UpdateMany(ctx, filter, update, mongoOpts)
@@ -393,7 +411,7 @@ func (c *Collection) UpdateMany(ctx context.Context, filter, update interface{},
 }
 
 // DeleteMany deletes multiple documents
-func (c *Collection) DeleteMany(ctx context.Context, filter interface{}, _ *database.DeleteOptions) (database.DocumentDeleteResult, error) {
+func (c *Collection) DeleteMany(ctx context.Context, filter any, _ *database.DeleteOptions) (database.DocumentDeleteResult, error) {
 	result, err := c.collection.DeleteMany(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete documents: %w", err)
@@ -403,7 +421,7 @@ func (c *Collection) DeleteMany(ctx context.Context, filter interface{}, _ *data
 }
 
 // CountDocuments counts documents matching the filter
-func (c *Collection) CountDocuments(ctx context.Context, filter interface{}, opts *database.CountOptions) (int64, error) {
+func (c *Collection) CountDocuments(ctx context.Context, filter any, opts *database.CountOptions) (int64, error) {
 	var mongoOpts *options.CountOptions
 	if opts != nil {
 		mongoOpts = options.Count()
@@ -445,7 +463,7 @@ func (c *Collection) EstimatedDocumentCount(ctx context.Context, opts *database.
 }
 
 // Aggregate performs aggregation on the collection
-func (c *Collection) Aggregate(ctx context.Context, pipeline interface{}, opts *database.AggregateOptions) (database.DocumentCursor, error) {
+func (c *Collection) Aggregate(ctx context.Context, pipeline any, opts *database.AggregateOptions) (database.DocumentCursor, error) {
 	var mongoOpts *options.AggregateOptions
 	if opts != nil {
 		mongoOpts = options.Aggregate()
@@ -472,7 +490,7 @@ func (c *Collection) Aggregate(ctx context.Context, pipeline interface{}, opts *
 }
 
 // Distinct returns distinct values for a field
-func (c *Collection) Distinct(ctx context.Context, fieldName string, filter interface{}, opts *database.DistinctOptions) ([]interface{}, error) {
+func (c *Collection) Distinct(ctx context.Context, fieldName string, filter any, opts *database.DistinctOptions) ([]any, error) {
 	var mongoOpts *options.DistinctOptions
 	if opts != nil {
 		mongoOpts = options.Distinct()
@@ -580,31 +598,8 @@ func (c *Collection) BulkWrite(ctx context.Context, models []database.WriteModel
 }
 
 // Watch creates a change stream for the collection
-func (c *Collection) Watch(ctx context.Context, pipeline interface{}, opts *database.ChangeStreamOptions) (database.ChangeStream, error) {
-	var mongoOpts *options.ChangeStreamOptions
-	if opts != nil {
-		mongoOpts = options.ChangeStream()
-		if opts.BatchSize != nil {
-			mongoOpts.SetBatchSize(*opts.BatchSize)
-		}
-		// TODO: Fix FullDocument type compatibility
-		// if opts.FullDocument != nil {
-		//     mongoOpts.SetFullDocument(*opts.FullDocument)
-		// }
-		if opts.MaxAwaitTime != nil {
-			mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
-		}
-		if opts.ResumeAfter != nil {
-			mongoOpts.SetResumeAfter(opts.ResumeAfter)
-		}
-		// TODO: Fix StartAtOperationTime type compatibility
-		// if opts.StartAtOperationTime != nil {
-		//     mongoOpts.SetStartAtOperationTime(opts.StartAtOperationTime)
-		// }
-		if opts.StartAfter != nil {
-			mongoOpts.SetStartAfter(opts.StartAfter)
-		}
-	}
+func (c *Collection) Watch(ctx context.Context, pipeline any, opts *database.ChangeStreamOptions) (database.ChangeStream, error) {
+	mongoOpts := buildChangeStreamOptions(opts)
 
 	stream, err := c.collection.Watch(ctx, pipeline, mongoOpts)
 	if err != nil {
@@ -623,10 +618,6 @@ func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
 	}
 
 	mongoOpts := options.Index()
-	// Background option is deprecated in MongoDB 4.2+
-	// if opts.Background != nil {
-	//     mongoOpts.SetBackground(*opts.Background)
-	// }
 	if opts.ExpireAfterSeconds != nil {
 		// Additional validation: ensure we never pass negative values to MongoDB
 		if *opts.ExpireAfterSeconds >= 0 {
@@ -692,15 +683,49 @@ func buildUpdateOptions(opts *database.UpdateOptions) *options.UpdateOptions {
 	}
 
 	mongoOpts := options.Update()
-	// TODO: Fix ArrayFilters type compatibility
-	// if len(opts.ArrayFilters) > 0 {
-	//     mongoOpts.SetArrayFilters(opts.ArrayFilters)
-	// }
+	if len(opts.ArrayFilters) > 0 {
+		mongoOpts.SetArrayFilters(options.ArrayFilters{Filters: opts.ArrayFilters})
+	}
 	if opts.BypassDocumentValidation != nil {
 		mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
 	}
 	if opts.Upsert != nil {
 		mongoOpts.SetUpsert(*opts.Upsert)
+	}
+	return mongoOpts
+}
+
+// buildChangeStreamOptions creates MongoDB change stream options from database.ChangeStreamOptions
+func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.ChangeStreamOptions {
+	if opts == nil {
+		return nil
+	}
+
+	mongoOpts := options.ChangeStream()
+	if opts.BatchSize != nil {
+		mongoOpts.SetBatchSize(*opts.BatchSize)
+	}
+	if opts.FullDocument != nil {
+		if fullDocValue, valid := validateAndMapFullDocument(*opts.FullDocument); valid {
+			mongoOpts.SetFullDocument(fullDocValue)
+		}
+	}
+	if opts.MaxAwaitTime != nil {
+		mongoOpts.SetMaxAwaitTime(*opts.MaxAwaitTime)
+	}
+	if opts.ResumeAfter != nil {
+		mongoOpts.SetResumeAfter(opts.ResumeAfter)
+	}
+	if opts.StartAtOperationTime != nil {
+		switch timestamp := opts.StartAtOperationTime.(type) {
+		case *primitive.Timestamp:
+			mongoOpts.SetStartAtOperationTime(timestamp)
+		case primitive.Timestamp:
+			mongoOpts.SetStartAtOperationTime(&timestamp)
+		}
+	}
+	if opts.StartAfter != nil {
+		mongoOpts.SetStartAfter(opts.StartAfter)
 	}
 	return mongoOpts
 }

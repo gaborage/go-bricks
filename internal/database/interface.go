@@ -8,9 +8,9 @@ import (
 // Statement defines the interface for prepared statements
 type Statement interface {
 	// Query execution
-	Query(ctx context.Context, args ...interface{}) (*sql.Rows, error)
-	QueryRow(ctx context.Context, args ...interface{}) *sql.Row
-	Exec(ctx context.Context, args ...interface{}) (sql.Result, error)
+	Query(ctx context.Context, args ...any) (*sql.Rows, error)
+	QueryRow(ctx context.Context, args ...any) *sql.Row
+	Exec(ctx context.Context, args ...any) (sql.Result, error)
 
 	// Statement management
 	Close() error
@@ -19,9 +19,9 @@ type Statement interface {
 // Tx defines the interface for database transactions
 type Tx interface {
 	// Query execution within transaction
-	Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row
-	Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// Prepared statements within transaction
 	Prepare(ctx context.Context, query string) (Statement, error)
@@ -34,9 +34,9 @@ type Tx interface {
 // Interface defines the common database operations supported by the framework
 type Interface interface {
 	// Query execution
-	Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row
-	Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// Prepared statements
 	Prepare(ctx context.Context, query string) (Statement, error)
@@ -47,7 +47,7 @@ type Interface interface {
 
 	// Health and diagnostics
 	Health(ctx context.Context) error
-	Stats() (map[string]interface{}, error)
+	Stats() (map[string]any, error)
 
 	// Connection management
 	Close() error

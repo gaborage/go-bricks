@@ -14,6 +14,11 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	preSetupMarker  = "pre-setup"
+	postSetupMarker = "post-setup"
+)
+
 func TestSetupMiddlewares(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -23,7 +28,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			name: "standard_middleware_setup",
 			config: &config.Config{
 				App: config.AppConfig{
-					RateLimit: 100,
+					Rate: config.RateConfig{Limit: 100},
 				},
 				Server: config.ServerConfig{
 					MiddlewareTimeout: 30 * time.Second,
@@ -34,7 +39,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			name: "zero_rate_limit_disabled",
 			config: &config.Config{
 				App: config.AppConfig{
-					RateLimit: 0,
+					Rate: config.RateConfig{Limit: 0},
 				},
 				Server: config.ServerConfig{
 					MiddlewareTimeout: 30 * time.Second,
@@ -90,7 +95,7 @@ func TestMiddlewareOrder(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
-		App: config.AppConfig{RateLimit: 100},
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
 			MiddlewareTimeout: 30 * time.Second,
 		},
@@ -101,7 +106,7 @@ func TestMiddlewareOrder(t *testing.T) {
 	// Add tracking middleware to verify order
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			middlewareOrder = append(middlewareOrder, "pre-setup")
+			middlewareOrder = append(middlewareOrder, preSetupMarker)
 			return next(c)
 		}
 	})
@@ -110,7 +115,7 @@ func TestMiddlewareOrder(t *testing.T) {
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			middlewareOrder = append(middlewareOrder, "post-setup")
+			middlewareOrder = append(middlewareOrder, postSetupMarker)
 			return next(c)
 		}
 	})
@@ -128,8 +133,8 @@ func TestMiddlewareOrder(t *testing.T) {
 	assert.NotEmpty(t, rec.Header().Get(echo.HeaderXRequestID))
 
 	// Verify middleware executed in correct order
-	assert.Contains(t, middlewareOrder, "pre-setup")
-	assert.Contains(t, middlewareOrder, "post-setup")
+	assert.Contains(t, middlewareOrder, preSetupMarker)
+	assert.Contains(t, middlewareOrder, postSetupMarker)
 	assert.Contains(t, middlewareOrder, "handler")
 
 	// Verify pre-setup comes before post-setup
@@ -139,9 +144,9 @@ func TestMiddlewareOrder(t *testing.T) {
 
 	for i, mw := range middlewareOrder {
 		switch mw {
-		case "pre-setup":
+		case preSetupMarker:
 			preIndex = i
-		case "post-setup":
+		case postSetupMarker:
 			postIndex = i
 		case "handler":
 			handlerIndex = i
@@ -156,7 +161,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
-		App: config.AppConfig{RateLimit: 100},
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
 			MiddlewareTimeout: 30 * time.Second,
 		},
@@ -198,7 +203,7 @@ func TestGzipMiddleware(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
-		App: config.AppConfig{RateLimit: 100},
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
 			MiddlewareTimeout: 30 * time.Second,
 		},
@@ -246,7 +251,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	e := echo.New()
 	log := logger.New("debug", false) // Enable logging to capture panic logs
 	cfg := &config.Config{
-		App: config.AppConfig{RateLimit: 100},
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
 			MiddlewareTimeout: 30 * time.Second,
 		},
@@ -276,7 +281,7 @@ func TestSecurityHeaders(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
-		App: config.AppConfig{RateLimit: 100},
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 		Server: config.ServerConfig{
 			MiddlewareTimeout: 30 * time.Second,
 		},

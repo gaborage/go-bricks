@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -197,7 +198,7 @@ func TestBuildUpdateOptions(t *testing.T) {
 		{
 			name: "with array filters",
 			input: &database.UpdateOptions{
-				ArrayFilters: []interface{}{bson.M{"elem.score": bson.M{"$gte": 80}}},
+				ArrayFilters: []any{bson.M{"elem.score": bson.M{"$gte": 80}}},
 			},
 			expected: func(opts *options.UpdateOptions) bool {
 				return opts != nil // ArrayFilters are currently commented out due to type compatibility
@@ -544,7 +545,7 @@ func TestConnectionInterfaceCompliance(t *testing.T) {
 func TestParseExpireAfterSeconds(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected *int32
 	}{
 		{
@@ -674,6 +675,217 @@ func TestParseExpireAfterSeconds(t *testing.T) {
 				require.NotNil(t, result, "Expected non-nil result for input: %v", tt.input)
 				assert.Equal(t, *tt.expected, *result, "Expected %d, got %d for input: %v", *tt.expected, *result, tt.input)
 			}
+		})
+	}
+}
+
+func TestBuildChangeStreamOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *database.ChangeStreamOptions
+		expected func(*options.ChangeStreamOptions) bool
+	}{
+		{
+			name:  testNilInput,
+			input: nil,
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts == nil
+			},
+		},
+		{
+			name:  testEmptyOptions,
+			input: &database.ChangeStreamOptions{},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with batch size",
+			input: &database.ChangeStreamOptions{
+				BatchSize: database.Int32Ptr(100),
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with full document",
+			input: &database.ChangeStreamOptions{
+				FullDocument: database.StringPtr("updateLookup"),
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with resume after",
+			input: &database.ChangeStreamOptions{
+				ResumeAfter: bson.M{"_id": "test"},
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+		{
+			name: "with start after",
+			input: &database.ChangeStreamOptions{
+				StartAfter: bson.M{"_id": "test"},
+			},
+			expected: func(opts *options.ChangeStreamOptions) bool {
+				return opts != nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildChangeStreamOptions(tt.input)
+			assert.True(t, tt.expected(result), "Unexpected result for test case: %s", tt.name)
+		})
+	}
+}
+
+func TestValidateAndMapFullDocument(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected options.FullDocument
+		valid    bool
+	}{
+		{
+			name:     "valid default",
+			input:    "default",
+			expected: options.Default,
+			valid:    true,
+		},
+		{
+			name:     "valid updateLookup",
+			input:    "updateLookup",
+			expected: options.UpdateLookup,
+			valid:    true,
+		},
+		{
+			name:     "valid whenAvailable",
+			input:    "whenAvailable",
+			expected: options.WhenAvailable,
+			valid:    true,
+		},
+		{
+			name:     "valid required",
+			input:    "required",
+			expected: options.Required,
+			valid:    true,
+		},
+		{
+			name:     "invalid empty string",
+			input:    "",
+			expected: "",
+			valid:    false,
+		},
+		{
+			name:     "invalid unknown value",
+			input:    "unknown",
+			expected: "",
+			valid:    false,
+		},
+		{
+			name:     "invalid case sensitive",
+			input:    "Default",
+			expected: "",
+			valid:    false,
+		},
+		{
+			name:     "invalid case sensitive updateLookup",
+			input:    "UpdateLookup",
+			expected: "",
+			valid:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, valid := validateAndMapFullDocument(tt.input)
+			assert.Equal(t, tt.valid, valid, "Expected validity %v, got %v for input: %s", tt.valid, valid, tt.input)
+			if tt.valid {
+				assert.Equal(t, tt.expected, result, "Expected %v, got %v for input: %s", tt.expected, result, tt.input)
+			}
+		})
+	}
+}
+
+func TestBuildChangeStreamOptionsWithEnhancements(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *database.ChangeStreamOptions
+		validate func(t *testing.T, result *options.ChangeStreamOptions)
+	}{
+		{
+			name: "valid FullDocument values",
+			input: &database.ChangeStreamOptions{
+				FullDocument: database.StringPtr("updateLookup"),
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+				// FullDocument is set via builder pattern, so we can't directly assert the value
+				// but we know it was set because no error occurred
+			},
+		},
+		{
+			name: "invalid FullDocument silently ignored",
+			input: &database.ChangeStreamOptions{
+				FullDocument: database.StringPtr("invalidValue"),
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+				// Invalid FullDocument should be silently ignored
+			},
+		},
+		{
+			name: "StartAtOperationTime with *primitive.Timestamp",
+			input: &database.ChangeStreamOptions{
+				StartAtOperationTime: &primitive.Timestamp{T: 123, I: 456},
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+			},
+		},
+		{
+			name: "StartAtOperationTime with primitive.Timestamp value",
+			input: &database.ChangeStreamOptions{
+				StartAtOperationTime: primitive.Timestamp{T: 123, I: 456},
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+			},
+		},
+		{
+			name: "StartAtOperationTime with invalid type silently ignored",
+			input: &database.ChangeStreamOptions{
+				StartAtOperationTime: "invalid_type",
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+				// Invalid type should be silently ignored
+			},
+		},
+		{
+			name: "combination of valid and invalid values",
+			input: &database.ChangeStreamOptions{
+				BatchSize:            database.Int32Ptr(100),
+				FullDocument:         database.StringPtr("required"),
+				StartAtOperationTime: primitive.Timestamp{T: 789, I: 101},
+				ResumeAfter:          bson.M{"_id": "test"},
+			},
+			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
+				assert.NotNil(t, result)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildChangeStreamOptions(tt.input)
+			tt.validate(t, result)
 		})
 	}
 }

@@ -12,21 +12,21 @@ type Logger interface {
 	Debug() LogEvent
 	Warn() LogEvent
 	Fatal() LogEvent
-	WithContext(ctx interface{}) Logger
-	WithFields(fields map[string]interface{}) Logger
+	WithContext(ctx any) Logger
+	WithFields(fields map[string]any) Logger
 }
 
 // LogEvent represents a structured log event that can be built with fields and sent.
 // It provides methods for adding various field types and sending the final log message.
 type LogEvent interface {
 	Msg(msg string)
-	Msgf(format string, args ...interface{})
+	Msgf(format string, args ...any)
 	Err(err error) LogEvent
 	Str(key, value string) LogEvent
 	Int(key string, value int) LogEvent
 	Int64(key string, value int64) LogEvent
 	Uint64(key string, value uint64) LogEvent
 	Dur(key string, d time.Duration) LogEvent
-	Interface(key string, i interface{}) LogEvent
+	Interface(key string, i any) LogEvent
 	Bytes(key string, val []byte) LogEvent
 }

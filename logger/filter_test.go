@@ -6,9 +6,17 @@ import (
 )
 
 const (
-	testUsername = "test_user_john"
-	testPassword = "test_password_123"
-	testUserDoe  = "test_user_john_doe"
+	testUsername             = "test_user_john"
+	testPassword             = "test_password_123"
+	testUserDoe              = "test_user_john_doe"
+	testNameJohn             = "john"
+	testEmail                = "john@example.com"
+	testAPIKey               = "REDACTED_API_KEY_FOR_TESTING"
+	testAPIKeyShort          = "REDACTED_KEY"
+	expectedMaskedPwdMsg     = "Expected password to be masked, got '%v'"
+	expectedMaskedMapMsg     = "Expected result to be a map"
+	expectedPreservedNameMsg = "Expected name field to remain unfiltered"
+	unexpectedValueMsg       = "Expected '%s', got '%s'"
 )
 
 func TestDefaultFilterConfig(t *testing.T) {
@@ -19,7 +27,7 @@ func TestDefaultFilterConfig(t *testing.T) {
 	}
 
 	if config.MaskValue != DefaultMaskValue {
-		t.Errorf("Expected default mask value '***', got '%s'", config.MaskValue)
+		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, config.MaskValue)
 	}
 
 	// Test that common sensitive fields are included
@@ -38,7 +46,7 @@ func TestNewSensitiveDataFilter(t *testing.T) {
 		t.Fatal("NewSensitiveDataFilter should not return nil")
 	}
 	if filter.config.MaskValue != DefaultMaskValue {
-		t.Errorf("Expected default mask value '***', got '%s'", filter.config.MaskValue)
+		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, filter.config.MaskValue)
 	}
 
 	// Test custom config
@@ -61,13 +69,13 @@ func TestFilterString(t *testing.T) {
 	// Test sensitive field masking (complete masking for security)
 	result := filter.FilterString("password", "mysecret")
 	if result != DefaultMaskValue {
-		t.Errorf("Expected '***', got '%s'", result)
+		t.Errorf(unexpectedValueMsg, DefaultMaskValue, result)
 	}
 
 	// Test non-sensitive field
 	result = filter.FilterString("username", testUserDoe)
 	if result != testUserDoe {
-		t.Errorf("Expected '%s', got '%s'", testUserDoe, result)
+		t.Errorf(unexpectedValueMsg, testUserDoe, result)
 	}
 
 	// Test URL masking (clean masking without URL encoding)
@@ -86,7 +94,7 @@ func TestFilterValue(t *testing.T) {
 	// Test sensitive value masking
 	result := filter.FilterValue("password", "secret123")
 	if result != DefaultMaskValue {
-		t.Errorf("Expected '***', got '%v'", result)
+		t.Errorf("Expected '%s', got '%v'", DefaultMaskValue, result)
 	}
 
 	// Test non-sensitive value
@@ -99,7 +107,7 @@ func TestFilterValue(t *testing.T) {
 	input := map[string]any{
 		"username": testUsername,
 		"password": testPassword,
-		"email":    "john@example.com",
+		"email":    testEmail,
 	}
 	result = filter.FilterValue("user_data", input)
 	resultMap := result.(map[string]any)
@@ -108,7 +116,7 @@ func TestFilterValue(t *testing.T) {
 		t.Errorf("Expected username to remain '%s', got '%v'", testUsername, resultMap["username"])
 	}
 	if resultMap["password"] != DefaultMaskValue {
-		t.Errorf("Expected password to be masked, got '%v'", resultMap["password"])
+		t.Errorf(expectedMaskedPwdMsg, resultMap["password"])
 	}
 }
 
@@ -121,8 +129,8 @@ func TestFilterFields(t *testing.T) {
 	input := map[string]any{
 		"username": testUserDoe,
 		"password": testPassword,
-		"api_key":  "test_api_1234567890",
-		"email":    "john@example.com",
+		"api_key":  testAPIKey,
+		"email":    testEmail,
 	}
 
 	result := filter.FilterFields(input)
@@ -131,12 +139,12 @@ func TestFilterFields(t *testing.T) {
 		t.Errorf("Expected username to remain unchanged")
 	}
 	if result["password"] != DefaultMaskValue {
-		t.Errorf("Expected password to be masked")
+		t.Errorf(expectedMaskedPwdMsg, result["password"])
 	}
 	if result["api_key"] != DefaultMaskValue {
 		t.Errorf("Expected api_key to be masked")
 	}
-	if result["email"] != "john@example.com" {
+	if result["email"] != testEmail {
 		t.Errorf("Expected email to remain unchanged")
 	}
 }
@@ -148,7 +156,7 @@ func TestMaskURL(t *testing.T) {
 	result := filter.maskURL("amqp://user:secret@rabbitmq.example.com/vhost")
 	expected := "amqp://user:" + DefaultMaskValue + "@rabbitmq.example.com/vhost"
 	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+		t.Errorf(unexpectedValueMsg, expected, result)
 	}
 
 	// Test URL without password
@@ -195,27 +203,27 @@ func TestFilterValueStructFiltering(t *testing.T) {
 	input := TestStruct{
 		Username: "test_user_john_doe",
 		Password: "test_secret123",
-		Email:    "john@example.com",
-		APIKey:   "test_api_123456",
+		Email:    testEmail,
+		APIKey:   testAPIKeyShort,
 	}
 
 	result := filter.FilterValue("user", input)
 	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]any")
+		t.Fatal(expectedMaskedMapMsg)
 	}
 
 	// Check that non-sensitive fields are preserved
 	if resultMap["username"] != "test_user_john_doe" {
 		t.Errorf("Expected username to remain 'test_user_john_doe', got '%v'", resultMap["username"])
 	}
-	if resultMap["email"] != "john@example.com" {
+	if resultMap["email"] != testEmail {
 		t.Errorf("Expected email to remain unchanged, got '%v'", resultMap["email"])
 	}
 
 	// Check that sensitive fields are masked
 	if resultMap["password"] != DefaultMaskValue {
-		t.Errorf("Expected password to be masked, got '%v'", resultMap["password"])
+		t.Errorf(expectedMaskedPwdMsg, resultMap["password"])
 	}
 	if resultMap["apiKey"] != DefaultMaskValue {
 		t.Errorf("Expected apiKey to be masked, got '%v'", resultMap["apiKey"])
@@ -239,14 +247,22 @@ func TestFilterValuePointerStruct(t *testing.T) {
 		Password: "test_secret",
 	}
 
-	// Based on the implementation, pointers don't get converted to struct filtering
-	// since FilterValue checks reflect.TypeOf(value).Kind() == reflect.Struct,
-	// but pointers have Kind() == reflect.Ptr
+	// With the updated implementation, pointers to structs should be filtered
 	result := filter.FilterValue("user", input)
 
-	// The pointer should pass through unchanged since it's not a struct
-	if result != input {
-		t.Errorf("Expected pointer to struct to pass through unchanged, got different value")
+	// The pointer should now be filtered and return a map
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Errorf("Expected pointer to struct to be filtered and return a map, got %T", result)
+	}
+
+	// Check that username is preserved and password is masked
+	if resultMap["username"] != testUsername {
+		t.Errorf("Expected username to be preserved, got '%v'", resultMap["username"])
+	}
+
+	if resultMap["password"] != DefaultMaskValue {
+		t.Errorf(expectedMaskedPwdMsg, resultMap["password"])
 	}
 }
 
@@ -285,7 +301,7 @@ func TestFilterValueUnexportedFields(t *testing.T) {
 	result := filter.FilterValue("user", input)
 	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]any")
+		t.Fatal(expectedMaskedMapMsg)
 	}
 
 	// Only exported fields should be in the result
@@ -322,7 +338,7 @@ func TestFilterValueJSONTags(t *testing.T) {
 	result := filter.FilterValue("data", input)
 	resultMap, ok := result.(map[string]any)
 	if !ok {
-		t.Fatal("Expected result to be a map[string]any")
+		t.Fatal(expectedMaskedMapMsg)
 	}
 
 	// Check JSON tag names are used
@@ -336,8 +352,9 @@ func TestFilterValueJSONTags(t *testing.T) {
 		t.Errorf("Expected comma_field to be 'comma', got '%v'", resultMap["comma_field"])
 	}
 
-	if resultMap["IgnoredField"] != "ignored" {
-		t.Error("Field with json:\"-\" uses field name, should be 'ignored'")
+	// Field with json:"-" should be completely excluded from the result
+	if _, exists := resultMap["IgnoredField"]; exists {
+		t.Error("Field with json:\"-\" should be completely excluded from result")
 	}
 	if _, exists := resultMap["-"]; exists {
 		t.Error("Field with json:\"-\" should not use '-' as key")
@@ -542,13 +559,13 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 
 	t.Run("struct_with_interface_field", func(t *testing.T) {
 		type TestStruct struct {
-			Username string      `json:"username"`
-			Password string      `json:"password"`
-			Data     interface{} `json:"data"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Data     any    `json:"data"`
 		}
 
 		input := TestStruct{
-			Username: "john",
+			Username: testNameJohn,
 			Password: "secret123",
 			Data:     "some interface data",
 		}
@@ -556,14 +573,14 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.FilterValue(testName, input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
-		if resultMap["username"] != "john" {
+		if resultMap["username"] != testNameJohn {
 			t.Error("Expected username to be preserved")
 		}
 		if resultMap["password"] != DefaultMaskValue {
-			t.Error("Expected password to be masked")
+			t.Errorf(expectedMaskedPwdMsg, resultMap["password"])
 		}
 		if resultMap["data"] != "some interface data" {
 			t.Error("Expected interface data to be preserved")
@@ -586,11 +603,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.FilterValue(testName, input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
 		if resultMap["name"] != testName {
-			t.Error("Expected name to be preserved")
+			t.Error(expectedPreservedNameMsg)
 		}
 		if resultMap["secret"] != DefaultMaskValue {
 			t.Error("Expected secret to be masked")
@@ -622,15 +639,23 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		}
 
 		input := &TestStruct{
-			Name:     "john",
+			Name:     testNameJohn,
 			Password: "secret",
 		}
 
 		result := filter.FilterValue(testName, input)
-		// Based on FilterValue implementation, pointers pass through unchanged
-		// since they're not struct type (they're pointer type)
-		if result != input {
-			t.Error("Expected pointer to struct to pass through unchanged")
+		// Pointer to struct should now be filtered like a regular struct
+		resultMap, ok := result.(map[string]any)
+		if !ok {
+			t.Error("Expected pointer to struct to be filtered and return a map")
+		}
+
+		if resultMap["name"] != testNameJohn {
+			t.Error("Expected name field to remain unfiltered")
+		}
+
+		if resultMap["password"] != "***" {
+			t.Error("Expected password field to be masked")
 		}
 	})
 
@@ -642,7 +667,7 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		}
 
 		input := &TestStruct{
-			Name:     "john",
+			Name:     testNameJohn,
 			Password: "secret",
 		}
 
@@ -650,11 +675,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.filterStruct(input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
-		if resultMap["name"] != "john" {
-			t.Error("Expected name to be preserved")
+		if resultMap["name"] != testNameJohn {
+			t.Error(expectedPreservedNameMsg)
 		}
 		if resultMap["password"] != DefaultMaskValue {
 			t.Error("Expected password to be masked")
@@ -679,11 +704,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.FilterValue(testName, input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
 		if resultMap["name"] != testName {
-			t.Error("Expected name to be preserved")
+			t.Error(expectedPreservedNameMsg)
 		}
 
 		// The embedded struct should be recursively filtered
@@ -710,11 +735,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.FilterValue(testName, input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
 		if resultMap["name"] != testName {
-			t.Error("Expected name to be preserved")
+			t.Error(expectedPreservedNameMsg)
 		}
 
 		items, ok := resultMap["items"].([]string)
@@ -727,11 +752,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 	})
 
 	t.Run("struct_field_that_cannot_interface", func(t *testing.T) {
-		// Create a struct with a field that cannot be interface{}d
+		// Create a struct with a field that cannot be anyd
 		type TestStruct struct {
 			Name     string `json:"name"`
 			Password string `json:"password"`
-			// Note: In Go, all exported fields can be interface{}d, so this
+			// Note: In Go, all exported fields can be anyd, so this
 			// test is mainly for the CanInterface() check coverage
 		}
 
@@ -744,11 +769,11 @@ func TestFilterStructCompleteFieldCoverage(t *testing.T) {
 		result := filter.FilterValue(testName, input)
 		resultMap, ok := result.(map[string]any)
 		if !ok {
-			t.Fatal("Expected result to be a map")
+			t.Fatal(expectedMaskedMapMsg)
 		}
 
 		if resultMap["name"] != testName {
-			t.Error("Expected name to be preserved")
+			t.Error(expectedPreservedNameMsg)
 		}
 		if resultMap["password"] != DefaultMaskValue {
 			t.Error("Expected password to be masked")

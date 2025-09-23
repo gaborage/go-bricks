@@ -228,7 +228,7 @@ func TestConnectionStats(t *testing.T) {
 
 		// Validate key fields to ensure mocks are actually consumed
 		if connections, ok := stats["connections"]; ok {
-			if connMap, ok := connections.(map[string]interface{}); ok {
+			if connMap, ok := connections.(map[string]any); ok {
 				assert.Contains(mt, connMap, "current")
 				assert.Contains(mt, connMap, "available")
 				assert.Equal(mt, int32(1), connMap["current"])
@@ -237,7 +237,7 @@ func TestConnectionStats(t *testing.T) {
 		}
 
 		if database, ok := stats["database"]; ok {
-			if dbMap, ok := database.(map[string]interface{}); ok {
+			if dbMap, ok := database.(map[string]any); ok {
 				assert.Contains(mt, dbMap, "dataSize")
 				assert.Contains(mt, dbMap, "collections")
 				assert.Equal(mt, int32(1024), dbMap["dataSize"])

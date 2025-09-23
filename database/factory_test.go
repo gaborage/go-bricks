@@ -402,14 +402,14 @@ func TestNewConnectionSuccessfulOracleMocked(t *testing.T) {
 
 	// Test Oracle path
 	cfg := &config.DatabaseConfig{
-		Type:        "oracle",
-		Host:        "localhost",
-		Port:        1521,
-		Database:    "ORCL",
-		Username:    "testuser",
-		Password:    "testpass",
-		MaxConns:    25,
-		ServiceName: "ORCL",
+		Type:     "oracle",
+		Host:     "localhost",
+		Port:     1521,
+		Database: "ORCL",
+		Username: "testuser",
+		Password: "testpass",
+		MaxConns: 25,
+		Service:  config.ServiceConfig{Name: "ORCL"},
 	}
 
 	// This will fail due to no real database, but it exercises the NewConnection code path

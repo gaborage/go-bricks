@@ -16,6 +16,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 2. [Feature Overview](#feature-overview)
 3. [Quick Start](#quick-start)
 4. [Configuration](#configuration)
+   - [Migration Guide](#configuration-migration-guide)
 5. [Modules and Application Structure](#modules-and-application-structure)
 6. [HTTP Server](#http-server)
 7. [Messaging](#messaging)
@@ -98,7 +99,8 @@ app:
   name: "my-service"
   version: "v1.0.0"
   env: "development"
-  rate_limit: 200
+  rate:
+    limit: 200
 
 server:
   port: 8080
@@ -163,12 +165,79 @@ _ = cfg.Unmarshal("custom", &custom)
 
 See [examples/params/main.go](examples/params/main.go) for a complete walkthrough.
 
-### Overriding via environment
-Environment variables override everything using uppercase and underscores:
+### Configuration Migration Guide
+
+**Breaking Change Notice**: GoBricks now uses dot notation for nested configuration structures. If you're upgrading from a previous version, update your YAML configuration files:
+
+#### Before (Old Format):
+```yaml
+app:
+  rate_limit: 200
+
+server:
+  base_path: "/api/v1"
+  health_route: "/health"
+  ready_route: "/ready"
+
+database:
+  service_name: "FREEPDB1"  # Oracle service name
 ```
+
+#### After (New Format):
+```yaml
+app:
+  rate:
+    limit: 200
+
+server:
+  base:
+    path: "/api/v1"
+  health:
+    route: "/health"
+  ready:
+    route: "/ready"
+
+database:
+  service:
+    name: "FREEPDB1"  # Oracle service name
+```
+
+**Environment variables remain the same** - no changes needed:
+- `APP_RATE_LIMIT=200` still works and maps to `app.rate.limit`
+- `DATABASE_SERVICE_NAME=FREEPDB1` still works and maps to `database.service.name`
+
+**Code changes** - Update field access in Go code:
+```go
+// Current (recommended)
+rateLimit := cfg.App.Rate.Limit
+serviceName := cfg.Database.Service.Name
+
+// Oracle database connection configuration:
+// Use exactly one of: Service.Name, SID, or Database
+oracleServiceName := cfg.Database.Service.Name  // For Oracle service
+oracleSID := cfg.Database.SID                   // For Oracle SID
+oracleDB := cfg.Database.Database               // For database name
+```
+
+### Overriding via environment
+Environment variables override everything using uppercase and underscores. The framework automatically converts underscore notation to dot notation for nested configuration:
+```bash
+# App configuration
 APP_NAME=my-service
+APP_RATE_LIMIT=200             # Maps to app.rate.limit
+
+# Database configuration
+DATABASE_TYPE=postgresql
 DATABASE_HOST=prod-db.company.com
-CUSTOM_FEATURE_FLAG=true
+DATABASE_PORT=5432
+
+# Oracle-specific configuration
+DATABASE_SERVICE_NAME=FREEPDB1  # Maps to database.service.name
+DATABASE_SID=ORCL
+
+# Custom configuration
+CUSTOM_FEATURE_FLAG=true       # Maps to custom.feature.flag
+CUSTOM_API_TIMEOUT=30s         # Maps to custom.api.timeout
 ```
 
 ---
@@ -228,9 +297,12 @@ GoBricks supports configurable base paths and health endpoints for different dep
 
 ```yaml
 server:
-  base_path: "/api/v1"        # All routes automatically prefixed
-  health_route: "/health"     # Custom health endpoint path
-  ready_route: "/ready"       # Custom readiness endpoint path
+  base:
+    path: "/api/v1"        # All routes automatically prefixed
+  health:
+    route: "/health"       # Custom health endpoint path
+  ready:
+    route: "/ready"        # Custom readiness endpoint path
 ```
 
 With this configuration:
@@ -240,9 +312,9 @@ With this configuration:
 
 Environment variable overrides:
 ```bash
-SERVER_BASE_PATH="/api/v1"
-SERVER_HEALTH_ROUTE="/status"
-SERVER_READY_ROUTE="/readiness"
+SERVER_BASE_PATH="/api/v1"      # Maps to server.base.path
+SERVER_HEALTH_ROUTE="/status"   # Maps to server.health.route
+SERVER_READY_ROUTE="/readiness" # Maps to server.ready.route
 ```
 
 ---

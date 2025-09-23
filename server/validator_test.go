@@ -45,7 +45,7 @@ func TestValidatorValidateSuccess(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 	}{
 		{
 			name: "valid_test_struct",
@@ -110,7 +110,7 @@ func TestValidatorValidateFailures(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		input          interface{}
+		input          any
 		expectedErrors int
 		expectedFields []string
 	}{
@@ -268,7 +268,7 @@ func TestValidatorValidateNonStruct(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		input interface{}
+		input any
 	}{
 		{
 			name:  "string",
@@ -459,7 +459,7 @@ func TestGetErrorMessage(t *testing.T) {
 		name          string
 		validationTag string
 		field         string
-		input         interface{}
+		input         any
 		expectedMsg   string
 	}{
 		{

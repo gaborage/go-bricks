@@ -88,7 +88,7 @@ func TestBuilderFilterConditions(t *testing.T) {
 				return NewBuilder().WhereIn("category", "electronics", "books", "clothing")
 			},
 			Expected: BuilderExpectation{
-				Filter: bson.M{"category": bson.M{InOp: []interface{}{"electronics", "books", "clothing"}}},
+				Filter: bson.M{"category": bson.M{InOp: []any{"electronics", "books", "clothing"}}},
 			},
 		},
 		{
@@ -97,7 +97,7 @@ func TestBuilderFilterConditions(t *testing.T) {
 				return NewBuilder().WhereNin("status", "deleted", "archived")
 			},
 			Expected: BuilderExpectation{
-				Filter: bson.M{"status": bson.M{NinOp: []interface{}{"deleted", "archived"}}},
+				Filter: bson.M{"status": bson.M{NinOp: []any{"deleted", "archived"}}},
 			},
 		},
 		{

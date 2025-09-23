@@ -61,7 +61,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 	}))
 
 	// Rate limit
-	e.Use(RateLimit(cfg.App.RateLimit))
+	e.Use(RateLimit(cfg.App.Rate.Limit))
 
 	// Timing
 	e.Use(Timing())

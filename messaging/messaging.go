@@ -32,11 +32,11 @@ type Client interface {
 
 // PublishOptions contains options for publishing messages with AMQP-specific features.
 type PublishOptions struct {
-	Exchange   string                 // AMQP exchange name
-	RoutingKey string                 // AMQP routing key
-	Headers    map[string]interface{} // Message headers
-	Mandatory  bool                   // AMQP mandatory flag
-	Immediate  bool                   // AMQP immediate flag
+	Exchange   string         // AMQP exchange name
+	RoutingKey string         // AMQP routing key
+	Headers    map[string]any // Message headers
+	Mandatory  bool           // AMQP mandatory flag
+	Immediate  bool           // AMQP immediate flag
 }
 
 // ConsumeOptions contains options for consuming messages with AMQP-specific features.

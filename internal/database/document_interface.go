@@ -24,34 +24,34 @@ type DocumentInterface interface {
 	ListIndexes(ctx context.Context, collection string) ([]IndexModel, error)
 
 	// Aggregation operations
-	Aggregate(ctx context.Context, collection string, pipeline interface{}, opts *AggregateOptions) (DocumentCursor, error)
+	Aggregate(ctx context.Context, collection string, pipeline any, opts *AggregateOptions) (DocumentCursor, error)
 
 	// Database administration
-	RunCommand(ctx context.Context, command interface{}) DocumentResult
+	RunCommand(ctx context.Context, command any) DocumentResult
 }
 
 // DocumentCollection defines operations on a specific collection
 type DocumentCollection interface {
 	// Single document operations
-	InsertOne(ctx context.Context, document interface{}, opts *InsertOneOptions) (interface{}, error)
-	FindOne(ctx context.Context, filter interface{}, opts *FindOneOptions) DocumentResult
-	UpdateOne(ctx context.Context, filter interface{}, update interface{}, opts *UpdateOptions) (DocumentUpdateResult, error)
-	ReplaceOne(ctx context.Context, filter interface{}, replacement interface{}, opts *ReplaceOptions) (DocumentUpdateResult, error)
-	DeleteOne(ctx context.Context, filter interface{}, opts *DeleteOptions) (DocumentDeleteResult, error)
+	InsertOne(ctx context.Context, document any, opts *InsertOneOptions) (any, error)
+	FindOne(ctx context.Context, filter any, opts *FindOneOptions) DocumentResult
+	UpdateOne(ctx context.Context, filter any, update any, opts *UpdateOptions) (DocumentUpdateResult, error)
+	ReplaceOne(ctx context.Context, filter any, replacement any, opts *ReplaceOptions) (DocumentUpdateResult, error)
+	DeleteOne(ctx context.Context, filter any, opts *DeleteOptions) (DocumentDeleteResult, error)
 
 	// Multiple document operations
-	InsertMany(ctx context.Context, documents []interface{}, opts *InsertManyOptions) ([]interface{}, error)
-	Find(ctx context.Context, filter interface{}, opts *FindOptions) (DocumentCursor, error)
-	UpdateMany(ctx context.Context, filter interface{}, update interface{}, opts *UpdateOptions) (DocumentUpdateResult, error)
-	DeleteMany(ctx context.Context, filter interface{}, opts *DeleteOptions) (DocumentDeleteResult, error)
+	InsertMany(ctx context.Context, documents []any, opts *InsertManyOptions) ([]any, error)
+	Find(ctx context.Context, filter any, opts *FindOptions) (DocumentCursor, error)
+	UpdateMany(ctx context.Context, filter any, update any, opts *UpdateOptions) (DocumentUpdateResult, error)
+	DeleteMany(ctx context.Context, filter any, opts *DeleteOptions) (DocumentDeleteResult, error)
 
 	// Count operations
-	CountDocuments(ctx context.Context, filter interface{}, opts *CountOptions) (int64, error)
+	CountDocuments(ctx context.Context, filter any, opts *CountOptions) (int64, error)
 	EstimatedDocumentCount(ctx context.Context, opts *EstimatedCountOptions) (int64, error)
 
 	// Aggregation operations
-	Aggregate(ctx context.Context, pipeline interface{}, opts *AggregateOptions) (DocumentCursor, error)
-	Distinct(ctx context.Context, fieldName string, filter interface{}, opts *DistinctOptions) ([]interface{}, error)
+	Aggregate(ctx context.Context, pipeline any, opts *AggregateOptions) (DocumentCursor, error)
+	Distinct(ctx context.Context, fieldName string, filter any, opts *DistinctOptions) ([]any, error)
 
 	// Index operations
 	CreateIndex(ctx context.Context, model IndexModel) error
@@ -63,7 +63,7 @@ type DocumentCollection interface {
 	BulkWrite(ctx context.Context, models []WriteModel, opts *BulkWriteOptions) (DocumentBulkWriteResult, error)
 
 	// Watch changes (if supported)
-	Watch(ctx context.Context, pipeline interface{}, opts *ChangeStreamOptions) (ChangeStream, error)
+	Watch(ctx context.Context, pipeline any, opts *ChangeStreamOptions) (ChangeStream, error)
 }
 
 // DocumentCursor represents a cursor for iterating over query results
@@ -71,8 +71,8 @@ type DocumentCursor interface {
 	// Iteration
 	Next(ctx context.Context) bool
 	TryNext(ctx context.Context) bool
-	Decode(val interface{}) error
-	All(ctx context.Context, results interface{}) error
+	Decode(val any) error
+	All(ctx context.Context, results any) error
 
 	// Cursor management
 	Close(ctx context.Context) error
@@ -85,7 +85,7 @@ type DocumentCursor interface {
 
 // DocumentResult represents a single document result
 type DocumentResult interface {
-	Decode(v interface{}) error
+	Decode(v any) error
 	Err() error
 }
 
@@ -94,7 +94,7 @@ type DocumentUpdateResult interface {
 	MatchedCount() int64
 	ModifiedCount() int64
 	UpsertedCount() int64
-	UpsertedID() interface{}
+	UpsertedID() any
 }
 
 // DocumentDeleteResult represents the result of a delete operation
@@ -109,14 +109,14 @@ type DocumentBulkWriteResult interface {
 	ModifiedCount() int64
 	DeletedCount() int64
 	UpsertedCount() int64
-	UpsertedIDs() map[int64]interface{}
+	UpsertedIDs() map[int64]any
 }
 
 // ChangeStream represents a change stream for watching collection changes
 type ChangeStream interface {
 	Next(ctx context.Context) bool
 	TryNext(ctx context.Context) bool
-	Decode(val interface{}) error
+	Decode(val any) error
 	Err() error
 	Close(ctx context.Context) error
 	ResumeToken() bson.Raw
@@ -124,12 +124,12 @@ type ChangeStream interface {
 
 // WriteModel represents a write operation for bulk writes
 type WriteModel interface {
-	GetModel() interface{}
+	GetModel() any
 }
 
 // IndexModel represents an index specification
 type IndexModel struct {
-	Keys    interface{}
+	Keys    any
 	Options *IndexOptions
 }
 
@@ -144,19 +144,19 @@ type InsertManyOptions struct {
 }
 
 type FindOneOptions struct {
-	Sort                interface{}
+	Sort                any
 	Skip                *int64
-	Projection          interface{}
+	Projection          any
 	MaxTime             *time.Duration
 	ShowRecordID        *bool
 	AllowPartialResults *bool
 }
 
 type FindOptions struct {
-	Sort                interface{}
+	Sort                any
 	Skip                *int64
 	Limit               *int64
-	Projection          interface{}
+	Projection          any
 	MaxTime             *time.Duration
 	ShowRecordID        *bool
 	AllowPartialResults *bool
@@ -165,7 +165,7 @@ type FindOptions struct {
 }
 
 type UpdateOptions struct {
-	ArrayFilters             []interface{}
+	ArrayFilters             []any
 	BypassDocumentValidation *bool
 	Upsert                   *bool
 }
@@ -210,22 +210,22 @@ type ChangeStreamOptions struct {
 	BatchSize            *int32
 	FullDocument         *string
 	MaxAwaitTime         *time.Duration
-	ResumeAfter          interface{}
-	StartAtOperationTime interface{}
-	StartAfter           interface{}
+	ResumeAfter          any
+	StartAtOperationTime any
+	StartAfter           any
 }
 
 type CreateCollectionOptions struct {
 	Capped                       *bool
 	SizeInBytes                  *int64
 	MaxDocuments                 *int64
-	StorageEngine                interface{}
-	Validator                    interface{}
+	StorageEngine                any
+	Validator                    any
 	ValidationLevel              *string
 	ValidationAction             *string
-	IndexOptionDefaults          interface{}
+	IndexOptionDefaults          any
 	ViewOn                       *string
-	Pipeline                     interface{}
+	Pipeline                     any
 	Collation                    *Collation
 	ChangeStreamPreAndPostImages *ChangeStreamPreAndPostImages
 }
@@ -235,21 +235,21 @@ type IndexOptions struct {
 	ExpireAfterSeconds      *int32
 	Name                    *string
 	Sparse                  *bool
-	StorageEngine           interface{}
+	StorageEngine           any
 	Unique                  *bool
 	Version                 *int32
 	DefaultLanguage         *string
 	LanguageOverride        *string
 	TextVersion             *int32
-	Weights                 interface{}
+	Weights                 any
 	SphereVersion           *int32
 	Bits                    *int32
 	Max                     *float64
 	Min                     *float64
 	BucketSize              *float64
-	PartialFilterExpression interface{}
+	PartialFilterExpression any
 	Collation               *Collation
-	WildcardProjection      interface{}
+	WildcardProjection      any
 	Hidden                  *bool
 }
 
@@ -278,42 +278,42 @@ type FilterBuilder struct {
 	filter bson.M
 }
 
-func (fb FilterBuilder) Eq(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Eq(field string, value any) FilterBuilder {
 	fb.filter[field] = value
 	return fb
 }
 
-func (fb FilterBuilder) Ne(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Ne(field string, value any) FilterBuilder {
 	fb.filter[field] = bson.M{"$ne": value}
 	return fb
 }
 
-func (fb FilterBuilder) Gt(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Gt(field string, value any) FilterBuilder {
 	fb.filter[field] = bson.M{"$gt": value}
 	return fb
 }
 
-func (fb FilterBuilder) Gte(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Gte(field string, value any) FilterBuilder {
 	fb.filter[field] = bson.M{"$gte": value}
 	return fb
 }
 
-func (fb FilterBuilder) Lt(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Lt(field string, value any) FilterBuilder {
 	fb.filter[field] = bson.M{"$lt": value}
 	return fb
 }
 
-func (fb FilterBuilder) Lte(field string, value interface{}) FilterBuilder {
+func (fb FilterBuilder) Lte(field string, value any) FilterBuilder {
 	fb.filter[field] = bson.M{"$lte": value}
 	return fb
 }
 
-func (fb FilterBuilder) In(field string, values ...interface{}) FilterBuilder {
+func (fb FilterBuilder) In(field string, values ...any) FilterBuilder {
 	fb.filter[field] = bson.M{"$in": values}
 	return fb
 }
 
-func (fb FilterBuilder) Nin(field string, values ...interface{}) FilterBuilder {
+func (fb FilterBuilder) Nin(field string, values ...any) FilterBuilder {
 	fb.filter[field] = bson.M{"$nin": values}
 	return fb
 }
@@ -328,27 +328,27 @@ func (fb FilterBuilder) Exists(field string, exists bool) FilterBuilder {
 	return fb
 }
 
-func (fb FilterBuilder) Type(field string, bsonType interface{}) FilterBuilder {
+func (fb FilterBuilder) Type(field string, bsonType any) FilterBuilder {
 	fb.filter[field] = bson.M{"$type": bsonType}
 	return fb
 }
 
-func (fb FilterBuilder) And(filters ...interface{}) FilterBuilder {
+func (fb FilterBuilder) And(filters ...any) FilterBuilder {
 	fb.filter["$and"] = filters
 	return fb
 }
 
-func (fb FilterBuilder) Or(filters ...interface{}) FilterBuilder {
+func (fb FilterBuilder) Or(filters ...any) FilterBuilder {
 	fb.filter["$or"] = filters
 	return fb
 }
 
-func (fb FilterBuilder) Nor(filters ...interface{}) FilterBuilder {
+func (fb FilterBuilder) Nor(filters ...any) FilterBuilder {
 	fb.filter["$nor"] = filters
 	return fb
 }
 
-func (fb FilterBuilder) Not(filter interface{}) FilterBuilder {
+func (fb FilterBuilder) Not(filter any) FilterBuilder {
 	fb.filter["$not"] = filter
 	return fb
 }
@@ -390,7 +390,7 @@ func (pb ProjectionBuilder) SliceWithSkip(field string, skip, limit int) Project
 	return pb
 }
 
-func (pb ProjectionBuilder) ElemMatch(field string, condition interface{}) ProjectionBuilder {
+func (pb ProjectionBuilder) ElemMatch(field string, condition any) ProjectionBuilder {
 	pb.projection[field] = bson.M{"$elemMatch": condition}
 	return pb
 }
@@ -446,7 +446,7 @@ type UpdateBuilder struct {
 	update bson.M
 }
 
-func (ub UpdateBuilder) Set(field string, value interface{}) UpdateBuilder {
+func (ub UpdateBuilder) Set(field string, value any) UpdateBuilder {
 	if ub.update[updateOpSet] == nil {
 		ub.update[updateOpSet] = make(bson.M)
 	}
@@ -464,7 +464,7 @@ func (ub UpdateBuilder) Unset(fields ...string) UpdateBuilder {
 	return ub
 }
 
-func (ub UpdateBuilder) Inc(field string, value interface{}) UpdateBuilder {
+func (ub UpdateBuilder) Inc(field string, value any) UpdateBuilder {
 	if ub.update[updateOpInc] == nil {
 		ub.update[updateOpInc] = make(bson.M)
 	}
@@ -472,7 +472,7 @@ func (ub UpdateBuilder) Inc(field string, value interface{}) UpdateBuilder {
 	return ub
 }
 
-func (ub UpdateBuilder) Push(field string, value interface{}) UpdateBuilder {
+func (ub UpdateBuilder) Push(field string, value any) UpdateBuilder {
 	if ub.update[updateOpPush] == nil {
 		ub.update[updateOpPush] = make(bson.M)
 	}
@@ -480,7 +480,7 @@ func (ub UpdateBuilder) Push(field string, value interface{}) UpdateBuilder {
 	return ub
 }
 
-func (ub UpdateBuilder) Pull(field string, condition interface{}) UpdateBuilder {
+func (ub UpdateBuilder) Pull(field string, condition any) UpdateBuilder {
 	if ub.update[updateOpPull] == nil {
 		ub.update[updateOpPull] = make(bson.M)
 	}
@@ -488,7 +488,7 @@ func (ub UpdateBuilder) Pull(field string, condition interface{}) UpdateBuilder 
 	return ub
 }
 
-func (ub UpdateBuilder) AddToSet(field string, value interface{}) UpdateBuilder {
+func (ub UpdateBuilder) AddToSet(field string, value any) UpdateBuilder {
 	if ub.update[updateOpAddToSet] == nil {
 		ub.update[updateOpAddToSet] = make(bson.M)
 	}
@@ -526,10 +526,16 @@ func AsDocumentInterface(db Interface) (DocumentInterface, bool) {
 }
 
 // Helper to get the underlying type name for reflection-based operations
-func GetTypeName(v interface{}) string {
+func GetTypeName(v any) string {
 	t := reflect.TypeOf(v)
+	if t == nil {
+		return ""
+	}
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	return t.Name()
+	if name := t.Name(); name != "" {
+		return name
+	}
+	return t.String()
 }

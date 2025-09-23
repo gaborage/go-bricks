@@ -863,7 +863,7 @@ func (m *Module) Init() error { return nil }`,
 		{
 			name: "interface instead of struct",
 			content: `package test
-type Module interface{}`,
+type Module any`,
 			expected: false,
 		},
 		{
