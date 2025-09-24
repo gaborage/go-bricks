@@ -36,8 +36,15 @@ type AppConfig struct {
 
 // RateConfig holds rate limiting settings.
 type RateConfig struct {
-	Limit int `koanf:"limit"`
-	Burst int `koanf:"burst"`
+	Limit      int              `koanf:"limit"`
+	Burst      int              `koanf:"burst"`
+	IPPreGuard IPPreGuardConfig `koanf:"ippreguard"`
+}
+
+// IPPreGuardConfig holds IP pre-guard rate limiting settings.
+type IPPreGuardConfig struct {
+	Enabled           bool `koanf:"enabled"`           // enable IP pre-guard rate limiting
+	RequestsPerSecond int  `koanf:"requestspersecond"` // requests per second limit per IP
 }
 
 // ServerConfig holds HTTP server settings.
@@ -211,7 +218,7 @@ type MultitenantConfig struct {
 type MultitenantResolverConfig struct {
 	Type         string `koanf:"type"`         // header, subdomain, composite
 	HeaderName   string `koanf:"headername"`   // default: X-Tenant-ID
-	RootDomain   string `koanf:"rootdomain"`   // e.g., .api.example.com
+	RootDomain   string `koanf:"rootdomain"`   // e.g., api.example.com or .api.example.com (leading dot optional)
 	TrustProxies bool   `koanf:"trustproxies"` // trust X-Forwarded-Host
 }
 

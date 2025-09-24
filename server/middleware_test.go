@@ -17,6 +17,10 @@ import (
 const (
 	preSetupMarker  = "pre-setup"
 	postSetupMarker = "post-setup"
+
+	// Test probe endpoint paths
+	testHealthPath = "/health"
+	testReadyPath  = "/ready"
 )
 
 func TestSetupMiddlewares(t *testing.T) {
@@ -28,7 +32,13 @@ func TestSetupMiddlewares(t *testing.T) {
 			name: "standard_middleware_setup",
 			config: &config.Config{
 				App: config.AppConfig{
-					Rate: config.RateConfig{Limit: 100},
+					Rate: config.RateConfig{
+						Limit: 100,
+						IPPreGuard: config.IPPreGuardConfig{
+							Enabled:           true,
+							RequestsPerSecond: 1000,
+						},
+					},
 				},
 				Server: config.ServerConfig{
 					Timeout: config.TimeoutConfig{
@@ -41,7 +51,13 @@ func TestSetupMiddlewares(t *testing.T) {
 			name: "zero_rate_limit_disabled",
 			config: &config.Config{
 				App: config.AppConfig{
-					Rate: config.RateConfig{Limit: 0},
+					Rate: config.RateConfig{
+						Limit: 0,
+						IPPreGuard: config.IPPreGuardConfig{
+							Enabled:           false,
+							RequestsPerSecond: 0,
+						},
+					},
 				},
 				Server: config.ServerConfig{
 					Timeout: config.TimeoutConfig{
@@ -58,7 +74,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			log := logger.New("disabled", false)
 
 			// Setup middlewares
-			SetupMiddlewares(e, log, tt.config)
+			SetupMiddlewares(e, log, tt.config, testHealthPath, testReadyPath)
 
 			// Create test handler
 			e.GET("/test", func(c echo.Context) error {
@@ -117,7 +133,7 @@ func TestMiddlewareOrder(t *testing.T) {
 		}
 	})
 
-	SetupMiddlewares(e, log, cfg)
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -175,7 +191,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg)
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	e.POST("/test", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -219,7 +235,7 @@ func TestGzipMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg)
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	// Create handler that returns large response
 	largeResponse := strings.Repeat("This is a test response that should be compressed. ", 100)
@@ -269,7 +285,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg)
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	// Handler that panics
 	e.GET("/panic", func(_ echo.Context) error {
@@ -301,7 +317,7 @@ func TestSecurityHeaders(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg)
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	e.GET("/test", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

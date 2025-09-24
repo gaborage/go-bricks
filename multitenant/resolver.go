@@ -29,7 +29,7 @@ func (r *HeaderResolver) ResolveTenant(ctx context.Context, req *http.Request) (
 		headerName = "X-Tenant-ID"
 	}
 
-	tenantID := req.Header.Get(headerName)
+	tenantID := strings.TrimSpace(req.Header.Get(headerName))
 	if tenantID == "" {
 		return "", ErrTenantResolutionFailed
 	}
@@ -54,35 +54,35 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 		return "", ErrTenantResolutionFailed
 	}
 
-	// Get host from request, prefer X-Forwarded-Host if trust_proxies is enabled
+	// Derive canonical host (optionally trust proxies)
 	host := req.Host
 	if r.TrustProxies {
-		if forwardedHost := req.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
-			host = forwardedHost
+		if fwd := req.Header.Get("X-Forwarded-Host"); fwd != "" {
+			// Use the first value if comma-separated
+			if idx := strings.Index(fwd, ","); idx >= 0 {
+				fwd = fwd[:idx]
+			}
+			host = strings.TrimSpace(fwd)
 		}
 	}
-
-	// Strip port if present
-	if colonIndex := strings.LastIndex(host, ":"); colonIndex > 0 {
-		// Only strip if it looks like host:port (not IPv6)
-		if !strings.Contains(host[:colonIndex], ":") {
-			host = host[:colonIndex]
-		}
+	// Strip port safely (best-effort): handle host:port and leave IPv6 literals intact
+	if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[:i], ":") {
+		host = host[:i]
 	}
 
-	// Ensure host ends with our root domain
-	if !strings.HasSuffix(host, r.RootDomain) {
+	// Require dot-delimited root domain to prevent suffix trickery
+	if host == r.RootDomain {
+		return "", ErrTenantResolutionFailed
+	}
+	if !strings.HasSuffix(host, "."+r.RootDomain) {
 		return "", ErrTenantResolutionFailed
 	}
 
-	// Extract tenant part (everything before the root domain)
-	tenantPart := host[:len(host)-len(r.RootDomain)]
+	// Extract subdomain part and drop the separating dot
+	tenantPart := strings.TrimSuffix(host, "."+r.RootDomain)
 	if tenantPart == "" {
 		return "", ErrTenantResolutionFailed
 	}
-
-	// Handle multiple subdomain levels (e.g., "client.tenant" from "client.tenant.api.example.com")
-	// For simplicity, use the entire subdomain part as tenant ID
 	return tenantPart, nil
 }
 

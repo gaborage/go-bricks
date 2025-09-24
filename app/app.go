@@ -21,6 +21,8 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
+var ErrNoTenantInContext = errors.New("no tenant in context")
+
 // SignalHandler interface allows for injectable signal handling for testing
 type SignalHandler interface {
 	Notify(c chan<- os.Signal, sig ...os.Signal)
@@ -189,7 +191,7 @@ func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts 
 		DBFromContext: func(ctx context.Context) (database.Interface, error) {
 			tenantID, ok := multitenant.GetTenant(ctx)
 			if !ok {
-				return nil, fmt.Errorf("no tenant found in context")
+				return nil, ErrNoTenantInContext
 			}
 			return tenantConnManager.GetDatabase(ctx, tenantID)
 		},

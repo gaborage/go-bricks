@@ -79,7 +79,7 @@ func (c *TenantConfigCache) GetDatabase(ctx context.Context, tenantID string) (*
 	c.mu.RUnlock()
 
 	// If cached and not expired, return immediately
-	if exists && !entry.isExpired(c.cfg.ttl) {
+	if exists && entry.dbConfig != nil && !entry.isExpired(c.cfg.ttl) {
 		c.touchEntry(tenantID)
 		return entry.dbConfig, nil
 	}
@@ -113,7 +113,7 @@ func (c *TenantConfigCache) GetMessaging(ctx context.Context, tenantID string) (
 	c.mu.RUnlock()
 
 	// If cached and not expired, return immediately
-	if exists && !entry.isExpired(c.cfg.ttl) {
+	if exists && entry.msgConfig != nil && !entry.isExpired(c.cfg.ttl) {
 		c.touchEntry(tenantID)
 		return entry.msgConfig, nil
 	}

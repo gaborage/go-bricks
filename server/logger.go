@@ -1,8 +1,6 @@
 package server
 
 import (
-	"strings"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
@@ -13,7 +11,8 @@ import (
 
 // Logger returns a request logging middleware using structured logging.
 // It logs HTTP requests with method, URI, status, latency, and request ID.
-func Logger(log logger.Logger) echo.MiddlewareFunc {
+// healthPath and readyPath specify probe endpoints that should be excluded from logging.
+func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogURI:       true,
 		LogStatus:    true,
@@ -22,12 +21,12 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 		LogRequestID: true,
 		LogError:     true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
-			// Skip health checks en los logs
+			// Skip probe endpoints from logs
 			path := c.Path()
 			if path == "" {
 				path = v.URI
 			}
-			if strings.HasSuffix(path, "/health") || strings.HasSuffix(path, "/ready") {
+			if path == healthPath || path == readyPath {
 				return nil
 			}
 
@@ -48,13 +47,16 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 			}
 
 			// Tenant context
-			tenantID, _ := multitenant.GetTenant(c.Request().Context())
+			ctx := c.Request().Context()
+			if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
+				event = event.Str("tenant", tenantID)
+			}
 
 			// Get AMQP message count and DB operation count from request context
-			amqpCount := logger.GetAMQPCounter(c.Request().Context())
-			dbCount := logger.GetDBCounter(c.Request().Context())
-			amqpElapsed := logger.GetAMQPElapsed(c.Request().Context())
-			dbElapsed := logger.GetDBElapsed(c.Request().Context())
+			amqpCount := logger.GetAMQPCounter(ctx)
+			dbCount := logger.GetDBCounter(ctx)
+			amqpElapsed := logger.GetAMQPElapsed(ctx)
+			dbElapsed := logger.GetDBElapsed(ctx)
 
 			// Resolve the same trace ID used in API responses
 			traceID := getTraceID(c)
@@ -70,7 +72,6 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				Int64("amqp_elapsed", amqpElapsed).
 				Int64("db_queries", dbCount).
 				Int64("db_elapsed", dbElapsed).
-				Str("tenant_id", tenantID).
 				Str("ip", c.RealIP()).
 				Str("user_agent", c.Request().UserAgent()).
 				// Log unified trace ID (matches response meta.traceId)

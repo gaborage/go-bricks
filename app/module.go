@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -248,6 +249,28 @@ func (r *ModuleRegistry) Shutdown() error {
 		}
 	}
 	return nil
+}
+
+// DatabaseFrom returns a tenant-scoped DB when available, else the global DB.
+func (d *ModuleDeps) DatabaseFrom(ctx context.Context) (database.Interface, error) {
+	if d.DB != nil {
+		return d.DB, nil
+	}
+	if d.DBFromContext != nil {
+		return d.DBFromContext(ctx)
+	}
+	return nil, fmt.Errorf("database dependency not configured")
+}
+
+// MessagingClientFrom returns a tenant-scoped messaging client when available, else the global client.
+func (d *ModuleDeps) MessagingClientFrom(ctx context.Context) (messaging.Client, error) {
+	if d.Messaging != nil {
+		return d.Messaging, nil
+	}
+	if d.MessagingFromContext != nil {
+		return d.MessagingFromContext(ctx)
+	}
+	return nil, fmt.Errorf("messaging dependency not configured")
 }
 
 // getModulePackage extracts the package path from a module instance

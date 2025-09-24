@@ -18,31 +18,35 @@ type recLogger struct{ last *recEvent }
 
 type recEvent struct{ fields map[string]string }
 
-func (r *recLogger) Info() logger.LogEvent {
+func (r *recLogger) noop() logger.LogEvent {
 	r.last = &recEvent{fields: map[string]string{}}
 	return r.last
+}
+
+func (r *recLogger) Info() logger.LogEvent {
+	return r.noop()
 }
 func (r *recLogger) Error() logger.LogEvent {
-	r.last = &recEvent{fields: map[string]string{}}
-	return r.last
+	return r.noop()
 }
 func (r *recLogger) Debug() logger.LogEvent {
-	r.last = &recEvent{fields: map[string]string{}}
-	return r.last
+	return r.noop()
 }
 func (r *recLogger) Warn() logger.LogEvent {
-	r.last = &recEvent{fields: map[string]string{}}
-	return r.last
+	return r.noop()
 }
 func (r *recLogger) Fatal() logger.LogEvent {
-	r.last = &recEvent{fields: map[string]string{}}
-	return r.last
+	return r.noop()
 }
 func (r *recLogger) WithContext(_ any) logger.Logger           { return r }
 func (r *recLogger) WithFields(_ map[string]any) logger.Logger { return r }
 
-func (e *recEvent) Msg(_ string)                                  {}
-func (e *recEvent) Msgf(_ string, _ ...any)                       {}
+func (e *recEvent) Msg(_ string) {
+	// No-op
+}
+func (e *recEvent) Msgf(_ string, _ ...any) {
+	// No-op
+}
 func (e *recEvent) Err(_ error) logger.LogEvent                   { return e }
 func (e *recEvent) Str(k, v string) logger.LogEvent               { e.fields[k] = v; return e }
 func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
@@ -56,7 +60,7 @@ func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog))
+	e.Use(Logger(recLog, testHealthPath, testReadyPath))
 
 	// Simple handler that emits a success envelope (adds meta with traceId)
 	e.GET("/t", func(c echo.Context) error {
@@ -86,7 +90,7 @@ func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {
 func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog))
+	e.Use(Logger(recLog, testHealthPath, testReadyPath))
 
 	// Handler emits success envelope which sets/propagates traceparent on response
 	e.GET("/tp", func(c echo.Context) error {
@@ -109,7 +113,7 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog))
+	e.Use(Logger(recLog, testHealthPath, testReadyPath))
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -126,7 +130,8 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
-	for _, path := range []string{"/health", "/ready", "/api/health", "/api/ready"} {
+	// Test both configured probe paths and ensure suffix matching no longer applies
+	for _, path := range []string{testHealthPath, testReadyPath} {
 		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 		rec := httptest.NewRecorder()
 
@@ -135,6 +140,18 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 		e.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusOK, rec.Code)
-		require.Nil(t, recLog.last, "health-style endpoints should not be logged")
+		require.Nil(t, recLog.last, "configured probe endpoints should not be logged")
+	}
+
+	// Test that paths with health/ready suffixes are now logged (no more suffix matching)
+	for _, path := range []string{"/api/health", "/api/ready"} {
+		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder()
+
+		recLog.last = nil
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.NotNil(t, recLog.last, "non-probe endpoints with health/ready suffix should be logged")
 	}
 }

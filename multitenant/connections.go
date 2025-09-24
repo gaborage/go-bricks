@@ -2,6 +2,7 @@ package multitenant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -82,7 +83,12 @@ func (m *TenantConnectionManager) GetDatabase(ctx context.Context, tenantID stri
 		return nil, fmt.Errorf("failed to initialize tenant connection: %w", err)
 	}
 
-	return result.(database.Interface), nil
+	db, ok := result.(database.Interface)
+	if !ok || db == nil {
+		return nil, fmt.Errorf("invalid database connection type for tenant %s", tenantID)
+	}
+
+	return db, nil
 }
 
 // initializeTenantConnection creates a new database connection for the tenant
@@ -162,22 +168,37 @@ func (m *TenantConnectionManager) evictOldestLocked() {
 
 // CleanupIdleConnections removes connections that have been idle for too long
 func (m *TenantConnectionManager) CleanupIdleConnections() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	now := time.Now()
 	var toEvict []string
 
+	m.mu.RLock()
 	for tenantID, resource := range m.resources {
 		if now.Sub(resource.lastUsed) > m.cfg.idleTTL {
 			toEvict = append(toEvict, tenantID)
 		}
 	}
+	m.mu.RUnlock()
 
+	var toClose []struct {
+		tenantID string
+		conn     database.Interface
+	}
+	m.mu.Lock()
 	for _, tenantID := range toEvict {
-		resource := m.resources[tenantID]
-		delete(m.resources, tenantID)
+		if resource, ok := m.resources[tenantID]; ok {
+			toClose = append(toClose, struct {
+				tenantID string
+				conn     database.Interface
+			}{
+				tenantID: tenantID,
+				conn:     resource.conn,
+			})
+			delete(m.resources, tenantID)
+		}
+	}
+	m.mu.Unlock()
 
+	for _, item := range toClose {
 		// Close connection in background
 		go func(conn database.Interface, tenant string) {
 			if err := conn.Close(); err != nil {
@@ -190,7 +211,7 @@ func (m *TenantConnectionManager) CleanupIdleConnections() {
 					"tenant_id": tenant,
 				}).Debug().Msg("Cleaned up idle tenant database connection")
 			}
-		}(resource.conn, tenantID)
+		}(item.conn, item.tenantID)
 	}
 }
 
@@ -220,22 +241,20 @@ func (m *TenantConnectionManager) RefreshTenant(_ context.Context, tenantID stri
 // Close closes all tenant connections
 func (m *TenantConnectionManager) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	res := m.resources
+	m.resources = make(map[string]*tenantResource)
+	m.mu.Unlock()
 
 	var errs []error
-	for tenantID, resource := range m.resources {
+	for tenantID, resource := range res {
 		if err := resource.conn.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close connection for tenant %s: %w", tenantID, err))
 		}
 	}
 
-	// Clear the map
-	m.resources = make(map[string]*tenantResource)
-
 	if len(errs) > 0 {
-		return fmt.Errorf("errors closing tenant connections: %v", errs)
+		return errors.Join(errs...)
 	}
-
 	return nil
 }
 

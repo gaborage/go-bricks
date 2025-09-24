@@ -1,6 +1,8 @@
 package server
 
 import (
+	"strings"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
@@ -11,7 +13,8 @@ import (
 
 // SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
 // It sets up CORS, logging, recovery, security headers, rate limiting, and other essential middleware.
-func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
+// healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
+func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
 	// Request ID
 	e.Use(middleware.RequestID())
 
@@ -24,18 +27,25 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 	// CORS
 	e.Use(CORS())
 
+	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
+	if cfg.App.Rate.IPPreGuard.Enabled {
+		e.Use(IPPreGuard(cfg.App.Rate.IPPreGuard.RequestsPerSecond))
+	}
+
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
-			e.Use(TenantMiddleware(resolver))
+			// Use skipper-aware middleware to bypass tenant resolution for health probes
+			skipper := CreateProbeSkipper(healthPath, readyPath)
+			e.Use(TenantMiddlewareWithSkipper(resolver, skipper))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
 	}
 
 	// Logger middleware with zerolog
-	e.Use(Logger(log))
+	e.Use(Logger(log, healthPath, readyPath))
 
 	// Recovery
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
@@ -98,7 +108,9 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	}
 
 	newSubdomainResolver := func() multitenant.TenantResolver {
-		return &multitenant.SubdomainResolver{RootDomain: resolverCfg.RootDomain, TrustProxies: resolverCfg.TrustProxies}
+		// Normalize RootDomain: strip leading dot to accept both ".example.com" and "example.com"
+		rootDomain := strings.TrimPrefix(resolverCfg.RootDomain, ".")
+		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.TrustProxies}
 	}
 
 	switch resolverCfg.Type {

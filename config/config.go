@@ -65,13 +65,15 @@ func Load() (*Config, error) {
 
 func loadDefaults(k *koanf.Koanf) error {
 	defaults := map[string]any{
-		"app.name":       "gobricks-service",
-		"app.version":    "v1.0.0",
-		"app.env":        EnvDevelopment,
-		"app.debug":      false,
-		"app.namespace":  "default",
-		"app.rate.limit": 100,
-		"app.rate.burst": 200,
+		"app.name":                              "gobricks-service",
+		"app.version":                           "v1.0.0",
+		"app.env":                               EnvDevelopment,
+		"app.debug":                             false,
+		"app.namespace":                         "default",
+		"app.rate.limit":                        100,
+		"app.rate.burst":                        200,
+		"app.rate.ippreguard.enabled":           true,
+		"app.rate.ippreguard.requestspersecond": 2000,
 
 		"server.host":               "0.0.0.0",
 		"server.port":               8080,

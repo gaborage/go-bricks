@@ -13,6 +13,9 @@ type MockProvider struct {
 	MessagingConfigs map[string]*multitenant.TenantMessagingConfig
 }
 
+// Assert interface conformance at compile time
+var _ multitenant.TenantConfigProvider = (*MockProvider)(nil)
+
 // GetDatabase returns a database config for the tenant if available.
 func (m *MockProvider) GetDatabase(_ context.Context, tenantID string) (*config.DatabaseConfig, error) {
 	if cfg, ok := m.DatabaseConfigs[tenantID]; ok {
