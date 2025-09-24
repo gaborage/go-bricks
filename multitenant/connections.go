@@ -65,14 +65,19 @@ func (m *TenantConnectionManager) GetDatabase(ctx context.Context, tenantID stri
 	}
 
 	// Check for existing connection
-	m.mu.Lock()
-	if resource, exists := m.resources[tenantID]; exists {
-		resource.lastUsed = time.Now()
-		conn := resource.conn
+	m.mu.RLock()
+	resource, exists := m.resources[tenantID]
+	m.mu.RUnlock()
+	if exists {
+		// Update lastUsed under write lock
+		m.mu.Lock()
+		if resource2, ok := m.resources[tenantID]; ok {
+			resource2.lastUsed = time.Now()
+			resource = resource2
+		}
 		m.mu.Unlock()
-		return conn, nil
+		return resource.conn, nil
 	}
-	m.mu.Unlock()
 
 	// Use singleflight to prevent concurrent initialization
 	result, err, _ := m.sfg.Do(tenantID, func() (interface{}, error) {

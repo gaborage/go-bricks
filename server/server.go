@@ -113,6 +113,8 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 
 	e.GET(healthPath, s.healthCheck)
 	e.GET(readyPath, s.readyCheck)
+	e.HEAD(healthPath, s.healthCheck)
+	e.HEAD(readyPath, s.readyCheck)
 
 	log.Debug().
 		Str("base_path", basePath).

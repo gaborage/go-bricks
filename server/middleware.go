@@ -38,7 +38,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
 			skipper := CreateProbeSkipper(healthPath, readyPath)
-			e.Use(TenantMiddlewareWithSkipper(resolver, skipper))
+			e.Use(TenantMiddleware(resolver, skipper))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
