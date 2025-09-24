@@ -16,6 +16,9 @@ const (
 	testAppName                  = "test-app"
 	testAppVersion               = "v1.0.0"
 	errMaxConnectionsNonNegative = "max connections must be non-negative"
+	testAMQPHost                 = "amqp://localhost:5672/"
+	testTenantHeader             = "X-Tenant-ID"
+	testDomain                   = ".api.example.com"
 )
 
 func TestValidateValidConfig(t *testing.T) {
@@ -1382,7 +1385,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "majority",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "primary",
+						Preference: "primary",
 					},
 				},
 			},
@@ -1401,7 +1404,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "acknowledged",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "primaryPreferred",
+						Preference: "primaryPreferred",
 					},
 				},
 			},
@@ -1420,7 +1423,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "MAJORITY",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "SECONDARY",
+						Preference: "SECONDARY",
 					},
 				},
 			},
@@ -1447,7 +1450,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				Username: "testuser",
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 				},
 			},
@@ -1481,7 +1484,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				Username: "testuser",
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 					Concern: ConcernConfig{
 						Write: "invalid",
@@ -1588,7 +1591,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				ConnectionString: testMongoDBConnectionString,
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "primary",
+						Preference: "primary",
 					},
 					Concern: ConcernConfig{
 						Write: "majority",
@@ -1604,7 +1607,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				ConnectionString: testMongoDBConnectionString,
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 				},
 			},
@@ -1915,5 +1918,599 @@ func createValidFullConfig() *Config {
 		Server:   createValidServerConfig(),
 		Database: createValidDatabaseConfig(),
 		Log:      createValidLogConfig(),
+	}
+}
+
+// =============================================================================
+// Multitenant Validation Tests
+// =============================================================================
+
+func TestIsMessagingConfigured(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   MessagingConfig
+		expected bool
+	}{
+		{
+			name:     "empty_config_not_configured",
+			config:   MessagingConfig{},
+			expected: false,
+		},
+		{
+			name: "broker_url_configured",
+			config: MessagingConfig{
+				Broker: BrokerConfig{
+					URL: testAMQPHost,
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "broker_url_with_virtualhost",
+			config: MessagingConfig{
+				Broker: BrokerConfig{
+					URL:         testAMQPHost,
+					VirtualHost: "/test",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "empty_broker_url_not_configured",
+			config: MessagingConfig{
+				Broker: BrokerConfig{
+					URL: "",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "whitespace_broker_url_is_configured",
+			config: MessagingConfig{
+				Broker: BrokerConfig{
+					URL: "   ",
+				},
+			},
+			expected: true, // Whitespace is still considered configured
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isMessagingConfigured(&tt.config)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestValidateMultitenantDisabled(t *testing.T) {
+	mtConfig := &MultitenantConfig{
+		Enabled: false,
+	}
+	dbConfig := &DatabaseConfig{
+		Type: PostgreSQL,
+		Host: "localhost",
+		Port: 5432,
+	}
+	msgConfig := &MessagingConfig{
+		Broker: BrokerConfig{
+			URL: testAMQPHost,
+		},
+	}
+
+	err := validateMultitenant(mtConfig, dbConfig, msgConfig)
+	assert.NoError(t, err, "Validation should pass when multitenant is disabled")
+}
+
+func TestValidateMultitenantSuccess(t *testing.T) {
+	tests := []struct {
+		name      string
+		mtConfig  MultitenantConfig
+		dbConfig  DatabaseConfig
+		msgConfig MessagingConfig
+	}{
+		{
+			name: "valid_header_resolver",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: testTenantHeader,
+				},
+				Cache: CacheConfig{
+					TTL: 5 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+					Cleanup: CleanupConfig{
+						Interval: 5 * time.Minute,
+					},
+				},
+				Validation: IDValidationConfig{
+					Pattern: `^[a-z0-9-]{1,64}$`,
+				},
+			},
+			dbConfig:  DatabaseConfig{},  // Empty for multitenant
+			msgConfig: MessagingConfig{}, // Empty for multitenant
+		},
+		{
+			name: "valid_subdomain_resolver",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "subdomain",
+					Domain: testDomain,
+				},
+				Cache: CacheConfig{
+					TTL: 10 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 50,
+					Cleanup: CleanupConfig{
+						Interval: 2 * time.Minute,
+					},
+				},
+				Validation: IDValidationConfig{
+					Pattern: `^[a-zA-Z][a-zA-Z0-9_-]{2,31}$`,
+				},
+			},
+			dbConfig:  DatabaseConfig{},
+			msgConfig: MessagingConfig{},
+		},
+		{
+			name: "valid_composite_resolver",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:    "composite",
+					Header:  testTenantHeader,
+					Domain:  testDomain,
+					Proxies: true,
+				},
+				Cache: CacheConfig{
+					TTL: 1 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 1000,
+					Cleanup: CleanupConfig{
+						Interval: 10 * time.Minute,
+					},
+				},
+				Validation: IDValidationConfig{
+					Pattern: "", // Empty uses default
+				},
+			},
+			dbConfig:  DatabaseConfig{},
+			msgConfig: MessagingConfig{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenant(&tt.mtConfig, &tt.dbConfig, &tt.msgConfig)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateMultitenantFailures(t *testing.T) {
+	tests := []struct {
+		name          string
+		mtConfig      MultitenantConfig
+		dbConfig      DatabaseConfig
+		msgConfig     MessagingConfig
+		expectedError string
+	}{
+		{
+			name: "invalid_resolver_type",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "invalid",
+				},
+			},
+			dbConfig:      DatabaseConfig{},
+			msgConfig:     MessagingConfig{},
+			expectedError: "resolver: invalid type: invalid",
+		},
+		{
+			name: "invalid_cache_ttl",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "header",
+				},
+				Cache: CacheConfig{
+					TTL: 30 * time.Second, // Less than 1 minute
+				},
+			},
+			dbConfig:      DatabaseConfig{},
+			msgConfig:     MessagingConfig{},
+			expectedError: "cache: ttl must be at least 1 minute",
+		},
+		{
+			name: "invalid_limits_too_many_tenants",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "header",
+				},
+				Cache: CacheConfig{
+					TTL: 5 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 1001, // Exceeds maximum
+				},
+			},
+			dbConfig:      DatabaseConfig{},
+			msgConfig:     MessagingConfig{},
+			expectedError: "limits: tenants cannot exceed 1000",
+		},
+		{
+			name: "invalid_tenant_id_pattern",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "header",
+				},
+				Cache: CacheConfig{
+					TTL: 5 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+				Validation: IDValidationConfig{
+					Pattern: `[unclosed`, // Invalid regex
+				},
+			},
+			dbConfig:      DatabaseConfig{},
+			msgConfig:     MessagingConfig{},
+			expectedError: "tenant_id pattern: error parsing regexp",
+		},
+		{
+			name: "database_configured_with_multitenant",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "header",
+				},
+				Cache: CacheConfig{
+					TTL: 5 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+			},
+			dbConfig: DatabaseConfig{
+				Host: "localhost", // This makes it configured
+				Type: PostgreSQL,
+			},
+			msgConfig:     MessagingConfig{},
+			expectedError: "database configuration not allowed when multitenant.enabled is true",
+		},
+		{
+			name: "messaging_configured_with_multitenant",
+			mtConfig: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: "header",
+				},
+				Cache: CacheConfig{
+					TTL: 5 * time.Minute,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+			},
+			dbConfig: DatabaseConfig{},
+			msgConfig: MessagingConfig{
+				Broker: BrokerConfig{
+					URL: testAMQPHost, // This makes it configured
+				},
+			},
+			expectedError: "messaging configuration not allowed when multitenant.enabled is true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenant(&tt.mtConfig, &tt.dbConfig, &tt.msgConfig)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedError)
+		})
+	}
+}
+
+func TestValidateMultitenantResolver(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         ResolverConfig
+		expectError    bool
+		errorContains  string
+		expectedHeader string // Check default header is set
+	}{
+		{
+			name: "valid_header_resolver",
+			config: ResolverConfig{
+				Type:   "header",
+				Header: "X-Custom-Tenant",
+			},
+			expectError: false,
+		},
+		{
+			name: "header_resolver_gets_default_header",
+			config: ResolverConfig{
+				Type: "header",
+				// No header specified, should get default
+			},
+			expectError:    false,
+			expectedHeader: testTenantHeader,
+		},
+		{
+			name: "valid_subdomain_resolver",
+			config: ResolverConfig{
+				Type:   "subdomain",
+				Domain: testDomain,
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_composite_resolver",
+			config: ResolverConfig{
+				Type:    "composite",
+				Header:  testTenantHeader,
+				Domain:  testDomain,
+				Proxies: true,
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid_resolver_type",
+			config: ResolverConfig{
+				Type: "invalid",
+			},
+			expectError:   true,
+			errorContains: "invalid type: invalid (must be one of: header, subdomain, composite)",
+		},
+		{
+			name: "subdomain_missing_domain",
+			config: ResolverConfig{
+				Type: "subdomain",
+				// Missing domain
+			},
+			expectError:   true,
+			errorContains: "domain is required for subdomain resolution",
+		},
+		{
+			name: "subdomain_domain_without_leading_dot",
+			config: ResolverConfig{
+				Type:   "subdomain",
+				Domain: "api.example.com", // Will be normalized to .api.example.com
+			},
+			expectError: false, // Now accepts and normalizes domains without leading dot
+		},
+		{
+			name: "composite_missing_domain",
+			config: ResolverConfig{
+				Type:   "composite",
+				Header: testTenantHeader,
+				// Missing domain
+			},
+			expectError:   true,
+			errorContains: "domain is required for subdomain resolution",
+		},
+		{
+			name: "composite_domain_without_leading_dot",
+			config: ResolverConfig{
+				Type:   "composite",
+				Header: testTenantHeader,
+				Domain: "api.example.com", // Will be normalized to .api.example.com
+			},
+			expectError: false, // Now accepts and normalizes domains without leading dot
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenantResolver(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			} else {
+				assert.NoError(t, err)
+				// Check if default header was set
+				if tt.expectedHeader != "" {
+					assert.Equal(t, tt.expectedHeader, tt.config.Header)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateMultitenantCache(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        CacheConfig
+		expectError   bool
+		errorContains string
+		expectedTTL   time.Duration // Check default TTL is set
+	}{
+		{
+			name: "valid_cache_config",
+			config: CacheConfig{
+				TTL: 5 * time.Minute,
+			},
+			expectError: false,
+		},
+		{
+			name: "minimum_ttl",
+			config: CacheConfig{
+				TTL: 1 * time.Minute,
+			},
+			expectError: false,
+		},
+		{
+			name: "large_ttl",
+			config: CacheConfig{
+				TTL: 24 * time.Hour,
+			},
+			expectError: false,
+		},
+		{
+			name: "zero_ttl_gets_default",
+			config: CacheConfig{
+				TTL: 0,
+			},
+			expectError: false,
+			expectedTTL: 5 * time.Minute,
+		},
+		{
+			name: "negative_ttl_gets_default",
+			config: CacheConfig{
+				TTL: -1 * time.Minute,
+			},
+			expectError: false,
+			expectedTTL: 5 * time.Minute,
+		},
+		{
+			name: "ttl_too_small",
+			config: CacheConfig{
+				TTL: 30 * time.Second, // Less than 1 minute
+			},
+			expectError:   true,
+			errorContains: "ttl must be at least 1 minute",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenantCache(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			} else {
+				assert.NoError(t, err)
+				// Check if default TTL was set
+				if tt.expectedTTL > 0 {
+					assert.Equal(t, tt.expectedTTL, tt.config.TTL)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateMultitenantLimits(t *testing.T) {
+	tests := []struct {
+		name             string
+		config           LimitsConfig
+		expectError      bool
+		errorContains    string
+		expectedTenants  int           // Check default tenants is set
+		expectedInterval time.Duration // Check default interval is set
+	}{
+		{
+			name: "valid_limits_config",
+			config: LimitsConfig{
+				Tenants: 100,
+				Cleanup: CleanupConfig{
+					Interval: 5 * time.Minute,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "minimum_tenants",
+			config: LimitsConfig{
+				Tenants: 1,
+				Cleanup: CleanupConfig{
+					Interval: 1 * time.Minute,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "maximum_tenants",
+			config: LimitsConfig{
+				Tenants: 1000,
+				Cleanup: CleanupConfig{
+					Interval: 1 * time.Hour,
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "zero_tenants_gets_default",
+			config: LimitsConfig{
+				Tenants: 0,
+				Cleanup: CleanupConfig{
+					Interval: 5 * time.Minute,
+				},
+			},
+			expectError:     false,
+			expectedTenants: 100,
+		},
+		{
+			name: "negative_tenants_gets_default",
+			config: LimitsConfig{
+				Tenants: -1,
+				Cleanup: CleanupConfig{
+					Interval: 5 * time.Minute,
+				},
+			},
+			expectError:     false,
+			expectedTenants: 100,
+		},
+		{
+			name: "zero_cleanup_interval_gets_default",
+			config: LimitsConfig{
+				Tenants: 100,
+				Cleanup: CleanupConfig{
+					Interval: 0,
+				},
+			},
+			expectError:      false,
+			expectedInterval: 5 * time.Minute,
+		},
+		{
+			name: "negative_cleanup_interval_gets_default",
+			config: LimitsConfig{
+				Tenants: 100,
+				Cleanup: CleanupConfig{
+					Interval: -1 * time.Minute,
+				},
+			},
+			expectError:      false,
+			expectedInterval: 5 * time.Minute,
+		},
+		{
+			name: "too_many_tenants",
+			config: LimitsConfig{
+				Tenants: 1001,
+				Cleanup: CleanupConfig{
+					Interval: 5 * time.Minute,
+				},
+			},
+			expectError:   true,
+			errorContains: "tenants cannot exceed 1000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenantLimits(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+			} else {
+				assert.NoError(t, err)
+				// Check if defaults were set
+				if tt.expectedTenants > 0 {
+					assert.Equal(t, tt.expectedTenants, tt.config.Tenants)
+				}
+				if tt.expectedInterval > 0 {
+					assert.Equal(t, tt.expectedInterval, tt.config.Cleanup.Interval)
+				}
+			}
+		})
 	}
 }

@@ -23,13 +23,15 @@ type connectionConfig struct {
 
 // TenantConnectionManager manages tenant-specific database connections.
 type TenantConnectionManager struct {
-	provider  TenantConfigProvider
-	cache     *TenantConfigCache
-	logger    logger.Logger
-	cfg       connectionConfig
-	mu        sync.RWMutex
-	resources map[string]*tenantResource
-	sfg       singleflight.Group
+	provider      TenantConfigProvider
+	cache         *TenantConfigCache
+	logger        logger.Logger
+	cfg           connectionConfig
+	mu            sync.RWMutex
+	resources     map[string]*tenantResource
+	sfg           singleflight.Group
+	cleanupTicker *time.Ticker
+	cleanupStop   chan bool
 }
 
 type tenantResource struct {
@@ -191,6 +193,10 @@ func (m *TenantConnectionManager) CleanupIdleConnections() {
 	m.mu.Lock()
 	for _, tenantID := range toEvict {
 		if resource, ok := m.resources[tenantID]; ok {
+			// Re-check liveness under write lock to avoid race conditions
+			if resource.lastUsed.Add(m.cfg.idleTTL).After(time.Now()) {
+				continue
+			}
 			toClose = append(toClose, struct {
 				tenantID string
 				conn     database.Interface
@@ -245,6 +251,9 @@ func (m *TenantConnectionManager) RefreshTenant(_ context.Context, tenantID stri
 
 // Close closes all tenant connections
 func (m *TenantConnectionManager) Close() error {
+	// Stop cleanup first
+	m.StopCleanup()
+
 	m.mu.Lock()
 	res := m.resources
 	m.resources = make(map[string]*tenantResource)
@@ -263,8 +272,77 @@ func (m *TenantConnectionManager) Close() error {
 	return nil
 }
 
-// WithMaxActiveTenants sets the max number of cached tenant connections.
-func WithMaxActiveTenants(maxTenants int) ConnectionOption {
+// StartCleanup starts the periodic cleanup of idle connections.
+// If interval is 0 or negative, cleanup is disabled.
+func (m *TenantConnectionManager) StartCleanup(interval time.Duration) {
+	if interval <= 0 {
+		m.logger.Debug().Msg("Connection cleanup disabled (interval <= 0)")
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Stop any existing cleanup
+	if m.cleanupTicker != nil {
+		m.cleanupTicker.Stop()
+		if m.cleanupStop != nil {
+			close(m.cleanupStop)
+		}
+	}
+
+	m.cleanupTicker = time.NewTicker(interval)
+	m.cleanupStop = make(chan bool, 1)
+
+	go func(ticker *time.Ticker, stop chan bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				m.logger.Error().
+					Interface("panic", r).
+					Msg("Panic in connection cleanup goroutine")
+			}
+		}()
+
+		for {
+			select {
+			case <-ticker.C:
+				m.CleanupIdleConnections()
+			case <-stop:
+				m.logger.Debug().Msg("Connection cleanup stopped")
+				return
+			}
+		}
+	}(m.cleanupTicker, m.cleanupStop)
+
+	m.logger.Info().
+		Dur("interval", interval).
+		Msg("Started periodic connection cleanup")
+}
+
+// StopCleanup stops the periodic cleanup of idle connections.
+func (m *TenantConnectionManager) StopCleanup() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.cleanupTicker != nil {
+		m.cleanupTicker.Stop()
+		m.cleanupTicker = nil
+	}
+
+	if m.cleanupStop != nil {
+		select {
+		case m.cleanupStop <- true:
+		default:
+			// Channel already closed or full
+		}
+		m.cleanupStop = nil
+	}
+
+	m.logger.Debug().Msg("Connection cleanup stopped")
+}
+
+// WithMaxTenants sets the max number of cached tenant connections.
+func WithMaxTenants(maxTenants int) ConnectionOption {
 	return func(cfg *connectionConfig) {
 		if maxTenants > 0 {
 			cfg.maxActiveTenants = maxTenants

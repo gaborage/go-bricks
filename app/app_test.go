@@ -26,14 +26,16 @@ import (
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
 )
 
 const (
-	appName       = "test-app"
-	readyEndpoint = "/ready"
-	moduleName    = "test-module"
-	appVersion    = "v1.0.0"
+	appName                      = "test-app"
+	readyEndpoint                = "/ready"
+	moduleName                   = "test-module"
+	appVersion                   = "v1.0.0"
+	noTenantConfigProviderErrMsg = "no tenant config provider was supplied"
 )
 
 // MockDatabase implements the database.Interface for testing
@@ -1397,4 +1399,365 @@ func verifyHealthyResponse(t *testing.T, response map[string]any, expectedDBStat
 	assert.Equal(t, appName, appDetails["name"])
 	assert.Equal(t, "test", appDetails["environment"])
 	assert.Equal(t, appVersion, appDetails["version"])
+}
+
+// =============================================================================
+// Multitenant Dependency Resolution Tests
+// =============================================================================
+
+// mockTenantConfigProvider implements multitenant.TenantConfigProvider for testing
+type mockTenantConfigProvider struct {
+	mock.Mock
+}
+
+func (m *mockTenantConfigProvider) GetDatabase(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
+	args := m.Called(ctx, tenantID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*config.DatabaseConfig), args.Error(1)
+}
+
+func (m *mockTenantConfigProvider) GetMessaging(ctx context.Context, tenantID string) (*multitenant.TenantMessagingConfig, error) {
+	args := m.Called(ctx, tenantID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*multitenant.TenantMessagingConfig), args.Error(1)
+}
+
+func TestResolveMultitenantDependencies(t *testing.T) {
+	cfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Cache: config.CacheConfig{
+				TTL: 5 * time.Minute,
+			},
+			Limits: config.LimitsConfig{
+				Tenants: 100,
+			},
+		},
+	}
+	log := logger.New("info", false)
+
+	tests := []struct {
+		name        string
+		opts        *Options
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "success_with_tenant_config_provider",
+			opts: &Options{
+				TenantConfigProvider: &mockTenantConfigProvider{},
+				DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+					return &MockDatabase{}, nil
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "success_with_provided_connection_manager",
+			opts: &Options{
+				TenantConnectionManager: &multitenant.TenantConnectionManager{},
+			},
+			expectError: false,
+		},
+		{
+			name: "error_no_tenant_config_provider",
+			opts: &Options{
+				// No TenantConfigProvider
+			},
+			expectError: true,
+			errorMsg:    noTenantConfigProviderErrMsg,
+		},
+		{
+			name:        "error_nil_options",
+			opts:        nil,
+			expectError: true,
+			errorMsg:    noTenantConfigProviderErrMsg,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, db, msgClient, tenantConnManager, err := resolveMultitenantDependencies(cfg, log, tt.opts)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+				assert.Nil(t, deps)
+				assert.Nil(t, db)
+				assert.Nil(t, msgClient)
+				assert.Nil(t, tenantConnManager)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, deps)
+				assert.Nil(t, db)        // No single-tenant DB
+				assert.Nil(t, msgClient) // No single-tenant messaging
+				assert.NotNil(t, tenantConnManager)
+
+				// Verify deps structure
+				assert.Nil(t, deps.DB)
+				assert.Equal(t, log, deps.Logger)
+				assert.Nil(t, deps.Messaging)
+				assert.Equal(t, cfg, deps.Config)
+				assert.NotNil(t, deps.DBFromContext)
+				assert.Nil(t, deps.MessagingFromContext) // Phase 2 implementation
+
+				// Test DBFromContext function coverage
+				ctx := context.Background()
+
+				// Test without tenant in context
+				_, err := deps.DBFromContext(ctx)
+				assert.ErrorIs(t, err, ErrNoTenantInContext)
+
+				// For the test with tenant config provider, we need to setup the mock expectation
+				if tt.name == "success_with_tenant_config_provider" {
+					// Setup mock to return a database config when called
+					mockProvider := tt.opts.TenantConfigProvider.(*mockTenantConfigProvider)
+					dbConfig := &config.DatabaseConfig{
+						Type:     "postgresql",
+						Host:     "localhost",
+						Port:     5432,
+						Database: "test_db",
+						Username: "test_user",
+					}
+					mockProvider.On("GetDatabase", mock.Anything, "test-tenant").Return(dbConfig, nil)
+
+					// Test with tenant in context - this will call the mock
+					ctxWithTenant := multitenant.SetTenant(ctx, "test-tenant")
+					_, _ = deps.DBFromContext(ctxWithTenant)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveTenantConnectionManager(t *testing.T) {
+	cfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Cache: config.CacheConfig{
+				TTL: 5 * time.Minute,
+			},
+			Limits: config.LimitsConfig{
+				Tenants: 100,
+			},
+		},
+	}
+	log := logger.New("info", false)
+
+	tests := []struct {
+		name        string
+		opts        *Options
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "success_with_provided_connection_manager",
+			opts: &Options{
+				TenantConnectionManager: &multitenant.TenantConnectionManager{},
+			},
+			expectError: false,
+		},
+		{
+			name: "success_with_tenant_config_provider",
+			opts: &Options{
+				TenantConfigProvider: &mockTenantConfigProvider{},
+			},
+			expectError: false,
+		},
+		{
+			name: "success_with_custom_cache_and_options",
+			opts: &Options{
+				TenantConfigProvider:    &mockTenantConfigProvider{},
+				TenantConfigCache:       &multitenant.TenantConfigCache{},
+				TenantCacheOptions:      []multitenant.CacheOption{multitenant.WithTTL(10 * time.Minute)},
+				TenantConnectionOptions: []multitenant.ConnectionOption{multitenant.WithMaxTenants(50)},
+			},
+			expectError: false,
+		},
+		{
+			name:        "error_nil_options",
+			opts:        nil,
+			expectError: true,
+			errorMsg:    noTenantConfigProviderErrMsg,
+		},
+		{
+			name: "error_no_tenant_config_provider",
+			opts: &Options{
+				// No TenantConfigProvider or TenantConnectionManager
+			},
+			expectError: true,
+			errorMsg:    noTenantConfigProviderErrMsg,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, err := resolveTenantConnectionManager(cfg, log, tt.opts)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+				assert.Nil(t, manager)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, manager)
+			}
+		})
+	}
+}
+
+func TestResolveTenantCache(t *testing.T) {
+	cfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Cache: config.CacheConfig{
+				TTL: 10 * time.Minute,
+			},
+			Limits: config.LimitsConfig{
+				Tenants: 200,
+			},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		opts         *Options
+		expectedTTL  time.Duration
+		expectedSize int
+	}{
+		{
+			name: "uses_provided_cache",
+			opts: &Options{
+				TenantConfigCache: &multitenant.TenantConfigCache{},
+			},
+		},
+		{
+			name: "creates_new_cache_with_config_values",
+			opts: &Options{
+				TenantConfigProvider: &mockTenantConfigProvider{},
+			},
+			expectedTTL:  10 * time.Minute,
+			expectedSize: 200,
+		},
+		{
+			name: "creates_new_cache_with_custom_options",
+			opts: &Options{
+				TenantConfigProvider: &mockTenantConfigProvider{},
+				TenantCacheOptions:   []multitenant.CacheOption{multitenant.WithTTL(15 * time.Minute)},
+			},
+			expectedTTL:  15 * time.Minute,
+			expectedSize: 200,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache := resolveTenantCache(cfg, tt.opts)
+			assert.NotNil(t, cache)
+
+			// For provided cache, we can't verify the internal settings
+			if tt.opts.TenantConfigCache != nil {
+				assert.Equal(t, tt.opts.TenantConfigCache, cache)
+			}
+		})
+	}
+}
+
+func TestResolveTenantConnectionOptions(t *testing.T) {
+	cfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Limits: config.LimitsConfig{
+				Tenants: 150,
+			},
+		},
+	}
+
+	tests := []struct {
+		name              string
+		opts              *Options
+		expectedMinLength int
+	}{
+		{
+			name:              "nil_options",
+			opts:              nil,
+			expectedMinLength: 1, // At least WithMaxTenants option
+		},
+		{
+			name:              "empty_options",
+			opts:              &Options{},
+			expectedMinLength: 1, // At least WithMaxTenants option
+		},
+		{
+			name: "with_additional_connection_options",
+			opts: &Options{
+				TenantConnectionOptions: []multitenant.ConnectionOption{
+					multitenant.WithMaxTenants(75),
+				},
+			},
+			expectedMinLength: 2, // WithMaxTenants + custom option
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			connOpts := resolveTenantConnectionOptions(cfg, tt.opts)
+			assert.NotNil(t, connOpts)
+			assert.GreaterOrEqual(t, len(connOpts), tt.expectedMinLength)
+		})
+	}
+}
+
+func TestResolveDependenciesWithMultitenant(t *testing.T) {
+	multitenantCfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Cache: config.CacheConfig{
+				TTL: 5 * time.Minute,
+			},
+			Limits: config.LimitsConfig{
+				Tenants: 100,
+			},
+		},
+	}
+
+	singleTenantCfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Enabled: false,
+		},
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "localhost",
+			Port: 5432,
+		},
+	}
+
+	log := logger.New("info", false)
+
+	t.Run("multitenant_enabled_calls_multitenant_resolver", func(t *testing.T) {
+		opts := &Options{
+			TenantConfigProvider: &mockTenantConfigProvider{},
+		}
+
+		deps, db, msgClient, tenantConnManager, err := resolveDependencies(multitenantCfg, log, opts)
+		assert.NoError(t, err)
+		assert.NotNil(t, deps)
+		assert.Nil(t, db)        // Multitenant mode
+		assert.Nil(t, msgClient) // Multitenant mode
+		assert.NotNil(t, tenantConnManager)
+	})
+
+	t.Run("multitenant_disabled_calls_single_tenant_resolver", func(t *testing.T) {
+		opts := &Options{
+			Database: &MockDatabase{},
+		}
+
+		deps, db, _, tenantConnManager, err := resolveDependencies(singleTenantCfg, log, opts)
+		assert.NoError(t, err)
+		assert.NotNil(t, deps)
+		assert.NotNil(t, db) // Single-tenant mode
+		// msgClient can be nil if messaging not configured
+		assert.Nil(t, tenantConnManager) // Single-tenant mode
+	})
 }

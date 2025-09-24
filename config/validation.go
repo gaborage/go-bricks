@@ -273,8 +273,8 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 
 // validateMongoDBFields validates MongoDB-specific configuration fields
 func validateMongoDBFields(cfg *DatabaseConfig) error {
-	if cfg.Mongo.Replica.ReadPreference != "" {
-		if err := validateMongoDBReadPreference(cfg.Mongo.Replica.ReadPreference); err != nil {
+	if cfg.Mongo.Replica.Preference != "" {
+		if err := validateMongoDBReadPreference(cfg.Mongo.Replica.Preference); err != nil {
 			return err
 		}
 	}
@@ -405,7 +405,7 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 	}
 
 	// Validate and compile tenant ID pattern
-	if err := mt.TenantID.SetRegex(mt.TenantID.Pattern); err != nil {
+	if err := mt.Validation.SetRegex(mt.Validation.Pattern); err != nil {
 		return fmt.Errorf("tenant_id pattern: %w", err)
 	}
 
@@ -423,7 +423,7 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 }
 
 // validateMultitenantResolver validates tenant resolver configuration
-func validateMultitenantResolver(cfg *MultitenantResolverConfig) error {
+func validateMultitenantResolver(cfg *ResolverConfig) error {
 	validTypes := []string{"header", "subdomain", "composite"}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return fmt.Errorf("invalid type: %s (must be one of: %s)",
@@ -431,17 +431,18 @@ func validateMultitenantResolver(cfg *MultitenantResolverConfig) error {
 	}
 
 	// Set defaults
-	if cfg.HeaderName == "" {
-		cfg.HeaderName = "X-Tenant-ID"
+	if cfg.Header == "" {
+		cfg.Header = "X-Tenant-ID"
 	}
 
 	// Validate subdomain-specific configuration
 	if cfg.Type == "subdomain" || cfg.Type == "composite" {
-		if cfg.RootDomain == "" {
-			return fmt.Errorf("rootdomain is required for subdomain resolution")
+		if strings.TrimSpace(cfg.Domain) == "" {
+			return fmt.Errorf("domain is required for subdomain resolution")
 		}
-		if !strings.HasPrefix(cfg.RootDomain, ".") {
-			return fmt.Errorf("rootdomain must start with a dot (e.g., .api.example.com)")
+		// Normalize: leading dot is optional in config
+		if !strings.HasPrefix(cfg.Domain, ".") {
+			cfg.Domain = "." + cfg.Domain
 		}
 	}
 
@@ -449,7 +450,7 @@ func validateMultitenantResolver(cfg *MultitenantResolverConfig) error {
 }
 
 // validateMultitenantCache validates cache configuration with defaults
-func validateMultitenantCache(cfg *MultitenantCacheConfig) error {
+func validateMultitenantCache(cfg *CacheConfig) error {
 	if cfg.TTL <= 0 {
 		cfg.TTL = 5 * time.Minute // default
 	}
@@ -460,13 +461,19 @@ func validateMultitenantCache(cfg *MultitenantCacheConfig) error {
 }
 
 // validateMultitenantLimits validates limits configuration with defaults
-func validateMultitenantLimits(cfg *MultitenantLimitsConfig) error {
-	if cfg.MaxActiveTenants <= 0 {
-		cfg.MaxActiveTenants = 100 // default
+func validateMultitenantLimits(cfg *LimitsConfig) error {
+	if cfg.Tenants <= 0 {
+		cfg.Tenants = 100 // default
 	}
-	if cfg.MaxActiveTenants > 1000 {
-		return fmt.Errorf("maxactivetenants cannot exceed 1000")
+	if cfg.Tenants > 1000 {
+		return fmt.Errorf("tenants cannot exceed 1000")
 	}
+
+	// Set default cleanup interval if not specified
+	if cfg.Cleanup.Interval <= 0 {
+		cfg.Cleanup.Interval = 5 * time.Minute // default
+	}
+
 	return nil
 }
 

@@ -89,7 +89,7 @@ func (cb *ConnectionBuilder) buildConnectionOptions() (*options.ClientOptions, e
 	setConnectionOptions(opts, cb.config)
 
 	// Configure read preference
-	if err := setReadPreference(opts, cb.config.Mongo.Replica.ReadPreference); err != nil {
+	if err := setReadPreference(opts, cb.config.Mongo.Replica.Preference); err != nil {
 		return nil, err
 	}
 

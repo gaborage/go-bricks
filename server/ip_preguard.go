@@ -17,10 +17,10 @@ const (
 // IPPreGuard returns an IP-based rate limiting middleware for early attack prevention.
 // This middleware runs before tenant resolution to block obvious attacks and invalid tenant sprays.
 // It uses a higher threshold than the main rate limiter and only protects against IP-based attacks.
-// If requestsPerSecond is 0 or negative, IP pre-guard is disabled.
-func IPPreGuard(requestsPerSecond int) echo.MiddlewareFunc {
-	// Disable IP pre-guard if requestsPerSecond is 0 or negative
-	if requestsPerSecond <= 0 {
+// If threshold is 0 or negative, IP pre-guard is disabled.
+func IPPreGuard(threshold int) echo.MiddlewareFunc {
+	// Disable IP pre-guard if threshold is 0 or negative
+	if threshold <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next
 		}
@@ -30,8 +30,8 @@ func IPPreGuard(requestsPerSecond int) echo.MiddlewareFunc {
 		Skipper: middleware.DefaultSkipper,
 		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 			middleware.RateLimiterMemoryStoreConfig{
-				Rate:      rate.Limit(requestsPerSecond),
-				Burst:     requestsPerSecond * 2, // Allow small bursts
+				Rate:      rate.Limit(threshold),
+				Burst:     threshold * 2, // Allow small bursts
 				ExpiresIn: IPPreGuardCleanup,
 			},
 		),

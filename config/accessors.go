@@ -473,7 +473,7 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 }
 
 func (c *Config) assignFieldValue(field reflect.Value, configKey string, required bool, value any) error {
-	switch field.Kind() { //nolint:exhaustive // injection supports a controlled subset of kinds
+	switch field.Kind() {
 	case reflect.String:
 		return c.assignStringField(field, configKey, required, value)
 	case reflect.Int, reflect.Int64:

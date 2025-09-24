@@ -105,7 +105,7 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 	}
 
 	rv := reflect.ValueOf(value)
-	switch rv.Kind() { //nolint:exhaustive // default case handles all other types
+	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
 		return f.filterSliceOrArrayWithProtection(key, rv, visited, maxDepth)
 	case reflect.Struct:

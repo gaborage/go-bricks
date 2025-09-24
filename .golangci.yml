@@ -31,7 +31,7 @@ linters:
     dupl:
       threshold: 100
     exhaustive:
-      default-signifies-exhaustive: false
+      default-signifies-exhaustive: true
     goconst:
       min-len: 2
       min-occurrences: 3
@@ -117,5 +117,3 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-# Formatters configuration (separate from linters)
-# Note: gofmt and goimports are formatters, not linters in golangci-lint v1.50+
