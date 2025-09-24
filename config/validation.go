@@ -437,11 +437,12 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 
 	// Validate subdomain-specific configuration
 	if cfg.Type == "subdomain" || cfg.Type == "composite" {
-		if cfg.Domain == "" {
+		if strings.TrimSpace(cfg.Domain) == "" {
 			return fmt.Errorf("domain is required for subdomain resolution")
 		}
+		// Normalize: leading dot is optional in config
 		if !strings.HasPrefix(cfg.Domain, ".") {
-			return fmt.Errorf("domain must start with a dot (e.g., .api.example.com)")
+			cfg.Domain = "." + cfg.Domain
 		}
 	}
 

@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -21,7 +23,27 @@ const (
 	// Test probe endpoint paths
 	testHealthPath = "/health"
 	testReadyPath  = "/ready"
+
+	// Test constants for buildTenantResolver tests
+	headerResolverType     = "*multitenant.HeaderResolver"
+	subdomainResolverType  = "*multitenant.SubdomainResolver"
+	validatingResolverType = "*multitenant.ValidatingResolver"
+	compositeResolverType  = "*multitenant.CompositeResolver"
+	defaultTenantHeader    = "X-Tenant-ID"
+	testDomain             = "example.com"
 )
+
+// testData represents the test case data for buildTenantResolver tests
+type testData struct {
+	name            string
+	config          *config.Config
+	expectNil       bool
+	expectType      string
+	expectValidated bool
+	headerName      string
+	rootDomain      string
+	trustProxies    bool
+}
 
 func TestSetupMiddlewares(t *testing.T) {
 	tests := []struct {
@@ -345,5 +367,291 @@ func TestSecurityHeaders(t *testing.T) {
 	hstsHeader := rec.Header().Get("Strict-Transport-Security")
 	if hstsHeader != "" {
 		assert.Contains(t, hstsHeader, "max-age=3600")
+	}
+}
+
+func TestBuildTenantResolver(t *testing.T) {
+	tests := []testData{
+		{
+			name: "header_resolver_default_header",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type: "header",
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: headerResolverType,
+			headerName: defaultTenantHeader,
+		},
+		{
+			name: "header_resolver_custom_header",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "header",
+						Header: "X-Custom-Tenant",
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: headerResolverType,
+			headerName: "X-Custom-Tenant",
+		},
+		{
+			name: "header_resolver_with_validation",
+			config: func() *config.Config {
+				cfg := &config.Config{
+					Multitenant: config.MultitenantConfig{
+						Resolver: config.ResolverConfig{
+							Type:   "header",
+							Header: defaultTenantHeader,
+						},
+						Validation: config.IDValidationConfig{},
+					},
+				}
+				// Set regex pattern to enable validation
+				cfg.Multitenant.Validation.SetRegex(`^[a-z0-9-]{1,64}$`)
+				return cfg
+			}(),
+			expectType:      validatingResolverType,
+			expectValidated: true,
+		},
+		{
+			name: "subdomain_resolver_basic",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "subdomain",
+						Domain: testDomain,
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: subdomainResolverType,
+			rootDomain: testDomain,
+		},
+		{
+			name: "subdomain_resolver_with_leading_dot",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "subdomain",
+						Domain: "." + testDomain,
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: subdomainResolverType,
+			rootDomain: testDomain,
+		},
+		{
+			name: "subdomain_resolver_with_proxies",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:    "subdomain",
+						Domain:  testDomain,
+						Proxies: true,
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType:   subdomainResolverType,
+			rootDomain:   testDomain,
+			trustProxies: true,
+		},
+		{
+			name: "subdomain_resolver_empty_domain",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "subdomain",
+						Domain: "",
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectNil: true,
+		},
+		{
+			name: "subdomain_resolver_with_validation",
+			config: func() *config.Config {
+				cfg := &config.Config{
+					Multitenant: config.MultitenantConfig{
+						Resolver: config.ResolverConfig{
+							Type:   "subdomain",
+							Domain: testDomain,
+						},
+						Validation: config.IDValidationConfig{},
+					},
+				}
+				cfg.Multitenant.Validation.SetRegex(`^[a-z0-9-]{1,64}$`)
+				return cfg
+			}(),
+			expectType:      validatingResolverType,
+			expectValidated: true,
+		},
+		{
+			name: "composite_resolver_both_configured",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "composite",
+						Header: defaultTenantHeader,
+						Domain: testDomain,
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: compositeResolverType,
+		},
+		{
+			name: "composite_resolver_header_only",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "composite",
+						Header: defaultTenantHeader,
+						Domain: "", // Empty domain should not create subdomain resolver
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: compositeResolverType,
+		},
+		{
+			name: "composite_resolver_subdomain_only",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "composite",
+						Header: "", // Empty header should still create default header resolver
+						Domain: testDomain,
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: compositeResolverType,
+		},
+		{
+			name: "composite_resolver_no_valid_resolvers",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type:   "composite",
+						Header: "", // Will create default header resolver
+						Domain: "", // Won't create subdomain resolver
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectType: compositeResolverType, // Should still create composite with header resolver
+		},
+		{
+			name: "invalid_resolver_type",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type: "invalid",
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectNil: true,
+		},
+		{
+			name: "empty_resolver_type",
+			config: &config.Config{
+				Multitenant: config.MultitenantConfig{
+					Resolver: config.ResolverConfig{
+						Type: "",
+					},
+					Validation: config.IDValidationConfig{},
+				},
+			},
+			expectNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := buildTenantResolver(tt.config)
+
+			if tt.expectNil {
+				assert.Nil(t, resolver, "Expected resolver to be nil")
+				return
+			}
+
+			assert.NotNil(t, resolver, "Expected resolver to be created")
+
+			// Check resolver type
+			resolverType := strings.ReplaceAll(reflect.TypeOf(resolver).String(), "server.", "")
+			assert.Equal(t, tt.expectType, resolverType, "Unexpected resolver type")
+
+			// Test specific resolver properties using helper functions
+			testResolverProperties(t, resolver, &tt)
+		})
+	}
+}
+
+// testResolverProperties tests the properties of different resolver types
+func testResolverProperties(t *testing.T, resolver multitenant.TenantResolver, td *testData) {
+	switch td.expectType {
+	case headerResolverType:
+		testHeaderResolver(t, resolver, td)
+	case subdomainResolverType:
+		testSubdomainResolver(t, resolver, td)
+	case validatingResolverType:
+		testValidatingResolver(t, resolver)
+	case compositeResolverType:
+		testCompositeResolver(t, resolver, td)
+	}
+}
+
+// testHeaderResolver validates header resolver properties
+func testHeaderResolver(t *testing.T, resolver multitenant.TenantResolver, td *testData) {
+	headerResolver := resolver.(*multitenant.HeaderResolver)
+	assert.Equal(t, td.headerName, headerResolver.HeaderName)
+}
+
+// testSubdomainResolver validates subdomain resolver properties
+func testSubdomainResolver(t *testing.T, resolver multitenant.TenantResolver, td *testData) {
+	subdomainResolver := resolver.(*multitenant.SubdomainResolver)
+	assert.Equal(t, td.rootDomain, subdomainResolver.RootDomain)
+	assert.Equal(t, td.trustProxies, subdomainResolver.TrustProxies)
+}
+
+// testValidatingResolver validates validating resolver properties
+func testValidatingResolver(t *testing.T, resolver multitenant.TenantResolver) {
+	validatingResolver := resolver.(*multitenant.ValidatingResolver)
+	assert.NotNil(t, validatingResolver.Resolver, "ValidatingResolver should wrap another resolver")
+	assert.NotNil(t, validatingResolver.TenantRegex, "ValidatingResolver should have regex")
+}
+
+// testCompositeResolver validates composite resolver properties
+func testCompositeResolver(t *testing.T, resolver multitenant.TenantResolver, td *testData) {
+	compositeResolver := resolver.(*multitenant.CompositeResolver)
+	assert.NotEmpty(t, compositeResolver.Resolvers, "CompositeResolver should have at least one resolver")
+
+	// Check that resolvers were created correctly
+	hasHeader := false
+	hasSubdomain := false
+	for _, r := range compositeResolver.Resolvers {
+		switch r.(type) {
+		case *multitenant.HeaderResolver:
+			hasHeader = true
+		case *multitenant.SubdomainResolver:
+			hasSubdomain = true
+		}
+	}
+
+	// Should always have header resolver (uses default if empty)
+	assert.True(t, hasHeader, "CompositeResolver should contain header resolver")
+
+	// Should have subdomain resolver only if domain is specified
+	if td.config.Multitenant.Resolver.Domain != "" {
+		assert.True(t, hasSubdomain, "CompositeResolver should contain subdomain resolver when domain is specified")
 	}
 }

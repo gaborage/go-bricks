@@ -117,5 +117,3 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-# Formatters configuration (separate from linters)
-# Note: gofmt and goimports are formatters, not linters in golangci-lint v1.50+
