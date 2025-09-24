@@ -92,13 +92,18 @@ func (c *TenantConfigCache) GetDatabase(ctx context.Context, tenantID string) (*
 
 	if err != nil {
 		// On error, try to serve stale data if available and not too old
-		if exists && !entry.isStale(c.cfg.staleGracePeriod) {
+		if exists && entry.dbConfig != nil && !entry.isStale(c.cfg.staleGracePeriod) {
 			return entry.dbConfig, nil
 		}
 		return nil, err
 	}
 
-	return result.(*config.DatabaseConfig), nil
+	dbCfg, ok := result.(*config.DatabaseConfig)
+	if !ok || dbCfg == nil {
+		return nil, ErrTenantNotFound
+	}
+
+	return dbCfg, nil
 }
 
 // GetMessaging returns the cached or freshly fetched messaging configuration for the tenant.
@@ -126,13 +131,18 @@ func (c *TenantConfigCache) GetMessaging(ctx context.Context, tenantID string) (
 
 	if err != nil {
 		// On error, try to serve stale data if available and not too old
-		if exists && !entry.isStale(c.cfg.staleGracePeriod) {
+		if exists && entry.msgConfig != nil && !entry.isStale(c.cfg.staleGracePeriod) {
 			return entry.msgConfig, nil
 		}
 		return nil, err
 	}
 
-	return result.(*TenantMessagingConfig), nil
+	msgCfg, ok := result.(*TenantMessagingConfig)
+	if !ok || msgCfg == nil {
+		return nil, ErrTenantNotFound
+	}
+
+	return msgCfg, nil
 }
 
 // fetchAndCacheDB fetches database config and updates cache

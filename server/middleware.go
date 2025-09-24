@@ -104,12 +104,19 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	}
 
 	newHeaderResolver := func() multitenant.TenantResolver {
-		return &multitenant.HeaderResolver{HeaderName: resolverCfg.HeaderName}
+		name := resolverCfg.HeaderName
+		if name == "" {
+			name = "X-Tenant-ID"
+		}
+		return &multitenant.HeaderResolver{HeaderName: name}
 	}
 
 	newSubdomainResolver := func() multitenant.TenantResolver {
 		// Normalize RootDomain: strip leading dot to accept both ".example.com" and "example.com"
 		rootDomain := strings.TrimPrefix(resolverCfg.RootDomain, ".")
+		if rootDomain == "" {
+			return nil
+		}
 		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.TrustProxies}
 	}
 
