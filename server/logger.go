@@ -8,6 +8,7 @@ import (
 
 	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Logger returns a request logging middleware using structured logging.
@@ -46,6 +47,9 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				resultCode = "ERROR"
 			}
 
+			// Tenant context
+			tenantID, _ := multitenant.GetTenant(c.Request().Context())
+
 			// Get AMQP message count and DB operation count from request context
 			amqpCount := logger.GetAMQPCounter(c.Request().Context())
 			dbCount := logger.GetDBCounter(c.Request().Context())
@@ -66,6 +70,7 @@ func Logger(log logger.Logger) echo.MiddlewareFunc {
 				Int64("amqp_elapsed", amqpElapsed).
 				Int64("db_queries", dbCount).
 				Int64("db_elapsed", dbElapsed).
+				Str("tenant_id", tenantID).
 				Str("ip", c.RealIP()).
 				Str("user_agent", c.Request().UserAgent()).
 				// Log unified trace ID (matches response meta.traceId)

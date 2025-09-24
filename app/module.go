@@ -24,11 +24,17 @@ type Module interface {
 
 // ModuleDeps contains the dependencies that are injected into each module.
 // It provides access to core services like database, logging, and messaging.
+// In multi-tenant mode, DB and Messaging may be nil and the *FromContext functions
+// should be used instead to get tenant-specific connections.
 type ModuleDeps struct {
 	DB        database.Interface
 	Logger    logger.Logger
 	Messaging messaging.Client
 	Config    *config.Config
+
+	// Multi-tenant support (nil in single-tenant mode)
+	DBFromContext        func(ctx context.Context) (database.Interface, error)
+	MessagingFromContext func(ctx context.Context) (messaging.Client, error) // Phase 2
 }
 
 // Describer is an optional interface that modules can implement to provide

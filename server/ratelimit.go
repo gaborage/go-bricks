@@ -7,6 +7,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/time/rate"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -35,8 +37,10 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 			},
 		),
 		IdentifierExtractor: func(ctx echo.Context) (string, error) {
-			id := ctx.RealIP()
-			return id, nil
+			if tenantID, ok := multitenant.GetTenant(ctx.Request().Context()); ok {
+				return tenantID, nil
+			}
+			return ctx.RealIP(), nil
 		},
 		ErrorHandler: func(context echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{

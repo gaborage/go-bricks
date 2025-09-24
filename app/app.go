@@ -17,6 +17,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -68,6 +69,9 @@ type App struct {
 	registry        *ModuleRegistry
 	signalHandler   SignalHandler
 	timeoutProvider TimeoutProvider
+
+	// Multi-tenant support
+	tenantConnManager *multitenant.TenantConnectionManager
 }
 
 // isDatabaseEnabled determines if database should be initialized based on config
@@ -160,16 +164,125 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 	return server.New(cfg, log)
 }
 
+// resolveDependencies initializes dependencies based on multi-tenant or single-tenant mode
+func resolveDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
+	if cfg.Multitenant.Enabled {
+		return resolveMultitenantDependencies(cfg, log, opts)
+	}
+	return resolveSingleTenantDependencies(cfg, log, opts)
+}
+
+// resolveMultitenantDependencies initializes multi-tenant mode dependencies
+func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
+	log.Info().Msg("Multi-tenant mode enabled")
+
+	tenantConnManager, err := resolveTenantConnectionManager(cfg, log, opts)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	deps := &ModuleDeps{
+		DB:        nil, // No single-tenant DB in multi-tenant mode
+		Logger:    log,
+		Messaging: nil, // No single-tenant messaging in multi-tenant mode
+		Config:    cfg,
+		DBFromContext: func(ctx context.Context) (database.Interface, error) {
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, fmt.Errorf("no tenant found in context")
+			}
+			return tenantConnManager.GetDatabase(ctx, tenantID)
+		},
+		MessagingFromContext: nil, // Phase 2 implementation
+	}
+
+	return deps, nil, nil, tenantConnManager, nil
+}
+
+// resolveSingleTenantDependencies initializes single-tenant mode dependencies
+func resolveSingleTenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
+	db, err := resolveDatabase(cfg, log, opts)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	msgClient := resolveMessaging(cfg, log, opts)
+
+	deps := &ModuleDeps{
+		DB:        db,
+		Logger:    log,
+		Messaging: msgClient,
+		Config:    cfg,
+		// Leave multi-tenant functions nil in single-tenant mode
+	}
+
+	return deps, db, msgClient, nil, nil
+}
+
+// resolveTenantConnectionManager creates the tenant connection manager
+func resolveTenantConnectionManager(cfg *config.Config, log logger.Logger, opts *Options) (*multitenant.TenantConnectionManager, error) {
+	if opts != nil && opts.TenantConnectionManager != nil {
+		return opts.TenantConnectionManager, nil
+	}
+
+	if opts == nil || opts.TenantConfigProvider == nil {
+		return nil, fmt.Errorf("multitenant enabled but no tenant config provider was supplied")
+	}
+
+	cache := resolveTenantCache(cfg, opts)
+	connOpts := resolveTenantConnectionOptions(cfg, opts)
+
+	tenantConnManager := multitenant.NewTenantConnectionManager(opts.TenantConfigProvider, cache, log, connOpts...)
+	if tenantConnManager == nil {
+		return nil, fmt.Errorf("failed to initialize tenant connection manager")
+	}
+
+	return tenantConnManager, nil
+}
+
+// resolveTenantCache creates or uses provided tenant config cache
+func resolveTenantCache(cfg *config.Config, opts *Options) *multitenant.TenantConfigCache {
+	if opts.TenantConfigCache != nil {
+		return opts.TenantConfigCache
+	}
+
+	cacheOpts := []multitenant.CacheOption{
+		multitenant.WithTTL(cfg.Multitenant.Cache.TTL),
+		multitenant.WithMaxSize(cfg.Multitenant.Limits.MaxActiveTenants),
+	}
+	cacheOpts = append(cacheOpts, opts.TenantCacheOptions...)
+
+	return multitenant.NewTenantConfigCache(opts.TenantConfigProvider, cacheOpts...)
+}
+
+// resolveTenantConnectionOptions creates connection options from config and overrides
+func resolveTenantConnectionOptions(cfg *config.Config, opts *Options) []multitenant.ConnectionOption {
+	connOpts := []multitenant.ConnectionOption{
+		multitenant.WithMaxActiveTenants(cfg.Multitenant.Limits.MaxActiveTenants),
+	}
+
+	if opts != nil {
+		connOpts = append(connOpts, opts.TenantConnectionOptions...)
+	}
+
+	return connOpts
+}
+
 // Options contains optional dependencies for creating an App instance
 type Options struct {
-	Database               database.Interface
-	MessagingClient        messaging.Client
-	SignalHandler          SignalHandler
-	TimeoutProvider        TimeoutProvider
-	Server                 ServerRunner
-	ConfigLoader           func() (*config.Config, error)
-	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
-	MessagingClientFactory func(string, logger.Logger) messaging.Client
+	Database                database.Interface
+	MessagingClient         messaging.Client
+	SignalHandler           SignalHandler
+	TimeoutProvider         TimeoutProvider
+	Server                  ServerRunner
+	ConfigLoader            func() (*config.Config, error)
+	DatabaseConnector       func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
+	MessagingClientFactory  func(string, logger.Logger) messaging.Client
+	TenantConfigProvider    multitenant.TenantConfigProvider
+	TenantConfigCache       *multitenant.TenantConfigCache
+	TenantCacheOptions      []multitenant.CacheOption
+	TenantConnectionOptions []multitenant.ConnectionOption
+	TenantConnectionManager *multitenant.TenantConnectionManager
 }
 
 // New creates a new application instance with dependencies determined by configuration.
@@ -205,38 +318,28 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		Str("version", cfg.App.Version).
 		Msg("Starting application")
 
-	// Initialize database if configured or provided
-	db, err := resolveDatabase(cfg, log, opts)
+	// Resolve core components
+	signalHandler, timeoutProvider := resolveSignalAndTimeout(opts)
+	srv := resolveServer(cfg, log, opts)
+
+	// Initialize dependencies based on mode
+	deps, db, msgClient, tenantConnManager, err := resolveDependencies(cfg, log, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize messaging client if configured or provided
-	msgClient := resolveMessaging(cfg, log, opts)
-
-	// Use provided signal handler and timeout provider or defaults
-	signalHandler, timeoutProvider := resolveSignalAndTimeout(opts)
-
-	// Resolve HTTP server implementation
-	srv := resolveServer(cfg, log, opts)
-
-	deps := &ModuleDeps{
-		DB:        db,
-		Logger:    log,
-		Messaging: msgClient,
-		Config:    cfg,
-	}
 	registry := NewModuleRegistry(deps)
 
 	app := &App{
-		cfg:             cfg,
-		server:          srv,
-		db:              db,
-		logger:          log,
-		messaging:       msgClient,
-		registry:        registry,
-		signalHandler:   signalHandler,
-		timeoutProvider: timeoutProvider,
+		cfg:               cfg,
+		server:            srv,
+		db:                db,
+		logger:            log,
+		messaging:         msgClient,
+		registry:          registry,
+		signalHandler:     signalHandler,
+		timeoutProvider:   timeoutProvider,
+		tenantConnManager: tenantConnManager,
 	}
 
 	srv.Echo().GET(cfg.Server.Path.Base+cfg.Server.Path.Ready, app.readyCheck)
@@ -304,6 +407,15 @@ func (a *App) Shutdown(ctx context.Context) error {
 			a.logger.Error().Err(err).Msg("Failed to close database connection")
 		} else {
 			a.logger.Info().Msg("Database connection closed successfully")
+		}
+	}
+
+	// Close tenant connection manager if enabled
+	if a.tenantConnManager != nil {
+		if err := a.tenantConnManager.Close(); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to close tenant connection manager")
+		} else {
+			a.logger.Info().Msg("Tenant connection manager closed successfully")
 		}
 	}
 

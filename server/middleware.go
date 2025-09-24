@@ -6,6 +6,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
@@ -22,6 +23,16 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 
 	// CORS
 	e.Use(CORS())
+
+	// Multi-tenant tenant resolver middleware (if enabled)
+	if cfg.Multitenant.Enabled {
+		resolver := buildTenantResolver(cfg)
+		if resolver != nil {
+			e.Use(TenantMiddleware(resolver))
+		} else {
+			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
+		}
+	}
 
 	// Logger middleware with zerolog
 	e.Use(Logger(log))
@@ -65,4 +76,49 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config) {
 
 	// Timing
 	e.Use(Timing())
+}
+
+func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
+	mtCfg := cfg.Multitenant
+	resolverCfg := mtCfg.Resolver
+	tenantRegex := mtCfg.TenantID.GetRegex()
+
+	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
+		if res == nil {
+			return nil
+		}
+		if tenantRegex == nil {
+			return res
+		}
+		return &multitenant.ValidatingResolver{Resolver: res, TenantRegex: tenantRegex}
+	}
+
+	newHeaderResolver := func() multitenant.TenantResolver {
+		return &multitenant.HeaderResolver{HeaderName: resolverCfg.HeaderName}
+	}
+
+	newSubdomainResolver := func() multitenant.TenantResolver {
+		return &multitenant.SubdomainResolver{RootDomain: resolverCfg.RootDomain, TrustProxies: resolverCfg.TrustProxies}
+	}
+
+	switch resolverCfg.Type {
+	case "header":
+		return wrap(newHeaderResolver())
+	case "subdomain":
+		return wrap(newSubdomainResolver())
+	case "composite":
+		resolvers := []multitenant.TenantResolver{}
+		if header := newHeaderResolver(); header != nil {
+			resolvers = append(resolvers, header)
+		}
+		if subdomain := newSubdomainResolver(); subdomain != nil {
+			resolvers = append(resolvers, subdomain)
+		}
+		if len(resolvers) == 0 {
+			return nil
+		}
+		return &multitenant.CompositeResolver{Resolvers: resolvers, TenantRegex: tenantRegex}
+	default:
+		return nil
+	}
 }
