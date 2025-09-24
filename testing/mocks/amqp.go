@@ -58,7 +58,10 @@ func (m *MockAMQPClient) ConsumeFromQueue(ctx context.Context, options messaging
 	ch := m.messageChannels[options.Queue]
 	m.mu.Unlock()
 
-	return ch, arguments.Error(1)
+	if err := arguments.Error(1); err != nil {
+		return nil, err
+	}
+	return ch, nil
 }
 
 // DeclareQueue implements messaging.AMQPClient

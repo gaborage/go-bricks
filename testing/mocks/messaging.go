@@ -40,13 +40,13 @@ func NewMockMessagingClient() *MockMessagingClient {
 
 // Publish implements messaging.Client
 func (m *MockMessagingClient) Publish(ctx context.Context, destination string, data []byte) error {
-	arguments := m.Called(ctx, destination, data)
+	arguments := m.MethodCalled("Publish", ctx, destination, data)
 	return arguments.Error(0)
 }
 
 // Consume implements messaging.Client
 func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
-	arguments := m.Called(ctx, destination)
+	arguments := m.MethodCalled("Consume", ctx, destination)
 
 	// Create a channel for this destination if it doesn't exist
 	m.mu.Lock()
@@ -56,7 +56,10 @@ func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (
 	ch := m.messageChannels[destination]
 	m.mu.Unlock()
 
-	return ch, arguments.Error(1)
+	if err := arguments.Error(1); err != nil {
+		return nil, err
+	}
+	return ch, nil
 }
 
 // Close implements messaging.Client
@@ -71,7 +74,7 @@ func (m *MockMessagingClient) Close() error {
 	}
 	m.messageChannels = make(map[string]chan amqp.Delivery)
 
-	arguments := m.Called()
+	arguments := m.MethodCalled("Close")
 	return arguments.Error(0)
 }
 
@@ -81,7 +84,7 @@ func (m *MockMessagingClient) IsReady() bool {
 	defer m.mu.RUnlock()
 
 	// Always call MethodCalled to honor expectations, even when closed
-	arguments := m.Called()
+	arguments := m.MethodCalled("IsReady")
 
 	// If closed, return false regardless of expectations
 	if m.closed {
