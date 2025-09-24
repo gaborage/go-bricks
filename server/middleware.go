@@ -29,7 +29,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {
-		e.Use(IPPreGuard(cfg.App.Rate.IPPreGuard.RequestsPerSecond))
+		e.Use(IPPreGuard(cfg.App.Rate.IPPreGuard.Threshold))
 	}
 
 	// Multi-tenant tenant resolver middleware (if enabled)
@@ -91,7 +91,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	mtCfg := cfg.Multitenant
 	resolverCfg := mtCfg.Resolver
-	tenantRegex := mtCfg.TenantID.GetRegex()
+	tenantRegex := mtCfg.Validation.GetRegex()
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
 		if res == nil {
@@ -104,7 +104,7 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	}
 
 	newHeaderResolver := func() multitenant.TenantResolver {
-		name := resolverCfg.HeaderName
+		name := resolverCfg.Header
 		if name == "" {
 			name = "X-Tenant-ID"
 		}
@@ -112,12 +112,12 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	}
 
 	newSubdomainResolver := func() multitenant.TenantResolver {
-		// Normalize RootDomain: strip leading dot to accept both ".example.com" and "example.com"
-		rootDomain := strings.TrimPrefix(resolverCfg.RootDomain, ".")
+		// Normalize Domain: strip leading dot to accept both ".example.com" and "example.com"
+		rootDomain := strings.TrimPrefix(resolverCfg.Domain, ".")
 		if rootDomain == "" {
 			return nil
 		}
-		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.TrustProxies}
+		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.Proxies}
 	}
 
 	switch resolverCfg.Type {

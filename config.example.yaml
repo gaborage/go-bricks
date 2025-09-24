@@ -10,6 +10,9 @@ app:
   rate:
     limit: 100
     burst: 200
+    ippreguard:
+      enabled: false
+      threshold: 2000          # IP rate limit threshold (requests per second)
 
 server:
   host: 0.0.0.0
@@ -50,7 +53,7 @@ database:
       enabled: true
     log:
       parameters: true
-      maxlength: 1000
+      max: 1000
 
   tls:
     mode: disable
@@ -68,7 +71,7 @@ database:
   mongo:
     replica:
       set: rs0
-      readpreference: primary
+      preference: primary
     auth:
       source: admin
     concern:
@@ -91,6 +94,22 @@ messaging:
   headers:
     x-app-name: my-service
     x-environment: development
+
+multitenant:
+  enabled: false
+  resolver:
+    type: header                 # Options: header, subdomain, composite
+    header: X-Tenant-ID          # Header name for header-based resolution
+    domain: api.example.com      # Root domain for subdomain resolution (leading dot optional)
+    proxies: false               # Trust X-Forwarded-Host header
+  cache:
+    ttl: 5m                      # Time-to-live for cached tenant configurations
+  limits:
+    tenants: 100                 # Maximum number of active tenant connections
+    cleanup:
+      interval: 5m               # Interval for cleaning up idle connections
+  validation:
+    pattern: "^[a-z0-9-]{1,64}$" # Regex pattern for validating tenant IDs
 
 # Custom configurations - add your application-specific settings here
 custom:

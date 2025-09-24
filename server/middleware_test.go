@@ -35,8 +35,8 @@ func TestSetupMiddlewares(t *testing.T) {
 					Rate: config.RateConfig{
 						Limit: 100,
 						IPPreGuard: config.IPPreGuardConfig{
-							Enabled:           true,
-							RequestsPerSecond: 1000,
+							Enabled:   true,
+							Threshold: 1000,
 						},
 					},
 				},
@@ -54,8 +54,8 @@ func TestSetupMiddlewares(t *testing.T) {
 					Rate: config.RateConfig{
 						Limit: 0,
 						IPPreGuard: config.IPPreGuardConfig{
-							Enabled:           false,
-							RequestsPerSecond: 0,
+							Enabled:   false,
+							Threshold: 0,
 						},
 					},
 				},

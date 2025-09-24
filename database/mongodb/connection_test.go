@@ -288,7 +288,7 @@ func TestNewConnectionConfigValidation(t *testing.T) {
 			Database: "test",
 			Mongo: config.MongoConfig{
 				Replica: config.ReplicaConfig{
-					ReadPreference: "invalid",
+					Preference: "invalid",
 				},
 			},
 		}

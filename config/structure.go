@@ -43,8 +43,8 @@ type RateConfig struct {
 
 // IPPreGuardConfig holds IP pre-guard rate limiting settings.
 type IPPreGuardConfig struct {
-	Enabled           bool `koanf:"enabled"`           // enable IP pre-guard rate limiting
-	RequestsPerSecond int  `koanf:"requestspersecond"` // requests per second limit per IP
+	Enabled   bool `koanf:"enabled"`   // enable IP pre-guard rate limiting
+	Threshold int  `koanf:"threshold"` // requests per second limit per IP
 }
 
 // ServerConfig holds HTTP server settings.
@@ -128,7 +128,7 @@ type SlowQueryConfig struct {
 // QueryLogConfig holds settings for query logging.
 type QueryLogConfig struct {
 	Parameters bool `koanf:"parameters"`
-	MaxLength  int  `koanf:"maxlength"`
+	MaxLength  int  `koanf:"max"`
 }
 
 // TLSConfig holds TLS/SSL settings for database connections.
@@ -159,8 +159,8 @@ type MongoConfig struct {
 
 // ReplicaConfig holds MongoDB replica set and read preference settings.
 type ReplicaConfig struct {
-	Set            string `koanf:"set"`
-	ReadPreference string `koanf:"readpreference"`
+	Set        string `koanf:"set"`
+	Preference string `koanf:"preference"`
 }
 
 // AuthConfig holds MongoDB authentication source settings.
@@ -207,44 +207,50 @@ type RoutingConfig struct {
 
 // MultitenantConfig holds multi-tenant specific settings.
 type MultitenantConfig struct {
-	Enabled  bool                      `koanf:"enabled"`
-	Resolver MultitenantResolverConfig `koanf:"resolver"`
-	Cache    MultitenantCacheConfig    `koanf:"cache"`
-	Limits   MultitenantLimitsConfig   `koanf:"limits"`
-	TenantID MultitenantTenantIDConfig `koanf:"tenantid"`
+	Enabled    bool               `koanf:"enabled"`
+	Resolver   ResolverConfig     `koanf:"resolver"`
+	Cache      CacheConfig        `koanf:"cache"`
+	Limits     LimitsConfig       `koanf:"limits"`
+	Validation IDValidationConfig `koanf:"validation"`
 }
 
-// MultitenantResolverConfig holds tenant resolution strategy settings.
-type MultitenantResolverConfig struct {
-	Type         string `koanf:"type"`         // header, subdomain, composite
-	HeaderName   string `koanf:"headername"`   // default: X-Tenant-ID
-	RootDomain   string `koanf:"rootdomain"`   // e.g., api.example.com or .api.example.com (leading dot optional)
-	TrustProxies bool   `koanf:"trustproxies"` // trust X-Forwarded-Host
+// ResolverConfig holds tenant resolution strategy settings.
+type ResolverConfig struct {
+	Type    string `koanf:"type"`    // header, subdomain, composite
+	Header  string `koanf:"header"`  // default: X-Tenant-ID
+	Domain  string `koanf:"domain"`  // e.g., api.example.com or .api.example.com (leading dot optional)
+	Proxies bool   `koanf:"proxies"` // trust X-Forwarded-Host
 }
 
-// MultitenantCacheConfig holds caching settings for tenant configurations.
-type MultitenantCacheConfig struct {
+// CacheConfig holds caching settings for tenant configurations.
+type CacheConfig struct {
 	TTL time.Duration `koanf:"ttl"` // default: 5m
 }
 
-// MultitenantLimitsConfig holds resource limits for multi-tenant operation.
-type MultitenantLimitsConfig struct {
-	MaxActiveTenants int `koanf:"maxactivetenants"` // default: 100
+// LimitsConfig holds resource limits for multi-tenant operation.
+type LimitsConfig struct {
+	Tenants int           `koanf:"tenants"` // default: 100
+	Cleanup CleanupConfig `koanf:"cleanup"`
 }
 
-// MultitenantTenantIDConfig holds tenant ID validation settings.
-type MultitenantTenantIDConfig struct {
+// CleanupConfig holds connection cleanup settings.
+type CleanupConfig struct {
+	Interval time.Duration `koanf:"interval"` // default: 5m
+}
+
+// IDValidationConfig holds tenant ID validation settings.
+type IDValidationConfig struct {
 	Pattern string `koanf:"pattern"` // default: ^[a-z0-9-]{1,64}$
 	regex   *regexp.Regexp
 }
 
 // GetRegex returns the compiled regex for tenant ID validation.
-func (c *MultitenantTenantIDConfig) GetRegex() *regexp.Regexp {
+func (c *IDValidationConfig) GetRegex() *regexp.Regexp {
 	return c.regex
 }
 
 // SetRegex compiles and sets the regex pattern.
-func (c *MultitenantTenantIDConfig) SetRegex(pattern string) error {
+func (c *IDValidationConfig) SetRegex(pattern string) error {
 	if pattern == "" {
 		pattern = `^[a-z0-9-]{1,64}$`
 	}

@@ -1382,7 +1382,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "majority",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "primary",
+						Preference: "primary",
 					},
 				},
 			},
@@ -1401,7 +1401,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "acknowledged",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "primaryPreferred",
+						Preference: "primaryPreferred",
 					},
 				},
 			},
@@ -1420,7 +1420,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 						Write: "MAJORITY",
 					},
 					Replica: ReplicaConfig{
-						ReadPreference: "SECONDARY",
+						Preference: "SECONDARY",
 					},
 				},
 			},
@@ -1447,7 +1447,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				Username: "testuser",
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 				},
 			},
@@ -1481,7 +1481,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				Username: "testuser",
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 					Concern: ConcernConfig{
 						Write: "invalid",
@@ -1588,7 +1588,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				ConnectionString: testMongoDBConnectionString,
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "primary",
+						Preference: "primary",
 					},
 					Concern: ConcernConfig{
 						Write: "majority",
@@ -1604,7 +1604,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				ConnectionString: testMongoDBConnectionString,
 				Mongo: MongoConfig{
 					Replica: ReplicaConfig{
-						ReadPreference: "invalid",
+						Preference: "invalid",
 					},
 				},
 			},

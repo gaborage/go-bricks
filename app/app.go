@@ -250,7 +250,7 @@ func resolveTenantCache(cfg *config.Config, opts *Options) *multitenant.TenantCo
 
 	cacheOpts := []multitenant.CacheOption{
 		multitenant.WithTTL(cfg.Multitenant.Cache.TTL),
-		multitenant.WithMaxSize(cfg.Multitenant.Limits.MaxActiveTenants),
+		multitenant.WithMaxSize(cfg.Multitenant.Limits.Tenants),
 	}
 	cacheOpts = append(cacheOpts, opts.TenantCacheOptions...)
 
@@ -260,7 +260,7 @@ func resolveTenantCache(cfg *config.Config, opts *Options) *multitenant.TenantCo
 // resolveTenantConnectionOptions creates connection options from config and overrides
 func resolveTenantConnectionOptions(cfg *config.Config, opts *Options) []multitenant.ConnectionOption {
 	connOpts := []multitenant.ConnectionOption{
-		multitenant.WithMaxActiveTenants(cfg.Multitenant.Limits.MaxActiveTenants),
+		multitenant.WithMaxTenants(cfg.Multitenant.Limits.Tenants),
 	}
 
 	if opts != nil {
@@ -364,6 +364,15 @@ func (a *App) Run() error {
 	}
 
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
+
+	// Start periodic connection cleanup for multi-tenant mode
+	if a.tenantConnManager != nil {
+		cleanupInterval := a.cfg.Multitenant.Limits.Cleanup.Interval
+		if cleanupInterval == 0 {
+			cleanupInterval = 5 * time.Minute // default
+		}
+		a.tenantConnManager.StartCleanup(cleanupInterval)
+	}
 
 	go func() {
 		if err := a.server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
