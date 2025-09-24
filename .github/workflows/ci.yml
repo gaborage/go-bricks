@@ -36,12 +36,19 @@ jobs:
       run: go mod download
     
     - name: Run tests
-      run: go test -race -coverprofile=coverage.out $(go list ./... | grep -vE '/(examples|testing|tools)(/|$)')
+      run: go test -race -cover -covermode=atomic -coverprofile=coverage.out $(go list ./... | grep -vE '/(examples|testing|tools)(/|$)')
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+
+    - name: Upload coverage artifact for SonarCloud
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.out
+        retention-days: 1
 
   lint:
     runs-on: ubuntu-latest
@@ -67,6 +74,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: .
+
       - name: Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:

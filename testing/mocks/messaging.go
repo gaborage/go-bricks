@@ -13,7 +13,7 @@ import (
 //
 // Example usage:
 //
-//	mockClient := &mocks.MockMessagingClient{}
+//	mockClient := mocks.NewMockMessagingClient()
 //	mockClient.On("Publish", mock.Anything, "user.created", mock.Anything).Return(nil)
 //	mockClient.On("IsReady").Return(true)
 //
@@ -65,14 +65,13 @@ func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (
 // Close implements messaging.Client
 func (m *MockMessagingClient) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	m.closed = true
 	// Close all message channels
 	for _, ch := range m.messageChannels {
 		close(ch)
 	}
 	m.messageChannels = make(map[string]chan amqp.Delivery)
+	m.mu.Unlock()
 
 	arguments := m.MethodCalled("Close")
 	return arguments.Error(0)
@@ -81,21 +80,25 @@ func (m *MockMessagingClient) Close() error {
 // IsReady implements messaging.Client
 func (m *MockMessagingClient) IsReady() bool {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	closed := m.closed
+	m.mu.RUnlock()
 
-	// If closed, return false regardless of expectations
-	if m.closed {
+	// If closed, not ready
+	if closed {
 		return false
 	}
 
 	for _, ec := range m.ExpectedCalls {
 		if ec.Method == "IsReady" {
-			return m.Called().Bool(0)
+			return m.MethodCalled("IsReady").Bool(0)
 		}
 	}
 
-	// Default to internal ready state
-	return m.isReady
+	m.mu.RLock()
+	ready := m.isReady
+	m.mu.RUnlock()
+
+	return ready
 }
 
 // Helper methods for testing scenarios
@@ -131,6 +134,9 @@ func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, bod
 
 	// Slow path: create channel and send under write lock.
 	m.mu.Lock()
+	if m.messageChannels == nil {
+		m.messageChannels = make(map[string]chan amqp.Delivery)
+	}
 	ch, exists = m.messageChannels[destination]
 	if !exists {
 		ch = make(chan amqp.Delivery, 100)

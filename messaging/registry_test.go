@@ -158,22 +158,24 @@ func newControllableMockClient() (client *controllableMockAMQPClient, readySigna
 
 // IsReady overrides the base implementation with channel-based signaling
 func (c *controllableMockAMQPClient) IsReady() bool {
+	// Fast path if already ready
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.closed {
+	closed := c.closed
+	ready := c.isReady
+	c.mu.RUnlock()
+	if closed {
 		return false
 	}
-
-	// If already ready, return immediately
-	if c.isReady {
+	if ready {
 		return true
 	}
 
 	// Wait for ready signal (non-blocking check)
 	select {
 	case <-c.readySignal:
+		c.mu.Lock()
 		c.isReady = true
+		c.mu.Unlock()
 		return true
 	default:
 		return false
