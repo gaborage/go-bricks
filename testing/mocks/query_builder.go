@@ -75,7 +75,11 @@ func (m *MockQueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit,
 // BuildUpsert implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	arguments := m.MethodCalled("BuildUpsert", table, conflictColumns, insertColumns, updateColumns)
-	return arguments.String(0), arguments.Get(1).([]any), arguments.Error(2)
+	argsVal, ok := arguments.Get(1).([]any)
+	if !ok {
+		argsVal = nil
+	}
+	return arguments.String(0), argsVal, arguments.Error(2)
 }
 
 // BuildCurrentTimestamp implements types.QueryBuilderInterface
