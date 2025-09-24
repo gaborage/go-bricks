@@ -555,17 +555,56 @@ func TestTenantConnectionManagerCleanupRaceCondition(t *testing.T) {
 	// Wait for it to become idle
 	time.Sleep(100 * time.Millisecond)
 
+	// Synchronization primitives for coordinated concurrent execution
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	errorCh := make(chan error, 50) // Buffered channel to capture errors from GetDatabase calls
+
 	// Simulate race condition: access connection while cleanup is happening
+	wg.Add(1)
 	go func() {
-		manager.GetDatabase(context.Background(), "tenant1")
+		defer wg.Done()
+		<-startCh                 // Wait for start signal
+		for i := 0; i < 50; i++ { // Multiple iterations to increase contention
+			db, err := manager.GetDatabase(context.Background(), "tenant1")
+			if err != nil {
+				errorCh <- err
+				return // Exit early on first error to avoid flooding
+			}
+			// Preserve resource handling - verify we got a valid database
+			if db == nil {
+				errorCh <- errors.New("GetDatabase returned nil database without error")
+				return
+			}
+		}
 	}()
 
+	wg.Add(1)
 	go func() {
-		manager.CleanupIdleConnections()
+		defer wg.Done()
+		<-startCh                 // Wait for start signal
+		for i := 0; i < 50; i++ { // Multiple iterations to increase contention
+			manager.CleanupIdleConnections()
+		}
 	}()
 
-	// Give goroutines time to complete
-	time.Sleep(20 * time.Millisecond)
+	// Start both goroutines simultaneously
+	close(startCh)
+
+	// Wait for both goroutines to complete
+	wg.Wait()
+	close(errorCh)
+
+	// Check for any errors captured during concurrent operations
+	capturedErrors := make([]error, 0, 50) // Pre-allocate with capacity matching buffer size
+	for err := range errorCh {
+		capturedErrors = append(capturedErrors, err)
+	}
+
+	// Fail the test if any errors were encountered
+	if len(capturedErrors) > 0 {
+		t.Fatalf("Race condition test captured %d error(s): first error: %v", len(capturedErrors), capturedErrors[0])
+	}
 }
 
 func TestTenantConnectionManagerStartCleanupShortInterval(t *testing.T) {
