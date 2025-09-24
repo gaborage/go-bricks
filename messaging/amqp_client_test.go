@@ -16,6 +16,7 @@ import (
 const (
 	confirmFailedMsg = "confirm failed"
 	amqpHost         = "amqp://localhost"
+	dialFailMsg      = "dial fail"
 )
 
 // adapter that satisfies amqpConnection with injectable amqpChannel
@@ -359,7 +360,7 @@ func TestNewAMQPClientConstructsAndStarts(t *testing.T) {
 	t.Helper()
 	// Ensure dialer does not hit network
 	oldDial := getAmqpDialFunc()
-	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New("dial fail") })
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 	defer func() { setAmqpDialFunc(oldDial) }()
 	c := NewAMQPClient("amqp://example", &stubLogger{})
 	if c == nil {
@@ -841,6 +842,11 @@ func TestUnsafePublishNotReady(t *testing.T) {
 // =============================================================================
 
 func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
+	// Stub dialer to prevent real network calls
+	originalDialFunc := getAmqpDialFunc()
+	defer setAmqpDialFunc(originalDialFunc)
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+
 	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -852,6 +858,11 @@ func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 }
 
 func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
+	// Stub dialer to prevent real network calls
+	originalDialFunc := getAmqpDialFunc()
+	defer setAmqpDialFunc(originalDialFunc)
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+
 	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -863,6 +874,11 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 }
 
 func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
+	// Stub dialer to prevent real network calls
+	originalDialFunc := getAmqpDialFunc()
+	defer setAmqpDialFunc(originalDialFunc)
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+
 	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -874,6 +890,11 @@ func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 }
 
 func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
+	// Stub dialer to prevent real network calls
+	originalDialFunc := getAmqpDialFunc()
+	defer setAmqpDialFunc(originalDialFunc)
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+
 	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
@@ -919,6 +940,11 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 }
 
 func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
+	// Stub dialer to prevent real network calls
+	originalDialFunc := getAmqpDialFunc()
+	defer setAmqpDialFunc(originalDialFunc)
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+
 	client := NewAMQPClient(amqpHost, &stubLogger{})
 
 	// Test init with a connection that fails to create channels

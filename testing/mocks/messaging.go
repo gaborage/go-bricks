@@ -83,17 +83,15 @@ func (m *MockMessagingClient) IsReady() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Always call MethodCalled to honor expectations, even when closed
-	arguments := m.MethodCalled("IsReady")
-
 	// If closed, return false regardless of expectations
 	if m.closed {
 		return false
 	}
 
-	// Use expectation result if provided
-	if len(arguments) > 0 {
-		return arguments.Bool(0)
+	for _, ec := range m.ExpectedCalls {
+		if ec.Method == "IsReady" {
+			return m.Called().Bool(0)
+		}
 	}
 
 	// Default to internal ready state
@@ -111,7 +109,7 @@ func (m *MockMessagingClient) SimulateMessage(destination string, body []byte) {
 func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, body []byte, headers map[string]any) {
 	delivery := amqp.Delivery{
 		Body:    body,
-		Headers: headers,
+		Headers: amqp.Table(headers),
 	}
 
 	// Fast path: destination exists - send under RLock to avoid racing with Close()
@@ -168,6 +166,11 @@ func (m *MockMessagingClient) ExpectPublishAny(err error) *mock.Call {
 // ExpectConsume sets up a consume expectation
 func (m *MockMessagingClient) ExpectConsume(destination string, err error) *mock.Call {
 	return m.On("Consume", mock.Anything, destination).Return(nil, err)
+}
+
+// ExpectConsumeAny sets up a consume expectation for any destination
+func (m *MockMessagingClient) ExpectConsumeAny(err error) *mock.Call {
+	return m.On("Consume", mock.Anything, mock.Anything).Return(nil, err)
 }
 
 // ExpectIsReady sets up an IsReady expectation

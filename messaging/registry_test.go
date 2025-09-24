@@ -815,15 +815,17 @@ func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
 	// Start the message handler
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Start handler in a goroutine
+	// Use synchronization channels instead of sleep
 	handlerDone := make(chan struct{})
+	handlerStarted := make(chan struct{})
 	go func() {
+		close(handlerStarted) // Signal handler is about to start
 		registry.handleMessages(ctx, consumer, deliveries)
 		close(handlerDone)
 	}()
 
-	// Cancel context after a short delay
-	time.Sleep(10 * time.Millisecond)
+	// Wait for handler to start, then cancel context immediately
+	<-handlerStarted
 	cancel()
 
 	// Handler should stop
@@ -853,15 +855,17 @@ func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
 	// Start the message handler
 	ctx := context.Background()
 
-	// Start handler in a goroutine
+	// Use synchronization channels instead of sleep
 	handlerDone := make(chan struct{})
+	handlerStarted := make(chan struct{})
 	go func() {
+		close(handlerStarted) // Signal handler is about to start
 		registry.handleMessages(ctx, consumer, deliveries)
 		close(handlerDone)
 	}()
 
-	// Close delivery channel after a short delay
-	time.Sleep(10 * time.Millisecond)
+	// Wait for handler to start, then close delivery channel immediately
+	<-handlerStarted
 	close(deliveries)
 
 	// Handler should stop
@@ -881,6 +885,7 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 	}
 	registry := NewRegistry(client, &stubLogger{})
 
+	// Create a handler that signals when message is processed
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
 		Queue:     testQueueName,
@@ -900,26 +905,29 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 		Acknowledger: &mockAcknowledger{},
 	}
 
-	// Send the delivery
-	deliveries <- delivery
-
-	// Start the message handler with context timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// Start the message handler with test context
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	// Start handler in a goroutine
+	// Use synchronization channels
 	handlerDone := make(chan struct{})
+	handlerStarted := make(chan struct{})
 	go func() {
 		defer close(handlerDone)
+		close(handlerStarted) // Signal handler is about to start
 		registry.handleMessages(ctx, consumer, deliveries)
 	}()
 
-	// Wait for handler to process or timeout
-	select {
-	case <-handlerDone:
-		// Handler completed
-	case <-ctx.Done():
-		// Timeout - this is expected as handler runs in a loop
+	// Wait for handler to start, then send the delivery
+	<-handlerStarted
+	deliveries <- delivery
+
+	// Wait for handler to process the message by checking call count
+	for range 100 { // Max 100ms wait with 1ms intervals
+		if handler.GetCallCount() >= 1 {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
 	}
 
 	// Verify handler was called

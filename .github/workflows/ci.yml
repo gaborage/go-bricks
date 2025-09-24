@@ -59,6 +59,18 @@ jobs:
         version: latest
         args: --timeout=5m --skip-dirs=tools,examples
 
+  sonarqube:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+      - name: Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   security:
     runs-on: ubuntu-latest
     steps:
