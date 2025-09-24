@@ -177,7 +177,7 @@ func TestMockQueryBuilderErrorHandling(t *testing.T) {
 		[]string{"id"},
 		map[string]any{"id": 1, "name": "test"},
 		map[string]any{"name": "updated"},
-	).Return("", ([]any)(nil), assert.AnError)
+	).Return("", []any(nil), assert.AnError)
 
 	sql, args, err := mockQB.BuildUpsert(
 		"users",
