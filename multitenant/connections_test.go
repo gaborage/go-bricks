@@ -555,17 +555,34 @@ func TestTenantConnectionManagerCleanupRaceCondition(t *testing.T) {
 	// Wait for it to become idle
 	time.Sleep(100 * time.Millisecond)
 
+	// Synchronization primitives for coordinated concurrent execution
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+
 	// Simulate race condition: access connection while cleanup is happening
+	wg.Add(1)
 	go func() {
-		manager.GetDatabase(context.Background(), "tenant1")
+		defer wg.Done()
+		<-startCh                 // Wait for start signal
+		for i := 0; i < 50; i++ { // Multiple iterations to increase contention
+			manager.GetDatabase(context.Background(), "tenant1")
+		}
 	}()
 
+	wg.Add(1)
 	go func() {
-		manager.CleanupIdleConnections()
+		defer wg.Done()
+		<-startCh                 // Wait for start signal
+		for i := 0; i < 50; i++ { // Multiple iterations to increase contention
+			manager.CleanupIdleConnections()
+		}
 	}()
 
-	// Give goroutines time to complete
-	time.Sleep(20 * time.Millisecond)
+	// Start both goroutines simultaneously
+	close(startCh)
+
+	// Wait for both goroutines to complete
+	wg.Wait()
 }
 
 func TestTenantConnectionManagerStartCleanupShortInterval(t *testing.T) {
