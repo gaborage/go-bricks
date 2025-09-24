@@ -16,3 +16,7 @@ type Statement = types.Statement
 // Tx defines the interface for database transactions.
 // This type alias maintains backward compatibility.
 type Tx = types.Tx
+
+// QueryBuilderInterface defines the interface for vendor-specific SQL query building.
+// This type alias maintains backward compatibility while enabling dependency injection.
+type QueryBuilderInterface = types.QueryBuilderInterface
