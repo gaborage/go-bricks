@@ -61,6 +61,7 @@ func (m *MockTx) Commit() error {
 }
 
 // Rollback implements types.Tx
+// Note: Implementation identical to Commit by design for testify mock tracking
 func (m *MockTx) Rollback() error {
 	arguments := m.Called()
 	return arguments.Error(0)

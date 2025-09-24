@@ -72,7 +72,7 @@ func NewUserMessageHandler() *UserMessageHandler {
 
 func (h *UserMessageHandler) Handle(_ context.Context, delivery *amqp.Delivery) error {
 	// Simple handler that just tracks processed events
-	var event map[string]interface{}
+	var event map[string]any
 	if err := json.Unmarshal(delivery.Body, &event); err != nil {
 		return err
 	}

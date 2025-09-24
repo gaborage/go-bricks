@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"maps"
 
 	"github.com/stretchr/testify/mock"
 
@@ -112,9 +113,7 @@ func (m *MockRegistry) GetExchanges() map[string]*messaging.ExchangeDeclaration 
 	}
 	// Return copy of internal storage
 	result := make(map[string]*messaging.ExchangeDeclaration, len(m.exchanges))
-	for name, decl := range m.exchanges {
-		result[name] = decl
-	}
+	maps.Copy(result, m.exchanges)
 	return result
 }
 
@@ -127,9 +126,7 @@ func (m *MockRegistry) GetQueues() map[string]*messaging.QueueDeclaration {
 	}
 	// Return copy of internal storage
 	result := make(map[string]*messaging.QueueDeclaration, len(m.queues))
-	for name, decl := range m.queues {
-		result[name] = decl
-	}
+	maps.Copy(result, m.queues)
 	return result
 }
 

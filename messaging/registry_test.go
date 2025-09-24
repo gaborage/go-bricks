@@ -13,6 +13,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Test constants for commonly used string literals
+const (
+	testExchangeName  = "test-exchange"
+	testQueueName     = "test-queue"
+	testKeyValue      = "test.key"
+	testEventType     = "test-event"
+	testExchange1Name = "test-exchange-1"
+	testExchange2Name = "test-exchange-2"
+	testQueue1Name    = "test-queue-1"
+	testQueue2Name    = "test-queue-2"
+	lateExchangeName  = "late-exchange"
+	lateQueueName     = "late-queue"
+	testKeyName       = "test-key"
+	testValueContent  = "test-value"
+	newKeyName        = "new-key"
+	testMessageID     = "test-message-id"
+	testRoutingKey    = "test.routing.key"
+	testMessageBody   = "test message body"
+)
+
 // ===== Registry Infrastructure Management Tests =====
 
 // mockAMQPClient implements AMQPClient for testing registry functionality
@@ -126,17 +146,17 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 
 	// Register infrastructure
 	registry.RegisterExchange(&ExchangeDeclaration{
-		Name: "test-exchange",
+		Name: testExchangeName,
 		Type: "topic",
 	})
 	registry.RegisterQueue(&QueueDeclaration{
-		Name:    "test-queue",
+		Name:    testQueueName,
 		Durable: true,
 	})
 	registry.RegisterBinding(&BindingDeclaration{
-		Queue:      "test-queue",
-		Exchange:   "test-exchange",
-		RoutingKey: "test.key",
+		Queue:      testQueueName,
+		Exchange:   testExchangeName,
+		RoutingKey: testKeyValue,
 	})
 
 	ctx := context.Background()
@@ -144,8 +164,8 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, registry.declared)
-	assert.Contains(t, client.declaredExchanges, "test-exchange")
-	assert.Contains(t, client.declaredQueues, "test-queue")
+	assert.Contains(t, client.declaredExchanges, testExchangeName)
+	assert.Contains(t, client.declaredQueues, testQueueName)
 	assert.Contains(t, client.bindings, "test-queue:test-exchange:test.key")
 }
 
@@ -174,7 +194,7 @@ func TestRegistryDeclareInfrastructureExchangeDeclarationErrorSimple(t *testing.
 	registry := NewRegistry(client, &stubLogger{})
 
 	registry.RegisterExchange(&ExchangeDeclaration{
-		Name: "test-exchange",
+		Name: testExchangeName,
 		Type: "topic",
 	})
 
@@ -196,8 +216,8 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 	})
 
@@ -246,27 +266,27 @@ func TestRegistryValidatePublisherSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	registry.RegisterPublisher(&PublisherDeclaration{
-		Exchange:   "test-exchange",
-		RoutingKey: "test.key",
+		Exchange:   testExchangeName,
+		RoutingKey: testKeyValue,
 	})
 
 	// Valid publisher
-	assert.True(t, registry.ValidatePublisher("test-exchange", "test.key"))
+	assert.True(t, registry.ValidatePublisher(testExchangeName, testKeyValue))
 
 	// Invalid publisher
-	assert.False(t, registry.ValidatePublisher("unknown-exchange", "test.key"))
-	assert.False(t, registry.ValidatePublisher("test-exchange", "unknown.key"))
+	assert.False(t, registry.ValidatePublisher("unknown-exchange", testKeyValue))
+	assert.False(t, registry.ValidatePublisher(testExchangeName, "unknown.key"))
 }
 
 func TestRegistryValidateConsumerSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue: "test-queue",
+		Queue: testQueueName,
 	})
 
 	// Valid consumer
-	assert.True(t, registry.ValidateConsumer("test-queue"))
+	assert.True(t, registry.ValidateConsumer(testQueueName))
 
 	// Invalid consumer
 	assert.False(t, registry.ValidateConsumer("unknown-queue"))
@@ -281,12 +301,12 @@ func TestRegistryGetPublishersSimple(t *testing.T) {
 
 	// Add publishers
 	pub1 := &PublisherDeclaration{
-		Exchange:   "test-exchange-1",
+		Exchange:   testExchange1Name,
 		RoutingKey: "test.key.1",
 		EventType:  "test-event-1",
 	}
 	pub2 := &PublisherDeclaration{
-		Exchange:   "test-exchange-2",
+		Exchange:   testExchange2Name,
 		RoutingKey: "test.key.2",
 		EventType:  "test-event-2",
 	}
@@ -311,11 +331,11 @@ func TestRegistryGetConsumersSimple(t *testing.T) {
 
 	// Add consumers
 	cons1 := &ConsumerDeclaration{
-		Queue:     "test-queue-1",
+		Queue:     testQueue1Name,
 		EventType: "test-event-1",
 	}
 	cons2 := &ConsumerDeclaration{
-		Queue:     "test-queue-2",
+		Queue:     testQueue2Name,
 		EventType: "test-event-2",
 	}
 
@@ -341,24 +361,24 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 
 	// Now try to register new components (should log warnings but not fail)
 	registry.RegisterExchange(&ExchangeDeclaration{
-		Name: "late-exchange",
+		Name: lateExchangeName,
 		Type: "topic",
 	})
 
 	registry.RegisterQueue(&QueueDeclaration{
-		Name:    "late-queue",
+		Name:    lateQueueName,
 		Durable: true,
 	})
 
 	registry.RegisterBinding(&BindingDeclaration{
-		Queue:      "late-queue",
-		Exchange:   "late-exchange",
+		Queue:      lateQueueName,
+		Exchange:   lateExchangeName,
 		RoutingKey: "late.key",
 	})
 
 	// Verify these were not actually registered
-	assert.NotContains(t, client.declaredExchanges, "late-exchange")
-	assert.NotContains(t, client.declaredQueues, "late-queue")
+	assert.NotContains(t, client.declaredExchanges, lateExchangeName)
+	assert.NotContains(t, client.declaredQueues, lateQueueName)
 }
 
 func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
@@ -393,8 +413,8 @@ func TestRegistryStartConsumersConsumeErrorSimple(t *testing.T) {
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 	})
 
@@ -411,8 +431,8 @@ func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 
 	// Register consumer without handler (documentation only)
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   nil, // No handler
 	})
 
@@ -447,12 +467,12 @@ func TestRegistryGetExchanges(t *testing.T) {
 
 	// Add exchanges
 	ex1 := &ExchangeDeclaration{
-		Name:    "test-exchange-1",
+		Name:    testExchange1Name,
 		Type:    "topic",
 		Durable: true,
 	}
 	ex2 := &ExchangeDeclaration{
-		Name:       "test-exchange-2",
+		Name:       testExchange2Name,
 		Type:       "direct",
 		AutoDelete: true,
 	}
@@ -462,14 +482,14 @@ func TestRegistryGetExchanges(t *testing.T) {
 
 	exchanges = registry.GetExchanges()
 	assert.Len(t, exchanges, 2)
-	assert.Equal(t, ex1, exchanges["test-exchange-1"])
-	assert.Equal(t, ex2, exchanges["test-exchange-2"])
+	assert.Equal(t, ex1, exchanges[testExchange1Name])
+	assert.Equal(t, ex2, exchanges[testExchange2Name])
 
 	// Verify data integrity (returned map should be a copy)
-	exchanges["test-exchange-1"] = nil
+	exchanges[testExchange1Name] = nil
 	originalExchanges := registry.GetExchanges()
 	assert.Len(t, originalExchanges, 2)
-	assert.NotNil(t, originalExchanges["test-exchange-1"])
+	assert.NotNil(t, originalExchanges[testExchange1Name])
 }
 
 func TestRegistryGetQueues(t *testing.T) {
@@ -481,11 +501,11 @@ func TestRegistryGetQueues(t *testing.T) {
 
 	// Add queues
 	q1 := &QueueDeclaration{
-		Name:    "test-queue-1",
+		Name:    testQueue1Name,
 		Durable: true,
 	}
 	q2 := &QueueDeclaration{
-		Name:       "test-queue-2",
+		Name:       testQueue2Name,
 		AutoDelete: true,
 		Exclusive:  true,
 	}
@@ -495,14 +515,14 @@ func TestRegistryGetQueues(t *testing.T) {
 
 	queues = registry.GetQueues()
 	assert.Len(t, queues, 2)
-	assert.Equal(t, q1, queues["test-queue-1"])
-	assert.Equal(t, q2, queues["test-queue-2"])
+	assert.Equal(t, q1, queues[testQueue1Name])
+	assert.Equal(t, q2, queues[testQueue2Name])
 
 	// Verify data integrity (returned map should be a copy)
-	queues["test-queue-1"] = nil
+	queues[testQueue1Name] = nil
 	originalQueues := registry.GetQueues()
 	assert.Len(t, originalQueues, 2)
-	assert.NotNil(t, originalQueues["test-queue-1"])
+	assert.NotNil(t, originalQueues[testQueue1Name])
 }
 
 func TestRegistryGetBindings(t *testing.T) {
@@ -514,13 +534,13 @@ func TestRegistryGetBindings(t *testing.T) {
 
 	// Add bindings
 	b1 := &BindingDeclaration{
-		Queue:      "test-queue-1",
-		Exchange:   "test-exchange-1",
+		Queue:      testQueue1Name,
+		Exchange:   testExchange1Name,
 		RoutingKey: "test.key.1",
 	}
 	b2 := &BindingDeclaration{
-		Queue:      "test-queue-2",
-		Exchange:   "test-exchange-2",
+		Queue:      testQueue2Name,
+		Exchange:   testExchange2Name,
 		RoutingKey: "test.key.2",
 		NoWait:     true,
 	}
@@ -542,7 +562,7 @@ func TestRegistryGetBindings(t *testing.T) {
 
 // ===== amqpDeliveryAccessor Tests =====
 
-func TestAmqpDeliveryAccessor_Get(t *testing.T) {
+func TestAmqpDeliveryAccessorGet(t *testing.T) {
 	tests := []struct {
 		name     string
 		headers  amqp.Table
@@ -552,29 +572,29 @@ func TestAmqpDeliveryAccessor_Get(t *testing.T) {
 		{
 			name:     "nil headers",
 			headers:  nil,
-			key:      "test-key",
+			key:      testKeyName,
 			expected: nil,
 		},
 		{
 			name:     "empty headers",
 			headers:  amqp.Table{},
-			key:      "test-key",
+			key:      testKeyName,
 			expected: nil,
 		},
 		{
 			name: "existing key",
 			headers: amqp.Table{
-				"test-key": "test-value",
+				testKeyName: testValueContent,
 			},
-			key:      "test-key",
-			expected: "test-value",
+			key:      testKeyName,
+			expected: testValueContent,
 		},
 		{
 			name: "non-existing key",
 			headers: amqp.Table{
 				"other-key": "other-value",
 			},
-			key:      "test-key",
+			key:      testKeyName,
 			expected: nil,
 		},
 		{
@@ -598,7 +618,7 @@ func TestAmqpDeliveryAccessor_Get(t *testing.T) {
 	}
 }
 
-func TestAmqpDeliveryAccessor_Set(t *testing.T) {
+func TestAmqpDeliveryAccessorSet(t *testing.T) {
 	// Create accessor with some initial headers
 	headers := amqp.Table{
 		"existing": "value",
@@ -609,16 +629,16 @@ func TestAmqpDeliveryAccessor_Set(t *testing.T) {
 	assert.Equal(t, "value", accessor.Get("existing"))
 
 	// Call Set - should be a no-op
-	accessor.Set("new-key", "new-value")
+	accessor.Set(newKeyName, "new-value")
 	accessor.Set("existing", "modified-value")
 
 	// Verify headers remain unchanged
 	assert.Equal(t, "value", accessor.Get("existing"))
-	assert.Nil(t, accessor.Get("new-key"))
+	assert.Nil(t, accessor.Get(newKeyName))
 
 	// Verify the original headers map wasn't modified
 	assert.Equal(t, "value", headers["existing"])
-	assert.NotContains(t, headers, "new-key")
+	assert.NotContains(t, headers, newKeyName)
 }
 
 // ===== Enhanced DeclareInfrastructure Tests =====
@@ -631,7 +651,7 @@ func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
 	registry := NewRegistry(client, &stubLogger{})
 
 	registry.RegisterQueue(&QueueDeclaration{
-		Name:    "test-queue",
+		Name:    testQueueName,
 		Durable: true,
 	})
 
@@ -649,9 +669,9 @@ func TestRegistryDeclareInfrastructureBindingError(t *testing.T) {
 	registry := NewRegistry(client, &stubLogger{})
 
 	registry.RegisterBinding(&BindingDeclaration{
-		Queue:      "test-queue",
-		Exchange:   "test-exchange",
-		RoutingKey: "test.key",
+		Queue:      testQueueName,
+		Exchange:   testExchangeName,
+		RoutingKey: testKeyValue,
 	})
 
 	err := registry.DeclareInfrastructure(context.Background())
@@ -680,7 +700,7 @@ func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 	registry := NewRegistry(client, &stubLogger{})
 
 	registry.RegisterExchange(&ExchangeDeclaration{
-		Name: "test-exchange",
+		Name: testExchangeName,
 		Type: "topic",
 	})
 
@@ -712,8 +732,8 @@ func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
 
 	handler := &testHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 	}
 
@@ -750,8 +770,8 @@ func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
 
 	handler := &testHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 	}
 
@@ -788,19 +808,19 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   false,
 	}
 
 	// Create a mock delivery
 	delivery := amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
+		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
 		Acknowledger: &mockAcknowledger{},
 	}
@@ -891,20 +911,20 @@ func TestRegistryProcessMessageSuccess(t *testing.T) {
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   false,
 	}
 
 	acker := &mockAcknowledger{}
 	delivery := &amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
-		Headers:      amqp.Table{"test-header": "test-value"},
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{"test-header": testValueContent},
 		Acknowledger: acker,
 	}
 
@@ -928,19 +948,19 @@ func TestRegistryProcessMessageHandlerError(t *testing.T) {
 		testHandler: testHandler{retErr: errors.New("handler error")},
 	}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   false,
 	}
 
 	acker := &mockAcknowledger{}
 	delivery := &amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
+		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
 		Acknowledger: acker,
 	}
@@ -963,19 +983,19 @@ func TestRegistryProcessMessageAutoAck(t *testing.T) {
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   true, // AutoAck enabled
 	}
 
 	acker := &mockAcknowledger{}
 	delivery := &amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
+		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
 		Acknowledger: acker,
 	}
@@ -998,8 +1018,8 @@ func TestRegistryProcessMessageAckError(t *testing.T) {
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   false,
 	}
@@ -1008,11 +1028,11 @@ func TestRegistryProcessMessageAckError(t *testing.T) {
 		ackErr: errors.New("ack failed"),
 	}
 	delivery := &amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
+		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
 		Acknowledger: acker,
 	}
@@ -1037,8 +1057,8 @@ func TestRegistryProcessMessageNackError(t *testing.T) {
 		testHandler: testHandler{retErr: errors.New("handler error")},
 	}
 	consumer := &ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 		AutoAck:   false,
 	}
@@ -1047,11 +1067,11 @@ func TestRegistryProcessMessageNackError(t *testing.T) {
 		nackErr: errors.New("nack failed"),
 	}
 	delivery := &amqp.Delivery{
-		MessageId:    "test-message-id",
-		RoutingKey:   "test.routing.key",
-		Exchange:     "test-exchange",
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
 		DeliveryTag:  123,
-		Body:         []byte("test message body"),
+		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
 		Acknowledger: acker,
 	}
@@ -1175,8 +1195,8 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     "test-queue",
-		EventType: "test-event",
+		Queue:     testQueueName,
+		EventType: testEventType,
 		Handler:   handler,
 	})
 
@@ -1230,7 +1250,7 @@ func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
 
 	// This should work fine
 	registry.RegisterPublisher(&PublisherDeclaration{
-		Exchange:   "late-exchange",
+		Exchange:   lateExchangeName,
 		RoutingKey: "late.key",
 		EventType:  "late-event",
 	})
@@ -1248,7 +1268,7 @@ func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
 
 	// This should work fine
 	registry.RegisterConsumer(&ConsumerDeclaration{
-		Queue:     "late-queue",
+		Queue:     lateQueueName,
 		EventType: "late-event",
 	})
 

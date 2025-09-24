@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -561,9 +562,7 @@ func (r *Registry) GetExchanges() map[string]*ExchangeDeclaration {
 	defer r.mu.RUnlock()
 
 	exchanges := make(map[string]*ExchangeDeclaration, len(r.exchanges))
-	for name, declaration := range r.exchanges {
-		exchanges[name] = declaration
-	}
+	maps.Copy(exchanges, r.exchanges)
 	return exchanges
 }
 
@@ -573,9 +572,7 @@ func (r *Registry) GetQueues() map[string]*QueueDeclaration {
 	defer r.mu.RUnlock()
 
 	queues := make(map[string]*QueueDeclaration, len(r.queues))
-	for name, declaration := range r.queues {
-		queues[name] = declaration
-	}
+	maps.Copy(queues, r.queues)
 	return queues
 }
 

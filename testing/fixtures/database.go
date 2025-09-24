@@ -151,6 +151,9 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 
 	// Allow read operations
 	rows := NewMockRows([]string{"colA"}, [][]any{{1}, {2}, {3}})
+	if rows.Err() != nil {
+		panic(rows.Err()) // This should never happen in tests
+	}
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(rows, nil)
 	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(createFailingRow(sql.ErrNoRows))
 

@@ -70,7 +70,7 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
-		for i := 0; i < failAfter; i++ {
+		for range failAfter {
 			mockClient.ExpectPublishAny(nil)
 		}
 		mockClient.ExpectPublishAny(amqp.ErrClosed)
