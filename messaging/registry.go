@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -11,6 +12,33 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
+
+// RegistryInterface defines the contract for messaging infrastructure management.
+// This interface allows for easy mocking and testing of messaging infrastructure.
+type RegistryInterface interface {
+	// Registration methods
+	RegisterExchange(declaration *ExchangeDeclaration)
+	RegisterQueue(declaration *QueueDeclaration)
+	RegisterBinding(declaration *BindingDeclaration)
+	RegisterPublisher(declaration *PublisherDeclaration)
+	RegisterConsumer(declaration *ConsumerDeclaration)
+
+	// Infrastructure lifecycle
+	DeclareInfrastructure(ctx context.Context) error
+	StartConsumers(ctx context.Context) error
+	StopConsumers()
+
+	// Getter methods for testing/monitoring
+	GetExchanges() map[string]*ExchangeDeclaration
+	GetQueues() map[string]*QueueDeclaration
+	GetBindings() []*BindingDeclaration
+	GetPublishers() []*PublisherDeclaration
+	GetConsumers() []*ConsumerDeclaration
+
+	// Validation methods
+	ValidatePublisher(exchange, routingKey string) bool
+	ValidateConsumer(queue string) bool
+}
 
 // Registry manages messaging infrastructure declarations across modules.
 // It ensures queues, exchanges, and bindings are properly declared before use.
@@ -526,4 +554,34 @@ func (r *Registry) ValidateConsumer(queue string) bool {
 		}
 	}
 	return false
+}
+
+// GetExchanges returns all registered exchanges (for testing/monitoring)
+func (r *Registry) GetExchanges() map[string]*ExchangeDeclaration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	exchanges := make(map[string]*ExchangeDeclaration, len(r.exchanges))
+	maps.Copy(exchanges, r.exchanges)
+	return exchanges
+}
+
+// GetQueues returns all registered queues (for testing/monitoring)
+func (r *Registry) GetQueues() map[string]*QueueDeclaration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	queues := make(map[string]*QueueDeclaration, len(r.queues))
+	maps.Copy(queues, r.queues)
+	return queues
+}
+
+// GetBindings returns all registered bindings (for testing/monitoring)
+func (r *Registry) GetBindings() []*BindingDeclaration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	bindings := make([]*BindingDeclaration, len(r.bindings))
+	copy(bindings, r.bindings)
+	return bindings
 }

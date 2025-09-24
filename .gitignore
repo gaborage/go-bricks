@@ -18,6 +18,8 @@
 
 !README.md
 !LICENSE
+!TESTING.md
+!CONTRIBUTING.md
 
 !Makefile
 
@@ -29,6 +31,8 @@
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
+
+!sonar-project.properties
 
 # ...even if they are in subdirectories
 !*/

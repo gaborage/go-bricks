@@ -11,9 +11,13 @@ import (
 
 type sampleType struct{}
 
-func sampleFunction() {}
+func sampleFunction() {
+	// no-op
+}
 
-func (sampleType) method() {}
+func (sampleType) method() {
+	// no-op
+}
 
 func captureCallerPackage() string {
 	return GetCallerPackage(1)

@@ -1,5 +1,8 @@
 .PHONY: help build test lint fmt tidy clean
 
+# Package selection for testing (excludes examples, testing, and tools directories)
+PKGS := $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
+
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -9,10 +12,10 @@ build: ## Build the project
 	go build ./...
 
 test: ## Run all tests
-	go test -race  $(shell go list ./... | grep -vE '/examples(/|$$)') 
+	go test -race $(PKGS)
 
 test-coverage: ## Run tests with coverage
-	go test -race -cover $(shell go list ./... | grep -vE '/examples(/|$$)')
+	go test -race -cover -covermode=atomic -coverprofile=coverage.out $(PKGS)
 
 lint: ## Run golangci-lint
 	golangci-lint run
