@@ -89,7 +89,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 }
 
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
-	mtCfg := cfg.Multitenant
+	mtCfg := &cfg.Multitenant
 	resolverCfg := mtCfg.Resolver
 	tenantRegex := mtCfg.Validation.GetRegex()
 

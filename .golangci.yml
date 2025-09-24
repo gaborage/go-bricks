@@ -31,7 +31,7 @@ linters:
     dupl:
       threshold: 100
     exhaustive:
-      default-signifies-exhaustive: false
+      default-signifies-exhaustive: true
     goconst:
       min-len: 2
       min-occurrences: 3

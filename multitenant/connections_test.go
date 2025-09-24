@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,8 @@ func TestTenantConnectionManagerStartStopCleanup(t *testing.T) {
 	assert.NotNil(t, manager.cleanupStop)
 
 	// Test stopping cleanup
+	// Capture goroutine count before stopping
+	initialGoroutines := runtime.NumGoroutine()
 	manager.StopCleanup()
 
 	// Give goroutine time to exit
@@ -66,6 +69,9 @@ func TestTenantConnectionManagerStartStopCleanup(t *testing.T) {
 	// Verify cleanup is stopped
 	assert.Nil(t, manager.cleanupTicker)
 	assert.Nil(t, manager.cleanupStop)
+
+	// Verify goroutine was terminated
+	assert.LessOrEqual(t, runtime.NumGoroutine(), initialGoroutines, "goroutine count should not increase after stopping cleanup")
 }
 
 func TestTenantConnectionManagerCleanupDisabled(t *testing.T) {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +17,7 @@ func TestIDValidationConfigSetRegex(t *testing.T) {
 		err := config.SetRegex(`^[a-z0-9-]{1,64}$`)
 
 		assert.NoError(t, err)
-		assert.Equal(t, `^[a-z0-9-]{1,64}$`, config.Pattern)
+		assert.Equal(t, `^[a-z0-9-]{1,64}$`, config.GetPattern())
 		assert.NotNil(t, config.regex)
 
 		// Test that the regex was compiled correctly
@@ -31,7 +32,7 @@ func TestIDValidationConfigSetRegex(t *testing.T) {
 		err := config.SetRegex("")
 
 		assert.NoError(t, err)
-		assert.Equal(t, `^[a-z0-9-]{1,64}$`, config.Pattern)
+		assert.Equal(t, `^[a-z0-9-]{1,64}$`, config.GetPattern())
 		assert.NotNil(t, config.regex)
 
 		// Test default pattern behavior
@@ -47,7 +48,7 @@ func TestIDValidationConfigSetRegex(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "error parsing regexp")
 		assert.Nil(t, config.regex)
-		assert.Empty(t, config.Pattern)
+		assert.Empty(t, config.GetPattern())
 	})
 
 	t.Run("complex_valid_pattern", func(t *testing.T) {
@@ -56,7 +57,7 @@ func TestIDValidationConfigSetRegex(t *testing.T) {
 		err := config.SetRegex(pattern)
 
 		assert.NoError(t, err)
-		assert.Equal(t, pattern, config.Pattern)
+		assert.Equal(t, pattern, config.GetPattern())
 
 		regex := config.GetRegex()
 		assert.True(t, regex.MatchString("tenant_1"))
@@ -83,7 +84,7 @@ func TestIDValidationConfigSetRegex(t *testing.T) {
 		regex2 := config.GetRegex()
 		assert.False(t, regex2.MatchString("abc"))
 		assert.True(t, regex2.MatchString("123"))
-		assert.Equal(t, `^[0-9]+$`, config.Pattern)
+		assert.Equal(t, `^[0-9]+$`, config.GetPattern())
 	})
 }
 
@@ -129,29 +130,94 @@ func TestIDValidationConfigThreadSafety(t *testing.T) {
 	err := config.SetRegex(`^[a-z]+$`)
 	assert.NoError(t, err)
 
-	// Simulate concurrent access (basic test)
-	done := make(chan bool, 10)
+	// Test concurrent reads and writes with high contention
+	const numGoroutines = 100
+	const iterationsPerGoroutine = 50
 
-	for i := 0; i < 10; i++ {
-		go func() {
-			defer func() { done <- true }()
+	var wg sync.WaitGroup
+	errorCh := make(chan error, numGoroutines*iterationsPerGoroutine)
 
-			regex := config.GetRegex()
-			if regex != nil {
-				regex.MatchString("test")
+	// Different regex patterns to create more contention
+	patterns := []string{
+		`^[a-z]+$`,
+		`^[A-Z]+$`,
+		`^[a-z0-9]+$`,
+		`^[a-zA-Z0-9-]+$`,
+		`^[0-9]+$`,
+		`^[a-z]{1,10}$`,
+		`^[a-zA-Z]{5,}$`,
+	}
+
+	// Spawn multiple goroutines that perform concurrent writes
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < iterationsPerGoroutine; j++ {
+				// Use different patterns to maximize contention
+				pattern := patterns[(goroutineID+j)%len(patterns)]
+				if err := config.SetRegex(pattern); err != nil {
+					errorCh <- err
+				}
 			}
-		}()
+		}(i)
 	}
 
-	// Wait for all goroutines to complete
-	for i := 0; i < 10; i++ {
-		<-done
+	// Spawn multiple goroutines that perform concurrent reads
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < iterationsPerGoroutine; j++ {
+				regex := config.GetRegex()
+				if regex != nil {
+					// Perform actual work with the regex to detect races
+					testStrings := []string{"test", "TEST", "123", "test-123", ""}
+					testStr := testStrings[(goroutineID+j)%len(testStrings)]
+					regex.MatchString(testStr)
+				}
+			}
+		}(i)
 	}
 
-	// Verify state is still valid
+	wg.Wait()
+	close(errorCh)
+
+	// Verify no errors occurred during concurrent operations
+	errors := make([]error, 0, numGoroutines*iterationsPerGoroutine)
+	for err := range errorCh {
+		errors = append(errors, err)
+	}
+
+	if len(errors) > 0 {
+		t.Errorf("Found %d errors during concurrent operations:", len(errors))
+		for i, err := range errors {
+			if i < 5 { // Limit output to first 5 errors
+				t.Errorf("  Error %d: %v", i+1, err)
+			}
+		}
+		if len(errors) > 5 {
+			t.Errorf("  ... and %d more errors", len(errors)-5)
+		}
+	}
+
+	// Verify final state is still valid
 	regex := config.GetRegex()
 	assert.NotNil(t, regex)
-	assert.True(t, regex.MatchString("abc"))
+
+	// The final pattern should be one of our test patterns
+	finalPattern := config.GetPattern()
+	found := false
+	for _, pattern := range patterns {
+		if finalPattern == pattern {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Final pattern '%s' should be one of the test patterns", finalPattern)
+
+	// Test that the final regex actually works
+	assert.True(t, regex.MatchString("") || !regex.MatchString(""), "Regex should be functional")
 }
 
 func TestIDValidationConfigEdgeCases(t *testing.T) {

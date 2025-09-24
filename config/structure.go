@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -241,12 +242,22 @@ type CleanupConfig struct {
 // IDValidationConfig holds tenant ID validation settings.
 type IDValidationConfig struct {
 	Pattern string `koanf:"pattern"` // default: ^[a-z0-9-]{1,64}$
+	mu      sync.RWMutex
 	regex   *regexp.Regexp
 }
 
 // GetRegex returns the compiled regex for tenant ID validation.
 func (c *IDValidationConfig) GetRegex() *regexp.Regexp {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.regex
+}
+
+// GetPattern returns the current pattern string safely.
+func (c *IDValidationConfig) GetPattern() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Pattern
 }
 
 // SetRegex compiles and sets the regex pattern.
@@ -258,6 +269,9 @@ func (c *IDValidationConfig) SetRegex(pattern string) error {
 	if err != nil {
 		return err
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.regex = regex
 	c.Pattern = pattern
 	return nil
