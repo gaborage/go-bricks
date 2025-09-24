@@ -36,6 +36,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("server config: %w", err)
 	}
 
+	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging); err != nil {
+		return fmt.Errorf("multitenant config: %w", err)
+	}
+
 	if err := validateDatabase(&cfg.Database); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
@@ -375,4 +379,98 @@ func validateLog(cfg *LogConfig) error {
 	}
 
 	return nil
+}
+
+// validateMultitenant validates multi-tenant configuration and ensures no conflicts
+// with single-tenant settings. When multitenant is enabled, database and messaging
+// configurations must be provided by the tenant config provider.
+func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig) error {
+	if !mt.Enabled {
+		return nil
+	}
+
+	// Validate resolver configuration
+	if err := validateMultitenantResolver(&mt.Resolver); err != nil {
+		return fmt.Errorf("resolver: %w", err)
+	}
+
+	// Validate cache configuration
+	if err := validateMultitenantCache(&mt.Cache); err != nil {
+		return fmt.Errorf("cache: %w", err)
+	}
+
+	// Validate limits configuration
+	if err := validateMultitenantLimits(&mt.Limits); err != nil {
+		return fmt.Errorf("limits: %w", err)
+	}
+
+	// Validate and compile tenant ID pattern
+	if err := mt.TenantID.SetRegex(mt.TenantID.Pattern); err != nil {
+		return fmt.Errorf("tenant_id pattern: %w", err)
+	}
+
+	// Ensure no conflict with single-tenant database configuration
+	if IsDatabaseConfigured(db) {
+		return fmt.Errorf("database configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
+	}
+
+	// Ensure no conflict with single-tenant messaging configuration
+	if isMessagingConfigured(msg) {
+		return fmt.Errorf("messaging configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
+	}
+
+	return nil
+}
+
+// validateMultitenantResolver validates tenant resolver configuration
+func validateMultitenantResolver(cfg *MultitenantResolverConfig) error {
+	validTypes := []string{"header", "subdomain", "composite"}
+	if !slices.Contains(validTypes, cfg.Type) {
+		return fmt.Errorf("invalid type: %s (must be one of: %s)",
+			cfg.Type, strings.Join(validTypes, ", "))
+	}
+
+	// Set defaults
+	if cfg.HeaderName == "" {
+		cfg.HeaderName = "X-Tenant-ID"
+	}
+
+	// Validate subdomain-specific configuration
+	if cfg.Type == "subdomain" || cfg.Type == "composite" {
+		if cfg.RootDomain == "" {
+			return fmt.Errorf("rootdomain is required for subdomain resolution")
+		}
+		if !strings.HasPrefix(cfg.RootDomain, ".") {
+			return fmt.Errorf("rootdomain must start with a dot (e.g., .api.example.com)")
+		}
+	}
+
+	return nil
+}
+
+// validateMultitenantCache validates cache configuration with defaults
+func validateMultitenantCache(cfg *MultitenantCacheConfig) error {
+	if cfg.TTL <= 0 {
+		cfg.TTL = 5 * time.Minute // default
+	}
+	if cfg.TTL < time.Minute {
+		return fmt.Errorf("ttl must be at least 1 minute")
+	}
+	return nil
+}
+
+// validateMultitenantLimits validates limits configuration with defaults
+func validateMultitenantLimits(cfg *MultitenantLimitsConfig) error {
+	if cfg.MaxActiveTenants <= 0 {
+		cfg.MaxActiveTenants = 100 // default
+	}
+	if cfg.MaxActiveTenants > 1000 {
+		return fmt.Errorf("maxactivetenants cannot exceed 1000")
+	}
+	return nil
+}
+
+// isMessagingConfigured determines if messaging is intentionally configured
+func isMessagingConfigured(cfg *MessagingConfig) bool {
+	return cfg.Broker.URL != ""
 }

@@ -90,8 +90,6 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		log.Fatal().Msg("failed to initialize request validator")
 	}
 
-	SetupMiddlewares(e, log, cfg)
-
 	// Initialize server with path configuration
 	basePath := normalizeBasePath(cfg.Server.Path.Base)
 	healthRoute := normalizeRoutePath(cfg.Server.Path.Health, "/health")
@@ -106,12 +104,17 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		readyRoute:  readyRoute,
 	}
 
-	// Register health endpoints with base path applied
+	// Compute full paths for probe endpoints before middleware setup
 	healthPath := s.buildFullPath(healthRoute)
 	readyPath := s.buildFullPath(readyRoute)
 
+	// Setup middlewares with probe endpoint paths for tenant skipper
+	SetupMiddlewares(e, log, cfg, healthPath, readyPath)
+
 	e.GET(healthPath, s.healthCheck)
 	e.GET(readyPath, s.readyCheck)
+	e.HEAD(healthPath, s.healthCheck)
+	e.HEAD(readyPath, s.readyCheck)
 
 	log.Debug().
 		Str("base_path", basePath).

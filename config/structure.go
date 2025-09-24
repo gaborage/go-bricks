@@ -1,6 +1,7 @@
 package config
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -12,11 +13,12 @@ import (
 // The embedded koanf.Koanf instance allows for flexible access to
 // additional custom configurations not explicitly defined in the struct.
 type Config struct {
-	App       AppConfig       `koanf:"app"`
-	Server    ServerConfig    `koanf:"server"`
-	Database  DatabaseConfig  `koanf:"database"`
-	Log       LogConfig       `koanf:"log"`
-	Messaging MessagingConfig `koanf:"messaging"`
+	App         AppConfig         `koanf:"app"`
+	Server      ServerConfig      `koanf:"server"`
+	Database    DatabaseConfig    `koanf:"database"`
+	Log         LogConfig         `koanf:"log"`
+	Messaging   MessagingConfig   `koanf:"messaging"`
+	Multitenant MultitenantConfig `koanf:"multitenant"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -34,8 +36,15 @@ type AppConfig struct {
 
 // RateConfig holds rate limiting settings.
 type RateConfig struct {
-	Limit int `koanf:"limit"`
-	Burst int `koanf:"burst"`
+	Limit      int              `koanf:"limit"`
+	Burst      int              `koanf:"burst"`
+	IPPreGuard IPPreGuardConfig `koanf:"ippreguard"`
+}
+
+// IPPreGuardConfig holds IP pre-guard rate limiting settings.
+type IPPreGuardConfig struct {
+	Enabled           bool `koanf:"enabled"`           // enable IP pre-guard rate limiting
+	RequestsPerSecond int  `koanf:"requestspersecond"` // requests per second limit per IP
 }
 
 // ServerConfig holds HTTP server settings.
@@ -194,4 +203,56 @@ type BrokerConfig struct {
 type RoutingConfig struct {
 	Exchange string `koanf:"exchange"`
 	Key      string `koanf:"key"`
+}
+
+// MultitenantConfig holds multi-tenant specific settings.
+type MultitenantConfig struct {
+	Enabled  bool                      `koanf:"enabled"`
+	Resolver MultitenantResolverConfig `koanf:"resolver"`
+	Cache    MultitenantCacheConfig    `koanf:"cache"`
+	Limits   MultitenantLimitsConfig   `koanf:"limits"`
+	TenantID MultitenantTenantIDConfig `koanf:"tenantid"`
+}
+
+// MultitenantResolverConfig holds tenant resolution strategy settings.
+type MultitenantResolverConfig struct {
+	Type         string `koanf:"type"`         // header, subdomain, composite
+	HeaderName   string `koanf:"headername"`   // default: X-Tenant-ID
+	RootDomain   string `koanf:"rootdomain"`   // e.g., api.example.com or .api.example.com (leading dot optional)
+	TrustProxies bool   `koanf:"trustproxies"` // trust X-Forwarded-Host
+}
+
+// MultitenantCacheConfig holds caching settings for tenant configurations.
+type MultitenantCacheConfig struct {
+	TTL time.Duration `koanf:"ttl"` // default: 5m
+}
+
+// MultitenantLimitsConfig holds resource limits for multi-tenant operation.
+type MultitenantLimitsConfig struct {
+	MaxActiveTenants int `koanf:"maxactivetenants"` // default: 100
+}
+
+// MultitenantTenantIDConfig holds tenant ID validation settings.
+type MultitenantTenantIDConfig struct {
+	Pattern string `koanf:"pattern"` // default: ^[a-z0-9-]{1,64}$
+	regex   *regexp.Regexp
+}
+
+// GetRegex returns the compiled regex for tenant ID validation.
+func (c *MultitenantTenantIDConfig) GetRegex() *regexp.Regexp {
+	return c.regex
+}
+
+// SetRegex compiles and sets the regex pattern.
+func (c *MultitenantTenantIDConfig) SetRegex(pattern string) error {
+	if pattern == "" {
+		pattern = `^[a-z0-9-]{1,64}$`
+	}
+	regex, err := regexp.Compile(pattern)
+	if err != nil {
+		return err
+	}
+	c.regex = regex
+	c.Pattern = pattern
+	return nil
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -24,11 +25,17 @@ type Module interface {
 
 // ModuleDeps contains the dependencies that are injected into each module.
 // It provides access to core services like database, logging, and messaging.
+// In multi-tenant mode, DB and Messaging may be nil and the *FromContext functions
+// should be used instead to get tenant-specific connections.
 type ModuleDeps struct {
 	DB        database.Interface
 	Logger    logger.Logger
 	Messaging messaging.Client
 	Config    *config.Config
+
+	// Multi-tenant support (nil in single-tenant mode)
+	DBFromContext        func(ctx context.Context) (database.Interface, error)
+	MessagingFromContext func(ctx context.Context) (messaging.Client, error) // Phase 2
 }
 
 // Describer is an optional interface that modules can implement to provide
@@ -242,6 +249,28 @@ func (r *ModuleRegistry) Shutdown() error {
 		}
 	}
 	return nil
+}
+
+// DatabaseFrom returns a tenant-scoped DB when available, else the global DB.
+func (d *ModuleDeps) DatabaseFrom(ctx context.Context) (database.Interface, error) {
+	if d.DB != nil {
+		return d.DB, nil
+	}
+	if d.DBFromContext != nil {
+		return d.DBFromContext(ctx)
+	}
+	return nil, fmt.Errorf("database dependency not configured")
+}
+
+// MessagingClientFrom returns a tenant-scoped messaging client when available, else the global client.
+func (d *ModuleDeps) MessagingClientFrom(ctx context.Context) (messaging.Client, error) {
+	if d.Messaging != nil {
+		return d.Messaging, nil
+	}
+	if d.MessagingFromContext != nil {
+		return d.MessagingFromContext(ctx)
+	}
+	return nil, fmt.Errorf("messaging dependency not configured")
 }
 
 // getModulePackage extracts the package path from a module instance
