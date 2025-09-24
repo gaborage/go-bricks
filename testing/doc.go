@@ -8,7 +8,7 @@
 // The mocks subpackage provides testify-based mock implementations for all
 // major framework interfaces:
 //   - Database operations (database.Interface, database.Statement, database.Tx)
-//   - Messaging operations (messaging.Client, messaging.AMQPClient, messaging.Registry)
+//   - Messaging operations (messaging.Client, messaging.AMQPClient, messaging.RegistryInterface)
 //
 // # Fixtures
 //

@@ -150,8 +150,9 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 	mockDB := NewHealthyDatabase()
 
 	// Allow read operations
-	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(&sql.Rows{}, nil)
-	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(&sql.Row{})
+	rows := NewMockRows([]string{"colA"}, [][]any{{1}, {2}, {3}})
+	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(rows, nil)
+	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(createFailingRow(sql.ErrNoRows))
 
 	// Fail write operations
 	readOnlyErr := errors.New("database is read-only")

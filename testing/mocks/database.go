@@ -26,19 +26,22 @@ type MockDatabase struct {
 
 // Query implements types.Interface
 func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	arguments := m.Called(ctx, query, args)
+	callArgs := append([]any{ctx, query}, args...)
+	arguments := m.Called(callArgs...)
 	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
 }
 
 // QueryRow implements types.Interface
 func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	arguments := m.Called(ctx, query, args)
+	callArgs := append([]any{ctx, query}, args...)
+	arguments := m.Called(callArgs...)
 	return arguments.Get(0).(*sql.Row)
 }
 
 // Exec implements types.Interface
 func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	arguments := m.Called(ctx, query, args)
+	callArgs := append([]any{ctx, query}, args...)
+	arguments := m.Called(callArgs...)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -86,6 +89,9 @@ func (m *MockDatabase) Health(ctx context.Context) error {
 // Stats implements types.Interface
 func (m *MockDatabase) Stats() (map[string]any, error) {
 	arguments := m.Called()
+	if arguments.Get(0) == nil {
+		return nil, arguments.Error(1)
+	}
 	return arguments.Get(0).(map[string]any), arguments.Error(1)
 }
 

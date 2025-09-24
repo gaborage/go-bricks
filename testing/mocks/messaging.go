@@ -99,13 +99,20 @@ func (m *MockMessagingClient) SimulateMessage(destination string, body []byte) {
 }
 
 // SimulateMessageWithHeaders sends a simulated message with headers to the specified destination
-func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, body []byte, headers map[string]interface{}) {
+func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, body []byte, headers map[string]any) {
 	m.mu.RLock()
 	ch, exists := m.messageChannels[destination]
 	m.mu.RUnlock()
 
 	if !exists {
-		return // No consumer for this destination
+		// Create channel on demand - upgrade to write lock
+		m.mu.Lock()
+		// Re-check existence after acquiring write lock
+		if ch, exists = m.messageChannels[destination]; !exists {
+			ch = make(chan amqp.Delivery, 100)
+			m.messageChannels[destination] = ch
+		}
+		m.mu.Unlock()
 	}
 
 	delivery := amqp.Delivery{

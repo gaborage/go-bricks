@@ -104,7 +104,6 @@ func TestEventServicePublishUserCreatedSuccess(t *testing.T) {
 	})
 
 	mockClient.ExpectPublish(userEventsExchangeName, expectedData, nil)
-	mockClient.ExpectIsReady(true)
 
 	// Test the service
 	service := NewEventService(mockClient)
@@ -137,13 +136,15 @@ func TestEventServiceConsumeMessages(t *testing.T) {
 		[]byte(`{"event_type": userCreatedExchangeName, "user_id": 1}`),
 		[]byte(`{"event_type": "user.updated", "user_id": 1}`),
 	}
-	mockClient := fixtures.NewMessageSimulator(messages...)
-
+	mockClient := fixtures.NewWorkingMessagingClient()
 	service := NewEventService(mockClient)
 
 	// Start consuming
 	deliveries, err := service.StartConsuming(context.Background(), "test.queue")
 	assert.NoError(t, err)
+	for _, msg := range messages {
+		mockClient.SimulateMessage("test.queue", msg)
+	}
 
 	// Collect messages with timeout
 	var receivedMessages [][]byte
@@ -293,7 +294,7 @@ func TestAMQPClientInfrastructure(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test binding
-	err = mockAMQP.BindQueue(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey)
+	err = mockAMQP.BindQueue(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey, false)
 	assert.NoError(t, err)
 
 	// Verify infrastructure state

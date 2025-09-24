@@ -435,3 +435,823 @@ func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
 	assert.False(t, registry.consumersActive)
 	assert.Nil(t, registry.cancelConsumers)
 }
+
+// ===== Getter Methods Tests =====
+
+func TestRegistryGetExchanges(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	// Initially empty
+	exchanges := registry.GetExchanges()
+	assert.Empty(t, exchanges)
+
+	// Add exchanges
+	ex1 := &ExchangeDeclaration{
+		Name:    "test-exchange-1",
+		Type:    "topic",
+		Durable: true,
+	}
+	ex2 := &ExchangeDeclaration{
+		Name:       "test-exchange-2",
+		Type:       "direct",
+		AutoDelete: true,
+	}
+
+	registry.RegisterExchange(ex1)
+	registry.RegisterExchange(ex2)
+
+	exchanges = registry.GetExchanges()
+	assert.Len(t, exchanges, 2)
+	assert.Equal(t, ex1, exchanges["test-exchange-1"])
+	assert.Equal(t, ex2, exchanges["test-exchange-2"])
+
+	// Verify data integrity (returned map should be a copy)
+	exchanges["test-exchange-1"] = nil
+	originalExchanges := registry.GetExchanges()
+	assert.Len(t, originalExchanges, 2)
+	assert.NotNil(t, originalExchanges["test-exchange-1"])
+}
+
+func TestRegistryGetQueues(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	// Initially empty
+	queues := registry.GetQueues()
+	assert.Empty(t, queues)
+
+	// Add queues
+	q1 := &QueueDeclaration{
+		Name:    "test-queue-1",
+		Durable: true,
+	}
+	q2 := &QueueDeclaration{
+		Name:       "test-queue-2",
+		AutoDelete: true,
+		Exclusive:  true,
+	}
+
+	registry.RegisterQueue(q1)
+	registry.RegisterQueue(q2)
+
+	queues = registry.GetQueues()
+	assert.Len(t, queues, 2)
+	assert.Equal(t, q1, queues["test-queue-1"])
+	assert.Equal(t, q2, queues["test-queue-2"])
+
+	// Verify data integrity (returned map should be a copy)
+	queues["test-queue-1"] = nil
+	originalQueues := registry.GetQueues()
+	assert.Len(t, originalQueues, 2)
+	assert.NotNil(t, originalQueues["test-queue-1"])
+}
+
+func TestRegistryGetBindings(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	// Initially empty
+	bindings := registry.GetBindings()
+	assert.Empty(t, bindings)
+
+	// Add bindings
+	b1 := &BindingDeclaration{
+		Queue:      "test-queue-1",
+		Exchange:   "test-exchange-1",
+		RoutingKey: "test.key.1",
+	}
+	b2 := &BindingDeclaration{
+		Queue:      "test-queue-2",
+		Exchange:   "test-exchange-2",
+		RoutingKey: "test.key.2",
+		NoWait:     true,
+	}
+
+	registry.RegisterBinding(b1)
+	registry.RegisterBinding(b2)
+
+	bindings = registry.GetBindings()
+	assert.Len(t, bindings, 2)
+	assert.Equal(t, b1, bindings[0])
+	assert.Equal(t, b2, bindings[1])
+
+	// Verify data integrity (returned slice should be a copy)
+	bindings[0] = nil
+	originalBindings := registry.GetBindings()
+	assert.Len(t, originalBindings, 2)
+	assert.NotNil(t, originalBindings[0])
+}
+
+// ===== amqpDeliveryAccessor Tests =====
+
+func TestAmqpDeliveryAccessor_Get(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  amqp.Table
+		key      string
+		expected any
+	}{
+		{
+			name:     "nil headers",
+			headers:  nil,
+			key:      "test-key",
+			expected: nil,
+		},
+		{
+			name:     "empty headers",
+			headers:  amqp.Table{},
+			key:      "test-key",
+			expected: nil,
+		},
+		{
+			name: "existing key",
+			headers: amqp.Table{
+				"test-key": "test-value",
+			},
+			key:      "test-key",
+			expected: "test-value",
+		},
+		{
+			name: "non-existing key",
+			headers: amqp.Table{
+				"other-key": "other-value",
+			},
+			key:      "test-key",
+			expected: nil,
+		},
+		{
+			name: "multiple headers",
+			headers: amqp.Table{
+				"key1": "value1",
+				"key2": 42,
+				"key3": true,
+			},
+			key:      "key2",
+			expected: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accessor := &amqpDeliveryAccessor{headers: tt.headers}
+			result := accessor.Get(tt.key)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestAmqpDeliveryAccessor_Set(t *testing.T) {
+	// Create accessor with some initial headers
+	headers := amqp.Table{
+		"existing": "value",
+	}
+	accessor := &amqpDeliveryAccessor{headers: headers}
+
+	// Verify initial state
+	assert.Equal(t, "value", accessor.Get("existing"))
+
+	// Call Set - should be a no-op
+	accessor.Set("new-key", "new-value")
+	accessor.Set("existing", "modified-value")
+
+	// Verify headers remain unchanged
+	assert.Equal(t, "value", accessor.Get("existing"))
+	assert.Nil(t, accessor.Get("new-key"))
+
+	// Verify the original headers map wasn't modified
+	assert.Equal(t, "value", headers["existing"])
+	assert.NotContains(t, headers, "new-key")
+}
+
+// ===== Enhanced DeclareInfrastructure Tests =====
+
+func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
+	client := &simpleMockAMQPClient{
+		isReady:         true,
+		declareQueueErr: errors.New("queue declaration failed"),
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	registry.RegisterQueue(&QueueDeclaration{
+		Name:    "test-queue",
+		Durable: true,
+	})
+
+	err := registry.DeclareInfrastructure(context.Background())
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to declare queue test-queue")
+}
+
+func TestRegistryDeclareInfrastructureBindingError(t *testing.T) {
+	client := &simpleMockAMQPClient{
+		isReady:      true,
+		bindQueueErr: errors.New("binding failed"),
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	registry.RegisterBinding(&BindingDeclaration{
+		Queue:      "test-queue",
+		Exchange:   "test-exchange",
+		RoutingKey: "test.key",
+	})
+
+	err := registry.DeclareInfrastructure(context.Background())
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to bind queue test-queue to exchange test-exchange")
+}
+
+func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
+	client := &simpleMockAMQPClient{isReady: false}
+	registry := NewRegistry(client, &stubLogger{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel the context immediately
+	cancel()
+
+	err := registry.DeclareInfrastructure(ctx)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context cancelled while waiting for AMQP client")
+}
+
+func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
+	client := &simpleMockAMQPClient{isReady: false}
+	registry := NewRegistry(client, &stubLogger{})
+
+	registry.RegisterExchange(&ExchangeDeclaration{
+		Name: "test-exchange",
+		Type: "topic",
+	})
+
+	// Start declaration in a goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- registry.DeclareInfrastructure(context.Background())
+	}()
+
+	// Wait a bit, then make client ready
+	time.Sleep(150 * time.Millisecond)
+	client.SetReady(true)
+
+	// Should complete successfully
+	err := <-done
+	assert.NoError(t, err)
+	assert.True(t, registry.declared)
+}
+
+// ===== Message Handling Tests =====
+
+func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
+	deliveries := make(chan amqp.Delivery)
+	client := &simpleMockAMQPClient{
+		isReady:      true,
+		deliveryChan: deliveries,
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler := &testHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+	}
+
+	// Start the message handler
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start handler in a goroutine
+	handlerDone := make(chan struct{})
+	go func() {
+		registry.handleMessages(ctx, consumer, deliveries)
+		close(handlerDone)
+	}()
+
+	// Cancel context after a short delay
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	// Handler should stop
+	select {
+	case <-handlerDone:
+		// Expected
+	case <-time.After(1 * time.Second):
+		t.Fatal("Handler did not stop after context cancellation")
+	}
+}
+
+func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
+	deliveries := make(chan amqp.Delivery)
+	client := &simpleMockAMQPClient{
+		isReady:      true,
+		deliveryChan: deliveries,
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler := &testHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+	}
+
+	// Start the message handler
+	ctx := context.Background()
+
+	// Start handler in a goroutine
+	handlerDone := make(chan struct{})
+	go func() {
+		registry.handleMessages(ctx, consumer, deliveries)
+		close(handlerDone)
+	}()
+
+	// Close delivery channel after a short delay
+	time.Sleep(10 * time.Millisecond)
+	close(deliveries)
+
+	// Handler should stop
+	select {
+	case <-handlerDone:
+		// Expected
+	case <-time.After(1 * time.Second):
+		t.Fatal("Handler did not stop after channel closure")
+	}
+}
+
+func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
+	deliveries := make(chan amqp.Delivery, 1)
+	client := &simpleMockAMQPClient{
+		isReady:      true,
+		deliveryChan: deliveries,
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	// Create a mock delivery
+	delivery := amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{},
+		Acknowledger: &mockAcknowledger{},
+	}
+
+	// Send the delivery
+	deliveries <- delivery
+
+	// Start the message handler with context timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Start handler in a goroutine
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		registry.handleMessages(ctx, consumer, deliveries)
+	}()
+
+	// Wait for handler to process or timeout
+	select {
+	case <-handlerDone:
+		// Handler completed
+	case <-ctx.Done():
+		// Timeout - this is expected as handler runs in a loop
+	}
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Close channel to stop handler
+	close(deliveries)
+
+	// Wait for handler to finish
+	select {
+	case <-handlerDone:
+		// Expected
+	case <-time.After(1 * time.Second):
+		t.Fatal("Handler did not stop after channel closure")
+	}
+}
+
+// countingTestHandler extends testHandler with call counting
+type countingTestHandler struct {
+	testHandler
+	callCount int
+	mu        sync.Mutex
+}
+
+func (h *countingTestHandler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+	h.mu.Lock()
+	h.callCount++
+	h.mu.Unlock()
+	return h.testHandler.Handle(ctx, delivery)
+}
+
+func (h *countingTestHandler) GetCallCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.callCount
+}
+
+// mockAcknowledger for testing message acknowledgment
+type mockAcknowledger struct {
+	ackCalled  bool
+	nackCalled bool
+	ackErr     error
+	nackErr    error
+}
+
+func (m *mockAcknowledger) Ack(_ uint64, _ bool) error {
+	m.ackCalled = true
+	return m.ackErr
+}
+
+func (m *mockAcknowledger) Nack(_ uint64, _, _ bool) error {
+	m.nackCalled = true
+	return m.nackErr
+}
+
+func (m *mockAcknowledger) Reject(_ uint64, _ bool) error {
+	return nil
+}
+
+// ===== processMessage Tests =====
+
+func TestRegistryProcessMessageSuccess(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{"test-header": "test-value"},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify message was acknowledged
+	assert.True(t, acker.ackCalled)
+	assert.False(t, acker.nackCalled)
+}
+
+func TestRegistryProcessMessageHandlerError(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{
+		testHandler: testHandler{retErr: errors.New("handler error")},
+	}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify message was negatively acknowledged (nacked)
+	assert.False(t, acker.ackCalled)
+	assert.True(t, acker.nackCalled)
+}
+
+func TestRegistryProcessMessageAutoAck(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   true, // AutoAck enabled
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// With AutoAck, no manual ack/nack should happen
+	assert.False(t, acker.ackCalled)
+	assert.False(t, acker.nackCalled)
+}
+
+func TestRegistryProcessMessageAckError(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{
+		ackErr: errors.New("ack failed"),
+	}
+	delivery := &amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify ack was attempted (even though it failed)
+	assert.True(t, acker.ackCalled)
+	assert.False(t, acker.nackCalled)
+}
+
+func TestRegistryProcessMessageNackError(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{
+		testHandler: testHandler{retErr: errors.New("handler error")},
+	}
+	consumer := &ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{
+		nackErr: errors.New("nack failed"),
+	}
+	delivery := &amqp.Delivery{
+		MessageId:    "test-message-id",
+		RoutingKey:   "test.routing.key",
+		Exchange:     "test-exchange",
+		DeliveryTag:  123,
+		Body:         []byte("test message body"),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify nack was attempted (even though it failed)
+	assert.False(t, acker.ackCalled)
+	assert.True(t, acker.nackCalled)
+}
+
+// ===== Concurrent Operations Tests =====
+
+func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
+	deliveries1 := make(chan amqp.Delivery)
+	deliveries2 := make(chan amqp.Delivery)
+
+	client := &multipleMockAMQPClient{
+		simpleMockAMQPClient: simpleMockAMQPClient{isReady: true},
+		queues: map[string]chan amqp.Delivery{
+			"queue-1": deliveries1,
+			"queue-2": deliveries2,
+		},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler1 := &testHandler{}
+	handler2 := &testHandler{}
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "queue-1",
+		EventType: "event-1",
+		Handler:   handler1,
+	})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "queue-2",
+		EventType: "event-2",
+		Handler:   handler2,
+	})
+
+	err := registry.StartConsumers(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, registry.consumersActive)
+
+	// Clean up
+	close(deliveries1)
+	close(deliveries2)
+	registry.StopConsumers()
+}
+
+func TestRegistryStartConsumersWithPartialFailure(t *testing.T) {
+	client := &multipleMockAMQPClient{
+		simpleMockAMQPClient: simpleMockAMQPClient{isReady: true},
+		consumeErrors: map[string]error{
+			"failing-queue": errors.New("consume failed"),
+		},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler1 := &testHandler{}
+	handler2 := &testHandler{}
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "working-queue",
+		EventType: "event-1",
+		Handler:   handler1,
+	})
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "failing-queue",
+		EventType: "event-2",
+		Handler:   handler2,
+	})
+
+	err := registry.StartConsumers(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to start consumer for queue failing-queue")
+	assert.False(t, registry.consumersActive)
+}
+
+// multipleMockAMQPClient extends simpleMockAMQPClient for testing multiple consumers
+type multipleMockAMQPClient struct {
+	simpleMockAMQPClient
+	queues        map[string]chan amqp.Delivery
+	consumeErrors map[string]error
+}
+
+func (m *multipleMockAMQPClient) ConsumeFromQueue(_ context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
+	if m.consumeErrors != nil {
+		if err, exists := m.consumeErrors[opts.Queue]; exists {
+			return nil, err
+		}
+	}
+
+	if m.queues != nil {
+		if ch, exists := m.queues[opts.Queue]; exists {
+			return ch, nil
+		}
+	}
+
+	// Default behavior
+	return m.simpleMockAMQPClient.ConsumeFromQueue(context.Background(), opts)
+}
+
+// ===== Edge Cases and Boundary Conditions =====
+
+func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
+	deliveries := make(chan amqp.Delivery)
+	close(deliveries) // Close to avoid goroutine leak
+
+	client := &simpleMockAMQPClient{
+		isReady:      true,
+		deliveryChan: deliveries,
+	}
+	registry := NewRegistry(client, &stubLogger{})
+
+	handler := &testHandler{}
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "test-queue",
+		EventType: "test-event",
+		Handler:   handler,
+	})
+
+	// Start consumers first time
+	err := registry.StartConsumers(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, registry.consumersActive)
+
+	// Start consumers second time - should be no-op
+	err = registry.StartConsumers(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, registry.consumersActive)
+
+	// Clean up
+	registry.StopConsumers()
+}
+
+func TestRegistryStartConsumersNilClient(t *testing.T) {
+	registry := NewRegistry(nil, &stubLogger{})
+
+	err := registry.StartConsumers(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "AMQP client is not ready")
+}
+
+func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
+	client := &simpleMockAMQPClient{isReady: true}
+	registry := NewRegistry(client, &stubLogger{})
+
+	// Register consumer without handler (documentation only)
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "doc-queue",
+		EventType: "doc-event",
+		Handler:   nil, // No handler
+	})
+
+	err := registry.StartConsumers(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, registry.consumersActive)
+
+	// Clean up
+	registry.StopConsumers()
+}
+
+func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+
+	// Publishers can be registered even after declaration (unlike exchanges/queues/bindings)
+	err := registry.DeclareInfrastructure(context.Background())
+	assert.NoError(t, err)
+
+	// This should work fine
+	registry.RegisterPublisher(&PublisherDeclaration{
+		Exchange:   "late-exchange",
+		RoutingKey: "late.key",
+		EventType:  "late-event",
+	})
+
+	publishers := registry.GetPublishers()
+	assert.Len(t, publishers, 1)
+}
+
+func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+
+	// Consumers can be registered even after declaration (unlike exchanges/queues/bindings)
+	err := registry.DeclareInfrastructure(context.Background())
+	assert.NoError(t, err)
+
+	// This should work fine
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     "late-queue",
+		EventType: "late-event",
+	})
+
+	consumers := registry.GetConsumers()
+	assert.Len(t, consumers, 1)
+}

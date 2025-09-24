@@ -9,10 +9,10 @@ build: ## Build the project
 	go build ./...
 
 test: ## Run all tests
-	go test -race $(shell go list ./... | grep -vE '/(examples|testing)(/|$$)')
+	go test -race $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
 
 test-coverage: ## Run tests with coverage
-	go test -race -cover $(shell go list ./... | grep -vE '/(examples|testing)(/|$$)')
+	go test -race -cover $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
 
 lint: ## Run golangci-lint
 	golangci-lint run
