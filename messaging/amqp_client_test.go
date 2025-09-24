@@ -13,6 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	confirmFailedMsg = "confirm failed"
+	amqpHost         = "amqp://localhost"
+)
+
 // adapter that satisfies amqpConnection with injectable amqpChannel
 type fakeConnAdapter struct {
 	notifyCloseCh chan *amqp.Error
@@ -422,7 +427,7 @@ func TestInitChannelCreationFailure(t *testing.T) {
 
 func TestInitConfirmFailureChannelCloseError(t *testing.T) {
 	ch := &fakeChannel{
-		confirmErr: errors.New("confirm failed"),
+		confirmErr: errors.New(confirmFailedMsg),
 		closeErr:   errors.New("close failed"),
 	}
 
@@ -444,7 +449,7 @@ func TestInitConfirmFailureChannelCloseError(t *testing.T) {
 }
 
 func TestInitConfirmFailureChannelCloseSuccess(t *testing.T) {
-	ch := &fakeChannel{confirmErr: errors.New("confirm failed")}
+	ch := &fakeChannel{confirmErr: errors.New(confirmFailedMsg)}
 
 	// Test confirm failure with successful channel close
 	confirmErr := ch.Confirm(false)
@@ -458,7 +463,7 @@ func TestInitConfirmFailureChannelCloseSuccess(t *testing.T) {
 	}
 
 	// The init function would return the original confirm error
-	if confirmErr.Error() != "confirm failed" {
+	if confirmErr.Error() != confirmFailedMsg {
 		t.Fatalf("expected confirm error, got: %v", confirmErr)
 	}
 }
@@ -804,7 +809,7 @@ func TestPublishBasicMethodDelegation(t *testing.T) {
 	c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
 
 	// Test the basic Publish method delegates to PublishToExchange
-	err := c.Publish(context.Background(), "test-queue", []byte("msg"))
+	err := c.Publish(context.Background(), testQueue, []byte("msg"))
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
@@ -813,7 +818,7 @@ func TestPublishBasicMethodDelegation(t *testing.T) {
 	if ch.lastPublishArgs.exchange != "" {
 		t.Fatalf("expected empty exchange for default, got: %s", ch.lastPublishArgs.exchange)
 	}
-	if ch.lastPublishArgs.key != "test-queue" {
+	if ch.lastPublishArgs.key != testQueue {
 		t.Fatalf("expected routing key 'test-queue', got: %s", ch.lastPublishArgs.key)
 	}
 }
@@ -836,18 +841,18 @@ func TestUnsafePublishNotReady(t *testing.T) {
 // =============================================================================
 
 func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
-	err := client.DeclareQueue("test-queue", true, false, false, false)
+	err := client.DeclareQueue(testQueue, true, false, false, false)
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
 func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
@@ -858,23 +863,23 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 }
 
 func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
-	err := client.BindQueue("test-queue", "test-exchange", "test.key", false)
+	err := client.BindQueue(testQueue, "test-exchange", "test.key", false)
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }
 
 func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 	defer client.Close() // Prevent goroutine leak
 
 	// Client not ready
 	_, err := client.ConsumeFromQueue(context.Background(), ConsumeOptions{
-		Queue: "test-queue",
+		Queue: testQueue,
 	})
 
 	assert.Error(t, err)
@@ -894,7 +899,7 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 		return &fakeConnAdapter{}, nil
 	})
 
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 	// Ensure background goroutines are stopped
 	t.Cleanup(func() { _ = client.Close() })
 
@@ -906,7 +911,7 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 
 	// Consume should fail with channel error
 	_, err := client.ConsumeFromQueue(context.Background(), ConsumeOptions{
-		Queue: "test-queue",
+		Queue: testQueue,
 	})
 
 	assert.Error(t, err)
@@ -914,7 +919,7 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 }
 
 func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
-	client := NewAMQPClient("amqp://localhost", &stubLogger{})
+	client := NewAMQPClient(amqpHost, &stubLogger{})
 
 	// Test init with a connection that fails to create channels
 	mockConn := &stubConn{}

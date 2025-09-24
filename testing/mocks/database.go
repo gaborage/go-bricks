@@ -27,7 +27,7 @@ type MockDatabase struct {
 // Query implements types.Interface
 func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
+	arguments := m.MethodCalled("Query", callArgs...)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -37,7 +37,7 @@ func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*s
 // QueryRow implements types.Interface
 func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
+	arguments := m.MethodCalled("QueryRow", callArgs...)
 	if arguments.Get(0) == nil {
 		return nil
 	}
@@ -47,7 +47,7 @@ func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) 
 // Exec implements types.Interface
 func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
+	arguments := m.MethodCalled("Exec", callArgs...)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -56,7 +56,7 @@ func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql
 
 // Prepare implements types.Interface
 func (m *MockDatabase) Prepare(ctx context.Context, query string) (types.Statement, error) {
-	arguments := m.Called(ctx, query)
+	arguments := m.MethodCalled("Prepare", ctx, query)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -65,7 +65,7 @@ func (m *MockDatabase) Prepare(ctx context.Context, query string) (types.Stateme
 
 // Begin implements types.Interface
 func (m *MockDatabase) Begin(ctx context.Context) (types.Tx, error) {
-	arguments := m.Called(ctx)
+	arguments := m.MethodCalled("Begin", ctx)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -74,7 +74,7 @@ func (m *MockDatabase) Begin(ctx context.Context) (types.Tx, error) {
 
 // BeginTx implements types.Interface
 func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
-	arguments := m.Called(ctx, opts)
+	arguments := m.MethodCalled("BeginTx", ctx, opts)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -83,13 +83,13 @@ func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.
 
 // Health implements types.Interface
 func (m *MockDatabase) Health(ctx context.Context) error {
-	arguments := m.Called(ctx)
+	arguments := m.MethodCalled("Health", ctx)
 	return arguments.Error(0)
 }
 
 // Stats implements types.Interface
 func (m *MockDatabase) Stats() (map[string]any, error) {
-	arguments := m.Called()
+	arguments := m.MethodCalled("Stats")
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
@@ -147,7 +147,7 @@ func (m *MockDatabase) ExpectTransaction(tx types.Tx, err error) *mock.Call {
 
 // ExpectDatabaseType sets up a database type expectation
 func (m *MockDatabase) ExpectDatabaseType(dbType string) *mock.Call {
-	return m.On("noop").Return(dbType)
+	return m.On("DatabaseType").Return(dbType)
 }
 
 // ExpectStats sets up a stats expectation with the provided stats and error

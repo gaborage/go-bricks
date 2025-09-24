@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	testExchange = "test-exchange"
+	testRoute    = "test.route"
+	testQueue    = "test-queue"
+	testConsumer = "test-consumer"
+	testMessage  = "test message"
+)
+
 // MockClient implements the Client interface for testing
 type MockClient struct {
 	isReady bool
@@ -145,15 +153,15 @@ func (m *MockMessageHandler) EventType() string {
 
 func TestPublishOptions(t *testing.T) {
 	options := PublishOptions{
-		Exchange:   "test-exchange",
-		RoutingKey: "test.route",
+		Exchange:   testExchange,
+		RoutingKey: testRoute,
 		Headers:    map[string]any{"test": "value"},
 		Mandatory:  true,
 		Immediate:  false,
 	}
 
-	assert.Equal(t, "test-exchange", options.Exchange)
-	assert.Equal(t, "test.route", options.RoutingKey)
+	assert.Equal(t, testExchange, options.Exchange)
+	assert.Equal(t, testRoute, options.RoutingKey)
 	assert.Equal(t, "value", options.Headers["test"])
 	assert.True(t, options.Mandatory)
 	assert.False(t, options.Immediate)
@@ -161,16 +169,16 @@ func TestPublishOptions(t *testing.T) {
 
 func TestConsumeOptions(t *testing.T) {
 	options := ConsumeOptions{
-		Queue:     "test-queue",
-		Consumer:  "test-consumer",
+		Queue:     testQueue,
+		Consumer:  testConsumer,
 		AutoAck:   true,
 		Exclusive: false,
 		NoLocal:   false,
 		NoWait:    true,
 	}
 
-	assert.Equal(t, "test-queue", options.Queue)
-	assert.Equal(t, "test-consumer", options.Consumer)
+	assert.Equal(t, testQueue, options.Queue)
+	assert.Equal(t, testConsumer, options.Consumer)
 	assert.True(t, options.AutoAck)
 	assert.False(t, options.Exclusive)
 	assert.False(t, options.NoLocal)
@@ -212,7 +220,7 @@ func TestMockClientPublish(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			err := client.Publish(ctx, "test-destination", []byte("test message"))
+			err := client.Publish(ctx, "test-destination", []byte(testMessage))
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -309,11 +317,11 @@ func TestMockAMQPClientPublishToExchange(t *testing.T) {
 
 	ctx := context.Background()
 	options := PublishOptions{
-		Exchange:   "test-exchange",
-		RoutingKey: "test.route",
+		Exchange:   testExchange,
+		RoutingKey: testRoute,
 	}
 
-	err := client.PublishToExchange(ctx, options, []byte("test message"))
+	err := client.PublishToExchange(ctx, options, []byte(testMessage))
 	assert.NoError(t, err)
 }
 
@@ -322,8 +330,8 @@ func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 
 	ctx := context.Background()
 	options := ConsumeOptions{
-		Queue:    "test-queue",
-		Consumer: "test-consumer",
+		Queue:    testQueue,
+		Consumer: testConsumer,
 	}
 
 	ch, err := client.ConsumeFromQueue(ctx, options)
@@ -334,23 +342,23 @@ func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 func TestMockAMQPClientDeclareQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.DeclareQueue("test-queue", true, false, false, false)
+	err := client.DeclareQueue(testQueue, true, false, false, false)
 	assert.NoError(t, err)
-	assert.True(t, client.queues["test-queue"])
+	assert.True(t, client.queues[testQueue])
 }
 
 func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false)
+	err := client.DeclareExchange(testExchange, "topic", true, false, false, false)
 	assert.NoError(t, err)
-	assert.True(t, client.exchanges["test-exchange"])
+	assert.True(t, client.exchanges[testExchange])
 }
 
 func TestMockAMQPClientBindQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.BindQueue("test-queue", "test-exchange", "test.route", false)
+	err := client.BindQueue(testQueue, testExchange, testRoute, false)
 	assert.NoError(t, err)
 
 	bindingKey := "test-queue:test-exchange:test.route"
@@ -415,14 +423,14 @@ func TestMockMessageHandlerHandle(t *testing.T) {
 	}
 
 	delivery := amqp.Delivery{
-		Body: []byte("test message"),
+		Body: []byte(testMessage),
 	}
 
 	ctx := context.Background()
 	err := handler.Handle(ctx, &delivery)
 	assert.NoError(t, err)
 	assert.Len(t, handler.handled, 1)
-	assert.Equal(t, "test message", string(handler.handled[0].Body))
+	assert.Equal(t, testMessage, string(handler.handled[0].Body))
 }
 
 func TestMockMessageHandlerHandleError(t *testing.T) {
@@ -432,7 +440,7 @@ func TestMockMessageHandlerHandleError(t *testing.T) {
 	}
 
 	delivery := amqp.Delivery{
-		Body: []byte("test message"),
+		Body: []byte(testMessage),
 	}
 
 	ctx := context.Background()
