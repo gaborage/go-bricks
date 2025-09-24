@@ -24,7 +24,7 @@ The testing utilities are designed to make testing go-bricks applications straig
 
 ## Testing Package Structure
 
-```
+```text
 github.com/gaborage/go-bricks/testing/
 ├── mocks/           # Mock implementations
 │   ├── database.go      # Database interface mocks

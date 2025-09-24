@@ -50,6 +50,9 @@ type simpleMockAMQPClient struct {
 	declaredExchanges []string
 	bindings          []string
 
+	// Controllable readiness for deterministic testing
+	makeReady func()
+
 	mu sync.RWMutex
 }
 
@@ -121,6 +124,62 @@ func (m *simpleMockAMQPClient) SetReady(ready bool) {
 	m.isReady = ready
 }
 
+// controllableMockAMQPClient provides deterministic readiness control for testing
+type controllableMockAMQPClient struct {
+	*simpleMockAMQPClient
+	readySignal chan struct{}
+	signalSent  bool
+	signalMu    sync.Mutex
+}
+
+// newControllableMockClient creates a mock client with controllable readiness via channel
+func newControllableMockClient() (client *controllableMockAMQPClient, readySignal chan struct{}) {
+	base := &simpleMockAMQPClient{isReady: false}
+	readySignal = make(chan struct{})
+
+	client = &controllableMockAMQPClient{
+		simpleMockAMQPClient: base,
+		readySignal:          readySignal,
+		signalSent:           false,
+	}
+
+	// Provide method to make client ready
+	client.makeReady = func() {
+		client.signalMu.Lock()
+		defer client.signalMu.Unlock()
+		if !client.signalSent {
+			close(readySignal)
+			client.signalSent = true
+		}
+	}
+
+	return
+}
+
+// IsReady overrides the base implementation with channel-based signaling
+func (c *controllableMockAMQPClient) IsReady() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.closed {
+		return false
+	}
+
+	// If already ready, return immediately
+	if c.isReady {
+		return true
+	}
+
+	// Wait for ready signal (non-blocking check)
+	select {
+	case <-c.readySignal:
+		c.isReady = true
+		return true
+	default:
+		return false
+	}
+}
+
 func TestNewRegistrySimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
@@ -173,7 +232,8 @@ func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) 
 	client := &simpleMockAMQPClient{isReady: false}
 	registry := NewRegistry(client, &stubLogger{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// Use a longer timeout to avoid flakes, but still test the timeout behavior
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	err := registry.DeclareInfrastructure(ctx)
@@ -696,7 +756,7 @@ func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
 }
 
 func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
-	client := &simpleMockAMQPClient{isReady: false}
+	client, readySignal := newControllableMockClient()
 	registry := NewRegistry(client, &stubLogger{})
 
 	registry.RegisterExchange(&ExchangeDeclaration{
@@ -710,14 +770,29 @@ func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 		done <- registry.DeclareInfrastructure(context.Background())
 	}()
 
-	// Wait a bit, then make client ready
-	time.Sleep(150 * time.Millisecond)
-	client.SetReady(true)
+	// Wait for the goroutine to start, then signal readiness deterministically
+	go func() {
+		// Small delay to ensure the DeclareInfrastructure call is waiting
+		time.Sleep(10 * time.Millisecond)
+		client.makeReady()
+	}()
 
-	// Should complete successfully
-	err := <-done
-	assert.NoError(t, err)
-	assert.True(t, registry.declared)
+	// Should complete successfully after readiness signal
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+		assert.True(t, registry.declared)
+	case <-time.After(1 * time.Second):
+		t.Fatal("DeclareInfrastructure did not complete within timeout")
+	}
+
+	// Ensure the ready signal was used
+	select {
+	case <-readySignal:
+		// Expected - signal should be closed
+	default:
+		t.Error("Ready signal was not closed")
+	}
 }
 
 // ===== Message Handling Tests =====

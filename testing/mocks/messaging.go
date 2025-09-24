@@ -80,14 +80,20 @@ func (m *MockMessagingClient) IsReady() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// Always call MethodCalled to honor expectations, even when closed
+	arguments := m.Called()
+
+	// If closed, return false regardless of expectations
 	if m.closed {
 		return false
 	}
 
-	arguments := m.Called()
+	// Use expectation result if provided
 	if len(arguments) > 0 {
 		return arguments.Bool(0)
 	}
+
+	// Default to internal ready state
 	return m.isReady
 }
 
@@ -100,32 +106,43 @@ func (m *MockMessagingClient) SimulateMessage(destination string, body []byte) {
 
 // SimulateMessageWithHeaders sends a simulated message with headers to the specified destination
 func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, body []byte, headers map[string]any) {
-	m.mu.RLock()
-	ch, exists := m.messageChannels[destination]
-	m.mu.RUnlock()
-
-	if !exists {
-		// Create channel on demand - upgrade to write lock
-		m.mu.Lock()
-		// Re-check existence after acquiring write lock
-		if ch, exists = m.messageChannels[destination]; !exists {
-			ch = make(chan amqp.Delivery, 100)
-			m.messageChannels[destination] = ch
-		}
-		m.mu.Unlock()
-	}
-
 	delivery := amqp.Delivery{
 		Body:    body,
 		Headers: headers,
 	}
 
-	select {
-	case ch <- delivery:
-		// Message sent successfully
-	default:
-		// Channel is full or closed, ignore
+	// Fast path: destination exists - send under RLock to avoid racing with Close()
+	m.mu.RLock()
+
+	ch, exists := m.messageChannels[destination]
+	if exists && !m.closed {
+		// Send the message in a non-blocking way
+		select {
+		case ch <- delivery:
+			// Message sent successfully
+		default:
+			// Channel is full, ignore
+		}
+		m.mu.RUnlock()
+		return
 	}
+	m.mu.RUnlock()
+
+	// Slow path: create channel and send under write lock.
+	m.mu.Lock()
+	ch, exists = m.messageChannels[destination]
+	if !exists {
+		ch = make(chan amqp.Delivery, 100)
+		m.messageChannels[destination] = ch
+	}
+	if !m.closed {
+		select {
+		case ch <- delivery:
+		default:
+			// Channel is full, ignore
+		}
+	}
+	m.mu.Unlock()
 }
 
 // SetReady sets the ready state of the mock client

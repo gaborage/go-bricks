@@ -38,6 +38,8 @@ func NewMockAMQPClient() *MockAMQPClient {
 	}
 }
 
+var _ messaging.AMQPClient = (*MockAMQPClient)(nil)
+
 // PublishToExchange implements messaging.AMQPClient
 func (m *MockAMQPClient) PublishToExchange(ctx context.Context, options messaging.PublishOptions, data []byte) error {
 	arguments := m.Called(ctx, options, data)

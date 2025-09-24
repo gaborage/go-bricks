@@ -12,7 +12,7 @@ test: ## Run all tests
 	go test -race $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
 
 test-coverage: ## Run tests with coverage
-	go test -race -cover $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
+	go test -race -cover -covermode=atomic -coverprofile=coverage.out $(PKGS)
 
 lint: ## Run golangci-lint
 	golangci-lint run

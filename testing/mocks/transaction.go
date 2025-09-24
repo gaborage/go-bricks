@@ -50,20 +50,20 @@ func (m *MockTx) Exec(ctx context.Context, query string, args ...any) (sql.Resul
 
 // Prepare implements types.Tx
 func (m *MockTx) Prepare(ctx context.Context, query string) (types.Statement, error) {
-	arguments := m.Called(ctx, query)
+	arguments := m.MethodCalled("Prepare", ctx, query)
 	return arguments.Get(0).(types.Statement), arguments.Error(1)
 }
 
 // Commit implements types.Tx
 func (m *MockTx) Commit() error {
-	arguments := m.Called()
+	arguments := m.MethodCalled("Commit")
 	return arguments.Error(0)
 }
 
 // Rollback implements types.Tx
 // Note: Implementation identical to Commit by design for testify mock tracking
 func (m *MockTx) Rollback() error {
-	arguments := m.Called()
+	arguments := m.MethodCalled("Rollback")
 	return arguments.Error(0)
 }
 
