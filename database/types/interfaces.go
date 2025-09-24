@@ -8,6 +8,8 @@ package types
 import (
 	"context"
 	"database/sql"
+
+	"github.com/Masterminds/squirrel"
 )
 
 // Statement defines the interface for prepared statements
@@ -65,4 +67,33 @@ type Interface interface {
 	// Migration support
 	GetMigrationTable() string
 	CreateMigrationTable(ctx context.Context) error
+}
+
+// QueryBuilderInterface defines the interface for vendor-specific SQL query building.
+// This interface allows for dependency injection and mocking of query builders,
+// enabling unit testing of business logic that constructs queries without
+// actually generating SQL strings.
+type QueryBuilderInterface interface {
+	// Vendor information
+	Vendor() string
+
+	// Query builders
+	Select(columns ...string) squirrel.SelectBuilder
+	Insert(table string) squirrel.InsertBuilder
+	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
+	Update(table string) squirrel.UpdateBuilder
+	Delete(table string) squirrel.DeleteBuilder
+
+	// Vendor-specific helpers
+	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
+	BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder
+	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
+
+	// Database function builders
+	BuildCurrentTimestamp() string
+	BuildUUIDGeneration() string
+	BuildBooleanValue(value bool) any
+
+	// Identifier escaping
+	EscapeIdentifier(identifier string) string
 }

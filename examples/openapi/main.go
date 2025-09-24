@@ -15,7 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
-	"github.com/gaborage/go-bricks/examples/openapi-demo/user"
+	"github.com/gaborage/go-bricks/examples/openapi/user"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
