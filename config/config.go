@@ -93,11 +93,6 @@ func loadDefaults(k *koanf.Koanf) error {
 		"log.pretty":        false,
 		"log.output.format": "json",
 		"log.output.file":   "",
-
-		// Multitenant messaging defaults
-		"multitenant.messaging.publisherttl":    "5m",
-		"multitenant.messaging.maxpublishers":   50,
-		"multitenant.messaging.cleanupinterval": "1m",
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"sync"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -21,7 +19,7 @@ type Module interface {
 	Name() string
 	Init(deps *ModuleDeps) error
 	RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
-	RegisterMessaging(registry *messaging.Registry)
+	DeclareMessaging(decls *messaging.Declarations)
 	Shutdown() error
 }
 
@@ -142,22 +140,18 @@ func (r *MetadataRegistry) Count() int {
 // ModuleRegistry manages the registration and lifecycle of application modules.
 // It handles module initialization, route registration, messaging setup, and shutdown.
 type ModuleRegistry struct {
-	modules           []Module
-	deps              *ModuleDeps
-	logger            logger.Logger
-	messagingRegistry *messaging.Registry
-	registryOnce      singleflight.Group // Protection for concurrent messaging registry initialization
+	modules []Module
+	deps    *ModuleDeps
+	logger  logger.Logger
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
 // It initializes an empty registry ready to accept module registrations.
-// Messaging registry initialization is handled separately based on the deployment mode.
 func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 	return &ModuleRegistry{
-		modules:           make([]Module, 0),
-		deps:              deps,
-		logger:            deps.Logger,
-		messagingRegistry: nil, // Will be set by app initialization based on mode
+		modules: make([]Module, 0),
+		deps:    deps,
+		logger:  deps.Logger,
 	}
 }
 
@@ -198,81 +192,44 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	}
 }
 
-// initializeMessagingRegistry lazily initializes the messaging registry.
-// It uses singleflight to protect against concurrent initialization.
-func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*messaging.Registry, error) {
-	result, err, _ := r.registryOnce.Do("messaging-registry", func() (interface{}, error) {
-		if r.messagingRegistry != nil {
-			return r.messagingRegistry, nil
-		}
-
-		// Try to get messaging client from dependencies
-		client, err := r.deps.GetMessaging(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		// Create new registry
-		registry := messaging.NewRegistry(client, r.logger)
-		r.messagingRegistry = registry
-
-		return registry, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result.(*messaging.Registry), nil
-}
-
-// RegisterMessaging calls RegisterMessaging on all registered modules.
-// It should be called after all modules have been registered but before starting the server.
-func (r *ModuleRegistry) RegisterMessaging() error {
-	// Lazily initialize messaging registry on demand
-	ctx := context.Background() // Use background context for infrastructure setup
-	registry, err := r.initializeMessagingRegistry(ctx)
-	if err != nil {
-		r.logger.Debug().
-			Err(err).
-			Msg("No messaging registry available, skipping messaging registration")
-		return nil
+// DeclareMessaging calls DeclareMessaging on all registered modules to populate a shared declarations store.
+// This method builds the declaration store that will be used for all tenant registries.
+func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
+	if decls == nil {
+		return fmt.Errorf("declarations store is nil")
 	}
 
 	for _, module := range r.modules {
 		r.logger.Info().
 			Str("module", module.Name()).
-			Msg("Registering module messaging")
+			Msg("Collecting module messaging declarations")
 
-		module.RegisterMessaging(registry)
+		module.DeclareMessaging(decls)
 	}
 
-	// Declare all messaging infrastructure after all modules have registered
-	r.logger.Info().Msg("Declaring messaging infrastructure")
-	if err := registry.DeclareInfrastructure(ctx); err != nil {
-		r.logger.Error().Err(err).Msg("Failed to declare messaging infrastructure")
-		return fmt.Errorf("DeclareInfrastructure failed: %w", err)
+	// Validate all declarations after collection
+	r.logger.Info().Msg("Validating messaging declarations")
+	if err := decls.Validate(); err != nil {
+		r.logger.Error().Err(err).Msg("Declaration validation failed")
+		return fmt.Errorf("declaration validation failed: %w", err)
 	}
 
-	// Start consumers after infrastructure is declared
-	r.logger.Info().Msg("Starting message consumers")
-	if err := registry.StartConsumers(ctx); err != nil {
-		r.logger.Error().Err(err).Msg("Failed to start message consumers")
-		return fmt.Errorf("StartConsumers failed: %w", err)
-	}
+	stats := decls.Stats()
+	r.logger.Info().
+		Int("exchanges", stats.Exchanges).
+		Int("queues", stats.Queues).
+		Int("bindings", stats.Bindings).
+		Int("publishers", stats.Publishers).
+		Int("consumers", stats.Consumers).
+		Msg("Messaging declarations collected and validated successfully")
+
 	return nil
 }
 
 // Shutdown gracefully shuts down all registered modules.
 // It calls each module's Shutdown method and logs any errors.
+// Messaging shutdown is handled by the messaging manager.
 func (r *ModuleRegistry) Shutdown() error {
-	// Stop consumers first if messaging registry was initialized
-	if r.messagingRegistry != nil {
-		r.logger.Info().Msg("Stopping message consumers")
-		r.messagingRegistry.StopConsumers()
-	}
-
-	// Then shutdown modules
 	for _, module := range r.modules {
 		r.logger.Info().
 			Str("module", module.Name()).

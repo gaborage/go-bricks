@@ -64,8 +64,8 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		server.WithDescription("Retrieves a paginated list of users with optional filtering"))
 }
 
-// RegisterMessaging sets up messaging for this module
-func (m *Module) RegisterMessaging(_ *messaging.Registry) {
+// DeclareMessaging declares messaging infrastructure for this module
+func (m *Module) DeclareMessaging(_ *messaging.Declarations) {
 	// No messaging in this example
 }
 

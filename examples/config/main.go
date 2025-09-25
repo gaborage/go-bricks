@@ -170,8 +170,8 @@ func (m *ConfigInjectionModule) RegisterRoutes(hr *server.HandlerRegistry, r ser
 	server.GET(hr, r, "/config", m.handleGetConfig)
 }
 
-// RegisterMessaging registers messaging handlers (none for this example)
-func (m *ConfigInjectionModule) RegisterMessaging(_ *messaging.Registry) {
+// DeclareMessaging declares messaging infrastructure (none for this example)
+func (m *ConfigInjectionModule) DeclareMessaging(_ *messaging.Declarations) {
 	// No messaging for this example
 }
 

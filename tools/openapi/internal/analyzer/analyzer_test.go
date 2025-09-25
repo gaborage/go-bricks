@@ -83,8 +83,8 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		server.WithDescription("` + testDescription + `"))
 }
 
-// RegisterMessaging sets up messaging for this module
-func (m *Module) RegisterMessaging(registry *messaging.Registry) {
+// DeclareMessaging declares messaging infrastructure for this module
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 	// No messaging in this test
 }
 
@@ -1309,7 +1309,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.GET(hr, r, "/test", m.testHandler)
 }
 
-func (m *Module) RegisterMessaging(registry *messaging.Registry) {
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 
 func (m *Module) Shutdown() error {
@@ -1459,7 +1459,7 @@ func (m *UserModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRe
 		server.WithSummary("Create user"))
 }
 
-func (m *UserModule) RegisterMessaging(registry *messaging.Registry) {}
+func (m *UserModule) DeclareMessaging(decls *messaging.Declarations) {}
 func (m *UserModule) Shutdown() error { return nil }
 func (m *UserModule) listUsers() {}
 func (m *UserModule) createUser() {}`

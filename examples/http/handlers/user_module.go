@@ -41,8 +41,8 @@ func (m *UserModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRe
 	server.DELETE(hr, r, "/users/:id", m.deleteUser)
 }
 
-// RegisterMessaging registers messaging handlers.
-func (m *UserModule) RegisterMessaging(_ *messaging.Registry) {
+// DeclareMessaging declares messaging infrastructure for this module.
+func (m *UserModule) DeclareMessaging(_ *messaging.Declarations) {
 	// No messaging for this example
 }
 

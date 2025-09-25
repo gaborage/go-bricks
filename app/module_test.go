@@ -44,8 +44,7 @@ func TestNewModuleRegistry(t *testing.T) {
 	assert.Equal(t, deps, registry.deps)
 	assert.Equal(t, log, registry.logger)
 	assert.Empty(t, registry.modules)
-	// messaging registry should be nil until first use (lazy creation)
-	assert.Nil(t, registry.messagingRegistry)
+	// No messaging registry field in new approach
 }
 
 func TestModuleRegistryRegisterSuccess(t *testing.T) {
@@ -151,7 +150,7 @@ func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
-func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
+func TestModuleRegistryDeclareMessaging(t *testing.T) {
 	log := logger.New("debug", true)
 	mockDB := &testmocks.MockDatabase{}
 	deps := &ModuleDeps{
@@ -161,7 +160,7 @@ func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 			return mockDB, nil
 		},
 		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, fmt.Errorf("messaging not configured") // No messaging client
+			return nil, fmt.Errorf("messaging not configured")
 		},
 	}
 
@@ -170,11 +169,14 @@ func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 	// Add a module
 	module := &MockModule{name: testModule}
 	module.On("Init", deps).Return(nil)
+	module.On("DeclareMessaging", mock.AnythingOfType("*messaging.Declarations")).Return()
 	require.NoError(t, registry.Register(module))
 
-	// RegisterMessaging should skip when no messaging registry is available
-	err := registry.RegisterMessaging()
+	// Collect messaging declarations from modules
+	decls := &messaging.Declarations{}
+	err := registry.DeclareMessaging(decls)
 	assert.NoError(t, err)
+	assert.NotNil(t, decls)
 
 	module.AssertExpectations(t)
 }

@@ -42,18 +42,13 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 	}
 }
 
-func createHealthProbes(db database.Interface, msg messaging.Client, log logger.Logger) []HealthProbe {
-	probes := []HealthProbe{databaseHealthProbe(db, log)}
-	probes = append(probes, messagingHealthProbe(msg))
-	return probes
-}
-
-func databaseHealthProbe(db database.Interface, log logger.Logger) HealthProbe {
-	if db == nil {
+// databaseManagerHealthProbe creates a health probe for the database manager
+func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) HealthProbe {
+	if dbManager == nil {
 		return healthProbeFunc{
 			name: "database",
 			fn: func(context.Context) (string, map[string]any, error) {
-				return "disabled", map[string]any{"status": "disabled"}, nil
+				return disabledStatus, map[string]any{"status": disabledStatus}, nil
 			},
 		}
 	}
@@ -62,27 +57,30 @@ func databaseHealthProbe(db database.Interface, log logger.Logger) HealthProbe {
 		name:     "database",
 		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			if err := db.Health(ctx); err != nil {
-				return "unhealthy", map[string]any{}, err
-			}
-
-			stats, err := db.Stats()
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to get database stats")
-				stats = map[string]any{"error": err.Error()}
-			}
-
+			// Get manager stats
+			stats := dbManager.Stats()
 			if stats == nil {
 				stats = map[string]any{}
 			}
 
-			return "healthy", stats, nil
+			// For single-tenant, try to get a connection to verify health
+			if dbManager.Size() == 0 {
+				// No active connections, try to create one to test health
+				if conn, err := dbManager.Get(ctx, ""); err != nil {
+					return unhealthyStatus, stats, err
+				} else if err := conn.Health(ctx); err != nil {
+					return unhealthyStatus, stats, err
+				}
+			}
+
+			return healthyStatus, stats, nil
 		},
 	}
 }
 
-func messagingHealthProbe(msg messaging.Client) HealthProbe {
-	if msg == nil {
+// messagingManagerHealthProbe creates a health probe for the messaging manager
+func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) HealthProbe {
+	if msgManager == nil {
 		return healthProbeFunc{
 			name: "messaging",
 			fn: func(context.Context) (string, map[string]any, error) {
@@ -93,11 +91,21 @@ func messagingHealthProbe(msg messaging.Client) HealthProbe {
 
 	return healthProbeFunc{
 		name: "messaging",
-		fn: func(context.Context) (string, map[string]any, error) {
-			if msg.IsReady() {
-				return "healthy", map[string]any{}, nil
+		fn: func(ctx context.Context) (string, map[string]any, error) {
+			// Get manager stats
+			stats := msgManager.Stats()
+			if stats == nil {
+				stats = map[string]any{}
 			}
-			return "unhealthy", map[string]any{}, nil
+
+			// For single-tenant, try to get a publisher to verify health
+			if client, err := msgManager.GetPublisher(ctx, ""); err != nil {
+				return unhealthyStatus, stats, err
+			} else if !client.IsReady() {
+				return unhealthyStatus, stats, nil
+			}
+
+			return healthyStatus, stats, nil
 		},
 	}
 }

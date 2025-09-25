@@ -18,7 +18,6 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/gaborage/go-bricks/testing/fixtures"
-	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -57,26 +56,26 @@ func (m *UserModule) RegisterRoutes(_ *server.HandlerRegistry, e *echo.Echo) {
 	e.POST("/users", m.createUser)
 }
 
-func (m *UserModule) RegisterMessaging(registry messaging.RegistryInterface) {
-	// Register messaging infrastructure
-	registry.RegisterExchange(&messaging.ExchangeDeclaration{
+func (m *UserModule) DeclareMessaging(decls *messaging.Declarations) {
+	// Declare messaging infrastructure
+	decls.RegisterExchange(&messaging.ExchangeDeclaration{
 		Name:    userEventsExchangeName,
 		Type:    "topic",
 		Durable: true,
 	})
 
-	registry.RegisterQueue(&messaging.QueueDeclaration{
+	decls.RegisterQueue(&messaging.QueueDeclaration{
 		Name:    userNotificationsQueue,
 		Durable: true,
 	})
 
-	registry.RegisterBinding(&messaging.BindingDeclaration{
+	decls.RegisterBinding(&messaging.BindingDeclaration{
 		Queue:      userNotificationsQueue,
 		Exchange:   userEventsExchangeName,
 		RoutingKey: usersWildcardRoutingKey,
 	})
 
-	registry.RegisterPublisher(&messaging.PublisherDeclaration{
+	decls.RegisterPublisher(&messaging.PublisherDeclaration{
 		Exchange:    userEventsExchangeName,
 		RoutingKey:  userCreated,
 		EventType:   userCreated,
@@ -166,7 +165,6 @@ func TestUserModuleCompleteIntegration(t *testing.T) {
 	// Set up all mocks
 	mockDB := fixtures.NewHealthyDatabase()
 	mockMessaging := fixtures.NewWorkingAMQPClient()
-	mockRegistry := fixtures.NewWorkingRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
 
@@ -205,8 +203,9 @@ func TestUserModuleCompleteIntegration(t *testing.T) {
 	routes := e.Routes()
 	assert.NotEmpty(t, routes)
 
-	// Test messaging registration (just verify it doesn't panic)
-	module.RegisterMessaging(mockRegistry)
+	// Test messaging declaration (just verify it doesn't panic)
+	decls := messaging.NewDeclarations()
+	module.DeclareMessaging(decls)
 
 	// Test module shutdown
 	err = module.Shutdown()
@@ -281,26 +280,8 @@ func TestUserModuleHTTPHandlers(t *testing.T) {
 func TestUserModuleMessagingIntegration(t *testing.T) {
 	mockDB := fixtures.NewHealthyDatabase()
 	mockMessaging := fixtures.NewWorkingAMQPClient()
-	mockRegistry := mocks.NewMockRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
-
-	// Set up specific messaging expectations
-	mockRegistry.On("RegisterExchange", mock.MatchedBy(func(decl *messaging.ExchangeDeclaration) bool {
-		return decl.Name == userEventsExchangeName && decl.Type == "topic"
-	})).Return()
-
-	mockRegistry.On("RegisterQueue", mock.MatchedBy(func(decl *messaging.QueueDeclaration) bool {
-		return decl.Name == userNotificationsQueue
-	})).Return()
-
-	mockRegistry.On("RegisterBinding", mock.MatchedBy(func(decl *messaging.BindingDeclaration) bool {
-		return decl.Queue == userNotificationsQueue && decl.Exchange == userEventsExchangeName
-	})).Return()
-
-	mockRegistry.On("RegisterPublisher", mock.MatchedBy(func(decl *messaging.PublisherDeclaration) bool {
-		return decl.EventType == userCreated
-	})).Return()
 
 	// Configure logger
 	mockLogger.On("Info").Return(mockLogEvent).Maybe()
@@ -324,11 +305,30 @@ func TestUserModuleMessagingIntegration(t *testing.T) {
 	err := module.Init(deps)
 	assert.NoError(t, err)
 
-	// Test messaging registration
-	module.RegisterMessaging(mockRegistry)
+	// Test messaging declarations
+	decls := messaging.NewDeclarations()
+	module.DeclareMessaging(decls)
 
-	// Verify all messaging registrations occurred
-	mockRegistry.AssertExpectations(t)
+	// Verify all messaging declarations are present
+	stats := decls.Stats()
+	assert.Equal(t, 1, stats.Exchanges)
+	assert.Equal(t, 1, stats.Queues)
+	assert.Equal(t, 1, stats.Bindings)
+	assert.Equal(t, 1, stats.Publishers)
+	assert.Equal(t, 0, stats.Consumers)
+
+	// Verify specific declarations
+	exchanges := decls.Exchanges
+	assert.Contains(t, exchanges, userEventsExchangeName)
+	assert.Equal(t, "topic", exchanges[userEventsExchangeName].Type)
+
+	queues := decls.Queues
+	assert.Contains(t, queues, userNotificationsQueue)
+	assert.True(t, queues[userNotificationsQueue].Durable)
+
+	// Verify validation passes
+	err = decls.Validate()
+	assert.NoError(t, err)
 }
 
 // TestUserModule_ErrorScenarios demonstrates error scenario testing
@@ -432,7 +432,6 @@ func TestUserModuleConfigurationInjection(t *testing.T) {
 func TestUserModuleLifecycleManagement(t *testing.T) {
 	mockDB := fixtures.NewHealthyDatabase()
 	mockMessaging := fixtures.NewWorkingAMQPClient()
-	mockRegistry := fixtures.NewWorkingRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
 
@@ -464,12 +463,11 @@ func TestUserModuleLifecycleManagement(t *testing.T) {
 	e := echo.New()
 	hr := server.NewHandlerRegistry(&config.Config{})
 	module.RegisterRoutes(hr, e)
-	module.RegisterMessaging(mockRegistry)
+
+	decls := messaging.NewDeclarations()
+	module.DeclareMessaging(decls)
 
 	// Test shutdown
 	err = module.Shutdown()
 	assert.NoError(t, err)
-
-	// Verify all mocks were used as expected
-	mockRegistry.AssertExpectations(t)
 }

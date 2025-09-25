@@ -394,19 +394,14 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		return fmt.Errorf("resolver: %w", err)
 	}
 
-	// Validate cache configuration
-	if err := validateMultitenantCache(&mt.Cache); err != nil {
-		return fmt.Errorf("cache: %w", err)
-	}
-
 	// Validate limits configuration
 	if err := validateMultitenantLimits(&mt.Limits); err != nil {
 		return fmt.Errorf("limits: %w", err)
 	}
 
-	// Validate and compile tenant ID pattern
-	if err := mt.Validation.SetRegex(mt.Validation.Pattern); err != nil {
-		return fmt.Errorf("tenant_id pattern: %w", err)
+	// Validate tenants configuration
+	if err := validateMultitenantTenants(mt.Tenants); err != nil {
+		return fmt.Errorf("tenants: %w", err)
 	}
 
 	// Ensure no conflict with single-tenant database configuration
@@ -449,17 +444,6 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 	return nil
 }
 
-// validateMultitenantCache validates cache configuration with defaults
-func validateMultitenantCache(cfg *CacheConfig) error {
-	if cfg.TTL <= 0 {
-		cfg.TTL = 5 * time.Minute // default
-	}
-	if cfg.TTL < time.Minute {
-		return fmt.Errorf("ttl must be at least 1 minute")
-	}
-	return nil
-}
-
 // validateMultitenantLimits validates limits configuration with defaults
 func validateMultitenantLimits(cfg *LimitsConfig) error {
 	if cfg.Tenants <= 0 {
@@ -468,10 +452,32 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 	if cfg.Tenants > 1000 {
 		return fmt.Errorf("tenants cannot exceed 1000")
 	}
+	return nil
+}
 
-	// Set default cleanup interval if not specified
-	if cfg.Cleanup.Interval <= 0 {
-		cfg.Cleanup.Interval = 5 * time.Minute // default
+// validateMultitenantTenants validates tenant configurations when they are provided
+func validateMultitenantTenants(tenants map[string]TenantEntry) error {
+	// Allow empty tenants map for dynamic tenant configuration
+	if len(tenants) == 0 {
+		return nil
+	}
+
+	// If tenants are provided statically, validate them
+	for tenantID := range tenants {
+		tenant := tenants[tenantID]
+		if tenantID == "" {
+			return fmt.Errorf("tenant ID cannot be empty")
+		}
+
+		// Validate tenant database configuration
+		if err := validateDatabase(&tenant.Database); err != nil {
+			return fmt.Errorf("tenant %s database: %w", tenantID, err)
+		}
+
+		// Validate tenant messaging configuration
+		if tenant.Messaging.URL == "" {
+			return fmt.Errorf("tenant %s messaging URL cannot be empty", tenantID)
+		}
 	}
 
 	return nil

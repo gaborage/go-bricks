@@ -23,8 +23,10 @@ import (
 )
 
 const (
-	serverErrorMsg = "server error: %w"
-	disabledStatus = "disabled"
+	serverErrorMsg  = "server error: %w"
+	disabledStatus  = "disabled"
+	healthyStatus   = "healthy"
+	unhealthyStatus = "unhealthy"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -72,20 +74,17 @@ func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout 
 type App struct {
 	cfg             *config.Config
 	server          ServerRunner
-	db              database.Interface
 	logger          logger.Logger
-	messaging       messaging.Client
 	registry        *ModuleRegistry
 	signalHandler   SignalHandler
 	timeoutProvider TimeoutProvider
 
-	// Multi-tenant support
-	tenantConnManager *multitenant.TenantConnectionManager
-	messagingManager  *multitenant.TenantMessagingManager
-	tenantMessaging   TenantMessagingOrchestrator
+	// Unified managers
+	dbManager        *database.DbManager
+	messagingManager *messaging.Manager
 
-	// Messaging declarations captured during startup for per-tenant replay
-	messagingDeclarations *multitenant.MessagingDeclarations
+	// Messaging declarations for manager usage
+	messagingDeclarations *messaging.Declarations
 
 	closers      []namedCloser
 	healthProbes []HealthProbe
@@ -97,11 +96,15 @@ type namedCloser struct {
 }
 
 type dependencyBundle struct {
-	deps                   *ModuleDeps
-	db                     database.Interface
-	messaging              messaging.Client
-	tenantConnManager      *multitenant.TenantConnectionManager
-	tenantMessagingManager *multitenant.TenantMessagingManager
+	deps             *ModuleDeps
+	dbManager        *database.DbManager
+	messagingManager *messaging.Manager
+}
+
+// TenantResourceSource combines the interfaces required by the database and messaging managers.
+type TenantResourceSource interface {
+	database.TenantResourceSource
+	messaging.TenantMessagingResourceSource
 }
 
 type appBootstrap struct {
@@ -119,152 +122,105 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 	return signalHandler, timeoutProvider, resolveServer(b.cfg, b.log, b.opts)
 }
 
-func (b *appBootstrap) dependencies() (*dependencyBundle, error) {
+func (b *appBootstrap) dependencies() *dependencyBundle {
+	// Create resource source for configuration
+	var resourceSource TenantResourceSource = config.NewTenantResourceSource(b.cfg)
+	if b.opts != nil && b.opts.ResourceSource != nil {
+		resourceSource = b.opts.ResourceSource
+	}
+
+	// Resolve factories from options
+	dbConnector := database.NewConnection
+	if b.opts != nil && b.opts.DatabaseConnector != nil {
+		dbConnector = b.opts.DatabaseConnector
+	}
+
+	clientFactory := func(url string, log logger.Logger) messaging.AMQPClient {
+		return messaging.NewAMQPClient(url, log)
+	}
+	if b.opts != nil && b.opts.MessagingClientFactory != nil {
+		clientFactory = func(url string, log logger.Logger) messaging.AMQPClient {
+			return b.opts.MessagingClientFactory(url, log)
+		}
+	}
+
+	// Create managers with proper sizing based on mode
+	var dbOpts database.DbManagerOptions
+	var msgOpts messaging.ManagerOptions
+
 	if b.cfg.Multitenant.Enabled {
-		return b.multitenantDependencies()
-	}
-	return b.singleTenantDependencies()
-}
-
-func (b *appBootstrap) singleTenantDependencies() (*dependencyBundle, error) {
-	db, err := resolveDatabase(b.cfg, b.log, b.opts)
-	if err != nil {
-		return nil, err
-	}
-
-	msgClient := resolveMessaging(b.cfg, b.log, b.opts)
-
-	deps := &ModuleDeps{
-		Logger: b.log,
-		Config: b.cfg,
-		GetDB: func(_ context.Context) (database.Interface, error) {
-			if db == nil {
-				return nil, fmt.Errorf("database not configured")
-			}
-			return db, nil
-		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			if msgClient == nil {
-				return nil, fmt.Errorf("messaging not configured")
-			}
-			if amqpClient, ok := msgClient.(messaging.AMQPClient); ok {
-				return amqpClient, nil
-			}
-			return nil, fmt.Errorf("messaging client is not an AMQPClient")
-		},
+		b.log.Info().Msg("Multi-tenant mode enabled")
+		dbOpts = database.DbManagerOptions{
+			MaxSize: b.cfg.Multitenant.Limits.Tenants, // Use configured tenant limit
+			IdleTTL: 30 * time.Minute,                 // Shorter for multi-tenant
+		}
+		msgOpts = messaging.ManagerOptions{
+			MaxPublishers: b.cfg.Multitenant.Limits.Tenants,
+			IdleTTL:       5 * time.Minute,
+		}
+	} else {
+		dbOpts = database.DbManagerOptions{
+			MaxSize: 10,            // Small for single-tenant
+			IdleTTL: 1 * time.Hour, // Longer for single-tenant
+		}
+		msgOpts = messaging.ManagerOptions{
+			MaxPublishers: 10, // Small for single-tenant
+			IdleTTL:       30 * time.Minute,
+		}
 	}
 
-	return &dependencyBundle{
-		deps:      deps,
-		db:        db,
-		messaging: msgClient,
-	}, nil
-}
+	// Create managers with injected factories
+	dbManager := database.NewDbManager(resourceSource, b.log, dbOpts, dbConnector)
+	messagingManager := messaging.NewMessagingManager(resourceSource, b.log, msgOpts, clientFactory)
 
-func (b *appBootstrap) multitenantDependencies() (*dependencyBundle, error) {
-	b.log.Info().Msg("Multi-tenant mode enabled")
-
-	tenantConnManager, err := resolveTenantConnectionManager(b.cfg, b.log, b.opts)
-	if err != nil {
-		return nil, err
-	}
-
-	messagingManager := resolveTenantMessagingManager(b.cfg, b.log, b.opts)
-
+	// Create ModuleDeps with unified key resolution
 	deps := &ModuleDeps{
 		Logger: b.log,
 		Config: b.cfg,
 		GetDB: func(ctx context.Context) (database.Interface, error) {
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
+			key := "" // Single-tenant key
+			if b.cfg.Multitenant.Enabled {
+				tenantID, ok := multitenant.GetTenant(ctx)
+				if !ok {
+					return nil, ErrNoTenantInContext
+				}
+				key = tenantID
 			}
-			return tenantConnManager.GetDatabase(ctx, tenantID)
+			return dbManager.Get(ctx, key)
 		},
 		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
-			if messagingManager == nil {
-				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
+			key := "" // Single-tenant key
+			if b.cfg.Multitenant.Enabled {
+				tenantID, ok := multitenant.GetTenant(ctx)
+				if !ok {
+					return nil, ErrNoTenantInContext
+				}
+				key = tenantID
 			}
-
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-
-			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
+			return messagingManager.GetPublisher(ctx, key)
 		},
 	}
 
 	return &dependencyBundle{
-		deps:                   deps,
-		tenantConnManager:      tenantConnManager,
-		tenantMessagingManager: messagingManager,
-	}, nil
+		deps:             deps,
+		dbManager:        dbManager,
+		messagingManager: messagingManager,
+	}
 }
 
-// isDatabaseEnabled determines if database should be initialized based on config
-// Uses the shared logic from config.IsDatabaseConfigured for consistency
-func isDatabaseEnabled(cfg *config.Config) bool {
-	return config.IsDatabaseConfigured(&cfg.Database)
-}
+// createHealthProbesForManagers creates health probes for the new managers
+func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, log logger.Logger) []HealthProbe {
+	var probes []HealthProbe
 
-// isMessagingEnabled determines if messaging should be initialized based on config
-func isMessagingEnabled(cfg *config.Config) bool {
-	return cfg.Messaging.Broker.URL != ""
-}
-
-func resolveDatabase(cfg *config.Config, log logger.Logger, opts *Options) (database.Interface, error) {
-	if opts != nil && opts.Database != nil {
-		log.Debug().Msg("Using provided database instance")
-		return opts.Database, nil
+	if dbManager != nil {
+		probes = append(probes, databaseManagerHealthProbe(dbManager, log))
 	}
 
-	if !isDatabaseEnabled(cfg) {
-		log.Info().Msg("No database configured, running without database")
-		return nil, nil
+	if messagingManager != nil {
+		probes = append(probes, messagingManagerHealthProbe(messagingManager, log))
 	}
 
-	connector := database.NewConnection
-	if opts != nil && opts.DatabaseConnector != nil {
-		connector = opts.DatabaseConnector
-	}
-
-	db, err := connector(&cfg.Database, log)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-
-	log.Info().
-		Str("type", cfg.Database.Type).
-		Str("host", cfg.Database.Host).
-		Msg("Database connection established")
-
-	return db, nil
-}
-
-func resolveMessaging(cfg *config.Config, log logger.Logger, opts *Options) messaging.Client {
-	factory := func(brokerURL string, log logger.Logger) messaging.Client {
-		return messaging.NewAMQPClient(brokerURL, log)
-	}
-	if opts != nil && opts.MessagingClientFactory != nil {
-		factory = opts.MessagingClientFactory
-	}
-
-	if opts != nil && opts.MessagingClient != nil {
-		log.Debug().Msg("Using provided messaging client")
-		return opts.MessagingClient
-	}
-
-	if !isMessagingEnabled(cfg) {
-		log.Info().Msg("No messaging broker URL configured, messaging disabled")
-		return nil
-	}
-
-	log.Info().
-		Str("broker_url", cfg.Messaging.Broker.URL).
-		Msg("Initializing AMQP messaging client")
-
-	return factory(cfg.Messaging.Broker.URL, log)
+	return probes
 }
 
 func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
@@ -292,90 +248,17 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 	return server.New(cfg, log)
 }
 
-// resolveTenantMessagingManager creates the tenant messaging manager for multi-tenant messaging
-func resolveTenantMessagingManager(cfg *config.Config, log logger.Logger, opts *Options) *multitenant.TenantMessagingManager {
-	if opts != nil && opts.TenantMessagingManager != nil {
-		return opts.TenantMessagingManager
-	}
-
-	if opts == nil || opts.TenantConfigProvider == nil {
-		return nil
-	}
-
-	cache := resolveTenantCache(cfg, opts)
-
-	cfg.Multitenant.Messaging.Normalize()
-	idleTTL := cfg.Multitenant.Messaging.PublisherTTL
-	maxActive := cfg.Multitenant.Messaging.MaxPublishers
-
-	return multitenant.NewTenantMessagingManager(opts.TenantConfigProvider, cache, log, idleTTL, maxActive)
-}
-
-// resolveTenantConnectionManager creates the tenant connection manager
-func resolveTenantConnectionManager(cfg *config.Config, log logger.Logger, opts *Options) (*multitenant.TenantConnectionManager, error) {
-	if opts != nil && opts.TenantConnectionManager != nil {
-		return opts.TenantConnectionManager, nil
-	}
-
-	if opts == nil || opts.TenantConfigProvider == nil {
-		return nil, fmt.Errorf("multitenant enabled but no tenant config provider was supplied")
-	}
-
-	cache := resolveTenantCache(cfg, opts)
-	connOpts := resolveTenantConnectionOptions(cfg, opts)
-
-	tenantConnManager := multitenant.NewTenantConnectionManager(opts.TenantConfigProvider, cache, log, connOpts...)
-	if tenantConnManager == nil {
-		return nil, fmt.Errorf("failed to initialize tenant connection manager")
-	}
-
-	return tenantConnManager, nil
-}
-
-// resolveTenantCache creates or uses provided tenant config cache
-func resolveTenantCache(cfg *config.Config, opts *Options) *multitenant.TenantConfigCache {
-	if opts.TenantConfigCache != nil {
-		return opts.TenantConfigCache
-	}
-
-	cacheOpts := []multitenant.CacheOption{
-		multitenant.WithTTL(cfg.Multitenant.Cache.TTL),
-		multitenant.WithMaxSize(cfg.Multitenant.Limits.Tenants),
-	}
-	cacheOpts = append(cacheOpts, opts.TenantCacheOptions...)
-
-	return multitenant.NewTenantConfigCache(opts.TenantConfigProvider, cacheOpts...)
-}
-
-// resolveTenantConnectionOptions creates connection options from config and overrides
-func resolveTenantConnectionOptions(cfg *config.Config, opts *Options) []multitenant.ConnectionOption {
-	connOpts := []multitenant.ConnectionOption{
-		multitenant.WithMaxTenants(cfg.Multitenant.Limits.Tenants),
-	}
-
-	if opts != nil {
-		connOpts = append(connOpts, opts.TenantConnectionOptions...)
-	}
-
-	return connOpts
-}
-
 // Options contains optional dependencies for creating an App instance
 type Options struct {
-	Database                database.Interface
-	MessagingClient         messaging.Client
-	SignalHandler           SignalHandler
-	TimeoutProvider         TimeoutProvider
-	Server                  ServerRunner
-	ConfigLoader            func() (*config.Config, error)
-	DatabaseConnector       func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
-	MessagingClientFactory  func(string, logger.Logger) messaging.Client
-	TenantConfigProvider    multitenant.TenantConfigProvider
-	TenantConfigCache       *multitenant.TenantConfigCache
-	TenantCacheOptions      []multitenant.CacheOption
-	TenantConnectionOptions []multitenant.ConnectionOption
-	TenantConnectionManager *multitenant.TenantConnectionManager
-	TenantMessagingManager  *multitenant.TenantMessagingManager
+	Database               database.Interface
+	MessagingClient        messaging.Client
+	SignalHandler          SignalHandler
+	TimeoutProvider        TimeoutProvider
+	Server                 ServerRunner
+	ConfigLoader           func() (*config.Config, error)
+	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
+	MessagingClientFactory func(string, logger.Logger) messaging.AMQPClient
+	ResourceSource         TenantResourceSource
 }
 
 // New creates a new application instance with dependencies determined by configuration.
@@ -415,40 +298,84 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 
 	signalHandler, timeoutProvider, srv := bootstrap.coreComponents()
 
-	bundle, err := bootstrap.dependencies()
-	if err != nil {
-		return nil, err
-	}
+	bundle := bootstrap.dependencies()
 
 	app := &App{
-		cfg:               cfg,
-		server:            srv,
-		db:                bundle.db,
-		logger:            log,
-		messaging:         bundle.messaging,
-		registry:          nil, // Will be set after app creation
-		signalHandler:     signalHandler,
-		timeoutProvider:   timeoutProvider,
-		tenantConnManager: bundle.tenantConnManager,
-		messagingManager:  bundle.tenantMessagingManager,
+		cfg:              cfg,
+		server:           srv,
+		logger:           log,
+		registry:         nil, // Will be set after app creation
+		signalHandler:    signalHandler,
+		timeoutProvider:  timeoutProvider,
+		dbManager:        bundle.dbManager,
+		messagingManager: bundle.messagingManager,
 	}
 
 	registry := NewModuleRegistry(bundle.deps)
 	app.registry = registry
 
-	if bundle.tenantMessagingManager != nil {
-		app.tenantMessaging = newTenantMessagingOrchestrator(registry, bundle.tenantMessagingManager, log)
+	// Collect messaging declarations from all modules
+	messagingDeclarations := messaging.NewDeclarations()
+	if err := registry.DeclareMessaging(messagingDeclarations); err != nil {
+		return nil, fmt.Errorf("failed to collect messaging declarations: %w", err)
 	}
 
-	if cfg.Multitenant.Enabled {
-		app.setupMultitenantGetMessaging(bundle.deps)
+	// Store declarations for use by messaging manager
+	app.messagingDeclarations = messagingDeclarations
+
+	// Reassign GetMessaging closure to handle lazy consumer initialization for multi-tenant mode
+	bundle.deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
+		key := "" // Single-tenant key
+		if app.cfg.Multitenant.Enabled {
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, ErrNoTenantInContext
+			}
+			key = tenantID
+
+			// Lazily ensure consumers are started for this tenant
+			if err := app.messagingManager.EnsureConsumers(ctx, key, app.messagingDeclarations); err != nil {
+				return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", key, err)
+			}
+		}
+		return app.messagingManager.GetPublisher(ctx, key)
 	}
 
-	app.healthProbes = createHealthProbes(app.db, app.messaging, log)
+	// Pre-warm single-tenant connections for backward compatibility
+	if !cfg.Multitenant.Enabled {
+		ctx := context.Background()
 
-	app.registerCloser("messaging client", app.messaging)
-	app.registerCloser("database connection", app.db)
-	app.registerCloser("tenant connection manager", app.tenantConnManager)
+		// Pre-warm database connection
+		if app.dbManager != nil {
+			if _, err := app.dbManager.Get(ctx, ""); err != nil {
+				log.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
+			} else {
+				log.Info().Msg("Pre-warmed single-tenant database connection")
+			}
+		}
+
+		// Ensure consumers are set up for single-tenant
+		if app.messagingManager != nil {
+			if err := app.messagingManager.EnsureConsumers(ctx, "", app.messagingDeclarations); err != nil {
+				log.Warn().Err(err).Msg("Failed to ensure single-tenant messaging consumers")
+			} else {
+				log.Info().Msg("Ensured single-tenant messaging consumers")
+			}
+
+			// Pre-warm messaging publisher
+			if _, err := app.messagingManager.GetPublisher(ctx, ""); err != nil {
+				log.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging publisher")
+			} else {
+				log.Info().Msg("Pre-warmed single-tenant messaging publisher")
+			}
+		}
+	}
+
+	// Create health probes for the new managers
+	app.healthProbes = createHealthProbesForManagers(app.dbManager, app.messagingManager, log)
+
+	// Register unified managers
+	app.registerCloser("database manager", app.dbManager)
 	app.registerCloser("messaging manager", app.messagingManager)
 
 	srv.RegisterReadyHandler(app.readyCheck)
@@ -456,50 +383,10 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 	return app, nil
 }
 
-// setupMultitenantGetMessaging configures the GetMessaging function for multi-tenant mode
-func (a *App) setupMultitenantGetMessaging(deps *ModuleDeps) {
-	deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
-		if a.tenantMessaging == nil {
-			return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
-		}
-
-		tenantID, ok := multitenant.GetTenant(ctx)
-		if !ok {
-			return nil, ErrNoTenantInContext
-		}
-
-		if a.messagingDeclarations == nil {
-			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
-		}
-
-		return a.tenantMessaging.PublisherForTenant(ctx, tenantID, a.messagingDeclarations)
-	}
-}
-
 // RegisterModule registers a new module with the application.
 // It adds the module to the registry for initialization and route registration.
 func (a *App) RegisterModule(module Module) error {
 	return a.registry.Register(module)
-}
-
-// captureMessagingDeclarations captures messaging infrastructure declarations
-// from all registered modules in multi-tenant mode. This creates a recording
-// registry with a mock AMQP client to capture declarations without broker connection.
-//
-// The captured declarations are stored for later per-tenant replay.
-func (a *App) captureMessagingDeclarations() error {
-	// Only capture in multi-tenant mode
-	if !a.cfg.Multitenant.Enabled || a.tenantMessaging == nil {
-		return nil
-	}
-
-	declarations, err := a.tenantMessaging.CaptureDeclarations()
-	if err != nil {
-		return err
-	}
-
-	a.messagingDeclarations = declarations
-	return nil
 }
 
 func (a *App) registerCloser(name string, closer interface{ Close() error }) {
@@ -511,30 +398,48 @@ func (a *App) registerCloser(name string, closer interface{ Close() error }) {
 }
 
 func (a *App) startMaintenanceLoops() {
-	if a.tenantConnManager != nil {
-		cleanupInterval := a.cfg.Multitenant.Limits.Cleanup.Interval
-		if cleanupInterval == 0 {
-			cleanupInterval = 5 * time.Minute
-		}
-		a.tenantConnManager.StartCleanup(cleanupInterval)
+	// Start cleanup for unified managers
+	if a.dbManager != nil {
+		a.dbManager.StartCleanup(5 * time.Minute) // Database cleanup every 5 minutes
 	}
-
 	if a.messagingManager != nil {
-		cleanupInterval := a.cfg.Multitenant.Messaging.CleanupInterval
-		if cleanupInterval == 0 {
-			cleanupInterval = time.Minute
-		}
-		a.messagingManager.StartCleanup(cleanupInterval)
+		a.messagingManager.StartCleanup(2 * time.Minute) // Messaging cleanup every 2 minutes
 	}
 }
 
 func (a *App) prepareRuntime() error {
-	if err := a.captureMessagingDeclarations(); err != nil {
-		return fmt.Errorf("failed to capture messaging declarations: %w", err)
+	// Use the previously collected messaging declarations
+	decls := a.messagingDeclarations
+	if decls == nil {
+		return fmt.Errorf("messaging declarations not initialized")
 	}
 
-	if err := a.registry.RegisterMessaging(); err != nil {
-		return fmt.Errorf("failed to register messaging infrastructure: %w", err)
+	// Initialize consumers based on deployment mode
+	if a.cfg.Multitenant.Enabled {
+		// Multi-tenant: consumers will be started on-demand per tenant
+		a.logger.Info().Msg("Multi-tenant mode: consumers will be started per tenant on demand")
+	} else {
+		// Single-tenant: pre-warm connections and start consumers
+		if a.messagingManager != nil {
+			ctx := context.Background()
+			if err := a.messagingManager.EnsureConsumers(ctx, "", decls); err != nil {
+				a.logger.Warn().Err(err).Msg("Failed to start single-tenant consumers")
+				// Don't fail the app startup for messaging issues
+			} else {
+				a.logger.Info().Msg("Single-tenant consumers started successfully")
+			}
+		}
+
+		// Pre-warm database connection for single-tenant
+		if a.dbManager != nil {
+			ctx := context.Background()
+			if _, err := a.dbManager.Get(ctx, ""); err != nil {
+				a.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
+				// Don't fail the app startup for database pre-warming
+			} else {
+				a.logger.Info().Msg("Single-tenant database connection pre-warmed")
+			}
+		}
 	}
 
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
@@ -591,7 +496,7 @@ func (a *App) drainServerError(ch <-chan error) error {
 
 // GetMessagingDeclarations returns the captured messaging declarations.
 // This is used by tenant managers to replay infrastructure for each tenant.
-func (a *App) GetMessagingDeclarations() *multitenant.MessagingDeclarations {
+func (a *App) GetMessagingDeclarations() *messaging.Declarations {
 	return a.messagingDeclarations
 }
 
@@ -715,13 +620,18 @@ func (a *App) readyCheck(c echo.Context) error {
 	if messagingStatus.Status == "" {
 		messagingStatus.Status = disabledStatus
 	}
+	messagingStats := messagingStatus.Details
+	if messagingStats == nil {
+		messagingStats = map[string]any{}
+	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"status":    "ready",
-		"time":      time.Now().Unix(),
-		"database":  dbStatus.Status,
-		"db_stats":  dbStats,
-		"messaging": messagingStatus.Status,
+		"status":          "ready",
+		"time":            time.Now().Unix(),
+		"database":        dbStatus.Status,
+		"db_stats":        dbStats,
+		"messaging":       messagingStatus.Status,
+		"messaging_stats": messagingStats,
 		"app": map[string]any{
 			"name":        a.cfg.App.Name,
 			"environment": a.cfg.App.Env,

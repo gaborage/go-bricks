@@ -197,7 +197,7 @@ func TestModule_RegisterInfrastructure(t *testing.T) {
     mockRegistry := fixtures.NewWorkingRegistry()
 
     module := &UserModule{}
-    module.RegisterMessaging(mockRegistry)
+    module.DeclareMessaging(mockDeclarations)
 
     // Verify infrastructure was registered
     exchanges := mockRegistry.GetExchanges()
@@ -289,7 +289,7 @@ func TestUserModule_Integration(t *testing.T) {
     module.RegisterRoutes(hr, echo)
 
     // Test messaging registration
-    module.RegisterMessaging(mockRegistry)
+    module.DeclareMessaging(mockDeclarations)
 
     // Verify registrations
     exchanges := mockRegistry.GetExchanges()

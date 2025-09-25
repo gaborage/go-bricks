@@ -1,6 +1,7 @@
 package server
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -88,10 +89,12 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	e.Use(Timing())
 }
 
+var defaultTenantIDRegex = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	mtCfg := &cfg.Multitenant
 	resolverCfg := mtCfg.Resolver
-	tenantRegex := mtCfg.Validation.GetRegex()
+	tenantRegex := defaultTenantIDRegex
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
 		if res == nil {

@@ -1,8 +1,6 @@
 package config
 
 import (
-	"regexp"
-	"sync"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -208,12 +206,21 @@ type RoutingConfig struct {
 
 // MultitenantConfig holds multi-tenant specific settings.
 type MultitenantConfig struct {
-	Enabled    bool                       `koanf:"enabled"`
-	Resolver   ResolverConfig             `koanf:"resolver"`
-	Cache      CacheConfig                `koanf:"cache"`
-	Limits     LimitsConfig               `koanf:"limits"`
-	Validation IDValidationConfig         `koanf:"validation"`
-	Messaging  MultitenantMessagingConfig `koanf:"messaging"`
+	Enabled  bool                   `koanf:"enabled"`
+	Resolver ResolverConfig         `koanf:"resolver"`
+	Limits   LimitsConfig           `koanf:"limits"`
+	Tenants  map[string]TenantEntry `koanf:"tenants"`
+}
+
+// TenantEntry represents a single tenant's resource configuration
+type TenantEntry struct {
+	Database  DatabaseConfig        `koanf:"database"`
+	Messaging TenantMessagingConfig `koanf:"messaging"`
+}
+
+// TenantMessagingConfig holds messaging configuration for a tenant
+type TenantMessagingConfig struct {
+	URL string `koanf:"url"`
 }
 
 // ResolverConfig holds tenant resolution strategy settings.
@@ -224,79 +231,7 @@ type ResolverConfig struct {
 	Proxies bool   `koanf:"proxies"` // trust X-Forwarded-Host
 }
 
-// CacheConfig holds caching settings for tenant configurations.
-type CacheConfig struct {
-	TTL time.Duration `koanf:"ttl"` // default: 5m
-}
-
 // LimitsConfig holds resource limits for multi-tenant operation.
 type LimitsConfig struct {
-	Tenants int           `koanf:"tenants"` // default: 100
-	Cleanup CleanupConfig `koanf:"cleanup"`
-}
-
-// CleanupConfig holds connection cleanup settings.
-type CleanupConfig struct {
-	Interval time.Duration `koanf:"interval"` // default: 5m
-}
-
-// IDValidationConfig holds tenant ID validation settings.
-type IDValidationConfig struct {
-	Pattern string `koanf:"pattern"` // default: ^[a-z0-9-]{1,64}$
-	mu      sync.RWMutex
-	regex   *regexp.Regexp
-}
-
-// GetRegex returns the compiled regex for tenant ID validation.
-func (c *IDValidationConfig) GetRegex() *regexp.Regexp {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.regex
-}
-
-// GetPattern returns the current pattern string safely.
-func (c *IDValidationConfig) GetPattern() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.Pattern
-}
-
-// SetRegex compiles and sets the regex pattern.
-func (c *IDValidationConfig) SetRegex(pattern string) error {
-	if pattern == "" {
-		pattern = `^[a-z0-9-]{1,64}$`
-	}
-	regex, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.regex = regex
-	c.Pattern = pattern
-	return nil
-}
-
-// MultitenantMessagingConfig holds messaging-specific settings for multi-tenant mode.
-type MultitenantMessagingConfig struct {
-	PublisherTTL    time.Duration `koanf:"publisherttl"`    // TTL for idle publisher connections, default: 5m
-	MaxPublishers   int           `koanf:"maxpublishers"`   // Maximum cached publisher connections, default: 50
-	CleanupInterval time.Duration `koanf:"cleanupinterval"` // Publisher cleanup interval, default: 1m
-}
-
-// Normalize applies default values when fields are unset.
-func (c *MultitenantMessagingConfig) Normalize() {
-	if c == nil {
-		return
-	}
-	if c.PublisherTTL <= 0 {
-		c.PublisherTTL = 5 * time.Minute
-	}
-	if c.MaxPublishers <= 0 {
-		c.MaxPublishers = 50
-	}
-	if c.CleanupInterval <= 0 {
-		c.CleanupInterval = time.Minute
-	}
+	Tenants int `koanf:"tenants"`
 }
