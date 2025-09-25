@@ -284,3 +284,19 @@ type MultitenantMessagingConfig struct {
 	MaxPublishers   int           `koanf:"max_publishers"`   // Maximum cached publisher connections, default: 50
 	CleanupInterval time.Duration `koanf:"cleanup_interval"` // Publisher cleanup interval, default: 1m
 }
+
+// Normalize applies default values when fields are unset.
+func (c *MultitenantMessagingConfig) Normalize() {
+	if c == nil {
+		return
+	}
+	if c.PublisherTTL <= 0 {
+		c.PublisherTTL = 5 * time.Minute
+	}
+	if c.MaxPublishers <= 0 {
+		c.MaxPublishers = 50
+	}
+	if c.CleanupInterval <= 0 {
+		c.CleanupInterval = time.Minute
+	}
+}

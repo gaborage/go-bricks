@@ -15,19 +15,22 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-// Integration test suite that tests the full multi-tenant messaging workflow
-// Note: These are unit tests that use mocked components to avoid external dependencies
+const (
+	tenantA = "tenant-a"
+	tenantB = "tenant-b"
+	tenantC = "tenant-c"
+)
 
-func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
+func TestMultiTenantMessagingEndToEnd(t *testing.T) {
 	// Setup provider with multiple tenant configurations
 	provider := newMockMessagingProvider()
-	provider.setTenantConfig("tenant-a", &TenantMessagingConfig{
+	provider.setTenantConfig(tenantA, &TenantMessagingConfig{
 		URL: "amqp://tenant-a:pass@localhost:5672/tenant-a",
 	})
-	provider.setTenantConfig("tenant-b", &TenantMessagingConfig{
+	provider.setTenantConfig(tenantB, &TenantMessagingConfig{
 		URL: "amqp://tenant-b:pass@localhost:5672/tenant-b",
 	})
-	provider.setTenantConfig("tenant-c", &TenantMessagingConfig{
+	provider.setTenantConfig(tenantC, &TenantMessagingConfig{
 		URL: "amqp://tenant-c:pass@localhost:5672/tenant-c",
 	})
 
@@ -45,7 +48,7 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 		results := make([]messaging.AMQPClient, 3)
 		errors := make([]error, 3)
 
-		tenants := []string{"tenant-a", "tenant-b", "tenant-c"}
+		tenants := []string{tenantA, tenantB, tenantC}
 
 		for i, tenant := range tenants {
 			wg.Add(1)
@@ -81,8 +84,8 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 		declarations := NewMessagingDeclarations()
 
 		// Add some declarations to test replay functionality
-		declarations.Exchanges["test.exchange"] = &messaging.ExchangeDeclaration{
-			Name:       "test.exchange",
+		declarations.Exchanges[testExchange] = &messaging.ExchangeDeclaration{
+			Name:       testExchange,
 			Type:       "topic",
 			Durable:    true,
 			AutoDelete: false,
@@ -90,8 +93,8 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 			NoWait:     false,
 			Args:       nil,
 		}
-		declarations.Queues["test.queue"] = &messaging.QueueDeclaration{
-			Name:       "test.queue",
+		declarations.Queues[testQueue] = &messaging.QueueDeclaration{
+			Name:       testQueue,
 			Durable:    true,
 			AutoDelete: false,
 			Exclusive:  false,
@@ -99,15 +102,15 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 			Args:       nil,
 		}
 		declarations.Bindings = append(declarations.Bindings, &messaging.BindingDeclaration{
-			Queue:      "test.queue",
-			Exchange:   "test.exchange",
+			Queue:      testQueue,
+			Exchange:   testExchange,
 			RoutingKey: "test.key",
 			NoWait:     false,
 			Args:       nil,
 		})
 
 		// Set up consumers for all tenants
-		tenants := []string{"tenant-a", "tenant-b", "tenant-c"}
+		tenants := []string{tenantA, tenantB, tenantC}
 		for _, tenant := range tenants {
 			err := manager.EnsureConsumers(ctx, tenant, declarations)
 			assert.NoError(t, err, "Consumer setup should succeed for tenant %s", tenant)
@@ -137,18 +140,18 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 
 	// Test 3: Publisher publishing with tenant ID injection
 	t.Run("PublisherTenantIDInjection", func(t *testing.T) {
-		client, err := manager.GetPublisher(ctx, "tenant-a")
+		client, err := manager.GetPublisher(ctx, tenantA)
 		require.NoError(t, err)
 		require.NotNil(t, client)
 
 		// Verify it's a wrapper that injects tenant_id
 		wrapper, ok := client.(*TenantAMQPClient)
 		require.True(t, ok, "Client should be TenantAMQPClient wrapper")
-		assert.Equal(t, "tenant-a", wrapper.tenantID)
+		assert.Equal(t, tenantA, wrapper.tenantID)
 
 		// Test publishing (using RecordingAMQPClient underneath)
 		err = wrapper.PublishToExchange(ctx, messaging.PublishOptions{
-			Exchange:   "test.exchange",
+			Exchange:   testExchange,
 			RoutingKey: "test.key",
 			Headers: map[string]any{
 				"custom_header": "custom_value",
@@ -166,10 +169,12 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 	// Test 4: Cleanup functionality
 	t.Run("PublisherCleanup", func(t *testing.T) {
 		// Create a manager with very short TTL for testing
+		// Create a manager with very short TTL for testing
 		shortTTLManager := NewTenantMessagingManagerWithFactory(provider, cache, log, 50*time.Millisecond, 10, &MockAMQPClientFactory{})
+		defer shortTTLManager.Close()
 
 		// Get publishers for multiple tenants
-		tenants := []string{"tenant-a", "tenant-b"}
+		tenants := []string{tenantA, tenantB}
 		for _, tenant := range tenants {
 			client, err := shortTTLManager.GetPublisher(ctx, tenant)
 			assert.NoError(t, err)
@@ -205,7 +210,7 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 		lifecycleManager := NewTenantMessagingManagerWithFactory(provider, cache, log, 1*time.Minute, 5, &MockAMQPClientFactory{})
 
 		// Create some publishers using existing tenant configurations
-		testTenants := []string{"tenant-a", "tenant-b", "tenant-c"}
+		testTenants := []string{tenantA, tenantB, tenantC}
 		for _, tenant := range testTenants {
 			client, err := lifecycleManager.GetPublisher(ctx, tenant)
 			assert.NoError(t, err)
@@ -255,7 +260,7 @@ func TestMultiTenantMessaging_EndToEnd(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestMultiTenantMessaging_LRUEviction(t *testing.T) {
+func TestMultiTenantMessagingLRUEviction(t *testing.T) {
 	provider := newMockMessagingProvider()
 
 	// Set up 5 tenant configurations
@@ -322,7 +327,7 @@ func TestMultiTenantMessaging_LRUEviction(t *testing.T) {
 	manager.pubMu.RUnlock()
 }
 
-func TestMultiTenantMessaging_TenantContext(t *testing.T) {
+func TestMultiTenantMessagingTenantContext(t *testing.T) {
 	// Test the tenant context functionality that would be used by the GetMessaging closure
 
 	// Test SetTenant and GetTenant
@@ -347,7 +352,7 @@ func TestMultiTenantMessaging_TenantContext(t *testing.T) {
 	assert.Empty(t, tenantID)
 }
 
-func TestMultiTenantMessaging_ConfigInjection(t *testing.T) {
+func TestMultiTenantMessagingConfigInjection(t *testing.T) {
 	// Test that configuration values are properly structured for injection
 
 	// Test default values from config/config.go

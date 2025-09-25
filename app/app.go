@@ -265,16 +265,9 @@ func resolveTenantMessagingManager(cfg *config.Config, log logger.Logger, opts *
 
 	cache := resolveTenantCache(cfg, opts)
 
-	// Configuration for messaging manager from config with sensible defaults
+	cfg.Multitenant.Messaging.Normalize()
 	idleTTL := cfg.Multitenant.Messaging.PublisherTTL
-	if idleTTL <= 0 {
-		idleTTL = 5 * time.Minute
-	}
-
 	maxActive := cfg.Multitenant.Messaging.MaxPublishers
-	if maxActive <= 0 {
-		maxActive = 50
-	}
 
 	return multitenant.NewTenantMessagingManager(opts.TenantConfigProvider, cache, log, idleTTL, maxActive)
 }

@@ -234,6 +234,11 @@ func (m *TenantMessagingManager) StartCleanup(interval time.Duration) {
 	m.cleanupMu.Lock()
 	defer m.cleanupMu.Unlock()
 
+	if interval <= 0 {
+		m.log.Debug().Msg("Publisher cleanup disabled (interval <= 0)")
+		return
+	}
+
 	// Only start if not already running (timer is nil)
 	if m.cleanupTimer != nil {
 		return

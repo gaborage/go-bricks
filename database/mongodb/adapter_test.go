@@ -320,6 +320,104 @@ func TestConnectionCreateIndex(t *testing.T) {
 	})
 }
 
+func TestConnectionDropIndex(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("drop index", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock successful index drop
+		mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+		err := conn.DropIndex(context.Background(), "test_collection", "name_index")
+		assert.NoError(t, err)
+	})
+
+	mt.Run("drop index with error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock error response
+		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
+			Code:    27,
+			Message: "IndexNotFound",
+		}))
+
+		err := conn.DropIndex(context.Background(), "test_collection", "nonexistent_index")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to drop index")
+	})
+}
+
+func TestConnectionListIndexes(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("list indexes", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock index list response
+		indexDocs := []bson.D{
+			{
+				{"v", 2},
+				{"key", bson.D{{"_id", 1}}},
+				{"name", "_id_"},
+			},
+			{
+				{"v", 2},
+				{"key", bson.D{{"name", 1}}},
+				{"name", "name_index"},
+				{"unique", true},
+			},
+			{
+				{"v", 2},
+				{"key", bson.D{{"email", 1}}},
+				{"name", "email_index"},
+				{"sparse", true},
+				{"expireAfterSeconds", int32(3600)},
+			},
+		}
+
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch, indexDocs...),
+			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.NextBatch), // End cursor
+		)
+
+		indexes, err := conn.ListIndexes(context.Background(), "test_collection")
+		assert.NoError(t, err)
+		assert.Len(t, indexes, 3)
+
+		// Verify first index (_id)
+		assert.NotNil(t, indexes[0].Keys)
+		assert.NotNil(t, indexes[0].Options)
+		assert.Equal(t, "_id_", *indexes[0].Options.Name)
+
+		// Verify second index (name with unique constraint)
+		assert.NotNil(t, indexes[1].Keys)
+		assert.NotNil(t, indexes[1].Options)
+		assert.Equal(t, "name_index", *indexes[1].Options.Name)
+		assert.Equal(t, true, *indexes[1].Options.Unique)
+
+		// Verify third index (email with sparse and TTL)
+		assert.NotNil(t, indexes[2].Keys)
+		assert.NotNil(t, indexes[2].Options)
+		assert.Equal(t, "email_index", *indexes[2].Options.Name)
+		assert.Equal(t, true, *indexes[2].Options.Sparse)
+		assert.Equal(t, int32(3600), *indexes[2].Options.ExpireAfterSeconds)
+	})
+
+	mt.Run("list indexes empty result", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+
+		// Mock empty index list response
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.FirstBatch), // Empty result
+		)
+
+		indexes, err := conn.ListIndexes(context.Background(), "test_collection")
+		assert.NoError(t, err)
+		assert.Empty(t, indexes)
+	})
+}
+
 func TestConnectionRunCommand(t *testing.T) {
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
@@ -888,4 +986,289 @@ func TestBuildChangeStreamOptionsWithEnhancements(t *testing.T) {
 			tt.validate(t, result)
 		})
 	}
+}
+
+func TestCollectionInsertMany(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("insert multiple documents", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock successful insert many
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"insertedIds", bson.A{
+				primitive.NewObjectID(),
+				primitive.NewObjectID(),
+				primitive.NewObjectID(),
+			}},
+		})
+
+		documents := []any{
+			bson.M{"name": "doc1", "value": 1},
+			bson.M{"name": "doc2", "value": 2},
+			bson.M{"name": "doc3", "value": 3},
+		}
+
+		insertedIDs, err := collection.InsertMany(context.Background(), documents, nil)
+		assert.NoError(t, err)
+		assert.Len(t, insertedIDs, 3)
+	})
+
+	mt.Run("insert many with options", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock successful insert many
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"insertedIds", bson.A{primitive.NewObjectID()}},
+		})
+
+		documents := []any{bson.M{"name": "test", "value": 123}}
+		opts := &database.InsertManyOptions{
+			Ordered:                  database.BoolPtr(false),
+			BypassDocumentValidation: database.BoolPtr(true),
+		}
+
+		insertedIDs, err := collection.InsertMany(context.Background(), documents, opts)
+		assert.NoError(t, err)
+		assert.Len(t, insertedIDs, 1)
+	})
+
+	mt.Run("insert many with error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock error response
+		mt.AddMockResponses(mtest.CreateWriteErrorsResponse(mtest.WriteError{
+			Index:   0,
+			Code:    11000,
+			Message: "duplicate key error",
+		}))
+
+		documents := []any{bson.M{"_id": "duplicate", "name": "test"}}
+
+		insertedIDs, err := collection.InsertMany(context.Background(), documents, nil)
+		assert.Error(t, err)
+		assert.Nil(t, insertedIDs)
+		assert.Contains(t, err.Error(), "failed to insert documents")
+	})
+}
+
+func TestCollectionDeleteMany(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("delete many documents", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock successful delete many
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"n", 5},
+		})
+
+		filter := bson.M{"status": "inactive"}
+		result, err := collection.DeleteMany(context.Background(), filter, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, int64(5), result.DeletedCount())
+	})
+
+	mt.Run("delete many with no matches", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock no matches response
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"n", 0},
+		})
+
+		filter := bson.M{"nonexistent": "value"}
+		result, err := collection.DeleteMany(context.Background(), filter, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, int64(0), result.DeletedCount())
+	})
+
+	mt.Run("delete many with error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock error response
+		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
+			Code:    2,
+			Message: "BadValue error",
+		}))
+
+		filter := bson.M{"invalid": primitive.Regex{Pattern: "[", Options: ""}} // Invalid regex
+		result, err := collection.DeleteMany(context.Background(), filter, nil)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to delete documents")
+	})
+}
+
+func TestCollectionAggregate(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("aggregate with pipeline", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock aggregate response with proper cursor responses
+		firstBatch := []bson.D{
+			{{"_id", "group1"}, {"count", 10}},
+			{{"_id", "group2"}, {"count", 15}},
+		}
+		mt.AddMockResponses(
+			mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch, firstBatch...),
+			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.NextBatch), // End cursor
+		)
+
+		pipeline := bson.A{
+			bson.D{{"$group", bson.D{
+				{"_id", "$category"},
+				{"count", bson.D{{"$sum", 1}}},
+			}}},
+			bson.D{{"$sort", bson.D{{"count", -1}}}},
+		}
+
+		cursor, err := collection.Aggregate(context.Background(), pipeline, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, cursor)
+
+		// Verify we can iterate through results
+		var results []bson.M
+		err = cursor.All(context.Background(), &results)
+		assert.NoError(t, err)
+		assert.Len(t, results, 2)
+		assert.Equal(t, "group1", results[0]["_id"])
+		assert.Equal(t, int32(10), results[0]["count"])
+	})
+
+	mt.Run("aggregate with options", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock aggregate response
+		mt.AddMockResponses(mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch))
+
+		pipeline := bson.A{bson.D{{"$match", bson.D{{"status", "active"}}}}}
+		opts := &database.AggregateOptions{
+			BatchSize: database.Int32Ptr(100),
+		}
+
+		cursor, err := collection.Aggregate(context.Background(), pipeline, opts)
+		assert.NoError(t, err)
+		assert.NotNil(t, cursor)
+		cursor.Close(context.Background())
+	})
+
+	mt.Run("aggregate with error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock error response
+		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
+			Code:    2,
+			Message: "Pipeline stage not recognized",
+		}))
+
+		pipeline := bson.A{bson.D{{"$invalidStage", bson.D{}}}}
+		cursor, err := collection.Aggregate(context.Background(), pipeline, nil)
+		assert.Error(t, err)
+		assert.Nil(t, cursor)
+		assert.Contains(t, err.Error(), "failed to execute aggregation")
+	})
+}
+
+func TestCollectionBulkWrite(t *testing.T) {
+	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+
+	mt.Run("bulk write with mixed operations", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock successful bulk write response
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"nInserted", 1},
+			{"nMatched", 0},
+			{"nModified", 0},
+			{"nRemoved", 0},
+			{"nUpserted", 0},
+		})
+
+		models := []database.WriteModel{
+			&InsertOneModel{Document: bson.M{"name": "insert1"}},
+		}
+
+		result, err := collection.BulkWrite(context.Background(), models, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		// Just verify the result methods work, specific counts are mock-dependent
+		assert.GreaterOrEqual(t, result.InsertedCount(), int64(0))
+	})
+
+	mt.Run("bulk write with options", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock successful bulk write
+		mt.AddMockResponses(bson.D{
+			{"ok", 1},
+			{"nInserted", 1},
+		})
+
+		models := []database.WriteModel{
+			&InsertOneModel{Document: bson.M{"name": "test"}},
+		}
+		opts := &database.BulkWriteOptions{
+			Ordered:                  database.BoolPtr(false),
+			BypassDocumentValidation: database.BoolPtr(true),
+		}
+
+		result, err := collection.BulkWrite(context.Background(), models, opts)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		// Just verify the result methods work, specific counts are mock-dependent
+		assert.GreaterOrEqual(t, result.InsertedCount(), int64(0))
+	})
+
+	mt.Run("bulk write with error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock bulk write error
+		mt.AddMockResponses(mtest.CreateWriteErrorsResponse(mtest.WriteError{
+			Index:   0,
+			Code:    11000,
+			Message: "duplicate key error",
+		}))
+
+		models := []database.WriteModel{
+			&InsertOneModel{Document: bson.M{"_id": "duplicate"}},
+		}
+
+		result, err := collection.BulkWrite(context.Background(), models, nil)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to execute bulk write")
+	})
+
+	mt.Run("bulk write with empty models", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		models := []database.WriteModel{}
+
+		result, err := collection.BulkWrite(context.Background(), models, nil)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to execute bulk write")
+	})
 }

@@ -15,6 +15,10 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+const (
+	tenantAMQPHost = "amqp://localhost:5672/tenant1"
+)
+
 // MockAMQPClientFactory creates RecordingAMQPClient instances for testing
 type MockAMQPClientFactory struct{}
 
@@ -90,10 +94,10 @@ func TestNewTenantMessagingManagerWithNilCache(t *testing.T) {
 	assert.NotNil(t, manager.cache) // Should create a default cache
 }
 
-func TestTenantMessagingManager_GetPublisher(t *testing.T) {
+func TestTenantMessagingManagerGetPublisher(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 
 	cache := NewTenantConfigCache(provider)
@@ -123,7 +127,7 @@ func TestTenantMessagingManager_GetPublisher(t *testing.T) {
 	manager.pubMu.RUnlock()
 }
 
-func TestTenantMessagingManager_GetPublisher_EmptyTenantID(t *testing.T) {
+func TestTenantMessagingManagerGetPublisherEmptyTenantID(t *testing.T) {
 	provider := newMockMessagingProvider()
 	cache := NewTenantConfigCache(provider)
 	log := logger.New("debug", true)
@@ -137,7 +141,7 @@ func TestTenantMessagingManager_GetPublisher_EmptyTenantID(t *testing.T) {
 	assert.Contains(t, err.Error(), "tenant id is required")
 }
 
-func TestTenantMessagingManager_GetPublisher_TenantNotFound(t *testing.T) {
+func TestTenantMessagingManagerGetPublisherTenantNotFound(t *testing.T) {
 	provider := newMockMessagingProvider()
 	cache := NewTenantConfigCache(provider)
 	log := logger.New("debug", true)
@@ -150,7 +154,7 @@ func TestTenantMessagingManager_GetPublisher_TenantNotFound(t *testing.T) {
 	assert.Nil(t, client)
 }
 
-func TestTenantMessagingManager_GetPublisher_LRUEviction(t *testing.T) {
+func TestTenantMessagingManagerGetPublisherLRUEviction(t *testing.T) {
 	provider := newMockMessagingProvider()
 
 	// Set up multiple tenant configurations
@@ -194,10 +198,10 @@ func TestTenantMessagingManager_GetPublisher_LRUEviction(t *testing.T) {
 	manager.pubMu.RUnlock()
 }
 
-func TestTenantMessagingManager_GetPublisher_Concurrent(t *testing.T) {
+func TestTenantMessagingManagerGetPublisherConcurrent(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 	// Add delay to make race conditions more likely
 	provider.setDelay(10 * time.Millisecond)
@@ -245,10 +249,10 @@ func TestTenantMessagingManager_GetPublisher_Concurrent(t *testing.T) {
 	manager.pubMu.RUnlock()
 }
 
-func TestTenantMessagingManager_EnsureConsumers(t *testing.T) {
+func TestTenantMessagingManagerEnsureConsumers(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 
 	cache := NewTenantConfigCache(provider)
@@ -280,7 +284,7 @@ func TestTenantMessagingManager_EnsureConsumers(t *testing.T) {
 	manager.consMu.RUnlock()
 }
 
-func TestTenantMessagingManager_EnsureConsumers_EmptyTenantID(t *testing.T) {
+func TestTenantMessagingManagerEnsureConsumersEmptyTenantID(t *testing.T) {
 	provider := newMockMessagingProvider()
 	cache := NewTenantConfigCache(provider)
 	log := logger.New("debug", true)
@@ -294,7 +298,7 @@ func TestTenantMessagingManager_EnsureConsumers_EmptyTenantID(t *testing.T) {
 	assert.Contains(t, err.Error(), "tenant id is required")
 }
 
-func TestTenantMessagingManager_EnsureConsumers_TenantNotFound(t *testing.T) {
+func TestTenantMessagingManagerEnsureConsumersTenantNotFound(t *testing.T) {
 	provider := newMockMessagingProvider()
 	cache := NewTenantConfigCache(provider)
 	log := logger.New("debug", true)
@@ -307,10 +311,10 @@ func TestTenantMessagingManager_EnsureConsumers_TenantNotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestTenantMessagingManager_EnsureConsumers_Concurrent(t *testing.T) {
+func TestTenantMessagingManagerEnsureConsumersConcurrent(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 	// Add delay to make race conditions more likely
 	provider.setDelay(10 * time.Millisecond)
@@ -352,13 +356,13 @@ func TestTenantMessagingManager_EnsureConsumers_Concurrent(t *testing.T) {
 	manager.consMu.RUnlock()
 }
 
-func TestTenantMessagingManager_CleanupPublishers(t *testing.T) {
+func TestTenantMessagingManagerCleanupPublishers(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 	provider.setTenantConfig("tenant2", &TenantMessagingConfig{
-		URL: "amqp://tenant2:pass@localhost:5672/tenant2",
+		URL: "amqp://localhost:5672/tenant2",
 	})
 
 	cache := NewTenantConfigCache(provider)
@@ -394,10 +398,10 @@ func TestTenantMessagingManager_CleanupPublishers(t *testing.T) {
 	manager.pubMu.RUnlock()
 }
 
-func TestTenantMessagingManager_CleanupPublishers_RecentlyUsed(t *testing.T) {
+func TestTenantMessagingManagerCleanupPublishersRecentlyUsed(t *testing.T) {
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig("tenant1", &TenantMessagingConfig{
-		URL: "amqp://tenant1:pass@localhost:5672/tenant1",
+		URL: tenantAMQPHost,
 	})
 
 	cache := NewTenantConfigCache(provider)

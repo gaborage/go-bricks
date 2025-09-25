@@ -266,6 +266,15 @@ type attemptResult struct {
 	retry    bool
 }
 
+// responseProcessingContext groups the metadata needed when handling an HTTP response.
+type responseProcessingContext struct {
+	attempt    int
+	maxRetries int
+	start      time.Time
+	callCount  int64
+	traceID    string
+}
+
 // Do performs an HTTP request with the specified method
 func (c *client) Do(ctx context.Context, method string, req *Request) (*Response, error) {
 	if err := c.validateRequest(req); err != nil {
@@ -311,7 +320,14 @@ func (c *client) executeAttempt(
 		return c.handleExecutionError(ctx, err, attempt, maxRetries)
 	}
 
-	return c.processHTTPResponse(ctx, httpReq, httpResp, attempt, maxRetries, start, callCount, traceIDForLog)
+	respCtx := responseProcessingContext{
+		attempt:    attempt,
+		maxRetries: maxRetries,
+		start:      start,
+		callCount:  callCount,
+		traceID:    traceIDForLog,
+	}
+	return c.processHTTPResponse(ctx, httpReq, httpResp, respCtx)
 }
 
 func (c *client) handleExecutionError(ctx context.Context, err error, attempt, maxRetries int) attemptResult {
@@ -329,16 +345,13 @@ func (c *client) processHTTPResponse(
 	ctx context.Context,
 	httpReq *nethttp.Request,
 	httpResp *nethttp.Response,
-	attempt, maxRetries int,
-	start time.Time,
-	callCount int64,
-	traceID string,
+	respCtx responseProcessingContext,
 ) attemptResult {
-	resp, err := c.buildResponse(ctx, start, callCount, httpReq, httpResp)
+	resp, err := c.buildResponse(ctx, respCtx.start, respCtx.callCount, httpReq, httpResp)
 	if err != nil {
-		return c.handleResponseBuildError(ctx, err, attempt, maxRetries)
+		return c.handleResponseBuildError(ctx, err, respCtx.attempt, respCtx.maxRetries)
 	}
-	return c.finalizeResponse(ctx, resp, attempt, maxRetries, traceID)
+	return c.finalizeResponse(ctx, resp, respCtx.attempt, respCtx.maxRetries, respCtx.traceID)
 }
 
 func (c *client) handleResponseBuildError(ctx context.Context, err error, attempt, maxRetries int) attemptResult {

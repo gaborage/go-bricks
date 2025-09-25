@@ -1772,3 +1772,86 @@ func TestResolveDependenciesWithMultitenant(t *testing.T) {
 		assert.Nil(t, tenantConnManager) // Single-tenant mode
 	})
 }
+
+// createTestConfig creates a basic test configuration
+func createTestConfig() *config.Config {
+	return &config.Config{
+		App: config.AppConfig{
+			Name:    appName,
+			Version: appVersion,
+			Env:     "test",
+		},
+		Server: config.ServerConfig{
+			Host: "localhost",
+			Port: 8080,
+		},
+		Log: config.LogConfig{
+			Level:  "info",
+			Pretty: true,
+		},
+		Multitenant: config.MultitenantConfig{
+			Enabled: false,
+		},
+	}
+}
+
+// TestNew tests the New function (wrapper around NewWithOptions)
+func TestNew(t *testing.T) {
+	t.Run("success calls NewWithOptions with nil", func(t *testing.T) {
+		// Use default config loading but accept whatever is loaded
+		app, err := New()
+
+		require.NoError(t, err)
+		assert.NotNil(t, app)
+		// Verify it's created with some basic structure
+		assert.NotNil(t, app.cfg)
+		assert.NotEmpty(t, app.cfg.App.Name) // Should have some default name
+	})
+
+	t.Run("uses NewWithOptions internally", func(t *testing.T) {
+		// Test that New() is equivalent to NewWithOptions(nil)
+		// We can't easily mock the config loading error, so we'll verify it's the same behavior
+		app1, err1 := New()
+		app2, err2 := NewWithOptions(nil)
+
+		// Both should have the same result (success or failure)
+		assert.Equal(t, err1 == nil, err2 == nil)
+		if err1 == nil && err2 == nil {
+			assert.Equal(t, app1.cfg.App.Name, app2.cfg.App.Name)
+			assert.Equal(t, app1.cfg.App.Env, app2.cfg.App.Env)
+		}
+	})
+}
+
+// TestGetMessagingDeclarations tests the GetMessagingDeclarations method
+func TestGetMessagingDeclarations(t *testing.T) {
+	t.Run("returns nil when no declarations captured", func(t *testing.T) {
+		cfg := createTestConfig()
+		app, err := NewWithConfig(cfg, nil)
+		require.NoError(t, err)
+
+		declarations := app.GetMessagingDeclarations()
+		assert.Nil(t, declarations)
+	})
+
+	t.Run("returns captured declarations", func(t *testing.T) {
+		cfg := createTestConfig()
+		cfg.Multitenant.Enabled = true
+
+		// Create test options with required multitenant components
+		tenantProvider := &mockTenantConfigProvider{}
+		opts := &Options{
+			TenantConfigProvider: tenantProvider,
+		}
+
+		app, err := NewWithConfig(cfg, opts)
+		require.NoError(t, err)
+
+		// Manually set messaging declarations to test the getter
+		mockDeclarations := &multitenant.MessagingDeclarations{}
+		app.messagingDeclarations = mockDeclarations
+
+		declarations := app.GetMessagingDeclarations()
+		assert.Equal(t, mockDeclarations, declarations)
+	})
+}

@@ -3,6 +3,7 @@ package config
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -292,4 +293,22 @@ func TestIDValidationConfigDefaultPattern(t *testing.T) {
 			assert.False(t, regex.MatchString(invalid), "Expected '%s' to be invalid", invalid)
 		}
 	})
+}
+
+func TestMultitenantMessagingConfigNormalize(t *testing.T) {
+	cfg := MultitenantMessagingConfig{}
+	cfg.Normalize()
+	assert.Equal(t, 5*time.Minute, cfg.PublisherTTL)
+	assert.Equal(t, 50, cfg.MaxPublishers)
+	assert.Equal(t, time.Minute, cfg.CleanupInterval)
+
+	custom := MultitenantMessagingConfig{
+		PublisherTTL:    2 * time.Minute,
+		MaxPublishers:   10,
+		CleanupInterval: 30 * time.Second,
+	}
+	custom.Normalize()
+	assert.Equal(t, 2*time.Minute, custom.PublisherTTL)
+	assert.Equal(t, 10, custom.MaxPublishers)
+	assert.Equal(t, 30*time.Second, custom.CleanupInterval)
 }

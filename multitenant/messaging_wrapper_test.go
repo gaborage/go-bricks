@@ -10,7 +10,10 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-const testTenantID = "test-tenant"
+const (
+	testTenantID = "test-tenant"
+	testMessage  = "test message"
+)
 
 func TestNewTenantAMQPClient(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
@@ -23,18 +26,18 @@ func TestNewTenantAMQPClient(t *testing.T) {
 	assert.Equal(t, tenantID, wrapper.tenantID)
 }
 
-func TestTenantAMQPClient_PublishToExchange_InjectsTenantID(t *testing.T) {
+func TestTenantAMQPClientPublishToExchangeInjectsTenantID(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
 	options := messaging.PublishOptions{
-		Exchange:   "test.exchange",
-		RoutingKey: "test.key",
+		Exchange:   testExchange,
+		RoutingKey: testRoutingKey,
 		Mandatory:  true,
 	}
-	data := []byte("test message")
+	data := []byte(testMessage)
 
 	err := wrapper.PublishToExchange(ctx, options, data)
 	require.NoError(t, err)
@@ -47,21 +50,21 @@ func TestTenantAMQPClient_PublishToExchange_InjectsTenantID(t *testing.T) {
 	// but we can verify the call was made successfully, meaning tenant_id injection worked
 }
 
-func TestTenantAMQPClient_PublishToExchange_PreservesExistingHeaders(t *testing.T) {
+func TestTenantAMQPClientPublishToExchangePreservesExistingHeaders(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
 	options := messaging.PublishOptions{
-		Exchange:   "test.exchange",
-		RoutingKey: "test.key",
+		Exchange:   testExchange,
+		RoutingKey: testRoutingKey,
 		Headers: map[string]any{
 			"existing_header": "existing_value",
 			"another_header":  42,
 		},
 	}
-	data := []byte("test message")
+	data := []byte(testMessage)
 
 	err := wrapper.PublishToExchange(ctx, options, data)
 	require.NoError(t, err)
@@ -75,18 +78,18 @@ func TestTenantAMQPClient_PublishToExchange_PreservesExistingHeaders(t *testing.
 	// passes if the injection logic doesn't overwrite the entire headers map)
 }
 
-func TestTenantAMQPClient_PublishToExchange_CreatesHeadersMapIfNil(t *testing.T) {
+func TestTenantAMQPClientPublishToExchangeCreatesHeadersMapIfNil(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
 	options := messaging.PublishOptions{
-		Exchange:   "test.exchange",
-		RoutingKey: "test.key",
+		Exchange:   testExchange,
+		RoutingKey: testRoutingKey,
 		Headers:    nil, // Explicitly nil headers
 	}
-	data := []byte("test message")
+	data := []byte(testMessage)
 
 	err := wrapper.PublishToExchange(ctx, options, data)
 	require.NoError(t, err)
@@ -96,14 +99,14 @@ func TestTenantAMQPClient_PublishToExchange_CreatesHeadersMapIfNil(t *testing.T)
 	assert.Equal(t, 1, counts.Publish)
 }
 
-func TestTenantAMQPClient_Publish_DelegatesToPublishToExchange(t *testing.T) {
+func TestTenantAMQPClientPublishDelegatesToPublishToExchange(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
 	destination := "test.destination"
-	data := []byte("test message")
+	data := []byte(testMessage)
 
 	err := wrapper.Publish(ctx, destination, data)
 	require.NoError(t, err)
@@ -113,13 +116,13 @@ func TestTenantAMQPClient_Publish_DelegatesToPublishToExchange(t *testing.T) {
 	assert.Equal(t, 1, counts.Publish)
 }
 
-func TestTenantAMQPClient_Consume_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientConsumeDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
-	destination := "test.queue"
+	destination := testQueue
 
 	ch, err := wrapper.Consume(ctx, destination)
 	require.NoError(t, err)
@@ -134,14 +137,14 @@ func TestTenantAMQPClient_Consume_DelegatesToBase(t *testing.T) {
 	assert.Equal(t, 1, counts.Consume)
 }
 
-func TestTenantAMQPClient_ConsumeFromQueue_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientConsumeFromQueueDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
 	ctx := context.Background()
 	options := messaging.ConsumeOptions{
-		Queue:    "test.queue",
+		Queue:    testQueue,
 		Consumer: "test-consumer",
 		AutoAck:  true,
 	}
@@ -159,12 +162,12 @@ func TestTenantAMQPClient_ConsumeFromQueue_DelegatesToBase(t *testing.T) {
 	assert.Equal(t, 1, counts.Consume)
 }
 
-func TestTenantAMQPClient_DeclareQueue_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientDeclareQueueDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
-	err := wrapper.DeclareQueue("test.queue", true, false, false, false)
+	err := wrapper.DeclareQueue(testQueue, true, false, false, false)
 	require.NoError(t, err)
 
 	// Verify the call was delegated
@@ -175,19 +178,19 @@ func TestTenantAMQPClient_DeclareQueue_DelegatesToBase(t *testing.T) {
 	calls := baseClient.GetQueueCalls()
 	require.Len(t, calls, 1)
 	call := calls[0]
-	assert.Equal(t, "test.queue", call.Name)
+	assert.Equal(t, testQueue, call.Name)
 	assert.True(t, call.Durable)
 	assert.False(t, call.AutoDelete)
 	assert.False(t, call.Exclusive)
 	assert.False(t, call.NoWait)
 }
 
-func TestTenantAMQPClient_DeclareExchange_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientDeclareExchangeDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
-	err := wrapper.DeclareExchange("test.exchange", "topic", true, false, false, false)
+	err := wrapper.DeclareExchange(testExchange, "topic", true, false, false, false)
 	require.NoError(t, err)
 
 	// Verify the call was delegated
@@ -198,7 +201,7 @@ func TestTenantAMQPClient_DeclareExchange_DelegatesToBase(t *testing.T) {
 	calls := baseClient.GetExchangeCalls()
 	require.Len(t, calls, 1)
 	call := calls[0]
-	assert.Equal(t, "test.exchange", call.Name)
+	assert.Equal(t, testExchange, call.Name)
 	assert.Equal(t, "topic", call.Kind)
 	assert.True(t, call.Durable)
 	assert.False(t, call.AutoDelete)
@@ -206,12 +209,12 @@ func TestTenantAMQPClient_DeclareExchange_DelegatesToBase(t *testing.T) {
 	assert.False(t, call.NoWait)
 }
 
-func TestTenantAMQPClient_BindQueue_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientBindQueueDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
 
-	err := wrapper.BindQueue("test.queue", "test.exchange", "test.key", false)
+	err := wrapper.BindQueue(testQueue, testExchange, testRoutingKey, false)
 	require.NoError(t, err)
 
 	// Verify the call was delegated
@@ -222,13 +225,13 @@ func TestTenantAMQPClient_BindQueue_DelegatesToBase(t *testing.T) {
 	calls := baseClient.GetBindingCalls()
 	require.Len(t, calls, 1)
 	call := calls[0]
-	assert.Equal(t, "test.queue", call.Queue)
-	assert.Equal(t, "test.exchange", call.Exchange)
-	assert.Equal(t, "test.key", call.RoutingKey)
+	assert.Equal(t, testQueue, call.Queue)
+	assert.Equal(t, testExchange, call.Exchange)
+	assert.Equal(t, testRoutingKey, call.RoutingKey)
 	assert.False(t, call.NoWait)
 }
 
-func TestTenantAMQPClient_Close_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientCloseDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
@@ -243,7 +246,7 @@ func TestTenantAMQPClient_Close_DelegatesToBase(t *testing.T) {
 	assert.False(t, wrapper.IsReady())
 }
 
-func TestTenantAMQPClient_IsReady_DelegatesToBase(t *testing.T) {
+func TestTenantAMQPClientIsReadyDelegatesToBase(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	tenantID := testTenantID
 	wrapper := NewTenantAMQPClient(baseClient, tenantID)
@@ -260,7 +263,7 @@ func TestTenantAMQPClient_IsReady_DelegatesToBase(t *testing.T) {
 	assert.False(t, wrapper.IsReady())
 }
 
-func TestTenantAMQPClient_InterfaceCompliance(t *testing.T) {
+func TestTenantAMQPClientInterfaceCompliance(t *testing.T) {
 	baseClient := NewRecordingAMQPClient()
 	wrapper := NewTenantAMQPClient(baseClient, testTenantID)
 
