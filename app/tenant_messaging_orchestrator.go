@@ -38,11 +38,6 @@ func (o *tenantMessagingOrchestrator) CaptureDeclarations() (*multitenant.Messag
 	recordingClient := multitenant.NewRecordingAMQPClient()
 	recordingRegistry := messaging.NewRegistry(recordingClient, o.log)
 
-	originalRegistry := o.registry.messagingRegistry
-	o.registry.messagingRegistry = recordingRegistry
-	defer func() {
-		o.registry.messagingRegistry = originalRegistry
-	}()
 
 	for _, module := range o.registry.modules {
 		o.log.Debug().
