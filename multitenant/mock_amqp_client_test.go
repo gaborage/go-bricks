@@ -10,6 +10,12 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+const (
+	testExchange   = "test.exchange"
+	testQueue      = "test.queue"
+	testRoutingKey = "test.routing.key"
+)
+
 func TestNewRecordingAMQPClient(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
@@ -22,7 +28,7 @@ func TestNewRecordingAMQPClient(t *testing.T) {
 	var _ messaging.Client = client
 }
 
-func TestRecordingAMQPClient_IsReady(t *testing.T) {
+func TestRecordingAMQPClientIsReady(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
 	// Should be ready initially
@@ -34,11 +40,11 @@ func TestRecordingAMQPClient_IsReady(t *testing.T) {
 	assert.False(t, client.IsReady())
 }
 
-func TestRecordingAMQPClient_DeclareExchange(t *testing.T) {
+func TestRecordingAMQPClientDeclareExchange(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
 	// Should succeed and record the call
-	err := client.DeclareExchange("test.exchange", "topic", true, false, false, false)
+	err := client.DeclareExchange(testExchange, "topic", true, false, false, false)
 	assert.NoError(t, err)
 
 	// Verify the call was recorded
@@ -46,7 +52,7 @@ func TestRecordingAMQPClient_DeclareExchange(t *testing.T) {
 	require.Len(t, calls, 1)
 
 	call := calls[0]
-	assert.Equal(t, "test.exchange", call.Name)
+	assert.Equal(t, testExchange, call.Name)
 	assert.Equal(t, "topic", call.Kind)
 	assert.True(t, call.Durable)
 	assert.False(t, call.AutoDelete)
@@ -60,11 +66,11 @@ func TestRecordingAMQPClient_DeclareExchange(t *testing.T) {
 	assert.Equal(t, 0, counts.BindQueue)
 }
 
-func TestRecordingAMQPClient_DeclareQueue(t *testing.T) {
+func TestRecordingAMQPClientDeclareQueue(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
 	// Should succeed and record the call
-	err := client.DeclareQueue("test.queue", true, false, false, false)
+	err := client.DeclareQueue(testQueue, true, false, false, false)
 	assert.NoError(t, err)
 
 	// Verify the call was recorded
@@ -72,7 +78,7 @@ func TestRecordingAMQPClient_DeclareQueue(t *testing.T) {
 	require.Len(t, calls, 1)
 
 	call := calls[0]
-	assert.Equal(t, "test.queue", call.Name)
+	assert.Equal(t, testQueue, call.Name)
 	assert.True(t, call.Durable)
 	assert.False(t, call.AutoDelete)
 	assert.False(t, call.Exclusive)
@@ -85,11 +91,11 @@ func TestRecordingAMQPClient_DeclareQueue(t *testing.T) {
 	assert.Equal(t, 0, counts.BindQueue)
 }
 
-func TestRecordingAMQPClient_BindQueue(t *testing.T) {
+func TestRecordingAMQPClientBindQueue(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
 	// Should succeed and record the call
-	err := client.BindQueue("test.queue", "test.exchange", "test.routing.key", false)
+	err := client.BindQueue(testQueue, testExchange, testRoutingKey, false)
 	assert.NoError(t, err)
 
 	// Verify the call was recorded
@@ -97,9 +103,9 @@ func TestRecordingAMQPClient_BindQueue(t *testing.T) {
 	require.Len(t, calls, 1)
 
 	call := calls[0]
-	assert.Equal(t, "test.queue", call.Queue)
-	assert.Equal(t, "test.exchange", call.Exchange)
-	assert.Equal(t, "test.routing.key", call.RoutingKey)
+	assert.Equal(t, testQueue, call.Queue)
+	assert.Equal(t, testExchange, call.Exchange)
+	assert.Equal(t, testRoutingKey, call.RoutingKey)
 	assert.False(t, call.NoWait)
 
 	// Verify call counts
@@ -109,13 +115,13 @@ func TestRecordingAMQPClient_BindQueue(t *testing.T) {
 	assert.Equal(t, 1, counts.BindQueue)
 }
 
-func TestRecordingAMQPClient_PublishToExchange(t *testing.T) {
+func TestRecordingAMQPClientPublishToExchange(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
 	options := messaging.PublishOptions{
-		Exchange:   "test.exchange",
-		RoutingKey: "test.routing.key",
+		Exchange:   testExchange,
+		RoutingKey: testRoutingKey,
 		Mandatory:  true,
 	}
 	data := []byte("test message")
@@ -129,12 +135,12 @@ func TestRecordingAMQPClient_PublishToExchange(t *testing.T) {
 	assert.Equal(t, 1, counts.Publish)
 }
 
-func TestRecordingAMQPClient_ConsumeFromQueue(t *testing.T) {
+func TestRecordingAMQPClientConsumeFromQueue(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
 	options := messaging.ConsumeOptions{
-		Queue:    "test.queue",
+		Queue:    testQueue,
 		Consumer: "test-consumer",
 		AutoAck:  true,
 	}
@@ -153,7 +159,7 @@ func TestRecordingAMQPClient_ConsumeFromQueue(t *testing.T) {
 	assert.Equal(t, 1, counts.Consume)
 }
 
-func TestRecordingAMQPClient_BasicPublish(t *testing.T) {
+func TestRecordingAMQPClientBasicPublish(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
@@ -168,7 +174,7 @@ func TestRecordingAMQPClient_BasicPublish(t *testing.T) {
 	assert.Equal(t, 1, counts.Publish)
 }
 
-func TestRecordingAMQPClient_BasicConsume(t *testing.T) {
+func TestRecordingAMQPClientBasicConsume(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
@@ -186,7 +192,7 @@ func TestRecordingAMQPClient_BasicConsume(t *testing.T) {
 	assert.Equal(t, 1, counts.Consume)
 }
 
-func TestRecordingAMQPClient_MultipleOperations(t *testing.T) {
+func TestRecordingAMQPClientMultipleOperations(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
@@ -225,7 +231,7 @@ func TestRecordingAMQPClient_MultipleOperations(t *testing.T) {
 	assert.Equal(t, "key2", bindingCalls[1].RoutingKey)
 }
 
-func TestRecordingAMQPClient_Reset(t *testing.T) {
+func TestRecordingAMQPClientReset(t *testing.T) {
 	client := NewRecordingAMQPClient()
 
 	// Perform some operations
@@ -253,7 +259,7 @@ func TestRecordingAMQPClient_Reset(t *testing.T) {
 	assert.Empty(t, client.GetBindingCalls())
 }
 
-func TestRecordingAMQPClient_ConcurrentAccess(t *testing.T) {
+func TestRecordingAMQPClientConcurrentAccess(t *testing.T) {
 	client := NewRecordingAMQPClient()
 	ctx := context.Background()
 
@@ -264,9 +270,9 @@ func TestRecordingAMQPClient_ConcurrentAccess(t *testing.T) {
 	done := make(chan bool, numGoroutines)
 
 	// Start multiple goroutines performing operations
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(_ int) {
-			for j := 0; j < numOperations; j++ {
+			for j := range numOperations {
 				switch j % 4 {
 				case 0:
 					client.DeclareExchange("ex", "direct", true, false, false, false)
