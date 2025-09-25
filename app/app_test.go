@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -213,6 +214,7 @@ type mockServer struct {
 	startCalls    int32
 	shutdownCalls int32
 	e             *echo.Echo
+	readyHandler  echo.HandlerFunc
 }
 
 type noopRouteRegistrar struct{}
@@ -260,6 +262,10 @@ func (m *mockServer) Echo() *echo.Echo {
 
 func (m *mockServer) ModuleGroup() server.RouteRegistrar {
 	return &noopRouteRegistrar{}
+}
+
+func (m *mockServer) RegisterReadyHandler(handler echo.HandlerFunc) {
+	m.readyHandler = handler
 }
 
 func (m *mockServer) startCount() int {
@@ -342,10 +348,15 @@ func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutPro
 	mockMessaging := &MockMessagingClient{}
 
 	deps := &ModuleDeps{
-		DB:        mockDB,
-		Logger:    log,
-		Messaging: mockMessaging,
-		Config:    cfg,
+		Logger: log,
+		Config: cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			// MockMessagingClient implements AMQPClient interface
+			return mockMessaging, nil
+		},
 	}
 	registry := NewModuleRegistry(deps)
 
@@ -654,8 +665,10 @@ func TestAppRegisterMessagingSuccess(t *testing.T) {
 func TestAppRegisterMessagingNoMessagingClient(t *testing.T) {
 	app, _, _ := createTestApp(t)
 
-	// Set messaging to nil to simulate no messaging client
-	app.registry.deps.Messaging = nil
+	// Set messaging function to return error to simulate no messaging client
+	app.registry.deps.GetMessaging = func(_ context.Context) (messaging.AMQPClient, error) {
+		return nil, fmt.Errorf("messaging not configured")
+	}
 	// Recreate registry without messaging
 	app.registry = NewModuleRegistry(app.registry.deps)
 
@@ -1498,18 +1511,16 @@ func TestResolveMultitenantDependencies(t *testing.T) {
 				assert.NotNil(t, tenantConnManager)
 
 				// Verify deps structure
-				assert.Nil(t, deps.DB)
 				assert.Equal(t, log, deps.Logger)
-				assert.Nil(t, deps.Messaging)
 				assert.Equal(t, cfg, deps.Config)
-				assert.NotNil(t, deps.DBFromContext)
-				assert.Nil(t, deps.MessagingFromContext) // Phase 2 implementation
+				assert.NotNil(t, deps.GetDB)
+				assert.NotNil(t, deps.GetMessaging)
 
-				// Test DBFromContext function coverage
+				// Test GetDB function coverage
 				ctx := context.Background()
 
 				// Test without tenant in context
-				_, err := deps.DBFromContext(ctx)
+				_, err := deps.GetDB(ctx)
 				assert.ErrorIs(t, err, ErrNoTenantInContext)
 
 				// For the test with tenant config provider, we need to setup the mock expectation
@@ -1527,7 +1538,7 @@ func TestResolveMultitenantDependencies(t *testing.T) {
 
 					// Test with tenant in context - this will call the mock
 					ctxWithTenant := multitenant.SetTenant(ctx, "test-tenant")
-					_, _ = deps.DBFromContext(ctxWithTenant)
+					_, _ = deps.GetDB(ctxWithTenant)
 				}
 			}
 		})

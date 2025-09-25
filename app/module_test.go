@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,19 +11,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
+)
+
+const (
+	testModule = "test-module"
 )
 
 func TestNewModuleRegistry(t *testing.T) {
 	log := logger.New("debug", true)
 	mockMessaging := &MockMessagingClient{}
 
+	mockDB := &MockDatabase{}
 	deps := &ModuleDeps{
-		DB:        &MockDatabase{},
-		Logger:    log,
-		Messaging: mockMessaging,
-		Config:    &config.Config{},
+		Logger: log,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -30,22 +43,28 @@ func TestNewModuleRegistry(t *testing.T) {
 	assert.Equal(t, deps, registry.deps)
 	assert.Equal(t, log, registry.logger)
 	assert.Empty(t, registry.modules)
-	// messaging registry should now be created since MockMessagingClient implements AMQPClient
-	assert.NotNil(t, registry.messagingRegistry)
+	// messaging registry should be nil until first use (lazy creation)
+	assert.Nil(t, registry.messagingRegistry)
 }
 
 func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	log := logger.New("debug", true)
+	mockDB := &MockDatabase{}
+	mockMessaging := &MockMessagingClient{}
 	deps := &ModuleDeps{
-		DB:        &MockDatabase{},
-		Logger:    log,
-		Messaging: &MockMessagingClient{},
-		Config:    &config.Config{},
+		Logger: log,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	registry := NewModuleRegistry(deps)
 
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: testModule}
 	module.On("Init", deps).Return(nil)
 
 	err := registry.Register(module)
@@ -58,11 +77,17 @@ func TestModuleRegistryRegisterSuccess(t *testing.T) {
 
 func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
+	mockDB := &MockDatabase{}
+	mockMessaging := &MockMessagingClient{}
 	deps := &ModuleDeps{
-		DB:        &MockDatabase{},
-		Logger:    log,
-		Messaging: &MockMessagingClient{},
-		Config:    &config.Config{},
+		Logger: log,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -81,11 +106,17 @@ func TestModuleRegistryRegisterInitError(t *testing.T) {
 
 func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	log := logger.New("debug", true)
+	mockDB := &MockDatabase{}
+	mockMessaging := &MockMessagingClient{}
 	deps := &ModuleDeps{
-		DB:        &MockDatabase{},
-		Logger:    log,
-		Messaging: &MockMessagingClient{},
-		Config:    &config.Config{},
+		Logger: log,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	registry := NewModuleRegistry(deps)
@@ -121,16 +152,22 @@ func TestModuleRegistryRegisterRoutes(t *testing.T) {
 
 func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 	log := logger.New("debug", true)
+	mockDB := &MockDatabase{}
 	deps := &ModuleDeps{
-		DB:        &MockDatabase{},
-		Logger:    log,
-		Messaging: nil, // No messaging client
+		Logger: log,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return nil, fmt.Errorf("messaging not configured") // No messaging client
+		},
 	}
 
 	registry := NewModuleRegistry(deps)
 
 	// Add a module
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: testModule}
 	module.On("Init", deps).Return(nil)
 	require.NoError(t, registry.Register(module))
 
@@ -217,7 +254,7 @@ func TestModuleRegistryShutdownSingleModule(t *testing.T) {
 	registry := NewModuleRegistry(deps)
 
 	// Add a module
-	module := &MockModule{name: "test-module"}
+	module := &MockModule{name: testModule}
 	module.On("Init", deps).Return(nil)
 	require.NoError(t, registry.Register(module))
 

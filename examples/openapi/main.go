@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/examples/openapi/user"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -39,10 +41,17 @@ func main() {
 
 	// Create module dependencies
 	deps := &app.ModuleDeps{
-		DB:        db,
-		Logger:    appLogger,
-		Messaging: nil, // No messaging in this example
-		Config:    cfg,
+		Logger: appLogger,
+		Config: cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			if db == nil {
+				return nil, fmt.Errorf("database not configured")
+			}
+			return db, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return nil, fmt.Errorf("messaging not configured") // No messaging in this example
+		},
 	}
 
 	// Create module registry

@@ -13,7 +13,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -32,9 +32,8 @@ const (
 
 // Example complete module for demonstration
 type UserModule struct {
-	db      types.Interface
+	deps    *app.ModuleDeps
 	logger  logger.Logger
-	client  messaging.Client
 	service *UserService
 }
 
@@ -43,12 +42,11 @@ func (m *UserModule) Name() string {
 }
 
 func (m *UserModule) Init(deps *app.ModuleDeps) error {
-	m.db = deps.DB
+	m.deps = deps
 	m.logger = deps.Logger
-	m.client = deps.Messaging
 
-	// Initialize service
-	m.service = NewUserService(m.db)
+	// Initialize service with dynamic database access
+	m.service = NewUserService(nil) // Updated to not require DB in constructor
 
 	return nil
 }
@@ -167,7 +165,7 @@ func (m *MockLogEvent) Msg(msg string) {
 func TestUserModuleCompleteIntegration(t *testing.T) {
 	// Set up all mocks
 	mockDB := fixtures.NewHealthyDatabase()
-	mockMessaging := fixtures.NewWorkingMessagingClient()
+	mockMessaging := fixtures.NewWorkingAMQPClient()
 	mockRegistry := fixtures.NewWorkingRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
@@ -183,10 +181,14 @@ func TestUserModuleCompleteIntegration(t *testing.T) {
 
 	// Create module dependencies
 	deps := &app.ModuleDeps{
-		DB:        mockDB,
-		Messaging: mockMessaging,
-		Logger:    mockLogger,
-		Config:    cfg,
+		Logger: mockLogger,
+		Config: cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	// Initialize module
@@ -215,7 +217,7 @@ func TestUserModuleCompleteIntegration(t *testing.T) {
 func TestUserModuleHTTPHandlers(t *testing.T) {
 	// Set up minimal dependencies for HTTP testing
 	mockDB := fixtures.NewHealthyDatabase()
-	mockMessaging := fixtures.NewWorkingMessagingClient()
+	mockMessaging := fixtures.NewWorkingAMQPClient()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
 
@@ -226,10 +228,14 @@ func TestUserModuleHTTPHandlers(t *testing.T) {
 	mockLogEvent.On("Msg", mock.Anything).Return().Maybe()
 
 	deps := &app.ModuleDeps{
-		DB:        mockDB,
-		Messaging: mockMessaging,
-		Logger:    mockLogger,
-		Config:    &config.Config{},
+		Logger: mockLogger,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	// Initialize module
@@ -274,7 +280,7 @@ func TestUserModuleHTTPHandlers(t *testing.T) {
 // TestUserModule_MessagingIntegration demonstrates messaging integration testing
 func TestUserModuleMessagingIntegration(t *testing.T) {
 	mockDB := fixtures.NewHealthyDatabase()
-	mockMessaging := fixtures.NewWorkingMessagingClient()
+	mockMessaging := fixtures.NewWorkingAMQPClient()
 	mockRegistry := mocks.NewMockRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
@@ -303,10 +309,14 @@ func TestUserModuleMessagingIntegration(t *testing.T) {
 	mockLogEvent.On("Msg", mock.Anything).Return().Maybe()
 
 	deps := &app.ModuleDeps{
-		DB:        mockDB,
-		Messaging: mockMessaging,
-		Logger:    mockLogger,
-		Config:    &config.Config{},
+		Logger: mockLogger,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	// Initialize and test module
@@ -325,7 +335,7 @@ func TestUserModuleMessagingIntegration(t *testing.T) {
 func TestUserModuleErrorScenarios(t *testing.T) {
 	t.Run("database_failure", func(t *testing.T) {
 		mockDB := fixtures.NewFailingDatabase(assert.AnError)
-		mockMessaging := fixtures.NewWorkingMessagingClient()
+		mockMessaging := fixtures.NewWorkingAMQPClient()
 		mockLogger := &MockLogger{}
 		mockLogEvent := &MockLogEvent{}
 
@@ -336,10 +346,14 @@ func TestUserModuleErrorScenarios(t *testing.T) {
 		mockLogEvent.On("Msg", mock.Anything).Return().Maybe()
 
 		deps := &app.ModuleDeps{
-			DB:        mockDB,
-			Messaging: mockMessaging,
-			Logger:    mockLogger,
-			Config:    &config.Config{},
+			Logger: mockLogger,
+			Config: &config.Config{},
+			GetDB: func(_ context.Context) (database.Interface, error) {
+				return mockDB, nil
+			},
+			GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+				return mockMessaging, nil
+			},
 		}
 
 		module := &UserModule{}
@@ -356,7 +370,7 @@ func TestUserModuleErrorScenarios(t *testing.T) {
 
 	t.Run("messaging_failure", func(t *testing.T) {
 		mockDB := fixtures.NewHealthyDatabase()
-		mockMessaging := fixtures.NewFailingMessagingClient(0) // Fail immediately
+		mockMessaging := fixtures.NewFailingAMQPClient() // Fail immediately
 		mockLogger := &MockLogger{}
 		mockLogEvent := &MockLogEvent{}
 
@@ -366,10 +380,14 @@ func TestUserModuleErrorScenarios(t *testing.T) {
 		mockLogEvent.On("Msg", mock.Anything).Return().Maybe()
 
 		deps := &app.ModuleDeps{
-			DB:        mockDB,
-			Messaging: mockMessaging,
-			Logger:    mockLogger,
-			Config:    &config.Config{},
+			Logger: mockLogger,
+			Config: &config.Config{},
+			GetDB: func(_ context.Context) (database.Interface, error) {
+				return mockDB, nil
+			},
+			GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+				return mockMessaging, nil
+			},
 		}
 
 		module := &UserModule{}
@@ -391,10 +409,14 @@ func TestUserModuleConfigurationInjection(t *testing.T) {
 	// cfg.Set("user.timeout", "30s")
 
 	deps := &app.ModuleDeps{
-		DB:        fixtures.NewHealthyDatabase(),
-		Messaging: fixtures.NewWorkingMessagingClient(),
-		Logger:    &MockLogger{},
-		Config:    cfg,
+		Logger: &MockLogger{},
+		Config: cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return fixtures.NewHealthyDatabase(), nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return fixtures.NewWorkingAMQPClient(), nil
+		},
 	}
 
 	module := &UserModule{}
@@ -409,7 +431,7 @@ func TestUserModuleConfigurationInjection(t *testing.T) {
 // TestUserModule_LifecycleManagement demonstrates module lifecycle testing
 func TestUserModuleLifecycleManagement(t *testing.T) {
 	mockDB := fixtures.NewHealthyDatabase()
-	mockMessaging := fixtures.NewWorkingMessagingClient()
+	mockMessaging := fixtures.NewWorkingAMQPClient()
 	mockRegistry := fixtures.NewWorkingRegistry()
 	mockLogger := &MockLogger{}
 	mockLogEvent := &MockLogEvent{}
@@ -421,10 +443,14 @@ func TestUserModuleLifecycleManagement(t *testing.T) {
 	mockLogEvent.On("Msg", mock.Anything).Return().Maybe()
 
 	deps := &app.ModuleDeps{
-		DB:        mockDB,
-		Messaging: mockMessaging,
-		Logger:    mockLogger,
-		Config:    &config.Config{},
+		Logger: mockLogger,
+		Config: &config.Config{},
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			return mockDB, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return mockMessaging, nil
+		},
 	}
 
 	module := &UserModule{}

@@ -39,32 +39,15 @@ type client struct {
 
 // NewClient creates a new REST client with default configuration
 func NewClient(log logger.Logger) Client {
-	return &client{
-		httpClient: &nethttp.Client{
-			Timeout: DefaultTimeout,
-		},
-		logger: log,
-		config: &Config{
-			Timeout:              DefaultTimeout,
-			MaxRetries:           DefaultMaxRetries,
-			RetryDelay:           DefaultRetryDelay,
-			RequestInterceptors:  []RequestInterceptor{},
-			ResponseInterceptors: []ResponseInterceptor{},
-			DefaultHeaders:       make(map[string]string),
-			LogPayloads:          false,
-			MaxPayloadLogBytes:   1024,
-			TraceIDHeader:        HeaderXRequestID,
-			NewTraceID:           func() string { return EnsureTraceID(context.Background()) },
-			TraceIDExtractor:     TraceIDFromContext,
-			EnableW3CTrace:       true,
-		},
-	}
+	return NewBuilder(log).Build()
 }
 
 // Builder provides a fluent interface for configuring the REST client
 type Builder struct {
-	config *Config
-	logger logger.Logger
+	config     *Config
+	logger     logger.Logger
+	httpClient *nethttp.Client
+	transport  nethttp.RoundTripper
 }
 
 // NewBuilder creates a new client builder
@@ -133,7 +116,7 @@ func (b *Builder) WithTraceIDGenerator(gen func() string) *Builder {
 }
 
 // WithTraceIDExtractor sets a function to extract a trace ID from context
-func (b *Builder) WithTraceIDExtractor(extractor func(ctx context.Context) (string, bool)) *Builder {
+func (b *Builder) WithTraceIDExtractor(extractor func(_ context.Context) (string, bool)) *Builder {
 	if extractor != nil {
 		b.config.TraceIDExtractor = extractor
 	}
@@ -143,6 +126,19 @@ func (b *Builder) WithTraceIDExtractor(extractor func(ctx context.Context) (stri
 // WithW3CTrace enables or disables W3C trace context propagation
 func (b *Builder) WithW3CTrace(enabled bool) *Builder {
 	b.config.EnableW3CTrace = enabled
+	return b
+}
+
+// WithHTTPClient allows providing a custom *http.Client instance.
+// When supplied, the builder uses it directly without modifying its Timeout or Transport.
+func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
+	b.httpClient = client
+	return b
+}
+
+// WithTransport sets a custom RoundTripper while still letting the builder manage other client settings.
+func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
+	b.transport = transport
 	return b
 }
 
@@ -162,10 +158,22 @@ func (b *Builder) WithResponseInterceptor(interceptor ResponseInterceptor) *Buil
 func (b *Builder) Build() Client {
 	// Deep-copy the builder config to avoid sharing mutable state
 	cfg := deepCopyConfig(b.config)
+
+	httpClient := b.httpClient
+	if httpClient == nil {
+		httpClient = &nethttp.Client{Timeout: cfg.Timeout}
+	} else if httpClient.Timeout == 0 {
+		// Respect existing non-zero timeouts on the provided client.
+		// When zero, default to the builder timeout to preserve previous behavior.
+		httpClient.Timeout = cfg.Timeout
+	}
+
+	if b.transport != nil {
+		httpClient.Transport = b.transport
+	}
+
 	return &client{
-		httpClient: &nethttp.Client{
-			Timeout: cfg.Timeout,
-		},
+		httpClient:           httpClient,
 		logger:               b.logger,
 		config:               cfg,
 		requestInterceptors:  cfg.RequestInterceptors,
@@ -252,6 +260,12 @@ func (c *client) Delete(ctx context.Context, req *Request) (*Response, error) {
 	return c.Do(ctx, nethttp.MethodDelete, req)
 }
 
+type attemptResult struct {
+	response *Response
+	err      error
+	retry    bool
+}
+
 // Do performs an HTTP request with the specified method
 func (c *client) Do(ctx context.Context, method string, req *Request) (*Response, error) {
 	if err := c.validateRequest(req); err != nil {
@@ -263,55 +277,122 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 	maxRetries := c.config.MaxRetries
 
 	for attempt := 0; ; attempt++ {
-		httpReq, err := c.buildRequest(ctx, method, req)
-		if err != nil {
-			return nil, err
-		}
-
-		// Capture the trace identifier from the outgoing request for logging/correlation
-		traceIDForLog := httpReq.Header.Get(c.config.TraceIDHeader)
-
-		c.logRequest(httpReq, req.Body, traceIDForLog)
-
-		httpResp, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			if cont, herr := c.shouldRetryOnError(ctx, err, attempt, maxRetries); herr != nil {
-				return nil, herr
-			} else if cont {
-				continue
-			}
-			// shouldRetryOnError returns a terminal error via herr; fallback for completeness
-			return nil, NewNetworkError("request execution failed", err)
-		}
-
-		resp, err := c.buildResponse(ctx, start, callCount, httpReq, httpResp)
-		if err != nil {
-			if cont, herr := c.shouldRetryOnBuildRespError(ctx, err, attempt, maxRetries); herr != nil {
-				return nil, herr
-			} else if cont {
-				continue
-			}
-			return nil, err
-		}
-
-		if IsSuccessStatus(resp.StatusCode) {
-			c.logResponse(resp, traceIDForLog)
-			return resp, nil
-		}
-
-		if cont, herr := c.shouldRetryStatus(ctx, resp.StatusCode, attempt, maxRetries); herr != nil {
-			return nil, herr
-		} else if cont {
+		result := c.executeAttempt(ctx, method, req, attempt, maxRetries, start, callCount)
+		if result.retry {
 			continue
 		}
+		return result.response, result.err
+	}
+}
 
-		c.logResponse(resp, traceIDForLog)
-		return resp, NewHTTPError(
+func (c *client) executeAttempt(
+	ctx context.Context,
+	method string,
+	req *Request,
+	attempt, maxRetries int,
+	start time.Time,
+	callCount int64,
+) attemptResult {
+	httpReq, err := c.buildRequest(ctx, method, req)
+	if err != nil {
+		return attemptResult{err: err}
+	}
+
+	traceHeader := c.traceHeaderName()
+	traceIDForLog := httpReq.Header.Get(traceHeader)
+
+	c.logRequest(httpReq, req.Body, traceIDForLog)
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		if httpResp != nil {
+			httpResp.Body.Close()
+		}
+		return c.handleExecutionError(ctx, err, attempt, maxRetries)
+	}
+
+	return c.processHTTPResponse(ctx, httpReq, httpResp, attempt, maxRetries, start, callCount, traceIDForLog)
+}
+
+func (c *client) handleExecutionError(ctx context.Context, err error, attempt, maxRetries int) attemptResult {
+	retry, handledErr := c.handleExecError(ctx, err, attempt, maxRetries)
+	if handledErr != nil {
+		return attemptResult{err: handledErr}
+	}
+	if retry {
+		return attemptResult{retry: true}
+	}
+	return attemptResult{err: NewNetworkError("request execution failed", err)}
+}
+
+func (c *client) processHTTPResponse(
+	ctx context.Context,
+	httpReq *nethttp.Request,
+	httpResp *nethttp.Response,
+	attempt, maxRetries int,
+	start time.Time,
+	callCount int64,
+	traceID string,
+) attemptResult {
+	resp, err := c.buildResponse(ctx, start, callCount, httpReq, httpResp)
+	if err != nil {
+		return c.handleResponseBuildError(ctx, err, attempt, maxRetries)
+	}
+	return c.finalizeResponse(ctx, resp, attempt, maxRetries, traceID)
+}
+
+func (c *client) handleResponseBuildError(ctx context.Context, err error, attempt, maxRetries int) attemptResult {
+	retry, handledErr := c.handleBuildRespError(ctx, err, attempt, maxRetries)
+	if handledErr != nil {
+		return attemptResult{err: handledErr}
+	}
+	if retry {
+		return attemptResult{retry: true}
+	}
+	return attemptResult{err: err}
+}
+
+func (c *client) finalizeResponse(ctx context.Context, resp *Response, attempt, maxRetries int, traceID string) attemptResult {
+	if IsSuccessStatus(resp.StatusCode) {
+		c.logResponse(resp, traceID)
+		return attemptResult{response: resp}
+	}
+
+	retry, err := c.shouldRetryStatus(ctx, resp.StatusCode, attempt, maxRetries)
+	if err != nil {
+		return attemptResult{response: resp, err: err}
+	}
+	if retry {
+		return attemptResult{retry: true}
+	}
+
+	c.logResponse(resp, traceID)
+	return attemptResult{
+		response: resp,
+		err: NewHTTPError(
 			fmt.Sprintf("HTTP request failed with status %d", resp.StatusCode),
 			resp.StatusCode,
 			resp.Body,
-		)
+		),
 	}
+}
+
+// handleExecError delegates to shouldRetryOnError and normalizes its results.
+func (c *client) handleExecError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	cont, herr := c.shouldRetryOnError(ctx, err, attempt, maxRetries)
+	if herr != nil {
+		return false, herr
+	}
+	return cont, nil
+}
+
+// handleBuildRespError delegates to shouldRetryOnBuildRespError and normalizes its results.
+func (c *client) handleBuildRespError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
+	cont, herr := c.shouldRetryOnBuildRespError(ctx, err, attempt, maxRetries)
+	if herr != nil {
+		return false, herr
+	}
+	return cont, nil
 }
 
 // shouldRetryOnError determines whether to retry after a request execution error
@@ -439,47 +520,61 @@ func (c *client) extractTraceID(ctx context.Context) string {
 	return EnsureTraceID(ctx)
 }
 
+func (c *client) traceHeaderName() string {
+	if c.config != nil && c.config.TraceIDHeader != "" {
+		return c.config.TraceIDHeader
+	}
+	return HeaderXRequestID
+}
+
 // applyHeaders applies headers to the HTTP request
 func (c *client) applyHeaders(httpReq *nethttp.Request, req *Request) {
-	// Apply default headers first
-	for key, value := range c.config.DefaultHeaders {
-		httpReq.Header.Set(key, value)
+	applyHeaderMap(httpReq.Header, c.config.DefaultHeaders)
+	applyHeaderMap(httpReq.Header, req.Headers)
+	c.ensureContentTypeHeader(httpReq, req.Body)
+	c.ensureTraceIDHeader(httpReq)
+	if c.config.EnableW3CTrace {
+		c.ensureTraceContextHeaders(httpReq)
 	}
+}
 
-	// Apply request-specific headers (these override defaults)
-	for key, value := range req.Headers {
-		httpReq.Header.Set(key, value)
+func applyHeaderMap(dst nethttp.Header, headers map[string]string) {
+	if len(headers) == 0 {
+		return
 	}
+	for key, value := range headers {
+		dst.Set(key, value)
+	}
+}
 
-	// Set Content-Type if not already set and body is present
-	if httpReq.Header.Get("Content-Type") == "" && req.Body != nil {
+func (c *client) ensureContentTypeHeader(httpReq *nethttp.Request, body []byte) {
+	if body == nil {
+		return
+	}
+	if httpReq.Header.Get("Content-Type") == "" {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
+}
 
-	// Automatically add trace ID header if not already present
-	headerName := c.config.TraceIDHeader
-	if headerName == "" {
-		headerName = HeaderXRequestID
+func (c *client) ensureTraceIDHeader(httpReq *nethttp.Request) {
+	headerName := c.traceHeaderName()
+	if httpReq.Header.Get(headerName) != "" {
+		return
 	}
-	if httpReq.Header.Get(headerName) == "" {
-		httpReq.Header.Set(headerName, c.extractTraceID(httpReq.Context()))
-	}
+	httpReq.Header.Set(headerName, c.extractTraceID(httpReq.Context()))
+}
 
-	// W3C Trace Context: propagate or generate traceparent/tracestate if enabled
-	if c.config.EnableW3CTrace {
-		if httpReq.Header.Get(HeaderTraceParent) == "" {
-			// Try to get from context first
-			if tp, ok := TraceParentFromContext(httpReq.Context()); ok {
-				httpReq.Header.Set(HeaderTraceParent, tp)
-			} else {
-				// Generate a new traceparent
-				httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
-			}
+func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
+	if httpReq.Header.Get(HeaderTraceParent) == "" {
+		if tp, ok := TraceParentFromContext(httpReq.Context()); ok {
+			httpReq.Header.Set(HeaderTraceParent, tp)
+		} else {
+			httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
 		}
-		if httpReq.Header.Get(HeaderTraceState) == "" {
-			if ts, ok := TraceStateFromContext(httpReq.Context()); ok {
-				httpReq.Header.Set(HeaderTraceState, ts)
-			}
+	}
+	if httpReq.Header.Get(HeaderTraceState) == "" {
+		if ts, ok := TraceStateFromContext(httpReq.Context()); ok {
+			httpReq.Header.Set(HeaderTraceState, ts)
 		}
 	}
 }

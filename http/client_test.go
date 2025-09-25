@@ -51,6 +51,20 @@ func newIPv4TestServer(t *testing.T, handler nethttp.Handler) *httptest.Server {
 	return server
 }
 
+type roundTripperFunc func(*nethttp.Request) (*nethttp.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	return f(req)
+}
+
+type stubRoundTripper struct {
+	name string
+}
+
+func (s *stubRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	return nil, fmt.Errorf("blocked request %s via %s", req.URL, s.name)
+}
+
 func TestNewClient(t *testing.T) {
 	log := createTestLogger()
 	client := NewClient(log)
@@ -112,6 +126,43 @@ func TestBuilder(t *testing.T) {
 			WithResponseInterceptor(respInterceptor).
 			Build()
 		assert.NotNil(t, client)
+	})
+
+	t.Run("with custom http client", func(t *testing.T) {
+		customTransport := roundTripperFunc(func(req *nethttp.Request) (*nethttp.Response, error) {
+			return nil, fmt.Errorf("not implemented: %s", req.URL)
+		})
+		custom := &nethttp.Client{Timeout: 123 * time.Millisecond, Transport: customTransport}
+		built := NewBuilder(log).
+			WithHTTPClient(custom).
+			WithTimeout(5 * time.Second).
+			Build()
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Equal(t, custom, clientImpl.httpClient)
+		assert.Equal(t, 123*time.Millisecond, clientImpl.httpClient.Timeout)
+	})
+
+	t.Run("with custom http client zero timeout uses builder timeout", func(t *testing.T) {
+		custom := &nethttp.Client{}
+		built := NewBuilder(log).
+			WithHTTPClient(custom).
+			WithTimeout(2 * time.Second).
+			Build()
+
+		clientImpl := built.(*client)
+		assert.Equal(t, 2*time.Second, clientImpl.httpClient.Timeout)
+	})
+
+	t.Run("with custom transport", func(t *testing.T) {
+		transport := &stubRoundTripper{name: "stub"}
+		built := NewBuilder(log).
+			WithTransport(transport).
+			Build()
+
+		clientImpl := built.(*client)
+		assert.Equal(t, transport, clientImpl.httpClient.Transport)
 	})
 
 	t.Run("with trace ID header", func(t *testing.T) {

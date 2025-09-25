@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"sync"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -25,17 +26,20 @@ type Module interface {
 
 // ModuleDeps contains the dependencies that are injected into each module.
 // It provides access to core services like database, logging, and messaging.
-// In multi-tenant mode, DB and Messaging may be nil and the *FromContext functions
-// should be used instead to get tenant-specific connections.
+// All modules must use GetDB() and GetMessaging() functions for resource access.
 type ModuleDeps struct {
-	DB        database.Interface
-	Logger    logger.Logger
-	Messaging messaging.Client
-	Config    *config.Config
+	Logger logger.Logger
+	Config *config.Config
 
-	// Multi-tenant support (nil in single-tenant mode)
-	DBFromContext        func(ctx context.Context) (database.Interface, error)
-	MessagingFromContext func(ctx context.Context) (messaging.Client, error) // Phase 2
+	// GetDB returns a database interface for the current context.
+	// In single-tenant mode, returns the global database instance.
+	// In multi-tenant mode, resolves tenant from context and returns tenant-specific database.
+	GetDB func(_ context.Context) (database.Interface, error)
+
+	// GetMessaging returns a messaging client for the current context.
+	// In single-tenant mode, returns the global messaging client.
+	// In multi-tenant mode, resolves tenant from context and returns tenant-specific client.
+	GetMessaging func(_ context.Context) (messaging.AMQPClient, error)
 }
 
 // Describer is an optional interface that modules can implement to provide
@@ -141,23 +145,18 @@ type ModuleRegistry struct {
 	deps              *ModuleDeps
 	logger            logger.Logger
 	messagingRegistry *messaging.Registry
+	registryOnce      singleflight.Group // Protection for concurrent messaging registry initialization
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
 // It initializes an empty registry ready to accept module registrations.
+// Messaging registry initialization is handled separately based on the deployment mode.
 func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
-	var messagingRegistry *messaging.Registry
-
-	// Initialize messaging registry if AMQP client is available
-	if amqpClient, ok := deps.Messaging.(messaging.AMQPClient); ok && deps.Messaging != nil {
-		messagingRegistry = messaging.NewRegistry(amqpClient, deps.Logger)
-	}
-
 	return &ModuleRegistry{
 		modules:           make([]Module, 0),
 		deps:              deps,
 		logger:            deps.Logger,
-		messagingRegistry: messagingRegistry,
+		messagingRegistry: nil, // Will be set by app initialization based on mode
 	}
 }
 
@@ -198,11 +197,44 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	}
 }
 
+// initializeMessagingRegistry lazily initializes the messaging registry.
+// It uses singleflight to protect against concurrent initialization.
+func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*messaging.Registry, error) {
+	result, err, _ := r.registryOnce.Do("messaging-registry", func() (interface{}, error) {
+		if r.messagingRegistry != nil {
+			return r.messagingRegistry, nil
+		}
+
+		// Try to get messaging client from dependencies
+		client, err := r.deps.GetMessaging(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create new registry
+		registry := messaging.NewRegistry(client, r.logger)
+		r.messagingRegistry = registry
+
+		return registry, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result.(*messaging.Registry), nil
+}
+
 // RegisterMessaging calls RegisterMessaging on all registered modules.
 // It should be called after all modules have been registered but before starting the server.
 func (r *ModuleRegistry) RegisterMessaging() error {
-	if r.messagingRegistry == nil {
-		r.logger.Debug().Msg("No messaging registry available, skipping messaging registration")
+	// Lazily initialize messaging registry on demand
+	ctx := context.Background() // Use background context for infrastructure setup
+	registry, err := r.initializeMessagingRegistry(ctx)
+	if err != nil {
+		r.logger.Debug().
+			Err(err).
+			Msg("No messaging registry available, skipping messaging registration")
 		return nil
 	}
 
@@ -211,25 +243,24 @@ func (r *ModuleRegistry) RegisterMessaging() error {
 			Str("module", module.Name()).
 			Msg("Registering module messaging")
 
-		module.RegisterMessaging(r.messagingRegistry)
+		module.RegisterMessaging(registry)
 	}
 
 	// Declare all messaging infrastructure after all modules have registered
 	r.logger.Info().Msg("Declaring messaging infrastructure")
-	ctx := context.Background() // Use background context for infrastructure setup
-	if err := r.messagingRegistry.DeclareInfrastructure(ctx); err != nil {
+	if err := registry.DeclareInfrastructure(ctx); err != nil {
 		return err
 	}
 
 	// Start consumers after infrastructure is declared
 	r.logger.Info().Msg("Starting message consumers")
-	return r.messagingRegistry.StartConsumers(ctx)
+	return registry.StartConsumers(ctx)
 }
 
 // Shutdown gracefully shuts down all registered modules.
 // It calls each module's Shutdown method and logs any errors.
 func (r *ModuleRegistry) Shutdown() error {
-	// Stop consumers first
+	// Stop consumers first if messaging registry was initialized
 	if r.messagingRegistry != nil {
 		r.logger.Info().Msg("Stopping message consumers")
 		r.messagingRegistry.StopConsumers()
@@ -249,28 +280,6 @@ func (r *ModuleRegistry) Shutdown() error {
 		}
 	}
 	return nil
-}
-
-// DatabaseFrom returns a tenant-scoped DB when available, else the global DB.
-func (d *ModuleDeps) DatabaseFrom(ctx context.Context) (database.Interface, error) {
-	if d.DB != nil {
-		return d.DB, nil
-	}
-	if d.DBFromContext != nil {
-		return d.DBFromContext(ctx)
-	}
-	return nil, fmt.Errorf("database dependency not configured")
-}
-
-// MessagingClientFrom returns a tenant-scoped messaging client when available, else the global client.
-func (d *ModuleDeps) MessagingClientFrom(ctx context.Context) (messaging.Client, error) {
-	if d.Messaging != nil {
-		return d.Messaging, nil
-	}
-	if d.MessagingFromContext != nil {
-		return d.MessagingFromContext(ctx)
-	}
-	return nil, fmt.Errorf("messaging dependency not configured")
 }
 
 // getModulePackage extracts the package path from a module instance

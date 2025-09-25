@@ -40,6 +40,7 @@ type ServerRunner interface {
 	Shutdown(ctx context.Context) error
 	Echo() *echo.Echo
 	ModuleGroup() server.RouteRegistrar
+	RegisterReadyHandler(handler echo.HandlerFunc)
 }
 
 // OSSignalHandler implements SignalHandler using the real OS signal package
@@ -184,18 +185,18 @@ func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts 
 	}
 
 	deps := &ModuleDeps{
-		DB:        nil, // No single-tenant DB in multi-tenant mode
-		Logger:    log,
-		Messaging: nil, // No single-tenant messaging in multi-tenant mode
-		Config:    cfg,
-		DBFromContext: func(ctx context.Context) (database.Interface, error) {
+		Logger: log,
+		Config: cfg,
+		GetDB: func(ctx context.Context) (database.Interface, error) {
 			tenantID, ok := multitenant.GetTenant(ctx)
 			if !ok {
 				return nil, ErrNoTenantInContext
 			}
 			return tenantConnManager.GetDatabase(ctx, tenantID)
 		},
-		MessagingFromContext: nil, // Phase 2 implementation
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return nil, fmt.Errorf("messaging not yet implemented in multi-tenant mode") // Phase 2 implementation
+		},
 	}
 
 	return deps, nil, nil, tenantConnManager, nil
@@ -211,11 +212,24 @@ func resolveSingleTenantDependencies(cfg *config.Config, log logger.Logger, opts
 	msgClient := resolveMessaging(cfg, log, opts)
 
 	deps := &ModuleDeps{
-		DB:        db,
-		Logger:    log,
-		Messaging: msgClient,
-		Config:    cfg,
-		// Leave multi-tenant functions nil in single-tenant mode
+		Logger: log,
+		Config: cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			if db == nil {
+				return nil, fmt.Errorf("database not configured")
+			}
+			return db, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			if msgClient == nil {
+				return nil, fmt.Errorf("messaging not configured")
+			}
+			// Type assert to AMQPClient since we know that's what we create
+			if amqpClient, ok := msgClient.(messaging.AMQPClient); ok {
+				return amqpClient, nil
+			}
+			return nil, fmt.Errorf("messaging client is not an AMQPClient")
+		},
 	}
 
 	return deps, db, msgClient, nil, nil
@@ -344,7 +358,7 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		tenantConnManager: tenantConnManager,
 	}
 
-	srv.Echo().GET(cfg.Server.Path.Base+cfg.Server.Path.Ready, app.readyCheck)
+	srv.RegisterReadyHandler(app.readyCheck)
 
 	return app, nil
 }
