@@ -12,13 +12,26 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+// AMQPClientFactory creates AMQP clients for tenants
+type AMQPClientFactory interface {
+	CreateClient(url string, log logger.Logger) messaging.AMQPClient
+}
+
+// DefaultAMQPClientFactory creates real AMQP clients
+type DefaultAMQPClientFactory struct{}
+
+func (f *DefaultAMQPClientFactory) CreateClient(url string, log logger.Logger) messaging.AMQPClient {
+	return messaging.NewAMQPClient(url, log)
+}
+
 // TenantMessagingManager manages per-tenant AMQP clients and registries.
 // - Consumers are long-lived (no eviction) to avoid missing inbound messages.
 // - Publisher clients are cached with idle eviction.
 type TenantMessagingManager struct {
-	provider TenantConfigProvider
-	cache    *TenantConfigCache
-	log      logger.Logger
+	provider      TenantConfigProvider
+	cache         *TenantConfigCache
+	log           logger.Logger
+	clientFactory AMQPClientFactory
 
 	// publisher cache (evictable)
 	pubMu      sync.RWMutex
@@ -32,6 +45,11 @@ type TenantMessagingManager struct {
 
 	idleTTL             time.Duration
 	maxActivePublishers int
+
+	// Cleanup timer management
+	cleanupTimer  *time.Timer
+	cleanupStopCh chan struct{}
+	cleanupMu     sync.Mutex
 }
 
 type publisherEntry struct {
@@ -47,6 +65,10 @@ type consumerEntry struct {
 }
 
 func NewTenantMessagingManager(provider TenantConfigProvider, cache *TenantConfigCache, log logger.Logger, idleTTL time.Duration, maxActive int) *TenantMessagingManager {
+	return NewTenantMessagingManagerWithFactory(provider, cache, log, idleTTL, maxActive, &DefaultAMQPClientFactory{})
+}
+
+func NewTenantMessagingManagerWithFactory(provider TenantConfigProvider, cache *TenantConfigCache, log logger.Logger, idleTTL time.Duration, maxActive int, factory AMQPClientFactory) *TenantMessagingManager {
 	if cache == nil {
 		cache = NewTenantConfigCache(provider)
 	}
@@ -54,6 +76,7 @@ func NewTenantMessagingManager(provider TenantConfigProvider, cache *TenantConfi
 		provider:            provider,
 		cache:               cache,
 		log:                 log,
+		clientFactory:       factory,
 		publishers:          make(map[string]*publisherEntry),
 		consumers:           make(map[string]*consumerEntry),
 		idleTTL:             idleTTL,
@@ -105,7 +128,7 @@ func (m *TenantMessagingManager) initPublisher(ctx context.Context, tenantID str
 	}
 
 	// Create client
-	base := messaging.NewAMQPClient(cfg.URL, m.log)
+	base := m.clientFactory.CreateClient(cfg.URL, m.log)
 	wrapper := NewTenantAMQPClient(base, tenantID)
 
 	// Evict if needed
@@ -172,7 +195,7 @@ func (m *TenantMessagingManager) initConsumers(ctx context.Context, tenantID str
 		return fmt.Errorf("get messaging config: %w", err)
 	}
 
-	client := messaging.NewAMQPClient(cfg.URL, m.log)
+	client := m.clientFactory.CreateClient(cfg.URL, m.log)
 	// Build per-tenant registry
 	reg := messaging.NewRegistry(client, m.log)
 	// Replay declarations
@@ -204,4 +227,99 @@ func (m *TenantMessagingManager) CleanupPublishers() {
 		}
 	}
 	m.pubMu.Unlock()
+}
+
+// StartCleanup starts periodic cleanup of idle publisher clients.
+func (m *TenantMessagingManager) StartCleanup(interval time.Duration) {
+	m.cleanupMu.Lock()
+	defer m.cleanupMu.Unlock()
+
+	// Only start if not already running (timer is nil)
+	if m.cleanupTimer != nil {
+		return
+	}
+
+	m.cleanupTimer = time.NewTimer(interval)
+	stopCh := make(chan struct{})
+	m.cleanupStopCh = stopCh
+
+	go m.cleanupLoop(interval, m.cleanupTimer, stopCh)
+
+	m.log.Info().
+		Dur("interval", interval).
+		Msg("Started periodic publisher cleanup")
+}
+
+// StopCleanup stops the periodic cleanup timer.
+func (m *TenantMessagingManager) StopCleanup() {
+	m.cleanupMu.Lock()
+	defer m.cleanupMu.Unlock()
+
+	// Only stop if currently running (timer is not nil)
+	if m.cleanupTimer == nil {
+		return
+	}
+
+	timer := m.cleanupTimer
+	stopCh := m.cleanupStopCh
+
+	timer.Stop()
+	m.cleanupTimer = nil
+	m.cleanupStopCh = nil
+
+	close(stopCh)
+
+	m.log.Info().Msg("Stopped periodic publisher cleanup")
+}
+
+// cleanupLoop runs the periodic cleanup in a separate goroutine.
+func (m *TenantMessagingManager) cleanupLoop(interval time.Duration, timer *time.Timer, stopCh <-chan struct{}) {
+	for {
+		select {
+		case <-timer.C:
+			m.CleanupPublishers()
+
+			// Reset timer for next cleanup
+			// If cleanup is stopped, the goroutine will exit via the stop channel
+			timer.Reset(interval)
+
+		case <-stopCh:
+			m.log.Debug().Msg("Publisher cleanup loop stopped")
+			return
+		}
+	}
+}
+
+// Close stops cleanup and closes all publisher and consumer connections.
+func (m *TenantMessagingManager) Close() error {
+	m.StopCleanup()
+
+	var errors []error
+
+	// Close all publisher clients
+	m.pubMu.Lock()
+	for tid, entry := range m.publishers {
+		if err := entry.client.Close(); err != nil {
+			errors = append(errors, fmt.Errorf("failed to close publisher for tenant %s: %w", tid, err))
+		}
+	}
+	m.publishers = make(map[string]*publisherEntry)
+	m.pubMu.Unlock()
+
+	// Close all consumer clients
+	m.consMu.Lock()
+	for tid, entry := range m.consumers {
+		if err := entry.client.Close(); err != nil {
+			errors = append(errors, fmt.Errorf("failed to close consumer for tenant %s: %w", tid, err))
+		}
+	}
+	m.consumers = make(map[string]*consumerEntry)
+	m.consMu.Unlock()
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to close messaging manager: %v", errors)
+	}
+
+	m.log.Info().Msg("Tenant messaging manager closed successfully")
+	return nil
 }

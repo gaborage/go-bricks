@@ -75,6 +75,7 @@ type App struct {
 
 	// Multi-tenant support
 	tenantConnManager *multitenant.TenantConnectionManager
+	messagingManager  *multitenant.TenantMessagingManager
 
 	// Messaging declarations captured during startup for per-tenant replay
 	messagingDeclarations *multitenant.MessagingDeclarations
@@ -187,6 +188,9 @@ func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts 
 		return nil, nil, nil, nil, err
 	}
 
+	// Initialize messaging manager for multi-tenant messaging
+	messagingManager := resolveTenantMessagingManager(cfg, log, opts)
+
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: cfg,
@@ -197,8 +201,19 @@ func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts 
 			}
 			return tenantConnManager.GetDatabase(ctx, tenantID)
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, fmt.Errorf("messaging not yet implemented in multi-tenant mode") // Phase 2 implementation
+		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
+			if messagingManager == nil {
+				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
+			}
+
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, ErrNoTenantInContext
+			}
+
+			// This will be set later when app has captured declarations
+			// For now, return error indicating messaging manager needs declarations
+			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
 		},
 	}
 
@@ -236,6 +251,32 @@ func resolveSingleTenantDependencies(cfg *config.Config, log logger.Logger, opts
 	}
 
 	return deps, db, msgClient, nil, nil
+}
+
+// resolveTenantMessagingManager creates the tenant messaging manager for multi-tenant messaging
+func resolveTenantMessagingManager(cfg *config.Config, log logger.Logger, opts *Options) *multitenant.TenantMessagingManager {
+	if opts != nil && opts.TenantMessagingManager != nil {
+		return opts.TenantMessagingManager
+	}
+
+	if opts == nil || opts.TenantConfigProvider == nil {
+		return nil
+	}
+
+	cache := resolveTenantCache(cfg, opts)
+
+	// Configuration for messaging manager from config with sensible defaults
+	idleTTL := cfg.Multitenant.Messaging.PublisherTTL
+	if idleTTL <= 0 {
+		idleTTL = 5 * time.Minute
+	}
+
+	maxActive := cfg.Multitenant.Messaging.MaxPublishers
+	if maxActive <= 0 {
+		maxActive = 50
+	}
+
+	return multitenant.NewTenantMessagingManager(opts.TenantConfigProvider, cache, log, idleTTL, maxActive)
 }
 
 // resolveTenantConnectionManager creates the tenant connection manager
@@ -302,6 +343,7 @@ type Options struct {
 	TenantCacheOptions      []multitenant.CacheOption
 	TenantConnectionOptions []multitenant.ConnectionOption
 	TenantConnectionManager *multitenant.TenantConnectionManager
+	TenantMessagingManager  *multitenant.TenantMessagingManager
 }
 
 // New creates a new application instance with dependencies determined by configuration.
@@ -347,7 +389,11 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		return nil, err
 	}
 
-	registry := NewModuleRegistry(deps)
+	// Initialize messaging manager if in multi-tenant mode
+	var messagingManager *multitenant.TenantMessagingManager
+	if cfg.Multitenant.Enabled {
+		messagingManager = resolveTenantMessagingManager(cfg, log, opts)
+	}
 
 	app := &App{
 		cfg:                   cfg,
@@ -355,12 +401,40 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		db:                    db,
 		logger:                log,
 		messaging:             msgClient,
-		registry:              registry,
+		registry:              nil, // Will be set after app creation
 		signalHandler:         signalHandler,
 		timeoutProvider:       timeoutProvider,
 		tenantConnManager:     tenantConnManager,
+		messagingManager:      messagingManager,
 		messagingDeclarations: nil, // Will be captured after modules are registered
 	}
+
+	// Update GetMessaging to use the app's messaging manager and declarations
+	if cfg.Multitenant.Enabled {
+		deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
+			if app.messagingManager == nil {
+				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
+			}
+
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, ErrNoTenantInContext
+			}
+
+			// Ensure consumers are started for this tenant (with captured declarations)
+			if app.messagingDeclarations != nil {
+				if err := app.messagingManager.EnsureConsumers(ctx, tenantID, app.messagingDeclarations); err != nil {
+					return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", tenantID, err)
+				}
+			}
+
+			// Return publisher client with automatic tenant_id injection
+			return app.messagingManager.GetPublisher(ctx, tenantID)
+		}
+	}
+
+	registry := NewModuleRegistry(deps)
+	app.registry = registry
 
 	srv.RegisterReadyHandler(app.readyCheck)
 
@@ -460,6 +534,15 @@ func (a *App) Run() error {
 		a.tenantConnManager.StartCleanup(cleanupInterval)
 	}
 
+	// Start periodic publisher cleanup for multi-tenant messaging
+	if a.messagingManager != nil {
+		cleanupInterval := a.cfg.Multitenant.Messaging.CleanupInterval
+		if cleanupInterval == 0 {
+			cleanupInterval = 1 * time.Minute // default
+		}
+		a.messagingManager.StartCleanup(cleanupInterval)
+	}
+
 	go func() {
 		if err := a.server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			a.logger.Fatal().Err(err).Msg("Failed to start server")
@@ -513,6 +596,15 @@ func (a *App) Shutdown(ctx context.Context) error {
 			a.logger.Error().Err(err).Msg("Failed to close tenant connection manager")
 		} else {
 			a.logger.Info().Msg("Tenant connection manager closed successfully")
+		}
+	}
+
+	// Close messaging manager if enabled
+	if a.messagingManager != nil {
+		if err := a.messagingManager.Close(); err != nil {
+			a.logger.Error().Err(err).Msg("Failed to close messaging manager")
+		} else {
+			a.logger.Info().Msg("Messaging manager closed successfully")
 		}
 	}
 

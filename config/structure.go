@@ -208,11 +208,12 @@ type RoutingConfig struct {
 
 // MultitenantConfig holds multi-tenant specific settings.
 type MultitenantConfig struct {
-	Enabled    bool               `koanf:"enabled"`
-	Resolver   ResolverConfig     `koanf:"resolver"`
-	Cache      CacheConfig        `koanf:"cache"`
-	Limits     LimitsConfig       `koanf:"limits"`
-	Validation IDValidationConfig `koanf:"validation"`
+	Enabled    bool                       `koanf:"enabled"`
+	Resolver   ResolverConfig             `koanf:"resolver"`
+	Cache      CacheConfig                `koanf:"cache"`
+	Limits     LimitsConfig               `koanf:"limits"`
+	Validation IDValidationConfig         `koanf:"validation"`
+	Messaging  MultitenantMessagingConfig `koanf:"messaging"`
 }
 
 // ResolverConfig holds tenant resolution strategy settings.
@@ -275,4 +276,11 @@ func (c *IDValidationConfig) SetRegex(pattern string) error {
 	c.regex = regex
 	c.Pattern = pattern
 	return nil
+}
+
+// MultitenantMessagingConfig holds messaging-specific settings for multi-tenant mode.
+type MultitenantMessagingConfig struct {
+	PublisherTTL    time.Duration `koanf:"publisher_ttl"`    // TTL for idle publisher connections, default: 5m
+	MaxPublishers   int           `koanf:"max_publishers"`   // Maximum cached publisher connections, default: 50
+	CleanupInterval time.Duration `koanf:"cleanup_interval"` // Publisher cleanup interval, default: 1m
 }
