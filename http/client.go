@@ -130,7 +130,8 @@ func (b *Builder) WithW3CTrace(enabled bool) *Builder {
 }
 
 // WithHTTPClient allows providing a custom *http.Client instance.
-// When supplied, the builder uses it directly without modifying its Timeout or Transport.
+// If the provided client's Timeout is zero, the builder applies its configured Timeout; otherwise it is used as-is.
+// The client's Transport is preserved unless explicitly overridden via WithTransport.
 func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	b.httpClient = client
 	return b
@@ -159,13 +160,17 @@ func (b *Builder) Build() Client {
 	// Deep-copy the builder config to avoid sharing mutable state
 	cfg := deepCopyConfig(b.config)
 
-	httpClient := b.httpClient
-	if httpClient == nil {
+	var httpClient *nethttp.Client
+	if b.httpClient == nil {
 		httpClient = &nethttp.Client{Timeout: cfg.Timeout}
-	} else if httpClient.Timeout == 0 {
-		// Respect existing non-zero timeouts on the provided client.
-		// When zero, default to the builder timeout to preserve previous behavior.
-		httpClient.Timeout = cfg.Timeout
+	} else if b.httpClient.Timeout == 0 {
+		// Shallow-copy to avoid mutating provided client
+		c := *b.httpClient
+		c.Timeout = cfg.Timeout
+		httpClient = &c
+	} else {
+		// Use provided client as-is
+		httpClient = b.httpClient
 	}
 
 	if b.transport != nil {

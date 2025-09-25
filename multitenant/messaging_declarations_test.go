@@ -12,6 +12,11 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+const (
+	testEventType = "test.created"
+	testConsumer  = "test-consumer"
+)
+
 func TestNewMessagingDeclarations(t *testing.T) {
 	declarations := NewMessagingDeclarations()
 
@@ -31,14 +36,14 @@ func TestNewMessagingDeclarations(t *testing.T) {
 	assert.True(t, declarations.IsEmpty())
 }
 
-func TestMessagingDeclarations_CaptureFromRegistry(t *testing.T) {
+func TestMessagingDeclarationsCaptureFromRegistry(t *testing.T) {
 	log := logger.New("debug", true)
 	mockClient := NewRecordingAMQPClient()
 	registry := messaging.NewRegistry(mockClient, log)
 
 	// Register some test infrastructure
 	exchange := &messaging.ExchangeDeclaration{
-		Name:    "test.exchange",
+		Name:    testExchange,
 		Type:    "topic",
 		Durable: true,
 		Args:    map[string]any{"x-message-ttl": 3600},
@@ -46,33 +51,33 @@ func TestMessagingDeclarations_CaptureFromRegistry(t *testing.T) {
 	registry.RegisterExchange(exchange)
 
 	queue := &messaging.QueueDeclaration{
-		Name:    "test.queue",
+		Name:    testQueue,
 		Durable: true,
 		Args:    map[string]any{"x-max-length": 1000},
 	}
 	registry.RegisterQueue(queue)
 
 	binding := &messaging.BindingDeclaration{
-		Queue:      "test.queue",
-		Exchange:   "test.exchange",
+		Queue:      testQueue,
+		Exchange:   testExchange,
 		RoutingKey: "test.event.*",
 		Args:       map[string]any{"x-match": "all"},
 	}
 	registry.RegisterBinding(binding)
 
 	publisher := &messaging.PublisherDeclaration{
-		Exchange:    "test.exchange",
+		Exchange:    testExchange,
 		RoutingKey:  "test.event.created",
-		EventType:   "test.created",
+		EventType:   testEventType,
 		Description: "Test event publisher",
 		Headers:     map[string]any{"version": "v1"},
 	}
 	registry.RegisterPublisher(publisher)
 
 	consumer := &messaging.ConsumerDeclaration{
-		Queue:       "test.queue",
-		Consumer:    "test-consumer",
-		EventType:   "test.created",
+		Queue:       testQueue,
+		Consumer:    testConsumer,
+		EventType:   testEventType,
 		Description: "Test event consumer",
 		Handler:     &mockHandler{},
 	}
@@ -87,81 +92,81 @@ func TestMessagingDeclarations_CaptureFromRegistry(t *testing.T) {
 
 	// Check exchanges
 	assert.Len(t, declarations.Exchanges, 1)
-	capturedExchange := declarations.Exchanges["test.exchange"]
+	capturedExchange := declarations.Exchanges[testExchange]
 	require.NotNil(t, capturedExchange)
-	assert.Equal(t, "test.exchange", capturedExchange.Name)
+	assert.Equal(t, testExchange, capturedExchange.Name)
 	assert.Equal(t, "topic", capturedExchange.Type)
 	assert.True(t, capturedExchange.Durable)
 	assert.Equal(t, 3600, capturedExchange.Args["x-message-ttl"])
 
 	// Check queues
 	assert.Len(t, declarations.Queues, 1)
-	capturedQueue := declarations.Queues["test.queue"]
+	capturedQueue := declarations.Queues[testQueue]
 	require.NotNil(t, capturedQueue)
-	assert.Equal(t, "test.queue", capturedQueue.Name)
+	assert.Equal(t, testQueue, capturedQueue.Name)
 	assert.True(t, capturedQueue.Durable)
 	assert.Equal(t, 1000, capturedQueue.Args["x-max-length"])
 
 	// Check bindings
 	assert.Len(t, declarations.Bindings, 1)
 	capturedBinding := declarations.Bindings[0]
-	assert.Equal(t, "test.queue", capturedBinding.Queue)
-	assert.Equal(t, "test.exchange", capturedBinding.Exchange)
+	assert.Equal(t, testQueue, capturedBinding.Queue)
+	assert.Equal(t, testExchange, capturedBinding.Exchange)
 	assert.Equal(t, "test.event.*", capturedBinding.RoutingKey)
 	assert.Equal(t, "all", capturedBinding.Args["x-match"])
 
 	// Check publishers
 	assert.Len(t, declarations.Publishers, 1)
 	capturedPublisher := declarations.Publishers[0]
-	assert.Equal(t, "test.exchange", capturedPublisher.Exchange)
+	assert.Equal(t, testExchange, capturedPublisher.Exchange)
 	assert.Equal(t, "test.event.created", capturedPublisher.RoutingKey)
-	assert.Equal(t, "test.created", capturedPublisher.EventType)
+	assert.Equal(t, testEventType, capturedPublisher.EventType)
 	assert.Equal(t, "v1", capturedPublisher.Headers["version"])
 
 	// Check consumers
 	assert.Len(t, declarations.Consumers, 1)
 	capturedConsumer := declarations.Consumers[0]
-	assert.Equal(t, "test.queue", capturedConsumer.Queue)
-	assert.Equal(t, "test-consumer", capturedConsumer.Consumer)
-	assert.Equal(t, "test.created", capturedConsumer.EventType)
+	assert.Equal(t, testQueue, capturedConsumer.Queue)
+	assert.Equal(t, testConsumer, capturedConsumer.Consumer)
+	assert.Equal(t, testEventType, capturedConsumer.EventType)
 	assert.Equal(t, consumer.Handler, capturedConsumer.Handler) // Same reference
 
 	// Verify deep copying - modify original and ensure captured is unchanged
 	exchange.Name = "modified.exchange"
-	assert.Equal(t, "test.exchange", capturedExchange.Name) // Should be unchanged
+	assert.Equal(t, testExchange, capturedExchange.Name) // Should be unchanged
 }
 
-func TestMessagingDeclarations_ReplayToRegistry(t *testing.T) {
+func TestMessagingDeclarationsReplayToRegistry(t *testing.T) {
 	// Create declarations with test data
 	declarations := NewMessagingDeclarations()
 
-	declarations.Exchanges["test.exchange"] = &messaging.ExchangeDeclaration{
-		Name:    "test.exchange",
+	declarations.Exchanges[testExchange] = &messaging.ExchangeDeclaration{
+		Name:    testExchange,
 		Type:    "topic",
 		Durable: true,
 	}
 
-	declarations.Queues["test.queue"] = &messaging.QueueDeclaration{
-		Name:    "test.queue",
+	declarations.Queues[testQueue] = &messaging.QueueDeclaration{
+		Name:    testQueue,
 		Durable: true,
 	}
 
 	declarations.Bindings = append(declarations.Bindings, &messaging.BindingDeclaration{
-		Queue:      "test.queue",
-		Exchange:   "test.exchange",
+		Queue:      testQueue,
+		Exchange:   testExchange,
 		RoutingKey: "test.*",
 	})
 
 	declarations.Publishers = append(declarations.Publishers, &messaging.PublisherDeclaration{
-		Exchange:   "test.exchange",
-		RoutingKey: "test.created",
-		EventType:  "test.created",
+		Exchange:   testExchange,
+		RoutingKey: testEventType,
+		EventType:  testEventType,
 	})
 
 	declarations.Consumers = append(declarations.Consumers, &messaging.ConsumerDeclaration{
-		Queue:     "test.queue",
-		Consumer:  "test-consumer",
-		EventType: "test.created",
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
 		Handler:   &mockHandler{},
 	})
 
@@ -176,50 +181,50 @@ func TestMessagingDeclarations_ReplayToRegistry(t *testing.T) {
 	// Verify replay
 	replayedExchanges := targetRegistry.GetExchanges()
 	assert.Len(t, replayedExchanges, 1)
-	assert.Contains(t, replayedExchanges, "test.exchange")
+	assert.Contains(t, replayedExchanges, testExchange)
 
 	replayedQueues := targetRegistry.GetQueues()
 	assert.Len(t, replayedQueues, 1)
-	assert.Contains(t, replayedQueues, "test.queue")
+	assert.Contains(t, replayedQueues, testQueue)
 
 	replayedBindings := targetRegistry.GetBindings()
 	assert.Len(t, replayedBindings, 1)
-	assert.Equal(t, "test.queue", replayedBindings[0].Queue)
+	assert.Equal(t, testQueue, replayedBindings[0].Queue)
 
 	replayedPublishers := targetRegistry.GetPublishers()
 	assert.Len(t, replayedPublishers, 1)
-	assert.Equal(t, "test.exchange", replayedPublishers[0].Exchange)
+	assert.Equal(t, testExchange, replayedPublishers[0].Exchange)
 
 	replayedConsumers := targetRegistry.GetConsumers()
 	assert.Len(t, replayedConsumers, 1)
-	assert.Equal(t, "test.queue", replayedConsumers[0].Queue)
+	assert.Equal(t, testQueue, replayedConsumers[0].Queue)
 }
 
-func TestMessagingDeclarations_Validate(t *testing.T) {
+func TestMessagingDeclarationsValidate(t *testing.T) {
 	t.Run("valid_declarations", func(t *testing.T) {
 		declarations := NewMessagingDeclarations()
 
 		// Add valid infrastructure
-		declarations.Exchanges["test.exchange"] = &messaging.ExchangeDeclaration{
-			Name: "test.exchange",
+		declarations.Exchanges[testExchange] = &messaging.ExchangeDeclaration{
+			Name: testExchange,
 			Type: "topic",
 		}
 
-		declarations.Queues["test.queue"] = &messaging.QueueDeclaration{
-			Name: "test.queue",
+		declarations.Queues[testQueue] = &messaging.QueueDeclaration{
+			Name: testQueue,
 		}
 
 		declarations.Bindings = append(declarations.Bindings, &messaging.BindingDeclaration{
-			Queue:    "test.queue",
-			Exchange: "test.exchange",
+			Queue:    testQueue,
+			Exchange: testExchange,
 		})
 
 		declarations.Publishers = append(declarations.Publishers, &messaging.PublisherDeclaration{
-			Exchange: "test.exchange",
+			Exchange: testExchange,
 		})
 
 		declarations.Consumers = append(declarations.Consumers, &messaging.ConsumerDeclaration{
-			Queue: "test.queue",
+			Queue: testQueue,
 		})
 
 		err := declarations.Validate()
@@ -229,14 +234,14 @@ func TestMessagingDeclarations_Validate(t *testing.T) {
 	t.Run("binding_references_undefined_queue", func(t *testing.T) {
 		declarations := NewMessagingDeclarations()
 
-		declarations.Exchanges["test.exchange"] = &messaging.ExchangeDeclaration{
-			Name: "test.exchange",
+		declarations.Exchanges[testExchange] = &messaging.ExchangeDeclaration{
+			Name: testExchange,
 		}
 
 		// Binding references undefined queue
 		declarations.Bindings = append(declarations.Bindings, &messaging.BindingDeclaration{
 			Queue:    "undefined.queue",
-			Exchange: "test.exchange",
+			Exchange: testExchange,
 		})
 
 		err := declarations.Validate()
@@ -247,13 +252,13 @@ func TestMessagingDeclarations_Validate(t *testing.T) {
 	t.Run("binding_references_undefined_exchange", func(t *testing.T) {
 		declarations := NewMessagingDeclarations()
 
-		declarations.Queues["test.queue"] = &messaging.QueueDeclaration{
-			Name: "test.queue",
+		declarations.Queues[testQueue] = &messaging.QueueDeclaration{
+			Name: testQueue,
 		}
 
 		// Binding references undefined exchange
 		declarations.Bindings = append(declarations.Bindings, &messaging.BindingDeclaration{
-			Queue:    "test.queue",
+			Queue:    testQueue,
 			Exchange: "undefined.exchange",
 		})
 
@@ -289,7 +294,7 @@ func TestMessagingDeclarations_Validate(t *testing.T) {
 	})
 }
 
-func TestMessagingDeclarations_Stats(t *testing.T) {
+func TestMessagingDeclarationsStats(t *testing.T) {
 	declarations := NewMessagingDeclarations()
 
 	// Empty declarations
@@ -327,7 +332,7 @@ func TestMessagingDeclarations_Stats(t *testing.T) {
 	assert.Contains(t, statsStr, "Consumers: 1")
 }
 
-func TestMessagingDeclarations_BackwardCompatibility(t *testing.T) {
+func TestMessagingDeclarationsBackwardCompatibility(t *testing.T) {
 	// Test that the Declarations alias works
 	declarations := NewMessagingDeclarations()
 	assert.NotNil(t, declarations)

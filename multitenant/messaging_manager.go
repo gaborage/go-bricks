@@ -198,8 +198,12 @@ func (m *TenantMessagingManager) initConsumers(ctx context.Context, tenantID str
 	client := m.clientFactory.CreateClient(cfg.URL, m.log)
 	// Build per-tenant registry
 	reg := messaging.NewRegistry(client, m.log)
-	// Replay declarations
-	decls.Replay(ctx, reg)
+	// Replay declarations if available
+	if decls != nil {
+		if err := decls.ReplayToRegistry(reg); err != nil {
+			return fmt.Errorf("replay declarations: %w", err)
+		}
+	}
 	if err := reg.DeclareInfrastructure(ctx); err != nil {
 		return fmt.Errorf("declare infra: %w", err)
 	}

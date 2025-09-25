@@ -270,9 +270,9 @@ func TestRecordingAMQPClientConcurrentAccess(t *testing.T) {
 	done := make(chan bool, numGoroutines)
 
 	// Start multiple goroutines performing operations
-	for i := range numGoroutines {
+	for i := 0; i < numGoroutines; i++ {
 		go func(_ int) {
-			for j := range numOperations {
+			for j := 0; j < numOperations; j++ {
 				switch j % 4 {
 				case 0:
 					client.DeclareExchange("ex", "direct", true, false, false, false)

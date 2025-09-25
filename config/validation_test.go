@@ -602,12 +602,12 @@ func TestValidateLogFailures(t *testing.T) {
 func TestValidateNestedErrors(t *testing.T) {
 	tests := []struct {
 		name          string
-		cfg           Config
+		cfg           *Config
 		expectedError string
 	}{
 		{
 			name: "app_config_error",
-			cfg: Config{
+			cfg: &Config{
 				App: AppConfig{
 					Name:    "",
 					Version: testAppVersion,
@@ -639,7 +639,7 @@ func TestValidateNestedErrors(t *testing.T) {
 		},
 		{
 			name: "server_config_error",
-			cfg: Config{
+			cfg: &Config{
 				App: AppConfig{
 					Name:    testAppName,
 					Version: testAppVersion,
@@ -671,7 +671,7 @@ func TestValidateNestedErrors(t *testing.T) {
 		},
 		{
 			name: "database_config_error",
-			cfg: Config{
+			cfg: &Config{
 				App: AppConfig{
 					Name:    testAppName,
 					Version: testAppVersion,
@@ -705,7 +705,7 @@ func TestValidateNestedErrors(t *testing.T) {
 		},
 		{
 			name: "log_config_error",
-			cfg: Config{
+			cfg: &Config{
 				App: AppConfig{
 					Name:    testAppName,
 					Version: testAppVersion,
@@ -741,7 +741,7 @@ func TestValidateNestedErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := Validate(&tt.cfg)
+			err := Validate(tt.cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -2005,13 +2005,13 @@ func TestValidateMultitenantDisabled(t *testing.T) {
 func TestValidateMultitenantSuccess(t *testing.T) {
 	tests := []struct {
 		name      string
-		mtConfig  MultitenantConfig
-		dbConfig  DatabaseConfig
-		msgConfig MessagingConfig
+		mtConfig  *MultitenantConfig
+		dbConfig  *DatabaseConfig
+		msgConfig *MessagingConfig
 	}{
 		{
 			name: "valid_header_resolver",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type:   "header",
@@ -2030,12 +2030,12 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 					Pattern: `^[a-z0-9-]{1,64}$`,
 				},
 			},
-			dbConfig:  DatabaseConfig{},  // Empty for multitenant
-			msgConfig: MessagingConfig{}, // Empty for multitenant
+			dbConfig:  &DatabaseConfig{},  // Empty for multitenant
+			msgConfig: &MessagingConfig{}, // Empty for multitenant
 		},
 		{
 			name: "valid_subdomain_resolver",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type:   "subdomain",
@@ -2054,12 +2054,12 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 					Pattern: `^[a-zA-Z][a-zA-Z0-9_-]{2,31}$`,
 				},
 			},
-			dbConfig:  DatabaseConfig{},
-			msgConfig: MessagingConfig{},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
 		},
 		{
 			name: "valid_composite_resolver",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type:    "composite",
@@ -2080,14 +2080,14 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 					Pattern: "", // Empty uses default
 				},
 			},
-			dbConfig:  DatabaseConfig{},
-			msgConfig: MessagingConfig{},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenant(&tt.mtConfig, &tt.dbConfig, &tt.msgConfig)
+			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig)
 			assert.NoError(t, err)
 		})
 	}
@@ -2096,26 +2096,26 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 func TestValidateMultitenantFailures(t *testing.T) {
 	tests := []struct {
 		name          string
-		mtConfig      MultitenantConfig
-		dbConfig      DatabaseConfig
-		msgConfig     MessagingConfig
+		mtConfig      *MultitenantConfig
+		dbConfig      *DatabaseConfig
+		msgConfig     *MessagingConfig
 		expectedError string
 	}{
 		{
 			name: "invalid_resolver_type",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "invalid",
 				},
 			},
-			dbConfig:      DatabaseConfig{},
-			msgConfig:     MessagingConfig{},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
 			expectedError: "resolver: invalid type: invalid",
 		},
 		{
 			name: "invalid_cache_ttl",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "header",
@@ -2124,13 +2124,13 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					TTL: 30 * time.Second, // Less than 1 minute
 				},
 			},
-			dbConfig:      DatabaseConfig{},
-			msgConfig:     MessagingConfig{},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
 			expectedError: "cache: ttl must be at least 1 minute",
 		},
 		{
 			name: "invalid_limits_too_many_tenants",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "header",
@@ -2142,13 +2142,13 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					Tenants: 1001, // Exceeds maximum
 				},
 			},
-			dbConfig:      DatabaseConfig{},
-			msgConfig:     MessagingConfig{},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
 			expectedError: "limits: tenants cannot exceed 1000",
 		},
 		{
 			name: "invalid_tenant_id_pattern",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "header",
@@ -2163,13 +2163,13 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					Pattern: `[unclosed`, // Invalid regex
 				},
 			},
-			dbConfig:      DatabaseConfig{},
-			msgConfig:     MessagingConfig{},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
 			expectedError: "tenant_id pattern: error parsing regexp",
 		},
 		{
 			name: "database_configured_with_multitenant",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "header",
@@ -2181,16 +2181,16 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					Tenants: 100,
 				},
 			},
-			dbConfig: DatabaseConfig{
+			dbConfig: &DatabaseConfig{
 				Host: "localhost", // This makes it configured
 				Type: PostgreSQL,
 			},
-			msgConfig:     MessagingConfig{},
+			msgConfig:     &MessagingConfig{},
 			expectedError: "database configuration not allowed when multitenant.enabled is true",
 		},
 		{
 			name: "messaging_configured_with_multitenant",
-			mtConfig: MultitenantConfig{
+			mtConfig: &MultitenantConfig{
 				Enabled: true,
 				Resolver: ResolverConfig{
 					Type: "header",
@@ -2202,8 +2202,8 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					Tenants: 100,
 				},
 			},
-			dbConfig: DatabaseConfig{},
-			msgConfig: MessagingConfig{
+			dbConfig: &DatabaseConfig{},
+			msgConfig: &MessagingConfig{
 				Broker: BrokerConfig{
 					URL: testAMQPHost, // This makes it configured
 				},
@@ -2214,7 +2214,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenant(&tt.mtConfig, &tt.dbConfig, &tt.msgConfig)
+			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})

@@ -152,35 +152,127 @@ func (d *MessagingDeclarations) CaptureFromRegistry(registry messaging.RegistryI
 	}
 }
 
+// cloneStringAnyMap creates a deep copy of a map[string]any
+func cloneStringAnyMap(original map[string]any) map[string]any {
+	if original == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(original))
+	for k, v := range original {
+		clone[k] = v
+	}
+	return clone
+}
+
+// cloneExchangeDeclaration creates a deep copy of an ExchangeDeclaration
+func cloneExchangeDeclaration(original *messaging.ExchangeDeclaration) *messaging.ExchangeDeclaration {
+	if original == nil {
+		return nil
+	}
+	return &messaging.ExchangeDeclaration{
+		Name:       original.Name,
+		Type:       original.Type,
+		Durable:    original.Durable,
+		AutoDelete: original.AutoDelete,
+		Internal:   original.Internal,
+		NoWait:     original.NoWait,
+		Args:       cloneStringAnyMap(original.Args),
+	}
+}
+
+// cloneQueueDeclaration creates a deep copy of a QueueDeclaration
+func cloneQueueDeclaration(original *messaging.QueueDeclaration) *messaging.QueueDeclaration {
+	if original == nil {
+		return nil
+	}
+	return &messaging.QueueDeclaration{
+		Name:       original.Name,
+		Durable:    original.Durable,
+		AutoDelete: original.AutoDelete,
+		Exclusive:  original.Exclusive,
+		NoWait:     original.NoWait,
+		Args:       cloneStringAnyMap(original.Args),
+	}
+}
+
+// cloneBindingDeclaration creates a deep copy of a BindingDeclaration
+func cloneBindingDeclaration(original *messaging.BindingDeclaration) *messaging.BindingDeclaration {
+	if original == nil {
+		return nil
+	}
+	return &messaging.BindingDeclaration{
+		Queue:      original.Queue,
+		Exchange:   original.Exchange,
+		RoutingKey: original.RoutingKey,
+		NoWait:     original.NoWait,
+		Args:       cloneStringAnyMap(original.Args),
+	}
+}
+
+// clonePublisherDeclaration creates a deep copy of a PublisherDeclaration
+func clonePublisherDeclaration(original *messaging.PublisherDeclaration) *messaging.PublisherDeclaration {
+	if original == nil {
+		return nil
+	}
+	return &messaging.PublisherDeclaration{
+		Exchange:    original.Exchange,
+		RoutingKey:  original.RoutingKey,
+		EventType:   original.EventType,
+		Description: original.Description,
+		Mandatory:   original.Mandatory,
+		Immediate:   original.Immediate,
+		Headers:     cloneStringAnyMap(original.Headers),
+	}
+}
+
+// cloneConsumerDeclaration creates a deep copy of a ConsumerDeclaration
+func cloneConsumerDeclaration(original *messaging.ConsumerDeclaration) *messaging.ConsumerDeclaration {
+	if original == nil {
+		return nil
+	}
+	return &messaging.ConsumerDeclaration{
+		Queue:       original.Queue,
+		Consumer:    original.Consumer,
+		AutoAck:     original.AutoAck,
+		Exclusive:   original.Exclusive,
+		NoLocal:     original.NoLocal,
+		NoWait:      original.NoWait,
+		EventType:   original.EventType,
+		Description: original.Description,
+		Handler:     original.Handler, // Handler reference is shared intentionally
+	}
+}
+
 // ReplayToRegistry applies all captured declarations to a new registry.
 // This is used to set up per-tenant infrastructure with the same declarations
 // that were captured at startup.
 //
-// Replay maintains dependency order: Exchanges → Queues → Bindings → Publishers → Consumers
+// Each declaration is deep-cloned before registration to prevent shared mutable
+// state across tenants. Replay maintains dependency order: Exchanges → Queues → Bindings → Publishers → Consumers
 func (d *MessagingDeclarations) ReplayToRegistry(registry messaging.RegistryInterface) error {
 	// Step 1: Register exchanges first (no dependencies)
 	for _, exchange := range d.Exchanges {
-		registry.RegisterExchange(exchange)
+		registry.RegisterExchange(cloneExchangeDeclaration(exchange))
 	}
 
 	// Step 2: Register queues (depend on exchanges existing)
 	for _, queue := range d.Queues {
-		registry.RegisterQueue(queue)
+		registry.RegisterQueue(cloneQueueDeclaration(queue))
 	}
 
 	// Step 3: Register bindings (depend on exchanges and queues existing)
 	for _, binding := range d.Bindings {
-		registry.RegisterBinding(binding)
+		registry.RegisterBinding(cloneBindingDeclaration(binding))
 	}
 
 	// Step 4: Register publishers (depend on exchanges existing)
 	for _, publisher := range d.Publishers {
-		registry.RegisterPublisher(publisher)
+		registry.RegisterPublisher(clonePublisherDeclaration(publisher))
 	}
 
 	// Step 5: Register consumers (depend on queues existing)
 	for _, consumer := range d.Consumers {
-		registry.RegisterConsumer(consumer)
+		registry.RegisterConsumer(cloneConsumerDeclaration(consumer))
 	}
 
 	return nil

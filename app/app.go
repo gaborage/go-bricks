@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,11 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
+)
+
+const (
+	serverErrorMsg = "server error: %w"
+	disabledStatus = "disabled"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -76,9 +82,124 @@ type App struct {
 	// Multi-tenant support
 	tenantConnManager *multitenant.TenantConnectionManager
 	messagingManager  *multitenant.TenantMessagingManager
+	tenantMessaging   TenantMessagingOrchestrator
 
 	// Messaging declarations captured during startup for per-tenant replay
 	messagingDeclarations *multitenant.MessagingDeclarations
+
+	closers      []namedCloser
+	healthProbes []HealthProbe
+}
+
+type namedCloser struct {
+	name   string
+	closer interface{ Close() error }
+}
+
+type dependencyBundle struct {
+	deps                   *ModuleDeps
+	db                     database.Interface
+	messaging              messaging.Client
+	tenantConnManager      *multitenant.TenantConnectionManager
+	tenantMessagingManager *multitenant.TenantMessagingManager
+}
+
+type appBootstrap struct {
+	cfg  *config.Config
+	log  logger.Logger
+	opts *Options
+}
+
+func newAppBootstrap(cfg *config.Config, log logger.Logger, opts *Options) *appBootstrap {
+	return &appBootstrap{cfg: cfg, log: log, opts: opts}
+}
+
+func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerRunner) {
+	signalHandler, timeoutProvider := resolveSignalAndTimeout(b.opts)
+	return signalHandler, timeoutProvider, resolveServer(b.cfg, b.log, b.opts)
+}
+
+func (b *appBootstrap) dependencies() (*dependencyBundle, error) {
+	if b.cfg.Multitenant.Enabled {
+		return b.multitenantDependencies()
+	}
+	return b.singleTenantDependencies()
+}
+
+func (b *appBootstrap) singleTenantDependencies() (*dependencyBundle, error) {
+	db, err := resolveDatabase(b.cfg, b.log, b.opts)
+	if err != nil {
+		return nil, err
+	}
+
+	msgClient := resolveMessaging(b.cfg, b.log, b.opts)
+
+	deps := &ModuleDeps{
+		Logger: b.log,
+		Config: b.cfg,
+		GetDB: func(_ context.Context) (database.Interface, error) {
+			if db == nil {
+				return nil, fmt.Errorf("database not configured")
+			}
+			return db, nil
+		},
+		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			if msgClient == nil {
+				return nil, fmt.Errorf("messaging not configured")
+			}
+			if amqpClient, ok := msgClient.(messaging.AMQPClient); ok {
+				return amqpClient, nil
+			}
+			return nil, fmt.Errorf("messaging client is not an AMQPClient")
+		},
+	}
+
+	return &dependencyBundle{
+		deps:      deps,
+		db:        db,
+		messaging: msgClient,
+	}, nil
+}
+
+func (b *appBootstrap) multitenantDependencies() (*dependencyBundle, error) {
+	b.log.Info().Msg("Multi-tenant mode enabled")
+
+	tenantConnManager, err := resolveTenantConnectionManager(b.cfg, b.log, b.opts)
+	if err != nil {
+		return nil, err
+	}
+
+	messagingManager := resolveTenantMessagingManager(b.cfg, b.log, b.opts)
+
+	deps := &ModuleDeps{
+		Logger: b.log,
+		Config: b.cfg,
+		GetDB: func(ctx context.Context) (database.Interface, error) {
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, ErrNoTenantInContext
+			}
+			return tenantConnManager.GetDatabase(ctx, tenantID)
+		},
+		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
+			if messagingManager == nil {
+				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
+			}
+
+			tenantID, ok := multitenant.GetTenant(ctx)
+			if !ok {
+				return nil, ErrNoTenantInContext
+			}
+
+			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
+		},
+	}
+
+	return &dependencyBundle{
+		deps:                   deps,
+		tenantConnManager:      tenantConnManager,
+		tenantMessagingManager: messagingManager,
+	}, nil
 }
 
 // isDatabaseEnabled determines if database should be initialized based on config
@@ -169,88 +290,6 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 	}
 
 	return server.New(cfg, log)
-}
-
-// resolveDependencies initializes dependencies based on multi-tenant or single-tenant mode
-func resolveDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	if cfg.Multitenant.Enabled {
-		return resolveMultitenantDependencies(cfg, log, opts)
-	}
-	return resolveSingleTenantDependencies(cfg, log, opts)
-}
-
-// resolveMultitenantDependencies initializes multi-tenant mode dependencies
-func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	log.Info().Msg("Multi-tenant mode enabled")
-
-	tenantConnManager, err := resolveTenantConnectionManager(cfg, log, opts)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	// Initialize messaging manager for multi-tenant messaging
-	messagingManager := resolveTenantMessagingManager(cfg, log, opts)
-
-	deps := &ModuleDeps{
-		Logger: log,
-		Config: cfg,
-		GetDB: func(ctx context.Context) (database.Interface, error) {
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-			return tenantConnManager.GetDatabase(ctx, tenantID)
-		},
-		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
-			if messagingManager == nil {
-				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
-			}
-
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-
-			// This will be set later when app has captured declarations
-			// For now, return error indicating messaging manager needs declarations
-			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
-		},
-	}
-
-	return deps, nil, nil, tenantConnManager, nil
-}
-
-// resolveSingleTenantDependencies initializes single-tenant mode dependencies
-func resolveSingleTenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	db, err := resolveDatabase(cfg, log, opts)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	msgClient := resolveMessaging(cfg, log, opts)
-
-	deps := &ModuleDeps{
-		Logger: log,
-		Config: cfg,
-		GetDB: func(_ context.Context) (database.Interface, error) {
-			if db == nil {
-				return nil, fmt.Errorf("database not configured")
-			}
-			return db, nil
-		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			if msgClient == nil {
-				return nil, fmt.Errorf("messaging not configured")
-			}
-			// Type assert to AMQPClient since we know that's what we create
-			if amqpClient, ok := msgClient.(messaging.AMQPClient); ok {
-				return amqpClient, nil
-			}
-			return nil, fmt.Errorf("messaging client is not an AMQPClient")
-		},
-	}
-
-	return deps, db, msgClient, nil, nil
 }
 
 // resolveTenantMessagingManager creates the tenant messaging manager for multi-tenant messaging
@@ -372,66 +411,69 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		Str("version", cfg.App.Version).
 		Msg("Starting application")
 
-	// Resolve core components
-	signalHandler, timeoutProvider := resolveSignalAndTimeout(opts)
-	srv := resolveServer(cfg, log, opts)
+	bootstrap := newAppBootstrap(cfg, log, opts)
 
-	// Initialize dependencies based on mode
-	deps, db, msgClient, tenantConnManager, err := resolveDependencies(cfg, log, opts)
+	signalHandler, timeoutProvider, srv := bootstrap.coreComponents()
+
+	bundle, err := bootstrap.dependencies()
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize messaging manager if in multi-tenant mode
-	var messagingManager *multitenant.TenantMessagingManager
-	if cfg.Multitenant.Enabled {
-		messagingManager = resolveTenantMessagingManager(cfg, log, opts)
-	}
-
 	app := &App{
-		cfg:                   cfg,
-		server:                srv,
-		db:                    db,
-		logger:                log,
-		messaging:             msgClient,
-		registry:              nil, // Will be set after app creation
-		signalHandler:         signalHandler,
-		timeoutProvider:       timeoutProvider,
-		tenantConnManager:     tenantConnManager,
-		messagingManager:      messagingManager,
-		messagingDeclarations: nil, // Will be captured after modules are registered
+		cfg:               cfg,
+		server:            srv,
+		db:                bundle.db,
+		logger:            log,
+		messaging:         bundle.messaging,
+		registry:          nil, // Will be set after app creation
+		signalHandler:     signalHandler,
+		timeoutProvider:   timeoutProvider,
+		tenantConnManager: bundle.tenantConnManager,
+		messagingManager:  bundle.tenantMessagingManager,
 	}
 
-	// Update GetMessaging to use the app's messaging manager and declarations
-	if cfg.Multitenant.Enabled {
-		deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
-			if app.messagingManager == nil {
-				return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
-			}
-
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-
-			// Ensure consumers are started for this tenant (with captured declarations)
-			if app.messagingDeclarations != nil {
-				if err := app.messagingManager.EnsureConsumers(ctx, tenantID, app.messagingDeclarations); err != nil {
-					return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", tenantID, err)
-				}
-			}
-
-			// Return publisher client with automatic tenant_id injection
-			return app.messagingManager.GetPublisher(ctx, tenantID)
-		}
-	}
-
-	registry := NewModuleRegistry(deps)
+	registry := NewModuleRegistry(bundle.deps)
 	app.registry = registry
+
+	if bundle.tenantMessagingManager != nil {
+		app.tenantMessaging = newTenantMessagingOrchestrator(registry, bundle.tenantMessagingManager, log)
+	}
+
+	if cfg.Multitenant.Enabled {
+		app.setupMultitenantGetMessaging(bundle.deps)
+	}
+
+	app.healthProbes = createHealthProbes(app.db, app.messaging, log)
+
+	app.registerCloser("messaging client", app.messaging)
+	app.registerCloser("database connection", app.db)
+	app.registerCloser("tenant connection manager", app.tenantConnManager)
+	app.registerCloser("messaging manager", app.messagingManager)
 
 	srv.RegisterReadyHandler(app.readyCheck)
 
 	return app, nil
+}
+
+// setupMultitenantGetMessaging configures the GetMessaging function for multi-tenant mode
+func (a *App) setupMultitenantGetMessaging(deps *ModuleDeps) {
+	deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
+		if a.tenantMessaging == nil {
+			return nil, fmt.Errorf("messaging not configured in multi-tenant mode")
+		}
+
+		tenantID, ok := multitenant.GetTenant(ctx)
+		if !ok {
+			return nil, ErrNoTenantInContext
+		}
+
+		if a.messagingDeclarations == nil {
+			return nil, fmt.Errorf("messaging declarations not yet captured for tenant %s - call during app startup", tenantID)
+		}
+
+		return a.tenantMessaging.PublisherForTenant(ctx, tenantID, a.messagingDeclarations)
+	}
 }
 
 // RegisterModule registers a new module with the application.
@@ -447,54 +489,104 @@ func (a *App) RegisterModule(module Module) error {
 // The captured declarations are stored for later per-tenant replay.
 func (a *App) captureMessagingDeclarations() error {
 	// Only capture in multi-tenant mode
-	if !a.cfg.Multitenant.Enabled {
+	if !a.cfg.Multitenant.Enabled || a.tenantMessaging == nil {
 		return nil
 	}
 
-	a.logger.Info().Msg("Capturing messaging declarations for multi-tenant mode")
-
-	// Create recording AMQP client that captures operations without executing them
-	recordingClient := multitenant.NewRecordingAMQPClient()
-
-	// Create temporary registry with recording client
-	recordingRegistry := messaging.NewRegistry(recordingClient, a.logger)
-
-	// Temporarily override the registry's messaging registry for capture
-	// Save original registry state
-	originalRegistry := a.registry.messagingRegistry
-
-	// Set recording registry and ensure original registry is restored
-	a.registry.messagingRegistry = recordingRegistry
-	defer func() {
-		a.registry.messagingRegistry = originalRegistry
-	}()
-
-	// Call RegisterMessaging on all modules to capture their declarations
-	// This will populate the recording registry without actual broker calls
-	for _, module := range a.registry.modules {
-		a.logger.Debug().
-			Str("module", module.Name()).
-			Msg("Capturing messaging declarations from module")
-
-		module.RegisterMessaging(recordingRegistry)
+	declarations, err := a.tenantMessaging.CaptureDeclarations()
+	if err != nil {
+		return err
 	}
 
-	// Capture declarations from the populated registry
-	declarations := multitenant.NewMessagingDeclarations()
-	declarations.CaptureFromRegistry(recordingRegistry)
-
-	// Validate captured declarations for consistency
-	if err := declarations.Validate(); err != nil {
-		return fmt.Errorf("captured messaging declarations are invalid: %w", err)
-	}
-
-	// Store declarations for per-tenant replay
 	a.messagingDeclarations = declarations
+	return nil
+}
 
-	// Log summary of captured declarations
-	declarations.LogSummary(a.logger)
+func (a *App) registerCloser(name string, closer interface{ Close() error }) {
+	if closer == nil {
+		return
+	}
+
+	a.closers = append(a.closers, namedCloser{name: name, closer: closer})
+}
+
+func (a *App) startMaintenanceLoops() {
+	if a.tenantConnManager != nil {
+		cleanupInterval := a.cfg.Multitenant.Limits.Cleanup.Interval
+		if cleanupInterval == 0 {
+			cleanupInterval = 5 * time.Minute
+		}
+		a.tenantConnManager.StartCleanup(cleanupInterval)
+	}
+
+	if a.messagingManager != nil {
+		cleanupInterval := a.cfg.Multitenant.Messaging.CleanupInterval
+		if cleanupInterval == 0 {
+			cleanupInterval = time.Minute
+		}
+		a.messagingManager.StartCleanup(cleanupInterval)
+	}
+}
+
+func (a *App) prepareRuntime() error {
+	if err := a.captureMessagingDeclarations(); err != nil {
+		return fmt.Errorf("failed to capture messaging declarations: %w", err)
+	}
+
+	if err := a.registry.RegisterMessaging(); err != nil {
+		return fmt.Errorf("failed to register messaging infrastructure: %w", err)
+	}
+
+	a.registry.RegisterRoutes(a.server.ModuleGroup())
+	a.startMaintenanceLoops()
 
 	return nil
+}
+
+func (a *App) serve() <-chan error {
+	errCh := make(chan error, 1)
+
+	go func() {
+		err := a.server.Start()
+		errCh <- err
+		close(errCh)
+	}()
+
+	return errCh
+}
+
+func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, error) {
+	quit := make(chan os.Signal, 1)
+	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	signalReceived := make(chan struct{}, 1)
+	go func() {
+		a.signalHandler.WaitForSignal(quit)
+		signalReceived <- struct{}{}
+	}()
+
+	select {
+	case <-signalReceived:
+		return true, nil
+	case err, ok := <-serverErrCh:
+		if !ok {
+			return false, nil
+		}
+		return false, err
+	}
+}
+
+func (a *App) drainServerError(ch <-chan error) error {
+	if ch == nil {
+		return nil
+	}
+
+	err, ok := <-ch
+	if !ok {
+		return nil
+	}
+
+	return err
 }
 
 // GetMessagingDeclarations returns the captured messaging declarations.
@@ -506,148 +598,130 @@ func (a *App) GetMessagingDeclarations() *multitenant.MessagingDeclarations {
 // Run starts the application and blocks until a shutdown signal is received.
 // It handles graceful shutdown with a timeout.
 func (a *App) Run() error {
-	// In multi-tenant mode, capture messaging declarations first
-	if err := a.captureMessagingDeclarations(); err != nil {
-		return fmt.Errorf("failed to capture messaging declarations: %w", err)
+	if err := a.prepareRuntime(); err != nil {
+		return err
 	}
 
-	// Register messaging infrastructure before starting the server
-	if err := a.registry.RegisterMessaging(); err != nil {
-		return fmt.Errorf("failed to register messaging infrastructure: %w", err)
+	serverErrCh := a.serve()
+
+	shutdownRequested, serverErr := a.waitForShutdownOrServerError(serverErrCh)
+
+	if shutdownRequested {
+		a.logger.Info().Msg("Shutdown signal received")
 	}
 
-	a.registry.RegisterRoutes(a.server.ModuleGroup())
-
-	// Start periodic connection cleanup for multi-tenant mode
-	if a.tenantConnManager != nil {
-		cleanupInterval := a.cfg.Multitenant.Limits.Cleanup.Interval
-		if cleanupInterval == 0 {
-			cleanupInterval = 5 * time.Minute // default
-		}
-		a.tenantConnManager.StartCleanup(cleanupInterval)
+	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+		a.logger.Error().Err(serverErr).Msg("Server stopped unexpectedly")
 	}
-
-	// Start periodic publisher cleanup for multi-tenant messaging
-	if a.messagingManager != nil {
-		cleanupInterval := a.cfg.Multitenant.Messaging.CleanupInterval
-		if cleanupInterval == 0 {
-			cleanupInterval = 1 * time.Minute // default
-		}
-		a.messagingManager.StartCleanup(cleanupInterval)
-	}
-
-	go func() {
-		if err := a.server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			a.logger.Fatal().Err(err).Msg("Failed to start server")
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	a.signalHandler.WaitForSignal(quit)
-
-	a.logger.Info().Msg("Shutting down application")
 
 	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	return a.Shutdown(ctx)
+	a.logger.Info().Msg("Shutting down application")
+
+	shutdownErr := a.Shutdown(ctx)
+
+	var errs []error
+
+	if shutdownRequested {
+		if err := a.drainServerError(serverErrCh); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+		}
+	} else if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, serverErr))
+	}
+
+	if shutdownErr != nil {
+		errs = append(errs, shutdownErr)
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// shutdownResource safely shuts down a resource and handles error logging
+func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
+	if err := closer.closer.Close(); err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: %w", closer.name, err))
+		a.logger.Error().Err(err).Msgf("Failed to close %s", closer.name)
+		return
+	}
+
+	capitalizedName := strings.ToUpper(closer.name[:1]) + closer.name[1:]
+	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }
 
 // Shutdown gracefully shuts down the application with the given context.
 // It closes database connections, messaging client, and stops the HTTP server.
+// Returns an aggregated error if any components fail to shut down.
 func (a *App) Shutdown(ctx context.Context) error {
+	var errs []error
+
+	// Shutdown modules first
 	if err := a.registry.Shutdown(); err != nil {
+		errs = append(errs, fmt.Errorf("modules: %w", err))
 		a.logger.Error().Err(err).Msg("Failed to shutdown modules")
 	}
 
+	// Shutdown server
 	if err := a.server.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, err))
 		a.logger.Error().Err(err).Msg("Failed to shutdown server")
 	}
 
-	// Close messaging client if enabled
-	if a.messaging != nil {
-		if err := a.messaging.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close messaging client")
-		} else {
-			a.logger.Info().Msg("Messaging client closed successfully")
-		}
-	}
-
-	// Close database connection if enabled
-	if a.db != nil {
-		if err := a.db.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close database connection")
-		} else {
-			a.logger.Info().Msg("Database connection closed successfully")
-		}
-	}
-
-	// Close tenant connection manager if enabled
-	if a.tenantConnManager != nil {
-		if err := a.tenantConnManager.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close tenant connection manager")
-		} else {
-			a.logger.Info().Msg("Tenant connection manager closed successfully")
-		}
-	}
-
-	// Close messaging manager if enabled
-	if a.messagingManager != nil {
-		if err := a.messagingManager.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close messaging manager")
-		} else {
-			a.logger.Info().Msg("Messaging manager closed successfully")
-		}
+	for _, closer := range a.closers {
+		a.shutdownResource(closer, &errs)
 	}
 
 	a.logger.Info().Msg("Application shutdown complete")
+
+	// Return aggregated errors if any occurred
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
 func (a *App) readyCheck(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Check database health if enabled
-	dbHealth := "disabled"
-	var stats map[string]any
-	if a.db != nil {
-		if err := a.db.Health(ctx); err != nil {
-			dbHealth = "unhealthy"
+	componentStatus := make(map[string]HealthStatus, len(a.healthProbes))
+	for _, probe := range a.healthProbes {
+		result := probe.Run(ctx)
+		componentStatus[result.Name] = result
+		if result.Err != nil && result.Critical {
 			return c.JSON(http.StatusServiceUnavailable, map[string]any{
-				"status":   "not ready",
-				"database": dbHealth,
-				"error":    err.Error(),
+				"status":    "not ready",
+				result.Name: result.Status,
+				"error":     result.Err.Error(),
 			})
 		}
-		dbHealth = "healthy"
-
-		var err error
-		stats, err = a.db.Stats()
-		if err != nil {
-			a.logger.Error().Err(err).Msg("Failed to get database stats")
-			stats = map[string]any{"error": err.Error()}
-		}
-	} else {
-		stats = map[string]any{"status": "disabled"}
 	}
 
-	// Check messaging health if enabled
-	messagingHealth := "disabled"
-	if a.messaging != nil {
-		if a.messaging.IsReady() {
-			messagingHealth = "healthy"
-		} else {
-			messagingHealth = "unhealthy"
-		}
+	dbStatus := componentStatus["database"]
+	if dbStatus.Status == "" {
+		dbStatus.Status = disabledStatus
+		dbStatus.Details = map[string]any{"status": disabledStatus}
+	}
+	dbStats := dbStatus.Details
+	if dbStats == nil {
+		dbStats = map[string]any{}
+	}
+
+	messagingStatus := componentStatus["messaging"]
+	if messagingStatus.Status == "" {
+		messagingStatus.Status = disabledStatus
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status":    "ready",
 		"time":      time.Now().Unix(),
-		"database":  dbHealth,
-		"db_stats":  stats,
-		"messaging": messagingHealth,
+		"database":  dbStatus.Status,
+		"db_stats":  dbStats,
+		"messaging": messagingStatus.Status,
 		"app": map[string]any{
 			"name":        a.cfg.App.Name,
 			"environment": a.cfg.App.Env,

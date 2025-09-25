@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -23,9 +24,9 @@ const (
 
 func TestNewModuleRegistry(t *testing.T) {
 	log := logger.New("debug", true)
-	mockMessaging := &MockMessagingClient{}
+	mockMessaging := testmocks.NewMockAMQPClient()
 
-	mockDB := &MockDatabase{}
+	mockDB := &testmocks.MockDatabase{}
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
@@ -49,8 +50,8 @@ func TestNewModuleRegistry(t *testing.T) {
 
 func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	log := logger.New("debug", true)
-	mockDB := &MockDatabase{}
-	mockMessaging := &MockMessagingClient{}
+	mockDB := &testmocks.MockDatabase{}
+	mockMessaging := testmocks.NewMockAMQPClient()
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
@@ -77,8 +78,8 @@ func TestModuleRegistryRegisterSuccess(t *testing.T) {
 
 func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
-	mockDB := &MockDatabase{}
-	mockMessaging := &MockMessagingClient{}
+	mockDB := &testmocks.MockDatabase{}
+	mockMessaging := testmocks.NewMockAMQPClient()
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
@@ -106,8 +107,8 @@ func TestModuleRegistryRegisterInitError(t *testing.T) {
 
 func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	log := logger.New("debug", true)
-	mockDB := &MockDatabase{}
-	mockMessaging := &MockMessagingClient{}
+	mockDB := &testmocks.MockDatabase{}
+	mockMessaging := testmocks.NewMockAMQPClient()
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
@@ -152,7 +153,7 @@ func TestModuleRegistryRegisterRoutes(t *testing.T) {
 
 func TestModuleRegistryRegisterMessagingNoRegistry(t *testing.T) {
 	log := logger.New("debug", true)
-	mockDB := &MockDatabase{}
+	mockDB := &testmocks.MockDatabase{}
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},

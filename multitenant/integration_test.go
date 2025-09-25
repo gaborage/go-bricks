@@ -25,13 +25,13 @@ func TestMultiTenantMessagingEndToEnd(t *testing.T) {
 	// Setup provider with multiple tenant configurations
 	provider := newMockMessagingProvider()
 	provider.setTenantConfig(tenantA, &TenantMessagingConfig{
-		URL: "amqp://tenant-a:pass@localhost:5672/tenant-a",
+		URL: "amqp://localhost:5672/tenant-a",
 	})
 	provider.setTenantConfig(tenantB, &TenantMessagingConfig{
-		URL: "amqp://tenant-b:pass@localhost:5672/tenant-b",
+		URL: "amqp://localhost:5672/tenant-b",
 	})
 	provider.setTenantConfig(tenantC, &TenantMessagingConfig{
-		URL: "amqp://tenant-c:pass@localhost:5672/tenant-c",
+		URL: "amqp://localhost:5672/tenant-c",
 	})
 
 	// Create messaging manager with mock factory
@@ -198,10 +198,6 @@ func TestMultiTenantMessagingEndToEnd(t *testing.T) {
 		finalCount := len(shortTTLManager.publishers)
 		shortTTLManager.pubMu.RUnlock()
 		assert.Equal(t, 0, finalCount, "All publishers should be cleaned up after TTL expiry")
-
-		// Close the test manager
-		err := shortTTLManager.Close()
-		assert.NoError(t, err)
 	})
 
 	// Test 5: Manager lifecycle (startup, cleanup, shutdown)

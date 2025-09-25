@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -249,12 +250,17 @@ func (r *ModuleRegistry) RegisterMessaging() error {
 	// Declare all messaging infrastructure after all modules have registered
 	r.logger.Info().Msg("Declaring messaging infrastructure")
 	if err := registry.DeclareInfrastructure(ctx); err != nil {
-		return err
+		r.logger.Error().Err(err).Msg("Failed to declare messaging infrastructure")
+		return fmt.Errorf("DeclareInfrastructure failed: %w", err)
 	}
 
 	// Start consumers after infrastructure is declared
 	r.logger.Info().Msg("Starting message consumers")
-	return registry.StartConsumers(ctx)
+	if err := registry.StartConsumers(ctx); err != nil {
+		r.logger.Error().Err(err).Msg("Failed to start message consumers")
+		return fmt.Errorf("StartConsumers failed: %w", err)
+	}
+	return nil
 }
 
 // Shutdown gracefully shuts down all registered modules.

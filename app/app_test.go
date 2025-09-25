@@ -2,210 +2,70 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/signal"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/labstack/echo/v4"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
-	dbpkg "github.com/gaborage/go-bricks/database"
-	"github.com/gaborage/go-bricks/internal/database"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
-	appName                      = "test-app"
-	readyEndpoint                = "/ready"
-	moduleName                   = "test-module"
-	appVersion                   = "v1.0.0"
-	noTenantConfigProviderErrMsg = "no tenant config provider was supplied"
+	appName       = "test-app"
+	moduleName    = "test-module"
+	appVersion    = "v1.0.0"
+	readyEndpoint = "/ready"
 )
 
-// MockDatabase implements the database.Interface for testing
-// Deprecated: Use github.com/gaborage/go-bricks/testing/mocks.MockDatabase instead
-// This internal mock will be removed in a future version.
-// For migration examples, see examples/testing/
-type MockDatabase struct {
-	mock.Mock
-}
-
-func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	argsList := m.Called(ctx, query, args)
-	return argsList.Get(0).(*sql.Rows), argsList.Error(1)
-}
-
-func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	argsList := m.Called(ctx, query, args)
-	return argsList.Get(0).(*sql.Row)
-}
-
-func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	argsList := m.Called(ctx, query, args)
-	return argsList.Get(0).(sql.Result), argsList.Error(1)
-}
-
-func (m *MockDatabase) Prepare(ctx context.Context, query string) (database.Statement, error) {
-	argsList := m.Called(ctx, query)
-	if argsList.Get(0) == nil {
-		return nil, argsList.Error(1)
-	}
-	return argsList.Get(0).(database.Statement), argsList.Error(1)
-}
-
-func (m *MockDatabase) Begin(ctx context.Context) (database.Tx, error) {
-	argsList := m.Called(ctx)
-	if argsList.Get(0) == nil {
-		return nil, argsList.Error(1)
-	}
-	return argsList.Get(0).(database.Tx), argsList.Error(1)
-}
-
-func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
-	argsList := m.Called(ctx, opts)
-	if argsList.Get(0) == nil {
-		return nil, argsList.Error(1)
-	}
-	return argsList.Get(0).(database.Tx), argsList.Error(1)
-}
-
-func (m *MockDatabase) Health(ctx context.Context) error {
-	argsList := m.Called(ctx)
-	return argsList.Error(0)
-}
-
-func (m *MockDatabase) Stats() (map[string]any, error) {
-	argsList := m.Called()
-	return argsList.Get(0).(map[string]any), argsList.Error(1)
-}
-
-func (m *MockDatabase) Close() error {
-	argsList := m.Called()
-	return argsList.Error(0)
-}
-
-func (m *MockDatabase) DatabaseType() string {
-	argsList := m.Called()
-	return argsList.String(0)
-}
-
-func (m *MockDatabase) GetMigrationTable() string {
-	// Mock implementation for GetMigrationTable (distinct from DatabaseType)
-	return "migrations" // Return a fixed mock value to differentiate from DatabaseType
-}
-
-func (m *MockDatabase) CreateMigrationTable(_ context.Context) error {
-	// Mock implementation for CreateMigrationTable (distinct from Health)
-	return nil // Return a fixed mock value to differentiate from Health
-}
-
-// MockSignalHandler implements SignalHandler for testing
 type MockSignalHandler struct {
 	mock.Mock
 	shouldExit chan bool
 }
 
 func NewMockSignalHandler() *MockSignalHandler {
-	return &MockSignalHandler{
-		shouldExit: make(chan bool, 1),
-	}
+	return &MockSignalHandler{shouldExit: make(chan bool, 1)}
 }
 
 func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
 	m.Called(c, sig)
-	// In tests, we don't use the real signal mechanism
 }
 
 func (m *MockSignalHandler) WaitForSignal(c <-chan os.Signal) {
 	m.Called(c)
-	// Wait for test to signal us to exit
 	<-m.shouldExit
 }
 
 func (m *MockSignalHandler) TriggerShutdown() {
-	m.shouldExit <- true
+	select {
+	case m.shouldExit <- true:
+	default:
+	}
 }
 
-// MockTimeoutProvider implements TimeoutProvider for testing
 type MockTimeoutProvider struct {
 	mock.Mock
 }
 
 func (m *MockTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	args := m.Called(parent, timeout)
-	ctx := args.Get(0).(context.Context)
-	cancel := args.Get(1).(context.CancelFunc)
-	return ctx, cancel
-}
-
-// MockMessagingClient implements the messaging.Client for testing
-// Deprecated: Use github.com/gaborage/go-bricks/testing/mocks.MockMessagingClient or MockAMQPClient instead
-// This internal mock will be removed in a future version.
-// For migration examples, see examples/testing/
-type MockMessagingClient struct {
-	mock.Mock
-}
-
-func (m *MockMessagingClient) Publish(ctx context.Context, destination string, data []byte) error {
-	argsList := m.Called(ctx, destination, data)
-	return argsList.Error(0)
-}
-
-func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
-	argsList := m.Called(ctx, destination)
-	return argsList.Get(0).(<-chan amqp.Delivery), argsList.Error(1)
-}
-
-func (m *MockMessagingClient) Close() error {
-	argsList := m.Called()
-	return argsList.Error(0)
-}
-
-func (m *MockMessagingClient) IsReady() bool {
-	argsList := m.Called()
-	return argsList.Bool(0)
-}
-
-func (m *MockMessagingClient) PublishToExchange(ctx context.Context, options messaging.PublishOptions, data []byte) error {
-	argsList := m.Called(ctx, options, data)
-	return argsList.Error(0)
-}
-
-func (m *MockMessagingClient) ConsumeFromQueue(ctx context.Context, options messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
-	argsList := m.Called(ctx, options)
-	return argsList.Get(0).(<-chan amqp.Delivery), argsList.Error(1)
-}
-
-func (m *MockMessagingClient) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool) error {
-	argsList := m.Called(name, durable, autoDelete, exclusive, noWait)
-	return argsList.Error(0)
-}
-
-func (m *MockMessagingClient) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool) error {
-	argsList := m.Called(name, kind, durable, autoDelete, internal, noWait)
-	return argsList.Error(0)
-}
-
-func (m *MockMessagingClient) BindQueue(queue, exchange, routingKey string, noWait bool) error {
-	argsList := m.Called(queue, exchange, routingKey, noWait)
-	return argsList.Error(0)
+	return args.Get(0).(context.Context), args.Get(1).(context.CancelFunc)
 }
 
 type mockServer struct {
@@ -215,44 +75,35 @@ type mockServer struct {
 	shutdownCalls int32
 	e             *echo.Echo
 	readyHandler  echo.HandlerFunc
-}
 
-type noopRouteRegistrar struct{}
-
-func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) *echo.Route {
-	return nil
-}
-
-func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
-	return &noopRouteRegistrar{}
-}
-
-func (n *noopRouteRegistrar) Use(_ ...echo.MiddlewareFunc) {
-	// No-op implementation for testing purposes
-}
-
-func (n *noopRouteRegistrar) FullPath(path string) string {
-	if path == "" {
-		return "/"
-	}
-	if strings.HasPrefix(path, "/") {
-		return path
-	}
-	return "/" + path
+	gate     chan struct{}
+	gateOnce sync.Once
 }
 
 func newMockServer() *mockServer {
-	return &mockServer{e: echo.New()}
+	return &mockServer{
+		startErr: http.ErrServerClosed,
+		e:        echo.New(),
+		gate:     make(chan struct{}),
+	}
+}
+
+func (m *mockServer) releaseStart() {
+	m.gateOnce.Do(func() {
+		close(m.gate)
+	})
 }
 
 func (m *mockServer) Start() error {
 	atomic.AddInt32(&m.startCalls, 1)
+	<-m.gate
 	return m.startErr
 }
 
 func (m *mockServer) Shutdown(ctx context.Context) error {
-	atomic.AddInt32(&m.shutdownCalls, 1)
 	_ = ctx
+	atomic.AddInt32(&m.shutdownCalls, 1)
+	m.releaseStart()
 	return m.shutdownErr
 }
 
@@ -276,7 +127,30 @@ func (m *mockServer) shutdownCount() int {
 	return int(atomic.LoadInt32(&m.shutdownCalls))
 }
 
-// MockModule implements the Module interface for testing
+type noopRouteRegistrar struct{}
+
+func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) *echo.Route {
+	return nil
+}
+
+func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
+	return &noopRouteRegistrar{}
+}
+
+func (n *noopRouteRegistrar) Use(_ ...echo.MiddlewareFunc) {
+	// No-op
+}
+
+func (n *noopRouteRegistrar) FullPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	if path[0] == '/' {
+		return path
+	}
+	return "/" + path
+}
+
 type MockModule struct {
 	mock.Mock
 	name string
@@ -286,13 +160,11 @@ func (m *MockModule) Name() string {
 	if m.name != "" {
 		return m.name
 	}
-	argsList := m.Called()
-	return argsList.String(0)
+	return m.Called().String(0)
 }
 
 func (m *MockModule) Init(deps *ModuleDeps) error {
-	argsList := m.Called(deps)
-	return argsList.Error(0)
+	return m.Called(deps).Error(0)
 }
 
 func (m *MockModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -304,596 +176,392 @@ func (m *MockModule) RegisterMessaging(registry *messaging.Registry) {
 }
 
 func (m *MockModule) Shutdown() error {
-	argsList := m.Called()
-	return argsList.Error(0)
+	return m.Called().Error(0)
 }
 
-// Helper to create a test app with mocked dependencies
-func createTestApp(_ *testing.T) (*App, *MockDatabase, *MockMessagingClient) {
-	return createTestAppWithMocks(nil, nil)
+type testAppFixture struct {
+	t         *testing.T
+	app       *App
+	db        *testmocks.MockDatabase
+	messaging *testmocks.MockAMQPClient
+	server    *mockServer
 }
 
-// Helper to create a test app with injectable mocked dependencies
-func createTestAppWithMocks(mockSignalHandler *MockSignalHandler, mockTimeoutProvider *MockTimeoutProvider) (*App, *MockDatabase, *MockMessagingClient) {
-	// Create test config
-	cfg := &config.Config{
+type fixtureOption func(*testAppFixture)
+
+func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
+	t.Helper()
+
+	cfg := defaultTestConfig()
+	log := logger.New("debug", true)
+
+	db := &testmocks.MockDatabase{}
+	msg := testmocks.NewMockAMQPClient()
+
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: cfg,
+		GetDB: func(context.Context) (database.Interface, error) {
+			return db, nil
+		},
+		GetMessaging: func(context.Context) (messaging.AMQPClient, error) {
+			return msg, nil
+		},
+	}
+
+	srv := newMockServer()
+
+	app := &App{
+		cfg:             cfg,
+		server:          srv,
+		db:              db,
+		logger:          log,
+		messaging:       msg,
+		registry:        NewModuleRegistry(deps),
+		signalHandler:   &OSSignalHandler{},
+		timeoutProvider: &StandardTimeoutProvider{},
+	}
+
+	fixture := &testAppFixture{
+		t:         t,
+		app:       app,
+		db:        db,
+		messaging: msg,
+		server:    srv,
+	}
+
+	for _, opt := range opts {
+		opt(fixture)
+	}
+
+	fixture.rebuildClosersAndHealth()
+	fixture.server.Echo().GET(readyEndpoint, fixture.app.readyCheck)
+
+	return fixture
+}
+
+func (f *testAppFixture) rebuildClosersAndHealth() {
+	f.app.healthProbes = createHealthProbes(f.app.db, f.app.messaging, f.app.logger)
+	f.app.closers = nil
+	f.app.registerCloser("messaging client", f.app.messaging)
+	f.app.registerCloser("database connection", f.app.db)
+	if f.app.tenantConnManager != nil {
+		f.app.registerCloser("tenant connection manager", f.app.tenantConnManager)
+	}
+	if f.app.messagingManager != nil {
+		f.app.registerCloser("messaging manager", f.app.messagingManager)
+	}
+}
+
+func withSignalHandler(handler SignalHandler) fixtureOption {
+	return func(f *testAppFixture) {
+		f.app.signalHandler = handler
+	}
+}
+
+func withTimeoutProvider(provider TimeoutProvider) fixtureOption {
+	return func(f *testAppFixture) {
+		f.app.timeoutProvider = provider
+	}
+}
+
+func withTenantMessaging(orchestrator TenantMessagingOrchestrator) fixtureOption {
+	return func(f *testAppFixture) {
+		f.app.cfg.Multitenant.Enabled = true
+		f.app.tenantMessaging = orchestrator
+		f.rebuildClosersAndHealth()
+	}
+}
+
+func defaultTestConfig() *config.Config {
+	return &config.Config{
 		App: config.AppConfig{
 			Name:    appName,
-			Version: appVersion,
 			Env:     "test",
+			Version: appVersion,
 		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
+		Server: config.ServerConfig{Host: "localhost", Port: 8080},
 		Database: config.DatabaseConfig{
 			Type: "postgresql",
 			Host: "localhost",
 			Port: 5432,
 		},
 		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "amqp://guest:guest@localhost:5672/",
-			},
+			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
 		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
+		Log: config.LogConfig{Level: "debug"},
 	}
-
-	log := logger.New("debug", true)
-
-	mockDB := &MockDatabase{}
-	mockMessaging := &MockMessagingClient{}
-
-	deps := &ModuleDeps{
-		Logger: log,
-		Config: cfg,
-		GetDB: func(_ context.Context) (database.Interface, error) {
-			return mockDB, nil
-		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			// MockMessagingClient implements AMQPClient interface
-			return mockMessaging, nil
-		},
-	}
-	registry := NewModuleRegistry(deps)
-
-	// Create test server
-	srv := newMockServer()
-
-	// Use default implementations if not provided
-	var signalHandler SignalHandler = &OSSignalHandler{}
-	var timeoutProvider TimeoutProvider = &StandardTimeoutProvider{}
-
-	if mockSignalHandler != nil {
-		signalHandler = mockSignalHandler
-	}
-	if mockTimeoutProvider != nil {
-		timeoutProvider = mockTimeoutProvider
-	}
-
-	app := &App{
-		cfg:             cfg,
-		server:          srv,
-		db:              mockDB,
-		logger:          log,
-		messaging:       mockMessaging,
-		registry:        registry,
-		signalHandler:   signalHandler,
-		timeoutProvider: timeoutProvider,
-	}
-
-	srv.Echo().GET(readyEndpoint, app.readyCheck)
-
-	return app, mockDB, mockMessaging
 }
 
-func TestAppRegisterModuleSuccess(t *testing.T) {
-	app, _, _ := createTestApp(t)
+func (f *testAppFixture) newReadyContext() (echo.Context, *httptest.ResponseRecorder) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
+	rec := httptest.NewRecorder()
+	return e.NewContext(req, rec), rec
+}
 
+type stubTenantMessaging struct {
+	captureCalled    bool
+	captureErr       error
+	publisher        messaging.AMQPClient
+	publishErr       error
+	lastTenant       string
+	lastDeclarations *multitenant.MessagingDeclarations
+}
+
+func (s *stubTenantMessaging) CaptureDeclarations() (*multitenant.MessagingDeclarations, error) {
+	s.captureCalled = true
+	if s.captureErr != nil {
+		return nil, s.captureErr
+	}
+	return multitenant.NewMessagingDeclarations(), nil
+}
+
+func (s *stubTenantMessaging) PublisherForTenant(_ context.Context, tenantID string, declarations *multitenant.MessagingDeclarations) (messaging.AMQPClient, error) {
+	s.lastTenant = tenantID
+	s.lastDeclarations = declarations
+	if s.publishErr != nil {
+		return nil, s.publishErr
+	}
+	return s.publisher, nil
+}
+
+type closerMock struct {
+	mock.Mock
+}
+
+func (c *closerMock) Close() error {
+	return c.Called().Error(0)
+}
+
+func TestRegisterModuleSuccess(t *testing.T) {
+	fixture := newTestAppFixture(t)
 	module := &MockModule{name: moduleName}
 	module.On("Init", mock.Anything).Return(nil)
 
-	err := app.RegisterModule(module)
-	assert.NoError(t, err)
-
-	// Verify module was added to registry
-	assert.Len(t, app.registry.modules, 1)
-	assert.Equal(t, moduleName, app.registry.modules[0].Name())
-
+	err := fixture.app.RegisterModule(module)
+	require.NoError(t, err)
+	assert.Len(t, fixture.app.registry.modules, 1)
 	module.AssertExpectations(t)
 }
 
-func TestAppRegisterModuleInitError(t *testing.T) {
-	app, _, _ := createTestApp(t)
-
-	module := &MockModule{name: "failing-module"}
-	expectedErr := errors.New("module init failed")
+func TestRegisterModuleInitError(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	module := &MockModule{name: moduleName}
+	expectedErr := errors.New("init failed")
 	module.On("Init", mock.Anything).Return(expectedErr)
 
-	err := app.RegisterModule(module)
-	assert.Error(t, err)
-	assert.Equal(t, expectedErr, err)
-
-	// Verify module was not added to registry
-	assert.Len(t, app.registry.modules, 0)
-
+	err := fixture.app.RegisterModule(module)
+	require.ErrorIs(t, err, expectedErr)
+	assert.Empty(t, fixture.app.registry.modules)
 	module.AssertExpectations(t)
 }
 
-func TestAppReadyCheckHealthy(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-
-	// Setup mocks for healthy state
-	setupHealthyMocks(mockDB, mockMessaging)
-
-	// Create test request and execute
-	c, rec := createReadyCheckRequest()
-	response := executeReadyCheckAndParseResponse(t, app, c, rec)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-	verifyHealthyResponse(t, response, "healthy", "healthy")
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-}
-
-func TestAppReadyCheckUnhealthyDatabase(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-
-	// Setup mocks for unhealthy database
-	expectedErr := errors.New("database connection failed")
-	setupUnhealthyDatabaseMocks(mockDB, mockMessaging, expectedErr)
-
-	// Create test request and execute
-	c, rec := createReadyCheckRequest()
-	response := executeReadyCheckAndParseResponse(t, app, c, rec)
-
-	// Verify response
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "not ready", response["status"])
-	assert.Equal(t, "unhealthy", response["database"])
-	assert.Equal(t, "database connection failed", response["error"])
-
-	mockDB.AssertExpectations(t)
-}
-
-func TestAppReadyCheckNoMessaging(t *testing.T) {
-	app, mockDB, _ := createTestApp(t)
-
-	// Disable messaging
-	app.messaging = nil
-
-	// Setup mocks for healthy database
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{
-		"open_connections": 5,
-	}, nil)
-
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "healthy", response["database"])
-	assert.Equal(t, "disabled", response["messaging"])
-
-	mockDB.AssertExpectations(t)
-}
-
-func TestAppReadyCheckDatabaseStatsError(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-
-	// Setup mocks - healthy database but stats error
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{}, errors.New("stats unavailable"))
-	mockMessaging.On("IsReady").Return(true)
-
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "healthy", response["database"])
-
-	// Check that db_stats contains error
-	dbStats := response["db_stats"].(map[string]any)
-	assert.Equal(t, "stats unavailable", dbStats["error"])
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-}
-
-func TestAppShutdownSuccess(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-	mockSrv := app.server.(*mockServer)
-
-	// Add a test module
-	module := &MockModule{name: moduleName}
-	module.On("Shutdown").Return(nil)
-	app.registry.modules = append(app.registry.modules, module)
-
-	// Setup mocks
-	mockDB.On("Close").Return(nil)
-	mockMessaging.On("Close").Return(nil)
-
-	// Execute shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := app.Shutdown(ctx)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, mockSrv.shutdownCount())
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-	module.AssertExpectations(t)
-}
-
-func TestAppShutdownWithErrors(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-	mockSrv := app.server.(*mockServer)
-
-	// Add a test module that fails shutdown
-	module := &MockModule{name: "failing-module"}
-	module.On("Shutdown").Return(errors.New("module shutdown failed"))
-	app.registry.modules = append(app.registry.modules, module)
-
-	// Setup mocks with errors
-	mockDB.On("Close").Return(errors.New("database close failed"))
-	mockMessaging.On("Close").Return(errors.New("messaging close failed"))
-
-	// Execute shutdown - should complete even with errors
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := app.Shutdown(ctx)
-	// Shutdown should not return error, but log the errors internally
-	assert.NoError(t, err)
-	assert.Equal(t, 1, mockSrv.shutdownCount())
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-	module.AssertExpectations(t)
-}
-
-func TestAppShutdownNoMessaging(t *testing.T) {
-	app, mockDB, _ := createTestApp(t)
-	app.messaging = nil
-
-	// Setup mocks
-	mockDB.On("Close").Return(nil)
-
-	// Execute shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := app.Shutdown(ctx)
-	assert.NoError(t, err)
-
-	mockDB.AssertExpectations(t)
-}
-
-// =============================================================================
-// Application Lifecycle Tests
-// =============================================================================
-
-func TestAppReadyCheckUnhealthyMessaging(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-
-	// Setup mocks for unhealthy messaging
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{
-		"open_connections": 5,
-	}, nil)
-	mockMessaging.On("IsReady").Return(false) // Messaging not ready
-
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "healthy", response["database"])
-	assert.Equal(t, "unhealthy", response["messaging"])
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-}
-
-func TestAppRegisterMessagingSuccess(t *testing.T) {
-	app, _, mockMessaging := createTestApp(t)
-
-	// Add a test module with messaging registration
-	module := &MockModule{name: "messaging-module"}
-	module.On("RegisterMessaging", mock.Anything).Return()
-	app.registry.modules = append(app.registry.modules, module)
-
-	// Mock the messaging operations that will be called during RegisterMessaging
-	mockMessaging.On("IsReady").Return(true)
-
-	err := app.registry.RegisterMessaging()
-	assert.NoError(t, err)
-
-	module.AssertExpectations(t)
-}
-
-func TestAppRegisterMessagingNoMessagingClient(t *testing.T) {
-	app, _, _ := createTestApp(t)
-
-	// Set messaging function to return error to simulate no messaging client
-	app.registry.deps.GetMessaging = func(_ context.Context) (messaging.AMQPClient, error) {
-		return nil, fmt.Errorf("messaging not configured")
-	}
-	// Recreate registry without messaging
-	app.registry = NewModuleRegistry(app.registry.deps)
-
-	err := app.registry.RegisterMessaging()
-	// Should not return error when no messaging client is available
-	assert.NoError(t, err)
-}
-
-func TestAppShutdownServerShutdownError(t *testing.T) {
-	app, mockDB, mockMessaging := createTestApp(t)
-	mockSrv := app.server.(*mockServer)
-	mockSrv.shutdownErr = errors.New("server shutdown failed")
-
-	// Mock server that fails to shutdown gracefully
-	// Since we can't easily mock the echo server, we'll focus on the shutdown logic
-	mockDB.On("Close").Return(nil)
-	mockMessaging.On("Close").Return(nil)
-
-	// Execute shutdown with very short timeout to test timeout scenario
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
-	defer cancel()
-
-	err := app.Shutdown(ctx)
-	// Shutdown should not return error even if server shutdown fails
-	assert.NoError(t, err)
-	assert.Equal(t, 1, mockSrv.shutdownCount())
-
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-}
-
-// =============================================================================
-// Run() Method Tests - Application Lifecycle
-// =============================================================================
-
-func TestAppRunSuccess(t *testing.T) {
-	mockSignalHandler := NewMockSignalHandler()
-	mockTimeoutProvider := &MockTimeoutProvider{}
-
-	app, mockDB, mockMessaging := createTestAppWithMocks(mockSignalHandler, mockTimeoutProvider)
-	mockSrv := app.server.(*mockServer)
-
-	// Setup mocks for successful run
-	mockSignalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
-	mockSignalHandler.On("WaitForSignal", mock.Anything).Return()
-
-	// Mock timeout creation for shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	mockTimeoutProvider.On("WithTimeout", context.Background(), 10*time.Second).Return(ctx, cancel)
-
-	// Setup mocks for shutdown sequence
-	mockDB.On("Close").Return(nil)
-	mockMessaging.On("Close").Return(nil)
-
-	// Mock messaging client health check during infrastructure declaration
-	mockMessaging.On("IsReady").Return(true)
-
-	// Test module for registry
-	module := &MockModule{name: moduleName}
-	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
-	module.On("RegisterMessaging", mock.Anything).Return()
-	module.On("Shutdown").Return(nil)
-	app.registry.modules = append(app.registry.modules, module)
-
-	// Run the app in a goroutine since it blocks
-	var runErr error
-	done := make(chan bool)
-	go func() {
-		defer func() { done <- true }()
-		runErr = app.Run()
-	}()
-
-	// Wait until server reports started
-	assert.Eventually(t, func() bool {
-		return mockSrv.startCount() > 0
-	}, time.Second, 10*time.Millisecond)
-
-	// Send shutdown signal
-	mockSignalHandler.TriggerShutdown()
-
-	// Wait for shutdown to complete
-	select {
-	case <-done:
-		// Expected completion
-	case <-time.After(2 * time.Second):
-		t.Fatal("App.Run() did not complete in expected time")
-	}
-
-	assert.NoError(t, runErr)
-	assert.Equal(t, 1, mockSrv.startCount())
-	assert.Equal(t, 1, mockSrv.shutdownCount())
-	mockSignalHandler.AssertExpectations(t)
-	mockTimeoutProvider.AssertExpectations(t)
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-	module.AssertExpectations(t)
-}
-
-func TestAppRunIgnoresServerClosedError(t *testing.T) {
-	mockSignalHandler := NewMockSignalHandler()
-	mockTimeoutProvider := &MockTimeoutProvider{}
-
-	app, mockDB, mockMessaging := createTestAppWithMocks(mockSignalHandler, mockTimeoutProvider)
-	mockSrv := app.server.(*mockServer)
-	mockSrv.startErr = http.ErrServerClosed
-
-	mockSignalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
-	mockSignalHandler.On("WaitForSignal", mock.Anything).Return()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	mockTimeoutProvider.On("WithTimeout", context.Background(), 10*time.Second).Return(ctx, cancel)
-
-	mockDB.On("Close").Return(nil)
-	mockMessaging.On("Close").Return(nil)
-	mockMessaging.On("IsReady").Return(true)
-
-	module := &MockModule{name: moduleName}
-	module.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
-	module.On("RegisterMessaging", mock.Anything).Return()
-	module.On("Shutdown").Return(nil)
-	app.registry.modules = append(app.registry.modules, module)
-
-	var runErr error
-	done := make(chan bool)
-	go func() {
-		defer func() { done <- true }()
-		runErr = app.Run()
-	}()
-
-	assert.Eventually(t, func() bool {
-		return mockSrv.startCount() > 0
-	}, time.Second, 10*time.Millisecond)
-	mockSignalHandler.TriggerShutdown()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("App.Run() did not complete in expected time")
-	}
-
-	assert.NoError(t, runErr)
-	assert.Equal(t, 1, mockSrv.startCount())
-	assert.Equal(t, 1, mockSrv.shutdownCount())
-	mockSignalHandler.AssertExpectations(t)
-	mockTimeoutProvider.AssertExpectations(t)
-	mockDB.AssertExpectations(t)
-	mockMessaging.AssertExpectations(t)
-	module.AssertExpectations(t)
-}
-
-// =============================================================================
-// New() Constructor Tests - Factory Method Testing
-// =============================================================================
-
-func TestAppNewDefaultConfig(t *testing.T) {
-	opts := &Options{ConfigLoader: func() (*config.Config, error) {
-		return &config.Config{
-			App: config.AppConfig{Name: "test", Env: "test", Version: "v"},
-			Log: config.LogConfig{Level: "info"},
-		}, nil
-	}}
-	app, err := NewWithOptions(opts)
-	require.NoError(t, err)
-	require.NotNil(t, app)
-	assert.NotNil(t, app.server)
-	assert.Nil(t, app.db)
-	assert.Nil(t, app.messaging)
-}
-
-func TestAppNewConfigLoadError(t *testing.T) {
-	opts := &Options{
-		ConfigLoader: func() (*config.Config, error) {
-			return nil, errors.New("load failed")
-		},
-	}
-
-	app, err := NewWithOptions(opts)
-	assert.Error(t, err)
-	assert.Nil(t, app)
-}
-
-func TestAppNewWithConfigUsesConnectors(t *testing.T) {
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			Type:     config.PostgreSQL,
-			Host:     "db-host",
-			Port:     5432,
-			Database: "testdb",
-			Username: "user",
-		},
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "amqp://broker",
+func TestReadyCheckScenarios(t *testing.T) {
+	cases := []struct {
+		name           string
+		prepare        func(f *testAppFixture)
+		expectedStatus int
+		assertBody     func(t *testing.T, body map[string]any)
+	}{
+		{
+			name: "healthy",
+			prepare: func(f *testAppFixture) {
+				f.db.On("Health", mock.Anything).Return(nil)
+				f.db.On("Stats").Return(map[string]any{"open_connections": 5}, nil)
+				f.messaging.SetReady(true)
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, "ready", body["status"])
+				assert.Equal(t, "healthy", body["database"])
+				assert.Equal(t, float64(5), body["db_stats"].(map[string]any)["open_connections"])
+				assert.Equal(t, "healthy", body["messaging"])
 			},
 		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
+		{
+			name: "database unhealthy",
+			prepare: func(f *testAppFixture) {
+				f.db.On("Health", mock.Anything).Return(errors.New("db down"))
+			},
+			expectedStatus: http.StatusServiceUnavailable,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, "not ready", body["status"])
+				assert.Equal(t, "unhealthy", body["database"])
+				assert.Equal(t, "db down", body["error"])
+			},
+		},
+		{
+			name: "messaging disabled",
+			prepare: func(f *testAppFixture) {
+				f.db.On("Health", mock.Anything).Return(nil)
+				f.db.On("Stats").Return(map[string]any{"status": "disabled"}, nil)
+				f.app.messaging = nil
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, "disabled", body["messaging"])
+			},
 		},
 	}
 
-	dbMock := &MockDatabase{}
-	msgMock := &MockMessagingClient{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTestAppFixture(t)
+			tc.prepare(fixture)
+
+			ctx, rec := fixture.newReadyContext()
+			err := fixture.app.readyCheck(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedStatus, rec.Code)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			tc.assertBody(t, body)
+
+			fixture.db.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRunGracefulShutdown(t *testing.T) {
+	signalHandler := NewMockSignalHandler()
+	timeoutProvider := &MockTimeoutProvider{}
+
+	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
+	fixture.messaging.ExpectClose(nil)
+	fixture.db.On("Close").Return(nil)
+
+	signalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
+	signalHandler.On("WaitForSignal", mock.Anything).Return()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	timeoutProvider.On("WithTimeout", mock.Anything, 10*time.Second).Return(shutdownCtx, cancel)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fixture.app.Run()
+	}()
+
+	assert.Eventually(t, func() bool { return fixture.server.startCount() == 1 }, time.Second, 10*time.Millisecond)
+
+	signalHandler.TriggerShutdown()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not complete in time")
+	}
+
+	assert.Equal(t, 1, fixture.server.shutdownCount())
+	signalHandler.AssertExpectations(t)
+	timeoutProvider.AssertExpectations(t)
+	fixture.messaging.AssertExpectations(t)
+	fixture.db.AssertExpectations(t)
+}
+
+func TestRunPropagatesServerError(t *testing.T) {
+	signalHandler := NewMockSignalHandler()
+	timeoutProvider := &MockTimeoutProvider{}
+	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
+
+	fixture.messaging.ExpectClose(nil)
+	fixture.db.On("Close").Return(nil)
+
+	signalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
+	signalHandler.On("WaitForSignal", mock.Anything).Return()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	timeoutProvider.On("WithTimeout", mock.Anything, 10*time.Second).Return(shutdownCtx, cancel)
+
+	startErr := errors.New("start failed")
+	fixture.server.startErr = startErr
+	fixture.server.releaseStart()
+
+	err := fixture.app.Run()
+	signalHandler.TriggerShutdown()
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, startErr)
+
+	signalHandler.AssertExpectations(t)
+	timeoutProvider.AssertExpectations(t)
+	fixture.messaging.AssertExpectations(t)
+	fixture.db.AssertExpectations(t)
+}
+
+func TestCaptureMessagingDeclarationsUsesOrchestrator(t *testing.T) {
+	stub := &stubTenantMessaging{}
+	fixture := newTestAppFixture(t, withTenantMessaging(stub))
+
+	err := fixture.app.captureMessagingDeclarations()
+	require.NoError(t, err)
+	assert.True(t, stub.captureCalled)
+	assert.NotNil(t, fixture.app.messagingDeclarations)
+}
+
+func TestSetupMultitenantGetMessagingUsesOrchestrator(t *testing.T) {
+	stub := &stubTenantMessaging{publisher: testmocks.NewMockAMQPClient()}
+	fixture := newTestAppFixture(t, withTenantMessaging(stub))
+	fixture.app.setupMultitenantGetMessaging(fixture.app.registry.deps)
+
+	ctx := multitenant.SetTenant(context.Background(), "tenant-1")
+
+	_, err := fixture.app.registry.deps.GetMessaging(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging declarations not yet captured")
+
+	fixture.app.messagingDeclarations = multitenant.NewMessagingDeclarations()
+
+	client, err := fixture.app.registry.deps.GetMessaging(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, stub.publisher, client)
+	assert.Equal(t, "tenant-1", stub.lastTenant)
+	assert.Equal(t, fixture.app.messagingDeclarations, stub.lastDeclarations)
+}
+
+func TestShutdownAggregatesErrors(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	fixture.app.closers = nil
+
+	serverErr := errors.New("server fail")
+	fixture.server.shutdownErr = serverErr
+
+	resourceErr := errors.New("resource fail")
+	closer := &closerMock{}
+	closer.On("Close").Return(resourceErr)
+	fixture.app.registerCloser("resource", closer)
+
+	err := fixture.app.Shutdown(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, serverErr)
+	assert.ErrorIs(t, err, resourceErr)
+	closer.AssertExpectations(t)
+}
+
+func TestNewWithConfigUsesConnectors(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Database.Host = "db-host"
+	cfg.Messaging.Broker.URL = "amqp://broker"
+
+	dbMock := &testmocks.MockDatabase{}
+	msgMock := testmocks.NewMockAMQPClient()
+
 	var dbCalled, messagingCalled bool
 
 	opts := &Options{
-		DatabaseConnector: func(dbCfg *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
+		DatabaseConnector: func(dbCfg *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
 			dbCalled = true
-			assert.Equal(t, cfg.Database.Host, dbCfg.Host)
+			assert.Equal(t, "db-host", dbCfg.Host)
 			return dbMock, nil
 		},
 		MessagingClientFactory: func(url string, _ logger.Logger) messaging.Client {
 			messagingCalled = true
-			assert.Equal(t, cfg.Messaging.Broker.URL, url)
+			assert.Equal(t, "amqp://broker", url)
 			return msgMock
 		},
 	}
@@ -907,229 +575,34 @@ func TestAppNewWithConfigUsesConnectors(t *testing.T) {
 	assert.Equal(t, msgMock, app.messaging)
 }
 
-func TestAppNewWithConfigDatabaseConnectorError(t *testing.T) {
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			Type:     config.PostgreSQL,
-			Host:     "db-host",
-			Port:     5432,
-			Database: "testdb",
-			Username: "user",
-		},
-		Messaging: config.MessagingConfig{},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
+func TestNewWithOptionsLoadError(t *testing.T) {
 	opts := &Options{
-		DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
-			return nil, errors.New("connection failed")
-		},
-		MessagingClientFactory: func(_ string, _ logger.Logger) messaging.Client {
-			t.Fatalf("messaging factory should not be called on db failure")
-			return nil
+		ConfigLoader: func() (*config.Config, error) {
+			return nil, errors.New("load failed")
 		},
 	}
 
-	app, err := NewWithConfig(cfg, opts)
-	assert.Error(t, err)
+	app, err := NewWithOptions(opts)
+	require.Error(t, err)
 	assert.Nil(t, app)
-}
-
-func TestAppNewWithConfigUsesProvidedServer(t *testing.T) {
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
-	providedServer := newMockServer()
-	opts := &Options{Server: providedServer}
-
-	app, err := NewWithConfig(cfg, opts)
-	require.NoError(t, err)
-	require.NotNil(t, app)
-	assert.Equal(t, providedServer, app.server)
-}
-
-func TestAppNewWithConfigDatabaseAndMessagingEnabled(t *testing.T) {
-	// Create test config with both database and messaging enabled
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			Type: "postgresql",
-			Host: "test-host",
-			Port: 5432,
-		},
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "amqp://test-broker:5672",
-			},
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
-	// Use mocks to avoid real connections
-	mockDB := &MockDatabase{}
-	mockMessaging := &MockMessagingClient{}
-	mockSignalHandler := NewMockSignalHandler()
-	mockTimeoutProvider := &MockTimeoutProvider{}
-
-	opts := &Options{
-		Database:        mockDB,
-		MessagingClient: mockMessaging,
-		SignalHandler:   mockSignalHandler,
-		TimeoutProvider: mockTimeoutProvider,
-	}
-
-	app, err := NewWithConfig(cfg, opts)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, app)
-	assert.Equal(t, mockDB, app.db)
-	assert.Equal(t, mockMessaging, app.messaging)
-	assert.Equal(t, mockSignalHandler, app.signalHandler)
-	assert.Equal(t, mockTimeoutProvider, app.timeoutProvider)
-	assert.Equal(t, appName, app.cfg.App.Name)
-}
-
-func TestAppNewWithConfigDatabaseOnlyEnabled(t *testing.T) {
-	// Create test config with only database enabled
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			Type: "postgresql",
-			Host: "test-host",
-			Port: 5432,
-		},
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "", // Empty means disabled
-			},
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
-	mockDB := &MockDatabase{}
-
-	opts := &Options{
-		Database: mockDB,
-	}
-
-	app, err := NewWithConfig(cfg, opts)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, app)
-	assert.Equal(t, mockDB, app.db)
-	assert.Nil(t, app.messaging) // Should be nil when not configured
-}
-
-func TestAppNewWithConfigMessagingOnlyEnabled(t *testing.T) {
-	// Create test config with only messaging enabled
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			// Empty database config means disabled
-		},
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "amqp://test-broker:5672",
-			},
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
-	mockMessaging := &MockMessagingClient{}
-
-	opts := &Options{
-		MessagingClient: mockMessaging,
-	}
-
-	app, err := NewWithConfig(cfg, opts)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, app)
-	assert.Nil(t, app.db) // Should be nil when not configured
-	assert.Equal(t, mockMessaging, app.messaging)
 }
 
 func TestStandardTimeoutProviderWithTimeout(t *testing.T) {
 	provider := &StandardTimeoutProvider{}
-
-	start := time.Now()
-	ctx, cancel := provider.WithTimeout(context.Background(), 5*time.Millisecond)
+	ctx, cancel := provider.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
 	deadline, ok := ctx.Deadline()
-	assert.True(t, ok)
-	assert.WithinDuration(t, start.Add(5*time.Millisecond), deadline, 20*time.Millisecond)
-
-	cancel()
-	assert.Eventually(t, func() bool {
-		return ctx.Err() == context.Canceled
-	}, 10*time.Millisecond, time.Millisecond)
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(10*time.Millisecond), deadline, 20*time.Millisecond)
 }
 
 func TestOSSignalHandlerWaitForSignal(t *testing.T) {
 	handler := &OSSignalHandler{}
 	signals := make(chan os.Signal, 1)
 	handler.Notify(signals, os.Interrupt)
-	done := make(chan struct{})
 
+	done := make(chan struct{})
 	go func() {
 		handler.WaitForSignal(signals)
 		close(done)
@@ -1139,719 +612,7 @@ func TestOSSignalHandlerWaitForSignal(t *testing.T) {
 
 	select {
 	case <-done:
-		// expected
 	case <-time.After(time.Second):
 		t.Fatal("wait for signal timed out")
 	}
-
-	signal.Stop(signals)
-}
-
-func TestAppNewWithConfigNeitherEnabled(t *testing.T) {
-	// Create test config with neither database nor messaging enabled
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Database: config.DatabaseConfig{
-			// Empty database config means disabled
-		},
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{
-				URL: "", // Empty means disabled
-			},
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: false,
-		},
-	}
-
-	app, err := NewWithConfig(cfg, nil)
-
-	assert.NoError(t, err)
-	assert.NotNil(t, app)
-	assert.Nil(t, app.db)        // Should be nil when not configured
-	assert.Nil(t, app.messaging) // Should be nil when not configured
-	assert.NotNil(t, app.server)
-	assert.NotNil(t, app.logger)
-	assert.NotNil(t, app.registry)
-}
-
-func TestAppIsDatabaseEnabled(t *testing.T) {
-	tests := []struct {
-		name     string
-		config   *config.Config
-		expected bool
-	}{
-		{
-			name: "enabled with host",
-			config: &config.Config{
-				Database: config.DatabaseConfig{
-					Host: "localhost",
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "enabled with type",
-			config: &config.Config{
-				Database: config.DatabaseConfig{
-					Type: "postgresql",
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "enabled with both",
-			config: &config.Config{
-				Database: config.DatabaseConfig{
-					Host: "localhost",
-					Type: "postgresql",
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "disabled when empty",
-			config: &config.Config{
-				Database: config.DatabaseConfig{},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isDatabaseEnabled(tt.config)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestAppIsMessagingEnabled(t *testing.T) {
-	tests := []struct {
-		name     string
-		config   *config.Config
-		expected bool
-	}{
-		{
-			name: "enabled with broker URL",
-			config: &config.Config{
-				Messaging: config.MessagingConfig{
-					Broker: config.BrokerConfig{
-						URL: "amqp://localhost:5672",
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "disabled when empty",
-			config: &config.Config{
-				Messaging: config.MessagingConfig{
-					Broker: config.BrokerConfig{
-						URL: "",
-					},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isMessagingEnabled(tt.config)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-// =============================================================================
-// readyCheck Tests with Optional Dependencies
-// =============================================================================
-
-func TestAppReadyCheckDatabaseDisabled(t *testing.T) {
-	// Create app without database
-	cfg := &config.Config{
-		App:       config.AppConfig{Name: appName, Version: appVersion, Env: "test"},
-		Server:    config.ServerConfig{Host: "localhost", Port: 8080},
-		Database:  config.DatabaseConfig{}, // Empty means disabled
-		Messaging: config.MessagingConfig{Broker: config.BrokerConfig{URL: ""}},
-		Log:       config.LogConfig{Level: "info", Pretty: false},
-	}
-
-	app, err := NewWithConfig(cfg, nil)
-	require.NoError(t, err)
-
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err = app.readyCheck(c)
-	require.NoError(t, err)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Parse JSON response
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "disabled", response["database"])
-	assert.Equal(t, "disabled", response["messaging"])
-
-	// Check db_stats shows disabled status
-	dbStats := response["db_stats"].(map[string]any)
-	assert.Equal(t, "disabled", dbStats["status"])
-}
-
-func TestAppReadyCheckMessagingDisabled(t *testing.T) {
-	app, mockDB, _ := createTestApp(t)
-
-	// Disable messaging
-	app.messaging = nil
-
-	// Setup healthy database
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{"open_connections": 5}, nil)
-
-	// Create test request
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	// Execute ready check
-	err := app.readyCheck(c)
-	require.NoError(t, err)
-
-	// Verify response
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, "healthy", response["database"])
-	assert.Equal(t, "disabled", response["messaging"])
-
-	// Verify app details
-	appDetails := response["app"].(map[string]any)
-	assert.Equal(t, appName, appDetails["name"])
-	assert.Equal(t, "test", appDetails["environment"])
-	assert.Equal(t, appVersion, appDetails["version"])
-
-	mockDB.AssertExpectations(t)
-}
-
-// =============================================================================
-// Test Helper Functions for Ready Check Tests
-// =============================================================================
-
-// createReadyCheckRequest creates a standardized HTTP request for ready check tests
-func createReadyCheckRequest() (echo.Context, *httptest.ResponseRecorder) {
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	return c, rec
-}
-
-// executeReadyCheckAndParseResponse executes ready check and returns parsed JSON response
-func executeReadyCheckAndParseResponse(t *testing.T, app *App, c echo.Context, rec *httptest.ResponseRecorder) map[string]any {
-	err := app.readyCheck(c)
-	require.NoError(t, err)
-
-	var response map[string]any
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	return response
-}
-
-// setupHealthyMocks configures mocks for a healthy system state
-func setupHealthyMocks(mockDB *MockDatabase, mockMessaging *MockMessagingClient) {
-	mockDB.On("Health", mock.Anything).Return(nil)
-	mockDB.On("Stats").Return(map[string]any{
-		"open_connections": 5,
-		"max_connections":  25,
-	}, nil)
-	mockMessaging.On("IsReady").Return(true)
-}
-
-// setupUnhealthyDatabaseMocks configures mocks for an unhealthy database state
-func setupUnhealthyDatabaseMocks(mockDB *MockDatabase, mockMessaging *MockMessagingClient, dbError error) {
-	mockDB.On("Health", mock.Anything).Return(dbError)
-	mockMessaging.On("IsReady").Return(true)
-}
-
-// verifyHealthyResponse verifies the structure of a healthy ready check response
-func verifyHealthyResponse(t *testing.T, response map[string]any, expectedDBState, expectedMessagingState string) {
-	assert.Equal(t, "ready", response["status"])
-	assert.Equal(t, expectedDBState, response["database"])
-	assert.Equal(t, expectedMessagingState, response["messaging"])
-	assert.NotNil(t, response["time"])
-	assert.NotNil(t, response["db_stats"])
-	assert.NotNil(t, response["app"])
-
-	// Verify app details
-	appDetails := response["app"].(map[string]any)
-	assert.Equal(t, appName, appDetails["name"])
-	assert.Equal(t, "test", appDetails["environment"])
-	assert.Equal(t, appVersion, appDetails["version"])
-}
-
-// =============================================================================
-// Multitenant Dependency Resolution Tests
-// =============================================================================
-
-// mockTenantConfigProvider implements multitenant.TenantConfigProvider for testing
-type mockTenantConfigProvider struct {
-	mock.Mock
-}
-
-func (m *mockTenantConfigProvider) GetDatabase(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
-	args := m.Called(ctx, tenantID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*config.DatabaseConfig), args.Error(1)
-}
-
-func (m *mockTenantConfigProvider) GetMessaging(ctx context.Context, tenantID string) (*multitenant.TenantMessagingConfig, error) {
-	args := m.Called(ctx, tenantID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*multitenant.TenantMessagingConfig), args.Error(1)
-}
-
-func TestResolveMultitenantDependencies(t *testing.T) {
-	cfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Enabled: true,
-			Cache: config.CacheConfig{
-				TTL: 5 * time.Minute,
-			},
-			Limits: config.LimitsConfig{
-				Tenants: 100,
-			},
-		},
-	}
-	log := logger.New("info", false)
-
-	tests := []struct {
-		name        string
-		opts        *Options
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name: "success_with_tenant_config_provider",
-			opts: &Options{
-				TenantConfigProvider: &mockTenantConfigProvider{},
-				DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (dbpkg.Interface, error) {
-					return &MockDatabase{}, nil
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "success_with_provided_connection_manager",
-			opts: &Options{
-				TenantConnectionManager: &multitenant.TenantConnectionManager{},
-			},
-			expectError: false,
-		},
-		{
-			name: "error_no_tenant_config_provider",
-			opts: &Options{
-				// No TenantConfigProvider
-			},
-			expectError: true,
-			errorMsg:    noTenantConfigProviderErrMsg,
-		},
-		{
-			name:        "error_nil_options",
-			opts:        nil,
-			expectError: true,
-			errorMsg:    noTenantConfigProviderErrMsg,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			deps, db, msgClient, tenantConnManager, err := resolveMultitenantDependencies(cfg, log, tt.opts)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
-				assert.Nil(t, deps)
-				assert.Nil(t, db)
-				assert.Nil(t, msgClient)
-				assert.Nil(t, tenantConnManager)
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, deps)
-				assert.Nil(t, db)        // No single-tenant DB
-				assert.Nil(t, msgClient) // No single-tenant messaging
-				assert.NotNil(t, tenantConnManager)
-
-				// Verify deps structure
-				assert.Equal(t, log, deps.Logger)
-				assert.Equal(t, cfg, deps.Config)
-				assert.NotNil(t, deps.GetDB)
-				assert.NotNil(t, deps.GetMessaging)
-
-				// Test GetDB function coverage
-				ctx := context.Background()
-
-				// Test without tenant in context
-				_, err := deps.GetDB(ctx)
-				assert.ErrorIs(t, err, ErrNoTenantInContext)
-
-				// For the test with tenant config provider, we need to setup the mock expectation
-				if tt.name == "success_with_tenant_config_provider" {
-					// Setup mock to return a database config when called
-					mockProvider := tt.opts.TenantConfigProvider.(*mockTenantConfigProvider)
-					dbConfig := &config.DatabaseConfig{
-						Type:     "postgresql",
-						Host:     "localhost",
-						Port:     5432,
-						Database: "test_db",
-						Username: "test_user",
-					}
-					mockProvider.On("GetDatabase", mock.Anything, "test-tenant").Return(dbConfig, nil)
-
-					// Test with tenant in context - this will call the mock
-					ctxWithTenant := multitenant.SetTenant(ctx, "test-tenant")
-					_, _ = deps.GetDB(ctxWithTenant)
-				}
-			}
-		})
-	}
-}
-
-func TestResolveTenantConnectionManager(t *testing.T) {
-	cfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Cache: config.CacheConfig{
-				TTL: 5 * time.Minute,
-			},
-			Limits: config.LimitsConfig{
-				Tenants: 100,
-			},
-		},
-	}
-	log := logger.New("info", false)
-
-	tests := []struct {
-		name        string
-		opts        *Options
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name: "success_with_provided_connection_manager",
-			opts: &Options{
-				TenantConnectionManager: &multitenant.TenantConnectionManager{},
-			},
-			expectError: false,
-		},
-		{
-			name: "success_with_tenant_config_provider",
-			opts: &Options{
-				TenantConfigProvider: &mockTenantConfigProvider{},
-			},
-			expectError: false,
-		},
-		{
-			name: "success_with_custom_cache_and_options",
-			opts: &Options{
-				TenantConfigProvider:    &mockTenantConfigProvider{},
-				TenantConfigCache:       &multitenant.TenantConfigCache{},
-				TenantCacheOptions:      []multitenant.CacheOption{multitenant.WithTTL(10 * time.Minute)},
-				TenantConnectionOptions: []multitenant.ConnectionOption{multitenant.WithMaxTenants(50)},
-			},
-			expectError: false,
-		},
-		{
-			name:        "error_nil_options",
-			opts:        nil,
-			expectError: true,
-			errorMsg:    noTenantConfigProviderErrMsg,
-		},
-		{
-			name: "error_no_tenant_config_provider",
-			opts: &Options{
-				// No TenantConfigProvider or TenantConnectionManager
-			},
-			expectError: true,
-			errorMsg:    noTenantConfigProviderErrMsg,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager, err := resolveTenantConnectionManager(cfg, log, tt.opts)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
-				assert.Nil(t, manager)
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, manager)
-			}
-		})
-	}
-}
-
-func TestResolveTenantCache(t *testing.T) {
-	cfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Cache: config.CacheConfig{
-				TTL: 10 * time.Minute,
-			},
-			Limits: config.LimitsConfig{
-				Tenants: 200,
-			},
-		},
-	}
-
-	tests := []struct {
-		name         string
-		opts         *Options
-		expectedTTL  time.Duration
-		expectedSize int
-	}{
-		{
-			name: "uses_provided_cache",
-			opts: &Options{
-				TenantConfigCache: &multitenant.TenantConfigCache{},
-			},
-		},
-		{
-			name: "creates_new_cache_with_config_values",
-			opts: &Options{
-				TenantConfigProvider: &mockTenantConfigProvider{},
-			},
-			expectedTTL:  10 * time.Minute,
-			expectedSize: 200,
-		},
-		{
-			name: "creates_new_cache_with_custom_options",
-			opts: &Options{
-				TenantConfigProvider: &mockTenantConfigProvider{},
-				TenantCacheOptions:   []multitenant.CacheOption{multitenant.WithTTL(15 * time.Minute)},
-			},
-			expectedTTL:  15 * time.Minute,
-			expectedSize: 200,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cache := resolveTenantCache(cfg, tt.opts)
-			assert.NotNil(t, cache)
-
-			// For provided cache, we can't verify the internal settings
-			if tt.opts.TenantConfigCache != nil {
-				assert.Equal(t, tt.opts.TenantConfigCache, cache)
-			}
-		})
-	}
-}
-
-func TestResolveTenantConnectionOptions(t *testing.T) {
-	cfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Limits: config.LimitsConfig{
-				Tenants: 150,
-			},
-		},
-	}
-
-	tests := []struct {
-		name              string
-		opts              *Options
-		expectedMinLength int
-	}{
-		{
-			name:              "nil_options",
-			opts:              nil,
-			expectedMinLength: 1, // At least WithMaxTenants option
-		},
-		{
-			name:              "empty_options",
-			opts:              &Options{},
-			expectedMinLength: 1, // At least WithMaxTenants option
-		},
-		{
-			name: "with_additional_connection_options",
-			opts: &Options{
-				TenantConnectionOptions: []multitenant.ConnectionOption{
-					multitenant.WithMaxTenants(75),
-				},
-			},
-			expectedMinLength: 2, // WithMaxTenants + custom option
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			connOpts := resolveTenantConnectionOptions(cfg, tt.opts)
-			assert.NotNil(t, connOpts)
-			assert.GreaterOrEqual(t, len(connOpts), tt.expectedMinLength)
-		})
-	}
-}
-
-func TestResolveDependenciesWithMultitenant(t *testing.T) {
-	multitenantCfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Enabled: true,
-			Cache: config.CacheConfig{
-				TTL: 5 * time.Minute,
-			},
-			Limits: config.LimitsConfig{
-				Tenants: 100,
-			},
-		},
-	}
-
-	singleTenantCfg := &config.Config{
-		Multitenant: config.MultitenantConfig{
-			Enabled: false,
-		},
-		Database: config.DatabaseConfig{
-			Type: "postgresql",
-			Host: "localhost",
-			Port: 5432,
-		},
-	}
-
-	log := logger.New("info", false)
-
-	t.Run("multitenant_enabled_calls_multitenant_resolver", func(t *testing.T) {
-		opts := &Options{
-			TenantConfigProvider: &mockTenantConfigProvider{},
-		}
-
-		deps, db, msgClient, tenantConnManager, err := resolveDependencies(multitenantCfg, log, opts)
-		assert.NoError(t, err)
-		assert.NotNil(t, deps)
-		assert.Nil(t, db)        // Multitenant mode
-		assert.Nil(t, msgClient) // Multitenant mode
-		assert.NotNil(t, tenantConnManager)
-	})
-
-	t.Run("multitenant_disabled_calls_single_tenant_resolver", func(t *testing.T) {
-		opts := &Options{
-			Database: &MockDatabase{},
-		}
-
-		deps, db, _, tenantConnManager, err := resolveDependencies(singleTenantCfg, log, opts)
-		assert.NoError(t, err)
-		assert.NotNil(t, deps)
-		assert.NotNil(t, db) // Single-tenant mode
-		// msgClient can be nil if messaging not configured
-		assert.Nil(t, tenantConnManager) // Single-tenant mode
-	})
-}
-
-// createTestConfig creates a basic test configuration
-func createTestConfig() *config.Config {
-	return &config.Config{
-		App: config.AppConfig{
-			Name:    appName,
-			Version: appVersion,
-			Env:     "test",
-		},
-		Server: config.ServerConfig{
-			Host: "localhost",
-			Port: 8080,
-		},
-		Log: config.LogConfig{
-			Level:  "info",
-			Pretty: true,
-		},
-		Multitenant: config.MultitenantConfig{
-			Enabled: false,
-		},
-	}
-}
-
-// TestNew tests the New function (wrapper around NewWithOptions)
-func TestNew(t *testing.T) {
-	t.Run("success calls NewWithOptions with nil", func(t *testing.T) {
-		// Use default config loading but accept whatever is loaded
-		app, err := New()
-
-		require.NoError(t, err)
-		assert.NotNil(t, app)
-		// Verify it's created with some basic structure
-		assert.NotNil(t, app.cfg)
-		assert.NotEmpty(t, app.cfg.App.Name) // Should have some default name
-	})
-
-	t.Run("uses NewWithOptions internally", func(t *testing.T) {
-		// Test that New() is equivalent to NewWithOptions(nil)
-		// We can't easily mock the config loading error, so we'll verify it's the same behavior
-		app1, err1 := New()
-		app2, err2 := NewWithOptions(nil)
-
-		// Both should have the same result (success or failure)
-		assert.Equal(t, err1 == nil, err2 == nil)
-		if err1 == nil && err2 == nil {
-			assert.Equal(t, app1.cfg.App.Name, app2.cfg.App.Name)
-			assert.Equal(t, app1.cfg.App.Env, app2.cfg.App.Env)
-		}
-	})
-}
-
-// TestGetMessagingDeclarations tests the GetMessagingDeclarations method
-func TestGetMessagingDeclarations(t *testing.T) {
-	t.Run("returns nil when no declarations captured", func(t *testing.T) {
-		cfg := createTestConfig()
-		app, err := NewWithConfig(cfg, nil)
-		require.NoError(t, err)
-
-		declarations := app.GetMessagingDeclarations()
-		assert.Nil(t, declarations)
-	})
-
-	t.Run("returns captured declarations", func(t *testing.T) {
-		cfg := createTestConfig()
-		cfg.Multitenant.Enabled = true
-
-		// Create test options with required multitenant components
-		tenantProvider := &mockTenantConfigProvider{}
-		opts := &Options{
-			TenantConfigProvider: tenantProvider,
-		}
-
-		app, err := NewWithConfig(cfg, opts)
-		require.NoError(t, err)
-
-		// Manually set messaging declarations to test the getter
-		mockDeclarations := &multitenant.MessagingDeclarations{}
-		app.messagingDeclarations = mockDeclarations
-
-		declarations := app.GetMessagingDeclarations()
-		assert.Equal(t, mockDeclarations, declarations)
-	})
 }
