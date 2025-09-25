@@ -162,10 +162,7 @@ func (s *Server) dispatchReady(c echo.Context) error {
 	s.readyMu.RLock()
 	handler := s.readyHandler
 	s.readyMu.RUnlock()
-	if handler != nil {
-		return handler(c)
-	}
-	return s.readyCheck(c)
+	return handler(c)
 }
 
 // Start starts the HTTP server and begins accepting requests.

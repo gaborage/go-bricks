@@ -4,7 +4,7 @@ This document records the architectural decisions made during the development of
 
 ## ADR-001: Enhanced Handler System Implementation
 
-**Date:** 2025-11-12  
+**Date:** 2025-09-12  
 **Status:** Accepted  
 **Context:** HTTP handler ergonomics and developer experience improvement
 
@@ -189,7 +189,7 @@ Implement an enhanced handler system with the following characteristics (updated
 
 ## ADR-002: Custom Base Path and Health Route Configuration
 
-**Date**: 2025-01-15
+**Date**: 2025-09-15
 **Status**: Accepted
 **Decision Makers**: GoBricks Core Team
 
@@ -382,7 +382,7 @@ No migration needed for database-free applications.
 
 ## ADR-004: Lazy Messaging Registry Creation in ModuleRegistry
 
-**Date:** 2025-01-24
+**Date:** 2025-09-24
 **Status:** Accepted
 **Context:** Multi-tenant messaging architecture and improved dependency resolution
 

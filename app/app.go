@@ -75,6 +75,9 @@ type App struct {
 
 	// Multi-tenant support
 	tenantConnManager *multitenant.TenantConnectionManager
+
+	// Messaging declarations captured during startup for per-tenant replay
+	messagingDeclarations *multitenant.MessagingDeclarations
 }
 
 // isDatabaseEnabled determines if database should be initialized based on config
@@ -347,15 +350,16 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 	registry := NewModuleRegistry(deps)
 
 	app := &App{
-		cfg:               cfg,
-		server:            srv,
-		db:                db,
-		logger:            log,
-		messaging:         msgClient,
-		registry:          registry,
-		signalHandler:     signalHandler,
-		timeoutProvider:   timeoutProvider,
-		tenantConnManager: tenantConnManager,
+		cfg:                   cfg,
+		server:                srv,
+		db:                    db,
+		logger:                log,
+		messaging:             msgClient,
+		registry:              registry,
+		signalHandler:         signalHandler,
+		timeoutProvider:       timeoutProvider,
+		tenantConnManager:     tenantConnManager,
+		messagingDeclarations: nil, // Will be captured after modules are registered
 	}
 
 	srv.RegisterReadyHandler(app.readyCheck)
@@ -369,9 +373,77 @@ func (a *App) RegisterModule(module Module) error {
 	return a.registry.Register(module)
 }
 
+// captureMessagingDeclarations captures messaging infrastructure declarations
+// from all registered modules in multi-tenant mode. This creates a recording
+// registry with a mock AMQP client to capture declarations without broker connection.
+//
+// The captured declarations are stored for later per-tenant replay.
+func (a *App) captureMessagingDeclarations() error {
+	// Only capture in multi-tenant mode
+	if !a.cfg.Multitenant.Enabled {
+		return nil
+	}
+
+	a.logger.Info().Msg("Capturing messaging declarations for multi-tenant mode")
+
+	// Create recording AMQP client that captures operations without executing them
+	recordingClient := multitenant.NewRecordingAMQPClient()
+
+	// Create temporary registry with recording client
+	recordingRegistry := messaging.NewRegistry(recordingClient, a.logger)
+
+	// Temporarily override the registry's messaging registry for capture
+	// Save original registry state
+	originalRegistry := a.registry.messagingRegistry
+
+	// Set recording registry and ensure original registry is restored
+	a.registry.messagingRegistry = recordingRegistry
+	defer func() {
+		a.registry.messagingRegistry = originalRegistry
+	}()
+
+	// Call RegisterMessaging on all modules to capture their declarations
+	// This will populate the recording registry without actual broker calls
+	for _, module := range a.registry.modules {
+		a.logger.Debug().
+			Str("module", module.Name()).
+			Msg("Capturing messaging declarations from module")
+
+		module.RegisterMessaging(recordingRegistry)
+	}
+
+	// Capture declarations from the populated registry
+	declarations := multitenant.NewMessagingDeclarations()
+	declarations.CaptureFromRegistry(recordingRegistry)
+
+	// Validate captured declarations for consistency
+	if err := declarations.Validate(); err != nil {
+		return fmt.Errorf("captured messaging declarations are invalid: %w", err)
+	}
+
+	// Store declarations for per-tenant replay
+	a.messagingDeclarations = declarations
+
+	// Log summary of captured declarations
+	declarations.LogSummary(a.logger)
+
+	return nil
+}
+
+// GetMessagingDeclarations returns the captured messaging declarations.
+// This is used by tenant managers to replay infrastructure for each tenant.
+func (a *App) GetMessagingDeclarations() *multitenant.MessagingDeclarations {
+	return a.messagingDeclarations
+}
+
 // Run starts the application and blocks until a shutdown signal is received.
 // It handles graceful shutdown with a timeout.
 func (a *App) Run() error {
+	// In multi-tenant mode, capture messaging declarations first
+	if err := a.captureMessagingDeclarations(); err != nil {
+		return fmt.Errorf("failed to capture messaging declarations: %w", err)
+	}
+
 	// Register messaging infrastructure before starting the server
 	if err := a.registry.RegisterMessaging(); err != nil {
 		return fmt.Errorf("failed to register messaging infrastructure: %w", err)

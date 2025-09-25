@@ -305,7 +305,7 @@ func (c *client) executeAttempt(
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		if httpResp != nil {
+		if httpResp != nil && httpResp.Body != nil {
 			httpResp.Body.Close()
 		}
 		return c.handleExecutionError(ctx, err, attempt, maxRetries)
