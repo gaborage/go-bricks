@@ -167,7 +167,9 @@ func (tc *Connection) Prepare(ctx context.Context, query string) (types.Statemen
 
 // Begin starts a transaction with performance tracking
 func (tc *Connection) Begin(ctx context.Context) (types.Tx, error) {
+	start := time.Now()
 	tx, err := tc.conn.Begin(ctx)
+	tc.trackOperation(ctx, "BEGIN", nil, start, err)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +179,9 @@ func (tc *Connection) Begin(ctx context.Context) (types.Tx, error) {
 
 // BeginTx starts a transaction with options and performance tracking
 func (tc *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
+	start := time.Now()
 	tx, err := tc.conn.BeginTx(ctx, opts)
+	tc.trackOperation(ctx, "BEGIN_TX", nil, start, err)
 	if err != nil {
 		return nil, err
 	}

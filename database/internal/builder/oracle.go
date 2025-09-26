@@ -94,7 +94,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	escapedInsertCols := qb.escapeIdentifiers(insertKeys)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range escapedInsertCols {
-		usingValues[i] = "? AS " + col
+		usingValues[i] = fmt.Sprintf(":%d AS %s", i+1, col)
 	}
 	usingArgs := valuesByKeyOrder(insertColumns, insertKeys)
 
@@ -111,8 +111,9 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	updateKeys := sortedKeys(updateColumns)
 	escapedUpdateCols := qb.escapeIdentifiers(updateKeys)
 	updateSets := make([]string, len(updateKeys))
+	baseIndex := len(insertKeys) + 1
 	for i, col := range escapedUpdateCols {
-		updateSets[i] = fmt.Sprintf("%s = :%d", col, i+1)
+		updateSets[i] = fmt.Sprintf("%s = :%d", col, baseIndex+i)
 	}
 	updateArgs := valuesByKeyOrder(updateColumns, updateKeys)
 
