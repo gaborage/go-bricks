@@ -106,6 +106,7 @@ func NewDisconnectedMessagingClient() *mocks.MockMessagingClient {
 // NewWorkingAMQPClient creates a mock AMQP client that operates successfully.
 func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 	mockClient := mocks.NewMockAMQPClient()
+	mockClient.SetReady(true)
 
 	// Setup successful responses for infrastructure operations
 	mockClient.ExpectDeclareExchangeAny(nil) // Allow any exchange

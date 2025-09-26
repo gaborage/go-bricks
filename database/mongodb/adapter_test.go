@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"testing"
 
@@ -491,6 +492,60 @@ func TestCollectionFindOne(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "test", doc["name"])
 	})
+
+	mt.Run("find one with context cancellation", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Create cancelled context
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		filter := bson.M{"name": "test"}
+		result := collection.FindOne(ctx, filter, nil)
+		assert.NotNil(t, result)
+
+		var doc bson.M
+		err := result.Decode(&doc)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "context canceled")
+	})
+
+	mt.Run("find one with no document found", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock no document found response
+		mt.AddMockResponses(mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.FirstBatch))
+
+		filter := bson.M{"name": "nonexistent"}
+		result := collection.FindOne(context.Background(), filter, nil)
+		assert.NotNil(t, result)
+
+		var doc bson.M
+		err := result.Decode(&doc)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, mongo.ErrNoDocuments))
+	})
+
+	mt.Run("find one with invalid decode type", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock find response with string data that can't be decoded to struct
+		userDoc := MockUser("507f1f77bcf86cd799439011", "test")
+		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("test_collection"), userDoc))
+
+		filter := bson.M{"name": "test"}
+		result := collection.FindOne(context.Background(), filter, nil)
+		assert.NotNil(t, result)
+
+		// Try to decode BSON document into incompatible type (channel)
+		var invalidDecode chan string
+		err := result.Decode(&invalidDecode)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no decoder found")
+	})
 }
 
 func TestCollectionUpdateOne(t *testing.T) {
@@ -546,6 +601,84 @@ func TestCollectionCountDocuments(t *testing.T) {
 		count, err := collection.CountDocuments(context.Background(), filter, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(5), count)
+	})
+
+	mt.Run("count documents with empty collection", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("empty_collection")
+
+		// Mock empty count response
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("empty_collection"), 0))
+
+		filter := bson.M{}
+		count, err := collection.CountDocuments(context.Background(), filter, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	})
+
+	mt.Run("count documents with complex filter", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock count response for complex filter
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 3))
+
+		filter := bson.M{
+			"status": "active",
+			"age":    bson.M{"$gte": 18},
+			"tags":   bson.M{"$in": []string{"premium", "gold"}},
+		}
+		count, err := collection.CountDocuments(context.Background(), filter, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), count)
+	})
+
+	mt.Run("count documents with options", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock count response
+		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 10))
+
+		filter := bson.M{"status": "active"}
+		opts := &database.CountOptions{
+			Limit: database.Int64Ptr(100),
+		}
+		count, err := collection.CountDocuments(context.Background(), filter, opts)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), count)
+	})
+
+	mt.Run("count documents with context cancellation", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Create cancelled context
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		filter := bson.M{"status": "active"}
+		count, err := collection.CountDocuments(ctx, filter, nil)
+		assert.Error(t, err)
+		assert.Equal(t, int64(0), count)
+		assert.Contains(t, err.Error(), "context canceled")
+	})
+
+	mt.Run("count documents with aggregation error", func(mt *mtest.T) {
+		conn := setupTestConnection(t, mt)
+		collection := conn.Collection("test_collection")
+
+		// Mock error response for aggregation
+		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
+			Code:    2,
+			Message: "Invalid aggregation pipeline",
+		}))
+
+		filter := bson.M{"invalid_field": bson.M{"$invalidOperator": "value"}}
+		count, err := collection.CountDocuments(context.Background(), filter, nil)
+		assert.Error(t, err)
+		assert.Equal(t, int64(0), count)
+		assert.Contains(t, err.Error(), "failed to count documents")
 	})
 }
 

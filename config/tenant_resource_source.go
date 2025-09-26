@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 // TenantResourceSource provides per-key database and messaging configurations.
@@ -14,6 +15,7 @@ type TenantResourceSource struct {
 
 	// Multi-tenant configurations (used when key is tenant ID)
 	tenants map[string]TenantEntry
+	mu      sync.RWMutex
 }
 
 // NewTenantResourceSource creates a config-backed tenant resource source
@@ -22,6 +24,7 @@ func NewTenantResourceSource(cfg *Config) *TenantResourceSource {
 		defaultDB:        &cfg.Database,
 		defaultMessaging: &cfg.Messaging,
 		tenants:          make(map[string]TenantEntry),
+		mu:               sync.RWMutex{},
 	}
 
 	// Copy tenant configurations if multi-tenant is enabled
@@ -47,7 +50,9 @@ func (s *TenantResourceSource) DBConfig(_ context.Context, key string) (*Databas
 	}
 
 	// Multi-tenant case
+	s.mu.RLock()
 	tenant, exists := s.tenants[key]
+	s.mu.RUnlock()
 	if !exists {
 		return nil, fmt.Errorf("no database configuration found for tenant: %s", key)
 	}
@@ -72,7 +77,9 @@ func (s *TenantResourceSource) AMQPURL(_ context.Context, key string) (string, e
 	}
 
 	// Multi-tenant case
+	s.mu.RLock()
 	tenant, exists := s.tenants[key]
+	s.mu.RUnlock()
 	if !exists {
 		return "", fmt.Errorf("no messaging configuration found for tenant: %s", key)
 	}
@@ -86,16 +93,23 @@ func (s *TenantResourceSource) AMQPURL(_ context.Context, key string) (string, e
 
 // AddTenant adds a new tenant configuration at runtime (useful for dynamic tenant management)
 func (s *TenantResourceSource) AddTenant(tenantID string, entry *TenantEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.tenants[tenantID] = *entry
 }
 
 // RemoveTenant removes a tenant configuration at runtime
 func (s *TenantResourceSource) RemoveTenant(tenantID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.tenants, tenantID)
 }
 
 // GetTenants returns a copy of all tenant configurations
 func (s *TenantResourceSource) GetTenants() map[string]TenantEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	result := make(map[string]TenantEntry, len(s.tenants))
 	for k := range s.tenants {
 		result[k] = s.tenants[k]
@@ -105,6 +119,8 @@ func (s *TenantResourceSource) GetTenants() map[string]TenantEntry {
 
 // HasTenant checks if a tenant configuration exists
 func (s *TenantResourceSource) HasTenant(tenantID string) bool {
+	s.mu.RLock()
 	_, exists := s.tenants[tenantID]
+	s.mu.RUnlock()
 	return exists
 }

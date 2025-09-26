@@ -64,7 +64,7 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 					stats = map[string]any{}
 				}
 				stats["status"] = "no active connections"
-				return healthyStatus, stats, nil
+				return healthyStatus, stats, err
 			}
 
 			if err := conn.Health(ctx); err != nil {

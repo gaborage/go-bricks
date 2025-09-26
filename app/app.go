@@ -457,6 +457,13 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 		return
 	}
 
+	name := strings.TrimSpace(closer.name)
+	if name == "" {
+		a.logger.Info().Msg("Resource closed successfully")
+		return
+	}
+
+	// Capitalize the first letter of the name for logging
 	capitalizedName := strings.ToUpper(closer.name[:1]) + closer.name[1:]
 	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }

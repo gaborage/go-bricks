@@ -1435,6 +1435,7 @@ func TestAnalyzeProjectWithModule(t *testing.T) {
 
 import (
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
 

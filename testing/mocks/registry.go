@@ -215,11 +215,11 @@ func (m *MockRegistry) hasExpectation(methodName string) bool {
 
 // ExpectRegistrations sets up expectations for infrastructure registration
 func (m *MockRegistry) ExpectRegistrations() {
-	m.On("RegisterExchange", mock.Anything).Return().Maybe()
-	m.On("RegisterQueue", mock.Anything).Return().Maybe()
-	m.On("RegisterBinding", mock.Anything).Return().Maybe()
-	m.On("RegisterPublisher", mock.Anything).Return().Maybe()
-	m.On("RegisterConsumer", mock.Anything).Return().Maybe()
+	m.On("RegisterExchange", mock.Anything).Return()
+	m.On("RegisterQueue", mock.Anything).Return()
+	m.On("RegisterBinding", mock.Anything).Return()
+	m.On("RegisterPublisher", mock.Anything).Return()
+	m.On("RegisterConsumer", mock.Anything).Return()
 }
 
 // ExpectDeclareInfrastructure sets up a declare infrastructure expectation

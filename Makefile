@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt tidy clean
+.PHONY: help build test lint fmt tidy clean check test-coverage
 
 # Package selection for testing (excludes examples and tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(examples|tools)(/|$$)')
@@ -29,4 +29,4 @@ tidy: ## Tidy Go modules
 clean: ## Clean build cache
 	go clean -cache -testcache
 
-check: fmt lint clean test ## Run fmt, lint, and test (pre-commit checks)
+check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)

@@ -39,20 +39,28 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 ) error {
 	var errs []error
 
-	// Pre-warm database connection
-	if err := w.PreWarmDatabase(ctx, ""); err != nil {
-		w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-		errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
+	if w.dbManager != nil {
+		// Pre-warm database connection
+		if err := w.PreWarmDatabase(ctx, ""); err != nil {
+			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
+			errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
+		} else {
+			w.logger.Info().Msg("Pre-warmed single-tenant database connection")
+		}
 	} else {
-		w.logger.Info().Msg("Pre-warmed single-tenant database connection")
+		w.logger.Debug().Msg("Skipping single-tenant database pre-warming: database manager unavailable")
 	}
 
-	// Pre-warm messaging components
-	if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
-		w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
-		errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
+	if w.messagingManager != nil {
+		// Pre-warm messaging components
+		if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
+			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
+			errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
+		} else {
+			w.logger.Info().Msg("Pre-warmed single-tenant messaging")
+		}
 	} else {
-		w.logger.Info().Msg("Pre-warmed single-tenant messaging")
+		w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: messaging manager unavailable")
 	}
 
 	// Return combined errors but don't fail startup
