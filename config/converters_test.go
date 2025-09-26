@@ -8,6 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	unsupportedType         = "unsupported type"
+	emptyString             = "empty string"
+	invalidString           = "invalid string"
+	notANumber              = "not-a-number"
+	missingKey              = "missing key"
+	invalidConversionErrMsg = "invalid conversion"
+)
+
 func TestFloatConversionEdgeCases(t *testing.T) {
 	_, err := floatToInt64(math.NaN())
 	assert.Error(t, err)
@@ -36,7 +45,7 @@ func TestUnsignedIntConversions(t *testing.T) {
 		{"uint overflow", uint(math.MaxUint64), 0, true},
 		{"uint64 overflow", uint64(math.MaxUint64), 0, true},
 		{"uint64 max safe", uint64(math.MaxInt64), math.MaxInt64, false},
-		{"unsupported type", "invalid", 0, true},
+		{unsupportedType, "invalid", 0, true},
 		{"unsupported type int", 42, 0, true},
 	}
 
@@ -65,7 +74,7 @@ func TestSignedIntConversions(t *testing.T) {
 		{"int8 conversion", int8(-128), -128, false},
 		{"int16 conversion", int16(32767), 32767, false},
 		{"int32 conversion", int32(-2147483648), -2147483648, false},
-		{"unsupported type", "invalid", 0, true},
+		{unsupportedType, "invalid", 0, true},
 		{"unsupported type uint", uint(42), 0, true},
 	}
 
@@ -90,7 +99,7 @@ func TestInt64Conversions(t *testing.T) {
 		assert.Equal(t, int64(12345), result)
 	})
 
-	t.Run("empty string", func(t *testing.T) {
+	t.Run(emptyString, func(t *testing.T) {
 		_, err := toInt64("   ")
 		assert.Error(t, err)
 	})
@@ -129,10 +138,10 @@ func TestFloat64Conversions(t *testing.T) {
 		{"string valid", "123.45", 123.45, false},
 		{"string integer", "42", 42.0, false},
 		{"string negative", "-3.14", -3.14, false},
-		{"empty string", "", 0, true},
+		{emptyString, "", 0, true},
 		{"string whitespace", "   ", 0, true},
-		{"string invalid", "not-a-number", 0, true},
-		{"unsupported type", []int{1, 2}, 0, true},
+		{invalidString, notANumber, 0, true},
+		{unsupportedType, []int{1, 2}, 0, true},
 	}
 
 	for _, tt := range tests {
@@ -167,8 +176,8 @@ func TestBoolConversions(t *testing.T) {
 		{"string True", "True", true, false},
 		{"string FALSE", "FALSE", false, false},
 		{"string with spaces", "  true  ", true, false},
-		{"empty string", "", false, true},
-		{"string invalid", "maybe", false, true},
+		{emptyString, "", false, true},
+		{invalidString, "maybe", false, true},
 		{"int zero", int(0), false, false},
 		{"int nonzero", int(42), true, false},
 		{"int negative", int(-1), true, false},
@@ -190,7 +199,7 @@ func TestBoolConversions(t *testing.T) {
 		{"uint32 nonzero", uint32(4000000), true, false},
 		{"uint64 zero", uint64(0), false, false},
 		{"uint64 nonzero", uint64(123), true, false},
-		{"unsupported type", []bool{true}, false, true},
+		{unsupportedType, []bool{true}, false, true},
 	}
 
 	for _, tt := range tests {
@@ -257,12 +266,12 @@ func TestIntEdgeCases(t *testing.T) {
 		expected    int
 		expectError bool
 	}{
-		{"empty string", "", 0, true},
+		{emptyString, "", 0, true},
 		{"string whitespace", "   ", 0, true},
-		{"string invalid", "not-a-number", 0, true},
+		{invalidString, notANumber, 0, true},
 		{"int64 max value", int64(math.MaxInt64), int(math.MaxInt64), false},
 		{"uint64 overflow", uint64(math.MaxUint64), 0, true},
-		{"unsupported type", []int{1}, 0, true},
+		{unsupportedType, []int{1}, 0, true},
 	}
 
 	for _, tt := range tests {
@@ -342,7 +351,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 		"valid.int64":     int64(123),
 		"valid.float64":   3.14,
 		"valid.bool":      true,
-		"invalid.int":     "not-a-number",
+		"invalid.int":     notANumber,
 		"invalid.int64":   []string{"not", "number"},
 		"invalid.float64": "not-a-float",
 		"invalid.bool":    struct{}{},
@@ -354,15 +363,15 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 			name string
 			key  string
 		}{
-			{"missing key", "missing.key"},
-			{"empty string", "empty.string"},
+			{missingKey, "missing.key"},
+			{emptyString, "empty.string"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := cfg.GetRequiredString(tt.key)
 				assert.Error(t, err)
-				if tt.name == "empty string" {
+				if tt.name == emptyString {
 					assert.Contains(t, err.Error(), "empty")
 				} else {
 					assert.Contains(t, err.Error(), "missing")
@@ -376,8 +385,8 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 			name string
 			key  string
 		}{
-			{"missing key", "missing.key"},
-			{"invalid conversion", "invalid.int64"},
+			{missingKey, "missing.key"},
+			{invalidConversionErrMsg, "invalid.int64"},
 		}
 
 		for _, tt := range tests {
@@ -393,8 +402,8 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 			name string
 			key  string
 		}{
-			{"missing key", "missing.key"},
-			{"invalid conversion", "invalid.float64"},
+			{missingKey, "missing.key"},
+			{invalidConversionErrMsg, "invalid.float64"},
 		}
 
 		for _, tt := range tests {
@@ -410,8 +419,8 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 			name string
 			key  string
 		}{
-			{"missing key", "missing.key"},
-			{"invalid conversion", "invalid.bool"},
+			{missingKey, "missing.key"},
+			{invalidConversionErrMsg, "invalid.bool"},
 		}
 
 		for _, tt := range tests {
