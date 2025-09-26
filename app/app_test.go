@@ -215,6 +215,8 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		},
 	)
 
+	resourceProvider := NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
+
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: cfg,
@@ -237,10 +239,16 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		timeoutProvider:  &StandardTimeoutProvider{},
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
+		resourceProvider: resourceProvider,
+		messagingInitializer: NewMessagingInitializer(
+			log,
+			messagingManager,
+			cfg.Multitenant.Enabled,
+		),
+		connectionPreWarmer: NewConnectionPreWarmer(log, dbManager, messagingManager),
 	}
 
-	// Initialize messaging declarations for test
-	app.messagingDeclarations = messaging.NewDeclarations()
+	app.messagingDeclarations = nil
 
 	fixture := &testAppFixture{
 		t:         t,
@@ -632,6 +640,7 @@ type declarationCounterModule struct {
 func (m *declarationCounterModule) Name() string             { return "counter-module" }
 func (m *declarationCounterModule) Init(_ *ModuleDeps) error { return nil }
 func (m *declarationCounterModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
+	// no-op
 }
 func (m *declarationCounterModule) DeclareMessaging(_ *messaging.Declarations) {
 	m.callCount++
@@ -648,11 +657,8 @@ func TestMessagingDeclarationsBuiltOnceAndReused(t *testing.T) {
 	err := fixture.app.RegisterModule(counterModule)
 	require.NoError(t, err)
 
-	// The test fixture already initializes messagingDeclarations to an empty store,
-	// but the real flow would call DeclareMessaging during NewWithConfig.
-	// For this test, we verify the module registration completed successfully
-	assert.Equal(t, 0, counterModule.callCount, "In test fixture, DeclareMessaging is not called through normal flow")
-
-	// Verify that messagingDeclarations is set and not nil (initialized by fixture)
-	assert.NotNil(t, fixture.app.messagingDeclarations, "messagingDeclarations should be set")
+	// Declarations are built lazily during runtime preparation
+	require.NoError(t, fixture.app.prepareRuntime())
+	assert.Equal(t, 1, counterModule.callCount, "DeclareMessaging should be called during runtime preparation")
+	assert.NotNil(t, fixture.app.messagingDeclarations, "messagingDeclarations should be built during runtime preparation")
 }

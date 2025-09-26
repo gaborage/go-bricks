@@ -18,7 +18,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -82,9 +81,12 @@ type App struct {
 	// Unified managers
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	resourceProvider ResourceProvider
 
 	// Messaging declarations for manager usage
 	messagingDeclarations *messaging.Declarations
+	messagingInitializer  *MessagingInitializer
+	connectionPreWarmer   *ConnectionPreWarmer
 
 	closers      []namedCloser
 	healthProbes []HealthProbe
@@ -99,6 +101,11 @@ type dependencyBundle struct {
 	deps             *ModuleDeps
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	provider         ResourceProvider
+}
+
+type declarationSetter interface {
+	SetDeclarations(*messaging.Declarations)
 }
 
 // TenantResourceSource combines the interfaces required by the database and messaging managers.
@@ -123,88 +130,42 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 }
 
 func (b *appBootstrap) dependencies() *dependencyBundle {
-	// Create resource source for configuration
-	var resourceSource TenantResourceSource = config.NewTenantResourceSource(b.cfg)
-	if b.opts != nil && b.opts.ResourceSource != nil {
-		resourceSource = b.opts.ResourceSource
-	}
+	// Create factory resolver and configuration builder
+	resolver := NewFactoryResolver(b.opts)
+	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
+	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
-	// Resolve factories from options
-	dbConnector := database.NewConnection
-	if b.opts != nil && b.opts.DatabaseConnector != nil {
-		dbConnector = b.opts.DatabaseConnector
-	}
+	// Log factory configuration for debugging
+	factory.LogFactoryInfo()
 
-	clientFactory := func(url string, log logger.Logger) messaging.AMQPClient {
-		return messaging.NewAMQPClient(url, log)
-	}
-	if b.opts != nil && b.opts.MessagingClientFactory != nil {
-		clientFactory = func(url string, log logger.Logger) messaging.AMQPClient {
-			return b.opts.MessagingClientFactory(url, log)
-		}
-	}
+	// Resolve resource source
+	resourceSource := resolver.ResourceSource(b.cfg)
 
-	// Create managers with proper sizing based on mode
-	var dbOpts database.DbManagerOptions
-	var msgOpts messaging.ManagerOptions
+	// Create managers using the factory
+	dbManager := factory.CreateDatabaseManager(resourceSource)
+	messagingManager := factory.CreateMessagingManager(resourceSource)
 
+	// Create appropriate resource provider based on mode
+	var provider ResourceProvider
 	if b.cfg.Multitenant.Enabled {
-		b.log.Info().Msg("Multi-tenant mode enabled")
-		dbOpts = database.DbManagerOptions{
-			MaxSize: b.cfg.Multitenant.Limits.Tenants, // Use configured tenant limit
-			IdleTTL: 30 * time.Minute,                 // Shorter for multi-tenant
-		}
-		msgOpts = messaging.ManagerOptions{
-			MaxPublishers: b.cfg.Multitenant.Limits.Tenants,
-			IdleTTL:       5 * time.Minute,
-		}
+		provider = NewMultiTenantResourceProvider(dbManager, messagingManager, nil)
 	} else {
-		dbOpts = database.DbManagerOptions{
-			MaxSize: 10,            // Small for single-tenant
-			IdleTTL: 1 * time.Hour, // Longer for single-tenant
-		}
-		msgOpts = messaging.ManagerOptions{
-			MaxPublishers: 10, // Small for single-tenant
-			IdleTTL:       30 * time.Minute,
-		}
+		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
 	}
 
-	// Create managers with injected factories
-	dbManager := database.NewDbManager(resourceSource, b.log, dbOpts, dbConnector)
-	messagingManager := messaging.NewMessagingManager(resourceSource, b.log, msgOpts, clientFactory)
-
-	// Create ModuleDeps with unified key resolution
+	// Create ModuleDeps using the resource provider
 	deps := &ModuleDeps{
-		Logger: b.log,
-		Config: b.cfg,
-		GetDB: func(ctx context.Context) (database.Interface, error) {
-			key := "" // Single-tenant key
-			if b.cfg.Multitenant.Enabled {
-				tenantID, ok := multitenant.GetTenant(ctx)
-				if !ok {
-					return nil, ErrNoTenantInContext
-				}
-				key = tenantID
-			}
-			return dbManager.Get(ctx, key)
-		},
-		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
-			key := "" // Single-tenant key
-			if b.cfg.Multitenant.Enabled {
-				tenantID, ok := multitenant.GetTenant(ctx)
-				if !ok {
-					return nil, ErrNoTenantInContext
-				}
-				key = tenantID
-			}
-			return messagingManager.GetPublisher(ctx, key)
-		},
+		Logger:       b.log,
+		Config:       b.cfg,
+		GetDB:        provider.GetDB,
+		GetMessaging: provider.GetMessaging,
 	}
 
 	return &dependencyBundle{
 		deps:             deps,
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
+		provider:         provider,
 	}
 }
 
@@ -221,6 +182,29 @@ func createHealthProbesForManagers(dbManager *database.DbManager, messagingManag
 	}
 
 	return probes
+}
+
+func (a *App) buildMessagingDeclarations() error {
+	if a.messagingDeclarations != nil {
+		return nil
+	}
+
+	if a.registry == nil {
+		return fmt.Errorf("module registry not initialized")
+	}
+
+	decls := messaging.NewDeclarations()
+	if err := a.registry.DeclareMessaging(decls); err != nil {
+		return err
+	}
+
+	a.messagingDeclarations = decls
+
+	if setter, ok := a.resourceProvider.(declarationSetter); ok && a.resourceProvider != nil {
+		setter.SetDeclarations(decls)
+	}
+
+	return nil
 }
 
 func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
@@ -286,108 +270,24 @@ func NewWithOptions(opts *Options) (*App, error) {
 // NewWithConfig creates a new application instance with the provided config and optional overrides.
 // This factory method allows for dependency injection while maintaining fail-fast behavior.
 func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
-	log := logger.New(cfg.Log.Level, cfg.Log.Pretty)
+	builder := NewAppBuilder()
 
-	log.Info().
-		Str("app", cfg.App.Name).
-		Str("env", cfg.App.Env).
-		Str("version", cfg.App.Version).
-		Msg("Starting application")
+	app, err := builder.
+		WithConfig(cfg, opts).
+		CreateLogger().
+		CreateBootstrap().
+		ResolveDependencies().
+		CreateApp().
+		InitializeRegistry().
+		ConfigureRuntimeHelpers().
+		CreateHealthProbes().
+		RegisterClosers().
+		RegisterReadyHandler().
+		Build()
 
-	bootstrap := newAppBootstrap(cfg, log, opts)
-
-	signalHandler, timeoutProvider, srv := bootstrap.coreComponents()
-
-	bundle := bootstrap.dependencies()
-
-	app := &App{
-		cfg:              cfg,
-		server:           srv,
-		logger:           log,
-		registry:         nil, // Will be set after app creation
-		signalHandler:    signalHandler,
-		timeoutProvider:  timeoutProvider,
-		dbManager:        bundle.dbManager,
-		messagingManager: bundle.messagingManager,
+	if err != nil {
+		return nil, fmt.Errorf("failed to create app: %w", err)
 	}
-
-	registry := NewModuleRegistry(bundle.deps)
-	app.registry = registry
-
-	// Collect messaging declarations from all modules
-	messagingDeclarations := messaging.NewDeclarations()
-	if err := registry.DeclareMessaging(messagingDeclarations); err != nil {
-		return nil, fmt.Errorf("failed to collect messaging declarations: %w", err)
-	}
-
-	// Store declarations for use by messaging manager
-	app.messagingDeclarations = messagingDeclarations
-
-	// Reassign GetMessaging closure to handle lazy consumer initialization and missing configuration checks
-	bundle.deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
-		if app.messagingManager == nil {
-			return nil, fmt.Errorf("messaging not configured")
-		}
-
-		key := "" // Single-tenant key
-		if app.cfg.Multitenant.Enabled {
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-			key = tenantID
-			if app.messagingDeclarations != nil {
-				if err := app.messagingManager.EnsureConsumers(ctx, key, app.messagingDeclarations); err != nil {
-					return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", key, err)
-				}
-			}
-		} else if app.messagingDeclarations != nil {
-			if err := app.messagingManager.EnsureConsumers(ctx, key, app.messagingDeclarations); err != nil {
-				return nil, fmt.Errorf("failed to ensure consumers: %w", err)
-			}
-		}
-
-		return app.messagingManager.GetPublisher(ctx, key)
-	}
-
-	// Pre-warm single-tenant connections for backward compatibility
-	if !cfg.Multitenant.Enabled {
-		ctx := context.Background()
-
-		// Pre-warm database connection
-		if app.dbManager != nil {
-			if _, err := app.dbManager.Get(ctx, ""); err != nil {
-				log.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-			} else {
-				log.Info().Msg("Pre-warmed single-tenant database connection")
-			}
-		}
-
-		// Ensure consumers are set up for single-tenant
-		if app.messagingManager != nil {
-			if err := app.messagingManager.EnsureConsumers(ctx, "", app.messagingDeclarations); err != nil {
-				log.Warn().Err(err).Msg("Failed to ensure single-tenant messaging consumers")
-			} else {
-				log.Info().Msg("Ensured single-tenant messaging consumers")
-			}
-
-			// Pre-warm messaging publisher
-			if _, err := app.messagingManager.GetPublisher(ctx, ""); err != nil {
-				log.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging publisher")
-			} else {
-				log.Info().Msg("Pre-warmed single-tenant messaging publisher")
-			}
-		}
-	}
-
-	// Create health probes for the new managers
-	app.healthProbes = createHealthProbesForManagers(app.dbManager, app.messagingManager, log)
-
-	// Register unified managers
-	app.registerCloser("database manager", app.dbManager)
-	app.registerCloser("messaging manager", app.messagingManager)
-
-	srv.RegisterReadyHandler(app.readyCheck)
 
 	return app, nil
 }
@@ -417,37 +317,30 @@ func (a *App) startMaintenanceLoops() {
 }
 
 func (a *App) prepareRuntime() error {
-	// Use the previously collected messaging declarations
-	decls := a.messagingDeclarations
-	if decls == nil {
-		return fmt.Errorf("messaging declarations not initialized")
+	if err := a.buildMessagingDeclarations(); err != nil {
+		return err
 	}
 
-	// Initialize consumers based on deployment mode
-	if a.cfg.Multitenant.Enabled {
-		// Multi-tenant: consumers will be started on-demand per tenant
-		a.logger.Info().Msg("Multi-tenant mode: consumers will be started per tenant on demand")
-	} else {
-		// Single-tenant: pre-warm connections and start consumers
-		if a.messagingManager != nil {
-			ctx := context.Background()
-			if err := a.messagingManager.EnsureConsumers(ctx, "", decls); err != nil {
-				a.logger.Warn().Err(err).Msg("Failed to start single-tenant consumers")
-				// Don't fail the app startup for messaging issues
-			} else {
-				a.logger.Info().Msg("Single-tenant consumers started successfully")
+	decls := a.messagingDeclarations
+
+	if a.messagingInitializer != nil && a.messagingInitializer.IsAvailable() && decls != nil {
+		a.messagingInitializer.LogDeploymentMode()
+
+		if a.resourceProvider != nil {
+			if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
+				return err
 			}
 		}
 
-		// Pre-warm database connection for single-tenant
-		if a.dbManager != nil {
-			ctx := context.Background()
-			if _, err := a.dbManager.Get(ctx, ""); err != nil {
-				a.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-				// Don't fail the app startup for database pre-warming
-			} else {
-				a.logger.Info().Msg("Single-tenant database connection pre-warmed")
-			}
+		if err := a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls); err != nil {
+			return err
+		}
+	}
+
+	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
+		a.connectionPreWarmer.LogAvailability()
+		if err := a.connectionPreWarmer.PreWarmSingleTenant(context.Background(), decls); err != nil {
+			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
 	}
 

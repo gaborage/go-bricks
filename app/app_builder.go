@@ -1,0 +1,242 @@
+package app
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
+)
+
+// Builder orchestrates the step-by-step construction of an App instance
+// using a fluent interface pattern. Each step is responsible for a single
+// aspect of initialization, making the process clear and testable.
+type Builder struct {
+	// Configuration
+	cfg  *config.Config
+	opts *Options
+
+	// Core components
+	logger    logger.Logger
+	bootstrap *appBootstrap
+	bundle    *dependencyBundle
+	app       *App
+
+	// State tracking
+	err error
+}
+
+// NewAppBuilder creates a new app builder instance.
+func NewAppBuilder() *Builder {
+	return &Builder{}
+}
+
+// WithConfig sets the configuration and options for the app.
+func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	b.cfg = cfg
+	b.opts = opts
+	return b
+}
+
+// CreateLogger creates and configures the application logger.
+func (b *Builder) CreateLogger() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.cfg == nil {
+		b.err = fmt.Errorf("configuration required before creating logger")
+		return b
+	}
+
+	b.logger = logger.New(b.cfg.Log.Level, b.cfg.Log.Pretty)
+	b.logger.Info().
+		Str("app", b.cfg.App.Name).
+		Str("env", b.cfg.App.Env).
+		Str("version", b.cfg.App.Version).
+		Msg("Starting application")
+
+	return b
+}
+
+// CreateBootstrap creates the bootstrap helper for dependency resolution.
+func (b *Builder) CreateBootstrap() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.logger == nil {
+		b.err = fmt.Errorf("logger required before creating bootstrap")
+		return b
+	}
+
+	b.bootstrap = newAppBootstrap(b.cfg, b.logger, b.opts)
+	return b
+}
+
+// ResolveDependencies creates and configures all application dependencies.
+func (b *Builder) ResolveDependencies() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.bootstrap == nil {
+		b.err = fmt.Errorf("bootstrap required before resolving dependencies")
+		return b
+	}
+
+	b.bundle = b.bootstrap.dependencies()
+	return b
+}
+
+// CreateApp creates the core App instance with basic configuration.
+func (b *Builder) CreateApp() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.bundle == nil {
+		b.err = fmt.Errorf("dependencies required before creating app")
+		return b
+	}
+
+	signalHandler, timeoutProvider, srv := b.bootstrap.coreComponents()
+
+	b.app = &App{
+		cfg:              b.cfg,
+		server:           srv,
+		logger:           b.logger,
+		registry:         nil, // Will be set in next step
+		signalHandler:    signalHandler,
+		timeoutProvider:  timeoutProvider,
+		dbManager:        b.bundle.dbManager,
+		messagingManager: b.bundle.messagingManager,
+		resourceProvider: b.bundle.provider,
+	}
+
+	return b
+}
+
+// InitializeRegistry creates and configures the module registry.
+func (b *Builder) InitializeRegistry() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.app == nil {
+		b.err = fmt.Errorf("app instance required before initializing registry")
+		return b
+	}
+
+	registry := NewModuleRegistry(b.bundle.deps)
+	b.app.registry = registry
+	return b
+}
+
+// ConfigureRuntimeHelpers prepares helper components used during runtime.
+func (b *Builder) ConfigureRuntimeHelpers() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.app == nil {
+		b.err = fmt.Errorf("app instance required before configuring runtime helpers")
+		return b
+	}
+
+	b.app.messagingInitializer = NewMessagingInitializer(b.logger, b.app.messagingManager, b.cfg.Multitenant.Enabled)
+	b.app.connectionPreWarmer = NewConnectionPreWarmer(b.logger, b.app.dbManager, b.app.messagingManager)
+
+	if !b.cfg.Multitenant.Enabled {
+		ctx := context.Background()
+
+		if b.bundle.dbManager != nil {
+			if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {
+				b.err = fmt.Errorf("failed to pre-initialize database connection: %w", err)
+				return b
+			}
+		}
+
+		if b.bundle.messagingManager != nil {
+			if _, err := b.bundle.messagingManager.GetPublisher(ctx, ""); err != nil {
+				b.err = fmt.Errorf("failed to pre-initialize messaging publisher: %w", err)
+				return b
+			}
+		}
+	}
+
+	return b
+}
+
+// CreateHealthProbes creates health check probes for all managers.
+func (b *Builder) CreateHealthProbes() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.app == nil {
+		b.err = fmt.Errorf("app instance required before creating health probes")
+		return b
+	}
+
+	b.app.healthProbes = createHealthProbesForManagers(
+		b.app.dbManager,
+		b.app.messagingManager,
+		b.logger,
+	)
+
+	return b
+}
+
+// RegisterClosers registers all components that need cleanup on shutdown.
+func (b *Builder) RegisterClosers() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.app == nil {
+		b.err = fmt.Errorf("app instance required before registering closers")
+		return b
+	}
+
+	b.app.registerCloser("database manager", b.app.dbManager)
+	b.app.registerCloser("messaging manager", b.app.messagingManager)
+	return b
+}
+
+// RegisterReadyHandler registers the health check handler with the server.
+func (b *Builder) RegisterReadyHandler() *Builder {
+	if b.err != nil {
+		return b
+	}
+
+	if b.app == nil {
+		b.err = fmt.Errorf("app instance required before registering ready handler")
+		return b
+	}
+
+	b.app.server.RegisterReadyHandler(b.app.readyCheck)
+	return b
+}
+
+// Build returns the completed App instance or any error encountered during building.
+func (b *Builder) Build() (*App, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+
+	if b.app == nil {
+		return nil, fmt.Errorf("app building incomplete")
+	}
+
+	return b.app, nil
+}
+
+// GetError returns any error encountered during the building process.
+func (b *Builder) GetError() error {
+	return b.err
+}
