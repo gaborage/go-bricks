@@ -10,27 +10,95 @@ import (
 
 // quoteOracleColumn handles Oracle-specific column name quoting.
 // It identifies Oracle reserved words and applies appropriate quoting.
-func (qb *QueryBuilder) quoteOracleColumn(column string) string {
-	if qb.vendor == dbtypes.Oracle {
-		// Quote columns that might be Oracle reserved words
-		if column == "number" {
-			return `"number"`
-		}
+var oracleReservedWords = map[string]struct{}{
+	"ACCESS": {}, "ADD": {}, "ALL": {}, "ALTER": {}, "AND": {}, "ANY": {}, "AS": {}, "ASC": {},
+	"BEGIN": {}, "BETWEEN": {}, "BY": {}, "CASE": {}, "CHECK": {}, "COLUMN": {}, "COMMENT": {},
+	"CONNECT": {}, "CREATE": {}, "CURRENT": {}, "DELETE": {}, "DESC": {}, "DISTINCT": {},
+	"DROP": {}, "ELSE": {}, "EXCLUDE": {}, "EXISTS": {}, "FOR": {}, "FROM": {}, "GRANT": {},
+	"GROUP": {}, "HAVING": {}, "IN": {}, "INDEX": {}, "INSERT": {}, "INTERSECT": {}, "INTO": {},
+	"IS": {}, "LEVEL": {}, "LIKE": {}, "LOCK": {}, "MINUS": {}, "MODE": {}, "NOCOMPRESS": {},
+	"NOT": {}, "NULL": {}, "NUMBER": {}, "OF": {}, "ON": {}, "OPTION": {}, "OR": {}, "ORDER": {},
+	"ROW": {}, "ROWNUM": {}, "SELECT": {}, "SET": {}, "SHARE": {}, "SIZE": {}, "START": {},
+	"TABLE": {}, "THEN": {}, "TO": {}, "TRIGGER": {}, "UNION": {}, "UNIQUE": {}, "UPDATE": {},
+	"VALUES": {}, "VIEW": {}, "WHEN": {}, "WHERE": {}, "WITH": {},
+}
+
+func isOracleReservedWord(identifier string) bool {
+	if identifier == "" {
+		return false
 	}
-	return column
+	_, ok := oracleReservedWords[strings.ToUpper(identifier)]
+	return ok
+}
+
+func oracleNeedsQuoting(identifier string) bool {
+	if identifier == "" {
+		return false
+	}
+
+	first := identifier[0]
+	if first >= '0' && first <= '9' {
+		return true
+	}
+
+	for _, r := range identifier {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '$' || r == '#' {
+			continue
+		}
+		return true
+	}
+
+	return false
+}
+
+func oracleQuoteIdentifier(column string) string {
+	trimmed := strings.TrimSpace(column)
+	if trimmed == "" {
+		return trimmed
+	}
+
+	if strings.Contains(trimmed, ".") {
+		parts := strings.Split(trimmed, ".")
+		for i, part := range parts {
+			parts[i] = oracleQuoteIdentifier(part)
+		}
+		return strings.Join(parts, ".")
+	}
+
+	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
+		return trimmed
+	}
+
+	if isOracleReservedWord(trimmed) {
+		return `"` + strings.ToUpper(trimmed) + `"`
+	}
+
+	if oracleNeedsQuoting(trimmed) {
+		return `"` + trimmed + `"`
+	}
+
+	return trimmed
+}
+
+func (qb *QueryBuilder) quoteOracleColumn(column string) string {
+	if qb.vendor != dbtypes.Oracle {
+		return column
+	}
+	return oracleQuoteIdentifier(column)
 }
 
 // quoteOracleColumns handles Oracle-specific column name quoting for multiple columns.
 // It applies quoting to each column individually for SELECT operations.
 func (qb *QueryBuilder) quoteOracleColumns(columns ...string) []string {
-	if qb.vendor == dbtypes.Oracle {
-		quotedColumns := make([]string, len(columns))
-		for i, col := range columns {
-			quotedColumns[i] = qb.quoteOracleColumn(col)
-		}
-		return quotedColumns
+	if qb.vendor != dbtypes.Oracle {
+		return columns
 	}
-	return columns
+
+	quotedColumns := make([]string, len(columns))
+	for i, col := range columns {
+		quotedColumns[i] = oracleQuoteIdentifier(col)
+	}
+	return quotedColumns
 }
 
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
@@ -43,11 +111,7 @@ func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
 
 	quoted := make([]string, len(columns))
 	for i, col := range columns {
-		if col == "number" { // Oracle reserved word
-			quoted[i] = `"` + strings.ToUpper(col) + `"`
-			continue
-		}
-		quoted[i] = col
+		quoted[i] = oracleQuoteIdentifier(col)
 	}
 	return quoted
 }
