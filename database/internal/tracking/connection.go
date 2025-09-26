@@ -81,8 +81,9 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (types.Statement
 	if err != nil {
 		return nil, err
 	}
+	base := &BasicStatement{Stmt: stmt}
 
-	return &BasicStatement{Stmt: stmt}, nil
+	return NewStatement(base, db.logger, db.vendor, query, db.settings), nil
 }
 
 // trackQuery tracks database query performance and logs the results

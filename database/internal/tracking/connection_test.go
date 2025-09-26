@@ -243,8 +243,8 @@ func TestDBPrepareContextWrapsStatement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected prepare to succeed, got %v", err)
 	}
-	if _, ok := stmt.(*BasicStatement); !ok {
-		t.Fatalf("expected *BasicStatement, got %T", stmt)
+	if _, ok := stmt.(*Statement); !ok {
+		t.Fatalf("expected *Statement, got %T", stmt)
 	}
 }
 

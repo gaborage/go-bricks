@@ -30,8 +30,10 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	elapsed := time.Since(start)
 
 	// Increment database operation counter for request tracking
-	logger.IncrementDBCounter(ctx)
-	logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
+	if ctx != nil {
+		logger.IncrementDBCounter(ctx)
+		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
+	}
 
 	// Truncate query string to safe max length to avoid unbounded payloads
 	truncatedQuery := query

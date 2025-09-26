@@ -8,6 +8,7 @@ package types
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/Masterminds/squirrel"
 )
@@ -41,10 +42,16 @@ func NewRowFromSQL(row *sql.Row) Row {
 }
 
 func (r *sqlRowAdapter) Scan(dest ...any) error {
+	if r == nil || r.row == nil {
+		return errors.New("sqlRowAdapter: underlying sql.Row is nil")
+	}
 	return r.row.Scan(dest...)
 }
 
 func (r *sqlRowAdapter) Err() error {
+	if r == nil || r.row == nil {
+		return errors.New("sqlRowAdapter: underlying sql.Row is nil")
+	}
 	return r.row.Err()
 }
 

@@ -24,25 +24,25 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	copy(cc, conflictColumns)
 	sort.Strings(cc)
 
-	if len(cc) == 0 || len(updateKeys) == 0 {
-		return "", nil, fmt.Errorf("conflict columns and update keys required for PostgreSQL upsert")
+	if len(cc) == 0 {
+		return "", nil, fmt.Errorf("conflict columns required for PostgreSQL upsert")
 	}
 
-	escapedCC := make([]string, len(cc))
-	for i, c := range cc {
-		escapedCC[i] = qb.EscapeIdentifier(c)
-	}
-	conflictClause := "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO UPDATE SET "
-
-	// Build UPDATE SET clause with deterministic order
+	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
-	var setParts = make([]string, 0, len(updateCols))
-	for _, col := range updateCols {
-		escapedCol := qb.EscapeIdentifier(col)
-		setParts = append(setParts, escapedCol+" = EXCLUDED."+escapedCol)
+	var conflictClause string
+	if len(updateCols) == 0 {
+		// If no update columns are provided, do nothing on conflict
+		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO NOTHING"
+	} else {
+		var setParts = make([]string, 0, len(updateCols))
+		for _, col := range updateCols {
+			escapedCol := qb.EscapeIdentifier(col)
+			setParts = append(setParts, escapedCol+" = EXCLUDED."+escapedCol)
+		}
+		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO UPDATE SET " + strings.Join(setParts, ", ")
 	}
-	conflictClause += strings.Join(setParts, ", ")
 
 	// Generate the final SQL with conflict resolution
 	sql, args, err := insertQuery.ToSql()

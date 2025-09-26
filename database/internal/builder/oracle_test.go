@@ -59,7 +59,7 @@ func TestBuildUpsertOracleGeneratesMergeStatement(t *testing.T) {
 	if !strings.HasPrefix(sql, "MERGE INTO users") {
 		t.Fatalf("expected MERGE statement, got %s", sql)
 	}
-	if !strings.Contains(sql, "WHEN MATCHED THEN UPDATE SET \"NAME\" = ?") {
+	if !strings.Contains(sql, "WHEN MATCHED THEN UPDATE SET \"NAME\" = :1") {
 		t.Fatalf("expected update clause, got %s", sql)
 	}
 	if !strings.Contains(sql, "WHEN NOT MATCHED THEN INSERT (\"ID\", \"NAME\") VALUES (source.\"ID\", source.\"NAME\")") {

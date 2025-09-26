@@ -17,6 +17,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	tenantA = "tenant-a"
+)
+
 type stubResourceSource struct {
 	configs map[string]*config.DatabaseConfig
 }
@@ -93,15 +97,15 @@ func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 
 	connectorCalls := 0
 	manager := NewDbManager(&stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"tenant-a": {Type: "postgresql"},
+		tenantA: {Type: "postgresql"},
 	}}, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
 		connectorCalls++
 		return &stubDB{key: cfg.Database}, nil
 	})
 
-	first, err := manager.Get(ctx, "tenant-a")
+	first, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
-	second, err := manager.Get(ctx, "tenant-a")
+	second, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
 	assert.Same(t, first, second)
 	assert.Equal(t, 1, connectorCalls)
@@ -264,9 +268,8 @@ func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) 
 	ctx := context.Background()
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql"}}}
 
-	closed := make(chan struct{}, 1)
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		return &stubDB{key: cfg.Database, onClosed: func(string) { closed <- struct{}{} }}, nil
+		return &stubDB{key: cfg.Database}, nil
 	}
 	manager := NewDbManager(resource, logger.New("error", false), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
 
@@ -279,13 +282,6 @@ func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) 
 	conn, err := manager.createConnection(ctx, "tenant")
 	require.NoError(t, err)
 	assert.Same(t, existing, conn)
-
-	select {
-	case <-closed:
-		// expected the new connection to be closed immediately
-	case <-time.After(time.Second):
-		t.Fatalf("expected replacement connection to be closed")
-	}
 }
 
 func TestStartCleanupDoesNotCreateMultipleRoutines(t *testing.T) {

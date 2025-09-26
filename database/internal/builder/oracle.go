@@ -112,7 +112,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	escapedUpdateCols := qb.escapeIdentifiers(updateKeys)
 	updateSets := make([]string, len(updateKeys))
 	for i, col := range escapedUpdateCols {
-		updateSets[i] = fmt.Sprintf("%s = ?", col)
+		updateSets[i] = fmt.Sprintf("%s = :%d", col, i+1)
 	}
 	updateArgs := valuesByKeyOrder(updateColumns, updateKeys)
 
