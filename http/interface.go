@@ -79,7 +79,7 @@ type Config struct {
 	// NewTraceID generates a new trace ID when none is present (default: uuid)
 	NewTraceID func() string
 	// TraceIDExtractor allows advanced extraction of a trace ID from context; return ok=false to fallback to generator
-	TraceIDExtractor func(ctx context.Context) (traceID string, ok bool)
+	TraceIDExtractor func(_ context.Context) (traceID string, ok bool)
 	// EnableW3CTrace enables W3C Trace Context (traceparent/tracestate) propagation and generation
 	EnableW3CTrace bool
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -19,12 +20,14 @@ import (
 // Server represents an HTTP server instance with Echo framework.
 // It manages server lifecycle, configuration, and request handling.
 type Server struct {
-	echo        *echo.Echo
-	cfg         *config.Config
-	logger      logger.Logger
-	basePath    string
-	healthRoute string
-	readyRoute  string
+	echo         *echo.Echo
+	cfg          *config.Config
+	logger       logger.Logger
+	basePath     string
+	healthRoute  string
+	readyRoute   string
+	readyMu      sync.RWMutex
+	readyHandler echo.HandlerFunc
 }
 
 // normalizeBasePath ensures the base path starts with "/" and doesn't end with "/"
@@ -96,12 +99,13 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	readyRoute := normalizeRoutePath(cfg.Server.Path.Ready, "/ready")
 
 	s := &Server{
-		echo:        e,
-		cfg:         cfg,
-		logger:      log,
-		basePath:    basePath,
-		healthRoute: healthRoute,
-		readyRoute:  readyRoute,
+		echo:         e,
+		cfg:          cfg,
+		logger:       log,
+		basePath:     basePath,
+		healthRoute:  healthRoute,
+		readyRoute:   readyRoute,
+		readyHandler: nil,
 	}
 
 	// Compute full paths for probe endpoints before middleware setup
@@ -111,10 +115,12 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	// Setup middlewares with probe endpoint paths for tenant skipper
 	SetupMiddlewares(e, log, cfg, healthPath, readyPath)
 
+	s.RegisterReadyHandler(s.readyCheck)
+
 	e.GET(healthPath, s.healthCheck)
-	e.GET(readyPath, s.readyCheck)
 	e.HEAD(healthPath, s.healthCheck)
-	e.HEAD(readyPath, s.readyCheck)
+	e.GET(readyPath, s.dispatchReady)
+	e.HEAD(readyPath, s.dispatchReady)
 
 	log.Debug().
 		Str("base_path", basePath).
@@ -138,6 +144,25 @@ func (s *Server) ModuleGroup() RouteRegistrar {
 		return newRouteGroup(s.echo.Group(""), "")
 	}
 	return newRouteGroup(s.echo.Group(s.basePath), s.basePath)
+}
+
+// RegisterReadyHandler overrides the ready endpoint handler.
+// Passing nil restores the default handler.
+func (s *Server) RegisterReadyHandler(handler echo.HandlerFunc) {
+	if handler == nil {
+		handler = s.readyCheck
+	}
+	s.readyMu.Lock()
+	s.readyHandler = handler
+	s.readyMu.Unlock()
+}
+
+// dispatchReady executes the currently registered ready handler.
+func (s *Server) dispatchReady(c echo.Context) error {
+	s.readyMu.RLock()
+	handler := s.readyHandler
+	s.readyMu.RUnlock()
+	return handler(c)
 }
 
 // Start starts the HTTP server and begins accepting requests.

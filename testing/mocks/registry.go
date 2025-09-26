@@ -81,20 +81,22 @@ func (m *MockRegistry) RegisterConsumer(declaration *messaging.ConsumerDeclarati
 	}
 }
 
-// noop is a helper to avoid code duplication in DeclareInfrastructure and StartConsumers
-func (m *MockRegistry) noop(ctx context.Context) error {
-	arguments := m.Called(ctx)
-	return arguments.Error(0)
-}
-
 // DeclareInfrastructure implements messaging.RegistryInterface
 func (m *MockRegistry) DeclareInfrastructure(ctx context.Context) error {
-	return m.noop(ctx)
+	if m.hasExpectation("DeclareInfrastructure") {
+		arguments := m.Called(ctx)
+		return arguments.Error(0)
+	}
+	return nil
 }
 
 // StartConsumers implements messaging.RegistryInterface
 func (m *MockRegistry) StartConsumers(ctx context.Context) error {
-	return m.noop(ctx)
+	if m.hasExpectation("StartConsumers") {
+		arguments := m.Called(ctx)
+		return arguments.Error(0)
+	}
+	return nil
 }
 
 // StopConsumers implements messaging.RegistryInterface

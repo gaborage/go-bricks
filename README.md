@@ -250,7 +250,7 @@ type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
     RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
-    RegisterMessaging(registry *messaging.Registry)
+    DeclareMessaging(decls *messaging.Declarations)
     Shutdown() error
 }
 ```
@@ -272,7 +272,7 @@ func register(framework *app.App) error {
 }
 ```
 
-`Init` is called once to capture dependencies, `RegisterRoutes` attaches HTTP handlers, `RegisterMessaging` declares AMQP infrastructure, and `Shutdown` releases resources.
+`Init` is called once to capture dependencies, `RegisterRoutes` attaches HTTP handlers, `DeclareMessaging` declares AMQP infrastructure, and `Shutdown` releases resources.
 
 ---
 
@@ -327,9 +327,9 @@ AMQP support via RabbitMQ:
 - Health / readiness hooks integrate with the main app lifecycle.
 
 ```go
-func (m *Module) RegisterMessaging(reg *messaging.Registry) {
-    reg.DeclareExchange("user.events", "topic")
-    reg.RegisterConsumer("user.events", "user.created", handler)
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    decls.DeclareExchange("user.events", "topic")
+    decls.DeclareConsumer("user.events", "user.created", handler)
 }
 ```
 

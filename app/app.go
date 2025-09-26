@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,8 +18,14 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
+)
+
+const (
+	serverErrorMsg  = "server error: %w"
+	disabledStatus  = "disabled"
+	healthyStatus   = "healthy"
+	unhealthyStatus = "unhealthy"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -40,6 +47,7 @@ type ServerRunner interface {
 	Shutdown(ctx context.Context) error
 	Echo() *echo.Echo
 	ModuleGroup() server.RouteRegistrar
+	RegisterReadyHandler(handler echo.HandlerFunc)
 }
 
 // OSSignalHandler implements SignalHandler using the real OS signal package
@@ -65,80 +73,138 @@ func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout 
 type App struct {
 	cfg             *config.Config
 	server          ServerRunner
-	db              database.Interface
 	logger          logger.Logger
-	messaging       messaging.Client
 	registry        *ModuleRegistry
 	signalHandler   SignalHandler
 	timeoutProvider TimeoutProvider
 
-	// Multi-tenant support
-	tenantConnManager *multitenant.TenantConnectionManager
+	// Unified managers
+	dbManager        *database.DbManager
+	messagingManager *messaging.Manager
+	resourceProvider ResourceProvider
+
+	// Messaging declarations for manager usage
+	messagingDeclarations *messaging.Declarations
+	messagingInitializer  *MessagingInitializer
+	connectionPreWarmer   *ConnectionPreWarmer
+
+	closers      []namedCloser
+	healthProbes []HealthProbe
 }
 
-// isDatabaseEnabled determines if database should be initialized based on config
-// Uses the shared logic from config.IsDatabaseConfigured for consistency
-func isDatabaseEnabled(cfg *config.Config) bool {
-	return config.IsDatabaseConfigured(&cfg.Database)
+type namedCloser struct {
+	name   string
+	closer interface{ Close() error }
 }
 
-// isMessagingEnabled determines if messaging should be initialized based on config
-func isMessagingEnabled(cfg *config.Config) bool {
-	return cfg.Messaging.Broker.URL != ""
+type dependencyBundle struct {
+	deps             *ModuleDeps
+	dbManager        *database.DbManager
+	messagingManager *messaging.Manager
+	provider         ResourceProvider
 }
 
-func resolveDatabase(cfg *config.Config, log logger.Logger, opts *Options) (database.Interface, error) {
-	if opts != nil && opts.Database != nil {
-		log.Debug().Msg("Using provided database instance")
-		return opts.Database, nil
-	}
-
-	if !isDatabaseEnabled(cfg) {
-		log.Info().Msg("No database configured, running without database")
-		return nil, nil
-	}
-
-	connector := database.NewConnection
-	if opts != nil && opts.DatabaseConnector != nil {
-		connector = opts.DatabaseConnector
-	}
-
-	db, err := connector(&cfg.Database, log)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
-	}
-
-	log.Info().
-		Str("type", cfg.Database.Type).
-		Str("host", cfg.Database.Host).
-		Msg("Database connection established")
-
-	return db, nil
+type declarationSetter interface {
+	SetDeclarations(*messaging.Declarations)
 }
 
-func resolveMessaging(cfg *config.Config, log logger.Logger, opts *Options) messaging.Client {
-	factory := func(brokerURL string, log logger.Logger) messaging.Client {
-		return messaging.NewAMQPClient(brokerURL, log)
-	}
-	if opts != nil && opts.MessagingClientFactory != nil {
-		factory = opts.MessagingClientFactory
+// TenantStore combines the interfaces required by the database and messaging managers.
+type TenantStore interface {
+	database.TenantStore
+	messaging.TenantMessagingResourceSource
+}
+
+type appBootstrap struct {
+	cfg  *config.Config
+	log  logger.Logger
+	opts *Options
+}
+
+func newAppBootstrap(cfg *config.Config, log logger.Logger, opts *Options) *appBootstrap {
+	return &appBootstrap{cfg: cfg, log: log, opts: opts}
+}
+
+func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerRunner) {
+	signalHandler, timeoutProvider := resolveSignalAndTimeout(b.opts)
+	return signalHandler, timeoutProvider, resolveServer(b.cfg, b.log, b.opts)
+}
+
+func (b *appBootstrap) dependencies() *dependencyBundle {
+	// Create factory resolver and configuration builder
+	resolver := NewFactoryResolver(b.opts)
+	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
+	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
+
+	// Log factory configuration for debugging
+	factory.LogFactoryInfo()
+
+	// Resolve resource source
+	resourceSource := resolver.ResourceSource(b.cfg)
+
+	// Create managers using the factory
+	dbManager := factory.CreateDatabaseManager(resourceSource)
+	messagingManager := factory.CreateMessagingManager(resourceSource)
+
+	// Create appropriate resource provider based on mode
+	var provider ResourceProvider
+	if b.cfg.Multitenant.Enabled {
+		provider = NewMultiTenantResourceProvider(dbManager, messagingManager, nil)
+	} else {
+		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
 	}
 
-	if opts != nil && opts.MessagingClient != nil {
-		log.Debug().Msg("Using provided messaging client")
-		return opts.MessagingClient
+	// Create ModuleDeps using the resource provider
+	deps := &ModuleDeps{
+		Logger:       b.log,
+		Config:       b.cfg,
+		GetDB:        provider.GetDB,
+		GetMessaging: provider.GetMessaging,
 	}
 
-	if !isMessagingEnabled(cfg) {
-		log.Info().Msg("No messaging broker URL configured, messaging disabled")
+	return &dependencyBundle{
+		deps:             deps,
+		dbManager:        dbManager,
+		messagingManager: messagingManager,
+		provider:         provider,
+	}
+}
+
+// createHealthProbesForManagers creates health probes for the new managers
+func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, log logger.Logger) []HealthProbe {
+	var probes []HealthProbe
+
+	if dbManager != nil {
+		probes = append(probes, databaseManagerHealthProbe(dbManager, log))
+	}
+
+	if messagingManager != nil {
+		probes = append(probes, messagingManagerHealthProbe(messagingManager, log))
+	}
+
+	return probes
+}
+
+func (a *App) buildMessagingDeclarations() error {
+	if a.messagingDeclarations != nil {
 		return nil
 	}
 
-	log.Info().
-		Str("broker_url", cfg.Messaging.Broker.URL).
-		Msg("Initializing AMQP messaging client")
+	if a.registry == nil {
+		return fmt.Errorf("module registry not initialized")
+	}
 
-	return factory(cfg.Messaging.Broker.URL, log)
+	decls := messaging.NewDeclarations()
+	if err := a.registry.DeclareMessaging(decls); err != nil {
+		return err
+	}
+
+	a.messagingDeclarations = decls
+
+	if setter, ok := a.resourceProvider.(declarationSetter); ok && a.resourceProvider != nil {
+		setter.SetDeclarations(decls)
+	}
+
+	return nil
 }
 
 func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
@@ -166,125 +232,17 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 	return server.New(cfg, log)
 }
 
-// resolveDependencies initializes dependencies based on multi-tenant or single-tenant mode
-func resolveDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	if cfg.Multitenant.Enabled {
-		return resolveMultitenantDependencies(cfg, log, opts)
-	}
-	return resolveSingleTenantDependencies(cfg, log, opts)
-}
-
-// resolveMultitenantDependencies initializes multi-tenant mode dependencies
-func resolveMultitenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	log.Info().Msg("Multi-tenant mode enabled")
-
-	tenantConnManager, err := resolveTenantConnectionManager(cfg, log, opts)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	deps := &ModuleDeps{
-		DB:        nil, // No single-tenant DB in multi-tenant mode
-		Logger:    log,
-		Messaging: nil, // No single-tenant messaging in multi-tenant mode
-		Config:    cfg,
-		DBFromContext: func(ctx context.Context) (database.Interface, error) {
-			tenantID, ok := multitenant.GetTenant(ctx)
-			if !ok {
-				return nil, ErrNoTenantInContext
-			}
-			return tenantConnManager.GetDatabase(ctx, tenantID)
-		},
-		MessagingFromContext: nil, // Phase 2 implementation
-	}
-
-	return deps, nil, nil, tenantConnManager, nil
-}
-
-// resolveSingleTenantDependencies initializes single-tenant mode dependencies
-func resolveSingleTenantDependencies(cfg *config.Config, log logger.Logger, opts *Options) (*ModuleDeps, database.Interface, messaging.Client, *multitenant.TenantConnectionManager, error) {
-	db, err := resolveDatabase(cfg, log, opts)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	msgClient := resolveMessaging(cfg, log, opts)
-
-	deps := &ModuleDeps{
-		DB:        db,
-		Logger:    log,
-		Messaging: msgClient,
-		Config:    cfg,
-		// Leave multi-tenant functions nil in single-tenant mode
-	}
-
-	return deps, db, msgClient, nil, nil
-}
-
-// resolveTenantConnectionManager creates the tenant connection manager
-func resolveTenantConnectionManager(cfg *config.Config, log logger.Logger, opts *Options) (*multitenant.TenantConnectionManager, error) {
-	if opts != nil && opts.TenantConnectionManager != nil {
-		return opts.TenantConnectionManager, nil
-	}
-
-	if opts == nil || opts.TenantConfigProvider == nil {
-		return nil, fmt.Errorf("multitenant enabled but no tenant config provider was supplied")
-	}
-
-	cache := resolveTenantCache(cfg, opts)
-	connOpts := resolveTenantConnectionOptions(cfg, opts)
-
-	tenantConnManager := multitenant.NewTenantConnectionManager(opts.TenantConfigProvider, cache, log, connOpts...)
-	if tenantConnManager == nil {
-		return nil, fmt.Errorf("failed to initialize tenant connection manager")
-	}
-
-	return tenantConnManager, nil
-}
-
-// resolveTenantCache creates or uses provided tenant config cache
-func resolveTenantCache(cfg *config.Config, opts *Options) *multitenant.TenantConfigCache {
-	if opts.TenantConfigCache != nil {
-		return opts.TenantConfigCache
-	}
-
-	cacheOpts := []multitenant.CacheOption{
-		multitenant.WithTTL(cfg.Multitenant.Cache.TTL),
-		multitenant.WithMaxSize(cfg.Multitenant.Limits.Tenants),
-	}
-	cacheOpts = append(cacheOpts, opts.TenantCacheOptions...)
-
-	return multitenant.NewTenantConfigCache(opts.TenantConfigProvider, cacheOpts...)
-}
-
-// resolveTenantConnectionOptions creates connection options from config and overrides
-func resolveTenantConnectionOptions(cfg *config.Config, opts *Options) []multitenant.ConnectionOption {
-	connOpts := []multitenant.ConnectionOption{
-		multitenant.WithMaxTenants(cfg.Multitenant.Limits.Tenants),
-	}
-
-	if opts != nil {
-		connOpts = append(connOpts, opts.TenantConnectionOptions...)
-	}
-
-	return connOpts
-}
-
 // Options contains optional dependencies for creating an App instance
 type Options struct {
-	Database                database.Interface
-	MessagingClient         messaging.Client
-	SignalHandler           SignalHandler
-	TimeoutProvider         TimeoutProvider
-	Server                  ServerRunner
-	ConfigLoader            func() (*config.Config, error)
-	DatabaseConnector       func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
-	MessagingClientFactory  func(string, logger.Logger) messaging.Client
-	TenantConfigProvider    multitenant.TenantConfigProvider
-	TenantConfigCache       *multitenant.TenantConfigCache
-	TenantCacheOptions      []multitenant.CacheOption
-	TenantConnectionOptions []multitenant.ConnectionOption
-	TenantConnectionManager *multitenant.TenantConnectionManager
+	Database               database.Interface
+	MessagingClient        messaging.Client
+	SignalHandler          SignalHandler
+	TimeoutProvider        TimeoutProvider
+	Server                 ServerRunner
+	ConfigLoader           func() (*config.Config, error)
+	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
+	MessagingClientFactory func(string, logger.Logger) messaging.AMQPClient
+	ResourceSource         TenantStore
 }
 
 // New creates a new application instance with dependencies determined by configuration.
@@ -312,39 +270,24 @@ func NewWithOptions(opts *Options) (*App, error) {
 // NewWithConfig creates a new application instance with the provided config and optional overrides.
 // This factory method allows for dependency injection while maintaining fail-fast behavior.
 func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
-	log := logger.New(cfg.Log.Level, cfg.Log.Pretty)
+	builder := NewAppBuilder()
 
-	log.Info().
-		Str("app", cfg.App.Name).
-		Str("env", cfg.App.Env).
-		Str("version", cfg.App.Version).
-		Msg("Starting application")
+	app, err := builder.
+		WithConfig(cfg, opts).
+		CreateLogger().
+		CreateBootstrap().
+		ResolveDependencies().
+		CreateApp().
+		InitializeRegistry().
+		ConfigureRuntimeHelpers().
+		CreateHealthProbes().
+		RegisterClosers().
+		RegisterReadyHandler().
+		Build()
 
-	// Resolve core components
-	signalHandler, timeoutProvider := resolveSignalAndTimeout(opts)
-	srv := resolveServer(cfg, log, opts)
-
-	// Initialize dependencies based on mode
-	deps, db, msgClient, tenantConnManager, err := resolveDependencies(cfg, log, opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create app: %w", err)
 	}
-
-	registry := NewModuleRegistry(deps)
-
-	app := &App{
-		cfg:               cfg,
-		server:            srv,
-		db:                db,
-		logger:            log,
-		messaging:         msgClient,
-		registry:          registry,
-		signalHandler:     signalHandler,
-		timeoutProvider:   timeoutProvider,
-		tenantConnManager: tenantConnManager,
-	}
-
-	srv.Echo().GET(cfg.Server.Path.Base+cfg.Server.Path.Ready, app.readyCheck)
 
 	return app, nil
 }
@@ -355,128 +298,249 @@ func (a *App) RegisterModule(module Module) error {
 	return a.registry.Register(module)
 }
 
-// Run starts the application and blocks until a shutdown signal is received.
-// It handles graceful shutdown with a timeout.
-func (a *App) Run() error {
-	// Register messaging infrastructure before starting the server
-	if err := a.registry.RegisterMessaging(); err != nil {
-		return fmt.Errorf("failed to register messaging infrastructure: %w", err)
+func (a *App) registerCloser(name string, closer interface{ Close() error }) {
+	if closer == nil {
+		return
+	}
+
+	a.closers = append(a.closers, namedCloser{name: name, closer: closer})
+}
+
+func (a *App) startMaintenanceLoops() {
+	// Start cleanup for unified managers
+	if a.dbManager != nil {
+		a.dbManager.StartCleanup(5 * time.Minute) // Database cleanup every 5 minutes
+	}
+	if a.messagingManager != nil {
+		a.messagingManager.StartCleanup(2 * time.Minute) // Messaging cleanup every 2 minutes
+	}
+}
+
+func (a *App) prepareRuntime() error {
+	if err := a.buildMessagingDeclarations(); err != nil {
+		return err
+	}
+
+	decls := a.messagingDeclarations
+
+	if a.messagingInitializer != nil && a.messagingInitializer.IsAvailable() && decls != nil {
+		a.messagingInitializer.LogDeploymentMode()
+
+		if a.resourceProvider != nil {
+			if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
+				return err
+			}
+		}
+
+		if err := a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls); err != nil {
+			return err
+		}
+	}
+
+	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
+		a.connectionPreWarmer.LogAvailability()
+		if err := a.connectionPreWarmer.PreWarmSingleTenant(context.Background(), decls); err != nil {
+			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
+		}
 	}
 
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
+	a.startMaintenanceLoops()
 
-	// Start periodic connection cleanup for multi-tenant mode
-	if a.tenantConnManager != nil {
-		cleanupInterval := a.cfg.Multitenant.Limits.Cleanup.Interval
-		if cleanupInterval == 0 {
-			cleanupInterval = 5 * time.Minute // default
-		}
-		a.tenantConnManager.StartCleanup(cleanupInterval)
-	}
+	return nil
+}
+
+func (a *App) serve() <-chan error {
+	errCh := make(chan error, 1)
 
 	go func() {
-		if err := a.server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			a.logger.Fatal().Err(err).Msg("Failed to start server")
-		}
+		err := a.server.Start()
+		errCh <- err
+		close(errCh)
 	}()
 
+	return errCh
+}
+
+func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, error) {
 	quit := make(chan os.Signal, 1)
 	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	a.signalHandler.WaitForSignal(quit)
 
-	a.logger.Info().Msg("Shutting down application")
+	signalReceived := make(chan struct{}, 1)
+	go func() {
+		a.signalHandler.WaitForSignal(quit)
+		signalReceived <- struct{}{}
+	}()
+
+	select {
+	case <-signalReceived:
+		return true, nil
+	case err, ok := <-serverErrCh:
+		if !ok {
+			return false, nil
+		}
+		return false, err
+	}
+}
+
+func (a *App) drainServerError(ch <-chan error) error {
+	if ch == nil {
+		return nil
+	}
+
+	err, ok := <-ch
+	if !ok {
+		return nil
+	}
+
+	return err
+}
+
+// GetMessagingDeclarations returns the captured messaging declarations.
+// This is used by tenant managers to replay infrastructure for each tenant.
+func (a *App) GetMessagingDeclarations() *messaging.Declarations {
+	return a.messagingDeclarations
+}
+
+// Run starts the application and blocks until a shutdown signal is received.
+// It handles graceful shutdown with a timeout.
+func (a *App) Run() error {
+	if err := a.prepareRuntime(); err != nil {
+		return err
+	}
+
+	serverErrCh := a.serve()
+
+	shutdownRequested, serverErr := a.waitForShutdownOrServerError(serverErrCh)
+
+	if shutdownRequested {
+		a.logger.Info().Msg("Shutdown signal received")
+	}
+
+	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+		a.logger.Error().Err(serverErr).Msg("Server stopped unexpectedly")
+	}
 
 	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	return a.Shutdown(ctx)
+	a.logger.Info().Msg("Shutting down application")
+
+	shutdownErr := a.Shutdown(ctx)
+
+	var errs []error
+
+	if shutdownRequested {
+		if err := a.drainServerError(serverErrCh); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+		}
+	} else if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, serverErr))
+	}
+
+	if shutdownErr != nil {
+		errs = append(errs, shutdownErr)
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// shutdownResource safely shuts down a resource and handles error logging
+func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
+	if err := closer.closer.Close(); err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: %w", closer.name, err))
+		a.logger.Error().Err(err).Msgf("Failed to close %s", closer.name)
+		return
+	}
+
+	name := strings.TrimSpace(closer.name)
+	if name == "" {
+		a.logger.Info().Msg("Resource closed successfully")
+		return
+	}
+
+	// Capitalize the first letter of the name for logging
+	capitalizedName := strings.ToUpper(closer.name[:1]) + closer.name[1:]
+	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }
 
 // Shutdown gracefully shuts down the application with the given context.
 // It closes database connections, messaging client, and stops the HTTP server.
+// Returns an aggregated error if any components fail to shut down.
 func (a *App) Shutdown(ctx context.Context) error {
+	var errs []error
+
+	// Shutdown modules first
 	if err := a.registry.Shutdown(); err != nil {
+		errs = append(errs, fmt.Errorf("modules: %w", err))
 		a.logger.Error().Err(err).Msg("Failed to shutdown modules")
 	}
 
+	// Shutdown server
 	if err := a.server.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf(serverErrorMsg, err))
 		a.logger.Error().Err(err).Msg("Failed to shutdown server")
 	}
 
-	// Close messaging client if enabled
-	if a.messaging != nil {
-		if err := a.messaging.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close messaging client")
-		} else {
-			a.logger.Info().Msg("Messaging client closed successfully")
-		}
-	}
-
-	// Close database connection if enabled
-	if a.db != nil {
-		if err := a.db.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close database connection")
-		} else {
-			a.logger.Info().Msg("Database connection closed successfully")
-		}
-	}
-
-	// Close tenant connection manager if enabled
-	if a.tenantConnManager != nil {
-		if err := a.tenantConnManager.Close(); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to close tenant connection manager")
-		} else {
-			a.logger.Info().Msg("Tenant connection manager closed successfully")
-		}
+	for _, closer := range a.closers {
+		a.shutdownResource(closer, &errs)
 	}
 
 	a.logger.Info().Msg("Application shutdown complete")
+
+	// Return aggregated errors if any occurred
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
 	return nil
 }
 
 func (a *App) readyCheck(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Check database health if enabled
-	dbHealth := "disabled"
-	var stats map[string]any
-	if a.db != nil {
-		if err := a.db.Health(ctx); err != nil {
-			dbHealth = "unhealthy"
+	componentStatus := make(map[string]HealthStatus, len(a.healthProbes))
+	for _, probe := range a.healthProbes {
+		result := probe.Run(ctx)
+		componentStatus[result.Name] = result
+		if result.Err != nil && result.Critical {
 			return c.JSON(http.StatusServiceUnavailable, map[string]any{
-				"status":   "not ready",
-				"database": dbHealth,
-				"error":    err.Error(),
+				"status":    "not ready",
+				result.Name: result.Status,
+				"error":     result.Err.Error(),
 			})
 		}
-		dbHealth = "healthy"
-
-		var err error
-		stats, err = a.db.Stats()
-		if err != nil {
-			a.logger.Error().Err(err).Msg("Failed to get database stats")
-			stats = map[string]any{"error": err.Error()}
-		}
-	} else {
-		stats = map[string]any{"status": "disabled"}
 	}
 
-	// Check messaging health if enabled
-	messagingHealth := "disabled"
-	if a.messaging != nil {
-		if a.messaging.IsReady() {
-			messagingHealth = "healthy"
-		} else {
-			messagingHealth = "unhealthy"
-		}
+	dbStatus := componentStatus["database"]
+	if dbStatus.Status == "" {
+		dbStatus.Status = disabledStatus
+		dbStatus.Details = map[string]any{"status": disabledStatus}
+	}
+	dbStats := dbStatus.Details
+	if dbStats == nil {
+		dbStats = map[string]any{}
+	}
+
+	messagingStatus := componentStatus["messaging"]
+	if messagingStatus.Status == "" {
+		messagingStatus.Status = disabledStatus
+	}
+	messagingStats := messagingStatus.Details
+	if messagingStats == nil {
+		messagingStats = map[string]any{}
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"status":    "ready",
-		"time":      time.Now().Unix(),
-		"database":  dbHealth,
-		"db_stats":  stats,
-		"messaging": messagingHealth,
+		"status":          "ready",
+		"time":            time.Now().Unix(),
+		"database":        dbStatus.Status,
+		"db_stats":        dbStats,
+		"messaging":       messagingStatus.Status,
+		"messaging_stats": messagingStats,
 		"app": map[string]any{
 			"name":        a.cfg.App.Name,
 			"environment": a.cfg.App.Env,

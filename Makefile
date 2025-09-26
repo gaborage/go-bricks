@@ -1,7 +1,7 @@
-.PHONY: help build test lint fmt tidy clean
+.PHONY: help build test lint fmt tidy clean check test-coverage
 
-# Package selection for testing (excludes examples, testing, and tools directories)
-PKGS := $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
+# Package selection for testing (excludes examples and tools directories)
+PKGS := $(shell go list ./... | grep -vE '/(examples|tools)(/|$$)')
 
 # Default target
 help: ## Show this help message

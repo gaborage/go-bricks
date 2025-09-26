@@ -69,6 +69,24 @@ func createFailingRow(err error) *sql.Row {
 	return row
 }
 
+// failingResult implements sql.Result to return errors from its methods
+type failingResult struct {
+	err error
+}
+
+func (r failingResult) LastInsertId() (int64, error) {
+	return 0, r.err
+}
+
+func (r failingResult) RowsAffected() (int64, error) {
+	return 0, r.err
+}
+
+// createFailingResult creates a sql.Result that will return the specified error from its methods
+func createFailingResult(err error) sql.Result {
+	return failingResult{err: err}
+}
+
 // NewHealthyDatabase creates a mock database that responds positively to health checks
 // and basic operations. This is useful for testing happy path scenarios.
 func NewHealthyDatabase() *mocks.MockDatabase {
@@ -94,10 +112,9 @@ func NewFailingDatabase(err error) *mocks.MockDatabase {
 	// Setup failing responses
 	mockDB.ExpectHealthCheck(false)
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return((*sql.Rows)(nil), err)
-	// For QueryRow, we need to return a valid row that will fail when scanned
-	failingRow := createFailingRow(err)
-	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(failingRow)
-	mockDB.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(nil, err)
+	// QueryRow should result in an error when called
+	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(createFailingRow(err))
+	mockDB.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(createFailingResult(err), nil)
 	mockDB.On("Begin", mock.Anything).Return((*mocks.MockTx)(nil), err)
 
 	return mockDB

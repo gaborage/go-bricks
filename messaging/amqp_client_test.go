@@ -908,27 +908,14 @@ func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
 }
 
 func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
-	originalDialFunc := getAmqpDialFunc()
-	defer setAmqpDialFunc(originalDialFunc)
-
 	consumeErr := errors.New("consume channel error")
 	mockChannel := &fakeChannel{
 		consumeErr: consumeErr,
 	}
 
-	setAmqpDialFunc(func(_ string) (amqpConnection, error) {
-		return &fakeConnAdapter{}, nil
-	})
-
-	client := NewAMQPClient(amqpHost, &stubLogger{})
-	// Ensure background goroutines are stopped
+	client := newClientWithFakeChannel(mockChannel)
+	// Ensure resources are cleaned up like the production constructor would
 	t.Cleanup(func() { _ = client.Close() })
-
-	// Set up manually with our mock channel
-	client.m.Lock()
-	client.channel = mockChannel
-	client.isReady = true
-	client.m.Unlock()
 
 	// Consume should fail with channel error
 	_, err := client.ConsumeFromQueue(context.Background(), ConsumeOptions{

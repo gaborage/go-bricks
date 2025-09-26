@@ -3,6 +3,7 @@ package testing_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -133,8 +134,8 @@ func TestEventServicePublishUserCreatedFailure(t *testing.T) {
 func TestEventServiceConsumeMessages(t *testing.T) {
 	// Create a mock client with pre-loaded messages
 	messages := [][]byte{
-		[]byte(`{"event_type": userCreatedExchangeName, "user_id": 1}`),
-		[]byte(`{"event_type": "user.updated", "user_id": 1}`),
+		[]byte(fmt.Sprintf(`{"event_type": %q, "user_id": 1}`, userCreated)),
+		[]byte(fmt.Sprintf(`{"event_type": %q, "user_id": 1}`, userUpdated)),
 	}
 	mockClient := fixtures.NewWorkingMessagingClient()
 	service := NewEventService(mockClient)
