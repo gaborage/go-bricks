@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -80,11 +81,11 @@ func TestValidateDatabaseTypeFailure(t *testing.T) {
 }
 
 func TestGetSupportedDatabaseTypes(t *testing.T) {
-	types := GetSupportedDatabaseTypes()
+	supportedDbTypes := GetSupportedDatabaseTypes()
 
-	assert.Len(t, types, 2)
-	assert.Contains(t, types, "postgresql")
-	assert.Contains(t, types, "oracle")
+	assert.Len(t, supportedDbTypes, 2)
+	assert.Contains(t, supportedDbTypes, "postgresql")
+	assert.Contains(t, supportedDbTypes, "oracle")
 }
 
 func TestNewConnectionUnsupportedType(t *testing.T) {
@@ -260,8 +261,8 @@ func (c *simpleConnection) Query(ctx context.Context, query string, args ...any)
 	return c.db.QueryContext(ctx, query, args...)
 }
 
-func (c *simpleConnection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return c.db.QueryRowContext(ctx, query, args...)
+func (c *simpleConnection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(c.db.QueryRowContext(ctx, query, args...))
 }
 
 func (c *simpleConnection) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -329,8 +330,8 @@ func (s *simpleStatement) Query(ctx context.Context, args ...any) (*sql.Rows, er
 	return s.stmt.QueryContext(ctx, args...)
 }
 
-func (s *simpleStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.stmt.QueryRowContext(ctx, args...)
+func (s *simpleStatement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.stmt.QueryRowContext(ctx, args...))
 }
 
 func (s *simpleStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
@@ -349,8 +350,8 @@ func (t *simpleTransaction) Query(ctx context.Context, query string, args ...any
 	return t.tx.QueryContext(ctx, query, args...)
 }
 
-func (t *simpleTransaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(ctx, query, args...)
+func (t *simpleTransaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(t.tx.QueryRowContext(ctx, query, args...))
 }
 
 func (t *simpleTransaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {

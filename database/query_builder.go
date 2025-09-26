@@ -9,13 +9,6 @@ import (
 	"github.com/Masterminds/squirrel"
 )
 
-// Database type constants
-const (
-	PostgreSQL = "postgresql"
-	Oracle     = "oracle"
-	MongoDB    = "mongodb"
-)
-
 // QueryBuilder provides vendor-specific SQL query building
 type QueryBuilder struct {
 	vendor           string

@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -360,7 +361,7 @@ func (c *Connection) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, er
 }
 
 // QueryRow executes a MongoDB query returning a single row (not applicable)
-func (c *Connection) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
+func (c *Connection) QueryRow(_ context.Context, _ string, _ ...any) types.Row {
 	// MongoDB doesn't support SQL queries, this is for interface compatibility
 	return nil
 }

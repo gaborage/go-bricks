@@ -27,21 +27,24 @@ type MockTx struct {
 // Query implements types.Tx
 func (m *MockTx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
+	arguments := m.MethodCalled("Query", callArgs...)
 	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
 }
 
 // QueryRow implements types.Tx
-func (m *MockTx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (m *MockTx) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
-	return arguments.Get(0).(*sql.Row)
+	arguments := m.MethodCalled("QueryRow", callArgs...)
+	if arguments.Get(0) == nil {
+		return nil
+	}
+	return arguments.Get(0).(types.Row)
 }
 
 // Exec implements types.Tx
 func (m *MockTx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	callArgs := append([]any{ctx, query}, args...)
-	arguments := m.Called(callArgs...)
+	arguments := m.MethodCalled("Exec", callArgs...)
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}

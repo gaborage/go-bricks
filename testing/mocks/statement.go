@@ -5,6 +5,8 @@ import (
 	"database/sql"
 
 	"github.com/stretchr/testify/mock"
+
+	"github.com/gaborage/go-bricks/database/types"
 )
 
 // MockStatement provides a testify-based mock implementation of the database Statement interface.
@@ -29,9 +31,9 @@ func (m *MockStatement) Query(ctx context.Context, args ...any) (*sql.Rows, erro
 }
 
 // QueryRow implements types.Statement
-func (m *MockStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
+func (m *MockStatement) QueryRow(ctx context.Context, args ...any) types.Row {
 	arguments := m.Called(ctx, args)
-	return arguments.Get(0).(*sql.Row)
+	return arguments.Get(0).(types.Row)
 }
 
 // Exec implements types.Statement
@@ -54,7 +56,7 @@ func (m *MockStatement) ExpectQuery(rows *sql.Rows, err error) *mock.Call {
 }
 
 // ExpectQueryRow sets up a query row expectation with the provided row
-func (m *MockStatement) ExpectQueryRow(row *sql.Row) *mock.Call {
+func (m *MockStatement) ExpectQueryRow(row types.Row) *mock.Call {
 	return m.On("QueryRow", mock.Anything, mock.Anything).Return(row)
 }
 

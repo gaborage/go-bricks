@@ -150,7 +150,10 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	_ = rs.Close()
 
 	// Execute QueryRow operation
-	_ = c.QueryRow(ctx, "SELECT NOW()")
+	row := c.QueryRow(ctx, "SELECT NOW()")
+	require.NotNil(t, row)
+	var now time.Time
+	require.NoError(t, row.Scan(&now))
 
 	// Execute Prepare + Statement operations
 	st, err := c.Prepare(ctx, "UPDATE items SET name=$1 WHERE id=$2")
@@ -395,6 +398,8 @@ func TestConnectionCreateMigrationTable(t *testing.T) {
 
 	// Mock the CREATE TABLE execution
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS flyway_schema_history`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`CREATE INDEX IF NOT EXISTS flyway_schema_history_s_idx ON flyway_schema_history \(success\);`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := c.CreateMigrationTable(ctx)
 	assert.NoError(t, err)
@@ -421,6 +426,9 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(countRows)
 	row := c.QueryRow(ctx, "SELECT COUNT(*) FROM test")
 	assert.NotNil(t, row)
+	var total int
+	require.NoError(t, row.Scan(&total))
+	assert.Equal(t, 42, total)
 
 	// Test Prepare error
 	mock.ExpectPrepare("INVALID SQL").WillReturnError(sql.ErrTxDone)

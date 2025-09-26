@@ -9,11 +9,11 @@ import (
 	go_ora "github.com/sijms/go-ora/v2"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/internal/database"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Connection implements the database.Interface for Oracle
+// Connection implements the types.Interface for Oracle
 type Connection struct {
 	db     *sql.DB
 	config *config.DatabaseConfig
@@ -29,8 +29,15 @@ var (
 	}
 )
 
-// NewConnection creates a new Oracle connection
-func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
+// NewConnection creates and returns an Oracle-backed types.Interface using the provided database configuration and logger.
+// It returns an error if cfg is nil, if the connection cannot be opened, or if an initial ping to the database fails.
+// The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
+// configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
+func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("database configuration is nil")
+	}
+
 	var dsn string
 	if cfg.ConnectionString != "" {
 		dsn = cfg.ConnectionString
@@ -88,7 +95,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}, nil
 }
 
-// Statement wraps sql.Stmt to implement database.Statement
+// Statement wraps sql.Stmt to implement types.Statement
 type Statement struct {
 	stmt *sql.Stmt
 }
@@ -99,8 +106,8 @@ func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 }
 
 // QueryRow executes a prepared query that returns a single row
-func (s *Statement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.stmt.QueryRowContext(ctx, args...)
+func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.stmt.QueryRowContext(ctx, args...))
 }
 
 // Exec executes a prepared statement with arguments
@@ -113,7 +120,7 @@ func (s *Statement) Close() error {
 	return s.stmt.Close()
 }
 
-// Transaction wraps sql.Tx to implement database.Tx
+// Transaction wraps sql.Tx to implement types.Tx
 type Transaction struct {
 	tx *sql.Tx
 }
@@ -124,8 +131,8 @@ func (t *Transaction) Query(ctx context.Context, query string, args ...any) (*sq
 }
 
 // QueryRow executes a query that returns a single row within the transaction
-func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(ctx, query, args...)
+func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(t.tx.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning rows within the transaction
@@ -134,7 +141,7 @@ func (t *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.
 }
 
 // Prepare creates a prepared statement within the transaction
-func (t *Transaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (t *Transaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := t.tx.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -158,8 +165,8 @@ func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql
 }
 
 // QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return c.db.QueryRowContext(ctx, query, args...)
+func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(c.db.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning any rows
@@ -168,7 +175,7 @@ func (c *Connection) Exec(ctx context.Context, query string, args ...any) (sql.R
 }
 
 // Prepare creates a prepared statement for later queries or executions
-func (c *Connection) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (c *Connection) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := c.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -177,7 +184,7 @@ func (c *Connection) Prepare(ctx context.Context, query string) (database.Statem
 }
 
 // Begin starts a transaction
-func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
+func (c *Connection) Begin(ctx context.Context) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -186,7 +193,7 @@ func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
 }
 
 // BeginTx starts a transaction with options
-func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -226,7 +233,7 @@ func (c *Connection) Close() error {
 
 // DatabaseType returns the database type
 func (c *Connection) DatabaseType() string {
-	return "oracle"
+	return types.Oracle
 }
 
 // GetMigrationTable returns the migration table name for Oracle

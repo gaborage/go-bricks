@@ -35,13 +35,13 @@ func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*s
 }
 
 // QueryRow implements types.Interface
-func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	callArgs := append([]any{ctx, query}, args...)
 	arguments := m.MethodCalled("QueryRow", callArgs...)
 	if arguments.Get(0) == nil {
 		return nil
 	}
-	return arguments.Get(0).(*sql.Row)
+	return arguments.Get(0).(types.Row)
 }
 
 // Exec implements types.Interface

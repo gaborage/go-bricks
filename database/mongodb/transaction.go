@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -25,7 +26,7 @@ func (t *Transaction) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, e
 }
 
 // QueryRow executes a query returning a single row within the transaction (not applicable)
-func (t *Transaction) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row {
+func (t *Transaction) QueryRow(_ context.Context, _ string, _ ...any) types.Row {
 	// MongoDB doesn't support SQL queries, this is for interface compatibility
 	return nil
 }

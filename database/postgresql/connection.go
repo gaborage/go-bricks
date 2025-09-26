@@ -11,11 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/internal/database"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Connection implements the database.Interface for PostgreSQL
+// Connection implements the types.Interface for PostgreSQL
 type Connection struct {
 	db     *sql.DB
 	config *config.DatabaseConfig
@@ -34,7 +34,10 @@ var (
 // quoteDSN quotes a DSN value according to libpq rules:
 // - Returns double single quotes for empty strings (empty value)
 // - Escapes backslashes and single quotes
-// - Wraps in single quotes when value contains non-alphanumeric/._- characters
+// quoteDSN returns a DSN-safe representation of value, wrapping it in single quotes
+// and escaping backslashes and single quotes when value contains characters other
+// than letters, digits, dot (.), underscore (_) or hyphen (-). If value is empty
+// it returns two single quotes `”`.
 func quoteDSN(value string) string {
 	if value == "" {
 		return "''"
@@ -61,8 +64,9 @@ func quoteDSN(value string) string {
 	return "'" + escaped + "'"
 }
 
-// NewConnection creates a new PostgreSQL connection
-func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
+// NewConnection creates and configures a PostgreSQL Connection using cfg and log.
+// It validates cfg, builds or uses the provided DSN, sets pool options, ensures connectivity with a ping, logs success, and returns the wrapped Connection or an error.
+func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is required")
 	}
@@ -124,7 +128,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}, nil
 }
 
-// Statement wraps sql.Stmt to implement database.Statement
+// Statement wraps sql.Stmt to implement types.Statement
 type Statement struct {
 	stmt *sql.Stmt
 }
@@ -135,8 +139,8 @@ func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 }
 
 // QueryRow executes a prepared query that returns a single row
-func (s *Statement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.stmt.QueryRowContext(ctx, args...)
+func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.stmt.QueryRowContext(ctx, args...))
 }
 
 // Exec executes a prepared statement with arguments
@@ -149,7 +153,7 @@ func (s *Statement) Close() error {
 	return s.stmt.Close()
 }
 
-// Transaction wraps sql.Tx to implement database.Tx
+// Transaction wraps sql.Tx to implement types.Tx
 type Transaction struct {
 	tx *sql.Tx
 }
@@ -160,8 +164,8 @@ func (t *Transaction) Query(ctx context.Context, query string, args ...any) (*sq
 }
 
 // QueryRow executes a query that returns a single row within the transaction
-func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(ctx, query, args...)
+func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(t.tx.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning rows within the transaction
@@ -170,7 +174,7 @@ func (t *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.
 }
 
 // Prepare creates a prepared statement within the transaction
-func (t *Transaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (t *Transaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := t.tx.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -194,8 +198,8 @@ func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql
 }
 
 // QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return c.db.QueryRowContext(ctx, query, args...)
+func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(c.db.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning any rows
@@ -204,7 +208,7 @@ func (c *Connection) Exec(ctx context.Context, query string, args ...any) (sql.R
 }
 
 // Prepare creates a prepared statement for later queries or executions
-func (c *Connection) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (c *Connection) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := c.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -213,7 +217,7 @@ func (c *Connection) Prepare(ctx context.Context, query string) (database.Statem
 }
 
 // Begin starts a transaction
-func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
+func (c *Connection) Begin(ctx context.Context) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -222,7 +226,7 @@ func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
 }
 
 // BeginTx starts a transaction with options
-func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -262,7 +266,7 @@ func (c *Connection) Close() error {
 
 // DatabaseType returns the database type
 func (c *Connection) DatabaseType() string {
-	return "postgresql"
+	return types.PostgreSQL
 }
 
 // GetMigrationTable returns the migration table name for PostgreSQL
@@ -272,7 +276,7 @@ func (c *Connection) GetMigrationTable() string {
 
 // CreateMigrationTable creates the migration table if it doesn't exist
 func (c *Connection) CreateMigrationTable(ctx context.Context) error {
-	query := `
+	tableQuery := `
 		CREATE TABLE IF NOT EXISTS flyway_schema_history (
 			installed_rank INTEGER NOT NULL,
 			version VARCHAR(50),
@@ -286,10 +290,16 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 			success BOOLEAN NOT NULL,
 			CONSTRAINT flyway_schema_history_pk PRIMARY KEY (installed_rank)
 		);
-		
-		CREATE INDEX IF NOT EXISTS flyway_schema_history_s_idx ON flyway_schema_history (success);
 	`
 
-	_, err := c.Exec(ctx, query)
-	return err
+	if _, err := c.Exec(ctx, tableQuery); err != nil {
+		return err
+	}
+
+	indexQuery := `CREATE INDEX IF NOT EXISTS flyway_schema_history_s_idx ON flyway_schema_history (success);`
+	if _, err := c.Exec(ctx, indexQuery); err != nil {
+		return err
+	}
+
+	return nil
 }

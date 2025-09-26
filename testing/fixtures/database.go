@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -43,7 +44,9 @@ const (
 // DatabaseFixtures provides helper functions for creating pre-configured database mocks
 // and SQL result builders for consistent testing.
 
-// getDefaultStats returns the default database statistics map used across fixtures
+// getDefaultStats returns a map containing the default database statistics for
+// open connections, in-use connections, and idle connections under the keys
+// OpenConnectionsField, InUseField, and IdleField respectively.
 func getDefaultStats() map[string]any {
 	return map[string]any{
 		OpenConnectionsField: DefaultOpenConnections,
@@ -52,8 +55,9 @@ func getDefaultStats() map[string]any {
 	}
 }
 
-// createFailingRow creates a *sql.Row that will return the specified error when scanned
-func createFailingRow(err error) *sql.Row {
+// createFailingRow returns a types.Row whose Scan will return the provided error.
+// The err parameter is the error that will be produced when scanning the returned Row.
+func createFailingRow(err error) types.Row {
 	// Create a mock database connection that will return an error
 	db, sqlMock, mockErr := sqlmock.New()
 	if mockErr != nil {
@@ -66,7 +70,7 @@ func createFailingRow(err error) *sql.Row {
 
 	// Execute the query to get the actual row
 	row := db.QueryRowContext(context.Background(), "SELECT")
-	return row
+	return types.NewRowFromSQL(row)
 }
 
 // failingResult implements sql.Result to return errors from its methods

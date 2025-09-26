@@ -2,21 +2,64 @@
 // These interfaces are separate from the main database package to avoid import cycles
 // and to make them easily accessible for mocking and testing.
 //
-//nolint:revive // Package name "types" is intentionally generic to avoid circular imports
+//nolint:revive // Package name "types" is intentionally generic to avoid circular
 package types
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/Masterminds/squirrel"
 )
+
+// Database vendor identifiers shared across the database packages.
+type Vendor = string
+
+const (
+	PostgreSQL Vendor = "postgresql"
+	Oracle     Vendor = "oracle"
+	MongoDB    Vendor = "mongodb"
+)
+
+// Row represents a single result set row with basic scanning behaviour.
+type Row interface {
+	Scan(dest ...any) error
+	Err() error
+}
+
+type sqlRowAdapter struct {
+	row *sql.Row
+}
+
+// NewRowFromSQL wraps the provided *sql.Row in a Row.
+// If row is nil, NewRowFromSQL returns nil.
+func NewRowFromSQL(row *sql.Row) Row {
+	if row == nil {
+		return nil
+	}
+	return &sqlRowAdapter{row: row}
+}
+
+func (r *sqlRowAdapter) Scan(dest ...any) error {
+	if r == nil || r.row == nil {
+		return errors.New("sqlRowAdapter: underlying sql.Row is nil")
+	}
+	return r.row.Scan(dest...)
+}
+
+func (r *sqlRowAdapter) Err() error {
+	if r == nil || r.row == nil {
+		return errors.New("sqlRowAdapter: underlying sql.Row is nil")
+	}
+	return r.row.Err()
+}
 
 // Statement defines the interface for prepared statements
 type Statement interface {
 	// Query execution
 	Query(ctx context.Context, args ...any) (*sql.Rows, error)
-	QueryRow(ctx context.Context, args ...any) *sql.Row
+	QueryRow(ctx context.Context, args ...any) Row
 	Exec(ctx context.Context, args ...any) (sql.Result, error)
 
 	// Statement management
@@ -27,7 +70,7 @@ type Statement interface {
 type Tx interface {
 	// Query execution within transaction
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRow(ctx context.Context, query string, args ...any) Row
 	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// Prepared statements within transaction
@@ -44,7 +87,7 @@ type Tx interface {
 type Interface interface {
 	// Query execution
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRow(ctx context.Context, query string, args ...any) Row
 	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// Prepared statements
