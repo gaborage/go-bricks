@@ -12,7 +12,7 @@ import (
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	if got := qb.quoteOracleColumn("number"); got != `"number"` {
+	if got := qb.quoteOracleColumn("number"); got != `"NUMBER"` {
 		t.Fatalf("expected reserved word to be quoted, got %s", got)
 	}
 	if got := qb.quoteOracleColumn("name"); got != "name" {
