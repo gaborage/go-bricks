@@ -49,7 +49,7 @@ func NewWorkingMessagingClient() *mocks.MockMessagingClient {
 	// Setup successful responses
 	mockClient.ExpectIsReady(true)
 	mockClient.ExpectPublishAny(nil)
-	mockClient.ExpectConsume("", nil) // Allow any queue consumption
+	mockClient.ExpectConsumeAny(nil) // Allow any queue consumption
 	mockClient.ExpectClose(nil)
 
 	return mockClient
@@ -65,15 +65,15 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 		// Fail immediately
 		mockClient.SetReady(false)
 		mockClient.ExpectIsReady(false)
-		mockClient.ExpectPublishAny(amqp.ErrClosed)
-		mockClient.ExpectConsume("", amqp.ErrClosed)
+		mockClient.ExpectPublishAny(amqp.ErrClosed).Once()
+		mockClient.ExpectConsumeAny(amqp.ErrClosed)
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
 		for i := 0; i < failAfter; i++ {
-			mockClient.ExpectPublishAny(nil)
+			mockClient.ExpectPublishAny(nil).Once()
 		}
-		mockClient.ExpectPublishAny(amqp.ErrClosed)
+		mockClient.ExpectPublishAny(amqp.ErrClosed).Once()
 	}
 
 	return mockClient
@@ -123,6 +123,7 @@ func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 // NewFailingAMQPClient creates a mock AMQP client that fails infrastructure operations.
 func NewFailingAMQPClient() *mocks.MockAMQPClient {
 	mockClient := mocks.NewMockAMQPClient()
+	mockClient.SetReady(false)
 
 	infraErr := amqp.Error{Code: 500, Reason: "INTERNAL_ERROR"}
 	mockClient.ExpectDeclareExchangeAny(&infraErr)

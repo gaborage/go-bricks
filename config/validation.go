@@ -399,11 +399,6 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		return fmt.Errorf("limits: %w", err)
 	}
 
-	// Validate tenants configuration
-	if err := validateMultitenantTenants(mt.Tenants); err != nil {
-		return fmt.Errorf("tenants: %w", err)
-	}
-
 	// Ensure no conflict with single-tenant database configuration
 	if IsDatabaseConfigured(db) {
 		return fmt.Errorf("database configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
@@ -412,6 +407,11 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 	// Ensure no conflict with single-tenant messaging configuration
 	if isMessagingConfigured(msg) {
 		return fmt.Errorf("messaging configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
+	}
+
+	// Validate tenants configuration
+	if err := validateMultitenantTenants(mt.Tenants); err != nil {
+		return fmt.Errorf("tenants: %w", err)
 	}
 
 	return nil
@@ -457,12 +457,10 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 
 // validateMultitenantTenants validates tenant configurations when they are provided
 func validateMultitenantTenants(tenants map[string]TenantEntry) error {
-	// Allow empty tenants map for dynamic tenant configuration
 	if len(tenants) == 0 {
-		return nil
+		return fmt.Errorf("at least one tenant must be configured")
 	}
 
-	// If tenants are provided statically, validate them
 	for tenantID := range tenants {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
@@ -470,12 +468,15 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		}
 
 		// Validate tenant database configuration
+		if !IsDatabaseConfigured(&tenant.Database) {
+			return fmt.Errorf("tenant %s database configuration is required", tenantID)
+		}
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
 
 		// Validate tenant messaging configuration
-		if tenant.Messaging.URL == "" {
+		if strings.TrimSpace(tenant.Messaging.URL) == "" {
 			return fmt.Errorf("tenant %s messaging URL cannot be empty", tenantID)
 		}
 	}

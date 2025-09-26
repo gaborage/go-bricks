@@ -21,6 +21,21 @@ const (
 	testDomain                   = ".api.example.com"
 )
 
+func makeSampleTenants() map[string]TenantEntry {
+	return map[string]TenantEntry{
+		"tenant-a": {
+			Database: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "tenant-a.db.local",
+				Port:     5432,
+				Database: "tenant_a",
+				Username: "tenant_user",
+			},
+			Messaging: TenantMessagingConfig{URL: testAMQPHost},
+		},
+	}
+}
+
 func TestValidateValidConfig(t *testing.T) {
 	cfg := createValidFullConfig()
 	err := Validate(cfg)
@@ -2020,6 +2035,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 100,
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig:  &DatabaseConfig{},  // Empty for multitenant
 			msgConfig: &MessagingConfig{}, // Empty for multitenant
@@ -2035,6 +2051,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 50,
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig:  &DatabaseConfig{},
 			msgConfig: &MessagingConfig{},
@@ -2052,6 +2069,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 1000,
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig:  &DatabaseConfig{},
 			msgConfig: &MessagingConfig{},
@@ -2081,6 +2099,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Resolver: ResolverConfig{
 					Type: "invalid",
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
@@ -2096,6 +2115,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 1001, // Exceeds maximum
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
@@ -2111,6 +2131,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 100,
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig: &DatabaseConfig{
 				Host: "localhost", // This makes it configured
@@ -2129,6 +2150,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Limits: LimitsConfig{
 					Tenants: 100,
 				},
+				Tenants: makeSampleTenants(),
 			},
 			dbConfig: &DatabaseConfig{},
 			msgConfig: &MessagingConfig{
@@ -2137,6 +2159,39 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				},
 			},
 			expectedError: "messaging configuration not allowed when multitenant.enabled is true",
+		},
+		{
+			name: "tenants_missing",
+			mtConfig: &MultitenantConfig{
+				Enabled:  true,
+				Resolver: ResolverConfig{Type: "header"},
+				Limits:   LimitsConfig{Tenants: 100},
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "tenants: at least one tenant must be configured",
+		},
+		{
+			name: "tenant_missing_messaging_url",
+			mtConfig: &MultitenantConfig{
+				Enabled:  true,
+				Resolver: ResolverConfig{Type: "header"},
+				Limits:   LimitsConfig{Tenants: 100},
+				Tenants: map[string]TenantEntry{
+					"tenant-a": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "tenant-a.db.local",
+							Port:     5432,
+							Database: "tenant_a",
+							Username: "tenant_user",
+						},
+					},
+				},
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "tenants: tenant tenant-a messaging URL cannot be empty",
 		},
 	}
 

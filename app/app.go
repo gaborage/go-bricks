@@ -323,8 +323,12 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 	// Store declarations for use by messaging manager
 	app.messagingDeclarations = messagingDeclarations
 
-	// Reassign GetMessaging closure to handle lazy consumer initialization for multi-tenant mode
+	// Reassign GetMessaging closure to handle lazy consumer initialization and missing configuration checks
 	bundle.deps.GetMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
+		if app.messagingManager == nil {
+			return nil, fmt.Errorf("messaging not configured")
+		}
+
 		key := "" // Single-tenant key
 		if app.cfg.Multitenant.Enabled {
 			tenantID, ok := multitenant.GetTenant(ctx)
@@ -332,12 +336,17 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 				return nil, ErrNoTenantInContext
 			}
 			key = tenantID
-
-			// Lazily ensure consumers are started for this tenant
+			if app.messagingDeclarations != nil {
+				if err := app.messagingManager.EnsureConsumers(ctx, key, app.messagingDeclarations); err != nil {
+					return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", key, err)
+				}
+			}
+		} else if app.messagingDeclarations != nil {
 			if err := app.messagingManager.EnsureConsumers(ctx, key, app.messagingDeclarations); err != nil {
-				return nil, fmt.Errorf("failed to ensure consumers for tenant %s: %w", key, err)
+				return nil, fmt.Errorf("failed to ensure consumers: %w", err)
 			}
 		}
+
 		return app.messagingManager.GetPublisher(ctx, key)
 	}
 

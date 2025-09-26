@@ -57,22 +57,28 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 		name:     "database",
 		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			// Get manager stats
+			conn, err := dbManager.Get(ctx, "")
+			if err != nil {
+				stats := dbManager.Stats()
+				if stats == nil {
+					stats = map[string]any{}
+				}
+				stats["status"] = "no active connections"
+				return healthyStatus, stats, nil
+			}
+
+			if err := conn.Health(ctx); err != nil {
+				stats := dbManager.Stats()
+				if stats == nil {
+					stats = map[string]any{}
+				}
+				return unhealthyStatus, stats, err
+			}
+
 			stats := dbManager.Stats()
 			if stats == nil {
 				stats = map[string]any{}
 			}
-
-			// For single-tenant, try to get a connection to verify health
-			if dbManager.Size() == 0 {
-				// No active connections, try to create one to test health
-				if conn, err := dbManager.Get(ctx, ""); err != nil {
-					return unhealthyStatus, stats, err
-				} else if err := conn.Health(ctx); err != nil {
-					return unhealthyStatus, stats, err
-				}
-			}
-
 			return healthyStatus, stats, nil
 		},
 	}
@@ -97,12 +103,16 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			if stats == nil {
 				stats = map[string]any{}
 			}
+			if active, ok := stats["active_publishers"].(int); ok && active == 0 {
+				stats["status"] = "no active publishers"
+				return healthyStatus, stats, nil
+			}
 
-			// For single-tenant, try to get a publisher to verify health
-			if client, err := msgManager.GetPublisher(ctx, ""); err != nil {
-				return unhealthyStatus, stats, err
-			} else if !client.IsReady() {
-				return unhealthyStatus, stats, nil
+			// Attempt to verify readiness using an existing publisher key when available
+			if client, err := msgManager.GetPublisher(ctx, ""); err == nil {
+				if !client.IsReady() {
+					return unhealthyStatus, stats, nil
+				}
 			}
 
 			return healthyStatus, stats, nil

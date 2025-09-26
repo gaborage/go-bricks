@@ -94,9 +94,8 @@ func NewFailingDatabase(err error) *mocks.MockDatabase {
 	// Setup failing responses
 	mockDB.ExpectHealthCheck(false)
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return((*sql.Rows)(nil), err)
-	// For QueryRow, we need to return a valid row that will fail when scanned
-	failingRow := createFailingRow(err)
-	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(failingRow)
+	// QueryRow should result in an error when called
+	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return((*sql.Row)(nil))
 	mockDB.On("Exec", mock.Anything, mock.Anything, mock.Anything).Return(nil, err)
 	mockDB.On("Begin", mock.Anything).Return((*mocks.MockTx)(nil), err)
 

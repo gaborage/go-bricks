@@ -3,9 +3,11 @@ package testing_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/testing/fixtures"
@@ -34,11 +36,20 @@ func NewUserService(db types.Interface) *UserService {
 	return &UserService{db: db}
 }
 
-func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
+func (s *UserService) GetUser(ctx context.Context, id int64) (_ *User, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("query failed: %v", r)
+		}
+	}()
+
 	row := s.db.QueryRow(ctx, "SELECT id, name, email FROM users WHERE id = ?", id)
+	if row == nil {
+		return nil, sql.ErrNoRows
+	}
 
 	user := &User{}
-	err := row.Scan(&user.ID, &user.Name, &user.Email)
+	err = row.Scan(&user.ID, &user.Name, &user.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +120,7 @@ func TestUserServiceCreateUserTransaction(t *testing.T) {
 
 	// Expect operations within transaction
 	result := fixtures.NewMockResult(1, 1) // lastInsertId=1, rowsAffected=1
-	mockTx.ExpectExec(usersInsertClause, result, nil)
+	mockTx.On("Exec", mock.Anything, usersInsertClause, mock.Anything, mock.Anything).Return(result, nil)
 
 	// The CreateUser method uses defer tx.Rollback(), so we need to expect that
 	mockTx.ExpectRollback(nil)
@@ -141,7 +152,7 @@ func TestUserServiceCreateUserTransactionFailure(t *testing.T) {
 
 	// Still expect the exec to succeed, but commit will fail
 	result := fixtures.NewMockResult(1, 1)
-	mockTx.ExpectExec(usersInsertClause, result, nil)
+	mockTx.On("Exec", mock.Anything, usersInsertClause, mock.Anything, mock.Anything).Return(result, nil)
 
 	service := NewUserService(mockDB)
 	user, err := service.CreateUser(context.Background(), testUser, testEmail)

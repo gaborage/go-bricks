@@ -41,9 +41,9 @@ type DbManager struct {
 	maxSize int
 
 	// Cleanup management
-	idleTTL     time.Duration
-	cleanupMu   sync.Mutex
-	cleanupDone chan struct{}
+	idleTTL   time.Duration
+	cleanupMu sync.Mutex
+	cleanupCh chan struct{}
 
 	// Singleflight for concurrent initialization
 	sfg singleflight.Group
@@ -85,7 +85,6 @@ func NewDbManager(resourceSource TenantResourceSource, log logger.Logger, opts D
 		lru:            list.New(),
 		maxSize:        opts.MaxSize,
 		idleTTL:        opts.IdleTTL,
-		cleanupDone:    make(chan struct{}),
 	}
 }
 
@@ -219,37 +218,31 @@ func (m *DbManager) StartCleanup(interval time.Duration) {
 	}
 
 	m.cleanupMu.Lock()
-	defer m.cleanupMu.Unlock()
-
-	// Prevent multiple cleanup routines
-	select {
-	case <-m.cleanupDone:
-		// Channel is closed, recreate it
-		m.cleanupDone = make(chan struct{})
-	default:
-		// Cleanup already running
+	if m.cleanupCh != nil {
+		m.cleanupMu.Unlock()
 		return
 	}
+	done := make(chan struct{})
+	m.cleanupCh = done
+	m.cleanupMu.Unlock()
 
-	go m.cleanupLoop(interval)
+	go m.cleanupLoop(interval, done)
 }
 
 // StopCleanup stops the background cleanup routine
 func (m *DbManager) StopCleanup() {
 	m.cleanupMu.Lock()
-	defer m.cleanupMu.Unlock()
-
-	select {
-	case <-m.cleanupDone:
-		// Already stopped
+	if m.cleanupCh == nil {
+		m.cleanupMu.Unlock()
 		return
-	default:
-		close(m.cleanupDone)
 	}
+	close(m.cleanupCh)
+	m.cleanupCh = nil
+	m.cleanupMu.Unlock()
 }
 
 // cleanupLoop runs the periodic cleanup of idle connections
-func (m *DbManager) cleanupLoop(interval time.Duration) {
+func (m *DbManager) cleanupLoop(interval time.Duration, done <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -257,7 +250,7 @@ func (m *DbManager) cleanupLoop(interval time.Duration) {
 		select {
 		case <-ticker.C:
 			m.cleanupIdleConnections()
-		case <-m.cleanupDone:
+		case <-done:
 			return
 		}
 	}

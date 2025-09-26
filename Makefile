@@ -1,7 +1,7 @@
 .PHONY: help build test lint fmt tidy clean
 
-# Package selection for testing (excludes examples, testing, and tools directories)
-PKGS := $(shell go list ./... | grep -vE '/(examples|testing|tools)(/|$$)')
+# Package selection for testing (excludes examples and tools directories)
+PKGS := $(shell go list ./... | grep -vE '/(examples|tools)(/|$$)')
 
 # Default target
 help: ## Show this help message
@@ -29,4 +29,4 @@ tidy: ## Tidy Go modules
 clean: ## Clean build cache
 	go clean -cache -testcache
 
-check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
+check: fmt lint clean test ## Run fmt, lint, and test (pre-commit checks)
