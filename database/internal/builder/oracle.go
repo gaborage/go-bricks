@@ -54,7 +54,8 @@ func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
 
 // buildOraclePaginationClause builds an Oracle-compatible pagination suffix.
 // Oracle 12c+ supports OFFSET ... ROWS FETCH NEXT ... ROWS ONLY syntax.
-// Returns empty string if both limit and offset are non-positive.
+// buildOraclePaginationClause constructs an Oracle-compatible pagination clause using OFFSET and FETCH NEXT syntax.
+// The returned string contains "OFFSET {offset} ROWS" and/or "FETCH NEXT {limit} ROWS ONLY" as applicable; it is empty if both limit and offset are less than or equal to zero.
 func buildOraclePaginationClause(limit, offset int) string {
 	if limit <= 0 && offset <= 0 {
 		return ""

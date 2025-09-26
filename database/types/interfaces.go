@@ -31,7 +31,8 @@ type sqlRowAdapter struct {
 	row *sql.Row
 }
 
-// NewRowFromSQL wraps *sql.Row so it satisfies Row. Returns nil when row is nil.
+// NewRowFromSQL wraps the provided *sql.Row in a Row.
+// If row is nil, NewRowFromSQL returns nil.
 func NewRowFromSQL(row *sql.Row) Row {
 	if row == nil {
 		return nil

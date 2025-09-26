@@ -29,7 +29,10 @@ var (
 	}
 )
 
-// NewConnection creates a new Oracle connection
+// NewConnection creates and returns an Oracle-backed types.Interface using the provided database configuration and logger.
+// It returns an error if cfg is nil, if the connection cannot be opened, or if an initial ping to the database fails.
+// The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
+// configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
