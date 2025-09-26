@@ -248,7 +248,7 @@ func createTestDbManager(t *testing.T) *database.DbManager {
 			Port: 5432,
 		},
 	}
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
 	return database.NewDbManager(resourceSource, log,
@@ -268,7 +268,7 @@ func createTestDbManagerWithMock(t *testing.T, mockDB *testmocks.MockDatabase) *
 			Port: 5432,
 		},
 	}
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
 	return database.NewDbManager(resourceSource, log,
@@ -288,7 +288,7 @@ func createTestDbManagerWithError(t *testing.T, err error) *database.DbManager {
 			Port: 5432,
 		},
 	}
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
 	return database.NewDbManager(resourceSource, log,
@@ -306,7 +306,7 @@ func createTestMessagingManager(t *testing.T) *messaging.Manager {
 			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
 		},
 	}
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
 	return messaging.NewMessagingManager(resourceSource, log,
@@ -324,7 +324,7 @@ func createTestMessagingManagerWithMock(t *testing.T, mockClient messaging.AMQPC
 			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
 		},
 	}
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
 	return messaging.NewMessagingManager(resourceSource, log,

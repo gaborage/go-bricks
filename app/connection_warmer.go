@@ -113,7 +113,7 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 
 // IsAvailable returns true if both database and messaging managers are available.
 func (w *ConnectionPreWarmer) IsAvailable() bool {
-	return w.dbManager != nil && w.messagingManager != nil
+	return w.dbManager != nil || w.messagingManager != nil
 }
 
 // LogAvailability logs which components are available for pre-warming.

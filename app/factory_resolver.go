@@ -46,11 +46,11 @@ func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
 
 // ResourceSource returns the appropriate tenant resource source.
 // If no custom resource source is provided in options, creates one from config.
-func (f *FactoryResolver) ResourceSource(cfg *config.Config) TenantResourceSource {
+func (f *FactoryResolver) ResourceSource(cfg *config.Config) TenantStore {
 	if f.opts != nil && f.opts.ResourceSource != nil {
 		return f.opts.ResourceSource
 	}
-	return config.NewTenantResourceSource(cfg)
+	return config.NewTenantStore(cfg)
 }
 
 // HasCustomFactories returns true if any custom factories are provided in options.

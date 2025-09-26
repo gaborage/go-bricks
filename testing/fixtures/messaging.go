@@ -65,15 +65,15 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 		// Fail immediately
 		mockClient.SetReady(false)
 		mockClient.ExpectIsReady(false)
-		mockClient.ExpectPublishAny(amqp.ErrClosed).Once()
+		mockClient.ExpectPublishAny(amqp.ErrClosed)
 		mockClient.ExpectConsumeAny(amqp.ErrClosed)
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
-		for i := 0; i < failAfter; i++ {
+		for range failAfter {
 			mockClient.ExpectPublishAny(nil).Once()
 		}
-		mockClient.ExpectPublishAny(amqp.ErrClosed).Once()
+		mockClient.ExpectPublishAny(amqp.ErrClosed)
 	}
 
 	return mockClient

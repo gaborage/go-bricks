@@ -6,9 +6,9 @@ import (
 	"sync"
 )
 
-// TenantResourceSource provides per-key database and messaging configurations.
+// TenantStore provides per-key database and messaging configurations.
 // This is the default config-backed implementation that uses the static tenant map.
-type TenantResourceSource struct {
+type TenantStore struct {
 	// Single-tenant configurations (used when key is "")
 	defaultDB        *DatabaseConfig
 	defaultMessaging *MessagingConfig
@@ -18,9 +18,9 @@ type TenantResourceSource struct {
 	mu      sync.RWMutex
 }
 
-// NewTenantResourceSource creates a config-backed tenant resource source
-func NewTenantResourceSource(cfg *Config) *TenantResourceSource {
-	source := &TenantResourceSource{
+// NewTenantStore creates a config-backed tenant store
+func NewTenantStore(cfg *Config) *TenantStore {
+	source := &TenantStore{
 		defaultDB:        &cfg.Database,
 		defaultMessaging: &cfg.Messaging,
 		tenants:          make(map[string]TenantEntry),
@@ -40,7 +40,7 @@ func NewTenantResourceSource(cfg *Config) *TenantResourceSource {
 // DBConfig returns the database configuration for the given key.
 // For single-tenant (key=""), returns the default database config.
 // For multi-tenant (key=tenantID), returns the tenant-specific database config.
-func (s *TenantResourceSource) DBConfig(_ context.Context, key string) (*DatabaseConfig, error) {
+func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, error) {
 	// Single-tenant case
 	if key == "" {
 		if s.defaultDB == nil {
@@ -63,7 +63,7 @@ func (s *TenantResourceSource) DBConfig(_ context.Context, key string) (*Databas
 // AMQPURL returns the AMQP URL for the given key.
 // For single-tenant (key=""), returns the default broker URL.
 // For multi-tenant (key=tenantID), returns the tenant-specific URL.
-func (s *TenantResourceSource) AMQPURL(_ context.Context, key string) (string, error) {
+func (s *TenantStore) AMQPURL(_ context.Context, key string) (string, error) {
 	// Single-tenant case
 	if key == "" {
 		if s.defaultMessaging == nil {
@@ -92,21 +92,21 @@ func (s *TenantResourceSource) AMQPURL(_ context.Context, key string) (string, e
 }
 
 // AddTenant adds a new tenant configuration at runtime (useful for dynamic tenant management)
-func (s *TenantResourceSource) AddTenant(tenantID string, entry *TenantEntry) {
+func (s *TenantStore) AddTenant(tenantID string, entry *TenantEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tenants[tenantID] = *entry
 }
 
 // RemoveTenant removes a tenant configuration at runtime
-func (s *TenantResourceSource) RemoveTenant(tenantID string) {
+func (s *TenantStore) RemoveTenant(tenantID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.tenants, tenantID)
 }
 
 // GetTenants returns a copy of all tenant configurations
-func (s *TenantResourceSource) GetTenants() map[string]TenantEntry {
+func (s *TenantStore) GetTenants() map[string]TenantEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -118,7 +118,7 @@ func (s *TenantResourceSource) GetTenants() map[string]TenantEntry {
 }
 
 // HasTenant checks if a tenant configuration exists
-func (s *TenantResourceSource) HasTenant(tenantID string) bool {
+func (s *TenantStore) HasTenant(tenantID string) bool {
 	s.mu.RLock()
 	_, exists := s.tenants[tenantID]
 	s.mu.RUnlock()

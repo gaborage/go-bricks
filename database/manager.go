@@ -13,9 +13,9 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// TenantResourceSource provides per-key database configurations.
+// TenantStore provides per-key database configurations.
 // This interface abstracts where tenant-specific database configs come from.
-type TenantResourceSource interface {
+type TenantStore interface {
 	// DBConfig returns the database configuration for the given key.
 	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
 	DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)
@@ -29,7 +29,7 @@ type Connector func(*config.DatabaseConfig, logger.Logger) (Interface, error)
 // The manager is key-agnostic - it doesn't know about tenants, just manages named connections.
 type DbManager struct {
 	logger         logger.Logger
-	resourceSource TenantResourceSource
+	resourceSource TenantStore
 	connector      Connector // Injected for testability
 
 	// Connection management
@@ -64,7 +64,7 @@ type DbManagerOptions struct {
 }
 
 // NewDbManager creates a new database manager
-func NewDbManager(resourceSource TenantResourceSource, log logger.Logger, opts DbManagerOptions, connector Connector) *DbManager {
+func NewDbManager(resourceSource TenantStore, log logger.Logger, opts DbManagerOptions, connector Connector) *DbManager {
 	if opts.MaxSize <= 0 {
 		opts.MaxSize = 100 // sensible default
 	}

@@ -9,7 +9,7 @@ import (
 
 const tenantAMQPURL = "amqp://tenant-a"
 
-func TestTenantResourceSourceDefaults(t *testing.T) {
+func TestTenantStoreDefaults(t *testing.T) {
 	cfg := &Config{
 		Database: DatabaseConfig{
 			Type:     PostgreSQL,
@@ -23,7 +23,7 @@ func TestTenantResourceSourceDefaults(t *testing.T) {
 		Multitenant: MultitenantConfig{Enabled: false},
 	}
 
-	source := NewTenantResourceSource(cfg)
+	source := NewTenantStore(cfg)
 	dbCfg, err := source.DBConfig(context.Background(), "")
 	assert.NoError(t, err)
 	assert.Same(t, &cfg.Database, dbCfg)
@@ -33,7 +33,7 @@ func TestTenantResourceSourceDefaults(t *testing.T) {
 	assert.Equal(t, cfg.Messaging.Broker.URL, url)
 }
 
-func TestTenantResourceSourceTenantOverrides(t *testing.T) {
+func TestTenantStoreTenantOverrides(t *testing.T) {
 	cfg := &Config{
 		Database:  DatabaseConfig{},
 		Messaging: MessagingConfig{},
@@ -53,7 +53,7 @@ func TestTenantResourceSourceTenantOverrides(t *testing.T) {
 		},
 	}
 
-	source := NewTenantResourceSource(cfg)
+	source := NewTenantStore(cfg)
 	dbCfg, err := source.DBConfig(context.Background(), "tenant-a")
 	assert.NoError(t, err)
 	assert.Equal(t, cfg.Multitenant.Tenants["tenant-a"].Database, *dbCfg)

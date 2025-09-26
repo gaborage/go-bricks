@@ -198,7 +198,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	msg := testmocks.NewMockAMQPClient()
 
 	// Create resource source for test
-	resourceSource := config.NewTenantResourceSource(cfg)
+	resourceSource := config.NewTenantStore(cfg)
 
 	// Create real managers with mock factories
 	dbManager := database.NewDbManager(resourceSource, log,

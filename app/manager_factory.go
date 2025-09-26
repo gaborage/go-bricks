@@ -30,7 +30,7 @@ func NewResourceManagerFactory(
 // CreateDatabaseManager creates a database manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
 func (f *ResourceManagerFactory) CreateDatabaseManager(
-	resourceSource TenantResourceSource,
+	resourceSource TenantStore,
 ) *database.DbManager {
 	if f.configBuilder.IsMultiTenant() {
 		f.logger.Info().
@@ -49,7 +49,7 @@ func (f *ResourceManagerFactory) CreateDatabaseManager(
 // CreateMessagingManager creates a messaging manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
 func (f *ResourceManagerFactory) CreateMessagingManager(
-	resourceSource TenantResourceSource,
+	resourceSource TenantStore,
 ) *messaging.Manager {
 	if f.configBuilder.IsMultiTenant() {
 		f.logger.Info().

@@ -108,9 +108,9 @@ type declarationSetter interface {
 	SetDeclarations(*messaging.Declarations)
 }
 
-// TenantResourceSource combines the interfaces required by the database and messaging managers.
-type TenantResourceSource interface {
-	database.TenantResourceSource
+// TenantStore combines the interfaces required by the database and messaging managers.
+type TenantStore interface {
+	database.TenantStore
 	messaging.TenantMessagingResourceSource
 }
 
@@ -242,7 +242,7 @@ type Options struct {
 	ConfigLoader           func() (*config.Config, error)
 	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
 	MessagingClientFactory func(string, logger.Logger) messaging.AMQPClient
-	ResourceSource         TenantResourceSource
+	ResourceSource         TenantStore
 }
 
 // New creates a new application instance with dependencies determined by configuration.
