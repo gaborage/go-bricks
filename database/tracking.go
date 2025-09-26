@@ -63,9 +63,12 @@ func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 	return settings
 }
 
-// wrapRow returns a types.Row that invokes the provided finish callback once when the row is consumed
-// (via Scan or Err). If either `row` or `finish` is nil, the original `row` is returned unchanged.
+// wrapRow wraps a types.Row to invoke finish once when Scan or Err is called.
+// It is safe to pass a nil row or finish function; in those cases the original row is returned.
 func wrapRow(row types.Row, finish func(error)) types.Row {
+	if row == nil || finish == nil {
+		return row
+	}
 	return rowtracker.Wrap(row, finish)
 }
 

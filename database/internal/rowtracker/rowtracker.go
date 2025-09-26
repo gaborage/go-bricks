@@ -29,9 +29,7 @@ func (tr *trackedRow) Scan(dest ...any) error {
 
 func (tr *trackedRow) Err() error {
 	err := tr.row.Err()
-	if err != nil {
-		tr.done(err)
-	}
+	tr.done(err)
 	return err
 }
 
