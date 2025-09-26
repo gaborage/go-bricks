@@ -48,7 +48,11 @@ type Statement struct {
 }
 
 // NewStatement creates a Statement wrapper that tracks performance for prepared statements.
-// It wraps the provided statement and records execution metrics for all operations.
+// NewStatement wraps the provided statement with a tracking implementation that records execution
+// metrics for Query, QueryRow, and Exec.
+//
+// The returned types.Statement uses the supplied logger, vendor identifier, optional query string,
+// and settings to control tracking behavior.
 func NewStatement(stmt types.Statement, log logger.Logger, vendor, query string, settings Settings) types.Statement {
 	return &Statement{
 		stmt:     stmt,

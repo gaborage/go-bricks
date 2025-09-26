@@ -13,6 +13,8 @@ type trackedRow struct {
 	once   sync.Once
 }
 
+// wrapRowWithTracker wraps a types.Row so the provided finish callback is invoked when the row is consumed.
+// If row or finish is nil, the original row is returned unchanged.
 func wrapRowWithTracker(row types.Row, finish func(error)) types.Row {
 	if row == nil || finish == nil {
 		return row

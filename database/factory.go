@@ -14,7 +14,8 @@ import (
 // NewConnection creates a new database connection according to cfg and returns it wrapped
 // with performance tracking. The concrete driver is selected by cfg.Type (supported: "postgresql",
 // "oracle"). If cfg.Type is unsupported an error is returned; if the chosen driver fails to
-// initialize, that underlying error is returned.
+// NewConnection creates a database connection for the provided configuration and returns it wrapped with performance tracking.
+// If cfg is nil, it returns an error. Supported cfg.Type values are "postgresql" and "oracle"; unsupported types return an error listing supported types. If driver initialization fails, the underlying error is returned.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
@@ -41,7 +42,8 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 }
 
 // ValidateDatabaseType returns nil if dbType is one of the supported database types.
-// If dbType is not supported, it returns an error describing the invalid value and listing the supported types.
+// ValidateDatabaseType validates that dbType is one of the supported database types.
+// If dbType is not supported, it returns an error that includes the invalid value and the list of supported types.
 func ValidateDatabaseType(dbType string) error {
 	supportedTypes := GetSupportedDatabaseTypes()
 	if !slices.Contains(supportedTypes, dbType) {

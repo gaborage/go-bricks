@@ -13,7 +13,14 @@ import (
 // TrackDBOperation logs database operation performance metrics and errors.
 // It provides centralized tracking for all database operations including queries,
 // statements, and transactions. The function handles slow query detection,
-// error logging, and request-scoped performance metrics.
+// TrackDBOperation records metrics and emits a log event for a completed database operation.
+//
+// TrackDBOperation is a no-op if tc or its Logger is nil. It records the operation's duration to
+// request-scoped metrics, clamps the query string to the configured maximum length, and — when
+// enabled — includes a sanitized form of parameters suitable for logging. If err is non-nil the
+// error is logged (with sql.ErrNoRows logged at debug level); if there is no error and the duration
+// exceeds the configured slow-query threshold a warning is emitted, otherwise a debug message is
+// emitted.
 func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any, start time.Time, err error) {
 	// Guard against nil tracking context or logger with no-op default
 	if tc == nil || tc.Logger == nil {
@@ -64,7 +71,12 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 // If maxLen <= 0 or value is already shorter than or equal to maxLen, the
 // original string is returned. When maxLen <= 3 the function returns the
 // first maxLen characters (no ellipsis); otherwise it returns the first
-// maxLen-3 characters followed by "..." to indicate truncation.
+// TruncateString truncates value to at most maxLen runes, adding "..." when space allows to indicate truncation.
+// 
+// If maxLen <= 0 the original value is returned unchanged. If the string's rune count is less than or equal to
+// maxLen the original value is returned. When maxLen <= 3 the function returns the first maxLen runes without an
+// ellipsis. For maxLen > 3 the result contains the first (maxLen-3) runes followed by "...". Multi-byte characters
+// are handled safely by operating on runes.
 func TruncateString(value string, maxLen int) string {
 	if maxLen <= 0 {
 		return value
@@ -85,7 +97,12 @@ func TruncateString(value string, maxLen int) string {
 // If args is empty, it returns nil. String values are truncated using TruncateString with
 // maxLen; byte slices are replaced with the placeholder "<bytes len=N>"; all other values
 // are formatted with "%v" and then truncated using TruncateString. The returned slice has
-// the same length and element order as the input (unless args is empty).
+// SanitizeArgs returns a sanitized copy of args suitable for logging.
+// If args is empty it returns nil. String values are truncated to maxLen runes
+// using TruncateString. Byte slices are replaced with the placeholder
+// "<bytes len=N>" where N is the byte length. Other values are formatted with
+// "%v" and then truncated to maxLen. The returned slice has the same length and
+// element order as the input.
 func SanitizeArgs(args []any, maxLen int) []any {
 	if len(args) == 0 {
 		return nil

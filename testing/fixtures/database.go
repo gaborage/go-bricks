@@ -44,7 +44,9 @@ const (
 // DatabaseFixtures provides helper functions for creating pre-configured database mocks
 // and SQL result builders for consistent testing.
 
-// getDefaultStats returns the default database statistics map used across fixtures
+// getDefaultStats returns a map containing the default database statistics for
+// open connections, in-use connections, and idle connections under the keys
+// OpenConnectionsField, InUseField, and IdleField respectively.
 func getDefaultStats() map[string]any {
 	return map[string]any{
 		OpenConnectionsField: DefaultOpenConnections,
@@ -53,7 +55,8 @@ func getDefaultStats() map[string]any {
 	}
 }
 
-// createFailingRow creates a Row that will return the specified error when scanned
+// createFailingRow returns a types.Row whose Scan will return the provided error.
+// The err parameter is the error that will be produced when scanning the returned Row.
 func createFailingRow(err error) types.Row {
 	// Create a mock database connection that will return an error
 	db, sqlMock, mockErr := sqlmock.New()

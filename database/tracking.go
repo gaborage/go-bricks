@@ -36,7 +36,11 @@ type TrackingContext struct {
 // newTrackingSettings creates trackingSettings populated from cfg.
 // If cfg is nil or a numeric field is non-positive, sensible defaults are used:
 // `defaultSlowQueryThreshold` for slowQueryThreshold and `defaultMaxQueryLength` for maxQueryLength.
-// The LogQueryParameters flag from cfg is copied into logQueryParameters.
+// newTrackingSettings builds trackingSettings using defaults and values from cfg.
+// If cfg is nil, it returns the default settings. Values from cfg override defaults when set:
+// - cfg.Query.Slow.Threshold > 0 sets slowQueryThreshold,
+// - cfg.Query.Log.MaxLength > 0 sets maxQueryLength,
+// - cfg.Query.Log.Parameters is copied into logQueryParameters.
 func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 	settings := trackingSettings{
 		slowQueryThreshold: defaultSlowQueryThreshold,
@@ -65,6 +69,8 @@ type trackedRow struct {
 	once   sync.Once
 }
 
+// wrapRow returns a types.Row that invokes the provided finish callback once when the row is consumed
+// (via Scan or Err). If either `row` or `finish` is nil, the original `row` is returned unchanged.
 func wrapRow(row types.Row, finish func(error)) types.Row {
 	if row == nil || finish == nil {
 		return row

@@ -21,7 +21,10 @@ type Transaction struct {
 }
 
 // NewTransaction creates a Transaction wrapper that tracks performance for database transactions.
-// It wraps the provided transaction and records execution metrics for all operations.
+// NewTransaction creates a Transaction wrapper around the provided tx that records execution
+// metrics for all transaction operations. The wrapper delegates calls to the given tx while
+// capturing timing and error information, stores the provided logger, vendor, and settings,
+// and initializes an internal Context used for tracking.
 func NewTransaction(tx types.Tx, log logger.Logger, vendor string, settings Settings) types.Tx {
 	t := &Transaction{
 		tx:       tx,

@@ -19,7 +19,11 @@ type QueryBuilder struct {
 }
 
 // NewQueryBuilder creates a new query builder for the specified database vendor.
-// It configures the appropriate placeholder format and other vendor-specific settings.
+// NewQueryBuilder creates a vendor-aware QueryBuilder configured with the appropriate
+// placeholder format and other vendor-specific settings for SQL generation.
+// For PostgreSQL it configures Dollar-style placeholders; for Oracle it configures
+// Colon-style placeholders; other SQL vendors use question-mark placeholders.
+// It panics if called with the MongoDB vendor because this builder supports SQL only.
 func NewQueryBuilder(vendor string) *QueryBuilder {
 	var sb squirrel.StatementBuilderType
 

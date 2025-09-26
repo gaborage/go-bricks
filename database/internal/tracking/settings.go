@@ -37,7 +37,13 @@ type Context struct {
 // NewSettings creates Settings populated from the provided database configuration.
 // If cfg is nil or a numeric field is non-positive, sensible defaults are used:
 // DefaultSlowQueryThreshold for slowQueryThreshold and DefaultMaxQueryLength for maxQueryLength.
-// The LogQueryParameters flag from cfg is copied into logQueryParameters.
+// NewSettings creates a Settings configured from the provided DatabaseConfig.
+// 
+// It initializes defaults from DefaultSlowQueryThreshold, DefaultMaxQueryLength,
+// and a default of false for logging query parameters. If cfg is nil the defaults
+// are returned. When cfg is provided, cfg.Query.Slow.Threshold > 0 overrides
+// the slow query threshold, cfg.Query.Log.MaxLength > 0 overrides the max
+// query length, and cfg.Query.Log.Parameters is copied into the logQueryParameters flag.
 func NewSettings(cfg *config.DatabaseConfig) Settings {
 	settings := Settings{
 		slowQueryThreshold: DefaultSlowQueryThreshold,
