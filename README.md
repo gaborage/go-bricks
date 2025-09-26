@@ -4,8 +4,10 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 
 [![CI](https://github.com/gaborage/go-bricks/workflows/CI/badge.svg)](https://github.com/gaborage/go-bricks/actions)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gaborage/go-bricks)](https://goreportcard.com/report/github.com/gaborage/go-bricks)
-[![codecov](https://codecov.io/gh/gaborage/go-bricks/branch/main/graph/badge.svg)](https://codecov.io/gh/gaborage/go-bricks)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=coverage)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gaborage/go-bricks.svg)](https://pkg.go.dev/github.com/gaborage/go-bricks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

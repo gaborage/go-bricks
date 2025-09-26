@@ -45,11 +45,12 @@ jobs:
     - name: Run tests
       run: go test -race -coverprofile=coverage.out $(go list ./... | grep -v models)
 
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7
+    - name: Upload coverage artifact for SonarCloud
+      uses: actions/upload-artifact@v4
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        flags: openapi-tool
+        name: openapi-tool-coverage-report
+        path: tools/openapi/coverage.out
+        retention-days: 1
 
   lint:
     runs-on: ubuntu-latest
@@ -100,3 +101,23 @@ jobs:
       run: |
         go mod tidy
         git diff --exit-code go.mod go.sum
+
+  sonarqube:
+    name: SonarCloud
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-tool-coverage-report
+          path: tools/openapi
+
+      - name: Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
