@@ -11,6 +11,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	singleEventExpected = "expected a single log event, got %d"
+)
+
 type eventRecord struct {
 	Level  string
 	Msg    string
@@ -187,7 +191,7 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	}
 
 	start := time.Now().Add(-25 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1", []any{"param"}, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, nil)
 
 	if logger.GetDBCounter(ctx) != 1 {
 		t.Fatalf("expected db counter to increment")
@@ -208,7 +212,7 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	if event.Msg != "Database operation executed" {
 		t.Fatalf("unexpected log message: %q", event.Msg)
 	}
-	if event.Fields["query"] != "SELECT 1" {
+	if event.Fields["query"] != selectOne {
 		t.Fatalf("expected query field to be stored")
 	}
 	if _, exists := event.Fields["args"]; exists {
@@ -230,7 +234,7 @@ func TestTrackDBOperationTruncatesQueryAndLogsArgs(t *testing.T) {
 
 	events := recLogger.events()
 	if len(events) != 1 {
-		t.Fatalf("expected a single event, got %d", len(events))
+		t.Fatalf(singleEventExpected, len(events))
 	}
 	event := events[0]
 	if event.Fields["query"].(string) != "SE..." {
@@ -257,11 +261,11 @@ func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
 	}
 
 	start := time.Now().Add(-20 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1", nil, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, nil)
 
 	events := recLogger.events()
 	if len(events) != 1 {
-		t.Fatalf("expected a single event, got %d", len(events))
+		t.Fatalf(singleEventExpected, len(events))
 	}
 	event := events[0]
 	if event.Level != levelWarn {
@@ -278,11 +282,11 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 	settings := Settings{slowQueryThreshold: time.Second}
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1", nil, start, sql.ErrNoRows)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, sql.ErrNoRows)
 
 	events := recLogger.events()
 	if len(events) != 1 {
-		t.Fatalf("expected a single event, got %d", len(events))
+		t.Fatalf(singleEventExpected, len(events))
 	}
 	event := events[0]
 	if event.Level != levelDebug {
@@ -300,11 +304,11 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 
 	failure := errors.New("boom")
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "SELECT 1", nil, start, failure)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, failure)
 
 	events := recLogger.events()
 	if len(events) != 1 {
-		t.Fatalf("expected a single event, got %d", len(events))
+		t.Fatalf(singleEventExpected, len(events))
 	}
 	event := events[0]
 	if event.Level != levelError {

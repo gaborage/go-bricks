@@ -10,6 +10,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/rowtracker"
+	"github.com/gaborage/go-bricks/database/internal/tracking"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -433,13 +434,15 @@ func trackDBOperation(ctx context.Context, tc *TrackingContext, query string, ar
 	elapsed := time.Since(start)
 
 	// Increment database operation counter for request tracking
-	logger.IncrementDBCounter(ctx)
-	logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
+	if ctx != nil {
+		logger.IncrementDBCounter(ctx)
+		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
+	}
 
 	// Truncate query string to safe max length to avoid unbounded payloads
 	truncatedQuery := query
 	if tc.Settings.maxQueryLength > 0 && len(query) > tc.Settings.maxQueryLength {
-		truncatedQuery = truncateString(query, tc.Settings.maxQueryLength)
+		truncatedQuery = tracking.TruncateString(query, tc.Settings.maxQueryLength)
 	}
 
 	// Log query execution details
@@ -470,21 +473,6 @@ func trackDBOperation(ctx context.Context, tc *TrackingContext, query string, ar
 	}
 }
 
-// truncateString returns value truncated to at most maxLen characters.
-// If maxLen <= 0 or value is already shorter than or equal to maxLen, the
-// original string is returned. When maxLen <= 3 the function returns the
-// first maxLen characters (no ellipsis); otherwise it returns the first
-// maxLen-3 characters followed by "..." to indicate truncation.
-func truncateString(value string, maxLen int) string {
-	if maxLen <= 0 || len(value) <= maxLen {
-		return value
-	}
-	if maxLen <= 3 {
-		return value[:maxLen]
-	}
-	return value[:maxLen-3] + "..."
-}
-
 // sanitizeArgs returns a sanitized copy of the provided argument slice suitable for logging.
 //
 // If args is empty, it returns nil. String values are truncated using truncateString with
@@ -499,11 +487,11 @@ func sanitizeArgs(args []any, maxLen int) []any {
 	for i, arg := range args {
 		switch v := arg.(type) {
 		case string:
-			sanitized[i] = truncateString(v, maxLen)
+			sanitized[i] = tracking.TruncateString(v, maxLen)
 		case []byte:
 			sanitized[i] = fmt.Sprintf("<bytes len=%d>", len(v))
 		default:
-			sanitized[i] = truncateString(fmt.Sprintf("%v", v), maxLen)
+			sanitized[i] = tracking.TruncateString(fmt.Sprintf("%v", v), maxLen)
 		}
 	}
 	return sanitized
