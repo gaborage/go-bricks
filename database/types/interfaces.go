@@ -2,7 +2,7 @@
 // These interfaces are separate from the main database package to avoid import cycles
 // and to make them easily accessible for mocking and testing.
 //
-//nolint:revive // Package name "types" is intentionally generic to avoid circular imports
+//nolint:revive // Package name "types" is intentionally generic to avoid circular
 package types
 
 import (
@@ -10,6 +10,13 @@ import (
 	"database/sql"
 
 	"github.com/Masterminds/squirrel"
+)
+
+// Database vendor identifiers shared across the database packages.
+const (
+	PostgreSQL = "postgresql"
+	Oracle     = "oracle"
+	MongoDB    = "mongodb"
 )
 
 // Statement defines the interface for prepared statements

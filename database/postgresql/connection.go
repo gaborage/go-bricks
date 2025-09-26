@@ -11,11 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/internal/database"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Connection implements the database.Interface for PostgreSQL
+// Connection implements the types.Interface for PostgreSQL
 type Connection struct {
 	db     *sql.DB
 	config *config.DatabaseConfig
@@ -62,7 +62,7 @@ func quoteDSN(value string) string {
 }
 
 // NewConnection creates a new PostgreSQL connection
-func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Interface, error) {
+func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is required")
 	}
@@ -124,7 +124,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (database.Inte
 	}, nil
 }
 
-// Statement wraps sql.Stmt to implement database.Statement
+// Statement wraps sql.Stmt to implement types.Statement
 type Statement struct {
 	stmt *sql.Stmt
 }
@@ -149,7 +149,7 @@ func (s *Statement) Close() error {
 	return s.stmt.Close()
 }
 
-// Transaction wraps sql.Tx to implement database.Tx
+// Transaction wraps sql.Tx to implement types.Tx
 type Transaction struct {
 	tx *sql.Tx
 }
@@ -170,7 +170,7 @@ func (t *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.
 }
 
 // Prepare creates a prepared statement within the transaction
-func (t *Transaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (t *Transaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := t.tx.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ func (c *Connection) Exec(ctx context.Context, query string, args ...any) (sql.R
 }
 
 // Prepare creates a prepared statement for later queries or executions
-func (c *Connection) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (c *Connection) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := c.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func (c *Connection) Prepare(ctx context.Context, query string) (database.Statem
 }
 
 // Begin starts a transaction
-func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
+func (c *Connection) Begin(ctx context.Context) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -222,7 +222,7 @@ func (c *Connection) Begin(ctx context.Context) (database.Tx, error) {
 }
 
 // BeginTx starts a transaction with options
-func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err

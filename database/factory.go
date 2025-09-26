@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/tracking"
 	"github.com/gaborage/go-bricks/database/oracle"
 	"github.com/gaborage/go-bricks/database/postgresql"
 	"github.com/gaborage/go-bricks/logger"
@@ -32,7 +33,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	}
 
 	// Wrap the connection with performance tracking
-	return NewTrackedConnection(conn, log, cfg), nil
+	return tracking.NewConnection(conn, log, cfg), nil
 }
 
 // ValidateDatabaseType returns nil if dbType is one of the supported database types.
