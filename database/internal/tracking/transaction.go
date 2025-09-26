@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/gaborage/go-bricks/database/internal/rowtracker"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -55,11 +56,12 @@ func (tx *Transaction) Query(ctx context.Context, query string, args ...any) (*s
 }
 
 // QueryRow executes a single row query within a transaction with performance tracking
+
 func (tx *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tx.tx.QueryRow(ctx, query, args...)
 
-	return wrapRowWithTracker(row, func(err error) {
+	return rowtracker.Wrap(row, func(err error) {
 		tx.trackTx(ctx, query, args, start, err)
 	})
 }

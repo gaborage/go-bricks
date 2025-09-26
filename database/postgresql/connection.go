@@ -37,7 +37,7 @@ var (
 // quoteDSN returns a DSN-safe representation of value, wrapping it in single quotes
 // and escaping backslashes and single quotes when value contains characters other
 // than letters, digits, dot (.), underscore (_) or hyphen (-). If value is empty
-// it returns two single quotes `''`.
+// it returns two single quotes `”`.
 func quoteDSN(value string) string {
 	if value == "" {
 		return "''"
@@ -64,8 +64,8 @@ func quoteDSN(value string) string {
 	return "'" + escaped + "'"
 }
 
-// NewConnection creates and returns a PostgreSQL Connection configured from cfg and using log for logging.
-// NewConnection validates that cfg is provided, uses cfg.ConnectionString or builds a DSN from host/port/user/password/database (including TLS mode if set), opens and configures the connection pool, performs a health ping with a 10-second timeout (closing the DB on ping failure), and logs successful connection details; it returns the created Connection implementing types.Interface or an error.
+// NewConnection creates and configures a PostgreSQL Connection using cfg and log.
+// It validates cfg, builds or uses the provided DSN, sets pool options, ensures connectivity with a ping, logs success, and returns the wrapped Connection or an error.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is required")

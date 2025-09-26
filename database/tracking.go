@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/rowtracker"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -63,39 +63,10 @@ func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 	return settings
 }
 
-type trackedRow struct {
-	row    types.Row
-	finish func(error)
-	once   sync.Once
-}
-
 // wrapRow returns a types.Row that invokes the provided finish callback once when the row is consumed
 // (via Scan or Err). If either `row` or `finish` is nil, the original `row` is returned unchanged.
 func wrapRow(row types.Row, finish func(error)) types.Row {
-	if row == nil || finish == nil {
-		return row
-	}
-	return &trackedRow{row: row, finish: finish}
-}
-
-func (tr *trackedRow) Scan(dest ...any) error {
-	err := tr.row.Scan(dest...)
-	tr.done(err)
-	return err
-}
-
-func (tr *trackedRow) Err() error {
-	err := tr.row.Err()
-	if err != nil {
-		tr.done(err)
-	}
-	return err
-}
-
-func (tr *trackedRow) done(err error) {
-	tr.once.Do(func() {
-		tr.finish(err)
-	})
+	return rowtracker.Wrap(row, finish)
 }
 
 // TrackedDB wraps sql.DB to provide request-scoped performance tracking

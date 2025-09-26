@@ -162,14 +162,21 @@ func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
 
 // EscapeIdentifier escapes a database identifier (table/column name) according to vendor rules
 func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
-	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		return `"` + identifier + `"`
-	case dbtypes.Oracle:
-		return `"` + strings.ToUpper(identifier) + `"` // Oracle prefers uppercase
-	default:
-		return `"` + identifier + `"`
+	parts := strings.Split(identifier, ".")
+	for i, part := range parts {
+		if len(part) >= 2 && part[0] == '"' && part[len(part)-1] == '"' {
+			// Already quoted, skip
+			continue
+		}
+		if qb.vendor == dbtypes.Oracle {
+			// Oracle prefers uppercase quoted identifiers
+			parts[i] = `"` + strings.ToUpper(part) + `"`
+		} else {
+			parts[i] = `"` + part + `"`
+		}
 	}
+
+	return strings.Join(parts, ".")
 }
 
 // quoteColumnsForSelect handles vendor-specific column name quoting for SELECT statements

@@ -38,7 +38,7 @@ type Context struct {
 // If cfg is nil or a numeric field is non-positive, sensible defaults are used:
 // DefaultSlowQueryThreshold for slowQueryThreshold and DefaultMaxQueryLength for maxQueryLength.
 // NewSettings creates a Settings configured from the provided DatabaseConfig.
-// 
+//
 // It initializes defaults from DefaultSlowQueryThreshold, DefaultMaxQueryLength,
 // and a default of false for logging query parameters. If cfg is nil the defaults
 // are returned. When cfg is provided, cfg.Query.Slow.Threshold > 0 overrides

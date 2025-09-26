@@ -13,19 +13,9 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	insertQuery := qb.Insert(table)
 
 	// Create deterministic column order for consistent SQL generation
-	orderedCols := make([]string, 0, len(insertColumns))
-	for c := range insertColumns {
-		orderedCols = append(orderedCols, c)
-	}
-	sort.Strings(orderedCols)
-
-	// Extract values in column order while keeping identifiers escaped
-	vals := make([]any, 0, len(orderedCols))
-	cols := make([]string, 0, len(orderedCols))
-	for _, c := range orderedCols {
-		vals = append(vals, insertColumns[c])
-		cols = append(cols, qb.EscapeIdentifier(c))
-	}
+	orderedCols := sortedKeys(insertColumns)
+	vals := valuesByKeyOrder(insertColumns, orderedCols)
+	cols := qb.escapeIdentifiers(orderedCols)
 
 	insertQuery = insertQuery.Columns(cols...).Values(vals...)
 
@@ -45,11 +35,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	conflictClause := "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO UPDATE SET "
 
 	// Build UPDATE SET clause with deterministic order
-	updateCols := make([]string, 0, len(updateKeys))
-	for c := range updateKeys {
-		updateCols = append(updateCols, c)
-	}
-	sort.Strings(updateCols)
+	updateCols := sortedKeys(updateKeys)
 
 	var setParts = make([]string, 0, len(updateCols))
 	for _, col := range updateCols {

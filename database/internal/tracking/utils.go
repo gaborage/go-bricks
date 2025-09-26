@@ -72,7 +72,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 // original string is returned. When maxLen <= 3 the function returns the
 // first maxLen characters (no ellipsis); otherwise it returns the first
 // TruncateString truncates value to at most maxLen runes, adding "..." when space allows to indicate truncation.
-// 
+//
 // If maxLen <= 0 the original value is returned unchanged. If the string's rune count is less than or equal to
 // maxLen the original value is returned. When maxLen <= 3 the function returns the first maxLen runes without an
 // ellipsis. For maxLen > 3 the result contains the first (maxLen-3) runes followed by "...". Multi-byte characters

@@ -1,4 +1,4 @@
-package tracking
+package rowtracker
 
 import (
 	"sync"
@@ -6,20 +6,19 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
-// trackedRow wraps types.Row to delay tracking until Scan or Err is invoked.
-type trackedRow struct {
-	row    types.Row
-	finish func(error)
-	once   sync.Once
-}
-
-// wrapRowWithTracker wraps a types.Row so the provided finish callback is invoked when the row is consumed.
-// If row or finish is nil, the original row is returned unchanged.
-func wrapRowWithTracker(row types.Row, finish func(error)) types.Row {
+// Wrap returns a types.Row wrapper that invokes finish once when Scan or Err is called.
+// It is safe to pass a nil row or finish function; in those cases the original row is returned.
+func Wrap(row types.Row, finish func(error)) types.Row {
 	if row == nil || finish == nil {
 		return row
 	}
 	return &trackedRow{row: row, finish: finish}
+}
+
+type trackedRow struct {
+	row    types.Row
+	finish func(error)
+	once   sync.Once
 }
 
 func (tr *trackedRow) Scan(dest ...any) error {

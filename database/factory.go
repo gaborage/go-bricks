@@ -11,11 +11,8 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// NewConnection creates a new database connection according to cfg and returns it wrapped
-// with performance tracking. The concrete driver is selected by cfg.Type (supported: "postgresql",
-// "oracle"). If cfg.Type is unsupported an error is returned; if the chosen driver fails to
-// NewConnection creates a database connection for the provided configuration and returns it wrapped with performance tracking.
-// If cfg is nil, it returns an error. Supported cfg.Type values are "postgresql" and "oracle"; unsupported types return an error listing supported types. If driver initialization fails, the underlying error is returned.
+// NewConnection creates a tracked database connection for the provided configuration.
+// It returns an error when cfg is nil, cfg.Type is unsupported (supported: "postgresql", "oracle"), or driver initialization fails.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
@@ -41,9 +38,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	return tracking.NewConnection(conn, log, cfg), nil
 }
 
-// ValidateDatabaseType returns nil if dbType is one of the supported database types.
-// ValidateDatabaseType validates that dbType is one of the supported database types.
-// If dbType is not supported, it returns an error that includes the invalid value and the list of supported types.
+// ValidateDatabaseType reports an error when dbType is not among the supported database types.
 func ValidateDatabaseType(dbType string) error {
 	supportedTypes := GetSupportedDatabaseTypes()
 	if !slices.Contains(supportedTypes, dbType) {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/rowtracker"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -48,11 +49,12 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 }
 
 // QueryRowContext executes a single row query with context and tracks performance
+
 func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := types.NewRowFromSQL(db.DB.QueryRowContext(ctx, query, args...))
 
-	return wrapRowWithTracker(row, func(err error) {
+	return rowtracker.Wrap(row, func(err error) {
 		db.trackQuery(ctx, query, args, start, err)
 	})
 }
@@ -129,11 +131,12 @@ func (tc *Connection) Query(ctx context.Context, query string, args ...any) (*sq
 }
 
 // QueryRow executes a single row query with performance tracking
+
 func (tc *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tc.conn.QueryRow(ctx, query, args...)
 
-	return wrapRowWithTracker(row, func(err error) {
+	return rowtracker.Wrap(row, func(err error) {
 		tc.trackOperation(ctx, query, args, start, err)
 	})
 }
