@@ -28,6 +28,14 @@ type UserUpdatedEvent struct {
 	Email  string `json:"email"`
 }
 
+type noopMessageHandler struct {
+	event string
+}
+
+func (h noopMessageHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
+
+func (h noopMessageHandler) EventType() string { return h.event }
+
 // Example EventService for demonstration
 type EventService struct {
 	client messaging.Client
@@ -333,10 +341,18 @@ func TestRegistryInfrastructure(t *testing.T) {
 	exchange := fixtures.NewExchangeDeclaration(userEventsExchangeName, "topic")
 	queue := fixtures.NewQueueDeclaration(userNotificationsQueue)
 	binding := fixtures.NewBindingDeclaration(userNotificationsQueue, userEventsExchangeName, usersWildcardRoutingKey)
+	publisher := fixtures.NewPublisherDeclaration(userEventsExchangeName, userCreated, "user.created")
+	consumer := fixtures.NewConsumerDeclaration(
+		userNotificationsQueue,
+		"user.created",
+		noopMessageHandler{event: "user.created"},
+	)
 
 	mockRegistry.RegisterExchange(exchange)
 	mockRegistry.RegisterQueue(queue)
 	mockRegistry.RegisterBinding(binding)
+	mockRegistry.RegisterPublisher(publisher)
+	mockRegistry.RegisterConsumer(consumer)
 
 	// Test infrastructure declaration
 	err := mockRegistry.DeclareInfrastructure(context.Background())

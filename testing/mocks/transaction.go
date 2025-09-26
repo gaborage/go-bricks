@@ -32,10 +32,10 @@ func (m *MockTx) Query(ctx context.Context, query string, args ...any) (*sql.Row
 }
 
 // QueryRow implements types.Tx
-func (m *MockTx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (m *MockTx) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	callArgs := append([]any{ctx, query}, args...)
 	arguments := m.Called(callArgs...)
-	return arguments.Get(0).(*sql.Row)
+	return arguments.Get(0).(types.Row)
 }
 
 // Exec implements types.Tx

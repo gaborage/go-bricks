@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -19,6 +20,7 @@ type stubStatement struct {
 	closeCalled  bool
 	rowsResult   *sql.Rows
 	execResult   sql.Result
+	rowResult    types.Row
 }
 
 func (s *stubStatement) Query(_ context.Context, args ...any) (*sql.Rows, error) {
@@ -29,9 +31,12 @@ func (s *stubStatement) Query(_ context.Context, args ...any) (*sql.Rows, error)
 	return s.rowsResult, s.queryErr
 }
 
-func (s *stubStatement) QueryRow(_ context.Context, args ...any) *sql.Row {
+func (s *stubStatement) QueryRow(_ context.Context, args ...any) types.Row {
 	s.queryRowArgs = append(s.queryRowArgs, append([]any(nil), args...))
-	return new(sql.Row)
+	if s.rowResult == nil {
+		s.rowResult = &stubRow{}
+	}
+	return s.rowResult
 }
 
 func (s *stubStatement) Exec(_ context.Context, args ...any) (sql.Result, error) {
@@ -51,6 +56,15 @@ type stubResult int64
 
 func (s stubResult) LastInsertId() (int64, error) { return int64(s), nil }
 func (s stubResult) RowsAffected() (int64, error) { return int64(s), nil }
+
+type stubRow struct {
+	scanErr error
+	err     error
+}
+
+func (r *stubRow) Scan(_ ...any) error { return r.scanErr }
+
+func (r *stubRow) Err() error { return r.err }
 
 func TestNewStatementWrapsUnderlying(t *testing.T) {
 	underlying := &stubStatement{}
@@ -140,6 +154,10 @@ func TestStatementQueryRowLogsWithoutError(t *testing.T) {
 	}
 	if len(underlying.queryRowArgs) != 1 || underlying.queryRowArgs[0][0] != 42 {
 		t.Fatalf("expected QueryRow arguments to be forwarded")
+	}
+	var scanned any
+	if err := row.Scan(&scanned); err != nil {
+		t.Fatalf("expected scan to succeed, got %v", err)
 	}
 
 	events := recLogger.events()

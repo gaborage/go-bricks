@@ -45,14 +45,13 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 }
 
 // QueryRowContext executes a single row query with context and tracks performance
-func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
-	row := db.DB.QueryRowContext(ctx, query, args...)
+	row := types.NewRowFromSQL(db.DB.QueryRowContext(ctx, query, args...))
 
-	// Track performance metrics (error will be checked when row is scanned)
-	db.trackQuery(ctx, query, args, start, nil)
-
-	return row
+	return wrapRowWithTracker(row, func(err error) {
+		db.trackQuery(ctx, query, args, start, err)
+	})
 }
 
 // ExecContext executes a query without returning rows and tracks performance
@@ -123,12 +122,13 @@ func (tc *Connection) Query(ctx context.Context, query string, args ...any) (*sq
 }
 
 // QueryRow executes a single row query with performance tracking
-func (tc *Connection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (tc *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tc.conn.QueryRow(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, args, start, nil)
-	return row
+	return wrapRowWithTracker(row, func(err error) {
+		tc.trackOperation(ctx, query, args, start, err)
+	})
 }
 
 // Exec executes a query without returning rows with performance tracking

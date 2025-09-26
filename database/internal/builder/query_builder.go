@@ -98,15 +98,6 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 // Different databases have different pagination mechanisms.
 func (qb *QueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder {
 	switch qb.vendor {
-	case dbtypes.PostgreSQL:
-		// PostgreSQL supports standard LIMIT/OFFSET
-		if limit > 0 {
-			query = query.Limit(uint64(limit))
-		}
-		if offset > 0 {
-			query = query.Offset(uint64(offset))
-		}
-		return query
 	case dbtypes.Oracle:
 		// Oracle uses OFFSET ... ROWS FETCH NEXT ... ROWS ONLY semantics (12c+)
 		oracleSuffix := buildOraclePaginationClause(limit, offset)

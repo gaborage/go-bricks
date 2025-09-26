@@ -22,8 +22,8 @@ func (s *BasicStatement) Query(ctx context.Context, args ...any) (*sql.Rows, err
 }
 
 // QueryRow executes the prepared statement as a single row query
-func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.QueryRowContext(ctx, args...)
+func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.QueryRowContext(ctx, args...))
 }
 
 // Exec executes the prepared statement without returning rows
@@ -69,12 +69,13 @@ func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 }
 
 // QueryRow executes the prepared statement as a single row query with tracking
-func (s *Statement) QueryRow(ctx context.Context, args ...any) *sql.Row {
+func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
 	start := time.Now()
 	row := s.stmt.QueryRow(ctx, args...)
 
-	s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, nil)
-	return row
+	return wrapRowWithTracker(row, func(err error) {
+		s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, err)
+	})
 }
 
 // Exec executes the prepared statement without returning rows with tracking

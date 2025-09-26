@@ -28,9 +28,9 @@ func (s *stubTx) Query(_ context.Context, _ string, args ...any) (*sql.Rows, err
 	return new(sql.Rows), s.queryErr
 }
 
-func (s *stubTx) QueryRow(_ context.Context, _ string, args ...any) *sql.Row {
+func (s *stubTx) QueryRow(_ context.Context, _ string, args ...any) types.Row {
 	s.queryRowArgs = append(s.queryRowArgs, append([]any(nil), args...))
-	return new(sql.Row)
+	return types.NewRowFromSQL(new(sql.Row))
 }
 
 func (s *stubTx) Exec(_ context.Context, _ string, args ...any) (sql.Result, error) {
@@ -59,6 +59,7 @@ func (s *stubTx) Rollback() error {
 }
 
 func TestNewTransactionWrapsUnderlying(t *testing.T) {
+	t.Parallel()
 	underlying := &stubTx{}
 	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
 
@@ -73,6 +74,7 @@ func TestNewTransactionWrapsUnderlying(t *testing.T) {
 }
 
 func TestTransactionQueryLogs(t *testing.T) {
+	t.Parallel()
 	ctx := logger.WithDBCounter(context.Background())
 	underlying := &stubTx{}
 	recLogger := newRecordingLogger()
@@ -99,6 +101,7 @@ func TestTransactionQueryLogs(t *testing.T) {
 }
 
 func TestTransactionExecLogsError(t *testing.T) {
+	t.Parallel()
 	ctx := logger.WithDBCounter(context.Background())
 	underlying := &stubTx{execErr: errors.New("fail")}
 	recLogger := newRecordingLogger()
@@ -115,6 +118,7 @@ func TestTransactionExecLogsError(t *testing.T) {
 }
 
 func TestTransactionPrepareReturnsTrackedStatement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	underlying := &stubTx{}
 	recLogger := newRecordingLogger()
@@ -135,6 +139,7 @@ func TestTransactionPrepareReturnsTrackedStatement(t *testing.T) {
 }
 
 func TestTransactionPreparePropagatesError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	underlying := &stubTx{prepareErr: errors.New("prepare fail")}
 	recLogger := newRecordingLogger()
@@ -150,6 +155,7 @@ func TestTransactionPreparePropagatesError(t *testing.T) {
 }
 
 func TestTransactionCommitAndRollbackDelegate(t *testing.T) {
+	t.Parallel()
 	underlying := &stubTx{}
 	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
 

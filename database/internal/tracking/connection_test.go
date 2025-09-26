@@ -14,12 +14,14 @@ import (
 )
 
 const (
-	levelDebug   = "debug"
-	levelError   = "error"
-	levelInfo    = "info"
-	levelWarn    = "warn"
-	levelFatal   = "fatal"
-	simpleSelect = "SELECT"
+	levelDebug         = "debug"
+	levelError         = "error"
+	levelInfo          = "info"
+	levelWarn          = "warn"
+	levelFatal         = "fatal"
+	simpleSelect       = "SELECT"
+	createMockErrorMsg = "failed to create sqlmock: %v"
+	selectOne          = "SELECT 1"
 )
 
 type stubConnection struct {
@@ -74,12 +76,12 @@ func (s *stubConnection) Query(_ context.Context, query string, args ...any) (*s
 	return new(sql.Rows), nil
 }
 
-func (s *stubConnection) QueryRow(_ context.Context, query string, args ...any) *sql.Row {
+func (s *stubConnection) QueryRow(_ context.Context, query string, args ...any) types.Row {
 	s.queryRowCalls = append(s.queryRowCalls, struct {
 		query string
 		args  []any
 	}{query: query, args: append([]any(nil), args...)})
-	return new(sql.Row)
+	return types.NewRowFromSQL(new(sql.Row))
 }
 
 func (s *stubConnection) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
@@ -155,11 +157,11 @@ func (s *stubConnection) CreateMigrationTable(context.Context) error {
 func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
+		t.Fatalf(createMockErrorMsg, err)
 	}
 	defer db.Close()
 
-	mock.ExpectQuery("SELECT 1").WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"col"}).AddRow(1))
+	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"col"}).AddRow(1))
 
 	cfg := &config.DatabaseConfig{}
 	cfg.Query.Log.Parameters = true
@@ -169,7 +171,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	tracked := NewDB(db, recLogger, "postgresql", cfg)
 	ctx := logger.WithDBCounter(context.Background())
 
-	rows, err := tracked.QueryContext(ctx, "SELECT 1", 1)
+	rows, err := tracked.QueryContext(ctx, selectOne, 1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -189,7 +191,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	if event.Level != levelDebug {
 		t.Fatalf("expected debug level, got %s", event.Level)
 	}
-	if event.Fields["query"] != "SELECT 1" {
+	if event.Fields["query"] != selectOne {
 		t.Fatalf("unexpected query field: %v", event.Fields["query"])
 	}
 	argsField, ok := event.Fields["args"].([]any)
@@ -201,7 +203,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 func TestDBExecContextLogsErrors(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
+		t.Fatalf(createMockErrorMsg, err)
 	}
 	defer db.Close()
 
@@ -228,7 +230,7 @@ func TestDBExecContextLogsErrors(t *testing.T) {
 func TestDBPrepareContextWrapsStatement(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
+		t.Fatalf(createMockErrorMsg, err)
 	}
 	defer db.Close()
 
@@ -249,7 +251,7 @@ func TestDBPrepareContextWrapsStatement(t *testing.T) {
 func TestDBPrepareContextPropagatesError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
+		t.Fatalf(createMockErrorMsg, err)
 	}
 	defer db.Close()
 
@@ -305,7 +307,7 @@ func TestConnectionPrepareWrapsStatement(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	stmt, err := conn.Prepare(context.Background(), "SELECT 1")
+	stmt, err := conn.Prepare(context.Background(), selectOne)
 	if err != nil {
 		t.Fatalf("expected prepare to succeed")
 	}
@@ -319,7 +321,7 @@ func TestConnectionPreparePropagatesError(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	_, err := conn.Prepare(context.Background(), "SELECT 1")
+	_, err := conn.Prepare(context.Background(), selectOne)
 	if err == nil {
 		t.Fatalf("expected prepare error")
 	}

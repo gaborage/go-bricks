@@ -99,31 +99,42 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	}
 	sort.Strings(sortedKeys)
 
+	escapedInsertCols := make(map[string]string, len(sortedKeys))
 	for _, key := range sortedKeys {
-		usingValues = append(usingValues, "? AS "+key)
+		escaped := qb.EscapeIdentifier(key)
+		escapedInsertCols[key] = escaped
+		usingValues = append(usingValues, "? AS "+escaped)
 		usingArgs = append(usingArgs, insertColumns[key])
 	}
 
 	// Build ON clause for conflict detection
 	onConditions := make([]string, len(conflictColumns))
 	for i, col := range conflictColumns {
-		onConditions[i] = fmt.Sprintf("target.%s = source.%s", col, col)
+		escapedCol := qb.EscapeIdentifier(col)
+		onConditions[i] = fmt.Sprintf("target.%s = source.%s", escapedCol, escapedCol)
 	}
 
 	// Build UPDATE SET clause
 	updateSets := make([]string, 0, len(updateColumns))
 	updateArgs := make([]any, 0, len(updateColumns))
-	for key, value := range updateColumns {
-		updateSets = append(updateSets, fmt.Sprintf("%s = ?", key))
-		updateArgs = append(updateArgs, value)
+	sortedUpdateKeys := make([]string, 0, len(updateColumns))
+	for key := range updateColumns {
+		sortedUpdateKeys = append(sortedUpdateKeys, key)
+	}
+	sort.Strings(sortedUpdateKeys)
+	for _, key := range sortedUpdateKeys {
+		escaped := qb.EscapeIdentifier(key)
+		updateSets = append(updateSets, fmt.Sprintf("%s = ?", escaped))
+		updateArgs = append(updateArgs, updateColumns[key])
 	}
 
 	// Build INSERT clause
 	insertCols := make([]string, len(sortedKeys))
 	insertVals := make([]string, len(sortedKeys))
 	for i, key := range sortedKeys {
-		insertCols[i] = key
-		insertVals[i] = "source." + key
+		escaped := escapedInsertCols[key]
+		insertCols[i] = escaped
+		insertVals[i] = "source." + escaped
 	}
 
 	query = fmt.Sprintf(`MERGE INTO %s target USING (SELECT %s FROM dual) source ON (%s)`,

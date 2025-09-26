@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -57,6 +59,39 @@ func newTrackingSettings(cfg *config.DatabaseConfig) trackingSettings {
 	return settings
 }
 
+type trackedRow struct {
+	row    types.Row
+	finish func(error)
+	once   sync.Once
+}
+
+func wrapRow(row types.Row, finish func(error)) types.Row {
+	if row == nil || finish == nil {
+		return row
+	}
+	return &trackedRow{row: row, finish: finish}
+}
+
+func (tr *trackedRow) Scan(dest ...any) error {
+	err := tr.row.Scan(dest...)
+	tr.done(err)
+	return err
+}
+
+func (tr *trackedRow) Err() error {
+	err := tr.row.Err()
+	if err != nil {
+		tr.done(err)
+	}
+	return err
+}
+
+func (tr *trackedRow) done(err error) {
+	tr.once.Do(func() {
+		tr.finish(err)
+	})
+}
+
 // TrackedDB wraps sql.DB to provide request-scoped performance tracking
 type TrackedDB struct {
 	*sql.DB
@@ -90,14 +125,13 @@ func (db *TrackedDB) QueryContext(ctx context.Context, query string, args ...any
 }
 
 // QueryRowContext executes a single row query with context and tracks performance
-func (db *TrackedDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (db *TrackedDB) QueryRowContext(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
-	row := db.DB.QueryRowContext(ctx, query, args...)
+	row := types.NewRowFromSQL(db.DB.QueryRowContext(ctx, query, args...))
 
-	// Track performance metrics (error will be checked when row is scanned)
-	db.trackQuery(ctx, query, args, start, nil)
-
-	return row
+	return wrapRow(row, func(err error) {
+		db.trackQuery(ctx, query, args, start, err)
+	})
 }
 
 // ExecContext executes a query without returning rows and tracks performance
@@ -120,8 +154,8 @@ func (s *BasicStatement) Query(ctx context.Context, args ...any) (*sql.Rows, err
 	return s.QueryContext(ctx, args...)
 }
 
-func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.QueryRowContext(ctx, args...)
+func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.QueryRowContext(ctx, args...))
 }
 
 func (s *BasicStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
@@ -178,14 +212,13 @@ func (s *TrackedStmt) Query(ctx context.Context, args ...any) (*sql.Rows, error)
 }
 
 // QueryRow executes a prepared single row query with context and tracks performance
-func (s *TrackedStmt) QueryRow(ctx context.Context, args ...any) *sql.Row {
+func (s *TrackedStmt) QueryRow(ctx context.Context, args ...any) types.Row {
 	start := time.Now()
 	row := s.Statement.QueryRow(ctx, args...)
 
-	// Track performance metrics
-	s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, nil)
-
-	return row
+	return wrapRow(row, func(err error) {
+		s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, err)
+	})
 }
 
 // Exec executes a prepared statement with context and tracks performance
@@ -233,14 +266,13 @@ func (tx *TrackedTx) QueryContext(ctx context.Context, query string, args ...any
 }
 
 // QueryRowContext executes a single row query within a transaction and tracks performance
-func (tx *TrackedTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (tx *TrackedTx) QueryRowContext(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tx.Tx.QueryRowContext(ctx, query, args...)
 
-	// Track performance metrics
-	tx.trackTx(ctx, query, args, start, nil)
-
-	return row
+	return wrapRow(row, func(err error) {
+		tx.trackTx(ctx, query, args, start, err)
+	})
 }
 
 // ExecContext executes a query within a transaction and tracks performance
@@ -294,12 +326,13 @@ func (tc *TrackedConnection) Query(ctx context.Context, query string, args ...an
 }
 
 // QueryRow executes a query that returns at most one row with tracking
-func (tc *TrackedConnection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (tc *TrackedConnection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tc.conn.QueryRow(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, args, start, nil)
-	return row
+	return wrapRow(row, func(err error) {
+		tc.trackOperation(ctx, query, args, start, err)
+	})
 }
 
 // Exec executes a query without returning any rows with tracking
@@ -516,13 +549,14 @@ func (ts *TrackedStatement) Query(ctx context.Context, args ...any) (*sql.Rows, 
 }
 
 // QueryRow executes a prepared query that returns a single row with tracking
-func (ts *TrackedStatement) QueryRow(ctx context.Context, args ...any) *sql.Row {
+func (ts *TrackedStatement) QueryRow(ctx context.Context, args ...any) types.Row {
 	start := time.Now()
 	row := ts.stmt.QueryRow(ctx, args...)
 
 	tc := &TrackingContext{Logger: ts.logger, Vendor: ts.vendor, Settings: ts.settings}
-	trackDBOperation(ctx, tc, "STMT_QUERY_ROW: "+ts.query, args, start, nil)
-	return row
+	return wrapRow(row, func(err error) {
+		trackDBOperation(ctx, tc, "STMT_QUERY_ROW: "+ts.query, args, start, err)
+	})
 }
 
 // Exec executes a prepared statement with tracking
@@ -559,13 +593,14 @@ func (tt *TrackedTransaction) Query(ctx context.Context, query string, args ...a
 }
 
 // QueryRow executes a query that returns a single row within the transaction with tracking
-func (tt *TrackedTransaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+func (tt *TrackedTransaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
 	start := time.Now()
 	row := tt.tx.QueryRow(ctx, query, args...)
 
 	tc := &TrackingContext{Logger: tt.logger, Vendor: tt.vendor, Settings: tt.settings}
-	trackDBOperation(ctx, tc, "TX_QUERY_ROW: "+query, args, start, nil)
-	return row
+	return wrapRow(row, func(err error) {
+		trackDBOperation(ctx, tc, "TX_QUERY_ROW: "+query, args, start, err)
+	})
 }
 
 // Exec executes a query without returning rows within the transaction with tracking

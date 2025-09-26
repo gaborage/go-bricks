@@ -13,6 +13,10 @@ import (
 // without producing any actual logging output.
 type Logger struct{}
 
+// Compile-time checks to ensure mocks satisfy interfaces
+var _ logger.Logger = (*Logger)(nil)
+var _ logger.LogEvent = (*LogEvent)(nil)
+
 // Info returns a no-op LogEvent for info-level logging
 func (l *Logger) Info() logger.LogEvent { return &LogEvent{} }
 
@@ -64,7 +68,11 @@ func (e *LogEvent) Bytes(_ string, _ []byte) logger.LogEvent { return e }
 func (e *LogEvent) Err(_ error) logger.LogEvent { return e }
 
 // Msg logs the message (no-op for testing)
-func (e *LogEvent) Msg(_ string) {}
+func (e *LogEvent) Msg(_ string) {
+	// No-op
+}
 
 // Msgf logs a formatted message (no-op for testing)
-func (e *LogEvent) Msgf(_ string, _ ...any) {}
+func (e *LogEvent) Msgf(_ string, _ ...any) {
+	// No-op
+}

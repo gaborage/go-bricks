@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -38,14 +39,14 @@ func (f *failingResourceSource) DBConfig(context.Context, string) (*config.Datab
 type stubStatement struct{}
 
 func (s *stubStatement) Query(_ context.Context, _ ...any) (*sql.Rows, error) { return nil, nil }
-func (s *stubStatement) QueryRow(_ context.Context, _ ...any) *sql.Row        { return nil }
+func (s *stubStatement) QueryRow(_ context.Context, _ ...any) types.Row       { return nil }
 func (s *stubStatement) Exec(_ context.Context, _ ...any) (sql.Result, error) { return nil, nil }
 func (s *stubStatement) Close() error                                         { return nil }
 
 type stubTx struct{}
 
 func (s *stubTx) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) { return nil, nil }
-func (s *stubTx) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row        { return nil }
+func (s *stubTx) QueryRow(_ context.Context, _ string, _ ...any) types.Row       { return nil }
 func (s *stubTx) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) { return nil, nil }
 func (s *stubTx) Prepare(_ context.Context, _ string) (Statement, error) {
 	return &stubStatement{}, nil
@@ -62,7 +63,7 @@ type stubDB struct {
 }
 
 func (s *stubDB) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) { return nil, nil }
-func (s *stubDB) QueryRow(_ context.Context, _ string, _ ...any) *sql.Row        { return nil }
+func (s *stubDB) QueryRow(_ context.Context, _ string, _ ...any) types.Row       { return nil }
 func (s *stubDB) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) { return nil, nil }
 func (s *stubDB) Prepare(_ context.Context, _ string) (Statement, error) {
 	return &stubStatement{}, nil

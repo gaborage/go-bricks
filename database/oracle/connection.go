@@ -31,6 +31,10 @@ var (
 
 // NewConnection creates a new Oracle connection
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("database configuration is nil")
+	}
+
 	var dsn string
 	if cfg.ConnectionString != "" {
 		dsn = cfg.ConnectionString
@@ -99,8 +103,8 @@ func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 }
 
 // QueryRow executes a prepared query that returns a single row
-func (s *Statement) QueryRow(ctx context.Context, args ...any) *sql.Row {
-	return s.stmt.QueryRowContext(ctx, args...)
+func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
+	return types.NewRowFromSQL(s.stmt.QueryRowContext(ctx, args...))
 }
 
 // Exec executes a prepared statement with arguments
@@ -124,8 +128,8 @@ func (t *Transaction) Query(ctx context.Context, query string, args ...any) (*sq
 }
 
 // QueryRow executes a query that returns a single row within the transaction
-func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return t.tx.QueryRowContext(ctx, query, args...)
+func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(t.tx.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning rows within the transaction
@@ -158,8 +162,8 @@ func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql
 }
 
 // QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return c.db.QueryRowContext(ctx, query, args...)
+func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return types.NewRowFromSQL(c.db.QueryRowContext(ctx, query, args...))
 }
 
 // Exec executes a query without returning any rows
@@ -226,7 +230,7 @@ func (c *Connection) Close() error {
 
 // DatabaseType returns the database type
 func (c *Connection) DatabaseType() string {
-	return "oracle"
+	return types.Oracle
 }
 
 // GetMigrationTable returns the migration table name for Oracle

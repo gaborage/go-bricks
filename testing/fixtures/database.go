@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -52,8 +53,8 @@ func getDefaultStats() map[string]any {
 	}
 }
 
-// createFailingRow creates a *sql.Row that will return the specified error when scanned
-func createFailingRow(err error) *sql.Row {
+// createFailingRow creates a Row that will return the specified error when scanned
+func createFailingRow(err error) types.Row {
 	// Create a mock database connection that will return an error
 	db, sqlMock, mockErr := sqlmock.New()
 	if mockErr != nil {
@@ -66,7 +67,7 @@ func createFailingRow(err error) *sql.Row {
 
 	// Execute the query to get the actual row
 	row := db.QueryRowContext(context.Background(), "SELECT")
-	return row
+	return types.NewRowFromSQL(row)
 }
 
 // failingResult implements sql.Result to return errors from its methods

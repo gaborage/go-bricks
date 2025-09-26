@@ -123,6 +123,9 @@ func TestTrackedConnectionQueryRow(t *testing.T) {
 
 	row := tracked.QueryRow(ctx, selectNameFromUsersWithID, 1)
 	assert.NotNil(t, row)
+	var name string
+	require.NoError(t, row.Scan(&name))
+	assert.Equal(t, "John", name)
 
 	assertDBCounter(ctx, t, 1)
 }
@@ -193,7 +196,11 @@ func TestTrackedConnectionMultipleOperations(t *testing.T) {
 	_, err2 := tracked.Exec(ctx, "UPDATE users SET active = true")
 	require.NoError(t, err2)
 
-	_ = tracked.QueryRow(ctx, selectCountUsers)
+	row := tracked.QueryRow(ctx, selectCountUsers)
+	require.NotNil(t, row)
+	var count int
+	require.NoError(t, row.Scan(&count))
+	assert.Equal(t, 10, count)
 
 	assertDBCounter(ctx, t, 3)
 	assertDBElapsedPositive(ctx, t)
@@ -421,7 +428,11 @@ func TestTrackedTransactionOperations(t *testing.T) {
 	require.NoError(t, err)
 	defer txRows.Close()
 
-	_ = tx.QueryRow(ctx, selectCountUsers)
+	row := tx.QueryRow(ctx, selectCountUsers)
+	require.NotNil(t, row)
+	var count int
+	require.NoError(t, row.Scan(&count))
+	assert.Equal(t, 5, count)
 
 	_, err = tx.Exec(ctx, "INSERT INTO users (name) VALUES ($1)", "John")
 	require.NoError(t, err)

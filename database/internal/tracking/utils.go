@@ -66,13 +66,18 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 // first maxLen characters (no ellipsis); otherwise it returns the first
 // maxLen-3 characters followed by "..." to indicate truncation.
 func TruncateString(value string, maxLen int) string {
-	if maxLen <= 0 || len(value) <= maxLen {
+	if maxLen <= 0 {
 		return value
 	}
-	if maxLen <= 3 {
-		return value[:maxLen]
+	r := []rune(value)
+	if len(r) <= maxLen {
+		return value
 	}
-	return value[:maxLen-3] + "..."
+	// Handle multi-byte characters correctly
+	if maxLen <= 3 {
+		return string(r[:maxLen])
+	}
+	return string(r[:maxLen-3]) + "..."
 }
 
 // SanitizeArgs returns a sanitized copy of the provided argument slice suitable for logging.

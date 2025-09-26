@@ -16,6 +16,10 @@ import (
 // "oracle"). If cfg.Type is unsupported an error is returned; if the chosen driver fails to
 // initialize, that underlying error is returned.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("database configuration is nil")
+	}
+
 	var conn Interface
 	var err error
 
@@ -39,7 +43,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 // ValidateDatabaseType returns nil if dbType is one of the supported database types.
 // If dbType is not supported, it returns an error describing the invalid value and listing the supported types.
 func ValidateDatabaseType(dbType string) error {
-	supportedTypes := []string{PostgreSQL, Oracle}
+	supportedTypes := GetSupportedDatabaseTypes()
 	if !slices.Contains(supportedTypes, dbType) {
 		return fmt.Errorf("unsupported database type: %s (supported: %v)", dbType, supportedTypes)
 	}

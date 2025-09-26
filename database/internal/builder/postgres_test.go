@@ -25,7 +25,7 @@ func TestBuildPostgreSQLUpsertProducesDeterministicSql(t *testing.T) {
 	sql, args, err := qb.buildPostgreSQLUpsert("users", conflictColumns, insertColumns, updateColumns)
 	require.NoError(t, err)
 
-	expectedSQL := "INSERT INTO users (id,name,updated_at) VALUES ($1,$2,$3) ON CONFLICT (id, tenant_id) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at"
+	expectedSQL := "INSERT INTO users (\"id\",\"name\",\"updated_at\") VALUES ($1,$2,$3) ON CONFLICT (\"id\", \"tenant_id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\", \"updated_at\" = EXCLUDED.\"updated_at\""
 	if sql != expectedSQL {
 		t.Fatalf("unexpected SQL generated: %s", sql)
 	}

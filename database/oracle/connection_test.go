@@ -165,7 +165,10 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	_ = rs.Close()
 
 	// Execute QueryRow operation
-	_ = c.QueryRow(ctx, "SELECT CURRENT_TIMESTAMP")
+	row := c.QueryRow(ctx, "SELECT CURRENT_TIMESTAMP")
+	require.NotNil(t, row)
+	var ts time.Time
+	require.NoError(t, row.Scan(&ts))
 
 	// Execute Prepare + Statement operations
 	st, err := c.Prepare(ctx, "UPDATE t SET x=:1 WHERE id=:2")
@@ -459,6 +462,9 @@ func TestConnectionQueryOperationsErrorHandling(t *testing.T) {
 	mock.ExpectQuery("SELECT COUNT").WillReturnRows(countRows)
 	row := c.QueryRow(ctx, "SELECT COUNT(*) FROM test")
 	assert.NotNil(t, row)
+	var total int
+	require.NoError(t, row.Scan(&total))
+	assert.Equal(t, 42, total)
 
 	// Test Prepare error
 	mock.ExpectPrepare("INVALID SQL").WillReturnError(sql.ErrTxDone)
