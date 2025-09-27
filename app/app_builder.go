@@ -223,17 +223,25 @@ func (b *Builder) RegisterReadyHandler() *Builder {
 	return b
 }
 
-// Build returns the completed App instance or any error encountered during building.
-func (b *Builder) Build() (*App, error) {
+// Build returns the completed App instance, logger, or any error encountered during building.
+// The logger is always returned, even on error, to enable proper error logging.
+func (b *Builder) Build() (*App, logger.Logger, error) {
+	// Ensure we always have a logger available
+	log := b.logger
+	if log == nil {
+		// Fallback to a bootstrap logger if no logger was created
+		log = createBootstrapLogger()
+	}
+
 	if b.err != nil {
-		return nil, b.err
+		return nil, log, b.err
 	}
 
 	if b.app == nil {
-		return nil, fmt.Errorf("app building incomplete")
+		return nil, log, fmt.Errorf("app building incomplete")
 	}
 
-	return b.app, nil
+	return b.app, log, nil
 }
 
 // GetError returns any error encountered during the building process.

@@ -224,20 +224,22 @@ func TestAppBuilderRegisterReadyHandlerErrors(t *testing.T) {
 func TestAppBuilderBuildErrors(t *testing.T) {
 	t.Run("with build error", func(t *testing.T) {
 		builder := &Builder{err: assert.AnError}
-		app, err := builder.Build()
+		app, log, err := builder.Build()
 
 		assert.Error(t, err)
 		assert.Equal(t, assert.AnError, err)
 		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
 	})
 
 	t.Run("incomplete build without app", func(t *testing.T) {
 		builder := NewAppBuilder()
-		app, err := builder.Build()
+		app, log, err := builder.Build()
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "app building incomplete")
 		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
 	})
 }
 
@@ -293,8 +295,9 @@ func TestAppBuilderErrorRecovery(t *testing.T) {
 		assert.Contains(t, builder.err.Error(), "configuration required")
 
 		// Build should return the same error
-		app, buildErr := builder.Build()
+		app, log, buildErr := builder.Build()
 		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
 		assert.Equal(t, builder.err, buildErr)
 	})
 }

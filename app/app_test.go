@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,10 +44,18 @@ func NewMockSignalHandler() *MockSignalHandler {
 }
 
 func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
+	// If no mock expectations are set, just return (no-op)
+	if len(m.ExpectedCalls) == 0 {
+		return
+	}
 	m.Called(c, sig)
 }
 
 func (m *MockSignalHandler) WaitForSignal(c <-chan os.Signal) {
+	// If no mock expectations are set, just return (no-op for tests)
+	if len(m.ExpectedCalls) == 0 {
+		return
+	}
 	m.Called(c)
 	<-m.shouldExit
 }
@@ -63,6 +72,10 @@ type MockTimeoutProvider struct {
 }
 
 func (m *MockTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	// If no mock expectations are set, use default behavior
+	if len(m.ExpectedCalls) == 0 {
+		return context.WithTimeout(parent, timeout)
+	}
 	args := m.Called(parent, timeout)
 	return args.Get(0).(context.Context), args.Get(1).(context.CancelFunc)
 }
@@ -374,7 +387,7 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 		},
 	}
 
-	app, err := NewWithConfig(cfg, opts)
+	app, _, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
 
 	_, err = app.dbManager.Get(context.Background(), "")
@@ -574,7 +587,7 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 		},
 	}
 
-	app, err := NewWithConfig(cfg, opts)
+	app, _, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 	assert.True(t, dbCalled)
@@ -597,9 +610,10 @@ func TestNewWithOptionsLoadError(t *testing.T) {
 		},
 	}
 
-	app, err := NewWithOptions(opts)
+	app, log, err := NewWithOptions(opts)
 	require.Error(t, err)
 	assert.Nil(t, app)
+	assert.NotNil(t, log) // Logger should always be available
 }
 
 func TestStandardTimeoutProviderWithTimeout(t *testing.T) {
@@ -661,4 +675,413 @@ func TestMessagingDeclarationsBuiltOnceAndReused(t *testing.T) {
 	require.NoError(t, fixture.app.prepareRuntime())
 	assert.Equal(t, 1, counterModule.callCount, "DeclareMessaging should be called during runtime preparation")
 	assert.NotNil(t, fixture.app.messagingDeclarations, "messagingDeclarations should be built during runtime preparation")
+}
+
+func TestNew(t *testing.T) {
+	t.Run("database type error returns logger and error", func(t *testing.T) {
+		// This test verifies that even when New() fails, it returns a logger
+		app, log, err := New()
+
+		assert.Error(t, err)
+		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
+
+		// Verify logger is functional even on failure
+		log.Info().Msg("Test log from New() test failure")
+	})
+}
+
+func TestGetMessagingDeclarations(t *testing.T) {
+	t.Run("returns nil when no declarations built", func(t *testing.T) {
+		app := &App{}
+
+		result := app.GetMessagingDeclarations()
+		assert.Nil(t, result)
+	})
+
+	t.Run("returns declarations when available", func(t *testing.T) {
+		decls := messaging.NewDeclarations()
+		app := &App{
+			messagingDeclarations: decls,
+		}
+
+		result := app.GetMessagingDeclarations()
+		assert.Equal(t, decls, result)
+	})
+}
+
+func TestCreateBootstrapLogger(t *testing.T) {
+	// Store original env vars
+	originalEnv := os.Getenv("APP_ENV")
+	originalLogLevel := os.Getenv("LOG_LEVEL")
+
+	defer func() {
+		// Restore original env vars
+		if originalEnv != "" {
+			os.Setenv("APP_ENV", originalEnv)
+		} else {
+			os.Unsetenv("APP_ENV")
+		}
+		if originalLogLevel != "" {
+			os.Setenv("LOG_LEVEL", originalLogLevel)
+		} else {
+			os.Unsetenv("LOG_LEVEL")
+		}
+	}()
+
+	t.Run("development environment settings", func(t *testing.T) {
+		os.Setenv("APP_ENV", "development")
+		os.Unsetenv("LOG_LEVEL")
+
+		log := createBootstrapLogger()
+		assert.NotNil(t, log)
+
+		// Verify logger works
+		log.Debug().Msg("Test debug message")
+	})
+
+	t.Run("production environment settings", func(t *testing.T) {
+		os.Setenv("APP_ENV", "production")
+		os.Unsetenv("LOG_LEVEL")
+
+		log := createBootstrapLogger()
+		assert.NotNil(t, log)
+
+		// Verify logger works
+		log.Info().Msg("Test info message")
+	})
+
+	t.Run("custom log level override", func(t *testing.T) {
+		os.Setenv("APP_ENV", "production")
+		os.Setenv("LOG_LEVEL", "debug")
+
+		log := createBootstrapLogger()
+		assert.NotNil(t, log)
+
+		// Verify logger works
+		log.Debug().Msg("Test debug message with override")
+	})
+
+	t.Run("empty environment defaults", func(t *testing.T) {
+		os.Unsetenv("APP_ENV")
+		os.Unsetenv("LOG_LEVEL")
+
+		log := createBootstrapLogger()
+		assert.NotNil(t, log)
+
+		// Verify logger works
+		log.Debug().Msg("Test with default settings")
+	})
+}
+
+func TestResolveServer(t *testing.T) {
+	cfg := defaultTestConfig()
+	log := logger.New("debug", true)
+
+	t.Run("uses provided server from options", func(t *testing.T) {
+		mockServer := &stubServerRunner{}
+		opts := &Options{
+			Server: mockServer,
+		}
+
+		result := resolveServer(cfg, log, opts)
+		assert.Equal(t, mockServer, result)
+	})
+
+	t.Run("creates new server when none provided", func(t *testing.T) {
+		result := resolveServer(cfg, log, nil)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("creates new server with empty options", func(t *testing.T) {
+		opts := &Options{}
+
+		result := resolveServer(cfg, log, opts)
+		assert.NotNil(t, result)
+	})
+}
+
+func TestRegisterCloser(t *testing.T) {
+	app := &App{}
+
+	t.Run("registers valid closer", func(t *testing.T) {
+		closer := &stubCloser{}
+		app.registerCloser("test-closer", closer)
+
+		assert.Len(t, app.closers, 1)
+		assert.Equal(t, "test-closer", app.closers[0].name)
+		assert.Equal(t, closer, app.closers[0].closer)
+	})
+
+	t.Run("ignores nil closer", func(t *testing.T) {
+		initialCount := len(app.closers)
+		app.registerCloser("nil-closer", nil)
+
+		assert.Len(t, app.closers, initialCount)
+	})
+}
+
+func TestNewWithConfigErrors(t *testing.T) {
+	t.Run("nil config causes error", func(t *testing.T) {
+		app, log, err := NewWithConfig(nil, &Options{})
+
+		assert.Error(t, err)
+		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
+	})
+
+	t.Run("nil options causes error", func(t *testing.T) {
+		cfg := &config.Config{}
+		app, log, err := NewWithConfig(cfg, nil)
+
+		assert.Error(t, err)
+		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
+	})
+
+	t.Run("invalid database config causes dependency resolution error", func(t *testing.T) {
+		cfg := &config.Config{
+			App: config.AppConfig{
+				Name:    "test-app",
+				Env:     "test",
+				Version: "1.0.0",
+			},
+			Log: config.LogConfig{
+				Level:  "info",
+				Pretty: false,
+			},
+			Database: config.DatabaseConfig{
+				Type:     "postgresql",
+				Host:     "", // Invalid empty host
+				Port:     0,  // Invalid port
+				Database: "",
+			},
+		}
+
+		app, log, err := NewWithConfig(cfg, &Options{})
+
+		assert.Error(t, err)
+		assert.Nil(t, app)
+		assert.NotNil(t, log) // Logger should always be available
+	})
+}
+
+func TestOSSignalHandler(t *testing.T) {
+	t.Run("Notify and WaitForSignal methods", func(t *testing.T) {
+		handler := &OSSignalHandler{}
+
+		// Test Notify - should not panic
+		c := make(chan os.Signal, 1)
+		handler.Notify(c, os.Interrupt)
+
+		// The actual signal handling is OS-dependent, so we just test that the methods exist
+		assert.NotNil(t, handler)
+	})
+}
+
+func TestStandardTimeoutProvider(t *testing.T) {
+	t.Run("WithTimeout creates context with timeout", func(t *testing.T) {
+		provider := &StandardTimeoutProvider{}
+		ctx := context.Background()
+
+		childCtx, cancel := provider.WithTimeout(ctx, time.Millisecond*100)
+		defer cancel()
+
+		assert.NotNil(t, childCtx)
+		deadline, ok := childCtx.Deadline()
+		assert.True(t, ok)
+		assert.True(t, deadline.After(time.Now()))
+	})
+}
+
+func TestBuildMessagingDeclarations(t *testing.T) {
+	t.Run("nil registry error", func(t *testing.T) {
+		app := &App{}
+
+		err := app.buildMessagingDeclarations()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "module registry not initialized")
+	})
+
+	t.Run("already built returns nil", func(t *testing.T) {
+		app := &App{
+			messagingDeclarations: messaging.NewDeclarations(),
+		}
+
+		err := app.buildMessagingDeclarations()
+		assert.NoError(t, err)
+	})
+}
+
+func TestShutdownResource(t *testing.T) {
+	t.Run("successful closure with name", func(t *testing.T) {
+		log := logger.New("debug", true)
+		app := &App{logger: log}
+
+		// Create a mock closer that succeeds
+		mockCloser := &stubCloser{}
+		closer := namedCloser{
+			name:   "test-resource",
+			closer: mockCloser,
+		}
+
+		var errs []error
+		app.shutdownResource(closer, &errs)
+
+		assert.Empty(t, errs)
+	})
+
+	t.Run("successful closure with empty name", func(t *testing.T) {
+		log := logger.New("debug", true)
+		app := &App{logger: log}
+
+		mockCloser := &stubCloser{}
+		closer := namedCloser{
+			name:   "",
+			closer: mockCloser,
+		}
+
+		var errs []error
+		app.shutdownResource(closer, &errs)
+
+		assert.Empty(t, errs)
+	})
+
+	t.Run("failed closure appends error", func(t *testing.T) {
+		log := logger.New("debug", true)
+		app := &App{logger: log}
+
+		// Create a mock closer that fails
+		mockCloser := &failingCloser{}
+		closer := namedCloser{
+			name:   "failing-resource",
+			closer: mockCloser,
+		}
+
+		var errs []error
+		app.shutdownResource(closer, &errs)
+
+		assert.Len(t, errs, 1)
+		assert.Contains(t, errs[0].Error(), "failing-resource")
+		assert.Contains(t, errs[0].Error(), "close failed")
+	})
+}
+
+func TestResolveSignalAndTimeout(t *testing.T) {
+	t.Run("uses custom handlers from options", func(t *testing.T) {
+		mockSignal := NewMockSignalHandler()
+		mockTimeout := &MockTimeoutProvider{}
+
+		opts := &Options{
+			SignalHandler:   mockSignal,
+			TimeoutProvider: mockTimeout,
+		}
+
+		signal, timeout := resolveSignalAndTimeout(opts)
+
+		assert.Equal(t, mockSignal, signal)
+		assert.Equal(t, mockTimeout, timeout)
+	})
+
+	t.Run("uses defaults when options is nil", func(t *testing.T) {
+		signal, timeout := resolveSignalAndTimeout(nil)
+
+		assert.IsType(t, &OSSignalHandler{}, signal)
+		assert.IsType(t, &StandardTimeoutProvider{}, timeout)
+	})
+
+	t.Run("uses defaults when handlers not provided", func(t *testing.T) {
+		opts := &Options{}
+
+		signal, timeout := resolveSignalAndTimeout(opts)
+
+		assert.IsType(t, &OSSignalHandler{}, signal)
+		assert.IsType(t, &StandardTimeoutProvider{}, timeout)
+	})
+}
+
+func TestIsDescriber(t *testing.T) {
+	t.Run("module implements Describer interface", func(t *testing.T) {
+		module := &describerModule{}
+		describer, ok := IsDescriber(module)
+
+		assert.True(t, ok)
+		assert.NotNil(t, describer)
+		assert.Equal(t, module, describer)
+	})
+
+	t.Run("module does not implement Describer interface", func(t *testing.T) {
+		module := &simpleTestModule{}
+		describer, ok := IsDescriber(module)
+
+		assert.False(t, ok)
+		assert.Nil(t, describer)
+	})
+}
+
+func TestDrainServerError(t *testing.T) {
+	t.Run("nil channel returns nil", func(t *testing.T) {
+		app := &App{}
+		err := app.drainServerError(nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("closed channel returns nil", func(t *testing.T) {
+		app := &App{}
+		ch := make(chan error)
+		close(ch)
+
+		err := app.drainServerError(ch)
+		assert.NoError(t, err)
+	})
+
+	t.Run("channel with error returns error", func(t *testing.T) {
+		app := &App{}
+		ch := make(chan error, 1)
+		expectedErr := fmt.Errorf("server error")
+		ch <- expectedErr
+
+		err := app.drainServerError(ch)
+		assert.Equal(t, expectedErr, err)
+	})
+}
+
+// Test helpers
+type stubServerRunner struct{}
+
+func (s *stubServerRunner) Start() error                       { return nil }
+func (s *stubServerRunner) Shutdown(_ context.Context) error   { return nil }
+func (s *stubServerRunner) Echo() *echo.Echo                   { return echo.New() }
+func (s *stubServerRunner) ModuleGroup() server.RouteRegistrar { return nil }
+func (s *stubServerRunner) RegisterReadyHandler(_ echo.HandlerFunc) {
+	// no-op
+}
+
+type stubCloser struct{}
+
+func (c *stubCloser) Close() error { return nil }
+
+type failingCloser struct{}
+
+func (c *failingCloser) Close() error { return fmt.Errorf("close failed") }
+
+type describerModule struct{}
+
+func (m *describerModule) Name() string             { return "describer-module" }
+func (m *describerModule) Init(_ *ModuleDeps) error { return nil }
+func (m *describerModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
+	// no-op
+}
+func (m *describerModule) DeclareMessaging(_ *messaging.Declarations) {
+	// no-op
+}
+func (m *describerModule) Shutdown() error { return nil }
+func (m *describerModule) DescribeModule() ModuleDescriptor {
+	return ModuleDescriptor{
+		Description: "A test module that implements Describer",
+		Version:     "1.0.0",
+	}
+}
+func (m *describerModule) DescribeRoutes() []server.RouteDescriptor {
+	return []server.RouteDescriptor{}
 }
