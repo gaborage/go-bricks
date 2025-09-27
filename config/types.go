@@ -239,10 +239,10 @@ type LimitsConfig struct {
 
 // DebugConfig holds debug endpoint settings.
 type DebugConfig struct {
-	Enabled     bool                `koanf:"enabled"`     // Enable debug endpoints
-	PathPrefix  string              `koanf:"pathprefix"`  // URL path prefix for debug endpoints
-	AllowedIPs  []string            `koanf:"allowedips"`  // List of allowed IP addresses/CIDRs
-	BearerToken string              `koanf:"bearertoken"` // Optional bearer token for authentication
+	Enabled     bool                 `koanf:"enabled"`     // Enable debug endpoints
+	PathPrefix  string               `koanf:"pathprefix"`  // URL path prefix for debug endpoints
+	AllowedIPs  []string             `koanf:"allowedips"`  // List of allowed IP addresses/CIDRs
+	BearerToken string               `koanf:"bearertoken"` // Optional bearer token for authentication
 	Endpoints   DebugEndpointsConfig `koanf:"endpoints"`   // Individual endpoint settings
 }
 

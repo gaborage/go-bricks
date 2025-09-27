@@ -172,7 +172,6 @@ func (a *App) Run() error {
 	}
 
 	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	a.logger.Info().Msg("Shutting down application")
 
@@ -188,10 +187,12 @@ func (a *App) Run() error {
 	select {
 	case shutdownErr = <-shutdownComplete:
 		a.logger.Info().Msg("Graceful shutdown completed")
+		cancel()
 	case <-time.After(15 * time.Second): // 5 seconds longer than shutdown context
 		a.logger.Error().Msg("Shutdown timed out, forcing exit")
 		// Force dump goroutines before exit
 		a.dumpGoroutinesIfNeeded()
+		cancel()
 		os.Exit(1)
 	}
 

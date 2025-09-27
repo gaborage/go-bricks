@@ -79,7 +79,7 @@ func isSQLFunction(s string) bool {
 	}
 
 	// Validate function name (before the parenthesis)
-	functionName := s[:parenIndex]
+	functionName := strings.TrimSpace(s[:parenIndex])
 
 	// Function name must start with letter
 	if !isLetter(functionName[0]) {

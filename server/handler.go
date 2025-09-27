@@ -149,7 +149,7 @@ func (rb *RequestBinder) bindStructFields(c echo.Context, targetType reflect.Typ
 			continue
 		}
 
-		if err := rb.bindFieldFromTags(c, field, fieldValue); err != nil {
+		if err := rb.bindFieldFromTags(c, &field, fieldValue); err != nil {
 			return err
 		}
 	}
@@ -157,7 +157,7 @@ func (rb *RequestBinder) bindStructFields(c echo.Context, targetType reflect.Typ
 }
 
 // bindFieldFromTags binds a single field from various tag sources
-func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	if err := rb.bindParamTag(c, field, fieldValue); err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field reflect.StructF
 }
 
 // bindParamTag binds path parameters using the "param" tag
-func (rb *RequestBinder) bindParamTag(c echo.Context, field reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindParamTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	paramName := field.Tag.Get("param")
 	if paramName == "" {
 		return nil
@@ -187,7 +187,7 @@ func (rb *RequestBinder) bindParamTag(c echo.Context, field reflect.StructField,
 }
 
 // bindQueryTag binds query parameters using the "query" tag
-func (rb *RequestBinder) bindQueryTag(c echo.Context, field reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindQueryTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	queryName := field.Tag.Get("query")
 	if queryName == "" {
 		return nil
@@ -221,7 +221,7 @@ func (rb *RequestBinder) bindQueryStringSlice(c echo.Context, queryName string, 
 }
 
 // bindHeaderTag binds headers using the "header" tag
-func (rb *RequestBinder) bindHeaderTag(c echo.Context, field reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindHeaderTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	headerName := field.Tag.Get("header")
 	if headerName == "" {
 		return nil

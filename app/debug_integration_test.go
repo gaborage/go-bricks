@@ -44,7 +44,7 @@ func TestDebugEndpointsIntegration(t *testing.T) {
 	debugHandlers.RegisterDebugEndpoints(e)
 
 	// Test that info endpoint is accessible from localhost
-	req := httptest.NewRequest(http.MethodGet, debugInfoPath, nil)
+	req := httptest.NewRequest(http.MethodGet, debugInfoPath, http.NoBody)
 	req.RemoteAddr = testIPAddress
 	rec := httptest.NewRecorder()
 
@@ -72,7 +72,7 @@ func TestDebugEndpointsIPRestriction(t *testing.T) {
 	debugHandlers.RegisterDebugEndpoints(e)
 
 	// Test that request from non-allowed IP is rejected
-	req := httptest.NewRequest(http.MethodGet, debugInfoPath, nil)
+	req := httptest.NewRequest(http.MethodGet, debugInfoPath, http.NoBody)
 	req.RemoteAddr = testIPAddress // Not in allowed list
 	rec := httptest.NewRecorder()
 
@@ -98,7 +98,7 @@ func TestDebugEndpointsDisabled(t *testing.T) {
 	debugHandlers.RegisterDebugEndpoints(e)
 
 	// Test that endpoints are not registered when disabled
-	req := httptest.NewRequest(http.MethodGet, debugInfoPath, nil)
+	req := httptest.NewRequest(http.MethodGet, debugInfoPath, http.NoBody)
 	req.RemoteAddr = testIPAddress
 	rec := httptest.NewRecorder()
 
@@ -124,7 +124,7 @@ func TestGoroutineEndpoint(t *testing.T) {
 	debugHandlers.RegisterDebugEndpoints(e)
 
 	// Test goroutines endpoint with JSON format
-	req := httptest.NewRequest(http.MethodGet, "/_debug/goroutines", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_debug/goroutines", http.NoBody)
 	req.RemoteAddr = testIPAddress
 	rec := httptest.NewRecorder()
 
@@ -135,7 +135,7 @@ func TestGoroutineEndpoint(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "timestamp")
 
 	// Test goroutines endpoint with text format
-	req = httptest.NewRequest(http.MethodGet, "/_debug/goroutines?format=text", nil)
+	req = httptest.NewRequest(http.MethodGet, "/_debug/goroutines?format=text", http.NoBody)
 	req.RemoteAddr = testIPAddress
 	rec = httptest.NewRecorder()
 

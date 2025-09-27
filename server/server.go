@@ -197,14 +197,16 @@ func (s *Server) Start() error {
 // It waits for existing connections to finish within the context timeout.
 func (s *Server) Shutdown(ctx context.Context) error {
 	// First try Echo's shutdown (for compatibility)
-	s.echo.Shutdown(ctx)
+	err := s.echo.Shutdown(ctx)
 
 	// Then ensure our actual http.Server instance is shut down
 	// This fixes the issue where Echo's StartServer doesn't store the server properly
 	if s.httpServer != nil {
-		return s.httpServer.Shutdown(ctx)
+		if httpErr := s.httpServer.Shutdown(ctx); httpErr != nil {
+			return httpErr
+		}
 	}
-	return nil
+	return err
 }
 
 func (s *Server) healthCheck(c echo.Context) error {

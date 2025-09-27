@@ -136,7 +136,16 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 		return nil
 	}
 
-	state := strings.Trim(parts[2], "[]:")
+	state := ""
+	if open := strings.Index(line, "["); open != -1 {
+		if closeIdx := strings.Index(line, "]"); closeIdx != -1 && closeIdx > open+1 {
+			state = strings.TrimSpace(line[open+1 : closeIdx])
+		}
+	}
+	if state == "" {
+		state = strings.Trim(parts[2], "[]:")
+	}
+
 	return &GoroutineStack{
 		ID:    id,
 		State: state,

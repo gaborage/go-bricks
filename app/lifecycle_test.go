@@ -58,10 +58,10 @@ func TestShutdownTiming(t *testing.T) {
 	}
 
 	app := &App{
-		cfg:         cfg,
-		logger:      testLogger,
-		registry:    NewModuleRegistry(deps),
-		closers:     []namedCloser{},
+		cfg:          cfg,
+		logger:       testLogger,
+		registry:     NewModuleRegistry(deps),
+		closers:      []namedCloser{},
 		healthProbes: []HealthProbe{},
 	}
 

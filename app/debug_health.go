@@ -13,7 +13,7 @@ import (
 type HealthDebugInfo struct {
 	Components map[string]ComponentHealth `json:"components"`
 	Summary    HealthSummary              `json:"summary"`
-	App        AppInfo                    `json:"app"`
+	App        Info                       `json:"app"`
 }
 
 // ComponentHealth contains detailed health information for a component
@@ -35,16 +35,16 @@ type HealthSummary struct {
 	ErrorCount    int    `json:"error_count"`
 }
 
-// AppInfo contains application information
-type AppInfo struct {
-	Name         string    `json:"name"`
-	Environment  string    `json:"environment"`
-	Version      string    `json:"version"`
-	StartTime    time.Time `json:"start_time,omitempty"`
-	Uptime       string    `json:"uptime,omitempty"`
-	PID          int       `json:"pid"`
-	Goroutines   int       `json:"goroutines"`
-	MemoryUsage  uint64    `json:"memory_usage"`
+// Info contains application information
+type Info struct {
+	Name        string    `json:"name"`
+	Environment string    `json:"environment"`
+	Version     string    `json:"version"`
+	StartTime   time.Time `json:"start_time,omitempty"`
+	Uptime      string    `json:"uptime,omitempty"`
+	PID         int       `json:"pid"`
+	Goroutines  int       `json:"goroutines"`
+	MemoryUsage uint64    `json:"memory_usage"`
 }
 
 // handleHealthDebug provides comprehensive health debugging information
@@ -81,22 +81,21 @@ func (d *DebugHandlers) handleHealthDebug(c echo.Context) error {
 		healthInfo.Components[result.Name] = component
 	}
 
-	// Calculate summary
-	healthInfo.Summary = d.calculateHealthSummary(healthInfo.Components)
-
 	// Add manager-specific health information if available
 	d.addManagerHealth(healthInfo)
 
+	// Calculate summary (incluyendo componentes añadidos)
+	healthInfo.Summary = d.calculateHealthSummary(healthInfo.Components)
 	resp := d.newDebugResponse(start, healthInfo, nil)
 	return c.JSON(http.StatusOK, resp)
 }
 
 // getAppInfo collects application information
-func (d *DebugHandlers) getAppInfo() AppInfo {
+func (d *DebugHandlers) getAppInfo() Info {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	appInfo := AppInfo{
+	appInfo := Info{
 		PID:         os.Getpid(),
 		Goroutines:  runtime.NumGoroutine(),
 		MemoryUsage: memStats.Alloc,
