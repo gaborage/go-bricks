@@ -21,6 +21,7 @@ import (
 // It manages server lifecycle, configuration, and request handling.
 type Server struct {
 	echo         *echo.Echo
+	httpServer   *http.Server // Store the actual http.Server instance for proper shutdown
 	cfg          *config.Config
 	logger       logger.Logger
 	basePath     string
@@ -186,13 +187,24 @@ func (s *Server) Start() error {
 		ReadHeaderTimeout: s.cfg.Server.Timeout.Read,
 	}
 
+	// Store the server instance for proper shutdown
+	s.httpServer = server
+
 	return s.echo.StartServer(server)
 }
 
 // Shutdown gracefully shuts down the HTTP server with the given context.
 // It waits for existing connections to finish within the context timeout.
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.echo.Shutdown(ctx)
+	// First try Echo's shutdown (for compatibility)
+	s.echo.Shutdown(ctx)
+
+	// Then ensure our actual http.Server instance is shut down
+	// This fixes the issue where Echo's StartServer doesn't store the server properly
+	if s.httpServer != nil {
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (s *Server) healthCheck(c echo.Context) error {

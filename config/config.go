@@ -93,6 +93,16 @@ func loadDefaults(k *koanf.Koanf) error {
 		"log.pretty":        false,
 		"log.output.format": "json",
 		"log.output.file":   "",
+
+		// Debug endpoints defaults (disabled by default for security)
+		"debug.enabled":            false,
+		"debug.pathprefix":         "/_sys",
+		"debug.allowedips":         []string{"127.0.0.1", "::1"},
+		"debug.bearertoken":        "",
+		"debug.endpoints.goroutines": true,
+		"debug.endpoints.gc":       true,
+		"debug.endpoints.health":   true,
+		"debug.endpoints.info":     true,
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)
