@@ -130,15 +130,40 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 	return server.New(cfg, log)
 }
 
+// createBootstrapLogger creates a logger with smart defaults for bootstrap/initialization logging.
+// This logger is available even when configuration loading fails.
+func createBootstrapLogger() logger.Logger {
+	// Smart defaults: debug in dev, info in prod
+	level := "info"
+	pretty := false
+
+	// Check environment for development mode
+	if env := os.Getenv("APP_ENV"); env == "development" || env == "dev" || env == "" {
+		level = "debug"
+		pretty = true
+	}
+
+	// Allow override via environment variable
+	if envLevel := os.Getenv("LOG_LEVEL"); envLevel != "" {
+		level = envLevel
+	}
+
+	return logger.New(level, pretty)
+}
+
 // New creates a new application instance with dependencies determined by configuration.
 // It initializes only the services that are configured, failing fast if configured services cannot connect.
-
-func New() (*App, error) {
+// Returns the app instance, a logger (always available even on failure), and any error.
+func New() (*App, logger.Logger, error) {
 	return NewWithOptions(nil)
 }
 
 // NewWithOptions creates a new application instance allowing overrides for config loading and dependencies.
-func NewWithOptions(opts *Options) (*App, error) {
+// Returns the app instance, a logger (always available even on failure), and any error.
+func NewWithOptions(opts *Options) (*App, logger.Logger, error) {
+	// Create bootstrap logger first - always available
+	bootstrapLog := createBootstrapLogger()
+
 	loader := config.Load
 	if opts != nil && opts.ConfigLoader != nil {
 		loader = opts.ConfigLoader
@@ -146,7 +171,7 @@ func NewWithOptions(opts *Options) (*App, error) {
 
 	cfg, err := loader()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, bootstrapLog, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	return NewWithConfig(cfg, opts)
@@ -154,10 +179,11 @@ func NewWithOptions(opts *Options) (*App, error) {
 
 // NewWithConfig creates a new application instance with the provided config and optional overrides.
 // This factory method allows for dependency injection while maintaining fail-fast behavior.
-func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
+// Returns the app instance, a logger (always available even on failure), and any error.
+func NewWithConfig(cfg *config.Config, opts *Options) (*App, logger.Logger, error) {
 	builder := NewAppBuilder()
 
-	app, err := builder.
+	app, log, err := builder.
 		WithConfig(cfg, opts).
 		CreateLogger().
 		CreateBootstrap().
@@ -171,10 +197,14 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, error) {
 		Build()
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to create app: %w", err)
+		// Return the logger from builder if available, otherwise create bootstrap logger
+		if log == nil {
+			log = createBootstrapLogger()
+		}
+		return nil, log, fmt.Errorf("failed to create app: %w", err)
 	}
 
-	return app, nil
+	return app, log, nil
 }
 
 // RegisterModule registers a new module with the application.
