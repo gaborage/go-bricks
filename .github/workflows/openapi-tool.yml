@@ -126,7 +126,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: openapi-tool-coverage-report
-          path: coverage.out
+          path: tools/openapi/coverage.out
           retention-days: 1
 
   lint:
