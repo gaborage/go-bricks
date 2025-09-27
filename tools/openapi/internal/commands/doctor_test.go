@@ -197,7 +197,7 @@ require (
 }
 
 func TestCheckGoBricksCompatibilityFileNotFound(t *testing.T) {
-	err := checkGoBricksCompatibility("/nonexistent/go.mod", false)
+	err := checkGoBricksCompatibility(filepath.Join("nonexistent", "go.mod"), false)
 	if err == nil {
 		t.Error("Expected error for nonexistent file, but got none")
 	}
@@ -226,7 +226,7 @@ func TestCheckProjectStructureValidProjectWithSubdirectory(t *testing.T) {
 }
 
 func TestCheckProjectStructureNonexistentDirectory(t *testing.T) {
-	err := checkProjectStructure("/nonexistent/directory")
+	err := checkProjectStructure(filepath.Join("nonexistent", "directory"))
 	assertError(t, err, true)
 }
 
@@ -284,7 +284,7 @@ require go-bricks v1.0.0
 		{
 			name: "nonexistent project",
 			opts: &DoctorOptions{
-				ProjectRoot: "/nonexistent/path",
+				ProjectRoot: filepath.Join("nonexistent", "path"),
 				Verbose:     false,
 			},
 			expectError: true,
@@ -346,8 +346,14 @@ func TestResolveProjectPath(t *testing.T) {
 			projectRoot: "/tmp/test",
 			expectError: false,
 			checkResult: func(t *testing.T, result string) {
-				if result != "/tmp/test" {
-					t.Errorf("Expected /tmp/test, got %s", result)
+				// On Windows, absolute paths include drive letters
+				// Convert both to absolute for comparison
+				expected, err := filepath.Abs("/tmp/test")
+				if err != nil {
+					t.Fatalf("Failed to resolve expected path: %v", err)
+				}
+				if result != expected {
+					t.Errorf("Expected %s, got %s", expected, result)
 				}
 			},
 		},
@@ -379,8 +385,14 @@ func TestResolveProjectPath(t *testing.T) {
 			projectRoot: "/tmp/test/../project",
 			expectError: false,
 			checkResult: func(t *testing.T, result string) {
-				if result != "/tmp/project" {
-					t.Errorf("Expected /tmp/project, got %s", result)
+				// On Windows, absolute paths include drive letters
+				// Convert both to absolute for comparison
+				expected, err := filepath.Abs("/tmp/project")
+				if err != nil {
+					t.Fatalf("Failed to resolve expected path: %v", err)
+				}
+				if result != expected {
+					t.Errorf("Expected %s, got %s", expected, result)
 				}
 			},
 		},
@@ -412,7 +424,7 @@ func TestValidatePath(t *testing.T) {
 		},
 		{
 			name:        "nonexistent path",
-			path:        "/nonexistent/path",
+			path:        filepath.Join("nonexistent", "path"),
 			expectError: true,
 		},
 		{
@@ -498,13 +510,13 @@ func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
 	}{
 		{
 			name:        "path traversal attempt",
-			goModPath:   "/tmp/../etc/passwd",
+			goModPath:   filepath.Join("tmp", "..", "etc", "passwd"),
 			expectError: true,
 			errorMsg:    "invalid go.mod path: must end with 'go.mod'",
 		},
 		{
 			name:        "invalid filename",
-			goModPath:   "/tmp/notgomod.txt",
+			goModPath:   filepath.Join("tmp", "notgomod.txt"),
 			expectError: true,
 			errorMsg:    "invalid go.mod path: must end with 'go.mod'",
 		},
@@ -729,7 +741,7 @@ func TestValidatePathPropagatesStatError(t *testing.T) {
 	}
 	t.Cleanup(func() { statFn = originalStat })
 
-	err := validatePath("/restricted/path")
+	err := validatePath(filepath.Join("restricted", "path"))
 	if err == nil {
 		t.Fatal("Expected error from validatePath when stat fails")
 	}

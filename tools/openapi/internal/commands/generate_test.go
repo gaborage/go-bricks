@@ -89,7 +89,7 @@ func TestValidateGenerateOptions(t *testing.T) {
 		{
 			name: "nonexistent project root",
 			opts: &GenerateOptions{
-				ProjectRoot: "/nonexistent/path",
+				ProjectRoot: filepath.Join("nonexistent", "path"),
 				OutputFile:  outputFileName,
 			},
 			wantErr: true,
@@ -415,7 +415,7 @@ func TestValidateGenerateOptionsPermissionError(t *testing.T) {
 			name: "valid simple path",
 			setup: func() *GenerateOptions {
 				return &GenerateOptions{
-					ProjectRoot: "/", // Root always exists
+					ProjectRoot: ".", // Current directory always exists
 					OutputFile:  "test.yaml",
 				}
 			},
@@ -425,7 +425,7 @@ func TestValidateGenerateOptionsPermissionError(t *testing.T) {
 			name: "path with extension already",
 			setup: func() *GenerateOptions {
 				return &GenerateOptions{
-					ProjectRoot: "/",
+					ProjectRoot: ".",
 					OutputFile:  "api.yaml",
 				}
 			},
