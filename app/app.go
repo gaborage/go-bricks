@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
@@ -138,7 +139,8 @@ func createBootstrapLogger() logger.Logger {
 	pretty := false
 
 	// Check environment for development mode
-	if env := os.Getenv("APP_ENV"); env == "development" || env == "dev" || env == "" {
+	env := strings.TrimSpace(os.Getenv("APP_ENV"))
+	if env == "" || strings.EqualFold(env, "development") || strings.EqualFold(env, "dev") {
 		level = "debug"
 		pretty = true
 	}
