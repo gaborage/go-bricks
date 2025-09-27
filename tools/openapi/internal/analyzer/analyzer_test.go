@@ -170,14 +170,16 @@ func FormatMessage(msg string) string {
 }
 
 func TestNew(t *testing.T) {
-	analyzer := New("/test/path")
+	// Use a platform-agnostic path for testing
+	testPath := filepath.Join("test", "path")
+	analyzer := New(testPath)
 
 	if analyzer == nil {
 		t.Fatal("New() returned nil")
 	}
 
-	if analyzer.projectRoot != "/test/path" {
-		t.Errorf("Expected project root '/test/path', got '%s'", analyzer.projectRoot)
+	if analyzer.projectRoot != testPath {
+		t.Errorf("Expected project root '%s', got '%s'", testPath, analyzer.projectRoot)
 	}
 
 	if analyzer.fileSet == nil {
@@ -354,7 +356,7 @@ func TestAnalyzeNonModuleFile(t *testing.T) {
 }
 
 func TestIsHTTPMethod(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		method   string
@@ -394,7 +396,7 @@ func containsSubstring(str, substr string) bool {
 
 // TestExtractCommentDescription tests comment extraction functionality
 func TestExtractCommentDescription(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -450,7 +452,7 @@ func TestExtractCommentDescription(t *testing.T) {
 
 // TestExtractStringFromExpr tests string extraction from expressions
 func TestExtractStringFromExpr(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -487,7 +489,7 @@ func TestExtractStringFromExpr(t *testing.T) {
 
 // TestExtractPathFromArg tests path extraction from AST arguments
 func TestExtractPathFromArg(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	// Set up some test constants
 	analyzer.constants["testRoute"] = "/api/test"
@@ -538,7 +540,7 @@ func TestExtractPathFromArg(t *testing.T) {
 
 // TestIsModuleDepsField tests module dependency field detection
 func TestIsModuleDepsField(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -627,7 +629,7 @@ func TestIsModuleDepsField(t *testing.T) {
 
 // TestIsMethodOnStruct tests method receiver detection
 func TestIsMethodOnStruct(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name       string
@@ -702,7 +704,7 @@ func TestIsMethodOnStruct(t *testing.T) {
 
 // TestExtractConstants tests constant extraction from AST
 func TestExtractConstants(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	// Create test AST file with constants
 	constContent := `package test
@@ -749,7 +751,7 @@ const singleConst = "/single"`
 
 // TestExtractPackageDescription tests package comment extraction
 func TestExtractPackageDescription(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -805,7 +807,7 @@ func TestAnalyzeProjectEdgeCases(t *testing.T) {
 
 	t.Run("invalid project path", func(_ *testing.T) {
 		// Create analyzer with invalid path
-		invalidAnalyzer := New("/nonexistent/path")
+		invalidAnalyzer := New(filepath.Join("nonexistent", "path"))
 		_, err := invalidAnalyzer.AnalyzeProject()
 		// Note: AnalyzeProject may not error on invalid paths, it just won't find modules
 		_ = err // Ignore error for now as implementation may vary
@@ -831,7 +833,7 @@ func TestAnalyzeProjectEdgeCases(t *testing.T) {
 
 // TestExtractModuleFromASTEdgeCases tests edge cases for extractModuleFromAST
 func TestExtractModuleFromASTEdgeCases(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -895,7 +897,7 @@ func (m *Module) RegisterRoutes() {}`,
 
 // TestExtractRouteFromStatementEdgeCases tests edge cases for extractRouteFromStatement
 func TestExtractRouteFromStatementEdgeCases(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -979,7 +981,7 @@ func invalid syntax {`
 // TestIsMethodOnStructMissingCase tests the missing case in isMethodOnStruct
 func TestIsMethodOnStructMissingCase(t *testing.T) {
 	// Test nil receiver list
-	analyzer := New("/test")
+	analyzer := New("test")
 	result := analyzer.isMethodOnStruct(nil, "TestStruct")
 	if result {
 		t.Error("Expected false for nil receiver list")
@@ -1234,7 +1236,7 @@ func TestValidateGoFilePath(t *testing.T) {
 		},
 		{
 			name:    "path outside project",
-			path:    "/tmp/external.go",
+			path:    filepath.Join("tmp", "external.go"),
 			wantErr: true,
 		},
 	}
@@ -1356,7 +1358,7 @@ func (m *Module) Init(deps *config.Config) error { return nil }`
 
 // TestExtractRoutesFromFuncBodyComplex tests complex route extraction scenarios
 func TestExtractRoutesFromFuncBodyComplex(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -1494,7 +1496,7 @@ func (m *UserModule) createUser() {}`
 
 // TestCollectMethodFlagsFromFile tests method flag collection functionality
 func TestCollectMethodFlagsFromFile(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	// Create test content with various method signatures
 	content := `package test
@@ -1551,7 +1553,7 @@ func (m *Module) InvalidRegisterRoutes() {}`
 
 // TestExtractImportAliases tests import alias extraction
 func TestExtractImportAliases(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name       string
@@ -1671,7 +1673,7 @@ func TestProjectMetadataExtraction(t *testing.T) {
 
 // TestMethodSignatureValidation tests validation of method signatures
 func TestMethodSignatureValidation(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
@@ -1729,7 +1731,7 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 				t.Fatalf(parseFailedFormat, err)
 			}
 
-			result, _ := analyzer.extractModuleFromAST(astFile, "/test/file.go")
+			result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join("test", "file.go"))
 			found := (result != nil)
 			if found != tt.expected {
 				t.Errorf("Expected module found=%v, got %v", tt.expected, found)
@@ -1740,7 +1742,7 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 
 // TestExtractStringFromExprEdgeCases tests string extraction from various expression types
 func TestExtractStringFromExprEdgeCases(t *testing.T) {
-	analyzer := New("/test")
+	analyzer := New("test")
 
 	tests := []struct {
 		name     string
