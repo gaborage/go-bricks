@@ -51,8 +51,13 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
-          go test -race -cover -covermode=atomic -coverprofile=coverage.out $packages
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' } | ForEach-Object { $_ }
+          if ($packages) {
+            go test -race -cover -covermode=atomic -coverprofile=coverage.out @packages
+          } else {
+            Write-Host "No packages found to test"
+            exit 1
+          }
 
       - name: Upload coverage artifact for SonarCloud (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
@@ -137,8 +142,13 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
-          go build -v $packages
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' } | ForEach-Object { $_ }
+          if ($packages) {
+            go build -v @packages
+          } else {
+            Write-Host "No packages found to build"
+            exit 1
+          }
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'

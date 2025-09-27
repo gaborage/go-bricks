@@ -56,8 +56,13 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          $packages = go list ./... | Where-Object { $_ -notmatch 'models' }
-          go test -race -coverprofile=coverage.out $packages
+          $packages = go list ./... | Where-Object { $_ -notmatch 'models' } | ForEach-Object { $_ }
+          if ($packages) {
+            go test -race -coverprofile=coverage.out @packages
+          } else {
+            Write-Host "No packages found to test"
+            exit 1
+          }
 
       - name: Upload coverage artifact for SonarCloud (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
