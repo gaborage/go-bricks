@@ -36,7 +36,7 @@ jobs:
       run: go mod download
     
     - name: Run tests
-      run: go test -race -cover -covermode=atomic -coverprofile=coverage.out $(go list ./... | grep -vE '/(examples|tools)(/|$)')
+      run: go test -race -cover -covermode=atomic -coverprofile=coverage.out $(go list ./... | grep -vE '/(tools)(/|$)')
 
     - name: Upload coverage artifact for SonarCloud
       uses: actions/upload-artifact@v4
@@ -59,7 +59,7 @@ jobs:
       uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9
       with:
         version: latest
-        args: --timeout=5m --skip-dirs=tools,examples
+        args: --timeout=5m --skip-dirs=tools
 
   sonarqube:
     name: SonarCloud
@@ -95,7 +95,7 @@ jobs:
       run: go install github.com/securego/gosec/v2/cmd/gosec@latest
     
     - name: Run Gosec Security Scanner
-      run: gosec $(go list ./... | grep -v examples | grep -v tools)
+      run: gosec $(go list ./... | grep -v tools)
 
   build:
     runs-on: ubuntu-latest
@@ -108,7 +108,7 @@ jobs:
         go-version: 1.25
     
     - name: Build
-      run: go build -v $(go list ./... | grep -v examples | grep -v tools)
+      run: go build -v $(go list ./... | grep -v tools)
     
     - name: Verify go mod
       run: |

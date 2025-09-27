@@ -84,7 +84,7 @@ func TestQueryBuilderSelect(t *testing.T) {
 			name:     "oracle_reserved_word",
 			vendor:   Oracle,
 			columns:  []string{"id", "number"},
-			expected: `SELECT id, "number"`,
+			expected: `SELECT id, "NUMBER"`,
 		},
 		{
 			name:     "postgresql_single_column",
@@ -247,7 +247,7 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 			vendor:   Oracle,
 			column:   "number",
 			value:    "123",
-			expected: `UPPER("number") LIKE`,
+			expected: `UPPER("NUMBER") LIKE`,
 		},
 		{
 			name:     "unknown_vendor",
@@ -500,7 +500,7 @@ func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 			name:       "unknown_vendor",
 			vendor:     "unknown",
 			identifier: "table_name",
-			expected:   "table_name",
+			expected:   `"table_name"`,
 		},
 	}
 
@@ -511,59 +511,6 @@ func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-func TestQueryBuilderQuoteOracleColumn(t *testing.T) {
-	qb := NewQueryBuilder(Oracle)
-
-	tests := []struct {
-		name     string
-		column   string
-		expected string
-	}{
-		{
-			name:     "reserved_word_number",
-			column:   "number",
-			expected: `"number"`,
-		},
-		{
-			name:     "regular_column",
-			column:   "id",
-			expected: "id",
-		},
-		{
-			name:     "name_column",
-			column:   "name",
-			expected: "name",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := qb.quoteOracleColumn(tt.column)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestQueryBuilderQuoteOracleColumns(t *testing.T) {
-	qb := NewQueryBuilder(Oracle)
-
-	columns := []string{"id", "number", "name"}
-	result := qb.quoteOracleColumns(columns...)
-
-	expected := []string{"id", `"number"`, "name"}
-	assert.Equal(t, expected, result)
-}
-
-func TestQueryBuilderQuoteOracleColumnsNonOracle(t *testing.T) {
-	qb := NewQueryBuilder(PostgreSQL)
-
-	columns := []string{"id", "number", "name"}
-	result := qb.quoteOracleColumns(columns...)
-
-	// Should return original columns for non-Oracle vendors
-	assert.Equal(t, columns, result)
 }
 
 func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
@@ -602,10 +549,12 @@ func TestQueryBuilderBuildUpsertOracle(t *testing.T) {
 
 	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
 
-	// Oracle implementation is not fully implemented (returns empty)
+	// Oracle implementation now provides working MERGE statement
 	assert.NoError(t, err)
-	assert.Empty(t, sql)
-	assert.Empty(t, args)
+	assert.Contains(t, sql, "MERGE INTO users")
+	assert.Contains(t, sql, "WHEN MATCHED THEN UPDATE")
+	assert.Contains(t, sql, "WHEN NOT MATCHED THEN INSERT")
+	assert.NotEmpty(t, args)
 }
 
 func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
@@ -622,7 +571,9 @@ func TestQueryBuilderBuildUpsertUnknown(t *testing.T) {
 
 	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
 
-	assert.NoError(t, err)
+	// Unknown vendor now returns proper error instead of empty results
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "upsert not supported for database vendor")
 	assert.Empty(t, sql)
 	assert.Empty(t, args)
 }

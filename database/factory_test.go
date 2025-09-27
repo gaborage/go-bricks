@@ -208,11 +208,8 @@ func TestNewConnectionReturnsTrackedConnection(t *testing.T) {
 	require.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
 
-	// Verify the wrapper has the correct properties
-	trackedConn := tracked.(*TrackedConnection)
-	assert.Equal(t, simpleConn, trackedConn.conn)
-	assert.Equal(t, log, trackedConn.logger)
-	assert.Equal(t, "postgresql", trackedConn.vendor)
+	// Verify wrapper functionality instead of internal implementation
+	assert.Equal(t, "postgresql", tracked.DatabaseType())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -532,11 +529,8 @@ func TestNewConnectionSuccessPath(t *testing.T) {
 	require.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
 
-	// Verify the wrapped connection has the correct properties
-	trackedConn := tracked.(*TrackedConnection)
-	assert.Equal(t, simpleConn, trackedConn.conn)
-	assert.Equal(t, log, trackedConn.logger)
-	assert.Equal(t, "postgresql", trackedConn.vendor)
+	// Verify wrapper functionality instead of internal implementation
+	assert.Equal(t, "postgresql", tracked.DatabaseType())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -579,11 +573,8 @@ func TestNewConnectionSuccessfulWrapping(t *testing.T) {
 	require.NotNil(t, tracked)
 	assert.IsType(t, &TrackedConnection{}, tracked)
 
-	// Verify wrapper properties
-	trackedConn := tracked.(*TrackedConnection)
-	assert.Equal(t, mockConn, trackedConn.conn)
-	assert.Equal(t, log, trackedConn.logger)
-	assert.Equal(t, "postgresql", trackedConn.vendor)
+	// Verify wrapper functionality instead of internal implementation
+	assert.Equal(t, "postgresql", tracked.DatabaseType())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

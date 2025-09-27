@@ -18,7 +18,7 @@ Go-bricks provides a comprehensive testing framework that includes:
 
 - **Mocks**: Testify-based mock implementations for all major interfaces
 - **Fixtures**: Pre-configured mocks and helpers for common scenarios
-- **Examples**: Real-world testing patterns and integration examples
+- **Demo Repository**: Real-world testing patterns and integration examples in [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project)
 
 The testing utilities are designed to make testing go-bricks applications straightforward and consistent.
 
@@ -485,9 +485,9 @@ import (
 
 ## Examples
 
-For more comprehensive examples, see the `examples/testing` directory which contains:
+For more comprehensive examples, see the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) repository which contains:
 
-- Complete module testing examples
+- Complete module testing examples in the testing directory
 - Integration test patterns
 - HTTP handler testing
 - Message handler testing
@@ -508,7 +508,7 @@ For more comprehensive examples, see the `examples/testing` directory which cont
 
 ### Getting Help
 
-- Check the examples in `examples/testing`
+- Check the examples in the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) testing directory
 - Review this documentation
 - Look at existing tests in the framework for patterns
 - Open an issue in the go-bricks repository for framework-specific questions
