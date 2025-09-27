@@ -1,7 +1,7 @@
-.PHONY: help build test lint fmt tidy clean check test-coverage
+.PHONY: help build test lint fmt update clean check test-coverage
 
-# Package selection for testing (excludes examples and tools directories)
-PKGS := $(shell go list ./... | grep -vE '/(examples|tools)(/|$$)')
+# Package selection for testing (excludes tools directories)
+PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 
 # Default target
 help: ## Show this help message
@@ -23,7 +23,8 @@ lint: ## Run golangci-lint
 fmt: ## Format Go code
 	go fmt ./...
 
-tidy: ## Tidy Go modules
+update: ## Update dependencies to latest versions
+	go get -u ./...
 	go mod tidy
 
 clean: ## Clean build cache

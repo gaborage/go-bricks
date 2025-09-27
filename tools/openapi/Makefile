@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt tidy clean install demo check
+.PHONY: help build test lint fmt update clean install demo check
 
 # Binary name
 BINARY_NAME := go-bricks-openapi
@@ -25,7 +25,8 @@ lint: ## Run golangci-lint
 fmt: ## Format Go code
 	go fmt ./...
 
-tidy: ## Tidy Go modules
+update: ## Update dependencies to latest versions
+	go get -u ./...
 	go mod tidy
 
 clean: ## Clean build cache and binaries
@@ -35,10 +36,11 @@ clean: ## Clean build cache and binaries
 install: build ## Install the CLI tool locally
 	go install -ldflags "-X main.version=$(VERSION)" ./cmd/go-bricks-openapi
 
-demo: build ## Run demo generation on example service
+demo: build ## Run demo generation on demo project (requires cloning demo repo)
 	./$(BINARY_NAME) doctor --project ../../
-	./$(BINARY_NAME) generate --project ../../examples/openapi-demo --output ../../examples/openapi-demo/generated-openapi.yaml
-	@echo "✓ Generated spec at ../../examples/openapi-demo/generated-openapi.yaml"
+	@echo "To run demo generation:"
+	@echo "1. Clone demo project: git clone https://github.com/gaborage/go-bricks-demo-project.git"
+	@echo "2. Generate spec: ./$(BINARY_NAME) generate --project ../go-bricks-demo-project/openapi-demo --output demo-spec.yaml"
 
 validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) version

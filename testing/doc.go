@@ -27,6 +27,6 @@
 //		"github.com/gaborage/go-bricks/testing/fixtures"
 //	)
 //
-// For comprehensive examples and usage patterns, see the examples/testing
-// directory and TESTING.md documentation.
+// For comprehensive examples and usage patterns, see the go-bricks-demo-project
+// repository (https://github.com/gaborage/go-bricks-demo-project) and TESTING.md documentation.
 package testing

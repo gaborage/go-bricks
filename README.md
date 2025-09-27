@@ -165,7 +165,7 @@ var custom struct {
 _ = cfg.Unmarshal("custom", &custom)
 ```
 
-See [examples/params/main.go](examples/params/main.go) for a complete walkthrough.
+See the [configuration injection example](https://github.com/gaborage/go-bricks-demo-project/tree/main/config-injection) for a complete walkthrough.
 
 ### Configuration Migration Guide
 
@@ -362,12 +362,14 @@ _ = migrator.Migrate(ctx, nil)
 ---
 
 ## Examples
-Explore the [`examples/`](examples/) folder:
+Explore the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) repository:
 - `http/handlers` – typed HTTP handler module
 - `http/client` – fluent HTTP client with retries and interceptors
 - `oracle` – Oracle insert with reserved column quoting
-- `params` – custom configuration namespace demo
+- `config-injection` – custom configuration namespace demo
 - `trace-propagation` – W3C tracing demonstration
+- `openapi-demo` – OpenAPI specification generation
+- `multitenant-aws` – multi-tenant app with AWS Secrets Manager
 
 ---
 

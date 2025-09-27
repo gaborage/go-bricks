@@ -14,17 +14,13 @@ import (
 // It wraps squirrel.StatementBuilderType with database-specific customizations
 // for placeholder formats, identifier quoting, and function generation.
 type QueryBuilder struct {
-	vendor           string
+	vendor           dbtypes.Vendor
 	statementBuilder squirrel.StatementBuilderType
 }
 
 // NewQueryBuilder creates a new query builder for the specified database vendor.
-// NewQueryBuilder creates a vendor-aware QueryBuilder configured with the appropriate
-// placeholder format and other vendor-specific settings for SQL generation.
-// For PostgreSQL it configures Dollar-style placeholders; for Oracle it configures
-// Colon-style placeholders; other SQL vendors use question-mark placeholders.
-// It panics if called with the MongoDB vendor because this builder supports SQL only.
-func NewQueryBuilder(vendor string) *QueryBuilder {
+// It configures placeholder formats and prepares for vendor-specific SQL generation.
+func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {
 	var sb squirrel.StatementBuilderType
 
 	switch vendor {
