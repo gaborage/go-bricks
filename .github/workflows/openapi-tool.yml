@@ -60,7 +60,7 @@ jobs:
             done
             # Generate combined coverage for SonarCloud (Ubuntu + Go 1.25 only)
             if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.go-version }}" = "1.25" ]; then
-              go test -race -coverprofile=coverage.out $packages || true
+              go test -race -coverprofile=coverage.out -covermode=atomic $packages || true
             fi
           fi
 
@@ -70,7 +70,7 @@ jobs:
         run: |
           for /f "delims=" %%i in ('go list ./...') do (
             echo %%i | findstr /v /c:"models" >nul && (
-              go test -race %%i
+              go test -race -coverprofile=coverage.out -covermode=atomic %%i
             )
           )
 
