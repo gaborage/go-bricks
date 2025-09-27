@@ -132,7 +132,7 @@ jobs:
           ./go-bricks-openapi.exe version
           ./go-bricks-openapi.exe --help
           ./go-bricks-openapi.exe doctor --project ../../
-          Write-Host "✓ CLI validation passed"
+          Write-Host "CLI validation passed"
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
