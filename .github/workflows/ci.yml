@@ -29,14 +29,16 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Clean module cache
+        run: go clean -modcache || true
+
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-${{ matrix.go-version }}-go-main-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-${{ matrix.go-version }}-main-${{ hashFiles('**/go.sum') }}-v2
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.go-version }}-go-main-
-            ${{ runner.os }}-${{ matrix.go-version }}-go-
+            ${{ runner.os }}-${{ matrix.go-version }}-main-
 
       - name: Download dependencies
         run: go mod download

@@ -36,13 +36,15 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      - name: Clean module cache
+        run: go clean -modcache || true
+
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ${{ runner.os }}-${{ matrix.go-version }}-openapi-tool-${{ hashFiles('tools/openapi/go.sum') }}
+          key: ${{ runner.os }}-${{ matrix.go-version }}-openapi-${{ hashFiles('tools/openapi/go.sum') }}-v2
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.go-version }}-openapi-tool-
             ${{ runner.os }}-${{ matrix.go-version }}-openapi-
 
       - name: Download dependencies
@@ -74,7 +76,7 @@ jobs:
             Write-Host "Testing package: $pkg"
             $result = go test -race -coverprofile=coverage.out -covermode=atomic $pkg 2>&1
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "Package $pkg had test failures (may be platform-specific):" -ForegroundColor Yellow
+              Write-Host "Package ${pkg} had test failures (may be platform-specific):" -ForegroundColor Yellow
               Write-Host $result
               # Check if failures are known platform-specific issues
               if ($result -match "Expected /tmp.*got D:" -or $result -match "wantErr true") {
@@ -84,7 +86,7 @@ jobs:
                 exit 1
               }
             } else {
-              Write-Host "Package $pkg: PASSED" -ForegroundColor Green
+              Write-Host "Package ${pkg} PASSED" -ForegroundColor Green
             }
           }
           Write-Host "Windows testing completed - core functionality verified" -ForegroundColor Green
