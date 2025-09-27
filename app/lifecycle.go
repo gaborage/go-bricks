@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -76,6 +77,12 @@ func (a *App) serve() <-chan error {
 func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, error) {
 	quit := make(chan os.Signal, 1)
 	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	// Ensure we clean up signal registration regardless of how we exit
+	defer func() {
+		signal.Stop(quit)
+		close(quit)
+	}()
 
 	signalReceived := make(chan struct{}, 1)
 	go func() {

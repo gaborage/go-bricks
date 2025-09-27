@@ -51,9 +51,59 @@ func oracleNeedsQuoting(identifier string) bool {
 	return false
 }
 
+// isLetter checks if a character is a letter
+func isLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+// isValidIdentifierChar checks if a character is valid in an identifier
+func isValidIdentifierChar(c byte) bool {
+	return isLetter(c) || (c >= '0' && c <= '9') || c == '_'
+}
+
+// isSQLFunction checks if the given string is a SQL function call
+func isSQLFunction(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	// Already quoted identifiers are not functions
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return false
+	}
+
+	// Find first opening parenthesis
+	parenIndex := strings.IndexByte(s, '(')
+	if parenIndex <= 0 || !strings.Contains(s[parenIndex:], ")") {
+		return false
+	}
+
+	// Validate function name (before the parenthesis)
+	functionName := s[:parenIndex]
+
+	// Function name must start with letter
+	if !isLetter(functionName[0]) {
+		return false
+	}
+
+	// Function name can only contain valid identifier characters
+	for i := 0; i < len(functionName); i++ {
+		if !isValidIdentifierChar(functionName[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
 func oracleQuoteIdentifier(column string) string {
 	trimmed := strings.TrimSpace(column)
 	if trimmed == "" {
+		return trimmed
+	}
+
+	// Don't quote SQL functions like COUNT(*), SUM(column), etc.
+	if isSQLFunction(trimmed) {
 		return trimmed
 	}
 
@@ -70,7 +120,7 @@ func oracleQuoteIdentifier(column string) string {
 	}
 
 	if isOracleReservedWord(trimmed) {
-		return `"` + strings.ToUpper(trimmed) + `"`
+		return `"` + trimmed + `"`
 	}
 
 	if oracleNeedsQuoting(trimmed) {

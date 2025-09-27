@@ -164,12 +164,8 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 			// Already quoted, skip
 			continue
 		}
-		if qb.vendor == dbtypes.Oracle {
-			// Oracle prefers uppercase quoted identifiers
-			parts[i] = `"` + strings.ToUpper(part) + `"`
-		} else {
-			parts[i] = `"` + part + `"`
-		}
+		// All vendors now preserve case for quoted identifiers
+		parts[i] = `"` + part + `"`
 	}
 
 	return strings.Join(parts, ".")
@@ -203,4 +199,40 @@ func (qb *QueryBuilder) quoteColumnForQuery(column string) string {
 	default:
 		return column
 	}
+}
+
+// Eq creates an equality condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) Eq(column string, value any) squirrel.Eq {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.Eq{quotedColumn: value}
+}
+
+// NotEq creates a not-equal condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) NotEq(column string, value any) squirrel.NotEq {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.NotEq{quotedColumn: value}
+}
+
+// Lt creates a less-than condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) Lt(column string, value any) squirrel.Lt {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.Lt{quotedColumn: value}
+}
+
+// LtOrEq creates a less-than-or-equal condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) LtOrEq(column string, value any) squirrel.LtOrEq {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.LtOrEq{quotedColumn: value}
+}
+
+// Gt creates a greater-than condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) Gt(column string, value any) squirrel.Gt {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.Gt{quotedColumn: value}
+}
+
+// GtOrEq creates a greater-than-or-equal condition with proper column quoting for the database vendor
+func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
+	quotedColumn := qb.quoteColumnForQuery(column)
+	return squirrel.GtOrEq{quotedColumn: value}
 }

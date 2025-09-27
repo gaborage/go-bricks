@@ -144,7 +144,7 @@ func TestEscapeIdentifierByVendor(t *testing.T) {
 		expected string
 	}{
 		{vendor: dbtypes.PostgreSQL, name: "foo", expected: `"foo"`},
-		{vendor: dbtypes.Oracle, name: "bar", expected: `"BAR"`},
+		{vendor: dbtypes.Oracle, name: "bar", expected: `"bar"`},
 		{vendor: "sqlite", name: "baz", expected: `"baz"`},
 	}
 

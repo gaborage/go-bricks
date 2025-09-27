@@ -84,7 +84,19 @@ func TestQueryBuilderSelect(t *testing.T) {
 			name:     "oracle_reserved_word",
 			vendor:   Oracle,
 			columns:  []string{"id", "number"},
-			expected: `SELECT id, "NUMBER"`,
+			expected: `SELECT id, "number"`,
+		},
+		{
+			name:     "oracle_count_function",
+			vendor:   Oracle,
+			columns:  []string{"COUNT(*)"},
+			expected: "SELECT COUNT(*)",
+		},
+		{
+			name:     "oracle_mixed_columns_and_functions",
+			vendor:   Oracle,
+			columns:  []string{"id", "COUNT(*)", "number", "SUM(balance)"},
+			expected: `SELECT id, COUNT(*), "number", SUM(balance)`,
 		},
 		{
 			name:     "postgresql_single_column",
@@ -182,7 +194,7 @@ func TestQueryBuilderInsertWithColumnsOracleReserved(t *testing.T) {
 
 	// Should quote the reserved column and use Oracle-style placeholders
 	assert.Contains(t, sql, "INSERT INTO accounts")
-	assert.Contains(t, sql, `"NUMBER"`)
+	assert.Contains(t, sql, `"number"`)
 }
 
 // Removed test for exported QuoteColumns helper (API pruned).
@@ -247,7 +259,7 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 			vendor:   Oracle,
 			column:   "number",
 			value:    "123",
-			expected: `UPPER("NUMBER") LIKE`,
+			expected: `UPPER("number") LIKE`,
 		},
 		{
 			name:     "unknown_vendor",
@@ -488,13 +500,13 @@ func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 			name:       "oracle_basic",
 			vendor:     Oracle,
 			identifier: "table_name",
-			expected:   `"TABLE_NAME"`,
+			expected:   `"table_name"`,
 		},
 		{
 			name:       "oracle_mixed_case",
 			vendor:     Oracle,
 			identifier: "TableName",
-			expected:   `"TABLENAME"`,
+			expected:   `"TableName"`,
 		},
 		{
 			name:       "unknown_vendor",
@@ -511,6 +523,106 @@ func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestQueryBuilderWhereClauseHelpers(t *testing.T) {
+	tests := []struct {
+		name     string
+		vendor   string
+		column   string
+		value    any
+		method   string
+		expected map[string]any
+	}{
+		{
+			name:     "oracle_eq_reserved_word",
+			vendor:   Oracle,
+			column:   "number",
+			value:    "12345",
+			method:   "Eq",
+			expected: map[string]any{`"number"`: "12345"},
+		},
+		{
+			name:     "oracle_eq_normal_column",
+			vendor:   Oracle,
+			column:   "name",
+			value:    "John",
+			method:   "Eq",
+			expected: map[string]any{"name": "John"},
+		},
+		{
+			name:     "postgresql_eq_reserved_word",
+			vendor:   PostgreSQL,
+			column:   "number",
+			value:    123,
+			method:   "Eq",
+			expected: map[string]any{"number": 123},
+		},
+		{
+			name:     "oracle_noteq_reserved_word",
+			vendor:   Oracle,
+			column:   "size",
+			value:    100,
+			method:   "NotEq",
+			expected: map[string]any{`"size"`: 100},
+		},
+		{
+			name:     "oracle_gt_reserved_word",
+			vendor:   Oracle,
+			column:   "level",
+			value:    5,
+			method:   "Gt",
+			expected: map[string]any{`"level"`: 5},
+		},
+		{
+			name:     "oracle_lt_reserved_word",
+			vendor:   Oracle,
+			column:   "access",
+			value:    10,
+			method:   "Lt",
+			expected: map[string]any{`"access"`: 10},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+
+			var condition map[string]any
+			switch tt.method {
+			case "Eq":
+				condition = map[string]any(qb.Eq(tt.column, tt.value))
+			case "NotEq":
+				condition = map[string]any(qb.NotEq(tt.column, tt.value))
+			case "Gt":
+				condition = map[string]any(qb.Gt(tt.column, tt.value))
+			case "Lt":
+				condition = map[string]any(qb.Lt(tt.column, tt.value))
+			case "GtOrEq":
+				condition = map[string]any(qb.GtOrEq(tt.column, tt.value))
+			case "LtOrEq":
+				condition = map[string]any(qb.LtOrEq(tt.column, tt.value))
+			}
+
+			assert.Equal(t, tt.expected, condition)
+		})
+	}
+}
+
+func TestQueryBuilderOracleWhereClauseInQuery(t *testing.T) {
+	qb := NewQueryBuilder(Oracle)
+
+	// Test that the WHERE clause helper creates properly quoted SQL
+	query := qb.Select("id", "name", "number").
+		From("accounts").
+		Where(qb.Eq("number", "12345"))
+
+	sql, args, err := query.ToSql()
+	require.NoError(t, err)
+
+	expectedSQL := `SELECT id, name, "number" FROM accounts WHERE "number" = :1`
+	assert.Equal(t, expectedSQL, sql)
+	assert.Equal(t, []any{"12345"}, args)
 }
 
 func TestQueryBuilderBuildUpsertPostgreSQL(t *testing.T) {
