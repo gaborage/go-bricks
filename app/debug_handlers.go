@@ -91,11 +91,19 @@ func (d *DebugHandlers) RegisterDebugEndpoints(e *echo.Echo) {
 	}
 
 	// Register endpoints
-	debugGroup.GET("/goroutines", d.handleGoroutines)
-	debugGroup.GET("/gc", d.handleGC)
-	debugGroup.POST("/gc", d.handleForceGC)
-	debugGroup.GET("/health-debug", d.handleHealthDebug)
-	debugGroup.GET("/info", d.handleInfo)
+	if d.config.Endpoints.Goroutines {
+		debugGroup.GET("/goroutines", d.handleGoroutines)
+	}
+	if d.config.Endpoints.GC {
+		debugGroup.GET("/gc", d.handleGC)
+		debugGroup.POST("/gc", d.handleForceGC)
+	}
+	if d.config.Endpoints.Health {
+		debugGroup.GET("/health-debug", d.handleHealthDebug)
+	}
+	if d.config.Endpoints.Info {
+		debugGroup.GET("/info", d.handleInfo)
+	}
 
 	d.logger.Info().
 		Str("prefix", d.config.PathPrefix).

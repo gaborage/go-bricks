@@ -160,31 +160,39 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 // Examples: "select [chan receive, locked to thread]" -> "select"
 //
 //	"chan receive [locked to thread]" -> "chan receive"
+//	"chan receive, timeout" -> "chan receive"
+//	"[annotations] primary" -> "primary"
 //	"running" -> "running"
 func (d *DebugHandlers) normalizeGoroutineState(state string) string {
 	state = strings.TrimSpace(state)
 	if state == "" {
-		return "unknown"
+		return unknownStatus
 	}
 
-	// Handle composite states with nested brackets
-	// Example: "select [chan receive, locked to thread]"
-	if bracketIndex := strings.Index(state, " ["); bracketIndex != -1 {
-		primaryState := strings.TrimSpace(state[:bracketIndex])
-		if primaryState != "" {
-			return primaryState
-		}
-	}
-
-	// Handle states that start with brackets but have primary state before
-	// Example: might have edge cases like "[annotations] primary"
-	if strings.HasPrefix(state, "[") && strings.Contains(state, "] ") {
+	// Handle states that start with brackets and have primary state after
+	// Example: "[annotations] primary"
+	if strings.HasPrefix(state, "[") {
 		if endBracket := strings.Index(state, "] "); endBracket != -1 {
 			remaining := strings.TrimSpace(state[endBracket+2:])
 			if remaining != "" {
-				return remaining
+				state = remaining
 			}
 		}
+	}
+
+	// Remove any bracketed suffix (like " [..]")
+	if bracketIndex := strings.Index(state, " ["); bracketIndex != -1 {
+		state = strings.TrimSpace(state[:bracketIndex])
+	}
+
+	// Split on the first comma and keep the part before it
+	if commaIndex := strings.Index(state, ","); commaIndex != -1 {
+		state = strings.TrimSpace(state[:commaIndex])
+	}
+
+	// Return the primary state, falling back to unknownStatus if empty
+	if state == "" {
+		return unknownStatus
 	}
 
 	return state
@@ -260,7 +268,7 @@ func (d *DebugHandlers) checkHighFunctionCount(stack GoroutineStack, functionCou
 
 // checkChannelOperations detects goroutines stuck on channel operations
 func (d *DebugHandlers) checkChannelOperations(stack GoroutineStack) *PotentialLeak {
-	if stack.State == "chan receive" || stack.State == "chan send" {
+	if strings.HasPrefix(stack.State, "chan receive") || strings.HasPrefix(stack.State, "chan send") {
 		return &PotentialLeak{
 			ID:       stack.ID,
 			Function: stack.Function,
@@ -272,7 +280,7 @@ func (d *DebugHandlers) checkChannelOperations(stack GoroutineStack) *PotentialL
 
 // checkSelectStatement detects goroutines stuck in select statements
 func (d *DebugHandlers) checkSelectStatement(stack GoroutineStack) *PotentialLeak {
-	if stack.State == "select" {
+	if strings.HasPrefix(stack.State, "select") {
 		return &PotentialLeak{
 			ID:       stack.ID,
 			Function: stack.Function,
@@ -284,7 +292,7 @@ func (d *DebugHandlers) checkSelectStatement(stack GoroutineStack) *PotentialLea
 
 // checkNetworkIO detects goroutines stuck on network IO operations
 func (d *DebugHandlers) checkNetworkIO(stack GoroutineStack) *PotentialLeak {
-	if stack.State != "IO wait" {
+	if !strings.HasPrefix(stack.State, "IO wait") {
 		return nil
 	}
 

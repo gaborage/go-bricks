@@ -137,20 +137,6 @@ func (qb *QueryBuilder) quoteOracleColumn(column string) string {
 	return oracleQuoteIdentifier(column)
 }
 
-// quoteOracleColumns handles Oracle-specific column name quoting for multiple columns.
-// It applies quoting to each column individually for SELECT operations.
-func (qb *QueryBuilder) quoteOracleColumns(columns ...string) []string {
-	if qb.vendor != dbtypes.Oracle {
-		return columns
-	}
-
-	quotedColumns := make([]string, len(columns))
-	for i, col := range columns {
-		quotedColumns[i] = oracleQuoteIdentifier(col)
-	}
-	return quotedColumns
-}
-
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
 // like INSERT or UPDATE where reserved words must be safely referenced. In these contexts, we
 // prefer upper-cased quoted identifiers for reserved words to match Oracle's default identifier case.

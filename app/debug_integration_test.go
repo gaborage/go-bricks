@@ -26,6 +26,12 @@ func TestDebugEndpointsIntegration(t *testing.T) {
 		PathPrefix:  debugPath,
 		AllowedIPs:  []string{localhostIPV4},
 		BearerToken: "",
+		Endpoints: config.DebugEndpointsConfig{
+			Info:       true,
+			Goroutines: true,
+			GC:         true,
+			Health:     true,
+		},
 	}
 
 	// Create test logger
@@ -114,6 +120,12 @@ func TestGoroutineEndpoint(t *testing.T) {
 		PathPrefix:  debugPath,
 		AllowedIPs:  []string{localhostIPV4},
 		BearerToken: "",
+		Endpoints: config.DebugEndpointsConfig{
+			Goroutines: true,
+			Info:       true,
+			GC:         true,
+			Health:     true,
+		},
 	}
 
 	testLogger := logger.New("info", false)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -21,7 +22,7 @@ import (
 // It manages server lifecycle, configuration, and request handling.
 type Server struct {
 	echo         *echo.Echo
-	httpServer   *http.Server // Store the actual http.Server instance for proper shutdown
+	httpServer   atomic.Pointer[http.Server] // Store the actual http.Server instance for proper shutdown with race-free access
 	cfg          *config.Config
 	logger       logger.Logger
 	basePath     string
@@ -187,8 +188,8 @@ func (s *Server) Start() error {
 		ReadHeaderTimeout: s.cfg.Server.Timeout.Read,
 	}
 
-	// Store the server instance for proper shutdown
-	s.httpServer = server
+	// Store the server instance for proper shutdown using atomic operation
+	s.httpServer.Store(server)
 
 	return s.echo.StartServer(server)
 }
@@ -199,10 +200,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// First try Echo's shutdown (for compatibility)
 	err := s.echo.Shutdown(ctx)
 
-	// Then ensure our actual http.Server instance is shut down
+	// Then ensure our actual http.Server instance is shut down using atomic load
 	// This fixes the issue where Echo's StartServer doesn't store the server properly
-	if s.httpServer != nil {
-		if httpErr := s.httpServer.Shutdown(ctx); httpErr != nil && !goerrors.Is(httpErr, http.ErrServerClosed) {
+	if srv := s.httpServer.Load(); srv != nil {
+		if httpErr := srv.Shutdown(ctx); httpErr != nil && !goerrors.Is(httpErr, http.ErrServerClosed) {
 			return httpErr
 		}
 	}

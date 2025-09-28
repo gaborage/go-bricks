@@ -251,7 +251,7 @@ func TestCalculateHealthSummary(t *testing.T) {
 			name:       "no components",
 			components: map[string]ComponentHealth{},
 			expected: HealthSummary{
-				OverallStatus: "unknown",
+				OverallStatus: unknownStatus,
 				TotalProbes:   0,
 				HealthyCount:  0,
 				CriticalCount: 0,
@@ -261,10 +261,10 @@ func TestCalculateHealthSummary(t *testing.T) {
 		{
 			name: "unknown status",
 			components: map[string]ComponentHealth{
-				"unknown": {Status: "unknown"},
+				unknownStatus: {Status: unknownStatus},
 			},
 			expected: HealthSummary{
-				OverallStatus: "unknown",
+				OverallStatus: unknownStatus,
 				TotalProbes:   1,
 				HealthyCount:  0,
 				CriticalCount: 0,

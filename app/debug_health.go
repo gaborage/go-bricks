@@ -9,6 +9,10 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+const (
+	unknownStatus = "unknown"
+)
+
 // HealthDebugInfo contains enhanced health information for debugging
 type HealthDebugInfo struct {
 	Components map[string]ComponentHealth `json:"components"`
@@ -138,7 +142,7 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 	} else if summary.HealthyCount == summary.TotalProbes && summary.TotalProbes > 0 {
 		summary.OverallStatus = "healthy"
 	} else {
-		summary.OverallStatus = "unknown"
+		summary.OverallStatus = unknownStatus
 	}
 
 	return summary

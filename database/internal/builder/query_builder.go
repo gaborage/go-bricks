@@ -186,7 +186,16 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 func (qb *QueryBuilder) quoteColumnsForSelect(columns ...string) []string {
 	switch qb.vendor {
 	case dbtypes.Oracle:
-		return qb.quoteOracleColumns(columns...)
+		quoted := make([]string, 0, len(columns))
+		for _, col := range columns {
+			if col == "*" || strings.HasSuffix(col, ".*") {
+				// Do not quote wildcard selectors
+				quoted = append(quoted, col)
+				continue
+			}
+			quoted = append(quoted, qb.quoteOracleColumn(col))
+		}
+		return quoted
 	default:
 		return columns
 	}

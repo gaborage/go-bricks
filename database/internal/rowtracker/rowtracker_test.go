@@ -197,9 +197,10 @@ func TestTrackedRowConcurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		for i := 0; i < 10; i++ {
 			wg.Add(1)
+			idx := i // Capture loop variable to avoid data race
 			go func() {
 				defer wg.Done()
-				if i%2 == 0 {
+				if idx%2 == 0 {
 					var dest []any
 					_ = trackedRow.Scan(dest...)
 				} else {

@@ -56,12 +56,12 @@ func TestNormalizeGoroutineState(t *testing.T) {
 		{
 			name:     "empty state becomes unknown",
 			input:    "",
-			expected: "unknown",
+			expected: unknownStatus,
 		},
 		{
 			name:     "whitespace only becomes unknown",
 			input:    "   ",
-			expected: "unknown",
+			expected: unknownStatus,
 		},
 		{
 			name:     "complex composite state",

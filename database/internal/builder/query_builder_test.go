@@ -280,7 +280,7 @@ func TestWhereLike(t *testing.T) {
 		},
 		{
 			vendor:      dbtypes.Oracle,
-			expectedSQL: `SELECT "*" FROM users WHERE UPPER(name) LIKE :1`,
+			expectedSQL: `SELECT * FROM users WHERE UPPER(name) LIKE :1`,
 		},
 		{
 			vendor:      "mysql",

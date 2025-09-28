@@ -7,7 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const tenantAMQPURL = "amqp://tenant-a"
+const (
+	tenantAMQPURL = "amqp://tenant-a"
+	tenantA       = "tenant-a"
+)
 
 func TestTenantStoreDefaults(t *testing.T) {
 	cfg := &Config{
@@ -40,7 +43,7 @@ func TestTenantStoreTenantOverrides(t *testing.T) {
 		Multitenant: MultitenantConfig{
 			Enabled: true,
 			Tenants: map[string]TenantEntry{
-				"tenant-a": {
+				tenantA: {
 					Database: DatabaseConfig{
 						Type:     PostgreSQL,
 						Host:     "tenant-a.db.local",
@@ -54,11 +57,11 @@ func TestTenantStoreTenantOverrides(t *testing.T) {
 	}
 
 	source := NewTenantStore(cfg)
-	dbCfg, err := source.DBConfig(context.Background(), "tenant-a")
+	dbCfg, err := source.DBConfig(context.Background(), tenantA)
 	assert.NoError(t, err)
-	assert.Equal(t, cfg.Multitenant.Tenants["tenant-a"].Database, *dbCfg)
+	assert.Equal(t, cfg.Multitenant.Tenants[tenantA].Database, *dbCfg)
 
-	url, err := source.AMQPURL(context.Background(), "tenant-a")
+	url, err := source.AMQPURL(context.Background(), tenantA)
 	assert.NoError(t, err)
 	assert.Equal(t, tenantAMQPURL, url)
 
