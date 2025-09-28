@@ -375,52 +375,32 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 }
 
 // Join adds a JOIN clause to the query
-func (sqb *SelectQueryBuilder) Join(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]any, len(rest))
-	for i, v := range rest {
-		args[i] = v
-	}
-	sqb.selectBuilder = sqb.selectBuilder.Join(join, args...)
+func (sqb *SelectQueryBuilder) Join(join string, rest ...any) *SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.Join(join, rest...)
 	return sqb
 }
 
 // LeftJoin adds a LEFT JOIN clause to the query
-func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]any, len(rest))
-	for i, v := range rest {
-		args[i] = v
-	}
-	sqb.selectBuilder = sqb.selectBuilder.LeftJoin(join, args...)
+func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...any) *SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.LeftJoin(join, rest...)
 	return sqb
 }
 
 // RightJoin adds a RIGHT JOIN clause to the query
-func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]any, len(rest))
-	for i, v := range rest {
-		args[i] = v
-	}
-	sqb.selectBuilder = sqb.selectBuilder.RightJoin(join, args...)
+func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...any) *SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.RightJoin(join, rest...)
 	return sqb
 }
 
 // InnerJoin adds an INNER JOIN clause to the query
-func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]any, len(rest))
-	for i, v := range rest {
-		args[i] = v
-	}
-	sqb.selectBuilder = sqb.selectBuilder.InnerJoin(join, args...)
+func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...any) *SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.InnerJoin(join, rest...)
 	return sqb
 }
 
 // CrossJoin adds a CROSS JOIN clause to the query
-func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]any, len(rest))
-	for i, v := range rest {
-		args[i] = v
-	}
-	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(join, args...)
+func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...any) *SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(join, rest...)
 	return sqb
 }
 

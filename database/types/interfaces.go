@@ -13,6 +13,43 @@ import (
 	"github.com/Masterminds/squirrel"
 )
 
+// SelectQueryBuilder defines the interface for enhanced SELECT query building with type safety.
+// This interface extends basic squirrel.SelectBuilder functionality with additional methods
+// for type-safe WHERE clauses, JOIN operations, and vendor-specific query features.
+type SelectQueryBuilder interface {
+	// Core SELECT builder methods
+	From(from ...string) SelectQueryBuilder
+	Join(join string, rest ...any) SelectQueryBuilder
+	LeftJoin(join string, rest ...any) SelectQueryBuilder
+	RightJoin(join string, rest ...any) SelectQueryBuilder
+	InnerJoin(join string, rest ...any) SelectQueryBuilder
+	CrossJoin(join string, rest ...any) SelectQueryBuilder
+	Where(pred any, rest ...any) SelectQueryBuilder
+	GroupBy(groupBys ...string) SelectQueryBuilder
+	Having(pred any, rest ...any) SelectQueryBuilder
+	OrderBy(orderBys ...string) SelectQueryBuilder
+	Limit(limit uint64) SelectQueryBuilder
+	Offset(offset uint64) SelectQueryBuilder
+
+	// Type-safe WHERE clause methods
+	WhereEq(column string, value any) SelectQueryBuilder
+	WhereNotEq(column string, value any) SelectQueryBuilder
+	WhereLt(column string, value any) SelectQueryBuilder
+	WhereLte(column string, value any) SelectQueryBuilder
+	WhereGt(column string, value any) SelectQueryBuilder
+	WhereGte(column string, value any) SelectQueryBuilder
+	WhereIn(column string, values any) SelectQueryBuilder
+	WhereNotIn(column string, values any) SelectQueryBuilder
+	WhereLike(column, pattern string) SelectQueryBuilder
+	WhereNull(column string) SelectQueryBuilder
+	WhereNotNull(column string) SelectQueryBuilder
+	WhereBetween(column string, lowerBound, upperBound any) SelectQueryBuilder
+	WhereRaw(condition string, args ...any) SelectQueryBuilder
+
+	// SQL generation
+	ToSQL() (sql string, args []any, err error)
+}
+
 // Database vendor identifiers shared across the database packages.
 type Vendor = string
 
@@ -121,7 +158,7 @@ type QueryBuilderInterface interface {
 	Vendor() string
 
 	// Query builders
-	Select(columns ...string) squirrel.SelectBuilder
+	Select(columns ...string) SelectQueryBuilder
 	Insert(table string) squirrel.InsertBuilder
 	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
 	Update(table string) squirrel.UpdateBuilder

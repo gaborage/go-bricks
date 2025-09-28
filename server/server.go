@@ -202,9 +202,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Then ensure our actual http.Server instance is shut down
 	// This fixes the issue where Echo's StartServer doesn't store the server properly
 	if s.httpServer != nil {
-		if httpErr := s.httpServer.Shutdown(ctx); httpErr != nil {
+		if httpErr := s.httpServer.Shutdown(ctx); httpErr != nil && !goerrors.Is(httpErr, http.ErrServerClosed) {
 			return httpErr
 		}
+	}
+	if goerrors.Is(err, http.ErrServerClosed) {
+		return nil
 	}
 	return err
 }

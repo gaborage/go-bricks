@@ -58,7 +58,7 @@ func isLetter(c byte) bool {
 
 // isValidIdentifierChar checks if a character is valid in an identifier
 func isValidIdentifierChar(c byte) bool {
-	return isLetter(c) || (c >= '0' && c <= '9') || c == '_'
+	return isLetter(c) || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '#'
 }
 
 // isSQLFunction checks if the given string is a SQL function call
@@ -81,8 +81,8 @@ func isSQLFunction(s string) bool {
 	// Validate function name (before the parenthesis)
 	functionName := strings.TrimSpace(s[:parenIndex])
 
-	// Function name must start with letter
-	if !isLetter(functionName[0]) {
+	// Function name must not be empty and must start with letter
+	if functionName == "" || !isLetter(functionName[0]) {
 		return false
 	}
 

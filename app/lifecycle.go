@@ -101,7 +101,6 @@ func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, erro
 	defer func() {
 		a.logger.Info().Msg("Cleaning up signal handler")
 		signal.Stop(quit)
-		close(quit)
 		a.logger.Info().Msg("Signal handler cleanup complete")
 	}()
 
@@ -125,8 +124,17 @@ func (a *App) drainServerError(ch <-chan error) error {
 		return nil
 	}
 
-	// Set a timeout to prevent hanging indefinitely - shorter timeout for tests
-	timeout := time.After(3 * time.Second)
+	// Derive from configured shutdown timeout with headroom
+	timeoutDur := 15 * time.Second // default timeout
+	if a.cfg != nil {
+		timeoutDur = a.cfg.Server.Timeout.Shutdown
+		if timeoutDur <= 0 {
+			timeoutDur = 15 * time.Second
+		} else {
+			timeoutDur += 5 * time.Second
+		}
+	}
+	timeout := time.After(timeoutDur)
 
 	if a.logger != nil {
 		a.logger.Debug().Msg("Draining server error channel")
@@ -193,7 +201,7 @@ func (a *App) Run() error {
 		// Force dump goroutines before exit
 		a.dumpGoroutinesIfNeeded()
 		cancel()
-		os.Exit(1)
+		return fmt.Errorf("shutdown timed out")
 	}
 
 	var errs []error
@@ -235,7 +243,8 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 	}
 
 	// Capitalize the first letter of the name for logging
-	capitalizedName := strings.ToUpper(closer.name[:1]) + closer.name[1:]
+	r := []rune(name)
+	capitalizedName := strings.ToUpper(string(r[0])) + string(r[1:])
 	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }
 
@@ -353,6 +362,9 @@ func (a *App) readyCheck(c echo.Context) error {
 // dumpGoroutinesIfNeeded dumps goroutine stacks if there are more than expected running
 func (a *App) dumpGoroutinesIfNeeded() {
 	// Count current goroutines
+	if !a.cfg.Debug.Enabled {
+		return
+	}
 	numGoroutines := runtime.NumGoroutine()
 
 	// In a clean shutdown, we expect only 1-2 goroutines (main + maybe GC)

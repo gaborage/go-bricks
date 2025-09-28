@@ -15,7 +15,7 @@ import (
 //
 //	mockQB := &mocks.MockQueryBuilder{}
 //	mockQB.On("Vendor").Return("postgresql")
-//	mockQB.On("Select", "id", "name").Return(squirrel.SelectBuilder{})
+//	mockQB.On("Select", "id", "name").Return(mockSelectBuilder)
 //	mockQB.On("BuildCaseInsensitiveLike", "name", "john").Return(squirrel.ILike{"name": "%john%"})
 //
 //	// Use mockQB in your tests
@@ -31,9 +31,9 @@ func (m *MockQueryBuilder) Vendor() string {
 }
 
 // Select implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Select(columns ...string) squirrel.SelectBuilder {
+func (m *MockQueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
 	args := m.MethodCalled("Select", columns)
-	return args.Get(0).(squirrel.SelectBuilder)
+	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 // Insert implements types.QueryBuilderInterface
@@ -114,7 +114,7 @@ func (m *MockQueryBuilder) ExpectVendor(vendor string) *mock.Call {
 }
 
 // ExpectSelect sets up a select expectation with the provided builder
-func (m *MockQueryBuilder) ExpectSelect(columns []string, builder squirrel.SelectBuilder) *mock.Call {
+func (m *MockQueryBuilder) ExpectSelect(columns []string, builder types.SelectQueryBuilder) *mock.Call {
 	return m.On("Select", columns).Return(builder)
 }
 

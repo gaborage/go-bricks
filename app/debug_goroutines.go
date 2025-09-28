@@ -138,7 +138,7 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 
 	state := ""
 	if open := strings.Index(line, "["); open != -1 {
-		if closeIdx := strings.Index(line, "]"); closeIdx != -1 && closeIdx > open+1 {
+		if closeIdx := strings.LastIndex(line, "]"); closeIdx != -1 && closeIdx > open+1 {
 			state = strings.TrimSpace(line[open+1 : closeIdx])
 		}
 	}
@@ -146,11 +146,48 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 		state = strings.Trim(parts[2], "[]:")
 	}
 
+	// Normalize goroutine state to handle composite states with annotations
+	state = d.normalizeGoroutineState(state)
+
 	return &GoroutineStack{
 		ID:    id,
 		State: state,
 		Stack: []string{},
 	}
+}
+
+// normalizeGoroutineState normalizes goroutine states to handle composite states with annotations
+// Examples: "select [chan receive, locked to thread]" -> "select"
+//
+//	"chan receive [locked to thread]" -> "chan receive"
+//	"running" -> "running"
+func (d *DebugHandlers) normalizeGoroutineState(state string) string {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return "unknown"
+	}
+
+	// Handle composite states with nested brackets
+	// Example: "select [chan receive, locked to thread]"
+	if bracketIndex := strings.Index(state, " ["); bracketIndex != -1 {
+		primaryState := strings.TrimSpace(state[:bracketIndex])
+		if primaryState != "" {
+			return primaryState
+		}
+	}
+
+	// Handle states that start with brackets but have primary state before
+	// Example: might have edge cases like "[annotations] primary"
+	if strings.HasPrefix(state, "[") && strings.Contains(state, "] ") {
+		if endBracket := strings.Index(state, "] "); endBracket != -1 {
+			remaining := strings.TrimSpace(state[endBracket+2:])
+			if remaining != "" {
+				return remaining
+			}
+		}
+	}
+
+	return state
 }
 
 // processStackFrame processes a stack frame line and updates the current stack

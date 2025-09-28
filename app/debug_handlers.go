@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
@@ -224,7 +225,7 @@ func (d *DebugHandlers) authMiddleware() echo.MiddlewareFunc {
 			}
 
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if token != d.config.BearerToken {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(d.config.BearerToken)) != 1 {
 				d.logger.Warn().Str("client_ip", c.RealIP()).Msg("Debug endpoint access denied: invalid token")
 				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
 			}

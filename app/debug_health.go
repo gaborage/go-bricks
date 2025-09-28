@@ -149,7 +149,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 	// Add database manager information
 	if d.app.dbManager != nil {
 		dbHealth := ComponentHealth{
-			Status:  "active",
+			Status:  "healthy",
 			Details: make(map[string]any),
 		}
 
@@ -163,7 +163,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 	// Add messaging manager information
 	if d.app.messagingManager != nil {
 		msgHealth := ComponentHealth{
-			Status:  "active",
+			Status:  "healthy",
 			Details: make(map[string]any),
 		}
 
