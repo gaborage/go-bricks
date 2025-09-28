@@ -421,14 +421,6 @@ func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...string) *SelectQue
 	return sqb
 }
 
-// Where adds a raw WHERE condition (for backward compatibility with complex conditions)
-// This method allows using squirrel.Sqlizer conditions like squirrel.Eq, squirrel.And, etc.
-// For simple column conditions, prefer the type-safe WhereEq, WhereLt, etc. methods.
-func (sqb *SelectQueryBuilder) Where(pred any, args ...any) *SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(pred, args...)
-	return sqb
-}
-
 // OrderBy adds an ORDER BY clause to the query
 func (sqb *SelectQueryBuilder) OrderBy(orderBys ...string) *SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.OrderBy(orderBys...)
