@@ -314,11 +314,14 @@ func (sqb *SelectQueryBuilder) WhereNotIn(column string, values any) *SelectQuer
 	return sqb
 }
 
-// WhereLike adds a LIKE condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
+// WhereLike adds a case-insensitive LIKE condition to the WHERE clause.
+// This uses vendor-specific case-insensitive logic:
+// - PostgreSQL: Uses ILIKE operator
+// - Oracle: Uses UPPER() function on both column and value
+// - Other vendors: Uses standard LIKE
 func (sqb *SelectQueryBuilder) WhereLike(column, pattern string) *SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Like{quotedColumn: pattern})
+	condition := sqb.qb.BuildCaseInsensitiveLike(column, pattern)
+	sqb.selectBuilder = sqb.selectBuilder.Where(condition)
 	return sqb
 }
 

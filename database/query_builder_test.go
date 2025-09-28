@@ -273,10 +273,9 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			condition := qb.BuildCaseInsensitiveLike(tt.column, tt.value)
 
 			// Use the condition in a query to generate SQL
-			query := qb.Select("*").From("table").Where(condition)
+			query := qb.Select("*").From("table").WhereLike(tt.column, tt.value)
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
@@ -615,7 +614,7 @@ func TestQueryBuilderOracleWhereClauseInQuery(t *testing.T) {
 	// Test that the WHERE clause helper creates properly quoted SQL
 	query := qb.Select("id", "name", "number").
 		From("accounts").
-		Where(qb.Eq("number", "12345"))
+		WhereEq("number", "12345")
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
@@ -716,7 +715,7 @@ func TestQueryBuilderPlaceholderFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Select("*").From("table").Where("id = ?", 1)
+			query := qb.Select("*").From("table").WhereEq("id", 1)
 
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
@@ -732,8 +731,8 @@ func TestQueryBuilderIntegrationTest(t *testing.T) {
 	// Build a complex SELECT query
 	query := qb.Select("id", "name", "email").
 		From("users").
-		Where("active = ?", true).
-		Where(qb.BuildCaseInsensitiveLike("name", "john")).
+		WhereEq("active", true).
+		WhereLike("name", "john").
 		OrderBy("name ASC")
 
 	query = qb.BuildLimitOffset(query, 10, 5)
@@ -762,7 +761,7 @@ func TestQueryBuilderWithSqlmock(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	// Build a SELECT query
-	query := qb.Select("id", "name").From("users").Where("active = ?", true)
+	query := qb.Select("id", "name").From("users").WhereEq("active", true)
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
@@ -831,8 +830,8 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 	query := qb.Select("u.id", "u.name", "p.title").
 		From("users u").
 		Join("posts p ON u.id = p.user_id").
-		Where("u.active = ?", true).
-		Where(qb.BuildCaseInsensitiveLike("p.title", "go")).
+		WhereEq("u.active", true).
+		WhereLike("p.title", "go").
 		OrderBy("u.name ASC")
 
 	query = qb.BuildLimitOffset(query, 5, 0)
