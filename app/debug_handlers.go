@@ -173,6 +173,13 @@ func (w *IPWhitelist) normalizeToCIDR(ipStr string) string {
 // ipWhitelistMiddleware restricts access to allowed IPs
 func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
+	if len(whitelist.networks) == 0 {
+		return func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				return next(c)
+			}
+		}
+	}
 	return d.createIPCheckHandler(whitelist)
 }
 

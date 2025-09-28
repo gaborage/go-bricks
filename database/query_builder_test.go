@@ -111,7 +111,7 @@ func TestQueryBuilderSelect(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			query := qb.Select(tt.columns...)
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -277,7 +277,7 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 
 			// Use the condition in a query to generate SQL
 			query := qb.Select("*").From("table").Where(condition)
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -339,7 +339,7 @@ func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 			query := qb.Select("*").From("table")
 			query = qb.BuildLimitOffset(query, tt.limit, tt.offset)
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 
 			for _, fragment := range tt.expected {
@@ -358,14 +358,14 @@ func TestQueryBuilderBuildLimitOffsetDefaultVendor(t *testing.T) {
 
 	// Apply only offset to verify it is respected without LIMIT
 	query = qb.BuildLimitOffset(query, 0, 3)
-	sqlText, _, err := query.ToSql()
+	sqlText, _, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.NotContains(t, sqlText, "LIMIT")
 	assert.Contains(t, sqlText, "OFFSET")
 
 	// Apply limit and offset together
 	query = qb.BuildLimitOffset(qb.Select("*").From("items"), 4, 2)
-	sqlText, _, err = query.ToSql()
+	sqlText, _, err = query.ToSQL()
 	require.NoError(t, err)
 	assert.Contains(t, sqlText, "LIMIT 4")
 	assert.Contains(t, sqlText, "OFFSET 2")
@@ -617,7 +617,7 @@ func TestQueryBuilderOracleWhereClauseInQuery(t *testing.T) {
 		From("accounts").
 		Where(qb.Eq("number", "12345"))
 
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
 	expectedSQL := `SELECT id, name, "number" FROM accounts WHERE "number" = :1`
@@ -718,7 +718,7 @@ func TestQueryBuilderPlaceholderFormat(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			query := qb.Select("*").From("table").Where("id = ?", 1)
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expectSQL)
 		})
@@ -738,7 +738,7 @@ func TestQueryBuilderIntegrationTest(t *testing.T) {
 
 	query = qb.BuildLimitOffset(query, 10, 5)
 
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.NotEmpty(t, sql)
 	assert.NotEmpty(t, args)
@@ -763,7 +763,7 @@ func TestQueryBuilderWithSqlmock(t *testing.T) {
 
 	// Build a SELECT query
 	query := qb.Select("id", "name").From("users").Where("active = ?", true)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
 	// Set up mock expectation
@@ -837,7 +837,7 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 
 	query = qb.BuildLimitOffset(query, 5, 0)
 
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
 	// Set up mock expectation

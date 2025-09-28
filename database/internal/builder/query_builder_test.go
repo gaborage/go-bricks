@@ -44,7 +44,7 @@ func TestBuildLimitOffsetSkipsZeroValues(t *testing.T) {
 
 	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 0, 0)
 
-	sql, _, err := query.ToSql()
+	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.NotContains(t, sql, "LIMIT")
 	assert.NotContains(t, sql, "OFFSET")
@@ -55,7 +55,7 @@ func TestBuildLimitOffsetAppliesPositiveValues(t *testing.T) {
 
 	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 5, 10)
 
-	sql, _, err := query.ToSql()
+	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.Contains(t, sql, "LIMIT 5")
 	assert.Contains(t, sql, "OFFSET 10")
@@ -66,7 +66,7 @@ func TestBuildLimitOffsetOracleUsesSuffix(t *testing.T) {
 
 	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 5, 0)
 
-	sql, _, err := query.ToSql()
+	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.Contains(t, sql, "FETCH NEXT 5 ROWS ONLY")
 	assert.NotContains(t, sql, "LIMIT")
