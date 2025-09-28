@@ -98,7 +98,7 @@ func (m *DbManager) Get(ctx context.Context, key string) (Interface, error) {
 	}
 
 	// Use singleflight to prevent thundering herd on connection creation
-	result, err, _ := m.sfg.Do(key, func() (interface{}, error) {
+	result, err, _ := m.sfg.Do(key, func() (any, error) {
 		// Double-check after acquiring singleflight lock
 		if conn := m.getExisting(key); conn != nil {
 			return conn, nil

@@ -107,7 +107,7 @@ func NewMessagingManager(resourceSource TenantMessagingResourceSource, log logge
 // Subsequent calls for the same key are idempotent.
 func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declarations) error {
 	// Use singleflight to prevent concurrent consumer setup for the same key
-	_, err, _ := m.sfg.Do("consumer:"+key, func() (interface{}, error) {
+	_, err, _ := m.sfg.Do("consumer:"+key, func() (any, error) {
 		return nil, m.ensureConsumersInternal(ctx, key, decls)
 	})
 	return err
@@ -176,7 +176,7 @@ func (m *Manager) GetPublisher(ctx context.Context, key string) (AMQPClient, err
 	}
 
 	// Use singleflight to prevent thundering herd on client creation
-	result, err, _ := m.sfg.Do("publisher:"+key, func() (interface{}, error) {
+	result, err, _ := m.sfg.Do("publisher:"+key, func() (any, error) {
 		// Double-check after acquiring singleflight lock
 		if client := m.getExistingPublisher(key); client != nil {
 			return client, nil

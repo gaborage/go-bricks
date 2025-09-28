@@ -373,7 +373,7 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 
 // Join adds a JOIN clause to the query
 func (sqb *SelectQueryBuilder) Join(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]interface{}, len(rest))
+	args := make([]any, len(rest))
 	for i, v := range rest {
 		args[i] = v
 	}
@@ -383,7 +383,7 @@ func (sqb *SelectQueryBuilder) Join(join string, rest ...string) *SelectQueryBui
 
 // LeftJoin adds a LEFT JOIN clause to the query
 func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]interface{}, len(rest))
+	args := make([]any, len(rest))
 	for i, v := range rest {
 		args[i] = v
 	}
@@ -393,7 +393,7 @@ func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...string) *SelectQuer
 
 // RightJoin adds a RIGHT JOIN clause to the query
 func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]interface{}, len(rest))
+	args := make([]any, len(rest))
 	for i, v := range rest {
 		args[i] = v
 	}
@@ -403,7 +403,7 @@ func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...string) *SelectQue
 
 // InnerJoin adds an INNER JOIN clause to the query
 func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]interface{}, len(rest))
+	args := make([]any, len(rest))
 	for i, v := range rest {
 		args[i] = v
 	}
@@ -413,7 +413,7 @@ func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...string) *SelectQue
 
 // CrossJoin adds a CROSS JOIN clause to the query
 func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...string) *SelectQueryBuilder {
-	args := make([]interface{}, len(rest))
+	args := make([]any, len(rest))
 	for i, v := range rest {
 		args[i] = v
 	}
@@ -424,7 +424,7 @@ func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...string) *SelectQue
 // Where adds a raw WHERE condition (for backward compatibility with complex conditions)
 // This method allows using squirrel.Sqlizer conditions like squirrel.Eq, squirrel.And, etc.
 // For simple column conditions, prefer the type-safe WhereEq, WhereLt, etc. methods.
-func (sqb *SelectQueryBuilder) Where(pred interface{}, args ...interface{}) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) Where(pred any, args ...any) *SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(pred, args...)
 	return sqb
 }
@@ -442,7 +442,7 @@ func (sqb *SelectQueryBuilder) GroupBy(groupBys ...string) *SelectQueryBuilder {
 }
 
 // Having adds a HAVING clause to the query
-func (sqb *SelectQueryBuilder) Having(pred interface{}, rest ...interface{}) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) *SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Having(pred, rest...)
 	return sqb
 }

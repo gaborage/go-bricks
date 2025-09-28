@@ -533,11 +533,11 @@ func TestFilterValueEdgeCases(t *testing.T) {
 
 	// Test with complex nested structure
 	t.Run("nested_structure", func(t *testing.T) {
-		complexData := map[string]interface{}{
-			"user": map[string]interface{}{
+		complexData := map[string]any{
+			"user": map[string]any{
 				"name":     "test",
 				"password": "secret123",
-				"details": map[string]interface{}{
+				"details": map[string]any{
 					"token": "abc123",
 				},
 			},
@@ -774,15 +774,15 @@ func TestFilterValueComplexEdgeCases(t *testing.T) {
 			assert.Len(t, resultSlice, 3)
 			assert.Equal(t, "normal", resultSlice[0])
 		} else {
-			// If changes were made, it becomes []interface{}
-			interfaceSlice := result.([]interface{})
+			// If changes were made, it becomes []any
+			interfaceSlice := result.([]any)
 			assert.Len(t, interfaceSlice, 3)
 		}
 	})
 
 	// Test nested structure with simple types to avoid comparison issues
 	t.Run("nested_map_with_strings", func(t *testing.T) {
-		data := map[string]interface{}{
+		data := map[string]any{
 			"normal_field": "value",
 			"password":     "secret123",
 			"token":        "abc123",
@@ -793,7 +793,7 @@ func TestFilterValueComplexEdgeCases(t *testing.T) {
 		assert.NotNil(t, result)
 
 		// Verify the filtering worked
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Equal(t, "value", resultMap["normal_field"])
 		assert.Equal(t, "***", resultMap["password"])
 		assert.Equal(t, "***", resultMap["token"])
@@ -825,7 +825,7 @@ func TestBuildFilteredStructMapCoverage(t *testing.T) {
 		assert.NotNil(t, result)
 
 		// Check that sensitive exported field is masked
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Equal(t, "***", resultMap["Secret"])
 		assert.Equal(t, "test", resultMap["Name"])
 	})
@@ -857,7 +857,7 @@ func TestExtractFieldNameCoverage(t *testing.T) {
 		result := filter.FilterValue("data", data)
 		assert.NotNil(t, result)
 
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Equal(t, "value1", resultMap["normal"])
 		assert.Equal(t, "value2", resultMap["with_options"])
 		assert.Equal(t, "value4", resultMap["EmptyTag"])

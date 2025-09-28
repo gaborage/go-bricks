@@ -17,10 +17,10 @@ import (
 
 // DebugResponse represents a standard debug endpoint response
 type DebugResponse struct {
-	Timestamp time.Time   `json:"timestamp"`
-	Duration  string      `json:"duration"`
-	Data      interface{} `json:"data"`
-	Error     string      `json:"error,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	Duration  string    `json:"duration"`
+	Data      any       `json:"data"`
+	Error     string    `json:"error,omitempty"`
 }
 
 // GoroutineInfo contains information about goroutines
@@ -173,7 +173,7 @@ func (w *IPWhitelist) normalizeToCIDR(ipStr string) string {
 // ipWhitelistMiddleware restricts access to allowed IPs
 func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
-	if len(whitelist.networks) == 0 {
+	if len(d.config.AllowedIPs) == 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c echo.Context) error {
 				return next(c)
@@ -235,7 +235,7 @@ func (d *DebugHandlers) authMiddleware() echo.MiddlewareFunc {
 }
 
 // newDebugResponse creates a standardized debug response
-func (d *DebugHandlers) newDebugResponse(start time.Time, data interface{}, err error) *DebugResponse {
+func (d *DebugHandlers) newDebugResponse(start time.Time, data any, err error) *DebugResponse {
 	resp := &DebugResponse{
 		Timestamp: start,
 		Duration:  time.Since(start).String(),
@@ -251,13 +251,13 @@ func (d *DebugHandlers) newDebugResponse(start time.Time, data interface{}, err 
 func (d *DebugHandlers) handleInfo(c echo.Context) error {
 	start := time.Now()
 
-	info := map[string]interface{}{
+	info := map[string]any{
 		"goroutines": runtime.NumGoroutine(),
 		"go_version": runtime.Version(),
 		"go_os":      runtime.GOOS,
 		"go_arch":    runtime.GOARCH,
 		"num_cpu":    runtime.NumCPU(),
-		"debug_config": map[string]interface{}{
+		"debug_config": map[string]any{
 			"enabled":      d.config.Enabled,
 			"path_prefix":  d.config.PathPrefix,
 			"auth_enabled": d.config.BearerToken != "",
@@ -267,7 +267,7 @@ func (d *DebugHandlers) handleInfo(c echo.Context) error {
 
 	// Add app-specific info if available
 	if d.app.cfg != nil {
-		info["app"] = map[string]interface{}{
+		info["app"] = map[string]any{
 			"name":        d.app.cfg.App.Name,
 			"environment": d.app.cfg.App.Env,
 			"version":     d.app.cfg.App.Version,

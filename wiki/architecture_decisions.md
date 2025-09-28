@@ -429,7 +429,7 @@ During the implementation of the multi-tenant architecture and the transition to
 **Lazy Initialization Method**:
 ```go
 func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*messaging.Registry, error) {
-    result, err, _ := r.registryOnce.Do("messaging-registry", func() (interface{}, error) {
+    result, err, _ := r.registryOnce.Do("messaging-registry", func() (any, error) {
         if r.messagingRegistry != nil {
             return r.messagingRegistry, nil
         }

@@ -18,12 +18,12 @@ type HealthDebugInfo struct {
 
 // ComponentHealth contains detailed health information for a component
 type ComponentHealth struct {
-	Status   string                 `json:"status"`
-	Critical bool                   `json:"critical"`
-	Error    string                 `json:"error,omitempty"`
-	Details  map[string]interface{} `json:"details"`
-	LastRun  time.Time              `json:"last_run"`
-	Duration string                 `json:"duration"`
+	Status   string         `json:"status"`
+	Critical bool           `json:"critical"`
+	Error    string         `json:"error,omitempty"`
+	Details  map[string]any `json:"details"`
+	LastRun  time.Time      `json:"last_run"`
+	Duration string         `json:"duration"`
 }
 
 // HealthSummary provides overall health summary
@@ -75,7 +75,7 @@ func (d *DebugHandlers) handleHealthDebug(c echo.Context) error {
 		}
 
 		if component.Details == nil {
-			component.Details = make(map[string]interface{})
+			component.Details = make(map[string]any)
 		}
 
 		healthInfo.Components[result.Name] = component
@@ -150,7 +150,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 	if d.app.dbManager != nil {
 		dbHealth := ComponentHealth{
 			Status:  "active",
-			Details: make(map[string]interface{}),
+			Details: make(map[string]any),
 		}
 
 		// Get database statistics
@@ -164,7 +164,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 	if d.app.messagingManager != nil {
 		msgHealth := ComponentHealth{
 			Status:  "active",
-			Details: make(map[string]interface{}),
+			Details: make(map[string]any),
 		}
 
 		// Get messaging statistics

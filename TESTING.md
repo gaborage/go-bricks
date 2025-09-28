@@ -61,7 +61,7 @@ func TestUserService_GetUser(t *testing.T) {
     // Set up expectations
     expectedRows := fixtures.NewMockRows(
         []string{"id", "name", "email"},
-        [][]interface{}{
+        [][]any{
             {1, "John Doe", "john@example.com"},
         },
     )
@@ -309,10 +309,10 @@ func TestUserModule_Integration(t *testing.T) {
 ### HTTP Handler Testing
 
 ```go
-func TestUserHandler_GetUser(t *testing.T) {
-    mockDB := fixtures.NewDatabaseWithData(map[string][]interface{}{
+func TestUserHandlerGetUser(t *testing.T) {
+    mockDB := fixtures.NewDatabaseWithData(map[string][]any{
         "SELECT * FROM users WHERE id = ?": {
-            []interface{}{1, "John Doe", "john@example.com"},
+            []any{1, "John Doe", "john@example.com"},
         },
     })
 
@@ -458,7 +458,7 @@ mock.ExpectQuery("SELECT").WillReturnRows(rows)
 **After (framework mocks):**
 ```go
 mockDB := &mocks.MockDatabase{}
-rows := fixtures.NewMockRows([]string{"id", "name"}, [][]interface{}{{1, "John"}})
+rows := fixtures.NewMockRows([]string{"id", "name"}, [][]any{{1, "John"}})
 mockDB.ExpectQuery("SELECT", rows, nil)
 ```
 

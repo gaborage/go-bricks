@@ -58,7 +58,7 @@ func (e *LogEvent) Uint64(_ string, _ uint64) logger.LogEvent { return e }
 // Dur adds a duration field to the log event (no-op for testing)
 func (e *LogEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 
-// Interface adds an interface{} field to the log event (no-op for testing)
+// Interface adds an any field to the log event (no-op for testing)
 func (e *LogEvent) Interface(_ string, _ any) logger.LogEvent { return e }
 
 // Bytes adds a byte slice field to the log event (no-op for testing)
