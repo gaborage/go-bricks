@@ -103,6 +103,9 @@ func loadDefaults(k *koanf.Koanf) error {
 		"debug.endpoints.gc":         true,
 		"debug.endpoints.health":     true,
 		"debug.endpoints.info":       true,
+
+		// Source configuration defaults
+		"source.type": SourceTypeStatic,
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

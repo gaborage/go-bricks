@@ -124,3 +124,8 @@ func (s *TenantStore) HasTenant(tenantID string) bool {
 	s.mu.RUnlock()
 	return exists
 }
+
+// IsDynamic returns false since this store uses static YAML configuration
+func (s *TenantStore) IsDynamic() bool {
+	return false
+}

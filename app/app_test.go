@@ -429,6 +429,10 @@ func (s *stubTenantResource) AMQPURL(context.Context, string) (string, error) {
 	return "amqp://stub/", nil
 }
 
+func (s *stubTenantResource) IsDynamic() bool {
+	return false // Test stub uses static behavior
+}
+
 func TestAppUsesProvidedResourceSource(t *testing.T) {
 	cfg := defaultTestConfig()
 	resource := &stubTenantResource{}

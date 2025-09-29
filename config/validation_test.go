@@ -2013,16 +2013,18 @@ func TestValidateMultitenantDisabled(t *testing.T) {
 		},
 	}
 
-	err := validateMultitenant(mtConfig, dbConfig, msgConfig)
+	sourceConfig := &SourceConfig{Type: SourceTypeStatic}
+	err := validateMultitenant(mtConfig, dbConfig, msgConfig, sourceConfig)
 	assert.NoError(t, err, "Validation should pass when multitenant is disabled")
 }
 
 func TestValidateMultitenantSuccess(t *testing.T) {
 	tests := []struct {
-		name      string
-		mtConfig  *MultitenantConfig
-		dbConfig  *DatabaseConfig
-		msgConfig *MessagingConfig
+		name         string
+		mtConfig     *MultitenantConfig
+		dbConfig     *DatabaseConfig
+		msgConfig    *MessagingConfig
+		sourceConfig *SourceConfig
 	}{
 		{
 			name: "valid_header_resolver",
@@ -2078,7 +2080,11 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig)
+			sourceConfig := tt.sourceConfig
+			if sourceConfig == nil {
+				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
+			}
+			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.NoError(t, err)
 		})
 	}
@@ -2090,6 +2096,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 		mtConfig      *MultitenantConfig
 		dbConfig      *DatabaseConfig
 		msgConfig     *MessagingConfig
+		sourceConfig  *SourceConfig
 		expectedError string
 	}{
 		{
@@ -2138,7 +2145,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Type: PostgreSQL,
 			},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "database configuration not allowed when multitenant.enabled is true",
+			expectedError: "database configuration not allowed when static tenants are configured",
 		},
 		{
 			name: "messaging_configured_with_multitenant",
@@ -2158,18 +2165,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					URL: testAMQPHost, // This makes it configured
 				},
 			},
-			expectedError: "messaging configuration not allowed when multitenant.enabled is true",
-		},
-		{
-			name: "tenants_missing",
-			mtConfig: &MultitenantConfig{
-				Enabled:  true,
-				Resolver: ResolverConfig{Type: "header"},
-				Limits:   LimitsConfig{Tenants: 100},
-			},
-			dbConfig:      &DatabaseConfig{},
-			msgConfig:     &MessagingConfig{},
-			expectedError: "tenants: at least one tenant must be configured",
+			expectedError: "messaging configuration not allowed when static tenants are configured",
 		},
 		{
 			name: "tenant_missing_messaging_url",
@@ -2197,7 +2193,11 @@ func TestValidateMultitenantFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig)
+			sourceConfig := tt.sourceConfig
+			if sourceConfig == nil {
+				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
+			}
+			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -2338,4 +2338,113 @@ func TestValidateMultitenantLimits(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "tenants cannot exceed 1000")
 	})
+}
+
+func TestValidateSourceConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		sourceType  string
+		expectError bool
+	}{
+		{
+			name:        "valid_static",
+			sourceType:  SourceTypeStatic,
+			expectError: false,
+		},
+		{
+			name:        "valid_dynamic",
+			sourceType:  SourceTypeDynamic,
+			expectError: false,
+		},
+		{
+			name:        "invalid_type",
+			sourceType:  "invalid",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SourceConfig{Type: tt.sourceType}
+			err := validateSourceConfig(cfg)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid type")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateMultitenantDynamicSource(t *testing.T) {
+	tests := []struct {
+		name         string
+		mtConfig     *MultitenantConfig
+		sourceConfig *SourceConfig
+		expectError  bool
+		errorText    string
+	}{
+		{
+			name: "dynamic_source_without_tenants",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: testTenantHeader,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+				// No tenants - loaded dynamically
+			},
+			sourceConfig: &SourceConfig{Type: SourceTypeDynamic},
+			expectError:  false,
+		},
+		{
+			name: "dynamic_source_with_tenants",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: testTenantHeader,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+				Tenants: makeSampleTenants(), // Tenants provided but ignored
+			},
+			sourceConfig: &SourceConfig{Type: SourceTypeDynamic},
+			expectError:  false, // Should not error, just ignored
+		},
+		{
+			name: "static_source_empty_tenants",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: testTenantHeader,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+				Tenants: map[string]TenantEntry{}, // Empty map
+			},
+			sourceConfig: &SourceConfig{Type: SourceTypeStatic},
+			expectError:  true,
+			errorText:    "empty map provided",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenant(tt.mtConfig, &DatabaseConfig{}, &MessagingConfig{}, tt.sourceConfig)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorText)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

@@ -397,6 +397,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 // Helper function to clear environment variables that might affect tests
 func clearEnvironmentVariables() {
 	envVars := []string{
+		"DEBUG", // Clear system DEBUG variable that can conflict with our debug config
 		"APP_NAME", "APP_VERSION", "APP_ENV", "APP_DEBUG", "APP_RATE_LIMIT", "APP_RATE_BURST", "APP_NAMESPACE",
 		"SERVER_HOST", "SERVER_PORT", "SERVER_TIMEOUT_READ", "SERVER_TIMEOUT_WRITE",
 		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
