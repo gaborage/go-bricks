@@ -270,6 +270,36 @@ func TestOracleSQLFunctionDetection(t *testing.T) {
 			input:    "FUNC123(arg)",
 			expected: true,
 		},
+		{
+			name:     "qualified_function_schema_pkg_func",
+			input:    "SCHEMA.PKG.FUNC(table.column)",
+			expected: true,
+		},
+		{
+			name:     "qualified_function_schema_func",
+			input:    "SCHEMA.GET_USER_COUNT(*)",
+			expected: true,
+		},
+		{
+			name:     "qualified_function_with_underscores",
+			input:    "MY_SCHEMA.MY_PKG.MY_FUNC(arg)",
+			expected: true,
+		},
+		{
+			name:     "qualified_function_empty_segment",
+			input:    "SCHEMA..FUNC(arg)",
+			expected: false,
+		},
+		{
+			name:     "qualified_function_invalid_start",
+			input:    "SCHEMA.1PKG.FUNC(arg)",
+			expected: false,
+		},
+		{
+			name:     "qualified_function_invalid_chars",
+			input:    "SCHEMA.PKG-NAME.FUNC(arg)",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

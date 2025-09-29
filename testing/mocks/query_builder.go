@@ -66,12 +66,6 @@ func (m *MockQueryBuilder) BuildCaseInsensitiveLike(column, value string) squirr
 	return args.Get(0).(squirrel.Sqlizer)
 }
 
-// BuildLimitOffset implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder {
-	args := m.MethodCalled("BuildLimitOffset", query, limit, offset)
-	return args.Get(0).(squirrel.SelectBuilder)
-}
-
 // BuildUpsert implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	arguments := m.MethodCalled("BuildUpsert", table, conflictColumns, insertColumns, updateColumns)

@@ -43,10 +43,10 @@ func TestBuildCaseInsensitiveLikeDefault(t *testing.T) {
 	assert.Equal(t, "%john%", args[0])
 }
 
-func TestBuildLimitOffsetSkipsZeroValues(t *testing.T) {
+func TestPaginateSkipsZeroValues(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 0, 0)
+	query := qb.Select("*").From("users").Paginate(0, 0)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -54,10 +54,10 @@ func TestBuildLimitOffsetSkipsZeroValues(t *testing.T) {
 	assert.NotContains(t, sql, "OFFSET")
 }
 
-func TestBuildLimitOffsetAppliesPositiveValues(t *testing.T) {
+func TestPaginateAppliesPositiveValues(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 5, 10)
+	query := qb.Select("*").From("users").Paginate(5, 10)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -65,10 +65,10 @@ func TestBuildLimitOffsetAppliesPositiveValues(t *testing.T) {
 	assert.Contains(t, sql, "OFFSET 10")
 }
 
-func TestBuildLimitOffsetOracleUsesSuffix(t *testing.T) {
+func TestPaginateOracleUsesSuffix(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	query := qb.BuildLimitOffset(qb.Select("*").From("users"), 5, 0)
+	query := qb.Select("*").From("users").Paginate(5, 0)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -389,17 +389,17 @@ func TestQueryModifiers(t *testing.T) {
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > $1`,
 		},
 		{
-			name: "Limit",
+			name: "Paginate with limit only",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").Limit(10).ToSQL()
+				sql, _, _ := qb.Select("*").From("users").Paginate(10, 0).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users LIMIT 10`,
 		},
 		{
-			name: "Offset",
+			name: "Paginate with offset only",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").Offset(20).ToSQL()
+				sql, _, _ := qb.Select("*").From("users").Paginate(0, 20).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users OFFSET 20`,

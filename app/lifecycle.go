@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
-	"runtime/pprof"
 	"strings"
 	"syscall"
 	"time"
@@ -198,8 +196,6 @@ func (a *App) Run() error {
 		cancel()
 	case <-time.After(15 * time.Second): // 5 seconds longer than shutdown context
 		a.logger.Error().Msg("Shutdown timed out, forcing exit")
-		// Force dump goroutines before exit
-		a.dumpGoroutinesIfNeeded()
 		cancel()
 		return fmt.Errorf("shutdown timed out")
 	}
@@ -298,9 +294,6 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	a.logger.Info().Msg("Application shutdown complete")
 
-	// Debug: Dump remaining goroutines if any are still running
-	a.dumpGoroutinesIfNeeded()
-
 	// Return aggregated errors if any occurred
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -357,45 +350,4 @@ func (a *App) readyCheck(c echo.Context) error {
 			"version":     a.cfg.App.Version,
 		},
 	})
-}
-
-// dumpGoroutinesIfNeeded dumps goroutine stacks if there are more than expected running
-func (a *App) dumpGoroutinesIfNeeded() {
-	// Count current goroutines
-	if !a.cfg.Debug.Enabled {
-		return
-	}
-	numGoroutines := runtime.NumGoroutine()
-
-	// In a clean shutdown, we expect only 1-2 goroutines (main + maybe GC)
-	// If more than 3 are running, something is likely leaked
-	if numGoroutines > 3 {
-		a.logger.Warn().
-			Int("goroutine_count", numGoroutines).
-			Msg("Unexpected goroutines still running after shutdown")
-
-		// Create a buffer to capture the goroutine dump
-		var buf strings.Builder
-		buf.WriteString(fmt.Sprintf("=== Goroutine Dump (%d total) ===\n", numGoroutines))
-
-		// Write goroutine profiles to the buffer
-		if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
-			a.logger.Error().Err(err).Msg("Failed to dump goroutines")
-			return
-		}
-
-		// Log the dump (split by lines to avoid truncation)
-		lines := strings.Split(buf.String(), "\n")
-		for i, line := range lines {
-			if i == 0 {
-				a.logger.Info().Str("dump_line", line).Msg("Goroutine dump header")
-			} else if strings.TrimSpace(line) != "" {
-				a.logger.Debug().Str("dump_line", line).Msg("Goroutine dump")
-			}
-		}
-	} else {
-		a.logger.Info().
-			Int("goroutine_count", numGoroutines).
-			Msg("Clean shutdown - expected number of goroutines")
-	}
 }

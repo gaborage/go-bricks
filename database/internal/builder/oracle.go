@@ -81,15 +81,28 @@ func isSQLFunction(s string) bool {
 	// Validate function name (before the parenthesis)
 	functionName := strings.TrimSpace(s[:parenIndex])
 
-	// Function name must not be empty and must start with letter
-	if functionName == "" || !isLetter(functionName[0]) {
+	// Function name must not be empty
+	if functionName == "" {
 		return false
 	}
 
-	// Function name can only contain valid identifier characters
-	for i := 0; i < len(functionName); i++ {
-		if !isValidIdentifierChar(functionName[i]) {
+	// Split on dots to handle qualified names like SCHEMA.PKG.FUNC
+	segments := strings.Split(functionName, ".")
+
+	// Validate each segment individually
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+
+		// Each segment must be non-empty and start with a letter
+		if segment == "" || !isLetter(segment[0]) {
 			return false
+		}
+
+		// Each segment can only contain valid identifier characters (excluding dots)
+		for i := 0; i < len(segment); i++ {
+			if !isValidIdentifierChar(segment[i]) {
+				return false
+			}
 		}
 	}
 

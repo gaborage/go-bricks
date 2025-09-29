@@ -29,7 +29,6 @@ func NewQueryBuilder(vendor string) *QueryBuilder {
 // - Update(table string) squirrel.UpdateBuilder
 // - Delete(table string) squirrel.DeleteBuilder
 // - BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
-// - BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder
 // - BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 // - BuildCurrentTimestamp() string
 // - BuildUUIDGeneration() string

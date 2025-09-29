@@ -23,6 +23,8 @@ type QueryBuilder struct {
 type SelectQueryBuilder struct {
 	qb            *QueryBuilder
 	selectBuilder squirrel.SelectBuilder
+	limit         uint64 // 0 means no limit
+	offset        uint64 // 0 means no offset
 }
 
 // NewQueryBuilder creates a new query builder for the specified database vendor.
@@ -102,29 +104,6 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 	default:
 		// Default to standard LIKE
 		return squirrel.Like{column: likeValue}
-	}
-}
-
-// BuildLimitOffset applies LIMIT and OFFSET to a SELECT query using vendor-specific syntax.
-// Different databases have different pagination mechanisms.
-func (qb *QueryBuilder) BuildLimitOffset(query *SelectQueryBuilder, limit, offset int) *SelectQueryBuilder {
-	switch qb.vendor {
-	case dbtypes.Oracle:
-		// Oracle uses OFFSET ... ROWS FETCH NEXT ... ROWS ONLY semantics (12c+)
-		oracleSuffix := buildOraclePaginationClause(limit, offset)
-		if oracleSuffix != "" {
-			query.selectBuilder = query.selectBuilder.Suffix(oracleSuffix)
-		}
-		return query
-	default:
-		// Default to standard LIMIT/OFFSET
-		if limit > 0 {
-			query.selectBuilder = query.selectBuilder.Limit(uint64(limit))
-		}
-		if offset > 0 {
-			query.selectBuilder = query.selectBuilder.Offset(uint64(offset))
-		}
-		return query
 	}
 }
 
@@ -431,19 +410,38 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) *SelectQueryBuilder
 	return sqb
 }
 
-// Limit adds a LIMIT clause to the query
-func (sqb *SelectQueryBuilder) Limit(limit uint64) *SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Limit(limit)
-	return sqb
-}
-
-// Offset adds an OFFSET clause to the query
-func (sqb *SelectQueryBuilder) Offset(offset uint64) *SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Offset(offset)
+// Paginate applies pagination to the query with vendor-specific syntax.
+// Use limit=0 for no limit (with offset only), offset=0 for no offset (limit only).
+// Oracle 12c+ will use OFFSET...FETCH syntax, others use LIMIT/OFFSET.
+func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) *SelectQueryBuilder {
+	sqb.limit = limit
+	sqb.offset = offset
 	return sqb
 }
 
 // ToSQL generates the final SQL query string and arguments.
+// For Oracle, pagination uses OFFSET...FETCH syntax; for others, uses LIMIT/OFFSET.
 func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
-	return sqb.selectBuilder.ToSql()
+	builder := sqb.selectBuilder
+
+	// Apply pagination based on vendor
+	if sqb.limit > 0 || sqb.offset > 0 {
+		if sqb.qb.vendor == dbtypes.Oracle {
+			// Oracle 12c+ uses OFFSET...FETCH syntax
+			paginationClause := buildOraclePaginationClause(int(sqb.limit), int(sqb.offset))
+			if paginationClause != "" {
+				builder = builder.Suffix(paginationClause)
+			}
+		} else {
+			// Standard SQL LIMIT/OFFSET for PostgreSQL and others
+			if sqb.limit > 0 {
+				builder = builder.Limit(sqb.limit)
+			}
+			if sqb.offset > 0 {
+				builder = builder.Offset(sqb.offset)
+			}
+		}
+	}
+
+	return builder.ToSql()
 }

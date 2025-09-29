@@ -283,7 +283,7 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 	}
 }
 
-func TestQueryBuilderBuildLimitOffset(t *testing.T) {
+func TestQueryBuilderPaginate(t *testing.T) {
 	tests := []struct {
 		name        string
 		vendor      string
@@ -335,8 +335,7 @@ func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Select("*").From("table")
-			query = qb.BuildLimitOffset(query, tt.limit, tt.offset)
+			query := qb.Select("*").From("table").Paginate(uint64(tt.limit), uint64(tt.offset))
 
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
@@ -351,19 +350,18 @@ func TestQueryBuilderBuildLimitOffset(t *testing.T) {
 	}
 }
 
-func TestQueryBuilderBuildLimitOffsetDefaultVendor(t *testing.T) {
+func TestQueryBuilderPaginateDefaultVendor(t *testing.T) {
 	qb := NewQueryBuilder("sqlite")
-	query := qb.Select("*").From("items")
 
 	// Apply only offset to verify it is respected without LIMIT
-	query = qb.BuildLimitOffset(query, 0, 3)
+	query := qb.Select("*").From("items").Paginate(0, 3)
 	sqlText, _, err := query.ToSQL()
 	require.NoError(t, err)
 	assert.NotContains(t, sqlText, "LIMIT")
 	assert.Contains(t, sqlText, "OFFSET")
 
 	// Apply limit and offset together
-	query = qb.BuildLimitOffset(qb.Select("*").From("items"), 4, 2)
+	query = qb.Select("*").From("items").Paginate(4, 2)
 	sqlText, _, err = query.ToSQL()
 	require.NoError(t, err)
 	assert.Contains(t, sqlText, "LIMIT 4")
@@ -733,9 +731,8 @@ func TestQueryBuilderIntegrationTest(t *testing.T) {
 		From("users").
 		WhereEq("active", true).
 		WhereLike("name", "john").
-		OrderBy("name ASC")
-
-	query = qb.BuildLimitOffset(query, 10, 5)
+		OrderBy("name ASC").
+		Paginate(10, 5)
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
@@ -832,9 +829,8 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 		Join("posts p ON u.id = p.user_id").
 		WhereEq("u.active", true).
 		WhereLike("p.title", "go").
-		OrderBy("u.name ASC")
-
-	query = qb.BuildLimitOffset(query, 5, 0)
+		OrderBy("u.name ASC").
+		Paginate(5, 0)
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)

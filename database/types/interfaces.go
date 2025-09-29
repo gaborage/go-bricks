@@ -166,7 +166,6 @@ type QueryBuilderInterface interface {
 
 	// Vendor-specific helpers
 	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
-	BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders
