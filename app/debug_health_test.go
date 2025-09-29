@@ -301,6 +301,9 @@ func TestAddManagerHealth(t *testing.T) {
 				assert.True(t, exists)
 				assert.Equal(t, "healthy", dbComponent.Status)
 				assert.NotNil(t, dbComponent.Details["stats"])
+				// Verify timestamp consistency
+				assert.False(t, dbComponent.LastRun.IsZero(), "LastRun should not be zero time")
+				assert.NotEmpty(t, dbComponent.Duration, "Duration should not be empty")
 			},
 		},
 		{
@@ -317,6 +320,9 @@ func TestAddManagerHealth(t *testing.T) {
 				assert.True(t, exists)
 				assert.Equal(t, "healthy", msgComponent.Status)
 				assert.NotNil(t, msgComponent.Details["stats"])
+				// Verify timestamp consistency
+				assert.False(t, msgComponent.LastRun.IsZero(), "LastRun should not be zero time")
+				assert.NotEmpty(t, msgComponent.Duration, "Duration should not be empty")
 			},
 		},
 		{
@@ -331,10 +337,15 @@ func TestAddManagerHealth(t *testing.T) {
 				}
 			},
 			checkResponse: func(t *testing.T, healthInfo *HealthDebugInfo) {
-				_, hasDB := healthInfo.Components["database_manager"]
-				_, hasMsg := healthInfo.Components["messaging_manager"]
+				dbComponent, hasDB := healthInfo.Components["database_manager"]
+				msgComponent, hasMsg := healthInfo.Components["messaging_manager"]
 				assert.True(t, hasDB)
 				assert.True(t, hasMsg)
+				// Verify timestamp consistency for both managers
+				assert.False(t, dbComponent.LastRun.IsZero(), "Database manager LastRun should not be zero time")
+				assert.NotEmpty(t, dbComponent.Duration, "Database manager Duration should not be empty")
+				assert.False(t, msgComponent.LastRun.IsZero(), "Messaging manager LastRun should not be zero time")
+				assert.NotEmpty(t, msgComponent.Duration, "Messaging manager Duration should not be empty")
 			},
 		},
 		{

@@ -152,13 +152,16 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 	// Add database manager information
 	if d.app.dbManager != nil {
-		dbHealth := ComponentHealth{
-			Status:  "healthy",
-			Details: make(map[string]any),
-		}
-
-		// Get database statistics
+		dbStart := time.Now()
 		stats := d.app.dbManager.Stats()
+		dbDuration := time.Since(dbStart)
+
+		dbHealth := ComponentHealth{
+			Status:   "healthy",
+			Details:  make(map[string]any),
+			LastRun:  dbStart,
+			Duration: dbDuration.String(),
+		}
 		dbHealth.Details["stats"] = stats
 
 		healthInfo.Components["database_manager"] = dbHealth
@@ -166,13 +169,16 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 
 	// Add messaging manager information
 	if d.app.messagingManager != nil {
-		msgHealth := ComponentHealth{
-			Status:  "healthy",
-			Details: make(map[string]any),
-		}
-
-		// Get messaging statistics
+		msgStart := time.Now()
 		stats := d.app.messagingManager.Stats()
+		msgDuration := time.Since(msgStart)
+
+		msgHealth := ComponentHealth{
+			Status:   "healthy",
+			Details:  make(map[string]any),
+			LastRun:  msgStart,
+			Duration: msgDuration.String(),
+		}
 		msgHealth.Details["stats"] = stats
 
 		healthInfo.Components["messaging_manager"] = msgHealth
