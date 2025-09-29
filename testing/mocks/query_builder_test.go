@@ -16,52 +16,71 @@ type MockSelectQueryBuilder struct {
 }
 
 func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
-	args := m.MethodCalled("From", from)
+	callArgs := make([]any, len(from))
+	for i, table := range from {
+		callArgs[i] = table
+	}
+	args := m.MethodCalled("From", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) Join(join string, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("Join", join, rest)
+	callArgs := append([]any{join}, rest...)
+	args := m.MethodCalled("Join", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) LeftJoin(join string, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("LeftJoin", join, rest)
+	callArgs := append([]any{join}, rest...)
+	args := m.MethodCalled("LeftJoin", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) RightJoin(join string, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("RightJoin", join, rest)
+	callArgs := append([]any{join}, rest...)
+	args := m.MethodCalled("RightJoin", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) InnerJoin(join string, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("InnerJoin", join, rest)
+	callArgs := append([]any{join}, rest...)
+	args := m.MethodCalled("InnerJoin", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) CrossJoin(join string, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("CrossJoin", join, rest)
+	callArgs := append([]any{join}, rest...)
+	args := m.MethodCalled("CrossJoin", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) Where(pred any, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("Where", pred, rest)
+	callArgs := append([]any{pred}, rest...)
+	args := m.MethodCalled("Where", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
-	args := m.MethodCalled("GroupBy", groupBys)
+	callArgs := make([]any, len(groupBys))
+	for i, col := range groupBys {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("GroupBy", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) Having(pred any, rest ...any) types.SelectQueryBuilder {
-	args := m.MethodCalled("Having", pred, rest)
+	callArgs := append([]any{pred}, rest...)
+	args := m.MethodCalled("Having", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockSelectQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
-	args := m.MethodCalled("OrderBy", orderBys)
+	callArgs := make([]any, len(orderBys))
+	for i, col := range orderBys {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("OrderBy", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -141,7 +160,8 @@ func (m *MockSelectQueryBuilder) WhereBetween(column string, lowerBound, upperBo
 }
 
 func (m *MockSelectQueryBuilder) WhereRaw(condition string, args ...any) types.SelectQueryBuilder {
-	mockArgs := m.MethodCalled("WhereRaw", condition, args)
+	callArgs := append([]any{condition}, args...)
+	mockArgs := m.MethodCalled("WhereRaw", callArgs...)
 	return mockArgs.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -206,10 +226,10 @@ func TestMockQueryBuilderQueryConstruction(t *testing.T) {
 	likeCondition := squirrel.Like{"name": "%john%"}
 
 	// Set expectations
-	mockQB.On("Select", []string{"id", "name", "email"}).Return(mockSelectBuilder)
+	mockQB.On("Select", "id", "name", "email").Return(mockSelectBuilder)
 	mockQB.On("BuildCaseInsensitiveLike", "name", "john").Return(likeCondition)
-	mockSelectBuilder.On("From", []string{"users"}).Return(mockSelectBuilder)
-	mockSelectBuilder.On("Where", likeCondition, []any(nil)).Return(mockSelectBuilder)
+	mockSelectBuilder.On("From", "users").Return(mockSelectBuilder)
+	mockSelectBuilder.On("Where", likeCondition).Return(mockSelectBuilder)
 
 	// Test the service
 	service := NewExampleUserService(mockQB)
@@ -227,8 +247,8 @@ func TestMockQueryBuilderEmptySearchTerm(t *testing.T) {
 	defer mockSelectBuilder.AssertExpectations(t)
 
 	// Set expectations - only Select should be called for empty search
-	mockQB.On("Select", []string{"id", "name", "email"}).Return(mockSelectBuilder)
-	mockSelectBuilder.On("From", []string{"users"}).Return(mockSelectBuilder)
+	mockQB.On("Select", "id", "name", "email").Return(mockSelectBuilder)
+	mockSelectBuilder.On("From", "users").Return(mockSelectBuilder)
 	// BuildCaseInsensitiveLike should NOT be called
 
 	// Test the service

@@ -68,6 +68,23 @@ func isQuotedString(s string) bool {
 	return len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"'
 }
 
+// isBalancedParentheses checks if parentheses are properly balanced in a string
+func isBalancedParentheses(s string) bool {
+	count := 0
+	for _, c := range s {
+		switch c {
+		case '(':
+			count++
+		case ')':
+			count--
+			if count < 0 {
+				return false // More closing than opening
+			}
+		}
+	}
+	return count == 0 // Must have equal opening and closing
+}
+
 // extractFunctionNameAndArgs splits a potential function call into name and validates parentheses structure
 func extractFunctionNameAndArgs(s string) (name string, hasValidStructure bool) {
 	// Find first opening parenthesis
@@ -76,7 +93,12 @@ func extractFunctionNameAndArgs(s string) (name string, hasValidStructure bool) 
 		return "", false
 	}
 
-	// Must have matching closing parenthesis
+	// Check for balanced parentheses in the entire string
+	if !isBalancedParentheses(s) {
+		return "", false
+	}
+
+	// Must have closing parenthesis after the opening one
 	if !strings.Contains(s[parenIndex:], ")") {
 		return "", false
 	}
@@ -137,49 +159,80 @@ func isValidQuotedSegment(segment string) bool {
 // parseQualifiedIdentifier splits a qualified identifier into segments and validates them
 // Handles quoted segments and ensures balanced quotes
 func parseQualifiedIdentifier(name string) ([]string, bool) {
-func parseQualifiedIdentifier(name string) ([]string, bool) {
-    inQuotes := false
-    var segments []string
-    var current strings.Builder
-    for i := 0; i < len(name); i++ {
-        c := name[i]
-        switch c {
-        case '"':
-            // If inside quotes and next char is also a quote, treat as escaped "" and keep both.
-            if inQuotes && i+1 < len(name) && name[i+1] == '"' {
-                current.WriteByte('"')
-                current.WriteByte('"')
-                i++ // skip the escaped partner
-                continue
-            }
-            inQuotes = !inQuotes
-            current.WriteByte(c)
-        case '.':
-            if inQuotes {
-                current.WriteByte(c)
-            } else {
-                s := strings.TrimSpace(current.String())
-                if s == "" {
-                    return nil, false
-                }
-                segments = append(segments, s)
-                current.Reset()
-            }
-        default:
-            current.WriteByte(c)
-        }
-    }
+	parser := &identifierParser{
+		input: name,
+	}
+	return parser.parse()
+}
 
-    s := strings.TrimSpace(current.String())
-    if s == "" {
-        return nil, false
-    }
-    segments = append(segments, s)
-    // Reject unbalanced quotes
-    if inQuotes {
-        return nil, false
-    }
-    return segments, true
+// identifierParser encapsulates the state and logic for parsing qualified identifiers
+type identifierParser struct {
+	input    string
+	inQuotes bool
+	segments []string
+	current  strings.Builder
+}
+
+// parse processes the input string and returns the parsed segments
+func (p *identifierParser) parse() ([]string, bool) {
+	for i := 0; i < len(p.input); i++ {
+		c := p.input[i]
+		switch c {
+		case '"':
+			if p.handleQuote(i) {
+				i++ // skip escaped quote partner
+			}
+		case '.':
+			if !p.handleDot() {
+				return nil, false
+			}
+		default:
+			p.current.WriteByte(c)
+		}
+	}
+	return p.finalize()
+}
+
+// handleQuote processes quote characters and escaped quotes
+func (p *identifierParser) handleQuote(pos int) bool {
+	// Handle escaped quotes: "" inside quoted string
+	if p.inQuotes && pos+1 < len(p.input) && p.input[pos+1] == '"' {
+		p.current.WriteByte('"')
+		p.current.WriteByte('"')
+		return true // indicate to skip next character
+	}
+	p.inQuotes = !p.inQuotes
+	p.current.WriteByte('"')
+	return false
+}
+
+// handleDot processes dot separators (only outside quotes)
+func (p *identifierParser) handleDot() bool {
+	if p.inQuotes {
+		p.current.WriteByte('.')
+		return true
+	}
+	s := strings.TrimSpace(p.current.String())
+	if s == "" {
+		return false
+	}
+	p.segments = append(p.segments, s)
+	p.current.Reset()
+	return true
+}
+
+// finalize completes parsing and validates the result
+func (p *identifierParser) finalize() ([]string, bool) {
+	s := strings.TrimSpace(p.current.String())
+	if s == "" {
+		return nil, false
+	}
+	p.segments = append(p.segments, s)
+	// Reject unbalanced quotes
+	if p.inQuotes {
+		return nil, false
+	}
+	return p.segments, true
 }
 
 // validateSegment checks if a segment is valid (quoted or unquoted)
@@ -262,6 +315,33 @@ func (qb *QueryBuilder) quoteOracleColumn(column string) string {
 		return column
 	}
 	return oracleQuoteIdentifier(column)
+}
+
+// quoteOracleIdentifierForClause handles Oracle-specific identifier quoting for ORDER BY and GROUP BY clauses
+// It parses expressions to distinguish column references from SQL functions and direction keywords
+func (qb *QueryBuilder) quoteOracleIdentifierForClause(identifier string) string {
+	if qb.vendor != dbtypes.Oracle {
+		return identifier
+	}
+
+	trimmed := strings.TrimSpace(identifier)
+	if trimmed == "" {
+		return trimmed
+	}
+
+	// Handle expressions with direction keywords (ASC/DESC)
+	parts := strings.Fields(trimmed)
+	if len(parts) == 2 {
+		column := parts[0]
+		direction := strings.ToUpper(parts[1])
+		if direction == "ASC" || direction == "DESC" {
+			quotedColumn := oracleQuoteIdentifier(column)
+			return quotedColumn + " " + direction
+		}
+	}
+
+	// For single identifiers, use standard quoting
+	return oracleQuoteIdentifier(trimmed)
 }
 
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements

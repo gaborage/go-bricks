@@ -834,3 +834,210 @@ func TestHelperFunctionsIntegration(t *testing.T) {
 		})
 	}
 }
+
+// TestIsBalancedParentheses tests the enhanced parentheses balancing logic
+func TestIsBalancedParentheses(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Balanced cases
+		{"simple_balanced", countClause, true},
+		{"nested_balanced", "FUNC(arg, OTHER(inner))", true},
+		{"multiple_balanced", "FUNC() + OTHER()", true},
+		{"empty_string", "", true},
+		{"no_parentheses", "column", true},
+
+		// Unbalanced cases
+		{"extra_opening", "COUNT((", false},
+		{"extra_closing", "COUNT())", false},
+		{"missing_opening", "COUNT)", false},
+		{"missing_closing", "COUNT(", false},
+		{"wrong_order", ")COUNT(", false},
+		{"nested_unbalanced", "FUNC(OTHER()", false},
+		{"multiple_unbalanced", "FUNC()) + OTHER(", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isBalancedParentheses(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+// TestOracleFromClauseQuoting tests the new FROM clause identifier quoting
+func TestOracleFromClauseQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	tests := []struct {
+		name        string
+		tables      []string
+		expectedSQL string
+		shouldQuote bool
+	}{
+		{
+			name:        "reserved_word_table",
+			tables:      []string{"number"},
+			expectedSQL: `SELECT * FROM "number"`,
+			shouldQuote: true,
+		},
+		{
+			name:        "single_reserved_table",
+			tables:      []string{"number"},
+			expectedSQL: `FROM "number"`,
+			shouldQuote: true,
+		},
+		{
+			name:        "regular_table",
+			tables:      []string{"users"},
+			expectedSQL: `SELECT * FROM users`,
+			shouldQuote: false,
+		},
+		{
+			name:        "qualified_table_name",
+			tables:      []string{"schema.number"},
+			expectedSQL: `SELECT * FROM schema."number"`,
+			shouldQuote: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := qb.Select("*").From(tt.tables...)
+			sql, _, err := query.ToSQL()
+			assert.NoError(t, err)
+			assert.Contains(t, sql, tt.expectedSQL, "SQL should contain expected FROM clause")
+		})
+	}
+}
+
+// TestOracleOrderByGroupByQuoting tests the new ORDER BY and GROUP BY identifier quoting
+func TestOracleOrderByGroupByQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	tests := []struct {
+		name        string
+		orderBy     []string
+		groupBy     []string
+		expectedSQL []string
+	}{
+		{
+			name:        "reserved_word_column",
+			orderBy:     []string{"number"},
+			groupBy:     []string{"level"},
+			expectedSQL: []string{`ORDER BY "number"`, `GROUP BY "level"`},
+		},
+		{
+			name:        "column_with_direction",
+			orderBy:     []string{"number ASC", "size DESC"},
+			groupBy:     []string{"access"},
+			expectedSQL: []string{`ORDER BY "number" ASC, "size" DESC`, `GROUP BY "access"`},
+		},
+		{
+			name:        "mixed_reserved_and_normal",
+			orderBy:     []string{"name", "number DESC"},
+			groupBy:     []string{"category", "level"},
+			expectedSQL: []string{`ORDER BY name, "number" DESC`, `GROUP BY category, "level"`},
+		},
+		{
+			name:        "sql_functions_preserved",
+			orderBy:     []string{countClause, sumClause},
+			groupBy:     []string{"COUNT(items)", "user_id"},
+			expectedSQL: []string{`ORDER BY COUNT(*), SUM(amount)`, `GROUP BY COUNT(items), user_id`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := qb.Select("*").From("users")
+
+			if len(tt.groupBy) > 0 {
+				query = query.GroupBy(tt.groupBy...)
+			}
+			if len(tt.orderBy) > 0 {
+				query = query.OrderBy(tt.orderBy...)
+			}
+
+			sql, _, err := query.ToSQL()
+			assert.NoError(t, err)
+
+			for _, expected := range tt.expectedSQL {
+				assert.Contains(t, sql, expected, "SQL should contain expected clause: %s", expected)
+			}
+		})
+	}
+}
+
+// TestQuoteOracleIdentifierForClause tests the new clause-specific identifier quoting
+func TestQuoteOracleIdentifierForClause(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Simple cases
+		{"reserved_word", "number", `"number"`},
+		{"normal_column", "name", "name"},
+		{"empty_string", "", ""},
+
+		// Direction keywords
+		{"reserved_with_asc", "number ASC", `"number" ASC`},
+		{"reserved_with_desc", "level DESC", `"level" DESC`},
+		{"normal_with_asc", "name ASC", "name ASC"},
+		{"normal_with_desc", "created_at DESC", "created_at DESC"},
+
+		// SQL functions (should not be quoted)
+		{"count_function", countClause, countClause},
+		{"sum_function", sumClause, sumClause},
+		{"qualified_function", "SCHEMA.FUNC(arg)", "SCHEMA.FUNC(arg)"},
+
+		// Qualified identifiers
+		{"qualified_reserved", "schema.number", `schema."number"`},
+		{"qualified_normal", "schema.name", "schema.name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := qb.quoteOracleIdentifierForClause(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+// TestEnhancedSQLFunctionDetectionWithBalancedParentheses tests the stricter parentheses validation
+func TestEnhancedSQLFunctionDetectionWithBalancedParentheses(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Valid balanced cases
+		{"simple_function", countClause, true},
+		{"function_with_args", sumClause, true},
+		{"nested_function", "UPPER(TRIM(name))", true},
+		{"multiple_args", "SUBSTR(name, 1, 10)", true},
+
+		// Invalid unbalanced cases (now properly detected)
+		{"extra_opening_paren", "COUNT((", false},
+		{"extra_closing_paren", "COUNT())", false},
+		{"missing_closing_paren", "COUNT(", false},
+		{"wrong_paren_order", ")COUNT(", false},
+		{"nested_unbalanced", "UPPER(TRIM(name)", false},
+
+		// Edge cases
+		{"empty_function", "FUNC()", true},
+		{"quoted_identifier", `"column"`, false},
+		{"no_parentheses", "column", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSQLFunction(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}

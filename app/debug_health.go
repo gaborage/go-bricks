@@ -44,8 +44,8 @@ type Info struct {
 	Name        string    `json:"name"`
 	Environment string    `json:"environment"`
 	Version     string    `json:"version"`
-	StartTime   time.Time `json:"start_time,omitempty"`
-	Uptime      string    `json:"uptime,omitempty"`
+	StartTime   time.Time `json:"start_time"`
+	Uptime      string    `json:"uptime"`
 	PID         int       `json:"pid"`
 	Goroutines  int       `json:"goroutines"`
 	MemoryUsage uint64    `json:"memory_usage"`

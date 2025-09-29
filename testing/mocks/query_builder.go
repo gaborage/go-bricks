@@ -32,7 +32,11 @@ func (m *MockQueryBuilder) Vendor() string {
 
 // Select implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
-	args := m.MethodCalled("Select", columns)
+	callArgs := make([]any, len(columns))
+	for i, col := range columns {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("Select", callArgs...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -44,7 +48,12 @@ func (m *MockQueryBuilder) Insert(table string) squirrel.InsertBuilder {
 
 // InsertWithColumns implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
-	args := m.MethodCalled("InsertWithColumns", table, columns)
+	callArgs := make([]any, len(columns)+1)
+	callArgs[0] = table
+	for i, col := range columns {
+		callArgs[i+1] = col
+	}
+	args := m.MethodCalled("InsertWithColumns", callArgs...)
 	return args.Get(0).(squirrel.InsertBuilder)
 }
 
@@ -109,7 +118,11 @@ func (m *MockQueryBuilder) ExpectVendor(vendor string) *mock.Call {
 
 // ExpectSelect sets up a select expectation with the provided builder
 func (m *MockQueryBuilder) ExpectSelect(columns []string, builder types.SelectQueryBuilder) *mock.Call {
-	return m.On("Select", columns).Return(builder)
+	callArgs := make([]any, len(columns))
+	for i, col := range columns {
+		callArgs[i] = col
+	}
+	return m.On("Select", callArgs...).Return(builder)
 }
 
 // ExpectInsert sets up an insert expectation with the provided builder
@@ -159,29 +172,41 @@ func (m *MockQueryBuilder) CrossJoin(table string, args ...any) types.SelectQuer
 }
 
 func (m *MockQueryBuilder) From(from ...string) types.SelectQueryBuilder {
-	arguments := m.MethodCalled("From", from)
+	callArgs := make([]any, len(from))
+	for i, table := range from {
+		callArgs[i] = table
+	}
+	arguments := m.MethodCalled("From", callArgs...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) Where(pred interface{}, args ...any) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) Where(pred any, args ...any) types.SelectQueryBuilder {
 	callArgs := append([]any{pred}, args...)
 	arguments := m.MethodCalled("Where", callArgs...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
-	arguments := m.MethodCalled("GroupBy", groupBys)
+	callArgs := make([]any, len(groupBys))
+	for i, col := range groupBys {
+		callArgs[i] = col
+	}
+	arguments := m.MethodCalled("GroupBy", callArgs...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) Having(pred interface{}, args ...any) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) Having(pred any, args ...any) types.SelectQueryBuilder {
 	callArgs := append([]any{pred}, args...)
 	arguments := m.MethodCalled("Having", callArgs...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 func (m *MockQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
-	arguments := m.MethodCalled("OrderBy", orderBys)
+	callArgs := make([]any, len(orderBys))
+	for i, col := range orderBys {
+		callArgs[i] = col
+	}
+	arguments := m.MethodCalled("OrderBy", callArgs...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 

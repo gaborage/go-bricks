@@ -205,6 +205,27 @@ func (qb *QueryBuilder) quoteColumnForQuery(column string) string {
 	}
 }
 
+// quoteTableForQuery handles vendor-specific table name quoting for FROM clauses
+func (qb *QueryBuilder) quoteTableForQuery(table string) string {
+	switch qb.vendor {
+	case dbtypes.Oracle:
+		return qb.quoteOracleColumn(table)
+	default:
+		return table
+	}
+}
+
+// quoteIdentifierForClause handles vendor-specific identifier quoting for ORDER BY and GROUP BY clauses
+// It parses expressions to identify column references vs SQL functions and direction keywords
+func (qb *QueryBuilder) quoteIdentifierForClause(identifier string) string {
+	switch qb.vendor {
+	case dbtypes.Oracle:
+		return qb.quoteOracleIdentifierForClause(identifier)
+	default:
+		return identifier
+	}
+}
+
 // Eq creates an equality condition with proper column quoting for the database vendor
 func (qb *QueryBuilder) Eq(column string, value any) squirrel.Eq {
 	quotedColumn := qb.quoteColumnForQuery(column)
@@ -244,9 +265,11 @@ func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
 // ========== SelectQueryBuilder Methods ==========
 
 // From specifies the table(s) to select from
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (sqb *SelectQueryBuilder) From(from ...string) dbtypes.SelectQueryBuilder {
 	for _, table := range from {
-		sqb.selectBuilder = sqb.selectBuilder.From(table)
+		quotedTable := sqb.qb.quoteTableForQuery(table)
+		sqb.selectBuilder = sqb.selectBuilder.From(quotedTable)
 	}
 	return sqb
 }
@@ -418,14 +441,26 @@ func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...any) dbtypes.Selec
 }
 
 // OrderBy adds an ORDER BY clause to the query
+// Column names are automatically quoted according to database vendor rules to handle reserved words.
+// SQL expressions and functions (like COUNT(*)) are preserved without quoting.
 func (sqb *SelectQueryBuilder) OrderBy(orderBys ...string) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.OrderBy(orderBys...)
+	quotedOrderBys := make([]string, len(orderBys))
+	for i, orderBy := range orderBys {
+		quotedOrderBys[i] = sqb.qb.quoteIdentifierForClause(orderBy)
+	}
+	sqb.selectBuilder = sqb.selectBuilder.OrderBy(quotedOrderBys...)
 	return sqb
 }
 
 // GroupBy adds a GROUP BY clause to the query
+// Column names are automatically quoted according to database vendor rules to handle reserved words.
+// SQL expressions and functions (like COUNT(*)) are preserved without quoting.
 func (sqb *SelectQueryBuilder) GroupBy(groupBys ...string) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.GroupBy(groupBys...)
+	quotedGroupBys := make([]string, len(groupBys))
+	for i, groupBy := range groupBys {
+		quotedGroupBys[i] = sqb.qb.quoteIdentifierForClause(groupBy)
+	}
+	sqb.selectBuilder = sqb.selectBuilder.GroupBy(quotedGroupBys...)
 	return sqb
 }
 
