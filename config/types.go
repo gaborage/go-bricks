@@ -18,6 +18,7 @@ type Config struct {
 	Log         LogConfig         `koanf:"log"`
 	Messaging   MessagingConfig   `koanf:"messaging"`
 	Multitenant MultitenantConfig `koanf:"multitenant"`
+	Debug       DebugConfig       `koanf:"debug"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -234,4 +235,21 @@ type ResolverConfig struct {
 // LimitsConfig holds resource limits for multi-tenant operation.
 type LimitsConfig struct {
 	Tenants int `koanf:"tenants"`
+}
+
+// DebugConfig holds debug endpoint settings.
+type DebugConfig struct {
+	Enabled     bool                 `koanf:"enabled"`     // Enable debug endpoints
+	PathPrefix  string               `koanf:"pathprefix"`  // URL path prefix for debug endpoints
+	AllowedIPs  []string             `koanf:"allowedips"`  // List of allowed IP addresses/CIDRs
+	BearerToken string               `koanf:"bearertoken"` // Optional bearer token for authentication
+	Endpoints   DebugEndpointsConfig `koanf:"endpoints"`   // Individual endpoint settings
+}
+
+// DebugEndpointsConfig holds settings for individual debug endpoints.
+type DebugEndpointsConfig struct {
+	Goroutines bool `koanf:"goroutines"` // Enable goroutine analysis endpoint
+	GC         bool `koanf:"gc"`         // Enable garbage collection endpoints
+	Health     bool `koanf:"health"`     // Enable enhanced health endpoint
+	Info       bool `koanf:"info"`       // Enable system info endpoint
 }

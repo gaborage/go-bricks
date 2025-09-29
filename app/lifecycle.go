@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -17,9 +18,11 @@ import (
 func (a *App) startMaintenanceLoops() {
 	// Start cleanup for unified managers
 	if a.dbManager != nil {
+		a.logger.Info().Msg("Starting database manager cleanup loop")
 		a.dbManager.StartCleanup(5 * time.Minute) // Database cleanup every 5 minutes
 	}
 	if a.messagingManager != nil {
+		a.logger.Info().Msg("Starting messaging manager cleanup loop")
 		a.messagingManager.StartCleanup(2 * time.Minute) // Messaging cleanup every 2 minutes
 	}
 }
@@ -53,6 +56,12 @@ func (a *App) prepareRuntime() error {
 		}
 	}
 
+	// Register debug endpoints if enabled
+	if a.cfg.Debug.Enabled {
+		debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
+		debugHandlers.RegisterDebugEndpoints(a.server.Echo())
+	}
+
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
 	a.startMaintenanceLoops()
 
@@ -64,8 +73,16 @@ func (a *App) serve() <-chan error {
 	errCh := make(chan error, 1)
 
 	go func() {
+		a.logger.Info().Msg("Server goroutine starting")
 		err := a.server.Start()
-		errCh <- err
+		a.logger.Info().Err(err).Msg("Server goroutine terminating")
+
+		// Send the error (could be nil if graceful shutdown, or actual error)
+		select {
+		case errCh <- err:
+		default:
+			// Channel might be closed already during shutdown
+		}
 		close(errCh)
 	}()
 
@@ -76,17 +93,22 @@ func (a *App) serve() <-chan error {
 func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, error) {
 	quit := make(chan os.Signal, 1)
 	a.signalHandler.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	a.logger.Info().Msg("Signal handler registered, waiting for shutdown signal or server error")
 
-	signalReceived := make(chan struct{}, 1)
-	go func() {
-		a.signalHandler.WaitForSignal(quit)
-		signalReceived <- struct{}{}
+	// Ensure we clean up signal registration regardless of how we exit
+	defer func() {
+		a.logger.Info().Msg("Cleaning up signal handler")
+		signal.Stop(quit)
+		a.logger.Info().Msg("Signal handler cleanup complete")
 	}()
 
+	// Wait directly on the signal channel instead of spawning another goroutine
 	select {
-	case <-signalReceived:
+	case <-quit:
+		a.logger.Info().Msg("Shutdown requested via signal")
 		return true, nil
 	case err, ok := <-serverErrCh:
+		a.logger.Info().Err(err).Msgf("Server error channel event (channel_open=%t)", ok)
 		if !ok {
 			return false, nil
 		}
@@ -100,12 +122,40 @@ func (a *App) drainServerError(ch <-chan error) error {
 		return nil
 	}
 
-	err, ok := <-ch
-	if !ok {
-		return nil
+	// Derive from configured shutdown timeout with headroom
+	timeoutDur := 15 * time.Second // default timeout
+	if a.cfg != nil {
+		timeoutDur = a.cfg.Server.Timeout.Shutdown
+		if timeoutDur <= 0 {
+			timeoutDur = 15 * time.Second
+		} else {
+			timeoutDur += 5 * time.Second
+		}
+	}
+	timeout := time.After(timeoutDur)
+
+	if a.logger != nil {
+		a.logger.Debug().Msg("Draining server error channel")
 	}
 
-	return err
+	select {
+	case err, ok := <-ch:
+		if !ok {
+			if a.logger != nil {
+				a.logger.Debug().Msg("Server error channel closed normally")
+			}
+			return nil
+		}
+		if a.logger != nil {
+			a.logger.Debug().Err(err).Msg("Server error channel returned error")
+		}
+		return err
+	case <-timeout:
+		if a.logger != nil {
+			a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
+		}
+		return fmt.Errorf("server goroutine failed to complete within timeout")
+	}
 }
 
 // Run starts the application and blocks until a shutdown signal is received.
@@ -128,17 +178,36 @@ func (a *App) Run() error {
 	}
 
 	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	a.logger.Info().Msg("Shutting down application")
 
-	shutdownErr := a.Shutdown(ctx)
+	// Run shutdown in a goroutine to allow for hard timeout
+	shutdownComplete := make(chan error, 1)
+	go func() {
+		shutdownComplete <- a.Shutdown(ctx)
+		close(shutdownComplete)
+	}()
+
+	// Wait for shutdown with hard timeout
+	var shutdownErr error
+	select {
+	case shutdownErr = <-shutdownComplete:
+		a.logger.Info().Msg("Graceful shutdown completed")
+		cancel()
+	case <-time.After(15 * time.Second): // 5 seconds longer than shutdown context
+		a.logger.Error().Msg("Shutdown timed out, forcing exit")
+		cancel()
+		return fmt.Errorf("shutdown timed out")
+	}
 
 	var errs []error
 
 	if shutdownRequested {
+		a.logger.Info().Msg("Waiting for server goroutine to complete")
 		if err := a.drainServerError(serverErrCh); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+		} else {
+			a.logger.Info().Msg("Server goroutine completed successfully")
 		}
 	} else if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
 		errs = append(errs, fmt.Errorf(serverErrorMsg, serverErr))
@@ -170,7 +239,8 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 	}
 
 	// Capitalize the first letter of the name for logging
-	capitalizedName := strings.ToUpper(closer.name[:1]) + closer.name[1:]
+	r := []rune(name)
+	capitalizedName := strings.ToUpper(string(r[0])) + string(r[1:])
 	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }
 
@@ -179,22 +249,48 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 // Returns an aggregated error if any components fail to shut down.
 func (a *App) Shutdown(ctx context.Context) error {
 	var errs []error
+	shutdownStart := time.Now()
 
 	// Shutdown modules first
+	a.logger.Info().Msg("Shutting down modules")
 	if err := a.registry.Shutdown(); err != nil {
 		errs = append(errs, fmt.Errorf("modules: %w", err))
 		a.logger.Error().Err(err).Msg("Failed to shutdown modules")
+	} else {
+		a.logger.Info().Dur("duration", time.Since(shutdownStart)).Msg("Modules shutdown completed")
 	}
 
 	// Shutdown server
-	if err := a.server.Shutdown(ctx); err != nil {
-		errs = append(errs, fmt.Errorf(serverErrorMsg, err))
-		a.logger.Error().Err(err).Msg("Failed to shutdown server")
+	if a.server != nil {
+		serverStart := time.Now()
+		a.logger.Info().Msg("Shutting down HTTP server")
+		if err := a.server.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
+			a.logger.Error().Err(err).Msg("Failed to shutdown server")
+		} else {
+			a.logger.Info().Dur("duration", time.Since(serverStart)).Msg("HTTP server shutdown completed")
+		}
 	}
 
+	// Stop cleanup loops for managers
+	managerStart := time.Now()
+	if a.dbManager != nil {
+		a.logger.Info().Msg("Stopping database manager cleanup loop")
+		a.dbManager.StopCleanup()
+	}
+	if a.messagingManager != nil {
+		a.logger.Info().Msg("Stopping messaging manager cleanup loop")
+		a.messagingManager.StopCleanup()
+	}
+	a.logger.Info().Dur("duration", time.Since(managerStart)).Msg("Manager cleanup loops stopped")
+
+	// Close remaining resources
+	closerStart := time.Now()
+	a.logger.Info().Msgf("Closing %d remaining resources", len(a.closers))
 	for _, closer := range a.closers {
 		a.shutdownResource(closer, &errs)
 	}
+	a.logger.Info().Dur("duration", time.Since(closerStart)).Msg("Resource closing completed")
 
 	a.logger.Info().Msg("Application shutdown complete")
 

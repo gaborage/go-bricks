@@ -15,7 +15,7 @@ import (
 //
 //	mockQB := &mocks.MockQueryBuilder{}
 //	mockQB.On("Vendor").Return("postgresql")
-//	mockQB.On("Select", "id", "name").Return(squirrel.SelectBuilder{})
+//	mockQB.On("Select", "id", "name").Return(mockSelectBuilder)
 //	mockQB.On("BuildCaseInsensitiveLike", "name", "john").Return(squirrel.ILike{"name": "%john%"})
 //
 //	// Use mockQB in your tests
@@ -31,9 +31,13 @@ func (m *MockQueryBuilder) Vendor() string {
 }
 
 // Select implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Select(columns ...string) squirrel.SelectBuilder {
-	args := m.MethodCalled("Select", columns)
-	return args.Get(0).(squirrel.SelectBuilder)
+func (m *MockQueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
+	callArgs := make([]any, len(columns))
+	for i, col := range columns {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("Select", callArgs...)
+	return args.Get(0).(types.SelectQueryBuilder)
 }
 
 // Insert implements types.QueryBuilderInterface
@@ -44,7 +48,12 @@ func (m *MockQueryBuilder) Insert(table string) squirrel.InsertBuilder {
 
 // InsertWithColumns implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
-	args := m.MethodCalled("InsertWithColumns", table, columns)
+	callArgs := make([]any, len(columns)+1)
+	callArgs[0] = table
+	for i, col := range columns {
+		callArgs[i+1] = col
+	}
+	args := m.MethodCalled("InsertWithColumns", callArgs...)
 	return args.Get(0).(squirrel.InsertBuilder)
 }
 
@@ -64,12 +73,6 @@ func (m *MockQueryBuilder) Delete(table string) squirrel.DeleteBuilder {
 func (m *MockQueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer {
 	args := m.MethodCalled("BuildCaseInsensitiveLike", column, value)
 	return args.Get(0).(squirrel.Sqlizer)
-}
-
-// BuildLimitOffset implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) BuildLimitOffset(query squirrel.SelectBuilder, limit, offset int) squirrel.SelectBuilder {
-	args := m.MethodCalled("BuildLimitOffset", query, limit, offset)
-	return args.Get(0).(squirrel.SelectBuilder)
 }
 
 // BuildUpsert implements types.QueryBuilderInterface
@@ -114,8 +117,12 @@ func (m *MockQueryBuilder) ExpectVendor(vendor string) *mock.Call {
 }
 
 // ExpectSelect sets up a select expectation with the provided builder
-func (m *MockQueryBuilder) ExpectSelect(columns []string, builder squirrel.SelectBuilder) *mock.Call {
-	return m.On("Select", columns).Return(builder)
+func (m *MockQueryBuilder) ExpectSelect(columns []string, builder types.SelectQueryBuilder) *mock.Call {
+	callArgs := make([]any, len(columns))
+	for i, col := range columns {
+		callArgs[i] = col
+	}
+	return m.On("Select", callArgs...).Return(builder)
 }
 
 // ExpectInsert sets up an insert expectation with the provided builder
@@ -158,5 +165,166 @@ func (m *MockQueryBuilder) ExpectEscapeIdentifier(input, output string) *mock.Ca
 	return m.On("EscapeIdentifier", input).Return(output)
 }
 
+func (m *MockQueryBuilder) CrossJoin(table string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{table}, args...)
+	arguments := m.MethodCalled("CrossJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) From(from ...string) types.SelectQueryBuilder {
+	callArgs := make([]any, len(from))
+	for i, table := range from {
+		callArgs[i] = table
+	}
+	arguments := m.MethodCalled("From", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Where(pred any, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{pred}, args...)
+	arguments := m.MethodCalled("Where", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
+	callArgs := make([]any, len(groupBys))
+	for i, col := range groupBys {
+		callArgs[i] = col
+	}
+	arguments := m.MethodCalled("GroupBy", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Having(pred any, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{pred}, args...)
+	arguments := m.MethodCalled("Having", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
+	callArgs := make([]any, len(orderBys))
+	for i, col := range orderBys {
+		callArgs[i] = col
+	}
+	arguments := m.MethodCalled("OrderBy", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) InnerJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("InnerJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) LeftJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("LeftJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) RightJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("RightJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Join(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("Join", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Limit", limit)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Offset(offset uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Offset", offset)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Paginate(limit, offset uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Paginate", limit, offset)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	arguments := m.MethodCalled("ToSQL")
+
+	var outArgs []any
+	if v, ok := arguments.Get(1).([]any); ok {
+		outArgs = v
+	}
+
+	return arguments.String(0), outArgs, arguments.Error(2)
+}
+
+func (m *MockQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereBetween", column, lowerBound, upperBound)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereEq(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereEq", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereGt(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereGt", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+func (m *MockQueryBuilder) WhereGte(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereGte", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereIn(column string, values any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereIn", column, values)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLike(column, pattern string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLike", column, pattern)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLt(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLt", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLte(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLte", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotEq(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotEq", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotIn(column string, values any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotIn", column, values)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotNull(column string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotNull", column)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNull(column string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNull", column)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereRaw(condition string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{condition}, args...)
+	arguments := m.MethodCalled("WhereRaw", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
 // Compile-time verification that MockQueryBuilder implements the interface
 var _ types.QueryBuilderInterface = (*MockQueryBuilder)(nil)
+var _ types.SelectQueryBuilder = (*MockQueryBuilder)(nil)

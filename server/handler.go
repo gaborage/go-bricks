@@ -110,22 +110,37 @@ func WrapHandler[T any, R any](
 }
 
 // bindRequest binds request data from various sources to the target struct.
-//
-//nolint:gocyclo // Coordinating multiple binding sources; readability preferred.
 func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
 
-	// Bind JSON body if present (tolerate parameters like charset)
-	if ct := c.Request().Header.Get("Content-Type"); ct != "" {
-		if mt, _, _ := mime.ParseMediaType(ct); mt == "application/json" || strings.HasSuffix(mt, "+json") {
-			if err := c.Bind(target); err != nil {
-				return fmt.Errorf("failed to bind JSON body: %w", err)
-			}
-		}
+	// Bind JSON body if present
+	if err := rb.bindJSONBody(c, target); err != nil {
+		return err
 	}
 
-	// Bind path parameters, query parameters, and headers using struct tags
+	// Bind struct field tags (param, query, header)
+	return rb.bindStructFields(c, targetType, targetValue)
+}
+
+// bindJSONBody binds JSON request body if Content-Type indicates JSON
+func (rb *RequestBinder) bindJSONBody(c echo.Context, target any) error {
+	ct := c.Request().Header.Get("Content-Type")
+	if ct == "" {
+		return nil
+	}
+
+	mt, _, _ := mime.ParseMediaType(ct)
+	if mt == "application/json" || strings.HasSuffix(mt, "+json") {
+		if err := c.Bind(target); err != nil {
+			return fmt.Errorf("failed to bind JSON body: %w", err)
+		}
+	}
+	return nil
+}
+
+// bindStructFields binds path parameters, query parameters, and headers using struct tags
+func (rb *RequestBinder) bindStructFields(c echo.Context, targetType reflect.Type, targetValue reflect.Value) error {
 	for i := 0; i < targetType.NumField(); i++ {
 		field := targetType.Field(i)
 		fieldValue := targetValue.Field(i)
@@ -134,61 +149,118 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
 			continue
 		}
 
-		// Check for path parameter tag
-		if paramName := field.Tag.Get("param"); paramName != "" {
-			if value := c.Param(paramName); value != "" {
-				if err := setFieldValue(fieldValue, value); err != nil {
-					return fmt.Errorf("failed to set path param %s: %w", paramName, err)
-				}
-			}
+		if err := rb.bindFieldFromTags(c, &field, fieldValue); err != nil {
+			return err
 		}
+	}
+	return nil
+}
 
-		// Check for query parameter tag
-		if queryName := field.Tag.Get("query"); queryName != "" {
-			// Support []string binding from repeated query parameters
-			if fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.String {
-				values := c.QueryParams()[queryName]
-				if len(values) > 0 {
-					slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
-					for i, v := range values {
-						slice.Index(i).SetString(v)
-					}
-					fieldValue.Set(slice)
-				}
-			} else {
-				if value := c.QueryParam(queryName); value != "" {
-					if err := setFieldValue(fieldValue, value); err != nil {
-						return fmt.Errorf("failed to set query param %s: %w", queryName, err)
-					}
-				}
-			}
+// bindFieldFromTags binds a single field from various tag sources
+func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+	if err := rb.bindParamTag(c, field, fieldValue); err != nil {
+		return err
+	}
+	if err := rb.bindQueryTag(c, field, fieldValue); err != nil {
+		return err
+	}
+	if err := rb.bindHeaderTag(c, field, fieldValue); err != nil {
+		return err
+	}
+	return nil
+}
+
+// bindParamTag binds path parameters using the "param" tag
+func (rb *RequestBinder) bindParamTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+	paramName := field.Tag.Get("param")
+	if paramName == "" {
+		return nil
+	}
+
+	value := c.Param(paramName)
+	if value != "" {
+		if err := setFieldValue(fieldValue, value); err != nil {
+			return fmt.Errorf("failed to set path param %s: %w", paramName, err)
 		}
+	}
+	return nil
+}
 
-		// Check for header tag
-		if headerName := field.Tag.Get("header"); headerName != "" {
-			if values := c.Request().Header.Values(headerName); len(values) > 0 {
-				// Support comma-separated list for []string headers
-				if fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.String {
-					slice := reflect.MakeSlice(fieldValue.Type(), 0, 8)
-					for _, raw := range values {
-						for _, p := range strings.Split(raw, ",") {
-							p = strings.TrimSpace(p)
-							if p != "" {
-								slice = reflect.Append(slice, reflect.ValueOf(p))
-							}
-						}
-					}
-					fieldValue.Set(slice)
-				} else {
-					if err := setFieldValue(fieldValue, values[0]); err != nil {
-						return fmt.Errorf("failed to set header %s: %w", headerName, err)
-					}
-				}
+// bindQueryTag binds query parameters using the "query" tag
+func (rb *RequestBinder) bindQueryTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+	queryName := field.Tag.Get("query")
+	if queryName == "" {
+		return nil
+	}
+
+	// Support []string binding from repeated query parameters
+	if rb.isStringSliceField(fieldValue) {
+		return rb.bindQueryStringSlice(c, queryName, fieldValue)
+	}
+
+	value := c.QueryParam(queryName)
+	if value != "" {
+		if err := setFieldValue(fieldValue, value); err != nil {
+			return fmt.Errorf("failed to set query param %s: %w", queryName, err)
+		}
+	}
+	return nil
+}
+
+// bindQueryStringSlice binds repeated query parameters to a []string field
+func (rb *RequestBinder) bindQueryStringSlice(c echo.Context, queryName string, fieldValue reflect.Value) error {
+	values := c.QueryParams()[queryName]
+	if len(values) > 0 {
+		slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
+		for i, v := range values {
+			slice.Index(i).SetString(v)
+		}
+		fieldValue.Set(slice)
+	}
+	return nil
+}
+
+// bindHeaderTag binds headers using the "header" tag
+func (rb *RequestBinder) bindHeaderTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+	headerName := field.Tag.Get("header")
+	if headerName == "" {
+		return nil
+	}
+
+	values := c.Request().Header.Values(headerName)
+	if len(values) == 0 {
+		return nil
+	}
+
+	// Support comma-separated list for []string headers
+	if rb.isStringSliceField(fieldValue) {
+		return rb.bindHeaderStringSlice(values, fieldValue)
+	}
+
+	if err := setFieldValue(fieldValue, values[0]); err != nil {
+		return fmt.Errorf("failed to set header %s: %w", headerName, err)
+	}
+	return nil
+}
+
+// bindHeaderStringSlice binds comma-separated header values to a []string field
+func (rb *RequestBinder) bindHeaderStringSlice(values []string, fieldValue reflect.Value) error {
+	slice := reflect.MakeSlice(fieldValue.Type(), 0, 8)
+	for _, raw := range values {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				slice = reflect.Append(slice, reflect.ValueOf(p))
 			}
 		}
 	}
-
+	fieldValue.Set(slice)
 	return nil
+}
+
+// isStringSliceField checks if a field is a []string slice
+func (rb *RequestBinder) isStringSliceField(fieldValue reflect.Value) bool {
+	return fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.String
 }
 
 type valueSetter func(reflect.Value, string) error

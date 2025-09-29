@@ -23,13 +23,13 @@ func TestHealthProbeFuncRun(t *testing.T) {
 			name:     testProbe,
 			critical: true,
 			fn: func(_ context.Context) (string, map[string]any, error) {
-				return "healthy", map[string]any{"key": "value"}, nil
+				return healthyStatus, map[string]any{"key": "value"}, nil
 			},
 		}
 
 		result := probe.Run(context.Background())
 		assert.Equal(t, testProbe, result.Name)
-		assert.Equal(t, "healthy", result.Status)
+		assert.Equal(t, healthyStatus, result.Status)
 		assert.Equal(t, map[string]any{"key": "value"}, result.Details)
 		assert.NoError(t, result.Err)
 		assert.True(t, result.Critical)
@@ -39,13 +39,13 @@ func TestHealthProbeFuncRun(t *testing.T) {
 		probe := healthProbeFunc{
 			name: testProbe,
 			fn: func(_ context.Context) (string, map[string]any, error) {
-				return "healthy", nil, nil
+				return healthyStatus, nil, nil
 			},
 		}
 
 		result := probe.Run(context.Background())
 		assert.Equal(t, testProbe, result.Name)
-		assert.Equal(t, "healthy", result.Status)
+		assert.Equal(t, healthyStatus, result.Status)
 		assert.NotNil(t, result.Details)
 		assert.Empty(t, result.Details)
 		assert.NoError(t, result.Err)
