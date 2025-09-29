@@ -152,5 +152,148 @@ func (m *MockQueryBuilder) ExpectEscapeIdentifier(input, output string) *mock.Ca
 	return m.On("EscapeIdentifier", input).Return(output)
 }
 
+func (m *MockQueryBuilder) CrossJoin(table string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{table}, args...)
+	arguments := m.MethodCalled("CrossJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) From(from ...string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("From", from)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Where(pred interface{}, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{pred}, args...)
+	arguments := m.MethodCalled("Where", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("GroupBy", groupBys)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Having(pred interface{}, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{pred}, args...)
+	arguments := m.MethodCalled("Having", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("OrderBy", orderBys)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) InnerJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("InnerJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) LeftJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("LeftJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) RightJoin(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("RightJoin", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Join(join string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{join}, args...)
+	arguments := m.MethodCalled("Join", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Limit", limit)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Offset(offset uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Offset", offset)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) Paginate(limit, offset uint64) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("Paginate", limit, offset)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	arguments := m.MethodCalled("ToSQL")
+	return arguments.Get(0).(string), arguments.Get(1).([]any), arguments.Get(2).(error)
+}
+
+func (m *MockQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereBetween", column, lowerBound, upperBound)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereEq(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereEq", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereGt(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereGt", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+func (m *MockQueryBuilder) WhereGte(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereGte", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereIn(column string, values any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereIn", column, values)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLike(column, pattern string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLike", column, pattern)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLt(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLt", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereLte(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereLte", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotEq(column string, value any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotEq", column, value)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotIn(column string, values any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotIn", column, values)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNotNull(column string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNotNull", column)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereNull(column string) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("WhereNull", column)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
+func (m *MockQueryBuilder) WhereRaw(condition string, args ...any) types.SelectQueryBuilder {
+	callArgs := append([]any{condition}, args...)
+	arguments := m.MethodCalled("WhereRaw", callArgs...)
+	return arguments.Get(0).(types.SelectQueryBuilder)
+}
+
 // Compile-time verification that MockQueryBuilder implements the interface
 var _ types.QueryBuilderInterface = (*MockQueryBuilder)(nil)
+var _ types.SelectQueryBuilder = (*MockQueryBuilder)(nil)

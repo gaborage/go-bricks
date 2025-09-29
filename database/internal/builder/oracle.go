@@ -134,20 +134,43 @@ func isValidQuotedSegment(segment string) bool {
 	return segment[1:len(segment)-1] != ""
 }
 
-// parseQualifiedIdentifier splits and validates a potentially qualified identifier
-// Returns segments and validity status
+// parseQualifiedIdentifier splits a qualified identifier into segments and validates them
+// Handles quoted segments and ensures balanced quotes
 func parseQualifiedIdentifier(name string) ([]string, bool) {
-	// Split on dots to handle qualified names like SCHEMA.PKG.FUNC
-	segments := strings.Split(name, ".")
-
-	// Validate each segment is not empty after trimming
-	for i, segment := range segments {
-		segments[i] = strings.TrimSpace(segment)
-		if segments[i] == "" {
-			return nil, false
+	inQuotes := false
+	var segments []string
+	var current strings.Builder
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch c {
+		case '"':
+			inQuotes = !inQuotes
+			current.WriteByte(c)
+		case '.':
+			if inQuotes {
+				current.WriteByte(c)
+			} else {
+				s := strings.TrimSpace(current.String())
+				if s == "" {
+					return nil, false
+				}
+				segments = append(segments, s)
+				current.Reset()
+			}
+		default:
+			current.WriteByte(c)
 		}
 	}
 
+	s := strings.TrimSpace(current.String())
+	if s == "" {
+		return nil, false
+	}
+	segments = append(segments, s)
+	// Reject unbalanced quotes
+	if inQuotes {
+		return nil, false
+	}
 	return segments, true
 }
 

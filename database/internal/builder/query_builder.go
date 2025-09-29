@@ -27,6 +27,11 @@ type SelectQueryBuilder struct {
 	offset        uint64 // 0 means no offset
 }
 
+// check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
+var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
+
+// ========== QueryBuilder Methods ==========
+
 // NewQueryBuilder creates a new query builder for the specified database vendor.
 // It configures placeholder formats and prepares for vendor-specific SQL generation.
 func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {

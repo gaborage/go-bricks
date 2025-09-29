@@ -198,12 +198,12 @@ func TestOracleSQLFunctionDetection(t *testing.T) {
 		},
 		{
 			name:     "lower_case_function",
-			input:    countClause,
+			input:    strings.ToLower(countClause),
 			expected: true,
 		},
 		{
 			name:     "mixed_case_function",
-			input:    countClause,
+			input:    "CoUnT(*)",
 			expected: true,
 		},
 		{
