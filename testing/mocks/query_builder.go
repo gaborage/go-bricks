@@ -226,7 +226,13 @@ func (m *MockQueryBuilder) Paginate(limit, offset uint64) types.SelectQueryBuild
 
 func (m *MockQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	arguments := m.MethodCalled("ToSQL")
-	return arguments.Get(0).(string), arguments.Get(1).([]any), arguments.Get(2).(error)
+
+	var outArgs []any
+	if v, ok := arguments.Get(1).([]any); ok {
+		outArgs = v
+	}
+
+	return arguments.String(0), outArgs, arguments.Error(2)
 }
 
 func (m *MockQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) types.SelectQueryBuilder {
