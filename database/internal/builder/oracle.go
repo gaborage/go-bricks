@@ -137,41 +137,49 @@ func isValidQuotedSegment(segment string) bool {
 // parseQualifiedIdentifier splits a qualified identifier into segments and validates them
 // Handles quoted segments and ensures balanced quotes
 func parseQualifiedIdentifier(name string) ([]string, bool) {
-	inQuotes := false
-	var segments []string
-	var current strings.Builder
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch c {
-		case '"':
-			inQuotes = !inQuotes
-			current.WriteByte(c)
-		case '.':
-			if inQuotes {
-				current.WriteByte(c)
-			} else {
-				s := strings.TrimSpace(current.String())
-				if s == "" {
-					return nil, false
-				}
-				segments = append(segments, s)
-				current.Reset()
-			}
-		default:
-			current.WriteByte(c)
-		}
-	}
+func parseQualifiedIdentifier(name string) ([]string, bool) {
+    inQuotes := false
+    var segments []string
+    var current strings.Builder
+    for i := 0; i < len(name); i++ {
+        c := name[i]
+        switch c {
+        case '"':
+            // If inside quotes and next char is also a quote, treat as escaped "" and keep both.
+            if inQuotes && i+1 < len(name) && name[i+1] == '"' {
+                current.WriteByte('"')
+                current.WriteByte('"')
+                i++ // skip the escaped partner
+                continue
+            }
+            inQuotes = !inQuotes
+            current.WriteByte(c)
+        case '.':
+            if inQuotes {
+                current.WriteByte(c)
+            } else {
+                s := strings.TrimSpace(current.String())
+                if s == "" {
+                    return nil, false
+                }
+                segments = append(segments, s)
+                current.Reset()
+            }
+        default:
+            current.WriteByte(c)
+        }
+    }
 
-	s := strings.TrimSpace(current.String())
-	if s == "" {
-		return nil, false
-	}
-	segments = append(segments, s)
-	// Reject unbalanced quotes
-	if inQuotes {
-		return nil, false
-	}
-	return segments, true
+    s := strings.TrimSpace(current.String())
+    if s == "" {
+        return nil, false
+    }
+    segments = append(segments, s)
+    // Reject unbalanced quotes
+    if inQuotes {
+        return nil, false
+    }
+    return segments, true
 }
 
 // validateSegment checks if a segment is valid (quoted or unquoted)
