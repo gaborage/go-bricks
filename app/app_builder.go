@@ -151,8 +151,26 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	b.app.messagingInitializer = NewMessagingInitializer(b.logger, b.app.messagingManager, b.cfg.Multitenant.Enabled)
 	b.app.connectionPreWarmer = NewConnectionPreWarmer(b.logger, b.app.dbManager, b.app.messagingManager)
 
-	if !b.cfg.Multitenant.Enabled {
+	// Determine if we should skip pre-initialization
+	// Skip for multi-tenant mode (resources loaded per-tenant)
+	skipPreInit := b.cfg.Multitenant.Enabled
+
+	// Skip for dynamic source configuration
+	if b.cfg.Source.Type == config.SourceTypeDynamic {
+		skipPreInit = true
+		b.logger.Info().Msg("Dynamic source type detected - skipping pre-initialization")
+	}
+
+	// Skip if custom resource source declares itself as dynamic
+	if b.opts != nil && b.opts.ResourceSource != nil && b.opts.ResourceSource.IsDynamic() {
+		skipPreInit = true
+		b.logger.Info().Msg("Dynamic resource store detected - skipping pre-initialization")
+	}
+
+	// Only pre-initialize for single-tenant mode with static configuration
+	if !skipPreInit {
 		ctx := context.Background()
+		b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
 
 		if b.bundle.dbManager != nil {
 			if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {

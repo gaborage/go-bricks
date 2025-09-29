@@ -36,6 +36,11 @@ type ServerRunner interface {
 type TenantStore interface {
 	database.TenantStore
 	messaging.TenantMessagingResourceSource
+
+	// IsDynamic returns true if this store loads tenant configurations dynamically
+	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for
+	// stores that use static YAML configuration. This controls pre-initialization behavior.
+	IsDynamic() bool
 }
 
 // declarationSetter is an internal interface for setting messaging declarations

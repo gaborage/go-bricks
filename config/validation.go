@@ -36,7 +36,7 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("server config: %w", err)
 	}
 
-	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging); err != nil {
+	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
 
@@ -384,7 +384,7 @@ func validateLog(cfg *LogConfig) error {
 // validateMultitenant validates multi-tenant configuration and ensures no conflicts
 // with single-tenant settings. When multitenant is enabled, database and messaging
 // configurations must be provided by the tenant config provider.
-func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig) error {
+func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig, source *SourceConfig) error {
 	if !mt.Enabled {
 		return nil
 	}
@@ -399,19 +399,30 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		return fmt.Errorf("limits: %w", err)
 	}
 
-	// Ensure no conflict with single-tenant database configuration
-	if IsDatabaseConfigured(db) {
-		return fmt.Errorf("database configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
+	// Validate source type
+	if err := validateSourceConfig(source); err != nil {
+		return fmt.Errorf("source: %w", err)
 	}
 
-	// Ensure no conflict with single-tenant messaging configuration
-	if isMessagingConfigured(msg) {
-		return fmt.Errorf("messaging configuration not allowed when multitenant.enabled is true (tenant configs are provided dynamically)")
+	// For static sources, validate tenants if provided (optional but must be valid if present)
+	// For dynamic sources, tenants are optional and loaded from external store
+	if source.Type == SourceTypeStatic && mt.Tenants != nil {
+		if len(mt.Tenants) == 0 {
+			return fmt.Errorf("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
+		}
+		if err := validateMultitenantTenants(mt.Tenants); err != nil {
+			return fmt.Errorf("tenants: %w", err)
+		}
 	}
 
-	// Validate tenants configuration
-	if err := validateMultitenantTenants(mt.Tenants); err != nil {
-		return fmt.Errorf("tenants: %w", err)
+	// For static sources with tenants, ensure no conflict with single-tenant config
+	if source.Type == SourceTypeStatic && mt.Tenants != nil && len(mt.Tenants) > 0 {
+		if IsDatabaseConfigured(db) {
+			return fmt.Errorf("database configuration not allowed when static tenants are configured")
+		}
+		if isMessagingConfigured(msg) {
+			return fmt.Errorf("messaging configuration not allowed when static tenants are configured")
+		}
 	}
 
 	return nil
@@ -481,6 +492,14 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		}
 	}
 
+	return nil
+}
+
+// validateSourceConfig validates the source configuration type
+func validateSourceConfig(cfg *SourceConfig) error {
+	if cfg.Type != SourceTypeStatic && cfg.Type != SourceTypeDynamic {
+		return fmt.Errorf("invalid type: %s (must be one of: static, dynamic)", cfg.Type)
+	}
 	return nil
 }
 
