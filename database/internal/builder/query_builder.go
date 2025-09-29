@@ -238,57 +238,77 @@ func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
 
 // ========== SelectQueryBuilder Methods ==========
 
-// From specifies the table to select from
-func (sqb *SelectQueryBuilder) From(table string) *SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.From(table)
+// From specifies the table(s) to select from
+func (sqb *SelectQueryBuilder) From(from ...string) dbtypes.SelectQueryBuilder {
+	for _, table := range from {
+		sqb.selectBuilder = sqb.selectBuilder.From(table)
+	}
+	return sqb
+}
+
+// Where adds a WHERE condition using the raw squirrel interface
+func (sqb *SelectQueryBuilder) Where(pred any, rest ...any) dbtypes.SelectQueryBuilder {
+	sqb.selectBuilder = sqb.selectBuilder.Where(pred, rest...)
+	return sqb
+}
+
+// Limit sets the LIMIT for the query
+func (sqb *SelectQueryBuilder) Limit(limit uint64) dbtypes.SelectQueryBuilder {
+	sqb.limit = limit
+	return sqb
+}
+
+// Offset sets the OFFSET for the query
+func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder {
+	sqb.offset = offset
 	return sqb
 }
 
 // WhereEq adds an equality condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereEq(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereEq(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Eq(column, value))
 	return sqb
 }
 
 // WhereNotEq adds a not-equal condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotEq(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereNotEq(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.NotEq(column, value))
 	return sqb
 }
 
 // WhereLt adds a less-than condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereLt(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereLt(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Lt(column, value))
 	return sqb
 }
 
 // WhereLte adds a less-than-or-equal condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereLte(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereLte(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.LtOrEq(column, value))
 	return sqb
 }
 
 // WhereGt adds a greater-than condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereGt(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereGt(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Gt(column, value))
 	return sqb
 }
 
 // WhereGte adds a greater-than-or-equal condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereGte(column string, value any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereGte(column string, value any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.GtOrEq(column, value))
 	return sqb
 }
 
 // WhereIn adds an IN condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereIn(column string, values any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereIn(column string, values any) dbtypes.SelectQueryBuilder {
 	quotedColumn := sqb.qb.quoteColumnForQuery(column)
 	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Eq{quotedColumn: values})
 	return sqb
@@ -296,7 +316,7 @@ func (sqb *SelectQueryBuilder) WhereIn(column string, values any) *SelectQueryBu
 
 // WhereNotIn adds a NOT IN condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotIn(column string, values any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereNotIn(column string, values any) dbtypes.SelectQueryBuilder {
 	quotedColumn := sqb.qb.quoteColumnForQuery(column)
 	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.NotEq{quotedColumn: values})
 	return sqb
@@ -307,7 +327,7 @@ func (sqb *SelectQueryBuilder) WhereNotIn(column string, values any) *SelectQuer
 // - PostgreSQL: Uses ILIKE operator
 // - Oracle: Uses UPPER() function on both column and value
 // - Other vendors: Uses standard LIKE
-func (sqb *SelectQueryBuilder) WhereLike(column, pattern string) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereLike(column, pattern string) dbtypes.SelectQueryBuilder {
 	condition := sqb.qb.BuildCaseInsensitiveLike(column, pattern)
 	sqb.selectBuilder = sqb.selectBuilder.Where(condition)
 	return sqb
@@ -315,7 +335,7 @@ func (sqb *SelectQueryBuilder) WhereLike(column, pattern string) *SelectQueryBui
 
 // WhereNull adds an IS NULL condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNull(column string) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereNull(column string) dbtypes.SelectQueryBuilder {
 	quotedColumn := sqb.qb.quoteColumnForQuery(column)
 	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Eq{quotedColumn: nil})
 	return sqb
@@ -323,7 +343,7 @@ func (sqb *SelectQueryBuilder) WhereNull(column string) *SelectQueryBuilder {
 
 // WhereNotNull adds an IS NOT NULL condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotNull(column string) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereNotNull(column string) dbtypes.SelectQueryBuilder {
 	quotedColumn := sqb.qb.quoteColumnForQuery(column)
 	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.NotEq{quotedColumn: nil})
 	return sqb
@@ -331,7 +351,7 @@ func (sqb *SelectQueryBuilder) WhereNotNull(column string) *SelectQueryBuilder {
 
 // WhereBetween adds a BETWEEN condition to the WHERE clause.
 // The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) dbtypes.SelectQueryBuilder {
 	quotedColumn := sqb.qb.quoteColumnForQuery(column)
 	condition := squirrel.And{
 		squirrel.GtOrEq{quotedColumn: lowerBound},
@@ -357,55 +377,55 @@ func (sqb *SelectQueryBuilder) WhereBetween(column string, lowerBound, upperBoun
 //	sqb.WhereRaw(`"number" = ?`, accountNumber)  // Oracle reserved word
 //	sqb.WhereRaw(`ROWNUM <= ?`, 10)              // Oracle-specific syntax
 //	sqb.WhereRaw(`ST_Distance(location, ?) < ?`, point, radius) // Spatial queries
-func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Where(condition, args...)
 	return sqb
 }
 
 // Join adds a JOIN clause to the query
-func (sqb *SelectQueryBuilder) Join(join string, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) Join(join string, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Join(join, rest...)
 	return sqb
 }
 
 // LeftJoin adds a LEFT JOIN clause to the query
-func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.LeftJoin(join, rest...)
 	return sqb
 }
 
 // RightJoin adds a RIGHT JOIN clause to the query
-func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.RightJoin(join, rest...)
 	return sqb
 }
 
 // InnerJoin adds an INNER JOIN clause to the query
-func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.InnerJoin(join, rest...)
 	return sqb
 }
 
 // CrossJoin adds a CROSS JOIN clause to the query
-func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(join, rest...)
 	return sqb
 }
 
 // OrderBy adds an ORDER BY clause to the query
-func (sqb *SelectQueryBuilder) OrderBy(orderBys ...string) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) OrderBy(orderBys ...string) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.OrderBy(orderBys...)
 	return sqb
 }
 
 // GroupBy adds a GROUP BY clause to the query
-func (sqb *SelectQueryBuilder) GroupBy(groupBys ...string) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) GroupBy(groupBys ...string) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.GroupBy(groupBys...)
 	return sqb
 }
 
 // Having adds a HAVING clause to the query
-func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
 	sqb.selectBuilder = sqb.selectBuilder.Having(pred, rest...)
 	return sqb
 }
@@ -413,7 +433,7 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) *SelectQueryBuilder
 // Paginate applies pagination to the query with vendor-specific syntax.
 // Use limit=0 for no limit (with offset only), offset=0 for no offset (limit only).
 // Oracle 12c+ will use OFFSET...FETCH syntax, others use LIMIT/OFFSET.
-func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) *SelectQueryBuilder {
+func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) dbtypes.SelectQueryBuilder {
 	sqb.limit = limit
 	sqb.offset = offset
 	return sqb

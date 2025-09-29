@@ -75,6 +75,11 @@ func (m *MockSelectQueryBuilder) Offset(offset uint64) types.SelectQueryBuilder 
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
+func (m *MockSelectQueryBuilder) Paginate(limit, offset uint64) types.SelectQueryBuilder {
+	args := m.MethodCalled("Paginate", limit, offset)
+	return args.Get(0).(types.SelectQueryBuilder)
+}
+
 func (m *MockSelectQueryBuilder) WhereEq(column string, value any) types.SelectQueryBuilder {
 	args := m.MethodCalled("WhereEq", column, value)
 	return args.Get(0).(types.SelectQueryBuilder)

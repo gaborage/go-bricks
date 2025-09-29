@@ -30,6 +30,7 @@ type SelectQueryBuilder interface {
 	OrderBy(orderBys ...string) SelectQueryBuilder
 	Limit(limit uint64) SelectQueryBuilder
 	Offset(offset uint64) SelectQueryBuilder
+	Paginate(limit, offset uint64) SelectQueryBuilder
 
 	// Type-safe WHERE clause methods
 	WhereEq(column string, value any) SelectQueryBuilder

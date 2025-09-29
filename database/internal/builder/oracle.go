@@ -61,48 +61,131 @@ func isValidIdentifierChar(c byte) bool {
 	return isLetter(c) || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '#'
 }
 
+// =========================== HELPER FUNCTIONS FOR SQL FUNCTION DETECTION ===========================
+
+// isQuotedString checks if a string is fully enclosed in double quotes
+func isQuotedString(s string) bool {
+	return len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"'
+}
+
+// extractFunctionNameAndArgs splits a potential function call into name and validates parentheses structure
+func extractFunctionNameAndArgs(s string) (name string, hasValidStructure bool) {
+	// Find first opening parenthesis
+	parenIndex := strings.IndexByte(s, '(')
+	if parenIndex <= 0 {
+		return "", false
+	}
+
+	// Must have matching closing parenthesis
+	if !strings.Contains(s[parenIndex:], ")") {
+		return "", false
+	}
+
+	// Extract and validate function name part
+	functionName := strings.TrimSpace(s[:parenIndex])
+	if functionName == "" {
+		return "", false
+	}
+
+	return functionName, true
+}
+
+// isValidOracleIdentifierStart checks if a character can start an Oracle identifier
+// Oracle identifiers must start with a letter (A-Z, a-z)
+func isValidOracleIdentifierStart(c byte) bool {
+	return isLetter(c)
+}
+
+// isValidIdentifierSegment validates a single unquoted identifier segment
+// Must start with letter and contain only valid identifier characters
+func isValidIdentifierSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+
+	// Must start with a letter (fixes the bug with "1COUNT" etc.)
+	if !isValidOracleIdentifierStart(segment[0]) {
+		return false
+	}
+
+	// All characters must be valid identifier characters
+	for i := 0; i < len(segment); i++ {
+		if !isValidIdentifierChar(segment[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isValidQuotedSegment validates a quoted identifier segment
+// Must be properly quoted and non-empty inside quotes
+func isValidQuotedSegment(segment string) bool {
+	if len(segment) < 2 {
+		return false
+	}
+
+	// Must start and end with quotes
+	if segment[0] != '"' || segment[len(segment)-1] != '"' {
+		return false
+	}
+
+	// Content inside quotes must not be empty
+	return segment[1:len(segment)-1] != ""
+}
+
+// parseQualifiedIdentifier splits and validates a potentially qualified identifier
+// Returns segments and validity status
+func parseQualifiedIdentifier(name string) ([]string, bool) {
+	// Split on dots to handle qualified names like SCHEMA.PKG.FUNC
+	segments := strings.Split(name, ".")
+
+	// Validate each segment is not empty after trimming
+	for i, segment := range segments {
+		segments[i] = strings.TrimSpace(segment)
+		if segments[i] == "" {
+			return nil, false
+		}
+	}
+
+	return segments, true
+}
+
+// validateSegment checks if a segment is valid (quoted or unquoted)
+func validateSegment(segment string) bool {
+	if segment[0] == '"' {
+		return isValidQuotedSegment(segment)
+	}
+	return isValidIdentifierSegment(segment)
+}
+
 // isSQLFunction checks if the given string is a SQL function call
 func isSQLFunction(s string) bool {
 	if s == "" {
 		return false
 	}
 
-	// Already quoted identifiers are not functions
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+	// Quoted strings are identifiers, not functions
+	if isQuotedString(s) {
 		return false
 	}
 
-	// Find first opening parenthesis
-	parenIndex := strings.IndexByte(s, '(')
-	if parenIndex <= 0 || !strings.Contains(s[parenIndex:], ")") {
+	// Extract function name and validate structure
+	functionName, hasValidStructure := extractFunctionNameAndArgs(s)
+	if !hasValidStructure {
 		return false
 	}
 
-	// Validate function name (before the parenthesis)
-	functionName := strings.TrimSpace(s[:parenIndex])
-
-	// Function name must not be empty
-	if functionName == "" {
+	// Parse and validate the function name (may be qualified)
+	segments, valid := parseQualifiedIdentifier(functionName)
+	if !valid {
 		return false
 	}
 
-	// Split on dots to handle qualified names like SCHEMA.PKG.FUNC
-	segments := strings.Split(functionName, ".")
-
-	// Validate each segment individually
+	// Validate each segment
 	for _, segment := range segments {
-		segment = strings.TrimSpace(segment)
-
-		// Each segment must be non-empty and start with a letter
-		if segment == "" || !isLetter(segment[0]) {
+		if !validateSegment(segment) {
 			return false
-		}
-
-		// Each segment can only contain valid identifier characters (excluding dots)
-		for i := 0; i < len(segment); i++ {
-			if !isValidIdentifierChar(segment[i]) {
-				return false
-			}
 		}
 	}
 

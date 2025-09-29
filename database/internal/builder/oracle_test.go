@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	countClause = "COUNT(*)"
-	sumClause   = "SUM(amount)"
+	countClause  = "COUNT(*)"
+	sumClause    = "SUM(amount)"
+	assertFormat = "input: %s"
 )
 
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
@@ -446,7 +447,7 @@ func TestTypeSafeWhereMethodsWithOracleReservedWords(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var query *SelectQueryBuilder
+			var query dbtypes.SelectQueryBuilder
 
 			// Build query based on the test case
 			switch tt.method {
@@ -513,7 +514,7 @@ func TestWhereRawForComplexOracleQueries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var query *SelectQueryBuilder
+			var query dbtypes.SelectQueryBuilder
 			if tt.name == "oracle_specific_rownum" {
 				query = qb.Select("id", "name").From("users").WhereRaw(tt.condition, tt.args...)
 			} else {
@@ -555,4 +556,281 @@ func TestFixesOriginalOracleIdentifierBug(t *testing.T) {
 	assert.Contains(t, sql, `SELECT id, name, "number"`, "SELECT clause should quote reserved word")
 	assert.Contains(t, sql, `WHERE "number" = :1`, "WHERE clause should quote reserved word")
 	assert.NotContains(t, sql, `WHERE number = :1`, "WHERE clause should NOT contain unquoted reserved word")
+}
+
+func TestIsQuotedString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"empty", "", false},
+		{"properly_quoted", `"test"`, true},
+		{"unquoted", "test", false},
+		{"only_start_quote", `"test`, false},
+		{"only_end_quote", `test"`, false},
+		{"single_quote", `"`, false},
+		{"just_quotes", `""`, true},
+		{"quotes_inside", `"test"more"`, true}, // Full string is quoted
+		{"spaces_quoted", `"  spaces  "`, true},
+		{"single_char", "a", false},
+		{"two_chars", "ab", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isQuotedString(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+func TestExtractFunctionNameAndArgs(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedName string
+		expectedOk   bool
+	}{
+		{"simple_function", countClause, "COUNT", true},
+		{"with_spaces", "  FUNC  ( args ) ", "FUNC", true},
+		{"no_closing", "FUNC(", "", false},
+		{"no_opening", "FUNC)", "", false},
+		{"empty_name", "()", "", false},
+		{"no_parens", "FUNC", "", false},
+		{"complex_args", "SUM(table.column)", "SUM", true},
+		{"qualified_name", "SCHEMA.PKG.FUNC(arg)", "SCHEMA.PKG.FUNC", true},
+		{"nested_parens", "FUNC(INNER())", "FUNC", true},
+		{"starts_with_paren", "(FUNC)", "", false},
+		{"multiple_parens", "FUNC()MORE()", "FUNC", true}, // Only cares about first
+		{"whitespace_name", "  TRIM_FUNC  (arg)", "TRIM_FUNC", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, ok := extractFunctionNameAndArgs(tt.input)
+			assert.Equal(t, tt.expectedOk, ok, assertFormat, tt.input)
+			if tt.expectedOk {
+				assert.Equal(t, tt.expectedName, name, assertFormat, tt.input)
+			}
+		})
+	}
+}
+
+func TestIsValidOracleIdentifierStart(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    byte
+		expected bool
+	}{
+		// Letters should return true
+		{"uppercase_A", 'A', true},
+		{"uppercase_Z", 'Z', true},
+		{"lowercase_a", 'a', true},
+		{"lowercase_z", 'z', true},
+		{"middle_letter", 'M', true},
+
+		// Numbers should return false
+		{"digit_0", '0', false},
+		{"digit_9", '9', false},
+		{"digit_5", '5', false},
+
+		// Special characters should return false
+		{"underscore", '_', false},
+		{"dollar", '$', false},
+		{"hash", '#', false},
+		{"hyphen", '-', false},
+		{"space", ' ', false},
+		{"dot", '.', false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidOracleIdentifierStart(tt.input)
+			assert.Equal(t, tt.expected, result, "input: %c", tt.input)
+		})
+	}
+}
+
+func TestIsValidIdentifierSegment(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"valid_simple", "TABLE", true},
+		{"valid_lowercase", "table", true},
+		{"with_underscore", "MY_TABLE", true},
+		{"with_dollar", "SYS$TABLE", true},
+		{"with_hash", "MY#TABLE", true},
+		{"with_numbers", "TABLE123", true},
+		{"mixed_case", "MyTable", true},
+
+		// Invalid cases - should start with letter
+		{"starts_with_digit", "1TABLE", false},
+		{"starts_with_underscore", "_TABLE", false},
+		{"starts_with_dollar", "$TABLE", false},
+		{"starts_with_hash", "#TABLE", false},
+
+		// Invalid characters
+		{"with_dash", "MY-TABLE", false},
+		{"with_space", "MY TABLE", false},
+		{"with_dot", "MY.TABLE", false},
+		{"with_special", "MY@TABLE", false},
+
+		// Edge cases
+		{"empty", "", false},
+		{"single_letter", "A", true},
+		{"single_digit", "1", false},
+		{"all_digits_start_letter", "A123", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidIdentifierSegment(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+func TestIsValidQuotedSegment(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{"valid_quoted", `"test"`, true},
+		{"quoted_with_spaces", `"test with spaces"`, true},
+		{"quoted_with_special", `"test@#$%"`, true},
+		{"quoted_with_numbers", `"123test"`, true},
+		{"quoted_empty_content", `""`, false}, // Empty content inside quotes
+
+		// Invalid cases
+		{"not_quoted", "test", false},
+		{"only_start_quote", `"test`, false},
+		{"only_end_quote", `test"`, false},
+		{"single_quote", `"`, false},
+		{"empty", "", false},
+		{"short_string", "a", false},
+
+		// Edge cases
+		{"quotes_in_content", `"test"inside"`, true}, // Valid quoted string
+		{"single_char_quoted", `"a"`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isValidQuotedSegment(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+func TestParseQualifiedIdentifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+		valid    bool
+	}{
+		{"simple", "FUNC", []string{"FUNC"}, true},
+		{"schema_qualified", "SCHEMA.FUNC", []string{"SCHEMA", "FUNC"}, true},
+		{"fully_qualified", "SCHEMA.PKG.FUNC", []string{"SCHEMA", "PKG", "FUNC"}, true},
+		{"with_spaces", " SCHEMA . PKG . FUNC ", []string{"SCHEMA", "PKG", "FUNC"}, true},
+
+		// Invalid cases
+		{"empty_segment", "SCHEMA..FUNC", nil, false},
+		{"starts_with_dot", ".FUNC", nil, false},
+		{"ends_with_dot", "FUNC.", nil, false},
+		{"only_dots", "...", nil, false},
+
+		// Mixed quoted and unquoted
+		{"mixed_quoted", `"SCHEMA".PKG."FUNC"`, []string{`"SCHEMA"`, "PKG", `"FUNC"`}, true},
+		{"all_quoted", `"SCHEMA"."PKG"."FUNC"`, []string{`"SCHEMA"`, `"PKG"`, `"FUNC"`}, true},
+
+		// Edge cases
+		{"single_dot", ".", nil, false},
+		{"empty_string", "", []string{""}, false},   // Will have empty segment
+		{"just_spaces", "   ", []string{""}, false}, // Trimmed to empty
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segments, valid := parseQualifiedIdentifier(tt.input)
+			assert.Equal(t, tt.valid, valid, assertFormat, tt.input)
+			if tt.valid {
+				assert.Equal(t, tt.expected, segments, assertFormat, tt.input)
+			} else {
+				assert.Nil(t, segments, "input: %s should return nil segments", tt.input)
+			}
+		})
+	}
+}
+
+func TestValidateSegment(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Valid unquoted segments
+		{"valid_unquoted", "TABLE", true},
+		{"valid_with_numbers", "TABLE123", true},
+		{"valid_with_underscore", "MY_TABLE", true},
+
+		// Invalid unquoted segments
+		{"invalid_starts_digit", "1TABLE", false},
+		{"invalid_special_char", "MY-TABLE", false},
+
+		// Valid quoted segments
+		{"valid_quoted", `"table"`, true},
+		{"valid_quoted_special", `"my-table"`, true},
+		{"valid_quoted_numbers", `"123table"`, true},
+
+		// Invalid quoted segments
+		{"invalid_quoted_empty", `""`, false},
+		{"invalid_unclosed_quote", `"table`, false},
+
+		// Edge cases
+		{"single_letter", "A", true},
+		{"single_quoted", `"A"`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := validateSegment(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+// Integration test to verify the helper functions work together correctly
+func TestHelperFunctionsIntegration(t *testing.T) {
+	// Test cases that verify the interaction between helper functions
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Cases that previously failed due to bugs
+		{"number_start_bug_fix", "1COUNT(*)", false},
+		{"qualified_invalid_start_bug_fix", "SCHEMA.1PKG.FUNC(arg)", false},
+
+		// Valid cases
+		{"simple_function", countClause, true},
+		{"qualified_function", "SCHEMA.PKG.FUNC(arg)", true},
+		{"mixed_quoted_qualified", `"SCHEMA".PKG.FUNC(arg)`, true},
+
+		// Invalid cases
+		{"quoted_identifier", `"column"`, false},
+		{"no_parentheses", "NOTAFUNC", false},
+		{"empty_segments", "SCHEMA..FUNC()", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isSQLFunction(tt.input)
+			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
 }
