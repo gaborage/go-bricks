@@ -19,14 +19,15 @@ const (
 	testAMQPHost                 = "amqp://localhost:5672/"
 	testTenantHeader             = "X-Tenant-ID"
 	testDomain                   = ".api.example.com"
+	testTenantDBHost             = "tenant-a.db.local"
 )
 
 func makeSampleTenants() map[string]TenantEntry {
 	return map[string]TenantEntry{
-		"tenant-a": {
+		tenantA: {
 			Database: DatabaseConfig{
 				Type:     PostgreSQL,
-				Host:     "tenant-a.db.local",
+				Host:     testTenantDBHost,
 				Port:     5432,
 				Database: "tenant_a",
 				Username: "tenant_user",
@@ -2076,6 +2077,43 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 			dbConfig:  &DatabaseConfig{},
 			msgConfig: &MessagingConfig{},
 		},
+		{
+			name: "tenants_without_messaging",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: testTenantHeader,
+				},
+				Limits: LimitsConfig{
+					Tenants: 100,
+				},
+				Tenants: map[string]TenantEntry{
+					tenantA: {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     testTenantDBHost,
+							Port:     5432,
+							Database: "tenant_a",
+							Username: "tenant_user",
+						},
+						Messaging: TenantMessagingConfig{URL: ""}, // No messaging
+					},
+					"tenant-b": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "tenant-b.db.local",
+							Port:     5432,
+							Database: "tenant_b",
+							Username: "tenant_user",
+						},
+						Messaging: TenantMessagingConfig{URL: ""}, // No messaging
+					},
+				},
+			},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2168,26 +2206,37 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			expectedError: "messaging configuration not allowed when static tenants are configured",
 		},
 		{
-			name: "tenant_missing_messaging_url",
+			name: "inconsistent_messaging_configuration",
 			mtConfig: &MultitenantConfig{
 				Enabled:  true,
 				Resolver: ResolverConfig{Type: "header"},
 				Limits:   LimitsConfig{Tenants: 100},
 				Tenants: map[string]TenantEntry{
-					"tenant-a": {
+					tenantA: {
 						Database: DatabaseConfig{
 							Type:     PostgreSQL,
-							Host:     "tenant-a.db.local",
+							Host:     testTenantDBHost,
 							Port:     5432,
 							Database: "tenant_a",
 							Username: "tenant_user",
 						},
+						Messaging: TenantMessagingConfig{URL: "amqp://tenant-a"}, // Has messaging
+					},
+					"tenant-b": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "tenant-b.db.local",
+							Port:     5432,
+							Database: "tenant_b",
+							Username: "tenant_user",
+						},
+						Messaging: TenantMessagingConfig{URL: ""}, // No messaging
 					},
 				},
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "tenants: tenant tenant-a messaging URL cannot be empty",
+			expectedError: "inconsistent messaging configuration",
 		},
 	}
 

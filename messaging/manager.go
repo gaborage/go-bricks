@@ -16,9 +16,9 @@ import (
 // TenantMessagingResourceSource provides per-key AMQP configurations.
 // This interface abstracts where tenant-specific messaging configs come from.
 type TenantMessagingResourceSource interface {
-	// AMQPURL returns the AMQP URL for the given key.
+	// BrokerURL returns the AMQP broker URL for the given key.
 	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
-	AMQPURL(ctx context.Context, key string) (string, error)
+	BrokerURL(ctx context.Context, key string) (string, error)
 }
 
 // ClientFactory creates AMQP clients from URLs
@@ -255,7 +255,7 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 // createAMQPClient creates a new AMQP client for the given key
 func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient, error) {
 	// Get AMQP URL for this key
-	amqpURL, err := m.resourceSource.AMQPURL(ctx, key)
+	amqpURL, err := m.resourceSource.BrokerURL(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AMQP URL for key %s: %w", key, err)
 	}

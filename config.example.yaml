@@ -84,6 +84,8 @@ log:
     format: json
     file: ""
 
+# Messaging configuration (OPTIONAL - only required if using AMQP/RabbitMQ)
+# If not using messaging, you can omit this entire section or leave broker.url empty
 messaging:
   broker:
     url: amqp://localhost:5672/
@@ -121,7 +123,7 @@ multitenant:
 #       username: app_user
 #       password: secure_password
 #     messaging:
-#       url: amqp://rabbitmq.example.com:5672/tenant-a
+#       url: amqp://rabbitmq.example.com:5672/tenant-a  # Optional - omit if tenant doesn't use messaging
 
 # Custom configurations - add your application-specific settings here
 custom:
