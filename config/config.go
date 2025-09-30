@@ -74,6 +74,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.rate.burst":                200,
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
+		"app.startup.timeout":           "10s",
 
 		"server.host":               "0.0.0.0",
 		"server.port":               8080,

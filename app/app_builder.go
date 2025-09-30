@@ -182,7 +182,8 @@ func (b *Builder) performPreInitialization() {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), b.cfg.App.Startup.Timeout)
+	defer cancel()
 	b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
 
 	// Pre-initialize database if configured
