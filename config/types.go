@@ -27,12 +27,18 @@ type Config struct {
 
 // AppConfig holds general application settings.
 type AppConfig struct {
-	Name      string     `koanf:"name" json:"name" yaml:"name" toml:"name" mapstructure:"name"`
-	Version   string     `koanf:"version" json:"version" yaml:"version" toml:"version" mapstructure:"version"`
-	Env       string     `koanf:"env" json:"env" yaml:"env" toml:"env" mapstructure:"env"`
-	Debug     bool       `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
-	Namespace string     `koanf:"namespace" json:"namespace" yaml:"namespace" toml:"namespace" mapstructure:"namespace"`
-	Rate      RateConfig `koanf:"rate" json:"rate" yaml:"rate" toml:"rate" mapstructure:"rate"`
+	Name      string        `koanf:"name" json:"name" yaml:"name" toml:"name" mapstructure:"name"`
+	Version   string        `koanf:"version" json:"version" yaml:"version" toml:"version" mapstructure:"version"`
+	Env       string        `koanf:"env" json:"env" yaml:"env" toml:"env" mapstructure:"env"`
+	Debug     bool          `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
+	Namespace string        `koanf:"namespace" json:"namespace" yaml:"namespace" toml:"namespace" mapstructure:"namespace"`
+	Rate      RateConfig    `koanf:"rate" json:"rate" yaml:"rate" toml:"rate" mapstructure:"rate"`
+	Startup   StartupConfig `koanf:"startup" json:"startup" yaml:"startup" toml:"startup" mapstructure:"startup"`
+}
+
+// StartupConfig holds application startup settings.
+type StartupConfig struct {
+	Timeout time.Duration `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
 }
 
 // RateConfig holds rate limiting settings.

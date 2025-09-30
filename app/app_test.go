@@ -742,16 +742,23 @@ func TestMessagingDeclarationsBuiltOnceAndReused(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	t.Run("database type error returns logger and error", func(t *testing.T) {
+	t.Run("error handling returns logger even on failure", func(t *testing.T) {
 		// This test verifies that even when New() fails, it returns a logger
-		app, log, err := New()
+		// We trigger a failure by providing an invalid config loader
+		opts := &Options{
+			ConfigLoader: func() (*config.Config, error) {
+				return nil, fmt.Errorf("simulated config error")
+			},
+		}
+
+		app, log, err := NewWithOptions(opts)
 
 		assert.Error(t, err)
 		assert.Nil(t, app)
-		assert.NotNil(t, log) // Logger should always be available
+		assert.NotNil(t, log) // Logger should always be available even on failure
 
-		// Verify logger is functional even on failure
-		log.Info().Msg("Test log from New() test failure")
+		// Verify logger is functional even when app creation fails
+		log.Info().Msg("Test log from New() failure scenario")
 	})
 }
 
@@ -894,13 +901,15 @@ func TestNewWithConfigErrors(t *testing.T) {
 		assert.NotNil(t, log) // Logger should always be available
 	})
 
-	t.Run("nil options causes error", func(t *testing.T) {
-		cfg := &config.Config{}
+	t.Run("nil options with empty config succeeds (messaging/database now optional)", func(t *testing.T) {
+		cfg := &config.Config{} // Empty config - database and messaging not configured
 		app, log, err := NewWithConfig(cfg, nil)
 
-		assert.Error(t, err)
-		assert.Nil(t, app)
-		assert.NotNil(t, log) // Logger should always be available
+		// After the fix: messaging and database are optional, so app creation succeeds
+		// Config validation is NOT performed by NewWithConfig (user's responsibility)
+		assert.NoError(t, err)
+		assert.NotNil(t, app)
+		assert.NotNil(t, log)
 	})
 
 	t.Run("invalid database config causes dependency resolution error", func(t *testing.T) {

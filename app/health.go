@@ -63,7 +63,15 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 				if stats == nil {
 					stats = map[string]any{}
 				}
-				stats["status"] = "no active connections"
+
+				// Check if database is not configured (not a critical failure)
+				if contains(err.Error(), "database not configured") || contains(err.Error(), "no default database") {
+					stats["status"] = notConfiguredStatus
+					return notConfiguredStatus, stats, nil
+				}
+
+				// Other errors mean connection issues
+				stats["status"] = "no_active_connections"
 				return healthyStatus, stats, err
 			}
 
@@ -72,6 +80,7 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 				if stats == nil {
 					stats = map[string]any{}
 				}
+				stats["status"] = "unhealthy"
 				return unhealthyStatus, stats, err
 			}
 
@@ -79,6 +88,7 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 			if stats == nil {
 				stats = map[string]any{}
 			}
+			stats["status"] = "healthy"
 			return healthyStatus, stats, nil
 		},
 	}
@@ -103,18 +113,31 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			if stats == nil {
 				stats = map[string]any{}
 			}
-			if active, ok := stats["active_publishers"].(int); ok && active == 0 {
-				stats["status"] = "no active publishers"
-				return healthyStatus, stats, nil
-			}
 
 			// Attempt to verify readiness using an existing publisher key when available
-			if client, err := msgManager.GetPublisher(ctx, ""); err == nil {
-				if !client.IsReady() {
-					return unhealthyStatus, stats, nil
+			client, err := msgManager.GetPublisher(ctx, "")
+			if err != nil {
+				// Check if messaging is not configured (not a failure)
+				if contains(err.Error(), "messaging not configured") {
+					stats["status"] = notConfiguredStatus
+					return notConfiguredStatus, stats, nil
 				}
+				// Other errors are actual failures
+				stats["status"] = "connection_failed"
+				return unhealthyStatus, stats, err
 			}
 
+			// Check if client is ready
+			if !client.IsReady() {
+				stats["status"] = "not_ready"
+				return unhealthyStatus, stats, nil
+			}
+
+			if active, ok := stats["active_publishers"].(int); ok && active == 0 {
+				stats["status"] = "no_active_publishers"
+			} else {
+				stats["status"] = healthyStatus
+			}
 			return healthyStatus, stats, nil
 		},
 	}
