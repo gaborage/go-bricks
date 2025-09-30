@@ -424,7 +424,7 @@ func (s *stubTenantResource) DBConfig(context.Context, string) (*config.Database
 	return &config.DatabaseConfig{Type: "postgresql"}, nil
 }
 
-func (s *stubTenantResource) AMQPURL(context.Context, string) (string, error) {
+func (s *stubTenantResource) BrokerURL(context.Context, string) (string, error) {
 	s.msgCalls++
 	return "amqp://stub/", nil
 }

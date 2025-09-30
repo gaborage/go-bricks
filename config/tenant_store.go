@@ -60,18 +60,19 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	return &tenant.Database, nil
 }
 
-// AMQPURL returns the AMQP URL for the given key.
+// BrokerURL returns the AMQP broker URL for the given key.
 // For single-tenant (key=""), returns the default broker URL.
 // For multi-tenant (key=tenantID), returns the tenant-specific URL.
-func (s *TenantStore) AMQPURL(_ context.Context, key string) (string, error) {
+// Returns an error if messaging is not configured or misconfigured.
+func (s *TenantStore) BrokerURL(_ context.Context, key string) (string, error) {
 	// Single-tenant case
 	if key == "" {
 		if s.defaultMessaging == nil {
-			return "", fmt.Errorf("no default messaging configuration available")
+			return "", fmt.Errorf("messaging not configured in single-tenant mode")
 		}
 		// Use the broker URL from messaging config
 		if s.defaultMessaging.Broker.URL == "" {
-			return "", fmt.Errorf("no broker URL configured in default messaging config")
+			return "", fmt.Errorf("messaging not configured in single-tenant mode (broker URL is empty)")
 		}
 		return s.defaultMessaging.Broker.URL, nil
 	}
@@ -81,11 +82,11 @@ func (s *TenantStore) AMQPURL(_ context.Context, key string) (string, error) {
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return "", fmt.Errorf("no messaging configuration found for tenant: %s", key)
+		return "", fmt.Errorf("no tenant configuration found for: %s", key)
 	}
 
 	if tenant.Messaging.URL == "" {
-		return "", fmt.Errorf("empty AMQP URL for tenant: %s", key)
+		return "", fmt.Errorf("messaging not configured for tenant: %s", key)
 	}
 
 	return tenant.Messaging.URL, nil

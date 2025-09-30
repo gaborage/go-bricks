@@ -31,7 +31,7 @@ func TestTenantStoreDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Same(t, &cfg.Database, dbCfg)
 
-	url, err := source.AMQPURL(context.Background(), "")
+	url, err := source.BrokerURL(context.Background(), "")
 	assert.NoError(t, err)
 	assert.Equal(t, cfg.Messaging.Broker.URL, url)
 }
@@ -61,13 +61,73 @@ func TestTenantStoreTenantOverrides(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, cfg.Multitenant.Tenants[tenantA].Database, *dbCfg)
 
-	url, err := source.AMQPURL(context.Background(), tenantA)
+	url, err := source.BrokerURL(context.Background(), tenantA)
 	assert.NoError(t, err)
 	assert.Equal(t, tenantAMQPURL, url)
 
 	_, err = source.DBConfig(context.Background(), "unknown")
 	assert.Error(t, err)
 
-	_, err = source.AMQPURL(context.Background(), "unknown")
+	_, err = source.BrokerURL(context.Background(), "unknown")
 	assert.Error(t, err)
+}
+
+func TestTenantStoreSingleTenantWithoutMessaging(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{
+			Type:     PostgreSQL,
+			Host:     "localhost",
+			Port:     5432,
+			Database: "app",
+		},
+		Messaging:   MessagingConfig{}, // No messaging configured
+		Multitenant: MultitenantConfig{Enabled: false},
+	}
+
+	source := NewTenantStore(cfg)
+
+	// Database should work
+	dbCfg, err := source.DBConfig(context.Background(), "")
+	assert.NoError(t, err)
+	assert.Same(t, &cfg.Database, dbCfg)
+
+	// Messaging should return descriptive error
+	url, err := source.BrokerURL(context.Background(), "")
+	assert.Error(t, err)
+	assert.Empty(t, url)
+	assert.Contains(t, err.Error(), "messaging not configured")
+}
+
+func TestTenantStoreMultiTenantWithoutMessaging(t *testing.T) {
+	cfg := &Config{
+		Database:  DatabaseConfig{},
+		Messaging: MessagingConfig{},
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]TenantEntry{
+				tenantA: {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "tenant-a.db.local",
+						Port:     5432,
+						Database: "tenant_a",
+					},
+					Messaging: TenantMessagingConfig{URL: ""}, // No messaging for this tenant
+				},
+			},
+		},
+	}
+
+	source := NewTenantStore(cfg)
+
+	// Database should work
+	dbCfg, err := source.DBConfig(context.Background(), tenantA)
+	assert.NoError(t, err)
+	assert.Equal(t, cfg.Multitenant.Tenants[tenantA].Database, *dbCfg)
+
+	// Messaging should return descriptive error
+	url, err := source.BrokerURL(context.Background(), tenantA)
+	assert.Error(t, err)
+	assert.Empty(t, url)
+	assert.Contains(t, err.Error(), "messaging not configured for tenant")
 }

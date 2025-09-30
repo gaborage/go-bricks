@@ -17,7 +17,7 @@ type stubMessagingSource struct {
 	urls map[string]string
 }
 
-func (s *stubMessagingSource) AMQPURL(_ context.Context, key string) (string, error) {
+func (s *stubMessagingSource) BrokerURL(_ context.Context, key string) (string, error) {
 	if url, ok := s.urls[key]; ok {
 		return url, nil
 	}

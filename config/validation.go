@@ -472,6 +472,25 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		return fmt.Errorf("at least one tenant must be configured")
 	}
 
+	// Check consistency: if any tenant has messaging configured, all must have it configured
+	// This prevents confusing scenarios where some tenants can use messaging and others cannot
+	hasAnyMessaging := false
+	hasNoMessaging := false
+
+	for tenantID := range tenants {
+		tenant := tenants[tenantID]
+		if isTenantMessagingConfigured(&tenant.Messaging) {
+			hasAnyMessaging = true
+		} else {
+			hasNoMessaging = true
+		}
+	}
+
+	// Enforce all-or-nothing messaging configuration for consistency
+	if hasAnyMessaging && hasNoMessaging {
+		return fmt.Errorf("inconsistent messaging configuration: either all tenants must have messaging configured or none should")
+	}
+
 	for tenantID := range tenants {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
@@ -486,9 +505,11 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
 
-		// Validate tenant messaging configuration
-		if strings.TrimSpace(tenant.Messaging.URL) == "" {
-			return fmt.Errorf("tenant %s messaging URL cannot be empty", tenantID)
+		// Validate tenant messaging configuration only if configured
+		// Messaging is optional but must be valid if provided
+		if isTenantMessagingConfigured(&tenant.Messaging) {
+			// No additional validation needed for messaging URL beyond non-empty check
+			// URL format validation happens at runtime when connecting
 		}
 	}
 
@@ -506,4 +527,10 @@ func validateSourceConfig(cfg *SourceConfig) error {
 // isMessagingConfigured determines if messaging is intentionally configured
 func isMessagingConfigured(cfg *MessagingConfig) bool {
 	return cfg.Broker.URL != ""
+}
+
+// isTenantMessagingConfigured determines if tenant messaging is intentionally configured.
+// Returns true if the tenant has a non-empty messaging URL.
+func isTenantMessagingConfigured(cfg *TenantMessagingConfig) bool {
+	return strings.TrimSpace(cfg.URL) != ""
 }
