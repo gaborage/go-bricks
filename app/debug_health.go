@@ -122,7 +122,7 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 
 	for _, component := range components {
 		switch component.Status {
-		case "healthy", "ready":
+		case healthyStatus, "ready":
 			summary.HealthyCount++
 		default:
 			if component.Critical {

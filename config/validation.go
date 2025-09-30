@@ -420,7 +420,7 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		if IsDatabaseConfigured(db) {
 			return fmt.Errorf("database configuration not allowed when static tenants are configured")
 		}
-		if isMessagingConfigured(msg) {
+		if IsMessagingConfigured(msg) {
 			return fmt.Errorf("messaging configuration not allowed when static tenants are configured")
 		}
 	}
@@ -517,8 +517,9 @@ func validateSourceConfig(cfg *SourceConfig) error {
 	return nil
 }
 
-// isMessagingConfigured determines if messaging is intentionally configured
-func isMessagingConfigured(cfg *MessagingConfig) bool {
+// IsMessagingConfigured determines if messaging is intentionally configured.
+// This mirrors the logic used to determine if messaging should be initialized.
+func IsMessagingConfigured(cfg *MessagingConfig) bool {
 	return cfg.Broker.URL != ""
 }
 

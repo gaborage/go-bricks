@@ -894,13 +894,15 @@ func TestNewWithConfigErrors(t *testing.T) {
 		assert.NotNil(t, log) // Logger should always be available
 	})
 
-	t.Run("nil options causes error", func(t *testing.T) {
-		cfg := &config.Config{}
+	t.Run("nil options with empty config succeeds (messaging/database now optional)", func(t *testing.T) {
+		cfg := &config.Config{} // Empty config - database and messaging not configured
 		app, log, err := NewWithConfig(cfg, nil)
 
-		assert.Error(t, err)
-		assert.Nil(t, app)
-		assert.NotNil(t, log) // Logger should always be available
+		// After the fix: messaging and database are optional, so app creation succeeds
+		// Config validation is NOT performed by NewWithConfig (user's responsibility)
+		assert.NoError(t, err)
+		assert.NotNil(t, app)
+		assert.NotNil(t, log)
 	})
 
 	t.Run("invalid database config causes dependency resolution error", func(t *testing.T) {

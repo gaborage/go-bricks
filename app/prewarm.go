@@ -3,11 +3,17 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 )
+
+// contains checks if a string contains a substring (case-insensitive)
+func contains(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+}
 
 // ConnectionPreWarmer handles pre-warming of database and messaging connections
 // for improved startup performance and health checking.
@@ -42,25 +48,35 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 	if w.dbManager != nil {
 		// Pre-warm database connection
 		if err := w.PreWarmDatabase(ctx, ""); err != nil {
-			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-			errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
+			// Check if error is due to database not being configured
+			if contains(err.Error(), "database not configured") || contains(err.Error(), "no default database") {
+				w.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
+			} else {
+				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
+				errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
+			}
 		} else {
 			w.logger.Info().Msg("Pre-warmed single-tenant database connection")
 		}
 	} else {
-		w.logger.Debug().Msg("Skipping single-tenant database pre-warming: database manager unavailable")
+		w.logger.Debug().Msg("Skipping single-tenant database pre-warming: manager unavailable")
 	}
 
 	if w.messagingManager != nil {
 		// Pre-warm messaging components
 		if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
-			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
-			errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
+			// Check if error is due to messaging not being configured
+			if contains(err.Error(), "messaging not configured") {
+				w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
+			} else {
+				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
+				errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
+			}
 		} else {
 			w.logger.Info().Msg("Pre-warmed single-tenant messaging")
 		}
 	} else {
-		w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: messaging manager unavailable")
+		w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: manager unavailable")
 	}
 
 	// Return combined errors but don't fail startup

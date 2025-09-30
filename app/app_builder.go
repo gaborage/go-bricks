@@ -169,25 +169,43 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 
 	// Only pre-initialize for single-tenant mode with static configuration
 	if !skipPreInit {
-		ctx := context.Background()
-		b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
-
-		if b.bundle.dbManager != nil {
-			if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {
-				b.err = fmt.Errorf("failed to pre-initialize database connection: %w", err)
-				return b
-			}
-		}
-
-		if b.bundle.messagingManager != nil {
-			if _, err := b.bundle.messagingManager.GetPublisher(ctx, ""); err != nil {
-				b.err = fmt.Errorf("failed to pre-initialize messaging publisher: %w", err)
-				return b
-			}
-		}
+		b.performPreInitialization()
 	}
 
 	return b
+}
+
+// performPreInitialization attempts to establish connections during app startup.
+// This reduces cold-start latency for single-tenant applications.
+func (b *Builder) performPreInitialization() {
+	if b.err != nil {
+		return
+	}
+
+	ctx := context.Background()
+	b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
+
+	// Pre-initialize database if configured
+	if b.bundle.dbManager != nil && config.IsDatabaseConfigured(&b.cfg.Database) {
+		if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {
+			b.err = fmt.Errorf("failed to pre-initialize database connection: %w", err)
+			return
+		}
+		b.logger.Debug().Msg("Pre-initialized database connection")
+	} else if b.bundle.dbManager != nil {
+		b.logger.Debug().Msg("Skipping database pre-initialization: not configured")
+	}
+
+	// Pre-initialize messaging if configured
+	if b.bundle.messagingManager != nil && config.IsMessagingConfigured(&b.cfg.Messaging) {
+		if _, err := b.bundle.messagingManager.GetPublisher(ctx, ""); err != nil {
+			b.err = fmt.Errorf("failed to pre-initialize messaging publisher: %w", err)
+			return
+		}
+		b.logger.Debug().Msg("Pre-initialized messaging publisher")
+	} else if b.bundle.messagingManager != nil {
+		b.logger.Debug().Msg("Skipping messaging pre-initialization: not configured")
+	}
 }
 
 // CreateHealthProbes creates health check probes for all managers.

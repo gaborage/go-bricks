@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	serverErrorMsg  = "server error: %w"
-	disabledStatus  = "disabled"
-	healthyStatus   = "healthy"
-	unhealthyStatus = "unhealthy"
+	serverErrorMsg      = "server error: %w"
+	disabledStatus      = "disabled"
+	healthyStatus       = "healthy"
+	unhealthyStatus     = "unhealthy"
+	notConfiguredStatus = "not_configured"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
