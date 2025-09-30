@@ -504,13 +504,6 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
-
-		// Validate tenant messaging configuration only if configured
-		// Messaging is optional but must be valid if provided
-		if isTenantMessagingConfigured(&tenant.Messaging) {
-			// No additional validation needed for messaging URL beyond non-empty check
-			// URL format validation happens at runtime when connecting
-		}
 	}
 
 	return nil
