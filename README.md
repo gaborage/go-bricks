@@ -23,10 +23,11 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 6. [HTTP Server](#http-server)
 7. [Messaging](#messaging)
 8. [Database](#database)
-9. [Observability and Operations](#observability-and-operations)
-10. [Examples](#examples)
-11. [Contributing](#contributing)
-12. [License](#license)
+9. [Multi-Tenant Implementation](#multi-tenant-implementation)
+10. [Observability and Operations](#observability-and-operations)
+11. [Examples](#examples)
+12. [Contributing](#contributing)
+13. [License](#license)
 
 ---
 
@@ -41,14 +42,16 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 
 ## Feature Overview
 - **Modular architecture** with explicit dependencies and lifecycle hooks.
-- **Echo-based HTTP server** with typed handlers, standardized response envelopes, and middleware batteries.
-- **AMQP messaging registry** for RabbitMQ that orchestrates exchanges, queues, publishers, and consumers.
-- **Configuration loader** built on Koanf that merges defaults, YAML, and environment variables.
-- **Database toolkit** with PostgreSQL and Oracle drivers, query builders, and health checks.
-- **Flyway migration integration** for schema evolution.
-- **Structured logging and observability** with trace propagation, request instrumentation, and health endpoints.
-- **Performance optimized** with modern Go type system (`any` over `interface{}`), efficient slice operations, and reduced function complexity.
-- **Enterprise-grade code quality** with comprehensive linting, zero warnings, and extensive test coverage.
+- **Echo-based HTTP server** with typed handlers, standardized response envelopes, and comprehensive middleware.
+- **Advanced AMQP messaging** with validate-once, replay-many declaration pattern for multi-tenant isolation.
+- **Configuration loader** built on Koanf that merges defaults, YAML, and environment variables with service-specific injection.
+- **Multi-database support** with PostgreSQL, Oracle, and MongoDB drivers, type-safe query builders, and automatic identifier quoting.
+- **Type-safe query building** with vendor-specific optimizations and Oracle reserved word handling.
+- **Multi-tenant architecture** with complete resource isolation, context-driven tenant resolution, and declaration replay.
+- **Flyway migration integration** for schema evolution across all database vendors.
+- **Structured logging and observability** with W3C trace propagation, request instrumentation, and health endpoints.
+- **Performance optimized** with modern Go type system, efficient connection pooling, and lazy resource initialization.
+- **Enterprise-grade code quality** with comprehensive linting, 80%+ test coverage, and security scanning.
 
 ---
 
@@ -274,7 +277,7 @@ func register(framework *app.App) error {
 }
 ```
 
-`Init` is called once to capture dependencies, `RegisterRoutes` attaches HTTP handlers, `DeclareMessaging` declares AMQP infrastructure, and `Shutdown` releases resources.
+`Init` is called once to capture dependencies, `RegisterRoutes` attaches HTTP handlers, `DeclareMessaging` declares AMQP infrastructure (validated once, replayed per-tenant), and `Shutdown` releases resources. The framework ensures proper lifecycle ordering and error handling across all module hooks.
 
 ---
 
@@ -323,31 +326,163 @@ SERVER_READY_ROUTE="/readiness" # Maps to server.ready.route
 
 ## Messaging
 
-AMQP support via RabbitMQ:
-- Declare exchanges and queues once using the shared registry.
-- Register publishers/consumers during module initialization.
-- Health / readiness hooks integrate with the main app lifecycle.
+AMQP support via RabbitMQ with a sophisticated declaration and registry system:
 
-```go
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    decls.DeclareExchange("user.events", "topic")
-    decls.DeclareConsumer("user.events", "user.created", handler)
-}
-```
+### Declaration Architecture
+- **Validate-Once, Replay-Many Pattern**: Messaging infrastructure is declared once by modules and validated upfront, then replayed to multiple per-tenant registries for complete isolation.
+- **Declarative Infrastructure**: Exchanges, queues, bindings, publishers, and consumers are declared as pure data structures before any connections are established.
+- **Deep Cloning**: Declarations support deep cloning to create isolated copies for each tenant, preventing shared mutable state.
+- **Built-in Validation**: The framework validates that all references between declarations are valid (e.g., bindings reference existing queues and exchanges).
+
+### Key Features
+- **Multi-Tenant Ready**: Declarations can be replayed to tenant-specific registries, enabling complete messaging isolation per tenant.
+- **Type-Safe Declaration Types**: Separate declaration types for exchanges, queues, bindings, publishers, and consumers with comprehensive configuration options.
+- **Automatic Reconnection**: Built-in reconnection logic with exponential backoff for resilient messaging operations.
+- **Health Integration**: Messaging health checks integrate with the application lifecycle for readiness probes.
+- **Context Propagation**: Tenant IDs and trace information automatically flow through messaging operations.
 
 ---
 
 ## Database
 
-### PostgreSQL / Oracle support
-Configure under `database.*` and use the provided factory to create connections. The query builder handles dialect differences (placeholders, quoting) and health checks feed into the readiness probe.
+### Multi-Database Support
+GoBricks provides a unified database interface supporting PostgreSQL, Oracle, and MongoDB with vendor-specific optimizations:
 
-### Flyway migrations
-GoBricks ships with a Flyway integration that runs migrations via CLI while injecting database credentials from configuration.
-```go
-migrator := migration.NewFlywayMigrator(cfg, log)
-_ = migrator.Migrate(ctx, nil)
+- **Unified Interface**: Single `database.Interface` abstraction works across all supported databases
+- **Query Builder**: Fluent, type-safe query building with automatic vendor-specific SQL generation
+- **Connection Management**: Built-in connection pooling, health monitoring, and performance tracking
+- **Migration Support**: Flyway integration for schema evolution with database credential injection
+
+### Type-Safe Query Builder
+
+The framework provides an enhanced query builder with type-safe WHERE clause methods that prevent SQL errors, especially with Oracle reserved words:
+
+**Type-Safe WHERE Methods**:
+- `WhereEq(column, value)` - Equality comparison with automatic identifier quoting
+- `WhereNotEq(column, value)` - Not equal comparison
+- `WhereLt/WhereLte/WhereGt/WhereGte(column, value)` - Comparison operators
+- `WhereIn/WhereNotIn(column, values)` - IN and NOT IN clauses
+- `WhereLike(column, pattern)` - LIKE pattern matching
+- `WhereNull/WhereNotNull(column)` - NULL checks
+- `WhereBetween(column, min, max)` - Range comparisons
+- `WhereRaw(condition, args...)` - Escape hatch for complex conditions (manual quoting required)
+
+These methods ensure Oracle reserved words like "number", "level", and "size" are automatically quoted, preventing runtime SQL errors.
+
+### Vendor-Specific Features
+
+**PostgreSQL**:
+- Standard `$1, $2` placeholder format
+- Full support for advanced PostgreSQL features
+- Optimized connection pooling with pgx driver
+
+**Oracle**:
+- Automatic `:1, :2` placeholder conversion
+- Reserved word identifier quoting
+- Service name and SID connection support
+
+**MongoDB**:
+- Document-based operations with SQL-like interface
+- Aggregation pipeline support
+- Unified interface for consistency
+
+### Flyway Migrations
+GoBricks ships with a Flyway integration that runs migrations via CLI while injecting database credentials from configuration, supporting all database vendors.
+
+---
+
+## Multi-Tenant Implementation
+
+Go-Bricks provides comprehensive multi-tenant support through tenant-specific database and messaging resolution with complete resource isolation.
+
+### Architecture Overview
+
+Go-Bricks implements multi-tenancy through several key components:
+
+1. **Tenant Resolution**: Extract tenant ID from requests using headers, subdomains, composite strategies, or custom logic with built-in validation support.
+2. **Resource Isolation**: Each tenant gets isolated database and messaging connections with complete separation.
+3. **Context Propagation**: Tenant ID flows through request context automatically across all framework components.
+4. **Function-Based Injection**: Database and messaging resources are resolved via functions in `ModuleDeps`, enabling lazy per-tenant connection management.
+5. **Declaration Replay**: Messaging infrastructure declarations are validated once and replayed to per-tenant registries, ensuring isolated messaging topologies.
+
+### Configuration Setup
+
+Configure multi-tenancy in your `config.yaml`:
+
+```yaml
+multitenant:
+  enabled: true
+  resolver:
+    type: "header"           # or "subdomain", "composite"
+    header: "X-Tenant-ID"   # header name for tenant resolution
+    domain: "api.example.com" # root domain for subdomain resolution
+    proxies: true           # trust X-Forwarded-Host headers
+  limits:
+    tenants: 100           # maximum number of tenants
+  tenants:
+    tenant1:
+      database:
+        type: "postgresql"
+        host: "tenant1-db.example.com"
+        port: 5432
+        database: "tenant1_db"
+        username: "tenant1_user"
+        password: "secure_pass_1"
+      messaging:
+        url: "amqp://tenant1:pass@tenant1-rabbitmq.example.com:5672/"
+    tenant2:
+      database:
+        type: "postgresql"
+        host: "tenant2-db.example.com"
+        port: 5432
+        database: "tenant2_db"
+        username: "tenant2_user"
+        password: "secure_pass_2"
+      messaging:
+        url: "amqp://tenant2:pass@tenant2-rabbitmq.example.com:5672/"
 ```
+
+### Custom Tenant Store Implementation
+
+Implement the `app.TenantStore` interface to integrate with external systems like AWS Secrets Manager, HashiCorp Vault, or custom databases. The interface requires implementing three methods:
+
+- `DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)` - Returns database configuration for a specific tenant
+- `AMQPURL(ctx context.Context, key string) (string, error)` - Returns AMQP connection URL for a specific tenant
+- `IsDynamic() bool` - Returns true if tenant configuration can change at runtime (dynamic) or false if static
+
+The `IsDynamic()` flag controls framework behavior for caching and configuration refresh. Dynamic stores (external sources like AWS Secrets Manager) return `true`, while static stores (YAML-based) return `false`. The framework handles connection pooling, caching, and lifecycle management automatically once the store implementation returns the configuration.
+
+### Tenant Resolution Strategies
+
+The framework provides multiple built-in tenant resolution strategies:
+
+- **HeaderResolver**: Extracts tenant ID from HTTP headers (e.g., `X-Tenant-ID`)
+- **SubdomainResolver**: Derives tenant ID from request host subdomains with proxy support
+- **CompositeResolver**: Tries multiple resolvers sequentially until one succeeds, with optional regex validation
+- **ValidatingResolver**: Wraps any resolver with tenant ID format validation using regex patterns
+
+All resolvers support context propagation and integrate seamlessly with the middleware layer.
+
+### Multi-Tenant Module Implementation
+
+Modules access tenant-specific resources through function-based injection in `ModuleDeps`:
+
+- `GetDB(ctx context.Context)` - Returns database connection for the tenant in the context
+- `GetMessaging(ctx context.Context)` - Returns messaging client for the tenant in the context
+
+The framework automatically resolves the tenant ID from the request context and provides the appropriate isolated resources. Messaging declarations made in `DeclareMessaging()` are validated once at startup and replayed to each tenant's registry, ensuring complete infrastructure isolation.
+
+### Benefits of Go-Bricks Multi-Tenancy
+
+1. **Complete Isolation**: Each tenant gets isolated database and messaging resources with separate connection pools
+2. **Context-Driven**: Tenant ID flows automatically through request context across all framework components
+3. **Extensible**: Custom resource stores can integrate with any external system (AWS, HashiCorp, custom databases)
+4. **Type-Safe**: Compile-time guarantees for tenant resolution functions and resource access
+5. **Performance**: Built-in caching and connection pooling for tenant resources with lazy initialization
+6. **Security**: Automatic tenant validation, configurable ID constraints via regex, and isolated infrastructure
+7. **Declaration Replay**: Messaging infrastructure is validated once and replayed per-tenant, preventing configuration drift
+
+This architecture enables scalable multi-tenant applications while maintaining strict isolation between tenants and providing flexibility for custom resource management strategies. See the [multitenant-aws example](https://github.com/gaborage/go-bricks-demo-project/tree/main/multitenant-aws) for a complete implementation.
 
 ---
 
