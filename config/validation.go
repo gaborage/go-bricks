@@ -211,8 +211,11 @@ func validateOptionalDatabasePort(port int) error {
 }
 
 func validateRequiredDatabasePort(port int) error {
-	if port <= 0 || port > 65535 {
+	if port <= 0 {
 		return NewMissingFieldError("database.port", "DATABASE_PORT", "database.port")
+	}
+	if port > 65535 {
+		return NewInvalidFieldError("database.port", "invalid port; must be between 1 and 65535", []string{"1-65535"})
 	}
 	return nil
 }

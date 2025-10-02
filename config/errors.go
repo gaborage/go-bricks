@@ -7,8 +7,10 @@ import (
 
 // ConfigError represents a configuration error with actionable guidance.
 // All error messages are lowercase following Go conventions.
+//
+//nolint:revive // ConfigError is intentionally named for clarity in external API usage
 type ConfigError struct {
-	Category string   // error category: "missing", "invalid", "not_set", "connection"
+	Category string   // error category: "missing", "invalid", "not_configured", "connection"
 	Field    string   // config field path (e.g., "database.host", "messaging.broker.url")
 	Message  string   // user-friendly error message (lowercase)
 	Action   string   // actionable instruction (lowercase)
