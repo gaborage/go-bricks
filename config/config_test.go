@@ -141,7 +141,7 @@ func TestLoadInvalidEnvironmentVariables(t *testing.T) {
 			name:    "invalid_log_level",
 			envKey:  "LOG_LEVEL",
 			value:   "super-loud",
-			wantErr: "invalid log level",
+			wantErr: "log.level",
 		},
 	}
 
@@ -460,7 +460,7 @@ func TestLoadDatabasePartialConfig(t *testing.T) {
 	assert.Error(t, err) // Should fail validation
 	assert.Nil(t, cfg)
 	// Error should mention missing required database config
-	assert.Contains(t, err.Error(), "invalid database type")
+	assert.Contains(t, err.Error(), "database.type")
 }
 
 func TestLoadDatabaseCompleteConfig(t *testing.T) {

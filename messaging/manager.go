@@ -125,30 +125,30 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		}
 	}
 
-	// Create AMQP client for consumers
+	// Create AMQP client for consumers (error is already well-formatted from createAMQPClient)
 	client, err := m.createAMQPClient(ctx, key)
 	if err != nil {
-		return fmt.Errorf("failed to create consumer client for key %s: %w", key, err)
+		return err
 	}
 
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		client.Close()
-		return fmt.Errorf("failed to replay declarations for key %s: %w", key, err)
+		return fmt.Errorf("failed to replay messaging declarations: %w", err)
 	}
 
 	// Declare infrastructure
 	if err := registry.DeclareInfrastructure(ctx); err != nil {
 		client.Close()
-		return fmt.Errorf("failed to declare messaging infrastructure for key %s: %w", key, err)
+		return fmt.Errorf("failed to declare messaging infrastructure: %w", err)
 	}
 
 	// Start consumers with tenant-aware context
 	tenantCtx := multitenant.SetTenant(ctx, key)
 	if err := registry.StartConsumers(tenantCtx); err != nil {
 		client.Close()
-		return fmt.Errorf("failed to start consumers for key %s: %w", key, err)
+		return fmt.Errorf("failed to start messaging consumers: %w", err)
 	}
 
 	// Store the consumer entry
@@ -211,10 +211,10 @@ func (m *Manager) getExistingPublisher(key string) AMQPClient {
 
 // createPublisher creates a new publisher client for the given key
 func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, error) {
-	// Create the AMQP client
+	// Create the AMQP client (error is already well-formatted from createAMQPClient)
 	client, err := m.createAMQPClient(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create publisher client for key %s: %w", key, err)
+		return nil, err
 	}
 
 	wrapped := newTenantAwarePublisher(client, key)
@@ -254,10 +254,10 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 
 // createAMQPClient creates a new AMQP client for the given key
 func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient, error) {
-	// Get AMQP URL for this key
+	// Get AMQP URL for this key (error is already well-formatted from tenant store)
 	amqpURL, err := m.resourceSource.BrokerURL(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AMQP URL for key %s: %w", key, err)
+		return nil, err
 	}
 
 	// Create AMQP client using injected factory

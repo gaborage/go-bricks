@@ -572,7 +572,7 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				Password: "testpass",
 			},
 			expectError:   true,
-			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "invalid config with multiple identifiers should fail validation",
@@ -590,7 +590,7 @@ func TestConnectionValidationIntegration(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured",
+			errorContains: "oracle connection identifier",
 		},
 	}
 

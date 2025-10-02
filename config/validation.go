@@ -57,25 +57,24 @@ func Validate(cfg *Config) error {
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
-		return fmt.Errorf("app name is required")
+		return NewMissingFieldError("app.name", "APP_NAME", "app.name")
 	}
 
 	if cfg.Version == "" {
-		return fmt.Errorf("app version is required")
+		return NewMissingFieldError("app.version", "APP_VERSION", "app.version")
 	}
 
 	validEnvs := []string{EnvDevelopment, EnvStaging, EnvProduction}
 	if !slices.Contains(validEnvs, cfg.Env) {
-		return fmt.Errorf("invalid environment: %s (must be one of: %s)",
-			cfg.Env, strings.Join(validEnvs, ", "))
+		return NewInvalidFieldError("app.env", fmt.Sprintf("'%s' is not valid", cfg.Env), validEnvs)
 	}
 
 	if cfg.Rate.Limit < 0 {
-		return fmt.Errorf("rate limit must be non-negative")
+		return NewValidationError("app.rate.limit", "must be non-negative")
 	}
 
 	if cfg.Rate.Burst < 0 {
-		return fmt.Errorf("rate burst must be non-negative")
+		return NewValidationError("app.rate.burst", "must be non-negative")
 	}
 
 	return nil
@@ -83,23 +82,23 @@ func validateApp(cfg *AppConfig) error {
 
 func validateServer(cfg *ServerConfig) error {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return fmt.Errorf("invalid port: %d (must be 1-65535)", cfg.Port)
+		return NewInvalidFieldError("server.port", fmt.Sprintf("%d is out of valid range", cfg.Port), []string{"1-65535"})
 	}
 
 	if cfg.Timeout.Read <= 0 {
-		return fmt.Errorf("read timeout must be positive")
+		return NewValidationError("server.timeout.read", "must be positive")
 	}
 
 	if cfg.Timeout.Write <= 0 {
-		return fmt.Errorf("write timeout must be positive")
+		return NewValidationError("server.timeout.write", "must be positive")
 	}
 
 	if cfg.Timeout.Middleware <= 0 {
-		return fmt.Errorf("middleware timeout must be positive")
+		return NewValidationError("server.timeout.middleware", "must be positive")
 	}
 
 	if cfg.Timeout.Shutdown <= 0 {
-		return fmt.Errorf("shutdown timeout must be positive")
+		return NewValidationError("server.timeout.shutdown", "must be positive")
 	}
 
 	return nil
@@ -177,15 +176,14 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 func validateDatabaseType(dbType string) error {
 	validTypes := []string{PostgreSQL, Oracle, MongoDB}
 	if !slices.Contains(validTypes, dbType) {
-		return fmt.Errorf("invalid database type: %s (must be one of: %s)",
-			dbType, strings.Join(validTypes, ", "))
+		return NewInvalidFieldError("database.type", fmt.Sprintf("'%s' is not supported", dbType), validTypes)
 	}
 	return nil
 }
 
 func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 	if cfg.Host == "" {
-		return fmt.Errorf("database host is required")
+		return NewMissingFieldError("database.host", "DATABASE_HOST", "database.host")
 	}
 
 	if err := validateRequiredDatabasePort(cfg.Port); err != nil {
@@ -195,11 +193,11 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 	// For Oracle, database name is optional if Service.Name or SID is provided
 	// Oracle-specific validation will provide more detailed error messages
 	if cfg.Type != Oracle && cfg.Database == "" {
-		return fmt.Errorf("database name is required")
+		return NewMissingFieldError("database.database", "DATABASE_DATABASE", "database.database")
 	}
 
 	if cfg.Username == "" {
-		return fmt.Errorf("database username is required")
+		return NewMissingFieldError("database.username", "DATABASE_USERNAME", "database.username")
 	}
 
 	return nil
@@ -207,14 +205,17 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 
 func validateOptionalDatabasePort(port int) error {
 	if port < 0 || port > 65535 {
-		return fmt.Errorf("invalid database port: %d", port)
+		return NewInvalidFieldError("database.port", fmt.Sprintf("%d is out of valid range", port), []string{"1-65535"})
 	}
 	return nil
 }
 
 func validateRequiredDatabasePort(port int) error {
-	if port <= 0 || port > 65535 {
-		return fmt.Errorf("invalid database port: %d", port)
+	if port <= 0 {
+		return NewMissingFieldError("database.port", "DATABASE_PORT", "database.port")
+	}
+	if port > 65535 {
+		return NewInvalidFieldError("database.port", "invalid port; must be between 1 and 65535", []string{"1-65535"})
 	}
 	return nil
 }
@@ -231,22 +232,22 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg.Pool.Max.Connections == 0 {
 		cfg.Pool.Max.Connections = 25
 	} else if cfg.Pool.Max.Connections < 0 {
-		return fmt.Errorf("max connections must be non-negative")
+		return NewValidationError("database.pool.max.connections", "must be non-negative")
 	}
 
 	if cfg.Pool.Idle.Connections < 0 {
-		return fmt.Errorf("max idle connections must be non-negative")
+		return NewValidationError("database.pool.idle.connections", "must be non-negative")
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {
-		return fmt.Errorf("max query length must be non-negative")
+		return NewValidationError("database.query.log.maxlength", "must be non-negative")
 	}
 	if cfg.Query.Log.MaxLength == 0 {
 		cfg.Query.Log.MaxLength = defaultMaxQueryLength
 	}
 
 	if cfg.Query.Slow.Threshold < 0 {
-		return fmt.Errorf("slow query threshold must be non-negative")
+		return NewValidationError("database.query.slow.threshold", "must be non-negative")
 	}
 	if cfg.Query.Slow.Threshold == 0 {
 		cfg.Query.Slow.Threshold = defaultSlowQueryThreshold
@@ -302,7 +303,8 @@ func validateMongoDBReadPreference(pref string) error {
 		return nil
 	}
 
-	return fmt.Errorf("invalid MongoDB read preference: %s (must be one of: primary, primaryPreferred, secondary, secondaryPreferred, nearest)", pref)
+	validOptions := []string{"primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest"}
+	return NewInvalidFieldError("database.mongo.replica.preference", fmt.Sprintf("'%s' is not supported", pref), validOptions)
 }
 
 // validateMongoDBWriteConcern validates MongoDB write concern values
@@ -326,7 +328,8 @@ func validateMongoDBWriteConcern(concern string) error {
 		}
 	}
 
-	return fmt.Errorf("invalid MongoDB write concern: %s (must be one of: majority, acknowledged, unacknowledged, or a non-negative integer)", concern)
+	validOptions := []string{"majority", "acknowledged", "unacknowledged", "or a non-negative integer"}
+	return NewInvalidFieldError("database.mongo.concern.write", fmt.Sprintf("'%s' is not supported", concern), validOptions)
 }
 
 // validateOracleFields validates Oracle-specific configuration fields.
@@ -349,7 +352,12 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 	}
 
 	if count == 0 {
-		return fmt.Errorf("oracle configuration requires exactly one of: service name, SID, or database name")
+		return &ConfigError{
+			Category: "missing",
+			Field:    "oracle connection identifier",
+			Message:  "exactly one required",
+			Action:   "set database.oracle.service.name, database.oracle.service.sid, or database.database",
+		}
 	}
 
 	if count > 1 {
@@ -363,7 +371,12 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 		if databaseSet {
 			configured = append(configured, "database name")
 		}
-		return fmt.Errorf("oracle configuration has multiple connection identifiers configured (%s), exactly one is required", strings.Join(configured, ", "))
+		return &ConfigError{
+			Category: "invalid",
+			Field:    "oracle connection identifier",
+			Message:  "multiple identifiers configured",
+			Action:   fmt.Sprintf("remove all but one of: %s", strings.Join(configured, ", ")),
+		}
 	}
 
 	return nil
@@ -374,8 +387,7 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 func validateLog(cfg *LogConfig) error {
 	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
 	if !slices.Contains(validLevels, cfg.Level) {
-		return fmt.Errorf("invalid log level: %s (must be one of: %s)",
-			cfg.Level, strings.Join(validLevels, ", "))
+		return NewInvalidFieldError("log.level", fmt.Sprintf("'%s' is not supported", cfg.Level), validLevels)
 	}
 
 	return nil
@@ -418,10 +430,20 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 	// For static sources with tenants, ensure no conflict with single-tenant config
 	if source.Type == SourceTypeStatic && mt.Tenants != nil && len(mt.Tenants) > 0 {
 		if IsDatabaseConfigured(db) {
-			return fmt.Errorf("database configuration not allowed when static tenants are configured")
+			return &ConfigError{
+				Category: "invalid",
+				Field:    "database",
+				Message:  "not allowed when static tenants are configured",
+				Action:   "remove database section from root config or move to multitenant.tenants.<tenant_id>.database",
+			}
 		}
 		if IsMessagingConfigured(msg) {
-			return fmt.Errorf("messaging configuration not allowed when static tenants are configured")
+			return &ConfigError{
+				Category: "invalid",
+				Field:    "messaging",
+				Message:  "not allowed when static tenants are configured",
+				Action:   "remove messaging section from root config or move to multitenant.tenants.<tenant_id>.messaging",
+			}
 		}
 	}
 
@@ -432,8 +454,7 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 func validateMultitenantResolver(cfg *ResolverConfig) error {
 	validTypes := []string{"header", "subdomain", "composite"}
 	if !slices.Contains(validTypes, cfg.Type) {
-		return fmt.Errorf("invalid type: %s (must be one of: %s)",
-			cfg.Type, strings.Join(validTypes, ", "))
+		return NewInvalidFieldError("multitenant.resolver.type", fmt.Sprintf("'%s' is not supported", cfg.Type), validTypes)
 	}
 
 	// Set defaults
@@ -444,7 +465,7 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 	// Validate subdomain-specific configuration
 	if cfg.Type == "subdomain" || cfg.Type == "composite" {
 		if strings.TrimSpace(cfg.Domain) == "" {
-			return fmt.Errorf("domain is required for subdomain resolution")
+			return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
 		}
 		// Normalize: leading dot is optional in config
 		if !strings.HasPrefix(cfg.Domain, ".") {
@@ -461,7 +482,7 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 		cfg.Tenants = 100 // default
 	}
 	if cfg.Tenants > 1000 {
-		return fmt.Errorf("tenants cannot exceed 1000")
+		return NewValidationError("multitenant.limits.tenants", "cannot exceed 1000")
 	}
 	return nil
 }
@@ -469,7 +490,7 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 // validateMultitenantTenants validates tenant configurations when they are provided
 func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 	if len(tenants) == 0 {
-		return fmt.Errorf("at least one tenant must be configured")
+		return NewValidationError("multitenant.tenants", "at least one tenant must be configured")
 	}
 
 	// Check consistency: if any tenant has messaging configured, all must have it configured
@@ -488,18 +509,23 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 
 	// Enforce all-or-nothing messaging configuration for consistency
 	if hasAnyMessaging && hasNoMessaging {
-		return fmt.Errorf("inconsistent messaging configuration: either all tenants must have messaging configured or none should")
+		return &ConfigError{
+			Category: "invalid",
+			Field:    "multitenant.tenants messaging",
+			Message:  "inconsistent configuration",
+			Action:   "either all tenants must have messaging configured or none should",
+		}
 	}
 
 	for tenantID := range tenants {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
-			return fmt.Errorf("tenant ID cannot be empty")
+			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
 		}
 
 		// Validate tenant database configuration
 		if !IsDatabaseConfigured(&tenant.Database) {
-			return fmt.Errorf("tenant %s database configuration is required", tenantID)
+			return NewMultiTenantError(tenantID, "database", "configuration required", fmt.Sprintf("add multitenant.tenants.%s.database section", tenantID))
 		}
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
@@ -512,7 +538,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 // validateSourceConfig validates the source configuration type
 func validateSourceConfig(cfg *SourceConfig) error {
 	if cfg.Type != SourceTypeStatic && cfg.Type != SourceTypeDynamic {
-		return fmt.Errorf("invalid type: %s (must be one of: static, dynamic)", cfg.Type)
+		return NewInvalidFieldError("source.type", fmt.Sprintf("'%s' is not supported", cfg.Type), []string{"static", "dynamic"})
 	}
 	return nil
 }

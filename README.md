@@ -19,15 +19,16 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 3. [Quick Start](#quick-start)
 4. [Configuration](#configuration)
    - [Migration Guide](#configuration-migration-guide)
-5. [Modules and Application Structure](#modules-and-application-structure)
-6. [HTTP Server](#http-server)
-7. [Messaging](#messaging)
-8. [Database](#database)
-9. [Multi-Tenant Implementation](#multi-tenant-implementation)
-10. [Observability and Operations](#observability-and-operations)
-11. [Examples](#examples)
-12. [Contributing](#contributing)
-13. [License](#license)
+5. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
+6. [Modules and Application Structure](#modules-and-application-structure)
+7. [HTTP Server](#http-server)
+8. [Messaging](#messaging)
+9. [Database](#database)
+10. [Multi-Tenant Implementation](#multi-tenant-implementation)
+11. [Observability and Operations](#observability-and-operations)
+12. [Examples](#examples)
+13. [Contributing](#contributing)
+14. [License](#license)
 
 ---
 
@@ -244,6 +245,64 @@ DATABASE_SID=ORCL
 CUSTOM_FEATURE_FLAG=true       # Maps to custom.feature.flag
 CUSTOM_API_TIMEOUT=30s         # Maps to custom.api.timeout
 ```
+
+---
+
+## Error Handling and Diagnostics
+
+GoBricks provides clear, actionable error messages for configuration and startup failures, helping developers quickly identify and fix issues.
+
+### Structured Error Messages
+
+All configuration errors follow a consistent format with actionable guidance:
+
+```
+config_<category>: <field> <message> <action>
+```
+
+**Error Categories**:
+- `missing` - Required configuration field is not provided
+- `invalid` - Configuration value is incorrect or out of range
+- `not_configured` - Optional feature is not configured (informational)
+- `connection` - Resource connection failure
+
+### Example Error Messages
+
+**Missing Required Field**:
+```
+config_missing: database.host required set DATABASE_HOST env var or add database.host to config.yaml
+```
+
+**Invalid Value**:
+```
+config_invalid: database.port invalid port; must be between 1 and 65535 must be one of: 1-65535
+```
+
+**Optional Feature Not Configured**:
+```
+config_not_configured: messaging.broker.url (optional) to enable: set MESSAGING_BROKER_URL env var or add messaging.broker.url to config.yaml
+```
+
+### Key Features
+
+1. **Lowercase Convention**: All error messages follow Go's lowercase error convention for consistency
+2. **Dual Configuration Paths**: Shows both environment variable name and YAML path for every field
+3. **Semantic Distinction**: Differentiates between missing values, invalid values, and optional features
+4. **Multi-Tenant Context**: Includes tenant ID in multi-tenant configuration errors
+5. **No Error Chains**: Single, clear error message instead of nested "failed to" chains
+
+### Error Detection
+
+The framework distinguishes between different configuration states:
+
+- **Missing vs Invalid**: Port `0` returns "required" error, while port `70000` returns "invalid port" error
+- **Not Configured vs Misconfigured**: Empty `messaging.broker.url` is informational, invalid URL format is an error
+- **Database/Messaging Optional**: When database or messaging is not configured, the framework treats it as optional and provides guidance for enabling
+
+This error system eliminates common frustrations like:
+- "messaging not configured" appearing multiple times in error chains
+- Unclear distinction between optional features and configuration errors
+- Missing guidance on how to fix configuration issues
 
 ---
 

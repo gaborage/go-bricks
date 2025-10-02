@@ -52,7 +52,8 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		db, err := provider.GetDB(context.Background())
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database not configured")
+		assert.Contains(t, err.Error(), "database")
+		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
 
@@ -96,7 +97,8 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		client, err := provider.GetMessaging(context.Background())
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "messaging not configured")
+		assert.Contains(t, err.Error(), "messaging")
+		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, client)
 	})
 
@@ -141,7 +143,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		db, err := provider.GetDB(ctx)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "database not configured")
+		assert.Contains(t, err.Error(), "database")
+		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, db)
 	})
 
@@ -181,7 +184,8 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		client, err := provider.GetMessaging(ctx)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "messaging not configured")
+		assert.Contains(t, err.Error(), "messaging")
+		assert.Contains(t, err.Error(), "not_configured")
 		assert.Nil(t, client)
 	})
 

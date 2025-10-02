@@ -44,7 +44,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	// Single-tenant case
 	if key == "" {
 		if s.defaultDB == nil {
-			return nil, fmt.Errorf("no default database configuration available")
+			return nil, NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
 		}
 		return s.defaultDB, nil
 	}
@@ -54,7 +54,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, fmt.Errorf("no database configuration found for tenant: %s", key)
+		return nil, NewMultiTenantError(key, "database", "configuration not found", fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
 	}
 
 	return &tenant.Database, nil
@@ -67,12 +67,8 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 func (s *TenantStore) BrokerURL(_ context.Context, key string) (string, error) {
 	// Single-tenant case
 	if key == "" {
-		if s.defaultMessaging == nil {
-			return "", fmt.Errorf("messaging not configured in single-tenant mode")
-		}
-		// Use the broker URL from messaging config
-		if s.defaultMessaging.Broker.URL == "" {
-			return "", fmt.Errorf("messaging not configured in single-tenant mode (broker URL is empty)")
+		if s.defaultMessaging == nil || s.defaultMessaging.Broker.URL == "" {
+			return "", NewNotConfiguredError("messaging.broker.url", "MESSAGING_BROKER_URL", "messaging.broker.url")
 		}
 		return s.defaultMessaging.Broker.URL, nil
 	}
@@ -82,11 +78,11 @@ func (s *TenantStore) BrokerURL(_ context.Context, key string) (string, error) {
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return "", fmt.Errorf("no tenant configuration found for: %s", key)
+		return "", NewMultiTenantError(key, "tenant", "configuration not found", fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
 	}
 
 	if tenant.Messaging.URL == "" {
-		return "", fmt.Errorf("messaging not configured for tenant: %s", key)
+		return "", NewMultiTenantError(key, "messaging.url", "not configured", fmt.Sprintf("add multitenant.tenants.%s.messaging.url", key))
 	}
 
 	return tenant.Messaging.URL, nil

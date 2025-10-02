@@ -95,7 +95,7 @@ func TestTenantStoreSingleTenantWithoutMessaging(t *testing.T) {
 	url, err := source.BrokerURL(context.Background(), "")
 	assert.Error(t, err)
 	assert.Empty(t, url)
-	assert.Contains(t, err.Error(), "messaging not configured")
+	assert.Contains(t, err.Error(), "messaging")
 }
 
 func TestTenantStoreMultiTenantWithoutMessaging(t *testing.T) {
@@ -129,5 +129,5 @@ func TestTenantStoreMultiTenantWithoutMessaging(t *testing.T) {
 	url, err := source.BrokerURL(context.Background(), tenantA)
 	assert.Error(t, err)
 	assert.Empty(t, url)
-	assert.Contains(t, err.Error(), "messaging not configured for tenant")
+	assert.Contains(t, err.Error(), "messaging")
 }

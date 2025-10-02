@@ -15,7 +15,7 @@ const (
 	testOracleHost               = "oracle.example.com"
 	testAppName                  = "test-app"
 	testAppVersion               = "v1.0.0"
-	errMaxConnectionsNonNegative = "max connections must be non-negative"
+	errMaxConnectionsNonNegative = "database.pool.max.connections must be non-negative"
 	testAMQPHost                 = "amqp://localhost:5672/"
 	testTenantHeader             = "X-Tenant-ID"
 	testDomain                   = ".api.example.com"
@@ -117,7 +117,7 @@ func TestValidateAppFailures(t *testing.T) {
 				Env:     EnvDevelopment,
 				Rate:    RateConfig{Limit: 100},
 			},
-			expectedError: "app name is required",
+			expectedError: "app.name",
 		},
 		{
 			name: "empty_version",
@@ -127,7 +127,7 @@ func TestValidateAppFailures(t *testing.T) {
 				Env:     EnvDevelopment,
 				Rate:    RateConfig{Limit: 100},
 			},
-			expectedError: "app version is required",
+			expectedError: "app.version",
 		},
 		{
 			name: "invalid_environment",
@@ -137,7 +137,7 @@ func TestValidateAppFailures(t *testing.T) {
 				Env:     "invalid",
 				Rate:    RateConfig{Limit: 100},
 			},
-			expectedError: "invalid environment: invalid",
+			expectedError: "app.env",
 		},
 		{
 			name: "negative_rate_limit",
@@ -147,7 +147,7 @@ func TestValidateAppFailures(t *testing.T) {
 				Env:     EnvDevelopment,
 				Rate:    RateConfig{Limit: -1},
 			},
-			expectedError: "rate limit must be non-negative",
+			expectedError: "app.rate.limit must be non-negative",
 		},
 	}
 
@@ -240,7 +240,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "invalid port: 0",
+			expectedError: "server.port",
 		},
 		{
 			name: "negative_port",
@@ -253,7 +253,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "invalid port: -1",
+			expectedError: "server.port",
 		},
 		{
 			name: "port_too_high",
@@ -266,7 +266,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "invalid port: 65536",
+			expectedError: "server.port",
 		},
 		{
 			name: "zero_read_timeout",
@@ -277,7 +277,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Write: 30 * time.Second,
 				},
 			},
-			expectedError: "read timeout must be positive",
+			expectedError: "server.timeout.read must be positive",
 		},
 		{
 			name: "negative_read_timeout",
@@ -288,7 +288,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Write: 30 * time.Second,
 				},
 			},
-			expectedError: "read timeout must be positive",
+			expectedError: "server.timeout.read must be positive",
 		},
 		{
 			name: "zero_write_timeout",
@@ -299,7 +299,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Write: 0,
 				},
 			},
-			expectedError: "write timeout must be positive",
+			expectedError: "server.timeout.write must be positive",
 		},
 		{
 			name: "negative_write_timeout",
@@ -310,7 +310,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Write: -1 * time.Second,
 				},
 			},
-			expectedError: "write timeout must be positive",
+			expectedError: "server.timeout.write must be positive",
 		},
 	}
 
@@ -433,7 +433,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "invalid database type: mysql",
+			expectedError: "database.type",
 		},
 		{
 			name: "empty_host",
@@ -449,7 +449,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database host is required",
+			expectedError: "database.host",
 		},
 		{
 			name: "zero_port",
@@ -465,7 +465,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "invalid database port: 0",
+			expectedError: "database.port",
 		},
 		{
 			name: "negative_port",
@@ -481,7 +481,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "invalid database port: -1",
+			expectedError: "database.port",
 		},
 		{
 			name: "port_too_high",
@@ -497,7 +497,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "invalid database port: 65536",
+			expectedError: "database.port",
 		},
 		{
 			name: "empty_database",
@@ -513,7 +513,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database name is required",
+			expectedError: "database.database",
 		},
 		{
 			name: "empty_username",
@@ -529,7 +529,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database username is required",
+			expectedError: "database.username",
 		},
 		{
 			name: "negative_max_conns",
@@ -581,28 +581,28 @@ func TestValidateLogFailures(t *testing.T) {
 			cfg: LogConfig{
 				Level: "invalid",
 			},
-			expectedError: "invalid log level: invalid",
+			expectedError: "log.level",
 		},
 		{
 			name: "empty_level",
 			cfg: LogConfig{
 				Level: "",
 			},
-			expectedError: "invalid log level:",
+			expectedError: "log.level",
 		},
 		{
 			name: "uppercase_level",
 			cfg: LogConfig{
 				Level: "INFO",
 			},
-			expectedError: "invalid log level: INFO",
+			expectedError: "log.level",
 		},
 		{
 			name: "mixed_case_level",
 			cfg: LogConfig{
 				Level: "Debug",
 			},
-			expectedError: "invalid log level: Debug",
+			expectedError: "log.level",
 		},
 	}
 
@@ -909,7 +909,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				// Missing required fields
 			},
 			expectError:   true,
-			errorContains: "invalid database type",
+			errorContains: "database.type",
 		},
 		{
 			name: "type_only_fails_validation",
@@ -918,7 +918,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				// Missing required fields
 			},
 			expectError:   true,
-			errorContains: "database host is required",
+			errorContains: "database.host",
 		},
 		{
 			name: "partial_config_missing_database_name",
@@ -929,7 +929,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				// Missing Database, Username, MaxConns
 			},
 			expectError:   true,
-			errorContains: "database name is required",
+			errorContains: "database.database",
 		},
 		{
 			name: "partial_config_missing_username",
@@ -941,7 +941,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				// Missing Username, MaxConns
 			},
 			expectError:   true,
-			errorContains: "database username is required",
+			errorContains: "database.username",
 		},
 		{
 			name: "partial_config_zero_max_conns_gets_default",
@@ -1015,7 +1015,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid database port",
+			errorContains: "database.port",
 		},
 		{
 			name: "connection_string_with_invalid_type",
@@ -1029,7 +1029,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid database type",
+			errorContains: "database.type",
 		},
 		{
 			name: "connection_string_missing_max_conns_applies_default",
@@ -1058,7 +1058,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid database type: mysql",
+			errorContains: "database.type",
 		},
 		{
 			name: "invalid_port_range",
@@ -1075,7 +1075,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid database port",
+			errorContains: "database.port",
 		},
 	}
 
@@ -1146,7 +1146,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "max query length must be non-negative",
+			errorContains: "database.query.log.maxlength must be non-negative",
 		},
 		{
 			name: "connection_string_with_zero_max_query_length_applies_default",
@@ -1181,7 +1181,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "slow query threshold must be non-negative",
+			errorContains: "database.query.slow.threshold must be non-negative",
 		},
 		{
 			name: "connection_string_with_zero_slow_query_threshold_applies_default",
@@ -1301,7 +1301,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "max query length must be non-negative",
+			errorContains: "database.query.log.maxlength must be non-negative",
 		},
 		{
 			name: "zero_max_query_length_applies_default",
@@ -1344,7 +1344,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "slow query threshold must be non-negative",
+			errorContains: "database.query.slow.threshold must be non-negative",
 		},
 		{
 			name: "zero_slow_query_threshold_applies_default",
@@ -1471,7 +1471,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid MongoDB read preference: invalid",
+			errorContains: "database.mongo.replica.preference",
 		},
 		{
 			name: "invalid write concern",
@@ -1488,7 +1488,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid MongoDB write concern: invalid",
+			errorContains: "database.mongo.concern.write",
 		},
 		{
 			name: "non-MongoDB type should not validate MongoDB fields",
@@ -1549,7 +1549,7 @@ func TestValidateMongoDBReadPreference(t *testing.T) {
 			err := validateMongoDBReadPreference(tt.preference)
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid MongoDB read preference")
+				assert.Contains(t, err.Error(), "database.mongo.replica.preference")
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1585,7 +1585,7 @@ func TestValidateMongoDBWriteConcern(t *testing.T) {
 			err := validateMongoDBWriteConcern(tt.concern)
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid MongoDB write concern")
+				assert.Contains(t, err.Error(), "database.mongo.concern.write")
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1628,7 +1628,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid MongoDB read preference",
+			errorContains: "database.mongo.replica.preference",
 		},
 		{
 			name: "invalid write concern with connection string",
@@ -1642,7 +1642,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "invalid MongoDB write concern",
+			errorContains: "database.mongo.concern.write",
 		},
 	}
 
@@ -1716,7 +1716,7 @@ func TestValidateOracleFields(t *testing.T) {
 				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
-			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "Oracle config with service name and SID",
@@ -1733,7 +1733,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID), exactly one is required",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "Oracle config with service name and database name",
@@ -1750,7 +1750,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured (service name, database name), exactly one is required",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "Oracle config with SID and database name",
@@ -1767,7 +1767,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured (SID, database name), exactly one is required",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "Oracle config with all three connection identifiers",
@@ -1785,7 +1785,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured (service name, SID, database name), exactly one is required",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "non-Oracle type should not validate Oracle fields",
@@ -1851,7 +1851,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle configuration has multiple connection identifiers configured",
+			errorContains: "oracle connection identifier",
 		},
 		{
 			name: "Oracle with connection string but no identifiers",
@@ -1861,7 +1861,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
-			errorContains: "oracle configuration requires exactly one of: service name, SID, or database name",
+			errorContains: "oracle connection identifier",
 		},
 	}
 
@@ -2148,7 +2148,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "resolver: invalid type: invalid",
+			expectedError: "multitenant.resolver.type",
 		},
 		{
 			name: "invalid_limits_too_many_tenants",
@@ -2164,7 +2164,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "limits: tenants cannot exceed 1000",
+			expectedError: "multitenant.limits.tenants",
 		},
 		{
 			name: "database_configured_with_multitenant",
@@ -2183,7 +2183,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 				Type: PostgreSQL,
 			},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "database configuration not allowed when static tenants are configured",
+			expectedError: "database",
 		},
 		{
 			name: "messaging_configured_with_multitenant",
@@ -2203,7 +2203,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					URL: testAMQPHost, // This makes it configured
 				},
 			},
-			expectedError: "messaging configuration not allowed when static tenants are configured",
+			expectedError: "messaging",
 		},
 		{
 			name: "inconsistent_messaging_configuration",
@@ -2236,7 +2236,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "inconsistent messaging configuration",
+			expectedError: "multitenant.tenants messaging",
 		},
 	}
 
@@ -2302,7 +2302,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				Type: "invalid",
 			},
 			expectError:   true,
-			errorContains: "invalid type: invalid (must be one of: header, subdomain, composite)",
+			errorContains: "multitenant.resolver.type",
 		},
 		{
 			name: "subdomain_missing_domain",
@@ -2311,7 +2311,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				// Missing domain
 			},
 			expectError:   true,
-			errorContains: "domain is required for subdomain resolution",
+			errorContains: "multitenant.resolver.domain",
 		},
 		{
 			name: "subdomain_domain_without_leading_dot",
@@ -2329,7 +2329,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				// Missing domain
 			},
 			expectError:   true,
-			errorContains: "domain is required for subdomain resolution",
+			errorContains: "multitenant.resolver.domain",
 		},
 		{
 			name: "composite_domain_without_leading_dot",
@@ -2385,7 +2385,7 @@ func TestValidateMultitenantLimits(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 1001}
 		err := validateMultitenantLimits(&cfg)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "tenants cannot exceed 1000")
+		assert.Contains(t, err.Error(), "multitenant.limits.tenants cannot exceed 1000")
 	})
 }
 
@@ -2418,7 +2418,7 @@ func TestValidateSourceConfig(t *testing.T) {
 			err := validateSourceConfig(cfg)
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid type")
+				assert.Contains(t, err.Error(), "source.type")
 			} else {
 				assert.NoError(t, err)
 			}

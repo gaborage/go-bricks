@@ -49,7 +49,7 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 		// Pre-warm database connection
 		if err := w.PreWarmDatabase(ctx, ""); err != nil {
 			// Check if error is due to database not being configured
-			if contains(err.Error(), "database not configured") || contains(err.Error(), "no default database") {
+			if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
 				w.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
 			} else {
 				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
@@ -66,7 +66,7 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 		// Pre-warm messaging components
 		if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
 			// Check if error is due to messaging not being configured
-			if contains(err.Error(), "messaging not configured") {
+			if contains(err.Error(), "not_configured") {
 				w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
 			} else {
 				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
