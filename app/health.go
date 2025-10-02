@@ -65,7 +65,7 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 				}
 
 				// Check if database is not configured (not a critical failure)
-				if contains(err.Error(), "database not configured") || contains(err.Error(), "no default database") {
+				if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
 					stats["status"] = notConfiguredStatus
 					return notConfiguredStatus, stats, nil
 				}
@@ -118,7 +118,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			client, err := msgManager.GetPublisher(ctx, "")
 			if err != nil {
 				// Check if messaging is not configured (not a failure)
-				if contains(err.Error(), "messaging not configured") {
+				if contains(err.Error(), "not_configured") {
 					stats["status"] = notConfiguredStatus
 					return notConfiguredStatus, stats, nil
 				}

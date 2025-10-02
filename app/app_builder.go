@@ -189,7 +189,7 @@ func (b *Builder) performPreInitialization() {
 	// Pre-initialize database if configured
 	if b.bundle.dbManager != nil && config.IsDatabaseConfigured(&b.cfg.Database) {
 		if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {
-			b.err = fmt.Errorf("failed to pre-initialize database connection: %w", err)
+			b.err = fmt.Errorf("database connection failed during startup: %w", err)
 			return
 		}
 		b.logger.Debug().Msg("Pre-initialized database connection")
@@ -200,7 +200,7 @@ func (b *Builder) performPreInitialization() {
 	// Pre-initialize messaging if configured
 	if b.bundle.messagingManager != nil && config.IsMessagingConfigured(&b.cfg.Messaging) {
 		if _, err := b.bundle.messagingManager.GetPublisher(ctx, ""); err != nil {
-			b.err = fmt.Errorf("failed to pre-initialize messaging publisher: %w", err)
+			b.err = fmt.Errorf("messaging connection failed during startup: %w", err)
 			return
 		}
 		b.logger.Debug().Msg("Pre-initialized messaging publisher")
