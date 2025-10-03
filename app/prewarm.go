@@ -45,39 +45,8 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 ) error {
 	var errs []error
 
-	if w.dbManager != nil {
-		// Pre-warm database connection
-		if err := w.PreWarmDatabase(ctx, ""); err != nil {
-			// Check if error is due to database not being configured
-			if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
-				w.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
-			} else {
-				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-				errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
-			}
-		} else {
-			w.logger.Info().Msg("Pre-warmed single-tenant database connection")
-		}
-	} else {
-		w.logger.Debug().Msg("Skipping single-tenant database pre-warming: manager unavailable")
-	}
-
-	if w.messagingManager != nil {
-		// Pre-warm messaging components
-		if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
-			// Check if error is due to messaging not being configured
-			if contains(err.Error(), "not_configured") {
-				w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
-			} else {
-				w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
-				errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
-			}
-		} else {
-			w.logger.Info().Msg("Pre-warmed single-tenant messaging")
-		}
-	} else {
-		w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: manager unavailable")
-	}
+	errs = w.attemptDatabasePreWarm(ctx, errs)
+	errs = w.attemptMessagingPreWarm(ctx, declarations, errs)
 
 	// Return combined errors but don't fail startup
 	if len(errs) > 0 {
@@ -85,6 +54,56 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 	}
 
 	return nil
+}
+
+// attemptDatabasePreWarm attempts to pre-warm database connection
+func (w *ConnectionPreWarmer) attemptDatabasePreWarm(ctx context.Context, errs []error) []error {
+	if w.dbManager == nil {
+		w.logger.Debug().Msg("Skipping single-tenant database pre-warming: manager unavailable")
+		return errs
+	}
+
+	// Pre-warm database connection
+	if err := w.PreWarmDatabase(ctx, ""); err != nil {
+		// Check if error is due to database not being configured
+		if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
+			w.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
+		} else {
+			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
+			errs = append(errs, fmt.Errorf("database pre-warming failed: %w", err))
+		}
+	} else {
+		w.logger.Info().Msg("Pre-warmed single-tenant database connection")
+	}
+
+	return errs
+}
+
+// attemptMessagingPreWarm attempts to pre-warm messaging components
+func (w *ConnectionPreWarmer) attemptMessagingPreWarm(
+	ctx context.Context,
+	declarations *messaging.Declarations,
+	errs []error,
+) []error {
+	if w.messagingManager == nil {
+		w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: manager unavailable")
+		return errs
+	}
+
+	// Pre-warm messaging components
+	if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
+		// Check if error is due to messaging not being configured
+		if contains(err.Error(), "not_configured") {
+			w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
+		} else {
+			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
+			errs = append(errs, fmt.Errorf("messaging pre-warming failed: %w", err))
+		}
+	} else {
+		w.logger.Info().Msg("Pre-warmed single-tenant messaging")
+	}
+
+	return errs
 }
 
 // PreWarmDatabase attempts to establish a database connection for the given key.

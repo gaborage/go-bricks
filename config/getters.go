@@ -10,6 +10,7 @@ const (
 	// Error message constants for getter methods
 	errMsgRequiredKeyMissing   = "required configuration key '%s' is missing"
 	errMsgConfigNotInitialized = "configuration not initialized"
+	errMsgRequiredKeyInvalid   = "required configuration key '%s' is invalid: %w"
 )
 
 // GetString retrieves a string value from the configuration or the provided default.
@@ -101,7 +102,7 @@ func (c *Config) GetRequiredInt(key string) (int, error) {
 
 	n, err := toInt(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return n, nil
 }
@@ -115,7 +116,7 @@ func (c *Config) GetRequiredInt64(key string) (int64, error) {
 
 	n, err := toInt64(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return n, nil
 }
@@ -129,7 +130,7 @@ func (c *Config) GetRequiredFloat64(key string) (float64, error) {
 
 	f, err := toFloat64(val)
 	if err != nil {
-		return 0, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return 0, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return f, nil
 }
@@ -143,7 +144,7 @@ func (c *Config) GetRequiredBool(key string) (bool, error) {
 
 	b, err := toBool(val)
 	if err != nil {
-		return false, fmt.Errorf("required configuration key '%s' is invalid: %w", key, err)
+		return false, fmt.Errorf(errMsgRequiredKeyInvalid, key, err)
 	}
 	return b, nil
 }
