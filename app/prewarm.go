@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -50,7 +51,7 @@ func (w *ConnectionPreWarmer) PreWarmSingleTenant(
 
 	// Return combined errors but don't fail startup
 	if len(errs) > 0 {
-		return fmt.Errorf("pre-warming issues (non-fatal): %v", errs)
+		return fmt.Errorf("pre-warming issues (non-fatal): %v", errors.Join(errs...))
 	}
 
 	return nil
