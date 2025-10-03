@@ -50,57 +50,77 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 			continue
 		}
 
-		tagInfo := TagInfo{
-			Name:        field.Name,
-			Constraints: make(map[string]string),
-			Tags:        make(map[string]string),
-		}
-
-		// Parse all struct tags for reference
-		parseAllStructTags(field.Tag, tagInfo.Tags)
-
-		// Parse JSON tag for field naming
-		if json := field.Tag.Get("json"); json != "" {
-			parts := strings.Split(json, ",")
-			if parts[0] == "-" {
-				tagInfo.JSONName = "-"
-			} else if parts[0] != "" {
-				tagInfo.JSONName = parts[0]
-			}
-			// Check for omitempty which affects required status
-			for _, part := range parts[1:] {
-				if strings.TrimSpace(part) == "omitempty" {
-					tagInfo.Tags["omitempty"] = trueValue
-				}
-			}
-		}
-
-		// Determine parameter type and name
-		tagInfo.ParamType, tagInfo.ParamName = parseParameterInfo(field.Tag)
-
-		// Parse validation constraints
-		if validate := field.Tag.Get("validate"); validate != "" {
-			parseValidateTag(validate, tagInfo.Constraints)
-		}
-
-		// Determine if field is required
-		tagInfo.Required = isFieldRequired(tagInfo.Constraints, tagInfo.Tags, tagInfo.ParamType, tagInfo.JSONName)
-
-		// Parse documentation tags
-		if doc := field.Tag.Get("doc"); doc != "" {
-			tagInfo.Description = doc
-		} else if description := field.Tag.Get("description"); description != "" {
-			tagInfo.Description = description
-		}
-
-		if example := field.Tag.Get("example"); example != "" {
-			tagInfo.Example = example
-		}
-
+		tagInfo := parseFieldTags(&field)
 		tags = append(tags, tagInfo)
 	}
 
 	return tags
+}
+
+// parseFieldTags extracts tag metadata from a single struct field
+func parseFieldTags(field *reflect.StructField) TagInfo {
+	tagInfo := TagInfo{
+		Name:        field.Name,
+		Constraints: make(map[string]string),
+		Tags:        make(map[string]string),
+	}
+
+	// Parse all struct tags for reference
+	parseAllStructTags(field.Tag, tagInfo.Tags)
+
+	// Parse JSON tag for field naming
+	parseJSONTag(field.Tag, &tagInfo)
+
+	// Determine parameter type and name
+	tagInfo.ParamType, tagInfo.ParamName = parseParameterInfo(field.Tag)
+
+	// Parse validation constraints
+	if validate := field.Tag.Get("validate"); validate != "" {
+		parseValidateTag(validate, tagInfo.Constraints)
+	}
+
+	// Determine if field is required
+	tagInfo.Required = isFieldRequired(tagInfo.Constraints, tagInfo.Tags, tagInfo.ParamType, tagInfo.JSONName)
+
+	// Parse documentation tags
+	parseDocumentationTags(field.Tag, &tagInfo)
+
+	return tagInfo
+}
+
+// parseJSONTag parses the JSON struct tag and updates tagInfo
+func parseJSONTag(tag reflect.StructTag, tagInfo *TagInfo) {
+	json := tag.Get("json")
+	if json == "" {
+		return
+	}
+
+	parts := strings.Split(json, ",")
+	if parts[0] == "-" {
+		tagInfo.JSONName = "-"
+	} else if parts[0] != "" {
+		tagInfo.JSONName = parts[0]
+	}
+
+	// Check for omitempty which affects required status
+	for _, part := range parts[1:] {
+		if strings.TrimSpace(part) == "omitempty" {
+			tagInfo.Tags["omitempty"] = trueValue
+		}
+	}
+}
+
+// parseDocumentationTags parses documentation and example tags
+func parseDocumentationTags(tag reflect.StructTag, tagInfo *TagInfo) {
+	if doc := tag.Get("doc"); doc != "" {
+		tagInfo.Description = doc
+	} else if description := tag.Get("description"); description != "" {
+		tagInfo.Description = description
+	}
+
+	if example := tag.Get("example"); example != "" {
+		tagInfo.Example = example
+	}
 }
 
 // parseAllStructTags parses all struct tags into a map

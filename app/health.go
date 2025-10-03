@@ -57,41 +57,50 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 		name:     "database",
 		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			conn, err := dbManager.Get(ctx, "")
-			if err != nil {
-				stats := dbManager.Stats()
-				if stats == nil {
-					stats = map[string]any{}
-				}
-
-				// Check if database is not configured (not a critical failure)
-				if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
-					stats["status"] = notConfiguredStatus
-					return notConfiguredStatus, stats, nil
-				}
-
-				// Other errors mean connection issues
-				stats["status"] = "no_active_connections"
-				return healthyStatus, stats, err
-			}
-
-			if err := conn.Health(ctx); err != nil {
-				stats := dbManager.Stats()
-				if stats == nil {
-					stats = map[string]any{}
-				}
-				stats["status"] = "unhealthy"
-				return unhealthyStatus, stats, err
-			}
-
-			stats := dbManager.Stats()
-			if stats == nil {
-				stats = map[string]any{}
-			}
-			stats["status"] = "healthy"
-			return healthyStatus, stats, nil
+			return checkDatabaseHealth(ctx, dbManager)
 		},
 	}
+}
+
+// checkDatabaseHealth checks database connection and health status
+func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (status string, stats map[string]any, err error) {
+	conn, err := dbManager.Get(ctx, "")
+	if err != nil {
+		return handleDatabaseConnectionError(err, dbManager)
+	}
+
+	if err := conn.Health(ctx); err != nil {
+		dbStats := getStatsOrEmpty(dbManager.Stats())
+		dbStats["status"] = "unhealthy"
+		return unhealthyStatus, dbStats, err
+	}
+
+	dbStats := getStatsOrEmpty(dbManager.Stats())
+	dbStats["status"] = "healthy"
+	return healthyStatus, dbStats, nil
+}
+
+// handleDatabaseConnectionError handles errors when getting database connection
+func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (status string, stats map[string]any, e error) {
+	dbStats := getStatsOrEmpty(dbManager.Stats())
+
+	// Check if database is not configured (not a critical failure)
+	if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
+		dbStats["status"] = notConfiguredStatus
+		return notConfiguredStatus, dbStats, nil
+	}
+
+	// Other errors mean connection issues
+	dbStats["status"] = "no_active_connections"
+	return unhealthyStatus, dbStats, err
+}
+
+// getStatsOrEmpty returns stats or an empty map if stats is nil
+func getStatsOrEmpty(stats map[string]any) map[string]any {
+	if stats == nil {
+		return map[string]any{}
+	}
+	return stats
 }
 
 // messagingManagerHealthProbe creates a health probe for the messaging manager

@@ -132,35 +132,55 @@ func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Con
 	}
 
 	traceCtx := ctx
-
-	// Extract X-Request-ID
-	if v := headers.Get(HeaderXRequestID); v != nil {
-		if traceID := safeToString(v); traceID != "" {
-			traceCtx = WithTraceID(traceCtx, traceID)
-		}
-	}
-
-	// Extract traceparent
-	if v := headers.Get(HeaderTraceParent); v != nil {
-		if tp := safeToString(v); tp != "" {
-			traceCtx = WithTraceParent(traceCtx, tp)
-			// Derive trace ID from traceparent if not already set
-			if _, hasTraceID := IDFromContext(traceCtx); !hasTraceID {
-				if traceID := extractTraceIDFromParent(tp); traceID != "" {
-					traceCtx = WithTraceID(traceCtx, traceID)
-				}
-			}
-		}
-	}
-
-	// Extract tracestate
-	if v := headers.Get(HeaderTraceState); v != nil {
-		if ts := safeToString(v); ts != "" {
-			traceCtx = WithTraceState(traceCtx, ts)
-		}
-	}
+	traceCtx = extractRequestID(traceCtx, headers)
+	traceCtx = extractTraceParent(traceCtx, headers)
+	traceCtx = extractTraceState(traceCtx, headers)
 
 	return traceCtx
+}
+
+// extractRequestID extracts X-Request-ID header
+func extractRequestID(ctx context.Context, headers HeaderAccessor) context.Context {
+	if v := headers.Get(HeaderXRequestID); v != nil {
+		if traceID := safeToString(v); traceID != "" {
+			return WithTraceID(ctx, traceID)
+		}
+	}
+	return ctx
+}
+
+// extractTraceParent extracts traceparent header and derives trace ID if needed
+func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Context {
+	v := headers.Get(HeaderTraceParent)
+	if v == nil {
+		return ctx
+	}
+
+	tp := safeToString(v)
+	if tp == "" {
+		return ctx
+	}
+
+	ctx = WithTraceParent(ctx, tp)
+
+	// Derive trace ID from traceparent if not already set
+	if _, hasTraceID := IDFromContext(ctx); !hasTraceID {
+		if traceID := extractTraceIDFromParent(tp); traceID != "" {
+			ctx = WithTraceID(ctx, traceID)
+		}
+	}
+
+	return ctx
+}
+
+// extractTraceState extracts tracestate header
+func extractTraceState(ctx context.Context, headers HeaderAccessor) context.Context {
+	if v := headers.Get(HeaderTraceState); v != nil {
+		if ts := safeToString(v); ts != "" {
+			return WithTraceState(ctx, ts)
+		}
+	}
+	return ctx
 }
 
 // InjectIntoHeaders injects trace context into transport headers (default: force mode)

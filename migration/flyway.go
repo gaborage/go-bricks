@@ -14,6 +14,12 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+const (
+	// Flyway command flag constants
+	flagConfigFiles = "-configFiles="
+	flagLocationsFS = "-locations=filesystem:"
+)
+
 // FlywayMigrator handles database migrations using Flyway
 type FlywayMigrator struct {
 	config        *config.Config
@@ -75,8 +81,8 @@ func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 
 	// Execute Flyway command
 	args := []string{
-		"-configFiles=" + cfg.ConfigPath,
-		"-locations=filesystem:" + cfg.MigrationPath,
+		flagConfigFiles + cfg.ConfigPath,
+		flagLocationsFS + cfg.MigrationPath,
 		"migrate",
 	}
 
@@ -90,8 +96,8 @@ func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 	}
 
 	args := []string{
-		"-configFiles=" + cfg.ConfigPath,
-		"-locations=filesystem:" + cfg.MigrationPath,
+		flagConfigFiles + cfg.ConfigPath,
+		flagLocationsFS + cfg.MigrationPath,
 		"info",
 	}
 
@@ -105,8 +111,8 @@ func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 	}
 
 	args := []string{
-		"-configFiles=" + cfg.ConfigPath,
-		"-locations=filesystem:" + cfg.MigrationPath,
+		flagConfigFiles + cfg.ConfigPath,
+		flagLocationsFS + cfg.MigrationPath,
 		"validate",
 	}
 
