@@ -16,8 +16,8 @@ import (
 
 const (
 	// Flyway command flag constants
-	flagConfigFiles  = "-configFiles="
-	flagLocationsFS  = "-locations=filesystem:"
+	flagConfigFiles = "-configFiles="
+	flagLocationsFS = "-locations=filesystem:"
 )
 
 // FlywayMigrator handles database migrations using Flyway

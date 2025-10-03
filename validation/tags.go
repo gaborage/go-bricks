@@ -50,7 +50,7 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 			continue
 		}
 
-		tagInfo := parseFieldTags(field)
+		tagInfo := parseFieldTags(&field)
 		tags = append(tags, tagInfo)
 	}
 
@@ -58,7 +58,7 @@ func ParseValidationTags(t reflect.Type) []TagInfo {
 }
 
 // parseFieldTags extracts tag metadata from a single struct field
-func parseFieldTags(field reflect.StructField) TagInfo {
+func parseFieldTags(field *reflect.StructField) TagInfo {
 	tagInfo := TagInfo{
 		Name:        field.Name,
 		Constraints: make(map[string]string),

@@ -63,36 +63,36 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 }
 
 // checkDatabaseHealth checks database connection and health status
-func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (string, map[string]any, error) {
+func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (status string, stats map[string]any, err error) {
 	conn, err := dbManager.Get(ctx, "")
 	if err != nil {
 		return handleDatabaseConnectionError(err, dbManager)
 	}
 
 	if err := conn.Health(ctx); err != nil {
-		stats := getStatsOrEmpty(dbManager.Stats())
-		stats["status"] = "unhealthy"
-		return unhealthyStatus, stats, err
+		dbStats := getStatsOrEmpty(dbManager.Stats())
+		dbStats["status"] = "unhealthy"
+		return unhealthyStatus, dbStats, err
 	}
 
-	stats := getStatsOrEmpty(dbManager.Stats())
-	stats["status"] = "healthy"
-	return healthyStatus, stats, nil
+	dbStats := getStatsOrEmpty(dbManager.Stats())
+	dbStats["status"] = "healthy"
+	return healthyStatus, dbStats, nil
 }
 
 // handleDatabaseConnectionError handles errors when getting database connection
-func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (string, map[string]any, error) {
-	stats := getStatsOrEmpty(dbManager.Stats())
+func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (status string, stats map[string]any, e error) {
+	dbStats := getStatsOrEmpty(dbManager.Stats())
 
 	// Check if database is not configured (not a critical failure)
 	if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
-		stats["status"] = notConfiguredStatus
-		return notConfiguredStatus, stats, nil
+		dbStats["status"] = notConfiguredStatus
+		return notConfiguredStatus, dbStats, nil
 	}
 
 	// Other errors mean connection issues
-	stats["status"] = "no_active_connections"
-	return unhealthyStatus, stats, err
+	dbStats["status"] = "no_active_connections"
+	return unhealthyStatus, dbStats, err
 }
 
 // getStatsOrEmpty returns stats or an empty map if stats is nil
