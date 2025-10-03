@@ -1,8 +1,15 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+)
+
+// Sentinel errors for common configuration states
+var (
+	// ErrNotConfigured indicates a feature is intentionally not configured (not an error state)
+	ErrNotConfigured = errors.New("not configured")
 )
 
 // ConfigError represents a configuration error with actionable guidance.
@@ -101,6 +108,27 @@ func NewConnectionError(resource, message string, troubleshooting []string) *Con
 		Message:  message,
 		Details:  troubleshooting,
 	}
+}
+
+// IsNotConfigured checks if an error indicates a feature is not configured.
+// Returns true for ConfigError with category "not_configured" or errors wrapping ErrNotConfigured.
+func IsNotConfigured(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for ErrNotConfigured sentinel
+	if errors.Is(err, ErrNotConfigured) {
+		return true
+	}
+
+	// Check for ConfigError with not_configured category
+	var configErr *ConfigError
+	if errors.As(err, &configErr) {
+		return configErr.Category == "not_configured"
+	}
+
+	return false
 }
 
 // NewMultiTenantError creates an error specific to multi-tenant configuration.

@@ -4,17 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 )
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
-}
 
 // ConnectionPreWarmer handles pre-warming of database and messaging connections
 // for improved startup performance and health checking.
@@ -67,7 +62,7 @@ func (w *ConnectionPreWarmer) attemptDatabasePreWarm(ctx context.Context, errs [
 	// Pre-warm database connection
 	if err := w.PreWarmDatabase(ctx, ""); err != nil {
 		// Check if error is due to database not being configured
-		if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
+		if config.IsNotConfigured(err) {
 			w.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
 		} else {
 			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
@@ -94,7 +89,7 @@ func (w *ConnectionPreWarmer) attemptMessagingPreWarm(
 	// Pre-warm messaging components
 	if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
 		// Check if error is due to messaging not being configured
-		if contains(err.Error(), "not_configured") {
+		if config.IsNotConfigured(err) {
 			w.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
 		} else {
 			w.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
