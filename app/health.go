@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -85,7 +86,7 @@ func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (st
 	dbStats := getStatsOrEmpty(dbManager.Stats())
 
 	// Check if database is not configured (not a critical failure)
-	if contains(err.Error(), "not_configured") || contains(err.Error(), "no default database") {
+	if config.IsNotConfigured(err) {
 		dbStats["status"] = notConfiguredStatus
 		return notConfiguredStatus, dbStats, nil
 	}
@@ -127,7 +128,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			client, err := msgManager.GetPublisher(ctx, "")
 			if err != nil {
 				// Check if messaging is not configured (not a failure)
-				if contains(err.Error(), "not_configured") {
+				if config.IsNotConfigured(err) {
 					stats["status"] = notConfiguredStatus
 					return notConfiguredStatus, stats, nil
 				}
