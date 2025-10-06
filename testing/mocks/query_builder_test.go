@@ -188,8 +188,7 @@ func (s *ExampleUserService) BuildUserSearchQuery(searchTerm string) types.Selec
 	query := s.qb.Select("id", "name", "email").From("users")
 
 	if searchTerm != "" {
-		condition := s.qb.BuildCaseInsensitiveLike("name", searchTerm)
-		query = query.Where(condition)
+		query = query.WhereLike("name", searchTerm)
 	}
 
 	return query
@@ -222,14 +221,10 @@ func TestMockQueryBuilderQueryConstruction(t *testing.T) {
 	defer mockQB.AssertExpectations(t)
 	defer mockSelectBuilder.AssertExpectations(t)
 
-	// Create mock condition
-	likeCondition := squirrel.Like{"name": "%john%"}
-
 	// Set expectations
 	mockQB.On("Select", "id", "name", "email").Return(mockSelectBuilder)
-	mockQB.On("BuildCaseInsensitiveLike", "name", "john").Return(likeCondition)
 	mockSelectBuilder.On("From", "users").Return(mockSelectBuilder)
-	mockSelectBuilder.On("Where", likeCondition).Return(mockSelectBuilder)
+	mockSelectBuilder.On("WhereLike", "name", "john").Return(mockSelectBuilder)
 
 	// Test the service
 	service := NewExampleUserService(mockQB)

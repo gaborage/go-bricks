@@ -411,8 +411,8 @@ func NewTestBuilder() *Builder {
 // BuilderWithTestData creates a builder pre-populated with test conditions
 func BuilderWithTestData() *Builder {
 	return NewBuilder().
-		Where("category", TestCategory).
-		Where("status", TestStatus).
+		WhereEq("category", TestCategory).
+		WhereEq("status", TestStatus).
 		WhereGte("price", 10.0)
 }
 
@@ -440,7 +440,7 @@ func ECommerceSearchBuilder() *Builder {
 			bson.M{"price": bson.M{GteOp: 50}},
 			bson.M{"price": bson.M{LteOp: 2000}},
 		).
-		Where("in_stock", true).
+		WhereEq("in_stock", true).
 		WhereRegex("name", "samsung|apple|sony", "i").
 		OrderByDesc("rating").
 		OrderBy("price").

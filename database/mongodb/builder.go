@@ -32,15 +32,10 @@ func NewBuilder() *Builder {
 
 // Match methods for building filter conditions
 
-// Where adds a simple equality condition
-func (b *Builder) Where(field string, value any) *Builder {
+// WhereEq adds an equality condition
+func (b *Builder) WhereEq(field string, value any) *Builder {
 	b.match[field] = value
 	return b
-}
-
-// WhereEq adds an equality condition (alias for Where)
-func (b *Builder) WhereEq(field string, value any) *Builder {
-	return b.Where(field, value)
 }
 
 // WhereNe adds a "not equal" condition
@@ -676,7 +671,7 @@ func Select(fields ...string) *Builder {
 
 // Where creates a new builder with initial where condition
 func Where(field string, value any) *Builder {
-	return NewBuilder().Where(field, value)
+	return NewBuilder().WhereEq(field, value)
 }
 
 // Match creates a new builder with initial match condition
