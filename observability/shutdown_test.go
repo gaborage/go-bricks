@@ -32,7 +32,7 @@ func (m *mockProvider) ForceFlush(_ context.Context) error {
 	return nil
 }
 
-func TestShutdown_Success(t *testing.T) {
+func TestShutdownSuccess(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, 1*time.Second)
@@ -40,7 +40,7 @@ func TestShutdown_Success(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
-func TestShutdown_Error(t *testing.T) {
+func TestShutdownError(t *testing.T) {
 	expectedErr := errors.New("shutdown failed")
 	mock := &mockProvider{shutdownErr: expectedErr}
 
@@ -50,7 +50,7 @@ func TestShutdown_Error(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
-func TestShutdown_DefaultTimeout(t *testing.T) {
+func TestShutdownDefaultTimeout(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, 0) // Should use DefaultShutdownTimeout
@@ -58,7 +58,7 @@ func TestShutdown_DefaultTimeout(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
-func TestShutdown_NegativeTimeout(t *testing.T) {
+func TestShutdownNegativeTimeout(t *testing.T) {
 	mock := &mockProvider{}
 
 	err := Shutdown(mock, -1*time.Second) // Should use DefaultShutdownTimeout
@@ -66,7 +66,7 @@ func TestShutdown_NegativeTimeout(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
-func TestMustShutdown_Success(t *testing.T) {
+func TestMustShutdownSuccess(t *testing.T) {
 	mock := &mockProvider{}
 
 	assert.NotPanics(t, func() {
@@ -75,7 +75,7 @@ func TestMustShutdown_Success(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
-func TestMustShutdown_Panic(t *testing.T) {
+func TestMustShutdownPanic(t *testing.T) {
 	expectedErr := errors.New("shutdown failed")
 	mock := &mockProvider{shutdownErr: expectedErr}
 

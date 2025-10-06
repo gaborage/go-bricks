@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-func TestNoopProvider_TracerProvider(t *testing.T) {
+func TestNoopProviderTracerProvider(t *testing.T) {
 	provider := newNoopProvider()
 	tp := provider.TracerProvider()
 	assert.NotNil(t, tp)
@@ -18,19 +18,19 @@ func TestNoopProvider_TracerProvider(t *testing.T) {
 	assert.True(t, ok, "expected noop.TracerProvider")
 }
 
-func TestNoopProvider_Shutdown(t *testing.T) {
+func TestNoopProviderShutdown(t *testing.T) {
 	provider := newNoopProvider()
 	err := provider.Shutdown(context.Background())
 	assert.NoError(t, err)
 }
 
-func TestNoopProvider_ForceFlush(t *testing.T) {
+func TestNoopProviderForceFlush(t *testing.T) {
 	provider := newNoopProvider()
 	err := provider.ForceFlush(context.Background())
 	assert.NoError(t, err)
 }
 
-func TestNoopProvider_MultipleOperations(t *testing.T) {
+func TestNoopProviderMultipleOperations(t *testing.T) {
 	provider := newNoopProvider()
 
 	// Multiple calls should not error

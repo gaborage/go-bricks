@@ -6,7 +6,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConfig_Validate(t *testing.T) {
+const (
+	testServiceName = "test-service"
+)
+
+func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  Config
@@ -16,7 +20,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid config",
 			config: Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					SampleRate: 0.5,
 				},
@@ -42,7 +46,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "invalid sample rate - negative",
 			config: Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					SampleRate: -0.1,
 				},
@@ -53,7 +57,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "invalid sample rate - too high",
 			config: Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					SampleRate: 1.1,
 				},
@@ -64,7 +68,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "sample rate at boundary - 0.0",
 			config: Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					SampleRate: 0.0,
 				},
@@ -75,7 +79,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "sample rate at boundary - 1.0",
 			config: Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					SampleRate: 1.0,
 				},

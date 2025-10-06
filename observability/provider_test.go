@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewProvider_Disabled(t *testing.T) {
+func TestNewProviderDisabled(t *testing.T) {
 	cfg := &Config{
 		Enabled: false,
 	}
@@ -27,7 +27,7 @@ func TestNewProvider_Disabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestNewProvider_InvalidConfig(t *testing.T) {
+func TestNewProviderInvalidConfig(t *testing.T) {
 	cfg := &Config{
 		Enabled:     true,
 		ServiceName: "", // Missing required field
@@ -39,10 +39,10 @@ func TestNewProvider_InvalidConfig(t *testing.T) {
 	assert.ErrorIs(t, err, ErrMissingServiceName)
 }
 
-func TestNewProvider_TracingEnabled(t *testing.T) {
+func TestNewProviderTracingEnabled(t *testing.T) {
 	cfg := &Config{
 		Enabled:        true,
-		ServiceName:    "test-service",
+		ServiceName:    testServiceName,
 		ServiceVersion: "1.0.0",
 		Environment:    "test",
 		Trace: TraceConfig{
@@ -89,10 +89,10 @@ func TestNewProvider_TracingEnabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestNewProvider_UnsupportedEndpoint(t *testing.T) {
+func TestNewProviderUnsupportedEndpoint(t *testing.T) {
 	cfg := &Config{
 		Enabled:     true,
-		ServiceName: "test-service",
+		ServiceName: testServiceName,
 		Trace: TraceConfig{
 			Enabled:    true,
 			Endpoint:   "http://localhost:4318", // OTLP not supported yet in PR #1
@@ -106,7 +106,7 @@ func TestNewProvider_UnsupportedEndpoint(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported trace endpoint")
 }
 
-func TestNewProvider_TracingSampleRate(t *testing.T) {
+func TestNewProviderTracingSampleRate(t *testing.T) {
 	tests := []struct {
 		name       string
 		sampleRate float64
@@ -121,7 +121,7 @@ func TestNewProvider_TracingSampleRate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
 				Enabled:     true,
-				ServiceName: "test-service",
+				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					Enabled:    true,
 					Endpoint:   "stdout",
@@ -140,10 +140,10 @@ func TestNewProvider_TracingSampleRate(t *testing.T) {
 	}
 }
 
-func TestProvider_Shutdown_Timeout(t *testing.T) {
+func TestProviderShutdownTimeout(t *testing.T) {
 	cfg := &Config{
 		Enabled:     true,
-		ServiceName: "test-service",
+		ServiceName: testServiceName,
 		Trace: TraceConfig{
 			Enabled:    true,
 			Endpoint:   "stdout",
@@ -164,10 +164,10 @@ func TestProvider_Shutdown_Timeout(t *testing.T) {
 	_ = provider.Shutdown(ctx)
 }
 
-func TestProvider_MultipleShutdowns(t *testing.T) {
+func TestProviderMultipleShutdowns(t *testing.T) {
 	cfg := &Config{
 		Enabled:     true,
-		ServiceName: "test-service",
+		ServiceName: testServiceName,
 		Trace: TraceConfig{
 			Enabled:    true,
 			Endpoint:   "stdout",
