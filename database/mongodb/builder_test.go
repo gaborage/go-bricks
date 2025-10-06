@@ -20,7 +20,7 @@ func TestBuilderFilterConditions(t *testing.T) {
 		{
 			Name: "simple equality",
 			Setup: func() *Builder {
-				return NewBuilder().Where("name", "John")
+				return NewBuilder().WhereEq("name", "John")
 			},
 			Expected: BuilderExpectation{
 				Filter: bson.M{"name": "John"},
@@ -30,8 +30,8 @@ func TestBuilderFilterConditions(t *testing.T) {
 			Name: "multiple conditions",
 			Setup: func() *Builder {
 				return NewBuilder().
-					Where("name", "John").
-					Where("age", 25)
+					WhereEq("name", "John").
+					WhereEq("age", 25)
 			},
 			Expected: BuilderExpectation{
 				Filter: bson.M{"name": "John", "age": 25},
@@ -471,7 +471,7 @@ func TestBuilderAggregationPipeline(t *testing.T) {
 			Name: "implicit stages from builder state",
 			Setup: func() *Builder {
 				return NewBuilder().
-					Where("category", TestCategory).
+					WhereEq("category", TestCategory).
 					OrderBy("price").
 					Skip(10).
 					Limit(5).
@@ -632,7 +632,7 @@ func TestBuilderUtilityMethods(t *testing.T) {
 		AssertPipeline(t, clone, original.ToPipeline())
 
 		// Verify independence
-		clone.Where("category", "books")
+		clone.WhereEq("category", "books")
 		assert.NotEqual(t, original.ToFilter(), clone.ToFilter())
 	})
 
@@ -649,7 +649,7 @@ func TestBuilderUtilityMethods(t *testing.T) {
 
 	t.Run("state inspection methods", func(t *testing.T) {
 		builder := NewBuilder().
-			Where("status", TestStatus).
+			WhereEq("status", TestStatus).
 			OrderBy("name").
 			Skip(10).
 			Limit(5).
@@ -881,7 +881,7 @@ func TestBuilderIntegrationWithMongoDB(t *testing.T) {
 		collection := conn.Collection("products")
 
 		builder := NewBuilder().
-			Where("category", TestCategory).
+			WhereEq("category", TestCategory).
 			WhereLt("stock", 10)
 
 		// Mock update response
@@ -908,7 +908,7 @@ func TestBuilderIntegrationWithMongoDB(t *testing.T) {
 		collection := conn.Collection("orders")
 
 		builder := NewBuilder().
-			Where("status", "pending").
+			WhereEq("status", "pending").
 			WhereGte("created_at", TestDate)
 
 		// Mock count response
@@ -948,7 +948,7 @@ func TestBuilderEdgeCases(t *testing.T) {
 		builder := NewBuilder()
 
 		// These should not panic
-		builder.Where("field", nil)
+		builder.WhereEq("field", nil)
 		builder.WhereIn("array_field") // No values
 		builder.Select()               // No fields
 		builder.Exclude()              // No fields
@@ -971,7 +971,7 @@ func TestBuilderEdgeCases(t *testing.T) {
 
 	t.Run("string representation", func(t *testing.T) {
 		builder := NewBuilder().
-			Where("status", TestStatus).
+			WhereEq("status", TestStatus).
 			Skip(10).
 			Limit(5)
 
@@ -981,7 +981,7 @@ func TestBuilderEdgeCases(t *testing.T) {
 	})
 
 	t.Run("JSON representation", func(t *testing.T) {
-		builder := NewBuilder().Where("test", "value")
+		builder := NewBuilder().WhereEq("test", "value")
 		json := builder.ToJSON()
 		assert.NotEmpty(t, json)
 		assert.Contains(t, json, "test")
@@ -1012,7 +1012,7 @@ func TestBuilderConcurrency(t *testing.T) {
 
 				for j := 0; j < numOperations; j++ {
 					builder.
-						Where("field"+string(rune(j)), j).
+						WhereEq("field"+string(rune(j)), j).
 						OrderBy("sort" + string(rune(j))).
 						Skip(int64(j)).
 						Limit(int64(j + 1))
@@ -1101,7 +1101,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 		builder := NewBuilder()
 
 		// Test existing simple value gets converted to condition map
-		builder.Where("price", 100)
+		builder.WhereEq("price", 100)
 		builder.addFieldCondition("price", GtOp, 50)
 
 		filter := builder.ToFilter()
@@ -1230,7 +1230,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 		builder.AddGroup(bson.M{"_id": "$department", "count": bson.M{"$sum": 1}})
 
 		// Add builder state
-		builder.Where("active", true)
+		builder.WhereEq("active", true)
 		builder.OrderBy("created_at")
 		builder.Skip(5)
 		builder.Limit(10)
@@ -1263,7 +1263,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 		assert.Empty(t, builder.GetSortFields())
 
 		// Test with data
-		builder.Where("test", "value")
+		builder.WhereEq("test", "value")
 		builder.OrderBy("field1")
 		builder.OrderByDesc("field2")
 		builder.Select("a", "b", "c")
@@ -1287,7 +1287,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 
 	t.Run("clone deep copy verification", func(t *testing.T) {
 		original := NewBuilder().
-			Where("field1", "value1").
+			WhereEq("field1", "value1").
 			WhereGt("field2", 100).
 			OrderBy("sort1").
 			Skip(10).
@@ -1298,7 +1298,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 		clone := original.Clone()
 
 		// Modify clone and verify original is unaffected
-		clone.Where("field1", "modified")
+		clone.WhereEq("field1", "modified")
 		clone.OrderBy("newsort")
 		clone.Skip(20)
 		clone.Select("newproj")
@@ -1346,7 +1346,7 @@ func TestBuilderComprehensiveCoverage(t *testing.T) {
 func TestBuilderErrorConditionsAndValidation(t *testing.T) {
 	t.Run("JSON serialization with complex types", func(t *testing.T) {
 		builder := NewBuilder().
-			Where("complex", bson.M{"nested": bson.M{"deep": "value"}}).
+			WhereEq("complex", bson.M{"nested": bson.M{"deep": "value"}}).
 			AddMatch(bson.M{"aggregation": true})
 
 		json := builder.ToJSON()
@@ -1357,7 +1357,7 @@ func TestBuilderErrorConditionsAndValidation(t *testing.T) {
 
 	t.Run("string representation with all fields", func(t *testing.T) {
 		builder := NewBuilder().
-			Where("field", "value").
+			WhereEq("field", "value").
 			OrderBy("sort").
 			Skip(10).
 			Limit(5)
@@ -1378,7 +1378,7 @@ func TestBuilderErrorConditionsAndValidation(t *testing.T) {
 			builder.AddMatch(bson.M{"iteration": i})
 		}
 
-		builder.Where("final", "filter")
+		builder.WhereEq("final", "filter")
 		builder.OrderBy("timestamp")
 		builder.Skip(100)
 		builder.Limit(20)
@@ -1406,7 +1406,7 @@ func TestBuilderErrorConditionsAndValidation(t *testing.T) {
 		// Use builder multiple times with reset
 		for i := 0; i < 3; i++ {
 			builder.Reset()
-			builder.Where("iteration", i)
+			builder.WhereEq("iteration", i)
 			builder.OrderBy("field")
 			builder.Skip(int64(i * 10))
 

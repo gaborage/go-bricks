@@ -24,7 +24,6 @@ type SelectQueryBuilder interface {
 	RightJoin(join string, rest ...any) SelectQueryBuilder
 	InnerJoin(join string, rest ...any) SelectQueryBuilder
 	CrossJoin(join string, rest ...any) SelectQueryBuilder
-	Where(pred any, rest ...any) SelectQueryBuilder
 	GroupBy(groupBys ...string) SelectQueryBuilder
 	Having(pred any, rest ...any) SelectQueryBuilder
 	OrderBy(orderBys ...string) SelectQueryBuilder

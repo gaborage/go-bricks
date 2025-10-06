@@ -274,12 +274,6 @@ func (sqb *SelectQueryBuilder) From(from ...string) dbtypes.SelectQueryBuilder {
 	return sqb
 }
 
-// Where adds a WHERE condition using the raw squirrel interface
-func (sqb *SelectQueryBuilder) Where(pred any, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(pred, rest...)
-	return sqb
-}
-
 // Limit sets the LIMIT for the query
 func (sqb *SelectQueryBuilder) Limit(limit uint64) dbtypes.SelectQueryBuilder {
 	sqb.limit = limit

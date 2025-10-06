@@ -180,12 +180,6 @@ func (m *MockQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) Where(pred any, args ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{pred}, args...)
-	arguments := m.MethodCalled("Where", callArgs...)
-	return arguments.Get(0).(types.SelectQueryBuilder)
-}
-
 func (m *MockQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
 	callArgs := make([]any, len(groupBys))
 	for i, col := range groupBys {
