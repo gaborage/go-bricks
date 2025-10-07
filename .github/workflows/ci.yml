@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Clear Go modules cache
+        run: rm -rf ~/go/pkg/mod
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -81,6 +84,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Clear Go modules cache
+        run: rm -rf ~/go/pkg/mod
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -101,7 +107,7 @@ jobs:
       - name: Run integration tests
         run: |
           set -euo pipefail
-          docker info >/dev/null 2>&1 || {echo "Docker is not running" && exit 1;}
+          docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
           go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./database/mongodb/...
 
@@ -175,6 +181,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Clear Go modules cache
+        run: rm -rf ~/go/pkg/mod
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -223,6 +232,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Clear Go modules cache
+        run: rm -rf ~/go/pkg/mod
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -260,6 +272,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Clear Go modules cache
+        run: rm -rf ~/go/pkg/mod
 
       - name: Set up Go
         uses: actions/setup-go@v6
