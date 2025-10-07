@@ -113,6 +113,7 @@ func (b *Builder) CreateApp() *Builder {
 		registry:         nil, // Will be set in next step
 		signalHandler:    signalHandler,
 		timeoutProvider:  timeoutProvider,
+		observability:    b.bundle.observability,
 		dbManager:        b.bundle.dbManager,
 		messagingManager: b.bundle.messagingManager,
 		resourceProvider: b.bundle.provider,

@@ -14,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -54,6 +55,9 @@ type App struct {
 	registry        *ModuleRegistry
 	signalHandler   SignalHandler
 	timeoutProvider TimeoutProvider
+
+	// Observability
+	observability observability.Provider
 
 	// Unified managers
 	dbManager        *database.DbManager

@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/observability"
 )
 
 // namedCloser holds a resource with its name for cleanup tracking
@@ -17,4 +18,5 @@ type dependencyBundle struct {
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
 	provider         ResourceProvider
+	observability    observability.Provider
 }

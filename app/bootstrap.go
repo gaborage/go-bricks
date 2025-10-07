@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/observability"
 )
 
 // appBootstrap handles the initialization sequence for creating an App instance.
@@ -26,7 +27,7 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 }
 
 // dependencies creates and configures all resource managers and dependencies.
-// Returns a bundle containing the database manager, messaging manager, and resource provider.
+// Returns a bundle containing the database manager, messaging manager, resource provider, and observability.
 func (b *appBootstrap) dependencies() *dependencyBundle {
 	// Create factory resolver and configuration builder
 	resolver := NewFactoryResolver(b.opts)
@@ -51,12 +52,17 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
 	}
 
-	// Create ModuleDeps using the resource provider
+	// Initialize observability provider (no-op if disabled)
+	obsProvider := b.initializeObservability()
+
+	// Create ModuleDeps using the resource provider and observability
 	deps := &ModuleDeps{
-		Logger:       b.log,
-		Config:       b.cfg,
-		GetDB:        provider.GetDB,
-		GetMessaging: provider.GetMessaging,
+		Logger:        b.log,
+		Config:        b.cfg,
+		Tracer:        obsProvider.TracerProvider().Tracer(b.cfg.App.Name),
+		MeterProvider: obsProvider.MeterProvider(),
+		GetDB:         provider.GetDB,
+		GetMessaging:  provider.GetMessaging,
 	}
 
 	return &dependencyBundle{
@@ -64,5 +70,38 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
 		provider:         provider,
+		observability:    obsProvider,
 	}
+}
+
+// initializeObservability creates and configures the observability provider.
+// Returns a no-op provider if observability is disabled or configuration is missing.
+func (b *appBootstrap) initializeObservability() observability.Provider {
+	// Create observability config
+	var obsCfg observability.Config
+
+	// Try to inject configuration
+	if err := b.cfg.InjectInto(&obsCfg); err != nil {
+		// Configuration missing or invalid - use defaults (observability disabled)
+		b.log.Debug().Err(err).Msg("Observability configuration not found or invalid, using no-op provider")
+		return observability.MustNewProvider(&observability.Config{Enabled: false})
+	}
+
+	// Create provider (will be no-op if Enabled is false)
+	provider, err := observability.NewProvider(&obsCfg)
+	if err != nil {
+		b.log.Warn().Err(err).Msg("Failed to initialize observability, using no-op provider")
+		return observability.MustNewProvider(&observability.Config{Enabled: false})
+	}
+
+	if obsCfg.Enabled {
+		b.log.Info().
+			Str("service", obsCfg.ServiceName).
+			Str("environment", obsCfg.Environment).
+			Msg("Observability initialized")
+	} else {
+		b.log.Debug().Msg("Observability disabled")
+	}
+
+	return provider
 }
