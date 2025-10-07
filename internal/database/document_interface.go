@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // DocumentInterface defines operations for document-oriented databases like MongoDB

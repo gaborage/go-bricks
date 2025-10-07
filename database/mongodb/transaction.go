@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/database"
@@ -14,7 +14,7 @@ import (
 
 // Transaction implements the database.Tx interface for MongoDB
 type Transaction struct {
-	session   mongo.Session
+	session   *mongo.Session
 	database  *mongo.Database
 	logger    logger.Logger
 	parentCtx context.Context
@@ -43,36 +43,32 @@ func (t *Transaction) Prepare(_ context.Context, _ string) (database.Statement, 
 
 // Commit commits the MongoDB transaction
 func (t *Transaction) Commit() error {
-	// Create session context from parent context
-	sessionCtx := mongo.NewSessionContext(t.parentCtx, t.session)
-
-	err := t.session.CommitTransaction(sessionCtx)
+	// In v2, pass the context directly to transaction methods
+	err := t.session.CommitTransaction(t.parentCtx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to commit MongoDB transaction")
 		// Still need to end session even if commit fails
-		t.session.EndSession(sessionCtx)
+		t.session.EndSession(t.parentCtx)
 		return fmt.Errorf("failed to commit MongoDB transaction: %w", err)
 	}
 
 	// End session after successful commit
-	t.session.EndSession(sessionCtx)
+	t.session.EndSession(t.parentCtx)
 	t.logger.Debug().Msg("MongoDB transaction committed successfully")
 	return nil
 }
 
 // Rollback rolls back the MongoDB transaction
 func (t *Transaction) Rollback() error {
-	// Create session context from parent context
-	sessionCtx := mongo.NewSessionContext(t.parentCtx, t.session)
-
-	err := t.session.AbortTransaction(sessionCtx)
+	// In v2, pass the context directly to transaction methods
+	err := t.session.AbortTransaction(t.parentCtx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to rollback MongoDB transaction")
 		// Continue with session cleanup even if abort fails
 	}
 
 	// Always end session, even if abort failed
-	t.session.EndSession(sessionCtx)
+	t.session.EndSession(t.parentCtx)
 	if err != nil {
 		return fmt.Errorf("failed to rollback MongoDB transaction: %w", err)
 	}
@@ -82,7 +78,7 @@ func (t *Transaction) Rollback() error {
 }
 
 // GetSession returns the underlying MongoDB session for document operations
-func (t *Transaction) GetSession() mongo.Session {
+func (t *Transaction) GetSession() *mongo.Session {
 	return t.session
 }
 
