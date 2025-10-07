@@ -83,6 +83,10 @@ type MetricsConfig struct {
 // Validate checks the configuration for common errors.
 // Returns an error if the configuration is invalid.
 func (c *Config) Validate() error {
+	if c == nil {
+		return ErrNilConfig
+	}
+
 	if !c.Enabled {
 		return nil // No validation needed when disabled
 	}

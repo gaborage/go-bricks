@@ -10,6 +10,12 @@ const (
 	testServiceName = "test-service"
 )
 
+func TestConfig_Validate_NilConfig(t *testing.T) {
+	var nilConfig *Config
+	err := nilConfig.Validate()
+	assert.ErrorIs(t, err, ErrNilConfig)
+}
+
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string

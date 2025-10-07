@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestNewProviderDisabled(t *testing.T) {
@@ -141,27 +142,57 @@ func TestNewProviderTracingSampleRate(t *testing.T) {
 }
 
 func TestProviderShutdownTimeout(t *testing.T) {
-	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
-		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   "stdout",
-			SampleRate: 1.0,
-		},
+	// This test verifies that Shutdown respects context timeout.
+	// We use a blocking exporter that only unblocks when context is cancelled,
+	// ensuring deterministic timeout behavior.
+
+	// Create a custom blocking exporter
+	blockingExporter := &blockingSpanExporter{
+		blockUntilCancel: make(chan struct{}),
 	}
 
-	provider, err := NewProvider(cfg)
-	require.NoError(t, err)
+	// Manually create provider with blocking exporter
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(blockingExporter),
+	)
 
-	// Create a context that will timeout immediately
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	provider := &provider{
+		config: Config{
+			Enabled:     true,
+			ServiceName: testServiceName,
+		},
+		tracerProvider: tp,
+	}
+
+	// Create context with short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(10 * time.Millisecond) // Ensure context is expired
+	// Shutdown should return error due to timeout
+	err := provider.Shutdown(ctx)
+	assert.Error(t, err, "expected error from shutdown timeout")
+	assert.Contains(t, err.Error(), "failed to shutdown trace provider")
 
-	// Shutdown might still succeed if it's fast enough, but this tests the timeout path
-	_ = provider.Shutdown(ctx)
+	// Cleanup: unblock the exporter
+	close(blockingExporter.blockUntilCancel)
+}
+
+// blockingSpanExporter is a test exporter that blocks in Shutdown until context is cancelled
+type blockingSpanExporter struct {
+	blockUntilCancel chan struct{}
+}
+
+func (b *blockingSpanExporter) ExportSpans(_ context.Context, _ []sdktrace.ReadOnlySpan) error {
+	return nil
+}
+
+func (b *blockingSpanExporter) Shutdown(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.blockUntilCancel:
+		return nil
+	}
 }
 
 func TestProviderMultipleShutdowns(t *testing.T) {

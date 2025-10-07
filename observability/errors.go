@@ -2,6 +2,9 @@ package observability
 
 import "errors"
 
+// ErrNilConfig is returned when Validate is called on a nil Config pointer.
+var ErrNilConfig = errors.New("observability: config is nil")
+
 // ErrMissingServiceName is returned when observability is enabled but no service name is configured.
 var ErrMissingServiceName = errors.New("observability: service name is required when observability is enabled")
 

@@ -184,3 +184,152 @@ custom:
       allowed:
       - http://localhost:3000
       - https://app.example.com
+
+observability:
+  # enabled controls whether observability features are active.
+  # When false, all observability operations become no-ops with zero overhead.
+  # Default: false
+  enabled: true
+
+  # service section defines service identification metadata
+  service:
+    # name is required when observability is enabled.
+    # This identifies your service in traces and metrics.
+    # Can be overridden by environment variable: OBSERVABILITY_SERVICE_NAME
+    name: "my-service"
+
+    # version specifies the version of your service.
+    # Used for filtering and grouping in observability backends.
+    # Can be overridden by environment variable: OBSERVABILITY_SERVICE_VERSION
+    # Default: "unknown"
+    version: "1.0.0"
+
+  # environment indicates the deployment environment.
+  # Common values: development, staging, production
+  # Can be overridden by environment variable: OBSERVABILITY_ENVIRONMENT
+  # Default: "development"
+  environment: "production"
+
+  # trace section configures distributed tracing
+  trace:
+    # enabled controls whether tracing is active.
+    # Can be disabled independently of metrics.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_ENABLED
+    # Default: true
+    enabled: true
+
+    # endpoint specifies where to send trace data.
+    # Special value "stdout" enables console logging for local development.
+    # For production, use OTLP gRPC endpoint: "http://localhost:4318" or "grpc://localhost:4317"
+    # For DataDog, point to the DataDog Agent's OTLP endpoint.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_ENDPOINT
+    # Default: "stdout"
+    endpoint: "stdout"
+
+    # sample.rate controls what fraction of traces to collect (0.0 to 1.0).
+    # 1.0 = collect all traces (use in development/staging)
+    # 0.1 = collect 10% of traces (reduces costs in production)
+    # 0.01 = collect 1% of traces (high-volume production)
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_SAMPLE_RATE
+    # Default: 1.0
+    sample:
+      rate: 1.0
+
+    # batch.timeout specifies how long to wait before sending a batch of spans.
+    # Lower values reduce latency but increase network overhead.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_BATCH_TIMEOUT
+    # Default: 5s
+    batch:
+      timeout: 5s
+
+    # export.timeout specifies the maximum time to wait for span export.
+    # Prevents slow backends from blocking the application.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_EXPORT_TIMEOUT
+    # Default: 30s
+    export:
+      timeout: 30s
+
+    # max.queue.size limits the number of spans buffered for export.
+    # Prevents memory exhaustion under high load.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_MAX_QUEUE_SIZE
+    # Default: 2048
+    max:
+      queue:
+        size: 2048
+      batch:
+        # max.batch.size limits the number of spans per export batch.
+        # Smaller batches reduce latency, larger batches reduce overhead.
+        # Can be overridden by environment variable: OBSERVABILITY_TRACE_MAX_BATCH_SIZE
+        # Default: 512
+        size: 512
+
+  # metrics section configures metrics collection
+  metrics:
+    # enabled controls whether metrics collection is active.
+    # Can be disabled independently of tracing.
+    # Can be overridden by environment variable: OBSERVABILITY_METRICS_ENABLED
+    # Default: true
+    enabled: true
+
+    # endpoint specifies where to send metric data.
+    # Special value "stdout" enables console logging for local development.
+    # For production, use OTLP gRPC endpoint: "http://localhost:4318"
+    # Can be overridden by environment variable: OBSERVABILITY_METRICS_ENDPOINT
+    # Default: "stdout"
+    endpoint: "stdout"
+
+    # interval specifies how often to export metrics.
+    # Shorter intervals provide more real-time data but increase overhead.
+    # Can be overridden by environment variable: OBSERVABILITY_METRICS_INTERVAL
+    # Default: 10s
+    interval: 10s
+
+    # export.timeout specifies the maximum time to wait for metric export.
+    # Can be overridden by environment variable: OBSERVABILITY_METRICS_EXPORT_TIMEOUT
+    # Default: 30s
+    export:
+      timeout: 30s
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment-Specific Examples
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Local Development (console output):
+# observability:
+#   enabled: true
+#   service:
+#     name: "my-service"
+#   trace:
+#     endpoint: "stdout"
+#   metrics:
+#     endpoint: "stdout"
+
+# Production with DataDog:
+# observability:
+#   enabled: true
+#   service:
+#     name: "my-service"
+#     version: "1.2.3"
+#   environment: "production"
+#   trace:
+#     endpoint: "http://localhost:4318"  # DataDog Agent OTLP receiver
+#     sample:
+#       rate: 0.1  # 10% sampling for cost control
+#   metrics:
+#     endpoint: "http://localhost:4318"
+#     interval: 30s
+
+# High-Volume Production (aggressive sampling):
+# observability:
+#   enabled: true
+#   service:
+#     name: "my-service"
+#   trace:
+#     endpoint: "http://localhost:4318"
+#     sample:
+#       rate: 0.01  # 1% sampling
+#     max:
+#       queue:
+#         size: 4096  # Larger buffer for bursts
+#   metrics:
+#     interval: 60s  # Less frequent metric exports
