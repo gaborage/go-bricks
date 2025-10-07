@@ -3,6 +3,8 @@ package observability
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/metric"
+	metricznoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -11,6 +13,7 @@ import (
 // Used when observability is disabled, ensuring zero overhead.
 type noopProvider struct {
 	tracerProvider trace.TracerProvider
+	meterProvider  metric.MeterProvider
 }
 
 // newNoopProvider creates a new no-op provider.
@@ -18,12 +21,18 @@ type noopProvider struct {
 func newNoopProvider() *noopProvider {
 	return &noopProvider{
 		tracerProvider: noop.NewTracerProvider(),
+		meterProvider:  metricznoop.NewMeterProvider(),
 	}
 }
 
 // TracerProvider returns a no-op tracer provider.
 func (n *noopProvider) TracerProvider() trace.TracerProvider {
 	return n.tracerProvider
+}
+
+// MeterProvider returns a no-op meter provider.
+func (n *noopProvider) MeterProvider() metric.MeterProvider {
+	return n.meterProvider
 }
 
 // Shutdown is a no-op for the no-op provider.

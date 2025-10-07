@@ -2,6 +2,17 @@ package observability
 
 import "time"
 
+const (
+	// EndpointStdout is a special endpoint value that outputs to stdout (for local development).
+	EndpointStdout = "stdout"
+
+	// ProtocolHTTP specifies OTLP over HTTP/protobuf.
+	ProtocolHTTP = "http"
+
+	// ProtocolGRPC specifies OTLP over gRPC.
+	ProtocolGRPC = "grpc"
+)
+
 // Config defines the configuration for observability features.
 // It supports automatic injection via the GoBricks config system.
 type Config struct {
@@ -116,9 +127,9 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate protocol for OTLP endpoints
-	if c.Trace.Endpoint != "stdout" && c.Trace.Endpoint != "" {
+	if c.Trace.Endpoint != EndpointStdout && c.Trace.Endpoint != "" {
 		protocol := c.Trace.Protocol
-		if protocol != "http" && protocol != "grpc" {
+		if protocol != ProtocolHTTP && protocol != ProtocolGRPC {
 			return ErrInvalidProtocol
 		}
 	}

@@ -9,7 +9,10 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/metric"
+	metricznoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
@@ -24,6 +27,9 @@ type Provider interface {
 	// TracerProvider returns the configured trace provider.
 	TracerProvider() trace.TracerProvider
 
+	// MeterProvider returns the configured meter provider.
+	MeterProvider() metric.MeterProvider
+
 	// Shutdown gracefully shuts down the provider, flushing any pending data.
 	// It should be called during application shutdown.
 	Shutdown(ctx context.Context) error
@@ -37,6 +43,7 @@ type Provider interface {
 type provider struct {
 	config         Config
 	tracerProvider *sdktrace.TracerProvider
+	meterProvider  *sdkmetric.MeterProvider
 	mu             sync.Mutex
 }
 
@@ -64,9 +71,19 @@ func NewProvider(cfg *Config) (Provider, error) {
 		}
 	}
 
+	// Initialize meter provider if metrics are enabled
+	if cfg.Metrics.Enabled {
+		if err := p.initMeterProvider(); err != nil {
+			return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
+		}
+	}
+
 	// Set global providers
 	if p.tracerProvider != nil {
 		otel.SetTracerProvider(p.tracerProvider)
+	}
+	if p.meterProvider != nil {
+		otel.SetMeterProvider(p.meterProvider)
 	}
 
 	// Set global propagator for W3C trace context
@@ -140,7 +157,7 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	endpoint := p.config.Trace.Endpoint
 
 	// Use stdout exporter for local development
-	if endpoint == "stdout" {
+	if endpoint == EndpointStdout {
 		return stdouttrace.New(
 			stdouttrace.WithPrettyPrint(),
 		)
@@ -149,9 +166,9 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	// Create OTLP exporter based on protocol
 	protocol := p.config.Trace.Protocol
 	switch protocol {
-	case "http":
+	case ProtocolHTTP:
 		return p.createOTLPHTTPExporter()
-	case "grpc":
+	case ProtocolGRPC:
 		return p.createOTLPGRPCExporter()
 	default:
 		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
@@ -204,29 +221,65 @@ func (p *provider) TracerProvider() trace.TracerProvider {
 	return p.tracerProvider
 }
 
+// MeterProvider returns the configured meter provider.
+func (p *provider) MeterProvider() metric.MeterProvider {
+	if p.meterProvider == nil {
+		return metricznoop.NewMeterProvider()
+	}
+	return p.meterProvider
+}
+
 // Shutdown gracefully shuts down the provider.
+//
+//nolint:dupl // Shutdown and ForceFlush have similar structure but different semantics
 func (p *provider) Shutdown(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	var errs []error
+
 	if p.tracerProvider != nil {
 		if err := p.tracerProvider.Shutdown(ctx); err != nil {
-			return fmt.Errorf("failed to shutdown trace provider: %w", err)
+			errs = append(errs, fmt.Errorf("failed to shutdown trace provider: %w", err))
 		}
+	}
+
+	if p.meterProvider != nil {
+		if err := p.meterProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to shutdown meter provider: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("shutdown errors: %v", errs)
 	}
 
 	return nil
 }
 
 // ForceFlush immediately flushes any pending telemetry data.
+//
+//nolint:dupl // Shutdown and ForceFlush have similar structure but different semantics
 func (p *provider) ForceFlush(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	var errs []error
+
 	if p.tracerProvider != nil {
 		if err := p.tracerProvider.ForceFlush(ctx); err != nil {
-			return fmt.Errorf("failed to flush trace provider: %w", err)
+			errs = append(errs, fmt.Errorf("failed to flush trace provider: %w", err))
 		}
+	}
+
+	if p.meterProvider != nil {
+		if err := p.meterProvider.ForceFlush(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush meter provider: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("flush errors: %v", errs)
 	}
 
 	return nil
