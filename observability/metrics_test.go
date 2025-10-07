@@ -56,10 +56,19 @@ func TestCreateCounter(t *testing.T) {
 	assert.True(t, sum.IsMonotonic)
 
 	// Verify data points
-	require.Len(t, sum.DataPoints, 2)
-	assert.Equal(t, int64(5), sum.DataPoints[0].Value)
-	assert.Equal(t, int64(10), sum.DataPoints[1].Value)
-}
+ 	// Verify data points
+ 	require.Len(t, sum.DataPoints, 2)
+-	assert.Equal(t, int64(5), sum.DataPoints[0].Value)
+	valuesByKey := make(map[string]int64, len(sum.DataPoints))
+	for _, dp := range sum.DataPoints {
+		attrVal, ok := dp.Attributes.Value("key")
+		require.True(t, ok, "missing expected attribute 'key'")
+		valuesByKey[attrVal.AsString()] = dp.Value
+	}
+
+	assert.Equal(t, int64(5), valuesByKey["value1"])
+	assert.Equal(t, int64(10), valuesByKey["value2"])
+ }
 
 func TestCreateHistogram(t *testing.T) {
 	// Create a manual reader for testing
