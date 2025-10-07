@@ -116,7 +116,8 @@ func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
 	require.Len(t, spans, 1)
 
 	span := spans[0]
-	assert.Equal(t, testRoutingKey+" publish", span.Name)
+	// Span name should use exchange since it's the primary AMQP entity
+	assert.Equal(t, testExchange+" publish", span.Name)
 
 	attrs := span.Attributes
 	assertAttribute(t, attrs, "messaging.rabbitmq.exchange", testExchange)
@@ -342,12 +343,12 @@ func setupReadyClient(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeCha
 	}
 
 	// Override dial function to return fake connection
-	originalDial := amqpDialFunc
-	amqpDialFunc = func(_ string) (amqpConnection, error) {
+	originalDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) {
 		return fakeConn, nil
-	}
+	})
 	t.Cleanup(func() {
-		amqpDialFunc = originalDial
+		setAmqpDialFunc(originalDial)
 	})
 
 	client := &AMQPClientImpl{

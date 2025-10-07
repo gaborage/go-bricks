@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"strconv"
 	"sync"
 	"time"
 
@@ -102,9 +103,10 @@ func (c *AMQPClientImpl) Publish(ctx context.Context, destination string, data [
 // createPublishSpan creates and configures an OpenTelemetry span for AMQP publish operations.
 func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int, startTime time.Time) (context.Context, trace.Span) {
 	tracer := otel.Tracer(messagingTracerName)
-	destination := options.RoutingKey
+	// Prefer Exchange over RoutingKey for destination since exchange is the primary AMQP entity
+	destination := options.Exchange
 	if destination == "" {
-		destination = options.Exchange
+		destination = options.RoutingKey
 	}
 	spanName := destination + " " + operationPublish
 
@@ -209,13 +211,18 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			c.log.Warn().
 				Uint64("delivery_tag", confirm.DeliveryTag).
 				Msg("Message publish not acknowledged, retrying...")
-			span.SetStatus(codes.Error, "message not acknowledged")
+			span.AddEvent("amqp.publish.retry", trace.WithAttributes(
+				attribute.String("reason", "message not acknowledged"),
+				attribute.String("delivery_tag", strconv.FormatUint(confirm.DeliveryTag, 10)),
+			))
 			// Continue to retry the publish operation
 			continue
 		case <-time.After(c.connectionTimeout):
 			// Confirmation timeout - retry the publish
 			c.log.Warn().Msg("Publish confirmation timeout, retrying...")
-			span.SetStatus(codes.Error, "confirmation timeout")
+			span.AddEvent("amqp.publish.retry", trace.WithAttributes(
+				attribute.String("reason", "confirmation timeout"),
+			))
 			// Continue to retry the publish operation
 			continue
 		}
