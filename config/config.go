@@ -6,7 +6,7 @@ import (
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
-	envprovider "github.com/knadh/koanf/providers/env"
+	envprovider "github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 )
@@ -39,9 +39,12 @@ func Load() (*Config, error) {
 	}
 
 	// Load environment variables (highest priority)
-	if err := k.Load(envprovider.Provider("", ".", func(s string) string {
-		// Convert UPPER_CASE to lower.case for koanf
-		return strings.ReplaceAll(strings.ToLower(s), "_", ".")
+	if err := k.Load(envprovider.Provider(".", envprovider.Opt{
+		TransformFunc: func(k, v string) (string, any) {
+			// Convert UPPER_CASE to lower.case for koanf
+			k = strings.ReplaceAll(strings.ToLower(k), "_", ".")
+			return k, v
+		},
 	}), nil); err != nil {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
