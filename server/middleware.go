@@ -6,6 +6,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
+	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -18,6 +20,17 @@ import (
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
 	// Request ID
 	e.Use(middleware.RequestID())
+
+	// OpenTelemetry instrumentation - creates spans for HTTP requests
+	// Skip health/ready probes to avoid noisy traces
+	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+	e.Use(otelecho.Middleware(
+		cfg.App.Name,
+		otelecho.WithTracerProvider(otel.GetTracerProvider()),
+		otelecho.WithSkipper(func(c echo.Context) bool {
+			return probeSkipper(c)
+		}),
+	))
 
 	// Inject trace context into request context for outbound propagation
 	e.Use(TraceContext())
