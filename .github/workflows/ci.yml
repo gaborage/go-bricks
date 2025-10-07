@@ -230,7 +230,7 @@ jobs:
           path: .
 
       - name: Scan
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
+        uses: SonarSource/sonarqube-scan-action@ba6563cca79df854af1350ec3dc5881313ec2d3c
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
