@@ -13,6 +13,8 @@ import (
 const (
 	testOTLPHTTPEndpoint = "localhost:4318"
 	testOTLPGRPCEndpoint = "localhost:4317"
+	testSpanName         = "test-span"
+	testTracerName       = "test-tracer"
 )
 
 func TestNewProviderDisabled(t *testing.T) {
@@ -78,7 +80,7 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	assert.NotNil(t, tracer)
 
 	// Should be able to start a span
-	_, span := tracer.Start(context.Background(), "test-span")
+	_, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()
 
@@ -114,10 +116,28 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span (proves exporter is initialized)
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), testSpanName)
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed (even though it will fail to send)
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector, which is expected
+
 	// Cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err = provider.Shutdown(ctx)
+	err = provider.Shutdown(shutdownCtx)
 	assert.NoError(t, err)
 }
 
@@ -140,10 +160,28 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span (proves exporter is initialized)
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), testSpanName)
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed (even though it will fail to send)
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector, which is expected
+
 	// Cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err = provider.Shutdown(ctx)
+	err = provider.Shutdown(shutdownCtx)
 	assert.NoError(t, err)
 }
 
@@ -168,10 +206,31 @@ func TestNewProviderOTLPWithHeaders(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), "test-span-with-headers")
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed
+	// Note: Headers are used during export, not during span creation
+	// Without a real collector, we can't verify headers are sent, but we can
+	// verify the provider accepts and stores the configuration
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector
+
 	// Cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err = provider.Shutdown(ctx)
+	err = provider.Shutdown(shutdownCtx)
 	assert.NoError(t, err)
 }
 

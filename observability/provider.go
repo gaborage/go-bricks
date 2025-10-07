@@ -154,7 +154,7 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	case "grpc":
 		return p.createOTLPGRPCExporter()
 	default:
-		return nil, fmt.Errorf("unsupported trace protocol: %s (must be 'http' or 'grpc')", protocol)
+		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
 	}
 }
 
