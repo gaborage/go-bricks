@@ -10,6 +10,13 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+const (
+	testOTLPHTTPEndpoint = "localhost:4318"
+	testOTLPGRPCEndpoint = "localhost:4317"
+	testSpanName         = "test-span"
+	testTracerName       = "test-tracer"
+)
+
 func TestNewProviderDisabled(t *testing.T) {
 	cfg := &Config{
 		Enabled: false,
@@ -73,7 +80,7 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	assert.NotNil(t, tracer)
 
 	// Should be able to start a span
-	_, span := tracer.Start(context.Background(), "test-span")
+	_, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()
 
@@ -90,13 +97,151 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestNewProviderUnsupportedEndpoint(t *testing.T) {
+func TestNewProviderOTLPHTTPExporter(t *testing.T) {
+	// Note: This test creates the exporter but does not actually send data
+	// since we don't have a real OTLP collector running
 	cfg := &Config{
 		Enabled:     true,
 		ServiceName: testServiceName,
 		Trace: TraceConfig{
 			Enabled:    true,
-			Endpoint:   "http://localhost:4318", // OTLP not supported yet in PR #1
+			Endpoint:   testOTLPHTTPEndpoint,
+			Protocol:   "http",
+			Insecure:   true,
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span (proves exporter is initialized)
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), testSpanName)
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed (even though it will fail to send)
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector, which is expected
+
+	// Cleanup
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(shutdownCtx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderOTLPGRPCExporter(t *testing.T) {
+	// Note: This test creates the exporter but does not actually send data
+	// since we don't have a real OTLP collector running
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   testOTLPGRPCEndpoint,
+			Protocol:   "grpc",
+			Insecure:   true,
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span (proves exporter is initialized)
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), testSpanName)
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed (even though it will fail to send)
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector, which is expected
+
+	// Cleanup
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(shutdownCtx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderOTLPWithHeaders(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:  true,
+			Endpoint: testOTLPHTTPEndpoint,
+			Protocol: "http",
+			Insecure: true,
+			Headers: map[string]string{
+				"Authorization":   "Bearer test-token",
+				"X-Custom-Header": "custom-value",
+			},
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify the provider has a tracer provider configured
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify we can create a tracer and span
+	tracer := tp.Tracer(testTracerName)
+	assert.NotNil(t, tracer)
+
+	// Create a test span to verify the pipeline works
+	ctx, span := tracer.Start(context.Background(), "test-span-with-headers")
+	assert.NotNil(t, span)
+	span.End()
+
+	// Force flush to ensure span is processed
+	// Note: Headers are used during export, not during span creation
+	// Without a real collector, we can't verify headers are sent, but we can
+	// verify the provider accepts and stores the configuration
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
+	defer flushCancel()
+	_ = provider.ForceFlush(flushCtx) // May error due to no collector
+
+	// Cleanup
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(shutdownCtx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderUnsupportedProtocol(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   testOTLPHTTPEndpoint,
+			Protocol:   "websocket",
 			SampleRate: 1.0,
 		},
 	}
@@ -104,7 +249,7 @@ func TestNewProviderUnsupportedEndpoint(t *testing.T) {
 	provider, err := NewProvider(cfg)
 	assert.Error(t, err)
 	assert.Nil(t, provider)
-	assert.Contains(t, err.Error(), "unsupported trace endpoint")
+	assert.ErrorIs(t, err, ErrInvalidProtocol)
 }
 
 func TestNewProviderTracingSampleRate(t *testing.T) {

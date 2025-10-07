@@ -35,8 +35,24 @@ type TraceConfig struct {
 
 	// Endpoint specifies where to send trace data.
 	// Special value "stdout" enables console logging for local development.
-	// For production, use OTLP endpoint (e.g., "http://localhost:4318").
+	// For production, use OTLP endpoint (e.g., "http://localhost:4318" for HTTP or "localhost:4317" for gRPC).
 	Endpoint string `config:"endpoint" default:"stdout"`
+
+	// Protocol specifies the OTLP protocol to use: "http" or "grpc".
+	// Only used when Endpoint is not "stdout".
+	// HTTP uses OTLP/HTTP protocol (default port 4318).
+	// gRPC uses OTLP/gRPC protocol (default port 4317).
+	Protocol string `config:"protocol" default:"http"`
+
+	// Insecure controls whether to use insecure connections (no TLS).
+	// Only applicable for OTLP endpoints (http/grpc).
+	// Set to true for local development without TLS.
+	Insecure bool `config:"insecure" default:"true"`
+
+	// Headers allows custom HTTP headers for OTLP exporters.
+	// Useful for authentication tokens or API keys.
+	// Format: map of header name to header value.
+	Headers map[string]string `config:"headers"`
 
 	// SampleRate controls what fraction of traces to collect (0.0 to 1.0).
 	// 1.0 means collect all traces, 0.1 means collect 10% of traces.
@@ -97,6 +113,14 @@ func (c *Config) Validate() error {
 
 	if c.Trace.SampleRate < 0.0 || c.Trace.SampleRate > 1.0 {
 		return ErrInvalidSampleRate
+	}
+
+	// Validate protocol for OTLP endpoints
+	if c.Trace.Endpoint != "stdout" && c.Trace.Endpoint != "" {
+		protocol := c.Trace.Protocol
+		if protocol != "http" && protocol != "grpc" {
+			return ErrInvalidProtocol
+		}
 	}
 
 	return nil

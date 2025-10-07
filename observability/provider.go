@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -13,6 +15,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Provider is the interface for observability providers.
@@ -143,8 +146,54 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 		)
 	}
 
-	// For other endpoints, we'll add OTLP support in PR #2
-	return nil, fmt.Errorf("unsupported trace endpoint: %s (OTLP support coming in next PR)", endpoint)
+	// Create OTLP exporter based on protocol
+	protocol := p.config.Trace.Protocol
+	switch protocol {
+	case "http":
+		return p.createOTLPHTTPExporter()
+	case "grpc":
+		return p.createOTLPGRPCExporter()
+	default:
+		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
+	}
+}
+
+// createOTLPHTTPExporter creates an OTLP HTTP trace exporter.
+func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
+	opts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpoint(p.config.Trace.Endpoint),
+	}
+
+	// Configure TLS/insecure connection
+	if p.config.Trace.Insecure {
+		opts = append(opts, otlptracehttp.WithInsecure())
+	}
+
+	// Add custom headers (e.g., for authentication)
+	if len(p.config.Trace.Headers) > 0 {
+		opts = append(opts, otlptracehttp.WithHeaders(p.config.Trace.Headers))
+	}
+
+	return otlptracehttp.New(context.Background(), opts...)
+}
+
+// createOTLPGRPCExporter creates an OTLP gRPC trace exporter.
+func (p *provider) createOTLPGRPCExporter() (sdktrace.SpanExporter, error) {
+	opts := []otlptracegrpc.Option{
+		otlptracegrpc.WithEndpoint(p.config.Trace.Endpoint),
+	}
+
+	// Configure TLS/insecure connection
+	if p.config.Trace.Insecure {
+		opts = append(opts, otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()))
+	}
+
+	// Add custom headers (e.g., for authentication)
+	if len(p.config.Trace.Headers) > 0 {
+		opts = append(opts, otlptracegrpc.WithHeaders(p.config.Trace.Headers))
+	}
+
+	return otlptracegrpc.New(context.Background(), opts...)
 }
 
 // TracerProvider returns the configured trace provider.

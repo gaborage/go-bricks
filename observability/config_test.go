@@ -10,7 +10,7 @@ const (
 	testServiceName = "test-service"
 )
 
-func TestConfig_Validate_NilConfig(t *testing.T) {
+func TestConfigValidateNilConfig(t *testing.T) {
 	var nilConfig *Config
 	err := nilConfig.Validate()
 	assert.ErrorIs(t, err, ErrNilConfig)
@@ -87,6 +87,58 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
+					SampleRate: 1.0,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "valid OTLP HTTP protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Endpoint:   "localhost:4318",
+					Protocol:   "http",
+					SampleRate: 1.0,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "valid OTLP gRPC protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Endpoint:   "localhost:4317",
+					Protocol:   "grpc",
+					SampleRate: 1.0,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "invalid OTLP protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Endpoint:   "localhost:4318",
+					Protocol:   "websocket",
+					SampleRate: 1.0,
+				},
+			},
+			wantErr: ErrInvalidProtocol,
+		},
+		{
+			name: "stdout endpoint ignores protocol validation",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Endpoint:   "stdout",
+					Protocol:   "invalid",
 					SampleRate: 1.0,
 				},
 			},
