@@ -5,9 +5,32 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/gaborage/go-bricks/logger"
+)
+
+const (
+	// Default operation type for unidentified queries
+	defaultOperation = "query"
+
+	// Database vendor normalization constants
+	dbVendorPostgreSQL = "postgresql"
+	dbVendorOracle     = "oracle"
+	dbVendorMongoDB    = "mongodb"
+	dbVendorMySQL      = "mysql"
+	dbVendorSQLite     = "sqlite"
+
+	// OpenTelemetry instrumentation constants
+	dbTracerName      = "go-bricks/database" // Tracer name for database operations
+	maxDBQueryAttrLen = 2000                 // Maximum length for db.query.text attribute
 )
 
 // TrackDBOperation logs database operation performance metrics and errors.
@@ -33,6 +56,11 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	if ctx != nil {
 		logger.IncrementDBCounter(ctx)
 		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
+	}
+
+	// Create OpenTelemetry span for database operation with accurate timing
+	if ctx != nil {
+		createDBSpan(ctx, tc, query, start, err)
 	}
 
 	// Truncate query string to safe max length to avoid unbounded payloads
@@ -121,4 +149,112 @@ func SanitizeArgs(args []any, maxLen int) []any {
 		}
 	}
 	return sanitized
+}
+
+// createDBSpan creates an OpenTelemetry span for a database operation.
+// It adds standard database semantic attributes and records errors.
+// The span uses the exact operation start time for accurate distributed tracing.
+func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
+	tracer := otel.Tracer(dbTracerName)
+
+	// Determine operation type from query
+	operation := extractDBOperation(query)
+	spanName := fmt.Sprintf("db.%s", operation)
+
+	// Start span with the actual operation start time for accurate timing
+	_, span := tracer.Start(ctx, spanName,
+		trace.WithTimestamp(start),
+		trace.WithSpanKind(trace.SpanKindClient),
+	)
+
+	// Add database semantic attributes using v1.32.0 conventions
+	// Truncate query for safety (span attributes should be reasonable size)
+	truncatedQuery := query
+	if len(query) > maxDBQueryAttrLen {
+		truncatedQuery = TruncateString(query, maxDBQueryAttrLen)
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String("db.system", normalizeDBVendor(tc.Vendor)),
+		semconv.DBQueryText(truncatedQuery),
+	}
+
+	// Add operation name if identified
+	if operation != defaultOperation {
+		attrs = append(attrs, semconv.DBOperationName(operation))
+	}
+
+	span.SetAttributes(attrs...)
+
+	// Record error status
+	if err != nil {
+		// sql.ErrNoRows is not an actual error - it's a normal empty result
+		if !errors.Is(err, sql.ErrNoRows) {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+	}
+
+	// End the span (will use current time, giving us the correct duration)
+	span.End()
+}
+
+// extractDBOperation extracts the operation type from a SQL query.
+// Returns lowercase operation name (select, insert, update, delete, etc.)
+func extractDBOperation(query string) string {
+	// Trim whitespace and get first word
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return defaultOperation
+	}
+
+	// Handle special operations
+	if strings.HasPrefix(query, "PREPARE:") {
+		return "prepare"
+	}
+	if query == "BEGIN" || query == "BEGIN_TX" {
+		return "begin"
+	}
+	if query == "COMMIT" {
+		return "commit"
+	}
+	if query == "ROLLBACK" {
+		return "rollback"
+	}
+	if query == "CREATE_MIGRATION_TABLE" {
+		return "create_table"
+	}
+
+	// Extract first word (SQL command)
+	parts := strings.Fields(query)
+	if len(parts) == 0 {
+		return defaultOperation
+	}
+
+	operation := strings.ToLower(parts[0])
+	switch operation {
+	case "select", "insert", "update", "delete", "create", "drop", "alter", "truncate":
+		return operation
+	default:
+		return defaultOperation
+	}
+}
+
+// normalizeDBVendor normalizes the database vendor name to match OTel semantic conventions.
+func normalizeDBVendor(vendor string) string {
+	vendor = strings.ToLower(vendor)
+	switch vendor {
+	case "postgres", dbVendorPostgreSQL:
+		return dbVendorPostgreSQL
+	case dbVendorOracle:
+		return dbVendorOracle
+	case dbVendorMongoDB, "mongo":
+		return dbVendorMongoDB
+	case dbVendorMySQL:
+		return dbVendorMySQL
+	case dbVendorSQLite, "sqlite3":
+		return dbVendorSQLite
+	default:
+		return vendor
+	}
 }
