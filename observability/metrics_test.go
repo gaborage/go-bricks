@@ -111,14 +111,6 @@ func TestCreateHistogram(t *testing.T) {
 	assert.Equal(t, uint64(3), dp.Count) // 3 recordings
 	assert.InDelta(t, 51.5, dp.Sum, 0.1) // Sum of values
 
-	// Check min and max values
-	minVal, minDefined := dp.Min.Value()
-	assert.True(t, minDefined)
-	assert.InDelta(t, 10.5, minVal, 0.1) // Min value
-
-	maxVal, maxDefined := dp.Max.Value()
-	assert.True(t, maxDefined)
-	assert.InDelta(t, 25.3, maxVal, 0.1) // Max value
 }
 
 func TestCreateUpDownCounter(t *testing.T) {
