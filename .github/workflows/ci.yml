@@ -24,8 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache
+      - name: Clear Go modules cache (Unix)
+        if: matrix.os != 'windows-latest'
         run: rm -rf ~/go/pkg/mod
+
+      - name: Clear Go modules cache (Windows)
+        if: matrix.os == 'windows-latest'
+        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
+        shell: pwsh
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -273,8 +279,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache
+      - name: Clear Go modules cache (Unix)
+        if: matrix.os != 'windows-latest'
         run: rm -rf ~/go/pkg/mod
+
+      - name: Clear Go modules cache (Windows)
+        if: matrix.os == 'windows-latest'
+        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
+        shell: pwsh
 
       - name: Set up Go
         uses: actions/setup-go@v6
