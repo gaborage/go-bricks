@@ -8,6 +8,11 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -43,6 +48,14 @@ const (
 	defaultReInitDelay       = 2 * time.Second
 	defaultResendDelay       = 5 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
+)
+
+// OpenTelemetry constants
+const (
+	messagingTracerName     = "go-bricks/messaging"
+	messagingSystemRabbitMQ = "rabbitmq"
+	operationPublish        = "publish"
+	operationReceive        = "receive"
 )
 
 var (
@@ -86,9 +99,45 @@ func (c *AMQPClientImpl) Publish(ctx context.Context, destination string, data [
 	}, data)
 }
 
+// createPublishSpan creates and configures an OpenTelemetry span for AMQP publish operations.
+func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int, startTime time.Time) (context.Context, trace.Span) {
+	tracer := otel.Tracer(messagingTracerName)
+	destination := options.RoutingKey
+	if destination == "" {
+		destination = options.Exchange
+	}
+	spanName := destination + " " + operationPublish
+
+	ctx, span := tracer.Start(ctx, spanName,
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithTimestamp(startTime),
+	)
+
+	// Set messaging semantic attributes
+	attrs := []attribute.KeyValue{
+		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
+		semconv.MessagingOperationName(operationPublish),
+		semconv.MessagingDestinationName(destination),
+		semconv.MessagingMessageBodySize(dataLen),
+	}
+	if options.Exchange != "" {
+		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", options.Exchange))
+	}
+	if options.RoutingKey != "" {
+		attrs = append(attrs, attribute.String("messaging.rabbitmq.routing_key", options.RoutingKey))
+	}
+	span.SetAttributes(attrs...)
+
+	return ctx, span
+}
+
 // PublishToExchange publishes a message to a specific exchange with routing key.
 func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
 	startTime := time.Now()
+
+	// Create OpenTelemetry span for publish operation
+	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
+	defer span.End()
 
 	c.m.RLock()
 	if !c.isReady {
@@ -97,6 +146,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			Str("exchange", options.Exchange).
 			Str("routing_key", options.RoutingKey).
 			Msg("AMQP client not ready, message not published")
+		span.SetStatus(codes.Error, "AMQP client not ready")
 		return nil // Return nil to avoid failing the business operation
 	}
 	c.m.RUnlock()
@@ -104,8 +154,12 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	for {
 		select {
 		case <-ctx.Done():
+			span.RecordError(ctx.Err())
+			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
+			span.RecordError(errShutdown)
+			span.SetStatus(codes.Error, errShutdown.Error())
 			return errShutdown
 		default:
 		}
@@ -115,8 +169,12 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			c.log.Warn().Err(err).Msg("Publish failed, retrying...")
 			select {
 			case <-ctx.Done():
+				span.RecordError(ctx.Err())
+				span.SetStatus(codes.Error, ctx.Err().Error())
 				return ctx.Err()
 			case <-c.done:
+				span.RecordError(errShutdown)
+				span.SetStatus(codes.Error, errShutdown.Error())
 				return errShutdown
 			case <-time.After(c.resendDelay):
 			}
@@ -126,8 +184,12 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		// Wait for confirmation
 		select {
 		case <-ctx.Done():
+			span.RecordError(ctx.Err())
+			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
+			span.RecordError(errShutdown)
+			span.SetStatus(codes.Error, errShutdown.Error())
 			return errShutdown
 		case confirm := <-c.notifyConfirm:
 			if confirm.Ack {
@@ -140,13 +202,22 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 					Str("routing_key", options.RoutingKey).
 					Uint64("delivery_tag", confirm.DeliveryTag).
 					Msg("Message published successfully")
+				span.SetStatus(codes.Ok, "")
 				return nil
 			}
+			// NACK received - retry the publish
 			c.log.Warn().
 				Uint64("delivery_tag", confirm.DeliveryTag).
-				Msg("Message publish not acknowledged")
+				Msg("Message publish not acknowledged, retrying...")
+			span.SetStatus(codes.Error, "message not acknowledged")
+			// Continue to retry the publish operation
+			continue
 		case <-time.After(c.connectionTimeout):
-			c.log.Warn().Msg("Publish confirmation timeout")
+			// Confirmation timeout - retry the publish
+			c.log.Warn().Msg("Publish confirmation timeout, retrying...")
+			span.SetStatus(codes.Error, "confirmation timeout")
+			// Continue to retry the publish operation
+			continue
 		}
 	}
 }
@@ -397,6 +468,47 @@ func (a *amqpHeaderAccessor) Set(key string, value any) {
 		a.headers = amqp.Table{}
 	}
 	a.headers[key] = value
+}
+
+// StartConsumeSpan creates an OpenTelemetry span for message consumption.
+// It extracts the trace context from the delivery headers and creates a child span.
+// This should be called by consumers when processing messages.
+// The returned context should be used for downstream operations, and the span must be ended when done.
+func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName string) (context.Context, trace.Span) {
+	// Extract trace context from message headers
+	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
+	ctx = gobrickstrace.ExtractFromHeaders(ctx, accessor)
+
+	// Create span for consume operation
+	tracer := otel.Tracer(messagingTracerName)
+	spanName := queueName + " " + operationReceive
+
+	ctx, span := tracer.Start(ctx, spanName,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	)
+
+	// Set messaging semantic attributes
+	attrs := []attribute.KeyValue{
+		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
+		semconv.MessagingOperationName(operationReceive),
+		semconv.MessagingDestinationName(queueName),
+		semconv.MessagingMessageBodySize(len(delivery.Body)),
+	}
+	if delivery.Exchange != "" {
+		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", delivery.Exchange))
+	}
+	if delivery.RoutingKey != "" {
+		attrs = append(attrs, attribute.String("messaging.rabbitmq.routing_key", delivery.RoutingKey))
+	}
+	if delivery.MessageId != "" {
+		attrs = append(attrs, semconv.MessagingMessageID(delivery.MessageId))
+	}
+	if delivery.CorrelationId != "" {
+		attrs = append(attrs, semconv.MessagingMessageConversationID(delivery.CorrelationId))
+	}
+	span.SetAttributes(attrs...)
+
+	return ctx, span
 }
 
 // unsafePublish publishes a message without confirmation handling.
