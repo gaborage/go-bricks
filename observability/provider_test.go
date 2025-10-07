@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -361,4 +362,146 @@ func TestProviderMultipleShutdowns(t *testing.T) {
 	// Second shutdown should not panic or error
 	err = provider.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+func TestMustNewProviderSuccess(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   "stdout",
+			SampleRate: 1.0,
+		},
+	}
+
+	// Should not panic with valid config
+	provider := MustNewProvider(cfg)
+	assert.NotNil(t, provider)
+
+	// Cleanup
+	err := provider.Shutdown(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestMustNewProviderPanic(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: "", // Invalid: missing service name
+	}
+
+	// Should panic with invalid config
+	assert.Panics(t, func() {
+		MustNewProvider(cfg)
+	}, "expected panic from MustNewProvider with invalid config")
+}
+
+func TestTracerProviderNilCase(t *testing.T) {
+	// Create provider with only metrics enabled (no tracer provider)
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Metrics: MetricsConfig{
+			Enabled:  true,
+			Endpoint: "stdout",
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// TracerProvider should return no-op when tracerProvider is nil
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	// Verify it's a noop provider
+	_, ok := tp.(noop.TracerProvider)
+	assert.True(t, ok, "expected noop.TracerProvider when tracing disabled")
+
+	// Cleanup
+	err = provider.Shutdown(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestNewProviderOTLPHTTPMetrics(t *testing.T) {
+	// Test OTLP HTTP metrics exporter initialization
+	// Note: This test verifies the exporter is created correctly
+	// but does not require a real collector to be running
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Metrics: MetricsConfig{
+			Enabled:  true,
+			Endpoint: testOTLPHTTPEndpoint,
+			Interval: 10 * time.Second,
+		},
+		Trace: TraceConfig{
+			Protocol: "http",
+			Insecure: true,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify meter provider is initialized
+	mp := provider.MeterProvider()
+	assert.NotNil(t, mp)
+
+	// Verify we can create a meter
+	meter := mp.Meter("test-http-metrics")
+	assert.NotNil(t, meter)
+
+	// Create and record a test metric (proves pipeline initialization)
+	counter, err := meter.Int64Counter("test.http.counter")
+	require.NoError(t, err)
+	counter.Add(context.Background(), 1)
+
+	// Cleanup - may error due to no collector running, which is expected
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = provider.Shutdown(shutdownCtx) // Ignore error as collector may not be available
+}
+
+func TestNewProviderOTLPGRPCMetrics(t *testing.T) {
+	// Test OTLP gRPC metrics exporter initialization
+	// Note: This test verifies the exporter is created correctly
+	// but does not require a real collector to be running
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Metrics: MetricsConfig{
+			Enabled:  true,
+			Endpoint: testOTLPGRPCEndpoint,
+			Interval: 10 * time.Second,
+		},
+		Trace: TraceConfig{
+			Protocol: "grpc",
+			Insecure: true,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify meter provider is initialized
+	mp := provider.MeterProvider()
+	assert.NotNil(t, mp)
+
+	// Verify we can create a meter
+	meter := mp.Meter("test-grpc-metrics")
+	assert.NotNil(t, meter)
+
+	// Create and record a test metric (proves pipeline initialization)
+	counter, err := meter.Int64Counter("test.grpc.counter")
+	require.NoError(t, err)
+	counter.Add(context.Background(), 1)
+
+	// Cleanup - may error due to no collector running, which is expected
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = provider.Shutdown(shutdownCtx) // Ignore error as collector may not be available
 }

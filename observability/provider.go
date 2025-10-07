@@ -100,7 +100,7 @@ func NewProvider(cfg *Config) (Provider, error) {
 func MustNewProvider(cfg *Config) Provider {
 	p, err := NewProvider(cfg)
 	if err != nil {
-		panic(fmt.Sprintf("failed to create observability provider: %v", err))
+		panic(fmt.Errorf("failed to create observability provider: %w", err))
 	}
 	return p
 }

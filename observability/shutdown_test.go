@@ -90,3 +90,36 @@ func TestMustShutdownPanic(t *testing.T) {
 	})
 	assert.True(t, mock.shutdownCalled)
 }
+
+func TestForceFlushBothProvidersFail(t *testing.T) {
+	// Test that ForceFlush aggregates errors from both trace and meter providers
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   "stdout",
+			SampleRate: 1.0,
+		},
+		Metrics: MetricsConfig{
+			Enabled:  true,
+			Endpoint: "stdout",
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	assert.NoError(t, err)
+
+	// Create a context that expires immediately to force errors
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately to cause flush errors
+
+	// ForceFlush should return an error aggregating both providers' errors
+	err = provider.ForceFlush(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "flush errors")
+
+	// Cleanup
+	shutdownCtx := context.Background()
+	_ = provider.Shutdown(shutdownCtx)
+}
