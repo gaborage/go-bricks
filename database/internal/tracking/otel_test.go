@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -245,7 +246,7 @@ func TestCreateDBSpanQueryTruncation(t *testing.T) {
 		if i > 0 {
 			longQuery += ","
 		}
-		longQuery += "$" + string(rune('1'+i%10))
+		longQuery += fmt.Sprintf("$%d", i+1)
 	}
 	longQuery += ")"
 
