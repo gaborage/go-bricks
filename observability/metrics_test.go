@@ -56,11 +56,10 @@ func TestCreateCounter(t *testing.T) {
 	assert.True(t, sum.IsMonotonic)
 
 	// Verify data points
- 	// Verify data points
- 	require.Len(t, sum.DataPoints, 2)
- 	// Verify data points
- 	require.Len(t, sum.DataPoints, 2)
- 	valuesByKey := make(map[string]int64, len(sum.DataPoints))
+	// Verify data points
+	require.Len(t, sum.DataPoints, 2)
+	// Verify data points
+	require.Len(t, sum.DataPoints, 2)
 	valuesByKey := make(map[string]int64, len(sum.DataPoints))
 	for _, dp := range sum.DataPoints {
 		attrVal, ok := dp.Attributes.Value("key")
@@ -70,7 +69,7 @@ func TestCreateCounter(t *testing.T) {
 
 	assert.Equal(t, int64(5), valuesByKey["value1"])
 	assert.Equal(t, int64(10), valuesByKey["value2"])
- }
+}
 
 func TestCreateHistogram(t *testing.T) {
 	// Create a manual reader for testing
@@ -112,7 +111,6 @@ func TestCreateHistogram(t *testing.T) {
 	dp := hist.DataPoints[0]
 	assert.Equal(t, uint64(3), dp.Count) // 3 recordings
 	assert.InDelta(t, 51.5, dp.Sum, 0.1) // Sum of values
-
 }
 
 func TestCreateUpDownCounter(t *testing.T) {
