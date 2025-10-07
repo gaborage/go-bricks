@@ -58,7 +58,9 @@ func TestCreateCounter(t *testing.T) {
 	// Verify data points
  	// Verify data points
  	require.Len(t, sum.DataPoints, 2)
--	assert.Equal(t, int64(5), sum.DataPoints[0].Value)
+ 	// Verify data points
+ 	require.Len(t, sum.DataPoints, 2)
+ 	valuesByKey := make(map[string]int64, len(sum.DataPoints))
 	valuesByKey := make(map[string]int64, len(sum.DataPoints))
 	for _, dp := range sum.DataPoints {
 		attrVal, ok := dp.Attributes.Value("key")
