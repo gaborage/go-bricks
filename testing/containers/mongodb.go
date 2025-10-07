@@ -25,7 +25,10 @@ type MongoDBContainerConfig struct {
 	StartupTimeout time.Duration
 }
 
-// DefaultMongoDBConfig returns a configuration with sensible defaults
+// DefaultMongoDBConfig returns a MongoDBContainerConfig populated with sensible defaults.
+//
+// The returned configuration sets ImageTag to "8.0", Username to "testuser", Password to "testpass",
+// Database to "testdb", and StartupTimeout to 60 seconds.
 func DefaultMongoDBConfig() *MongoDBContainerConfig {
 	return &MongoDBContainerConfig{
 		ImageTag:       "8.0",
@@ -43,7 +46,10 @@ type MongoDBContainer struct {
 }
 
 // StartMongoDBContainer starts a MongoDB testcontainer with the given configuration
-// If Docker is not available, the test is skipped with a clear message
+// StartMongoDBContainer starts a MongoDB testcontainer using the provided configuration.
+// If cfg is nil, DefaultMongoDBConfig is used. If Docker is not available the test is
+// skipped with a clear message. On success it returns a MongoDBContainer wrapping the
+// running container and its connection string; on failure it returns a non-nil error.
 func StartMongoDBContainer(ctx context.Context, t *testing.T, cfg *MongoDBContainerConfig) (*MongoDBContainer, error) {
 	t.Helper()
 
@@ -120,7 +126,8 @@ func (m *MongoDBContainer) MappedPort(ctx context.Context) (int, error) {
 	return mappedPort.Int(), nil
 }
 
-// isDockerAvailable checks if Docker is available and running
+// isDockerAvailable reports whether a Docker daemon is reachable via the testcontainers Docker provider.
+// It returns true if the provider can obtain the daemon host, false otherwise.
 func isDockerAvailable(ctx context.Context) bool {
 	provider, err := testcontainers.NewDockerProvider()
 	if err != nil {
@@ -134,7 +141,10 @@ func isDockerAvailable(ctx context.Context) bool {
 }
 
 // MustStartMongoDBContainer starts a MongoDB container or fails the test
-// This is a convenience wrapper around StartMongoDBContainer
+// MustStartMongoDBContainer starts a MongoDB test container and fails the test if startup fails.
+// 
+// It is a convenience wrapper around StartMongoDBContainer that calls t.Fatalf on any error and
+// returns the started *MongoDBContainer when successful.
 func MustStartMongoDBContainer(ctx context.Context, t *testing.T, cfg *MongoDBContainerConfig) *MongoDBContainer {
 	t.Helper()
 
