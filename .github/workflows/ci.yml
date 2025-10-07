@@ -30,7 +30,7 @@ jobs:
 
       - name: Clear Go modules cache (Windows)
         if: matrix.os == 'windows-latest'
-        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
+        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod" -ErrorAction SilentlyContinue
         shell: pwsh
 
       - name: Set up Go
@@ -285,7 +285,7 @@ jobs:
 
       - name: Clear Go modules cache (Windows)
         if: matrix.os == 'windows-latest'
-        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
+        run: Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod" -ErrorAction SilentlyContinue
         shell: pwsh
 
       - name: Set up Go
