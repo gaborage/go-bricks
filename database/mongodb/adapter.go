@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"math"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -29,7 +28,7 @@ func (c *Connection) Collection(name string) database.DocumentCollection {
 
 // CreateCollection creates a new collection with the specified options
 func (c *Connection) CreateCollection(ctx context.Context, name string, opts *database.CreateCollectionOptions) error {
-	var mongoOpts *options.CreateCollectionOptions
+	var mongoOpts *options.CreateCollectionOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.CreateCollection()
 		if opts.Capped != nil {
@@ -98,7 +97,7 @@ func (c *Connection) CreateIndex(ctx context.Context, collection string, model d
 // DropIndex drops an index from the specified collection
 func (c *Connection) DropIndex(ctx context.Context, collection, name string) error {
 	coll := c.database.Collection(collection)
-	_, err := coll.Indexes().DropOne(ctx, name)
+	err := coll.Indexes().DropOne(ctx, name)
 	if err != nil {
 		return fmt.Errorf("failed to drop index %s from collection %s: %w", name, collection, err)
 	}
@@ -235,7 +234,7 @@ func validateAndMapFullDocument(value string) (options.FullDocument, bool) {
 func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline any, opts *database.AggregateOptions) (database.DocumentCursor, error) {
 	coll := c.database.Collection(collection)
 
-	var mongoOpts *options.AggregateOptions
+	var mongoOpts *options.AggregateOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Aggregate()
 		if opts.AllowDiskUse != nil {
@@ -246,9 +245,6 @@ func (c *Connection) Aggregate(ctx context.Context, collection string, pipeline 
 		}
 		if opts.BypassDocumentValidation != nil {
 			mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
-		}
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
 		}
 	}
 
@@ -277,7 +273,7 @@ var _ database.DocumentCollection = (*Collection)(nil)
 
 // InsertOne inserts a single document
 func (c *Collection) InsertOne(ctx context.Context, document any, opts *database.InsertOneOptions) (any, error) {
-	var mongoOpts *options.InsertOneOptions
+	var mongoOpts *options.InsertOneOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.InsertOne()
 		if opts.BypassDocumentValidation != nil {
@@ -295,7 +291,7 @@ func (c *Collection) InsertOne(ctx context.Context, document any, opts *database
 
 // FindOne finds a single document
 func (c *Collection) FindOne(ctx context.Context, filter any, opts *database.FindOneOptions) database.DocumentResult {
-	var mongoOpts *options.FindOneOptions
+	var mongoOpts *options.FindOneOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.FindOne()
 		if opts.Sort != nil {
@@ -306,9 +302,6 @@ func (c *Collection) FindOne(ctx context.Context, filter any, opts *database.Fin
 		}
 		if opts.Projection != nil {
 			mongoOpts.SetProjection(opts.Projection)
-		}
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
 		}
 		if opts.ShowRecordID != nil {
 			mongoOpts.SetShowRecordID(*opts.ShowRecordID)
@@ -324,7 +317,7 @@ func (c *Collection) FindOne(ctx context.Context, filter any, opts *database.Fin
 
 // UpdateOne updates a single document
 func (c *Collection) UpdateOne(ctx context.Context, filter, update any, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
-	mongoOpts := buildUpdateOptions(opts)
+	mongoOpts := buildUpdateOneOptions(opts)
 
 	result, err := c.collection.UpdateOne(ctx, filter, update, mongoOpts)
 	if err != nil {
@@ -336,7 +329,7 @@ func (c *Collection) UpdateOne(ctx context.Context, filter, update any, opts *da
 
 // ReplaceOne replaces a single document
 func (c *Collection) ReplaceOne(ctx context.Context, filter, replacement any, opts *database.ReplaceOptions) (database.DocumentUpdateResult, error) {
-	var mongoOpts *options.ReplaceOptions
+	var mongoOpts *options.ReplaceOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Replace()
 		if opts.BypassDocumentValidation != nil {
@@ -367,7 +360,7 @@ func (c *Collection) DeleteOne(ctx context.Context, filter any, _ *database.Dele
 
 // InsertMany inserts multiple documents
 func (c *Collection) InsertMany(ctx context.Context, documents []any, opts *database.InsertManyOptions) ([]any, error) {
-	var mongoOpts *options.InsertManyOptions
+	var mongoOpts *options.InsertManyOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.InsertMany()
 		if opts.BypassDocumentValidation != nil {
@@ -400,7 +393,7 @@ func (c *Collection) Find(ctx context.Context, filter any, opts *database.FindOp
 
 // UpdateMany updates multiple documents
 func (c *Collection) UpdateMany(ctx context.Context, filter, update any, opts *database.UpdateOptions) (database.DocumentUpdateResult, error) {
-	mongoOpts := buildUpdateOptions(opts)
+	mongoOpts := buildUpdateManyOptions(opts)
 
 	result, err := c.collection.UpdateMany(ctx, filter, update, mongoOpts)
 	if err != nil {
@@ -422,7 +415,7 @@ func (c *Collection) DeleteMany(ctx context.Context, filter any, _ *database.Del
 
 // CountDocuments counts documents matching the filter
 func (c *Collection) CountDocuments(ctx context.Context, filter any, opts *database.CountOptions) (int64, error) {
-	var mongoOpts *options.CountOptions
+	var mongoOpts *options.CountOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Count()
 		if opts.Skip != nil {
@@ -430,9 +423,6 @@ func (c *Collection) CountDocuments(ctx context.Context, filter any, opts *datab
 		}
 		if opts.Limit != nil {
 			mongoOpts.SetLimit(*opts.Limit)
-		}
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
 		}
 	}
 
@@ -446,12 +436,9 @@ func (c *Collection) CountDocuments(ctx context.Context, filter any, opts *datab
 
 // EstimatedDocumentCount returns an estimated count of documents in the collection
 func (c *Collection) EstimatedDocumentCount(ctx context.Context, opts *database.EstimatedCountOptions) (int64, error) {
-	var mongoOpts *options.EstimatedDocumentCountOptions
+	var mongoOpts *options.EstimatedDocumentCountOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.EstimatedDocumentCount()
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
-		}
 	}
 
 	count, err := c.collection.EstimatedDocumentCount(ctx, mongoOpts)
@@ -464,7 +451,7 @@ func (c *Collection) EstimatedDocumentCount(ctx context.Context, opts *database.
 
 // Aggregate performs aggregation on the collection
 func (c *Collection) Aggregate(ctx context.Context, pipeline any, opts *database.AggregateOptions) (database.DocumentCursor, error) {
-	var mongoOpts *options.AggregateOptions
+	var mongoOpts *options.AggregateOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Aggregate()
 		if opts.AllowDiskUse != nil {
@@ -475,9 +462,6 @@ func (c *Collection) Aggregate(ctx context.Context, pipeline any, opts *database
 		}
 		if opts.BypassDocumentValidation != nil {
 			mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
-		}
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
 		}
 	}
 
@@ -491,17 +475,21 @@ func (c *Collection) Aggregate(ctx context.Context, pipeline any, opts *database
 
 // Distinct returns distinct values for a field
 func (c *Collection) Distinct(ctx context.Context, fieldName string, filter any, opts *database.DistinctOptions) ([]any, error) {
-	var mongoOpts *options.DistinctOptions
+	var mongoOpts *options.DistinctOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Distinct()
-		if opts.MaxTime != nil {
-			mongoOpts.SetMaxTime(*opts.MaxTime)
-		}
 	}
 
-	values, err := c.collection.Distinct(ctx, fieldName, filter, mongoOpts)
-	if err != nil {
+	// In v2, Distinct returns a result struct (not error)
+	result := c.collection.Distinct(ctx, fieldName, filter, mongoOpts)
+	if err := result.Err(); err != nil {
 		return nil, fmt.Errorf("failed to get distinct values: %w", err)
+	}
+
+	// Decode the result
+	var values []any
+	if err := result.Decode(&values); err != nil {
+		return nil, fmt.Errorf("failed to decode distinct values: %w", err)
 	}
 
 	return values, nil
@@ -546,7 +534,7 @@ func (c *Collection) CreateIndexes(ctx context.Context, models []database.IndexM
 
 // DropIndex drops an index from the collection
 func (c *Collection) DropIndex(ctx context.Context, name string) error {
-	_, err := c.collection.Indexes().DropOne(ctx, name)
+	err := c.collection.Indexes().DropOne(ctx, name)
 	if err != nil {
 		return fmt.Errorf("failed to drop index %s: %w", name, err)
 	}
@@ -578,7 +566,7 @@ func (c *Collection) BulkWrite(ctx context.Context, models []database.WriteModel
 		}
 	}
 
-	var mongoOpts *options.BulkWriteOptions
+	var mongoOpts *options.BulkWriteOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.BulkWrite()
 		if opts.BypassDocumentValidation != nil {
@@ -612,7 +600,7 @@ func (c *Collection) Watch(ctx context.Context, pipeline any, opts *database.Cha
 // Helper functions to eliminate code duplication
 
 // buildIndexOptions creates MongoDB index options from database.IndexOptions
-func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
+func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptionsBuilder {
 	if opts == nil {
 		return nil
 	}
@@ -640,7 +628,7 @@ func buildIndexOptions(opts *database.IndexOptions) *options.IndexOptions {
 }
 
 // buildFindOptions creates MongoDB find options from database.FindOptions
-func buildFindOptions(opts *database.FindOptions) *options.FindOptions {
+func buildFindOptions(opts *database.FindOptions) *options.FindOptionsBuilder {
 	if opts == nil {
 		return nil
 	}
@@ -658,9 +646,6 @@ func buildFindOptions(opts *database.FindOptions) *options.FindOptions {
 	if opts.Projection != nil {
 		mongoOpts.SetProjection(opts.Projection)
 	}
-	if opts.MaxTime != nil {
-		mongoOpts.SetMaxTime(*opts.MaxTime)
-	}
 	if opts.BatchSize != nil {
 		mongoOpts.SetBatchSize(*opts.BatchSize)
 	}
@@ -676,15 +661,34 @@ func buildFindOptions(opts *database.FindOptions) *options.FindOptions {
 	return mongoOpts
 }
 
-// buildUpdateOptions creates MongoDB update options from database.UpdateOptions
-func buildUpdateOptions(opts *database.UpdateOptions) *options.UpdateOptions {
+// buildUpdateOneOptions creates MongoDB UpdateOne options from database.UpdateOptions
+func buildUpdateOneOptions(opts *database.UpdateOptions) *options.UpdateOneOptionsBuilder {
 	if opts == nil {
 		return nil
 	}
 
-	mongoOpts := options.Update()
+	mongoOpts := options.UpdateOne()
 	if len(opts.ArrayFilters) > 0 {
-		mongoOpts.SetArrayFilters(options.ArrayFilters{Filters: opts.ArrayFilters})
+		mongoOpts.SetArrayFilters(opts.ArrayFilters)
+	}
+	if opts.BypassDocumentValidation != nil {
+		mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
+	}
+	if opts.Upsert != nil {
+		mongoOpts.SetUpsert(*opts.Upsert)
+	}
+	return mongoOpts
+}
+
+// buildUpdateManyOptions creates MongoDB UpdateMany options from database.UpdateOptions
+func buildUpdateManyOptions(opts *database.UpdateOptions) *options.UpdateManyOptionsBuilder {
+	if opts == nil {
+		return nil
+	}
+
+	mongoOpts := options.UpdateMany()
+	if len(opts.ArrayFilters) > 0 {
+		mongoOpts.SetArrayFilters(opts.ArrayFilters)
 	}
 	if opts.BypassDocumentValidation != nil {
 		mongoOpts.SetBypassDocumentValidation(*opts.BypassDocumentValidation)
@@ -696,7 +700,7 @@ func buildUpdateOptions(opts *database.UpdateOptions) *options.UpdateOptions {
 }
 
 // buildChangeStreamOptions creates MongoDB change stream options from database.ChangeStreamOptions
-func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.ChangeStreamOptions {
+func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.ChangeStreamOptionsBuilder {
 	if opts == nil {
 		return nil
 	}
@@ -718,9 +722,9 @@ func buildChangeStreamOptions(opts *database.ChangeStreamOptions) *options.Chang
 	}
 	if opts.StartAtOperationTime != nil {
 		switch timestamp := opts.StartAtOperationTime.(type) {
-		case *primitive.Timestamp:
+		case *bson.Timestamp:
 			mongoOpts.SetStartAtOperationTime(timestamp)
-		case primitive.Timestamp:
+		case bson.Timestamp:
 			mongoOpts.SetStartAtOperationTime(&timestamp)
 		}
 	}
