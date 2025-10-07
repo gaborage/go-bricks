@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
@@ -37,8 +37,8 @@ type Connection struct {
 }
 
 var (
-	connectMongoDB = func(ctx context.Context, opts *options.ClientOptions) (*mongo.Client, error) {
-		return mongo.Connect(ctx, opts)
+	connectMongoDB = func(opts *options.ClientOptions) (*mongo.Client, error) {
+		return mongo.Connect(opts)
 	}
 	pingMongoDB = func(ctx context.Context, client *mongo.Client) error {
 		return client.Ping(ctx, readpref.Primary())
@@ -140,7 +140,7 @@ func (cb *ConnectionBuilder) connectAndValidate(opts *options.ClientOptions) (*m
 	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectionTimeout)
 	defer cancel()
 
-	client, err := connectMongoDB(ctx, opts)
+	client, err := connectMongoDB(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
@@ -397,7 +397,7 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database
 	}()
 
 	// Convert SQL transaction options to MongoDB session options
-	var mongoOpts *options.TransactionOptions
+	var mongoOpts *options.TransactionOptionsBuilder
 	if opts != nil {
 		mongoOpts = options.Transaction()
 		// Map SQL isolation levels to MongoDB read concerns if needed
