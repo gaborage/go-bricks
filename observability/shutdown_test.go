@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/metric"
+	metricznoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -20,6 +22,10 @@ type mockProvider struct {
 
 func (m *mockProvider) TracerProvider() trace.TracerProvider {
 	return noop.NewTracerProvider()
+}
+
+func (m *mockProvider) MeterProvider() metric.MeterProvider {
+	return metricznoop.NewMeterProvider()
 }
 
 func (m *mockProvider) Shutdown(_ context.Context) error {
