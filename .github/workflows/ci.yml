@@ -101,6 +101,7 @@ jobs:
       - name: Run integration tests
         run: |
           set -euo pipefail
+          docker info >/dev/null 2>&1 || {echo "Docker is not running" && exit 1;}
           echo "Running integration tests with testcontainers..."
           go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./database/mongodb/...
 
@@ -197,6 +198,9 @@ jobs:
   sonarqube:
     name: SonarCloud
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     needs: merge-coverage
     steps:
       - uses: actions/checkout@v5

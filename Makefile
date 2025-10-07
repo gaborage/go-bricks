@@ -1,13 +1,14 @@
-.PHONY: help build test test-integration test-all test-coverage test-coverage-integration lint fmt update clean check docker-check
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration lint fmt update clean check docker-check
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS := ./database/mongodb/...
-
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
+
+all: build test test-integration ## Build and test the project
 
 build: ## Build the project
 	go build ./...

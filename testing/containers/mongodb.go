@@ -1,8 +1,11 @@
+//go:build integration
+
 package containers
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -85,7 +88,7 @@ func StartMongoDBContainer(ctx context.Context, t *testing.T, cfg *MongoDBContai
 		return nil, fmt.Errorf("failed to get MongoDB connection string: %w", err)
 	}
 
-	t.Logf("MongoDB container started successfully at %s", connStr)
+	t.Logf("MongoDB container started successfully at %s", redactConnectionString(connStr))
 
 	return &MongoDBContainer{
 		container: mongoContainer,
@@ -124,6 +127,28 @@ func (m *MongoDBContainer) MappedPort(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return mappedPort.Int(), nil
+}
+
+// redactConnectionString removes password from MongoDB connection string for safe logging.
+// Supports both mongodb:// and mongodb+srv:// schemes.
+// Returns the original string if parsing fails (better to show connection info than fail silently).
+func redactConnectionString(connStr string) string {
+	u, err := url.Parse(connStr)
+	if err != nil {
+		// If parsing fails, return a generic message without credentials
+		return "mongodb://****:****@<host>:<port>"
+	}
+
+	// If there's user info, redact the password
+	if u.User != nil {
+		username := u.User.Username()
+		if username != "" {
+			// Replace password with asterisks
+			u.User = url.UserPassword(username, "****")
+		}
+	}
+
+	return u.String()
 }
 
 // isDockerAvailable reports whether a Docker daemon is reachable via the testcontainers Docker provider.
