@@ -149,7 +149,7 @@ jobs:
             openapi-${{ runner.os }}-go1.25-
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9
+        uses: golangci/golangci-lint-action@1d64cc17c98f6243ff9c45fc39cc6911222133e3
         with:
           version: latest
           args: --timeout=5m --skip-dirs=tools
