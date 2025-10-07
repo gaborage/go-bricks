@@ -18,6 +18,16 @@ func TestNoopProviderTracerProvider(t *testing.T) {
 	assert.True(t, ok, "expected noop.TracerProvider")
 }
 
+func TestNoopProviderMeterProvider(t *testing.T) {
+	provider := newNoopProvider()
+	mp := provider.MeterProvider()
+	assert.NotNil(t, mp)
+
+	// Should be able to create a meter from the provider
+	meter := mp.Meter("test-meter")
+	assert.NotNil(t, meter)
+}
+
 func TestNoopProviderShutdown(t *testing.T) {
 	provider := newNoopProvider()
 	err := provider.Shutdown(context.Background())

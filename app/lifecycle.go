@@ -245,7 +245,7 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 }
 
 // Shutdown gracefully shuts down the application with the given context.
-// It closes database connections, messaging client, and stops the HTTP server.
+// It closes database connections, messaging client, observability, and stops the HTTP server.
 // Returns an aggregated error if any components fail to shut down.
 func (a *App) Shutdown(ctx context.Context) error {
 	var errs []error
@@ -269,6 +269,18 @@ func (a *App) Shutdown(ctx context.Context) error {
 			a.logger.Error().Err(err).Msg("Failed to shutdown server")
 		} else {
 			a.logger.Info().Dur("duration", time.Since(serverStart)).Msg("HTTP server shutdown completed")
+		}
+	}
+
+	// Shutdown observability (flush pending telemetry)
+	if a.observability != nil {
+		obsStart := time.Now()
+		a.logger.Info().Msg("Shutting down observability provider")
+		if err := a.observability.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("observability: %w", err))
+			a.logger.Error().Err(err).Msg("Failed to shutdown observability")
+		} else {
+			a.logger.Info().Dur("duration", time.Since(obsStart)).Msg("Observability shutdown completed")
 		}
 	}
 

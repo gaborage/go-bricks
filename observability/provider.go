@@ -95,6 +95,16 @@ func NewProvider(cfg *Config) (Provider, error) {
 	return p, nil
 }
 
+// MustNewProvider creates a new observability provider and panics on error.
+// This is useful for initialization where provider creation must succeed or fail fast.
+func MustNewProvider(cfg *Config) Provider {
+	p, err := NewProvider(cfg)
+	if err != nil {
+		panic(fmt.Errorf("failed to create observability provider: %w", err))
+	}
+	return p
+}
+
 // initTraceProvider initializes the OpenTelemetry trace provider.
 func (p *provider) initTraceProvider() error {
 	// Create resource with service information

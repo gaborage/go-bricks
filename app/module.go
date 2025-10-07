@@ -8,6 +8,8 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Module defines the interface that all application modules must implement.
@@ -21,11 +23,21 @@ type Module interface {
 }
 
 // ModuleDeps contains the dependencies that are injected into each module.
-// It provides access to core services like database, logging, and messaging.
+// It provides access to core services like database, logging, messaging, and observability.
 // All modules must use GetDB() and GetMessaging() functions for resource access.
 type ModuleDeps struct {
 	Logger logger.Logger
 	Config *config.Config
+
+	// Tracer provides distributed tracing capabilities.
+	// Creates spans for tracking operations across services.
+	// This is a no-op tracer if observability is disabled.
+	Tracer trace.Tracer
+
+	// MeterProvider provides metrics collection capabilities.
+	// Use this to create custom meters for application-specific metrics.
+	// This is a no-op provider if observability is disabled.
+	MeterProvider metric.MeterProvider
 
 	// GetDB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.
