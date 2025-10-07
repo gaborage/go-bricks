@@ -10,6 +10,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+const (
+	testOTLPHTTPEndpoint = "localhost:4318"
+	testOTLPGRPCEndpoint = "localhost:4317"
+)
+
 func TestNewProviderDisabled(t *testing.T) {
 	cfg := &Config{
 		Enabled: false,
@@ -90,13 +95,94 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestNewProviderUnsupportedEndpoint(t *testing.T) {
+func TestNewProviderOTLPHTTPExporter(t *testing.T) {
+	// Note: This test creates the exporter but does not actually send data
+	// since we don't have a real OTLP collector running
 	cfg := &Config{
 		Enabled:     true,
 		ServiceName: testServiceName,
 		Trace: TraceConfig{
 			Enabled:    true,
-			Endpoint:   "http://localhost:4318", // OTLP not supported yet in PR #1
+			Endpoint:   testOTLPHTTPEndpoint,
+			Protocol:   "http",
+			Insecure:   true,
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderOTLPGRPCExporter(t *testing.T) {
+	// Note: This test creates the exporter but does not actually send data
+	// since we don't have a real OTLP collector running
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   testOTLPGRPCEndpoint,
+			Protocol:   "grpc",
+			Insecure:   true,
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderOTLPWithHeaders(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:  true,
+			Endpoint: testOTLPHTTPEndpoint,
+			Protocol: "http",
+			Insecure: true,
+			Headers: map[string]string{
+				"Authorization":   "Bearer test-token",
+				"X-Custom-Header": "custom-value",
+			},
+			SampleRate: 1.0,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = provider.Shutdown(ctx)
+	assert.NoError(t, err)
+}
+
+func TestNewProviderUnsupportedProtocol(t *testing.T) {
+	cfg := &Config{
+		Enabled:     true,
+		ServiceName: testServiceName,
+		Trace: TraceConfig{
+			Enabled:    true,
+			Endpoint:   testOTLPHTTPEndpoint,
+			Protocol:   "websocket",
 			SampleRate: 1.0,
 		},
 	}
@@ -104,7 +190,7 @@ func TestNewProviderUnsupportedEndpoint(t *testing.T) {
 	provider, err := NewProvider(cfg)
 	assert.Error(t, err)
 	assert.Nil(t, provider)
-	assert.Contains(t, err.Error(), "unsupported trace endpoint")
+	assert.ErrorIs(t, err, ErrInvalidProtocol)
 }
 
 func TestNewProviderTracingSampleRate(t *testing.T) {
