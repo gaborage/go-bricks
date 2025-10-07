@@ -3,1213 +3,693 @@
 package mongodb
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
-	"math"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE: Integration tests using mtest have been disabled pending migration to testcontainers.
-// These tests require the 'integration' build tag to run: go test -tags=integration
-// Unit tests have been extracted to adapter_unit_test.go
+const (
+	cursorAllShouldSucceedMsg = "Cursor.All should succeed"
+)
 
-func setupTestConnection(t *testing.T, mt *mtest.T) *Connection {
-	cfg := &config.DatabaseConfig{
-		Host:     "localhost",
-		Port:     27017,
-		Database: "test",
-	}
-	log := CreateTestLogger()
+// =============================================================================
+// Connection Lifecycle Tests
+// =============================================================================
 
-	// Mock successful connection
-	originalConnect := connectMongoDB
-	originalPing := pingMongoDB
-	t.Cleanup(func() {
-		connectMongoDB = originalConnect
-		pingMongoDB = originalPing
-	})
+func TestConnectionHealth(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
 
-	connectMongoDB = func(_ context.Context, _ *options.ClientOptions) (*mongo.Client, error) {
-		return mt.Client, nil
-	}
-	pingMongoDB = func(_ context.Context, _ *mongo.Client) error {
-		return nil
-	}
-
-	conn, err := NewConnection(cfg, log)
-	require.NoError(t, err)
-
-	return conn.(*Connection)
+	err := conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed")
 }
 
-func TestConnectionCollection(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+func TestConnectionStats(t *testing.T) {
+	conn, _ := setupTestContainer(t)
 
-	mt.Run("get collection", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		collection := conn.Collection("test_collection")
-		assert.NotNil(t, collection)
-		assert.IsType(t, &Collection{}, collection)
-	})
+	stats, err := conn.Stats()
+	assert.NoError(t, err, "Stats retrieval should succeed")
+	assert.NotNil(t, stats, "Stats should not be nil")
+	assert.Contains(t, stats, "database_type", "Stats should contain database_type")
+	assert.Equal(t, "mongodb", stats["database_type"], "Database type should be mongodb")
 }
+
+func TestConnectionDatabaseType(t *testing.T) {
+	conn, _ := setupTestContainer(t)
+	defer conn.Close()
+
+	dbType := conn.DatabaseType()
+	assert.Equal(t, "mongodb", dbType, "Database type should be mongodb")
+}
+
+func TestConnectionClose(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Connection should work before close
+	err := conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed before close")
+
+	// Close connection
+	err = conn.Close()
+	assert.NoError(t, err, "Close should succeed")
+
+	// Health check should fail after close
+	err = conn.Health(ctx)
+	assert.Error(t, err, "Health check should fail after close")
+}
+
+// =============================================================================
+// Collection Management Tests
+// =============================================================================
 
 func TestConnectionCreateCollection(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_create_collection"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("create collection", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
+	tests := []struct {
+		name    string
+		opts    *database.CreateCollectionOptions
+		wantErr bool
+	}{
+		{
+			name:    "create collection without options",
+			opts:    nil,
+			wantErr: false,
+		},
+		{
+			name: "create capped collection",
+			opts: &database.CreateCollectionOptions{
+				Capped:      database.BoolPtr(true),
+				SizeInBytes: database.Int64Ptr(1024 * 1024), // 1MB
+			},
+			wantErr: false,
+		},
+		{
+			name: "create collection with validator",
+			opts: &database.CreateCollectionOptions{
+				Validator: bson.M{
+					"$jsonSchema": bson.M{
+						"required":   bson.A{"name", "value"},
+						"properties": bson.M{"name": bson.M{"bsonType": "string"}},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
 
-		// Mock successful collection creation
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCollName := collName + "_" + string(rune('0'+i))
+			defer cleanupTestCollection(t, conn, ctx, testCollName)
 
-		err := conn.CreateCollection(context.Background(), "new_collection", nil)
-		assert.NoError(t, err)
-	})
+			err := conn.CreateCollection(ctx, testCollName, tt.opts)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 
-	mt.Run("create collection with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock successful collection creation
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		opts := &database.CreateCollectionOptions{
-			Capped:      database.BoolPtr(true),
-			SizeInBytes: database.Int64Ptr(1024),
-		}
-
-		err := conn.CreateCollection(context.Background(), "capped_collection", opts)
-		assert.NoError(t, err)
-	})
+				// Verify collection exists by inserting a document
+				coll := conn.Collection(testCollName)
+				_, err := coll.InsertOne(ctx, sampleDocument("test", 1), nil)
+				assert.NoError(t, err, "Should be able to insert into created collection")
+			}
+		})
+	}
 }
 
 func TestConnectionDropCollection(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_drop_collection"
 
-	mt.Run("drop collection", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
+	// Create a collection first
+	err := conn.CreateCollection(ctx, collName, nil)
+	require.NoError(t, err, "Failed to create test collection")
 
-		// Mock successful collection drop
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
+	// Drop it
+	err = conn.DropCollection(ctx, collName)
+	assert.NoError(t, err, "Drop collection should succeed")
 
-		err := conn.DropCollection(context.Background(), "test_collection")
-		assert.NoError(t, err)
-	})
+	// MongoDB allows dropping non-existent collections (idempotent operation)
+	// This should NOT return an error
+	err = conn.DropCollection(ctx, "nonexistent_collection")
+	assert.NoError(t, err, "MongoDB allows dropping non-existent collections (idempotent)")
 }
+
+func TestConnectionCollection(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_get_collection"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	// Create collection
+	createTestCollection(t, conn, ctx, collName)
+
+	// Get collection
+	coll := conn.Collection(collName)
+	assert.NotNil(t, coll, "Collection should not be nil")
+	assert.IsType(t, &Collection{}, coll, "Should return Collection type")
+
+	// Verify we can use the collection
+	_, err := coll.InsertOne(ctx, sampleDocument("test", 1), nil)
+	assert.NoError(t, err, "Should be able to insert into collection")
+}
+
+// =============================================================================
+// Index Management Tests
+// =============================================================================
 
 func TestConnectionCreateIndex(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_create_index"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("create index", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
+	createTestCollection(t, conn, ctx, collName)
 
-		// Mock successful index creation
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		model := database.IndexModel{
-			Keys: bson.D{{Key: "name", Value: 1}},
-			Options: &database.IndexOptions{
-				Name:   database.StringPtr("name_index"),
-				Unique: database.BoolPtr(true),
+	tests := []struct {
+		name    string
+		model   database.IndexModel
+		wantErr bool
+	}{
+		{
+			name: "create simple index",
+			model: database.IndexModel{
+				Keys: bson.D{{Key: "name", Value: 1}},
+				Options: &database.IndexOptions{
+					Name: database.StringPtr("name_idx"),
+				},
 			},
-		}
+			wantErr: false,
+		},
+		{
+			name: "create unique index",
+			model: database.IndexModel{
+				Keys: bson.D{{Key: "email", Value: 1}},
+				Options: &database.IndexOptions{
+					Name:   database.StringPtr("email_unique_idx"),
+					Unique: database.BoolPtr(true),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "create sparse index",
+			model: database.IndexModel{
+				Keys: bson.D{{Key: "optional_field", Value: 1}},
+				Options: &database.IndexOptions{
+					Name:   database.StringPtr("optional_sparse_idx"),
+					Sparse: database.BoolPtr(true),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "create TTL index",
+			model: database.IndexModel{
+				Keys: bson.D{{Key: "created_at", Value: 1}},
+				Options: &database.IndexOptions{
+					Name:               database.StringPtr("ttl_idx"),
+					ExpireAfterSeconds: database.Int32Ptr(3600),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "create compound index",
+			model: database.IndexModel{
+				Keys: bson.D{
+					{Key: "category", Value: 1},
+					{Key: "priority", Value: -1},
+				},
+				Options: &database.IndexOptions{
+					Name: database.StringPtr("compound_idx"),
+				},
+			},
+			wantErr: false,
+		},
+	}
 
-		err := conn.CreateIndex(context.Background(), "test_collection", model)
-		assert.NoError(t, err)
-	})
-}
-
-func TestConnectionDropIndex(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("drop index", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock successful index drop
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		err := conn.DropIndex(context.Background(), "test_collection", "name_index")
-		assert.NoError(t, err)
-	})
-
-	mt.Run("drop index with error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock error response
-		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
-			Code:    27,
-			Message: "IndexNotFound",
-		}))
-
-		err := conn.DropIndex(context.Background(), "test_collection", "nonexistent_index")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to drop index")
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := conn.CreateIndex(ctx, collName, tt.model)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestConnectionListIndexes(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_list_indexes"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("list indexes", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
+	createTestCollection(t, conn, ctx, collName)
 
-		// Mock index list response
-		indexDocs := []bson.D{
-			{
-				{"v", 2},
-				{"key", bson.D{{"_id", 1}}},
-				{"name", "_id_"},
+	// Create a few indexes
+	indexModels := []database.IndexModel{
+		{
+			Keys: bson.D{{Key: "name", Value: 1}},
+			Options: &database.IndexOptions{
+				Name: database.StringPtr("name_idx"),
 			},
-			{
-				{"v", 2},
-				{"key", bson.D{{"name", 1}}},
-				{"name", "name_index"},
-				{"unique", true},
+		},
+		{
+			Keys: bson.D{{Key: "email", Value: 1}},
+			Options: &database.IndexOptions{
+				Name:   database.StringPtr("email_unique_idx"),
+				Unique: database.BoolPtr(true),
 			},
-			{
-				{"v", 2},
-				{"key", bson.D{{"email", 1}}},
-				{"name", "email_index"},
-				{"sparse", true},
-				{"expireAfterSeconds", int32(3600)},
-			},
+		},
+	}
+
+	for _, model := range indexModels {
+		err := conn.CreateIndex(ctx, collName, model)
+		require.NoError(t, err, "Failed to create test index")
+	}
+
+	// List indexes
+	indexes, err := conn.ListIndexes(ctx, collName)
+	assert.NoError(t, err, "ListIndexes should succeed")
+	assert.GreaterOrEqual(t, len(indexes), 3, "Should have at least 3 indexes (_id + 2 custom)")
+
+	// Verify index names
+	indexNames := make([]string, len(indexes))
+	for i, idx := range indexes {
+		if idx.Options != nil && idx.Options.Name != nil {
+			indexNames[i] = *idx.Options.Name
 		}
-
-		mt.AddMockResponses(
-			mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch, indexDocs...),
-			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.NextBatch), // End cursor
-		)
-
-		indexes, err := conn.ListIndexes(context.Background(), "test_collection")
-		assert.NoError(t, err)
-		assert.Len(t, indexes, 3)
-
-		// Verify first index (_id)
-		assert.NotNil(t, indexes[0].Keys)
-		assert.NotNil(t, indexes[0].Options)
-		assert.Equal(t, "_id_", *indexes[0].Options.Name)
-
-		// Verify second index (name with unique constraint)
-		assert.NotNil(t, indexes[1].Keys)
-		assert.NotNil(t, indexes[1].Options)
-		assert.Equal(t, "name_index", *indexes[1].Options.Name)
-		assert.Equal(t, true, *indexes[1].Options.Unique)
-
-		// Verify third index (email with sparse and TTL)
-		assert.NotNil(t, indexes[2].Keys)
-		assert.NotNil(t, indexes[2].Options)
-		assert.Equal(t, "email_index", *indexes[2].Options.Name)
-		assert.Equal(t, true, *indexes[2].Options.Sparse)
-		assert.Equal(t, int32(3600), *indexes[2].Options.ExpireAfterSeconds)
-	})
-
-	mt.Run("list indexes empty result", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock empty index list response
-		mt.AddMockResponses(
-			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.FirstBatch), // Empty result
-		)
-
-		indexes, err := conn.ListIndexes(context.Background(), "test_collection")
-		assert.NoError(t, err)
-		assert.Empty(t, indexes)
-	})
+	}
+	assert.Contains(t, indexNames, "_id_", "Should contain default _id index")
+	assert.Contains(t, indexNames, "name_idx", "Should contain name_idx")
+	assert.Contains(t, indexNames, "email_unique_idx", "Should contain email_unique_idx")
 }
 
-func TestConnectionRunCommand(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+func TestConnectionDropIndex(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_drop_index"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("run command", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
+	createTestCollection(t, conn, ctx, collName)
 
-		// Mock command response
-		mt.AddMockResponses(bson.D{{Key: "ok", Value: 1}, {Key: "result", Value: "success"}})
+	// Create an index
+	indexModel := database.IndexModel{
+		Keys: bson.D{{Key: "name", Value: 1}},
+		Options: &database.IndexOptions{
+			Name: database.StringPtr("name_idx"),
+		},
+	}
+	err := conn.CreateIndex(ctx, collName, indexModel)
+	require.NoError(t, err, "Failed to create test index")
 
-		result := conn.RunCommand(context.Background(), bson.D{{Key: "ping", Value: 1}})
-		assert.NotNil(t, result)
+	// Drop the index
+	err = conn.DropIndex(ctx, collName, "name_idx")
+	assert.NoError(t, err, "DropIndex should succeed")
 
-		var response bson.M
-		err := result.Decode(&response)
-		assert.NoError(t, err)
-		assert.Equal(t, int32(1), response["ok"])
-	})
+	// Verify index is gone
+	indexes, err := conn.ListIndexes(ctx, collName)
+	assert.NoError(t, err, "ListIndexes should succeed")
+
+	for _, idx := range indexes {
+		if idx.Options != nil && idx.Options.Name != nil {
+			assert.NotEqual(t, "name_idx", *idx.Options.Name, "Index should be dropped")
+		}
+	}
+
+	// Dropping non-existent index should return error
+	err = conn.DropIndex(ctx, collName, "nonexistent_idx")
+	assert.Error(t, err, "Dropping non-existent index should return error")
 }
+
+// =============================================================================
+// CRUD Operations Tests
+// =============================================================================
 
 func TestCollectionInsertOne(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("insert one document", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock successful insert
-		mt.AddMockResponses(MockSuccessResponse())
-
-		document := bson.M{"name": "test", "value": 123}
-		insertedID, err := collection.InsertOne(context.Background(), document, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, insertedID)
-	})
-
-	mt.Run("insert one with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock successful insert
-		mt.AddMockResponses(MockSuccessResponse())
-
-		document := bson.M{"name": "test", "value": 123}
-		opts := &database.InsertOneOptions{
-			BypassDocumentValidation: database.BoolPtr(true),
-		}
-
-		insertedID, err := collection.InsertOne(context.Background(), document, opts)
-		assert.NoError(t, err)
-		assert.NotNil(t, insertedID)
-	})
-}
-
-func TestCollectionFindOne(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("find one document", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock find response using helper
-		userDoc := MockUser("507f1f77bcf86cd799439011", "test")
-		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("test_collection"), userDoc))
-
-		filter := bson.M{"name": "test"}
-		result := collection.FindOne(context.Background(), filter, nil)
-		assert.NotNil(t, result)
-
-		var doc bson.M
-		err := result.Decode(&doc)
-		assert.NoError(t, err)
-		assert.Equal(t, "test", doc["name"])
-	})
-
-	mt.Run("find one with context cancellation", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Create cancelled context
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		filter := bson.M{"name": "test"}
-		result := collection.FindOne(ctx, filter, nil)
-		assert.NotNil(t, result)
-
-		var doc bson.M
-		err := result.Decode(&doc)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "context canceled")
-	})
-
-	mt.Run("find one with no document found", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock no document found response
-		mt.AddMockResponses(mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.FirstBatch))
-
-		filter := bson.M{"name": "nonexistent"}
-		result := collection.FindOne(context.Background(), filter, nil)
-		assert.NotNil(t, result)
-
-		var doc bson.M
-		err := result.Decode(&doc)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, mongo.ErrNoDocuments))
-	})
-
-	mt.Run("find one with invalid decode type", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock find response with string data that can't be decoded to struct
-		userDoc := MockUser("507f1f77bcf86cd799439011", "test")
-		mt.AddMockResponses(MockFindResponse(CreateTestNamespace("test_collection"), userDoc))
-
-		filter := bson.M{"name": "test"}
-		result := collection.FindOne(context.Background(), filter, nil)
-		assert.NotNil(t, result)
-
-		// Try to decode BSON document into incompatible type (channel)
-		var invalidDecode chan string
-		err := result.Decode(&invalidDecode)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no decoder found")
-	})
-}
-
-func TestCollectionUpdateOne(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("update one document", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock update response using helper with correct wire protocol fields
-		mt.AddMockResponses(MockUpdateResponse(1, 1, nil))
-
-		filter := bson.M{"name": "test"}
-		update := bson.M{"$set": bson.M{"value": 456}}
-
-		result, err := collection.UpdateOne(context.Background(), filter, update, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		assert.Equal(t, int64(1), result.MatchedCount())
-		assert.Equal(t, int64(1), result.ModifiedCount())
-	})
-}
-
-func TestCollectionDeleteOne(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("delete one document", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock delete response using helper with correct wire protocol fields
-		mt.AddMockResponses(MockDeleteResponse(1))
-
-		filter := bson.M{"name": "test"}
-		result, err := collection.DeleteOne(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		assert.Equal(t, int64(1), result.DeletedCount())
-	})
-}
-
-func TestCollectionCountDocuments(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("count documents", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock count response using helper (CountDocuments uses aggregation internally)
-		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 5))
-
-		filter := bson.M{"status": "active"}
-		count, err := collection.CountDocuments(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(5), count)
-	})
-
-	mt.Run("count documents with empty collection", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("empty_collection")
-
-		// Mock empty count response
-		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("empty_collection"), 0))
-
-		filter := bson.M{}
-		count, err := collection.CountDocuments(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(0), count)
-	})
-
-	mt.Run("count documents with complex filter", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock count response for complex filter
-		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 3))
-
-		filter := bson.M{
-			"status": "active",
-			"age":    bson.M{"$gte": 18},
-			"tags":   bson.M{"$in": []string{"premium", "gold"}},
-		}
-		count, err := collection.CountDocuments(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(3), count)
-	})
-
-	mt.Run("count documents with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock count response
-		mt.AddMockResponses(MockCountResponse(CreateTestNamespace("test_collection"), 10))
-
-		filter := bson.M{"status": "active"}
-		opts := &database.CountOptions{
-			Limit: database.Int64Ptr(100),
-		}
-		count, err := collection.CountDocuments(context.Background(), filter, opts)
-		assert.NoError(t, err)
-		assert.Equal(t, int64(10), count)
-	})
-
-	mt.Run("count documents with context cancellation", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Create cancelled context
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		filter := bson.M{"status": "active"}
-		count, err := collection.CountDocuments(ctx, filter, nil)
-		assert.Error(t, err)
-		assert.Equal(t, int64(0), count)
-		assert.Contains(t, err.Error(), "context canceled")
-	})
-
-	mt.Run("count documents with aggregation error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock error response for aggregation
-		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
-			Code:    2,
-			Message: "Invalid aggregation pipeline",
-		}))
-
-		filter := bson.M{"invalid_field": bson.M{"$invalidOperator": "value"}}
-		count, err := collection.CountDocuments(context.Background(), filter, nil)
-		assert.Error(t, err)
-		assert.Equal(t, int64(0), count)
-		assert.Contains(t, err.Error(), "failed to count documents")
-	})
-}
-
-func TestConnectionBeginTransaction(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("begin transaction", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock session start
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		tx, err := conn.Begin(context.Background())
-		assert.NoError(t, err)
-		assert.NotNil(t, tx)
-		assert.IsType(t, &Transaction{}, tx)
-
-		// Clean up transaction to avoid session leak
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-		err = tx.Rollback()
-		assert.NoError(t, err)
-	})
-}
-
-func TestTransactionCommitAndRollback(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("transaction commit", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock session start and transaction start
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		tx, err := conn.Begin(context.Background())
-		assert.NoError(t, err)
-		assert.NotNil(t, tx)
-
-		// Cast to MongoDB Transaction to verify proper session context usage
-		mongoTx, ok := tx.(*Transaction)
-		assert.True(t, ok)
-		assert.NotNil(t, mongoTx.session)
-		assert.NotNil(t, mongoTx.parentCtx)
-
-		// Mock transaction commit
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		err = tx.Commit()
-		assert.NoError(t, err)
-	})
-
-	mt.Run("transaction rollback", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Mock session start and transaction start
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		tx, err := conn.Begin(context.Background())
-		assert.NoError(t, err)
-		assert.NotNil(t, tx)
-
-		// Cast to MongoDB Transaction to verify proper session context usage
-		mongoTx, ok := tx.(*Transaction)
-		assert.True(t, ok)
-		assert.NotNil(t, mongoTx.session)
-		assert.NotNil(t, mongoTx.parentCtx)
-
-		// Mock transaction abort
-		mt.AddMockResponses(mtest.CreateSuccessResponse())
-
-		err = tx.Rollback()
-		assert.NoError(t, err)
-	})
-}
-
-func TestConnectionInterfaceCompliance(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
-
-	mt.Run("interface compliance", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-
-		// Test that Connection implements both interfaces
-		var dbInterface database.Interface = conn
-		var docInterface database.DocumentInterface = conn
-
-		assert.NotNil(t, dbInterface)
-		assert.NotNil(t, docInterface)
-
-		// Test AsDocumentInterface helper
-		docDB, ok := database.AsDocumentInterface(conn)
-		assert.True(t, ok)
-		assert.NotNil(t, docDB)
-	})
-}
-
-func TestParseExpireAfterSeconds(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    any
-		expected *int32
-	}{
-		{
-			name:     "int32 value",
-			input:    int32(3600),
-			expected: func() *int32 { v := int32(3600); return &v }(),
-		},
-		{
-			name:     "int32 negative value (should be rejected)",
-			input:    int32(-1),
-			expected: nil,
-		},
-		{
-			name:     "int32 zero value",
-			input:    int32(0),
-			expected: func() *int32 { v := int32(0); return &v }(),
-		},
-		{
-			name:     "int64 value in range",
-			input:    int64(7200),
-			expected: func() *int32 { v := int32(7200); return &v }(),
-		},
-		{
-			name:     "int64 negative value (should be rejected)",
-			input:    int64(-100),
-			expected: nil,
-		},
-		{
-			name:     "int64 value max int32",
-			input:    int64(math.MaxInt32),
-			expected: func() *int32 { v := int32(math.MaxInt32); return &v }(),
-		},
-		{
-			name:     "int64 value min int32 (negative, should be rejected)",
-			input:    int64(math.MinInt32),
-			expected: nil,
-		},
-		{
-			name:     "int64 value out of range (too large)",
-			input:    int64(math.MaxInt32) + 1,
-			expected: nil,
-		},
-		{
-			name:     "int64 value out of range (too small)",
-			input:    int64(math.MinInt32) - 1,
-			expected: nil,
-		},
-		{
-			name:     "float64 value",
-			input:    float64(1800.0),
-			expected: func() *int32 { v := int32(1800); return &v }(),
-		},
-		{
-			name:     "float64 negative value (should be rejected)",
-			input:    float64(-123.5),
-			expected: nil,
-		},
-		{
-			name:     "float64 value with rounding",
-			input:    float64(1800.6),
-			expected: func() *int32 { v := int32(1801); return &v }(),
-		},
-		{
-			name:     "float64 value with rounding down",
-			input:    float64(1800.4),
-			expected: func() *int32 { v := int32(1800); return &v }(),
-		},
-		{
-			name:     "float64 value out of range",
-			input:    float64(math.MaxInt32) + 1000.0,
-			expected: nil,
-		},
-		{
-			name:     "json.Number as integer",
-			input:    json.Number("900"),
-			expected: func() *int32 { v := int32(900); return &v }(),
-		},
-		{
-			name:     "json.Number negative integer (should be rejected)",
-			input:    json.Number("-500"),
-			expected: nil,
-		},
-		{
-			name:     "json.Number as float",
-			input:    json.Number("900.7"),
-			expected: func() *int32 { v := int32(901); return &v }(),
-		},
-		{
-			name:     "json.Number negative float (should be rejected)",
-			input:    json.Number("-123.7"),
-			expected: nil,
-		},
-		{
-			name:     "json.Number invalid",
-			input:    json.Number("invalid"),
-			expected: nil,
-		},
-		{
-			name:     "json.Number out of range",
-			input:    json.Number("9999999999999"),
-			expected: nil,
-		},
-		{
-			name:     "unsupported type (string)",
-			input:    "3600",
-			expected: nil,
-		},
-		{
-			name:     "unsupported type (bool)",
-			input:    true,
-			expected: nil,
-		},
-		{
-			name:     "nil value",
-			input:    nil,
-			expected: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := parseExpireAfterSeconds(tt.input)
-
-			if tt.expected == nil {
-				assert.Nil(t, result, "Expected nil result for input: %v", tt.input)
-			} else {
-				require.NotNil(t, result, "Expected non-nil result for input: %v", tt.input)
-				assert.Equal(t, *tt.expected, *result, "Expected %d, got %d for input: %v", *tt.expected, *result, tt.input)
-			}
-		})
-	}
-}
-
-func TestBuildChangeStreamOptions(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *database.ChangeStreamOptions
-		expected func(*options.ChangeStreamOptions) bool
-	}{
-		{
-			name:  testNilInput,
-			input: nil,
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts == nil
-			},
-		},
-		{
-			name:  testEmptyOptions,
-			input: &database.ChangeStreamOptions{},
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts != nil
-			},
-		},
-		{
-			name: "with batch size",
-			input: &database.ChangeStreamOptions{
-				BatchSize: database.Int32Ptr(100),
-			},
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts != nil
-			},
-		},
-		{
-			name: "with full document",
-			input: &database.ChangeStreamOptions{
-				FullDocument: database.StringPtr("updateLookup"),
-			},
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts != nil
-			},
-		},
-		{
-			name: "with resume after",
-			input: &database.ChangeStreamOptions{
-				ResumeAfter: bson.M{"_id": "test"},
-			},
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts != nil
-			},
-		},
-		{
-			name: "with start after",
-			input: &database.ChangeStreamOptions{
-				StartAfter: bson.M{"_id": "test"},
-			},
-			expected: func(opts *options.ChangeStreamOptions) bool {
-				return opts != nil
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildChangeStreamOptions(tt.input)
-			assert.True(t, tt.expected(result), "Unexpected result for test case: %s", tt.name)
-		})
-	}
-}
-
-func TestValidateAndMapFullDocument(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected options.FullDocument
-		valid    bool
-	}{
-		{
-			name:     "valid default",
-			input:    "default",
-			expected: options.Default,
-			valid:    true,
-		},
-		{
-			name:     "valid updateLookup",
-			input:    "updateLookup",
-			expected: options.UpdateLookup,
-			valid:    true,
-		},
-		{
-			name:     "valid whenAvailable",
-			input:    "whenAvailable",
-			expected: options.WhenAvailable,
-			valid:    true,
-		},
-		{
-			name:     "valid required",
-			input:    "required",
-			expected: options.Required,
-			valid:    true,
-		},
-		{
-			name:     "invalid empty string",
-			input:    "",
-			expected: "",
-			valid:    false,
-		},
-		{
-			name:     "invalid unknown value",
-			input:    "unknown",
-			expected: "",
-			valid:    false,
-		},
-		{
-			name:     "invalid case sensitive",
-			input:    "Default",
-			expected: "",
-			valid:    false,
-		},
-		{
-			name:     "invalid case sensitive updateLookup",
-			input:    "UpdateLookup",
-			expected: "",
-			valid:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, valid := validateAndMapFullDocument(tt.input)
-			assert.Equal(t, tt.valid, valid, "Expected validity %v, got %v for input: %s", tt.valid, valid, tt.input)
-			if tt.valid {
-				assert.Equal(t, tt.expected, result, "Expected %v, got %v for input: %s", tt.expected, result, tt.input)
-			}
-		})
-	}
-}
-
-func TestBuildChangeStreamOptionsWithEnhancements(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *database.ChangeStreamOptions
-		validate func(t *testing.T, result *options.ChangeStreamOptions)
-	}{
-		{
-			name: "valid FullDocument values",
-			input: &database.ChangeStreamOptions{
-				FullDocument: database.StringPtr("updateLookup"),
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-				// FullDocument is set via builder pattern, so we can't directly assert the value
-				// but we know it was set because no error occurred
-			},
-		},
-		{
-			name: "invalid FullDocument silently ignored",
-			input: &database.ChangeStreamOptions{
-				FullDocument: database.StringPtr("invalidValue"),
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-				// Invalid FullDocument should be silently ignored
-			},
-		},
-		{
-			name: "StartAtOperationTime with *bson.Timestamp",
-			input: &database.ChangeStreamOptions{
-				StartAtOperationTime: &bson.Timestamp{T: 123, I: 456},
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-			},
-		},
-		{
-			name: "StartAtOperationTime with bson.Timestamp value",
-			input: &database.ChangeStreamOptions{
-				StartAtOperationTime: bson.Timestamp{T: 123, I: 456},
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-			},
-		},
-		{
-			name: "StartAtOperationTime with invalid type silently ignored",
-			input: &database.ChangeStreamOptions{
-				StartAtOperationTime: "invalid_type",
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-				// Invalid type should be silently ignored
-			},
-		},
-		{
-			name: "combination of valid and invalid values",
-			input: &database.ChangeStreamOptions{
-				BatchSize:            database.Int32Ptr(100),
-				FullDocument:         database.StringPtr("required"),
-				StartAtOperationTime: bson.Timestamp{T: 789, I: 101},
-				ResumeAfter:          bson.M{"_id": "test"},
-			},
-			validate: func(t *testing.T, result *options.ChangeStreamOptions) {
-				assert.NotNil(t, result)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildChangeStreamOptions(tt.input)
-			tt.validate(t, result)
-		})
-	}
+	conn, ctx := setupTestContainer(t)
+	collName := "test_insert_one"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	createTestCollection(t, conn, ctx, collName)
+	coll := conn.Collection(collName)
+
+	doc := sampleDocument("test_insert", 42)
+	insertedID, err := coll.InsertOne(ctx, doc, nil)
+	assert.NoError(t, err, "InsertOne should succeed")
+	assert.NotNil(t, insertedID, "Inserted ID should not be nil")
+
+	// Verify document was inserted
+	assertDocumentCount(t, coll, ctx, 1)
 }
 
 func TestCollectionInsertMany(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_insert_many"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("insert multiple documents", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	createTestCollection(t, conn, ctx, collName)
+	coll := conn.Collection(collName)
 
-		// Mock successful insert many
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"insertedIds", bson.A{
-				primitive.NewObjectID(),
-				primitive.NewObjectID(),
-				primitive.NewObjectID(),
-			}},
-		})
+	docs := sampleDocuments(5)
+	insertedIDs, err := coll.InsertMany(ctx, docs, nil)
+	assert.NoError(t, err, "InsertMany should succeed")
+	assert.Len(t, insertedIDs, 5, "Should have 5 inserted IDs")
 
-		documents := []any{
-			bson.M{"name": "doc1", "value": 1},
-			bson.M{"name": "doc2", "value": 2},
-			bson.M{"name": "doc3", "value": 3},
-		}
+	// Verify documents were inserted
+	assertDocumentCount(t, coll, ctx, 5)
+}
 
-		insertedIDs, err := collection.InsertMany(context.Background(), documents, nil)
-		assert.NoError(t, err)
-		assert.Len(t, insertedIDs, 3)
-	})
+func TestCollectionFindOne(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_find_one"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("insert many with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	// Insert test data
+	testDoc := sampleDocument("find_test", 123)
+	createTestCollection(t, conn, ctx, collName, testDoc)
+	coll := conn.Collection(collName)
 
-		// Mock successful insert many
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"insertedIds", bson.A{primitive.NewObjectID()}},
-		})
+	// Find the document
+	filter := bson.M{"name": "find_test"}
+	result := coll.FindOne(ctx, filter, nil)
+	assert.NotNil(t, result, "FindOne result should not be nil")
 
-		documents := []any{bson.M{"name": "test", "value": 123}}
-		opts := &database.InsertManyOptions{
-			Ordered:                  database.BoolPtr(false),
-			BypassDocumentValidation: database.BoolPtr(true),
-		}
+	var doc bson.M
+	err := result.Decode(&doc)
+	assert.NoError(t, err, "Decode should succeed")
+	assert.Equal(t, "find_test", doc["name"], "Document name should match")
+	assert.Equal(t, int32(123), doc["value"], "Document value should match")
 
-		insertedIDs, err := collection.InsertMany(context.Background(), documents, opts)
-		assert.NoError(t, err)
-		assert.Len(t, insertedIDs, 1)
-	})
+	// Find non-existent document
+	filter = bson.M{"name": "nonexistent"}
+	result = coll.FindOne(ctx, filter, nil)
+	assert.NotNil(t, result, "FindOne should return result even if not found")
 
-	mt.Run("insert many with error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	err = result.Decode(&doc)
+	assert.Error(t, err, "Decode should fail for non-existent document")
+	assert.True(t, errors.Is(err, mongo.ErrNoDocuments), "Should be ErrNoDocuments")
+}
 
-		// Mock error response
-		mt.AddMockResponses(mtest.CreateWriteErrorsResponse(mtest.WriteError{
-			Index:   0,
-			Code:    11000,
-			Message: "duplicate key error",
-		}))
+func TestCollectionFind(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_find"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-		documents := []any{bson.M{"_id": "duplicate", "name": "test"}}
+	// Insert multiple test documents
+	docs := []any{
+		sampleDocument("doc1", 10),
+		sampleDocument("doc2", 20),
+		sampleDocument("doc3", 30),
+	}
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
 
-		insertedIDs, err := collection.InsertMany(context.Background(), documents, nil)
-		assert.Error(t, err)
-		assert.Nil(t, insertedIDs)
-		assert.Contains(t, err.Error(), "failed to insert documents")
-	})
+	// Find all documents
+	cursor, err := coll.Find(ctx, bson.M{}, nil)
+	assert.NoError(t, err, "Find should succeed")
+	assert.NotNil(t, cursor, "Cursor should not be nil")
+
+	var results []bson.M
+	err = cursor.All(ctx, &results)
+	assert.NoError(t, err, cursorAllShouldSucceedMsg)
+	assert.Len(t, results, 3, "Should find 3 documents")
+
+	// Find with filter
+	filter := bson.M{"value": bson.M{"$gte": 20}}
+	cursor, err = coll.Find(ctx, filter, nil)
+	assert.NoError(t, err, "Find with filter should succeed")
+
+	results = nil
+	err = cursor.All(ctx, &results)
+	assert.NoError(t, err, cursorAllShouldSucceedMsg)
+	assert.Len(t, results, 2, "Should find 2 documents with value >= 20")
+}
+
+func TestCollectionUpdateOne(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_update_one"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	// Insert test document
+	testDoc := sampleDocument("update_test", 100)
+	createTestCollection(t, conn, ctx, collName, testDoc)
+	coll := conn.Collection(collName)
+
+	// Update the document
+	filter := bson.M{"name": "update_test"}
+	update := bson.M{"$set": bson.M{"value": 200}}
+	result, err := coll.UpdateOne(ctx, filter, update, nil)
+	assert.NoError(t, err, "UpdateOne should succeed")
+	assert.NotNil(t, result, "Update result should not be nil")
+	assert.Equal(t, int64(1), result.MatchedCount(), "Should match 1 document")
+	assert.Equal(t, int64(1), result.ModifiedCount(), "Should modify 1 document")
+
+	// Verify update
+	assertDocumentExists(t, coll, ctx, bson.M{"name": "update_test", "value": 200})
+}
+
+func TestCollectionUpdateMany(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_update_many"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	// Insert multiple test documents
+	docs := sampleDocuments(5)
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
+
+	// Update all documents
+	filter := bson.M{"active": true}
+	update := bson.M{"$set": bson.M{"updated": true}}
+	result, err := coll.UpdateMany(ctx, filter, update, nil)
+	assert.NoError(t, err, "UpdateMany should succeed")
+	assert.NotNil(t, result, "Update result should not be nil")
+	assert.Equal(t, int64(5), result.MatchedCount(), "Should match 5 documents")
+	assert.Equal(t, int64(5), result.ModifiedCount(), "Should modify 5 documents")
+
+	// Verify all documents were updated
+	count, err := coll.CountDocuments(ctx, bson.M{"updated": true}, nil)
+	assert.NoError(t, err, "CountDocuments should succeed")
+	assert.Equal(t, int64(5), count, "All documents should be updated")
+}
+
+func TestCollectionDeleteOne(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_delete_one"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	// Insert test documents
+	docs := sampleDocuments(3)
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
+
+	// Delete one document
+	filter := bson.M{"name": "doc0"}
+	result, err := coll.DeleteOne(ctx, filter, nil)
+	assert.NoError(t, err, "DeleteOne should succeed")
+	assert.NotNil(t, result, "Delete result should not be nil")
+	assert.Equal(t, int64(1), result.DeletedCount(), "Should delete 1 document")
+
+	// Verify deletion
+	assertDocumentCount(t, coll, ctx, 2)
+	assertDocumentNotExists(t, coll, ctx, filter)
 }
 
 func TestCollectionDeleteMany(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_delete_many"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("delete many documents", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	// Insert test documents
+	docs := sampleDocuments(5)
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
 
-		// Mock successful delete many
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"n", 5},
-		})
+	// Delete multiple documents
+	filter := bson.M{"active": true}
+	result, err := coll.DeleteMany(ctx, filter, nil)
+	assert.NoError(t, err, "DeleteMany should succeed")
+	assert.NotNil(t, result, "Delete result should not be nil")
+	assert.Equal(t, int64(5), result.DeletedCount(), "Should delete 5 documents")
 
-		filter := bson.M{"status": "inactive"}
-		result, err := collection.DeleteMany(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		assert.Equal(t, int64(5), result.DeletedCount())
-	})
-
-	mt.Run("delete many with no matches", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock no matches response
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"n", 0},
-		})
-
-		filter := bson.M{"nonexistent": "value"}
-		result, err := collection.DeleteMany(context.Background(), filter, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		assert.Equal(t, int64(0), result.DeletedCount())
-	})
-
-	mt.Run("delete many with error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock error response
-		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
-			Code:    2,
-			Message: "BadValue error",
-		}))
-
-		filter := bson.M{"invalid": primitive.Regex{Pattern: "[", Options: ""}} // Invalid regex
-		result, err := collection.DeleteMany(context.Background(), filter, nil)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "failed to delete documents")
-	})
+	// Verify deletion
+	assertDocumentCount(t, coll, ctx, 0)
 }
+
+func TestCollectionCountDocuments(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_count_documents"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	// Insert test documents
+	docs := sampleDocuments(10)
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
+
+	// Count all documents
+	count, err := coll.CountDocuments(ctx, bson.M{}, nil)
+	assert.NoError(t, err, "CountDocuments should succeed")
+	assert.Equal(t, int64(10), count, "Should count 10 documents")
+
+	// Count with filter
+	filter := bson.M{"active": true}
+	count, err = coll.CountDocuments(ctx, filter, nil)
+	assert.NoError(t, err, "CountDocuments with filter should succeed")
+	assert.Equal(t, int64(10), count, "Should count 10 active documents")
+}
+
+// =============================================================================
+// Transaction Tests
+// =============================================================================
+
+func TestTransactionCommitSuccess(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_transaction_commit"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	createTestCollection(t, conn, ctx, collName)
+
+	// Begin transaction
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err, "Begin transaction should succeed")
+	require.NotNil(t, tx, "Transaction should not be nil")
+
+	// Get transaction context (MongoDB-specific)
+	mongoTx, ok := tx.(*Transaction)
+	require.True(t, ok, "Transaction should be MongoDB Transaction type")
+	require.NotNil(t, mongoTx.session, "Session should not be nil")
+
+	// Note: MongoDB transactions require session context, but our interface
+	// doesn't expose this. For now, we'll test commit/rollback behavior.
+
+	// Commit transaction
+	err = tx.Commit()
+	assert.NoError(t, err, "Commit should succeed")
+}
+
+func TestTransactionRollbackSuccess(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+	collName := "test_transaction_rollback"
+	defer cleanupTestCollection(t, conn, ctx, collName)
+
+	createTestCollection(t, conn, ctx, collName)
+
+	// Begin transaction
+	tx, err := conn.Begin(ctx)
+	require.NoError(t, err, "Begin transaction should succeed")
+	require.NotNil(t, tx, "Transaction should not be nil")
+
+	// Rollback transaction
+	err = tx.Rollback()
+	assert.NoError(t, err, "Rollback should succeed")
+}
+
+// =============================================================================
+// Aggregation Tests
+// =============================================================================
 
 func TestCollectionAggregate(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_aggregate"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("aggregate with pipeline", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	// Insert test documents with categories
+	docs := []any{
+		bson.M{"category": "A", "value": 10},
+		bson.M{"category": "A", "value": 20},
+		bson.M{"category": "B", "value": 15},
+		bson.M{"category": "B", "value": 25},
+		bson.M{"category": "C", "value": 30},
+	}
+	createTestCollection(t, conn, ctx, collName, docs...)
+	coll := conn.Collection(collName)
 
-		// Mock aggregate response with proper cursor responses
-		firstBatch := []bson.D{
-			{{"_id", "group1"}, {"count", 10}},
-			{{"_id", "group2"}, {"count", 15}},
-		}
-		mt.AddMockResponses(
-			mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch, firstBatch...),
-			mtest.CreateCursorResponse(0, CreateTestNamespace("test_collection"), mtest.NextBatch), // End cursor
-		)
+	// Aggregation pipeline: group by category and sum values
+	pipeline := bson.A{
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$category"},
+			{Key: "total", Value: bson.D{{Key: "$sum", Value: "$value"}}},
+		}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "_id", Value: 1}}}},
+	}
 
-		pipeline := bson.A{
-			bson.D{{"$group", bson.D{
-				{"_id", "$category"},
-				{"count", bson.D{{"$sum", 1}}},
-			}}},
-			bson.D{{"$sort", bson.D{{"count", -1}}}},
-		}
+	cursor, err := coll.Aggregate(ctx, pipeline, nil)
+	assert.NoError(t, err, "Aggregate should succeed")
+	assert.NotNil(t, cursor, "Cursor should not be nil")
 
-		cursor, err := collection.Aggregate(context.Background(), pipeline, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, cursor)
+	var results []bson.M
+	err = cursor.All(ctx, &results)
+	assert.NoError(t, err, cursorAllShouldSucceedMsg)
+	assert.Len(t, results, 3, "Should have 3 groups")
 
-		// Verify we can iterate through results
-		var results []bson.M
-		err = cursor.All(context.Background(), &results)
-		assert.NoError(t, err)
-		assert.Len(t, results, 2)
-		assert.Equal(t, "group1", results[0]["_id"])
-		assert.Equal(t, int32(10), results[0]["count"])
-	})
-
-	mt.Run("aggregate with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock aggregate response
-		mt.AddMockResponses(mtest.CreateCursorResponse(1, CreateTestNamespace("test_collection"), mtest.FirstBatch))
-
-		pipeline := bson.A{bson.D{{"$match", bson.D{{"status", "active"}}}}}
-		opts := &database.AggregateOptions{
-			BatchSize: database.Int32Ptr(100),
-		}
-
-		cursor, err := collection.Aggregate(context.Background(), pipeline, opts)
-		assert.NoError(t, err)
-		assert.NotNil(t, cursor)
-		cursor.Close(context.Background())
-	})
-
-	mt.Run("aggregate with error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock error response
-		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{
-			Code:    2,
-			Message: "Pipeline stage not recognized",
-		}))
-
-		pipeline := bson.A{bson.D{{"$invalidStage", bson.D{}}}}
-		cursor, err := collection.Aggregate(context.Background(), pipeline, nil)
-		assert.Error(t, err)
-		assert.Nil(t, cursor)
-		assert.Contains(t, err.Error(), "failed to execute aggregation")
-	})
+	// Verify aggregation results
+	assert.Equal(t, "A", results[0]["_id"], "First group should be A")
+	assert.Equal(t, int32(30), results[0]["total"], "Group A total should be 30")
+	assert.Equal(t, "B", results[1]["_id"], "Second group should be B")
+	assert.Equal(t, int32(40), results[1]["total"], "Group B total should be 40")
+	assert.Equal(t, "C", results[2]["_id"], "Third group should be C")
+	assert.Equal(t, int32(30), results[2]["total"], "Group C total should be 30")
 }
 
+// =============================================================================
+// Bulk Operations Tests
+// =============================================================================
+
 func TestCollectionBulkWrite(t *testing.T) {
-	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+	conn, ctx := setupTestContainer(t)
+	collName := "test_bulk_write"
+	defer cleanupTestCollection(t, conn, ctx, collName)
 
-	mt.Run("bulk write with mixed operations", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+	createTestCollection(t, conn, ctx, collName)
+	coll := conn.Collection(collName)
 
-		// Mock successful bulk write response
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"nInserted", 1},
-			{"nMatched", 0},
-			{"nModified", 0},
-			{"nRemoved", 0},
-			{"nUpserted", 0},
-		})
+	// Create bulk write models
+	models := []database.WriteModel{
+		&InsertOneModel{Document: sampleDocument("bulk1", 100)},
+		&InsertOneModel{Document: sampleDocument("bulk2", 200)},
+		&UpdateOneModel{
+			Filter: bson.M{"name": "bulk1"},
+			Update: bson.M{"$set": bson.M{"value": 150}},
+		},
+		&DeleteOneModel{
+			Filter: bson.M{"name": "bulk2"},
+		},
+	}
 
-		models := []database.WriteModel{
-			&InsertOneModel{Document: bson.M{"name": "insert1"}},
-		}
+	result, err := coll.BulkWrite(ctx, models, nil)
+	assert.NoError(t, err, "BulkWrite should succeed")
+	assert.NotNil(t, result, "Bulk write result should not be nil")
+	assert.Equal(t, int64(2), result.InsertedCount(), "Should insert 2 documents")
+	assert.Equal(t, int64(1), result.ModifiedCount(), "Should modify 1 document")
+	assert.Equal(t, int64(1), result.DeletedCount(), "Should delete 1 document")
 
-		result, err := collection.BulkWrite(context.Background(), models, nil)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		// Just verify the result methods work, specific counts are mock-dependent
-		assert.GreaterOrEqual(t, result.InsertedCount(), int64(0))
-	})
+	// Verify final state: 1 document with value 150
+	assertDocumentCount(t, coll, ctx, 1)
+	assertDocumentExists(t, coll, ctx, bson.M{"name": "bulk1", "value": 150})
+}
 
-	mt.Run("bulk write with options", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
+// =============================================================================
+// Interface Compliance Tests
+// =============================================================================
 
-		// Mock successful bulk write
-		mt.AddMockResponses(bson.D{
-			{"ok", 1},
-			{"nInserted", 1},
-		})
+func TestConnectionInterfaceCompliance(t *testing.T) {
+	conn, _ := setupTestContainer(t)
 
-		models := []database.WriteModel{
-			&InsertOneModel{Document: bson.M{"name": "test"}},
-		}
-		opts := &database.BulkWriteOptions{
-			Ordered:                  database.BoolPtr(false),
-			BypassDocumentValidation: database.BoolPtr(true),
-		}
+	// Verify Connection implements database.Interface
+	var _ database.Interface = conn
 
-		result, err := collection.BulkWrite(context.Background(), models, opts)
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-		// Just verify the result methods work, specific counts are mock-dependent
-		assert.GreaterOrEqual(t, result.InsertedCount(), int64(0))
-	})
+	// Verify Connection implements database.DocumentInterface
+	var _ database.DocumentInterface = conn
 
-	mt.Run("bulk write with error", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		// Mock bulk write error
-		mt.AddMockResponses(mtest.CreateWriteErrorsResponse(mtest.WriteError{
-			Index:   0,
-			Code:    11000,
-			Message: "duplicate key error",
-		}))
-
-		models := []database.WriteModel{
-			&InsertOneModel{Document: bson.M{"_id": "duplicate"}},
-		}
-
-		result, err := collection.BulkWrite(context.Background(), models, nil)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "failed to execute bulk write")
-	})
-
-	mt.Run("bulk write with empty models", func(mt *mtest.T) {
-		conn := setupTestConnection(t, mt)
-		collection := conn.Collection("test_collection")
-
-		models := []database.WriteModel{}
-
-		result, err := collection.BulkWrite(context.Background(), models, nil)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "failed to execute bulk write")
-	})
+	// Test AsDocumentInterface helper
+	docDB, ok := database.AsDocumentInterface(conn)
+	assert.True(t, ok, "Connection should implement DocumentInterface")
+	assert.NotNil(t, docDB, "DocumentInterface should not be nil")
 }

@@ -63,8 +63,106 @@ jobs:
             )
           )
 
-      - name: Upload coverage artifact for SonarCloud (Ubuntu only)
+      - name: Upload unit test coverage artifact (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage.out
+          retention-days: 1
+
+  integration-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: integration-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            integration-${{ runner.os }}-go${{ matrix.go-version }}-
+            ci-${{ runner.os }}-go${{ matrix.go-version }}-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run integration tests
+        run: |
+          set -euo pipefail
+          echo "Running integration tests with testcontainers..."
+          go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./database/mongodb/...
+
+      - name: Upload integration test coverage artifact
+        if: matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage-integration.out
+          retention-days: 1
+
+  merge-coverage:
+    runs-on: ubuntu-latest
+    needs: [test, integration-test]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download unit test coverage
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-unit
+          path: .
+
+      - name: Download integration test coverage
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-integration
+          path: .
+
+      - name: Merge coverage files
+        run: |
+          set -euo pipefail
+
+          # Verify both files exist
+          if [ ! -f coverage.out ]; then
+            echo "Error: coverage.out not found"
+            exit 1
+          fi
+          if [ ! -f coverage-integration.out ]; then
+            echo "Error: coverage-integration.out not found"
+            exit 1
+          fi
+
+          # Merge coverage files (skip mode line from second file)
+          echo "Merging coverage files..."
+          cat coverage.out > coverage-merged.out
+          tail -n +2 coverage-integration.out >> coverage-merged.out
+
+          # Show summary
+          echo "Coverage merge complete:"
+          wc -l coverage.out coverage-integration.out coverage-merged.out
+
+          # Rename merged file to coverage.out for SonarCloud
+          mv coverage-merged.out coverage.out
+
+      - name: Upload merged coverage for SonarCloud
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -99,7 +197,7 @@ jobs:
   sonarqube:
     name: SonarCloud
     runs-on: ubuntu-latest
-    needs: test
+    needs: merge-coverage
     steps:
       - uses: actions/checkout@v5
         with:
