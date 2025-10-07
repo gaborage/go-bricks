@@ -6,7 +6,7 @@ INTEGRATION_PKGS := ./database/mongodb/...
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 all: build test test-integration ## Build and test the project
 
@@ -18,7 +18,7 @@ test: ## Run unit tests only
 
 test-integration: docker-check ## Run integration tests (requires Docker)
 	@echo "Running integration tests with testcontainers..."
-	go test -v -race -tags=integration $(INTEGRATION_PKGS)
+	go test -v -race -count=1 -tags=integration $(INTEGRATION_PKGS)
 
 test-all: test test-integration ## Run all tests (unit + integration)
 
@@ -27,7 +27,7 @@ test-coverage: ## Run unit tests with coverage
 
 test-coverage-integration: docker-check ## Run integration tests with coverage (requires Docker)
 	@echo "Running integration tests with coverage..."
-	go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out $(INTEGRATION_PKGS)
+	go test -v -race -count=1 -tags=integration -covermode=atomic -coverprofile=coverage-integration.out $(INTEGRATION_PKGS)
 
 docker-check: ## Check if Docker is available
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker is not running. Integration tests require Docker Desktop or Docker daemon." && echo "Install Docker: https://www.docker.com/products/docker-desktop" && exit 1)

@@ -48,7 +48,6 @@ type MongoDBContainer struct {
 	connStr   string
 }
 
-// StartMongoDBContainer starts a MongoDB testcontainer with the given configuration
 // StartMongoDBContainer starts a MongoDB testcontainer using the provided configuration.
 // If cfg is nil, DefaultMongoDBConfig is used. If Docker is not available the test is
 // skipped with a clear message. On success it returns a MongoDBContainer wrapping the
@@ -131,7 +130,7 @@ func (m *MongoDBContainer) MappedPort(ctx context.Context) (int, error) {
 
 // redactConnectionString removes password from MongoDB connection string for safe logging.
 // Supports both mongodb:// and mongodb+srv:// schemes.
-// Returns the original string if parsing fails (better to show connection info than fail silently).
+// Returns a generic masked placeholder if parsing fails to avoid leaking credentials.
 func redactConnectionString(connStr string) string {
 	u, err := url.Parse(connStr)
 	if err != nil {
@@ -165,9 +164,8 @@ func isDockerAvailable(ctx context.Context) bool {
 	return err == nil
 }
 
-// MustStartMongoDBContainer starts a MongoDB container or fails the test
 // MustStartMongoDBContainer starts a MongoDB test container and fails the test if startup fails.
-// 
+//
 // It is a convenience wrapper around StartMongoDBContainer that calls t.Fatalf on any error and
 // returns the started *MongoDBContainer when successful.
 func MustStartMongoDBContainer(ctx context.Context, t *testing.T, cfg *MongoDBContainerConfig) *MongoDBContainer {
