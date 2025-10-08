@@ -24,9 +24,7 @@ func TestDefaultFilterConfig(t *testing.T) {
 
 	if config == nil {
 		t.Fatal("DefaultFilterConfig should not return nil")
-	}
-
-	if config.MaskValue != DefaultMaskValue {
+	} else if config.MaskValue != DefaultMaskValue {
 		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, config.MaskValue)
 	}
 
@@ -44,8 +42,7 @@ func TestNewSensitiveDataFilter(t *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 	if filter == nil {
 		t.Fatal("NewSensitiveDataFilter should not return nil")
-	}
-	if filter.config.MaskValue != DefaultMaskValue {
+	} else if filter.config.MaskValue != DefaultMaskValue {
 		t.Errorf("Expected default mask value '%s', got '%s'", DefaultMaskValue, filter.config.MaskValue)
 	}
 
