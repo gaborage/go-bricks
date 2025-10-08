@@ -7,7 +7,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConfigError_Error(t *testing.T) {
+const (
+	appNameField       = "app.name"
+	databaseHost       = "database.host"
+	outOfRangeErrMsg   = "out of range"
+	testField          = "test.field"
+	messagingBrokerURL = "messaging.broker.url"
+)
+
+func TestConfigErrorError(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      *ConfigError
@@ -17,7 +25,7 @@ func TestConfigError_Error(t *testing.T) {
 			name: "complete error with all fields",
 			err: &ConfigError{
 				Category: "missing",
-				Field:    "database.host",
+				Field:    databaseHost,
 				Message:  "required",
 				Action:   "set DATABASE_HOST env var or add database.host to config.yaml",
 				Details:  []string{"detail1", "detail2"},
@@ -27,7 +35,7 @@ func TestConfigError_Error(t *testing.T) {
 		{
 			name: "error without category",
 			err: &ConfigError{
-				Field:   "app.name",
+				Field:   appNameField,
 				Message: "required",
 				Action:  "set APP_NAME env var",
 			},
@@ -56,7 +64,7 @@ func TestConfigError_Error(t *testing.T) {
 			err: &ConfigError{
 				Category: "invalid",
 				Field:    "port",
-				Message:  "out of range",
+				Message:  outOfRangeErrMsg,
 			},
 			expected: "config_invalid: port out of range",
 		},
@@ -89,11 +97,11 @@ func TestConfigError_Error(t *testing.T) {
 	}
 }
 
-func TestConfigError_Unwrap(t *testing.T) {
+func TestConfigErrorUnwrap(t *testing.T) {
 	t.Run("Unwrap always returns nil", func(t *testing.T) {
 		err := &ConfigError{
 			Category: "missing",
-			Field:    "test.field",
+			Field:    testField,
 			Message:  "test message",
 		}
 
@@ -104,7 +112,7 @@ func TestConfigError_Unwrap(t *testing.T) {
 	t.Run("Unwrap compatible with errors.Unwrap", func(t *testing.T) {
 		err := &ConfigError{
 			Category: "invalid",
-			Field:    "test.field",
+			Field:    testField,
 		}
 
 		unwrapped := errors.Unwrap(err)
@@ -124,20 +132,20 @@ func TestNewMissingFieldError(t *testing.T) {
 	}{
 		{
 			name:         "database host missing",
-			field:        "database.host",
+			field:        databaseHost,
 			envVar:       "DATABASE_HOST",
-			yamlPath:     "database.host",
+			yamlPath:     databaseHost,
 			wantCategory: "missing",
-			wantField:    "database.host",
+			wantField:    databaseHost,
 			wantMessage:  "required",
 		},
 		{
 			name:         "app name missing",
-			field:        "app.name",
+			field:        appNameField,
 			envVar:       "APP_NAME",
-			yamlPath:     "app.name",
+			yamlPath:     appNameField,
 			wantCategory: "missing",
-			wantField:    "app.name",
+			wantField:    appNameField,
 			wantMessage:  "required",
 		},
 	}
@@ -180,7 +188,7 @@ func TestNewInvalidFieldError(t *testing.T) {
 		{
 			name:         "invalid with empty options",
 			field:        "server.port",
-			message:      "out of range",
+			message:      outOfRangeErrMsg,
 			validOptions: []string{},
 			wantAction:   false,
 		},
@@ -215,15 +223,15 @@ func TestNewNotConfiguredError(t *testing.T) {
 	}{
 		{
 			name:     "messaging not configured",
-			feature:  "messaging.broker.url",
+			feature:  messagingBrokerURL,
 			envVar:   "MESSAGING_BROKER_URL",
-			yamlPath: "messaging.broker.url",
+			yamlPath: messagingBrokerURL,
 		},
 		{
 			name:     "database not configured",
 			feature:  "database",
 			envVar:   "DATABASE_HOST",
-			yamlPath: "database.host",
+			yamlPath: databaseHost,
 		},
 	}
 
@@ -306,7 +314,7 @@ func TestNewMultiTenantError(t *testing.T) {
 		{
 			name:      "tenant database config missing",
 			tenantID:  "tenant-a",
-			field:     "database.host",
+			field:     databaseHost,
 			message:   "not configured",
 			action:    "add multitenant.tenants.tenant-a.database.host",
 			wantField: "tenant 'tenant-a' database.host",
@@ -369,22 +377,22 @@ func TestNewValidationError(t *testing.T) {
 	}
 }
 
-func TestConfigError_AsError(t *testing.T) {
+func TestConfigErrorAsError(t *testing.T) {
 	t.Run("ConfigError implements error interface", func(t *testing.T) {
 		var err error = &ConfigError{
 			Category: "missing",
-			Field:    "test.field",
+			Field:    testField,
 			Message:  "required",
 		}
 
 		assert.NotNil(t, err)
-		assert.Contains(t, err.Error(), "test.field")
+		assert.Contains(t, err.Error(), testField)
 	})
 
 	t.Run("ConfigError can be wrapped with errors.Is", func(t *testing.T) {
 		configErr := &ConfigError{
 			Category: "invalid",
-			Field:    "test.field",
+			Field:    testField,
 		}
 
 		// ConfigError is a leaf error, so errors.Is with itself should work
@@ -392,23 +400,23 @@ func TestConfigError_AsError(t *testing.T) {
 	})
 }
 
-func TestConfigError_IntegrationWithErrorsPackage(t *testing.T) {
+func TestConfigErrorIntegrationWithErrorsPackage(t *testing.T) {
 	t.Run("error formatting with %v", func(t *testing.T) {
 		err := &ConfigError{
 			Category: "missing",
-			Field:    "database.host",
+			Field:    databaseHost,
 			Message:  "required",
 		}
 
 		formatted := errors.New(err.Error())
-		assert.Contains(t, formatted.Error(), "database.host")
+		assert.Contains(t, formatted.Error(), databaseHost)
 	})
 
 	t.Run("error formatting with %w", func(t *testing.T) {
 		configErr := &ConfigError{
 			Category: "invalid",
 			Field:    "port",
-			Message:  "out of range",
+			Message:  outOfRangeErrMsg,
 		}
 
 		// Wrapping ConfigError
@@ -416,4 +424,81 @@ func TestConfigError_IntegrationWithErrorsPackage(t *testing.T) {
 		assert.Contains(t, wrapped.Error(), "port")
 		assert.Contains(t, wrapped.Error(), "validation failed")
 	})
+}
+
+func TestIsNotConfigured(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error returns false",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "ErrNotConfigured sentinel returns true",
+			err:      ErrNotConfigured,
+			expected: true,
+		},
+		{
+			name:     "wrapped ErrNotConfigured returns true",
+			err:      errors.New("database: " + ErrNotConfigured.Error()),
+			expected: false, // errors.New creates new error, not wrapping
+		},
+		{
+			name: "ConfigError with not_configured category returns true",
+			err: &ConfigError{
+				Category: "not_configured",
+				Field:    "messaging",
+				Message:  "(optional)",
+			},
+			expected: true,
+		},
+		{
+			name: "ConfigError with missing category returns false",
+			err: &ConfigError{
+				Category: "missing",
+				Field:    databaseHost,
+				Message:  "required",
+			},
+			expected: false,
+		},
+		{
+			name: "ConfigError with invalid category returns false",
+			err: &ConfigError{
+				Category: "invalid",
+				Field:    "log.level",
+				Message:  "unsupported",
+			},
+			expected: false,
+		},
+		{
+			name: "ConfigError with connection category returns false",
+			err: &ConfigError{
+				Category: "connection",
+				Field:    "database",
+				Message:  "connection refused",
+			},
+			expected: false,
+		},
+		{
+			name:     "generic error returns false",
+			err:      errors.New("some generic error"),
+			expected: false,
+		},
+		{
+			name:     "NewNotConfiguredError returns true",
+			err:      NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", messagingBrokerURL),
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsNotConfigured(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
