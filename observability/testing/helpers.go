@@ -144,6 +144,7 @@ func (sc *SpanCollector) Len() int {
 // Fails the test if the index is out of bounds.
 func (sc *SpanCollector) Get(index int) tracetest.SpanStub {
 	sc.t.Helper()
+	require.GreaterOrEqual(sc.t, index, 0, "span index out of bounds")
 	require.Less(sc.t, index, len(sc.spans), "span index out of bounds")
 	return sc.spans[index]
 }
