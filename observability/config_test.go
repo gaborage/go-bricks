@@ -119,6 +119,54 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name: "metrics invalid protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled: false,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: "localhost:4318",
+					Protocol: "websocket",
+				},
+			},
+			wantErr: ErrInvalidProtocol,
+		},
+		{
+			name: "metrics protocol inherits trace protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled:  true,
+					Endpoint: "localhost:4317",
+					Protocol: ProtocolGRPC,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: "localhost:4317",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics protocol defaults to http when trace disabled",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled: false,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: "localhost:4318",
+				},
+			},
+			wantErr: nil,
+		},
+		{
 			name: "invalid OTLP protocol",
 			config: Config{
 				Enabled:     true,
