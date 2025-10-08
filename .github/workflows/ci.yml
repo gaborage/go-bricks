@@ -112,7 +112,7 @@ jobs:
             $isKnownIssue = $false
             foreach ($pattern in $knownPatterns) {
               if ($pkgOutput -match $pattern) {
-                Write-Host "Known Windows-specific issue detected in $pkg: $pattern" -ForegroundColor Yellow
+                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
                 $isKnownIssue = $true
                 break
               }
