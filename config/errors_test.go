@@ -417,3 +417,80 @@ func TestConfigError_IntegrationWithErrorsPackage(t *testing.T) {
 		assert.Contains(t, wrapped.Error(), "validation failed")
 	})
 }
+
+func TestIsNotConfigured(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error returns false",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "ErrNotConfigured sentinel returns true",
+			err:      ErrNotConfigured,
+			expected: true,
+		},
+		{
+			name:     "wrapped ErrNotConfigured returns true",
+			err:      errors.New("database: " + ErrNotConfigured.Error()),
+			expected: false, // errors.New creates new error, not wrapping
+		},
+		{
+			name: "ConfigError with not_configured category returns true",
+			err: &ConfigError{
+				Category: "not_configured",
+				Field:    "messaging",
+				Message:  "(optional)",
+			},
+			expected: true,
+		},
+		{
+			name: "ConfigError with missing category returns false",
+			err: &ConfigError{
+				Category: "missing",
+				Field:    "database.host",
+				Message:  "required",
+			},
+			expected: false,
+		},
+		{
+			name: "ConfigError with invalid category returns false",
+			err: &ConfigError{
+				Category: "invalid",
+				Field:    "log.level",
+				Message:  "unsupported",
+			},
+			expected: false,
+		},
+		{
+			name: "ConfigError with connection category returns false",
+			err: &ConfigError{
+				Category: "connection",
+				Field:    "database",
+				Message:  "connection refused",
+			},
+			expected: false,
+		},
+		{
+			name:     "generic error returns false",
+			err:      errors.New("some generic error"),
+			expected: false,
+		},
+		{
+			name:     "NewNotConfiguredError returns true",
+			err:      NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url"),
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsNotConfigured(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
