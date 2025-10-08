@@ -10,6 +10,8 @@ import (
 const (
 	tenantAMQPURL = "amqp://tenant-a"
 	tenantA       = "tenant-a"
+	newTenant     = "tenant-new"
+	tenantB       = "tenant-b"
 )
 
 func TestTenantStoreDefaults(t *testing.T) {
@@ -146,7 +148,7 @@ func TestTenantStoreAddTenant(t *testing.T) {
 
 	// Initially no tenants
 	assert.Equal(t, 0, len(store.GetTenants()))
-	assert.False(t, store.HasTenant("tenant-new"))
+	assert.False(t, store.HasTenant(newTenant))
 
 	// Add a new tenant
 	newEntry := &TenantEntry{
@@ -159,18 +161,18 @@ func TestTenantStoreAddTenant(t *testing.T) {
 		Messaging: TenantMessagingConfig{URL: "amqp://new-tenant"},
 	}
 
-	store.AddTenant("tenant-new", newEntry)
+	store.AddTenant(newTenant, newEntry)
 
 	// Verify tenant was added
-	assert.True(t, store.HasTenant("tenant-new"))
+	assert.True(t, store.HasTenant(newTenant))
 	assert.Equal(t, 1, len(store.GetTenants()))
 
 	// Verify we can retrieve configuration for new tenant
-	dbCfg, err := store.DBConfig(context.Background(), "tenant-new")
+	dbCfg, err := store.DBConfig(context.Background(), newTenant)
 	assert.NoError(t, err)
 	assert.Equal(t, "new-tenant.db", dbCfg.Host)
 
-	url, err := store.BrokerURL(context.Background(), "tenant-new")
+	url, err := store.BrokerURL(context.Background(), newTenant)
 	assert.NoError(t, err)
 	assert.Equal(t, "amqp://new-tenant", url)
 }
@@ -191,7 +193,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 					},
 					Messaging: TenantMessagingConfig{URL: tenantAMQPURL},
 				},
-				"tenant-b": {
+				tenantB: {
 					Database: DatabaseConfig{
 						Type:     PostgreSQL,
 						Host:     "tenant-b.db",
@@ -209,14 +211,14 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 	// Initially 2 tenants
 	assert.Equal(t, 2, len(store.GetTenants()))
 	assert.True(t, store.HasTenant(tenantA))
-	assert.True(t, store.HasTenant("tenant-b"))
+	assert.True(t, store.HasTenant(tenantB))
 
 	// Remove tenant-a
 	store.RemoveTenant(tenantA)
 
 	// Verify tenant-a is gone
 	assert.False(t, store.HasTenant(tenantA))
-	assert.True(t, store.HasTenant("tenant-b"))
+	assert.True(t, store.HasTenant(tenantB))
 	assert.Equal(t, 1, len(store.GetTenants()))
 
 	// Verify we get error when trying to access removed tenant
@@ -244,7 +246,7 @@ func TestTenantStoreGetTenants(t *testing.T) {
 					},
 					Messaging: TenantMessagingConfig{URL: tenantAMQPURL},
 				},
-				"tenant-b": {
+				tenantB: {
 					Database: DatabaseConfig{
 						Type:     PostgreSQL,
 						Host:     "tenant-b.db",
@@ -263,7 +265,7 @@ func TestTenantStoreGetTenants(t *testing.T) {
 	tenants := store.GetTenants()
 	assert.Equal(t, 2, len(tenants))
 	assert.Contains(t, tenants, tenantA)
-	assert.Contains(t, tenants, "tenant-b")
+	assert.Contains(t, tenants, tenantB)
 
 	// Verify it returns a copy (modifying returned map should not affect store)
 	delete(tenants, tenantA)

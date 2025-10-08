@@ -32,17 +32,16 @@ test-coverage-integration: docker-check ## Run integration tests with coverage (
 	@go tool cover -func=coverage-integration.out | tail -1
 
 test-coverage-combined: docker-check ## Run combined unit and integration tests with coverage
-	@echo "Running unit tests with coverage..."
-	@go test -race -covermode=atomic -coverprofile=coverage-unit.out $(PKGS)
-	@echo "Running integration tests with coverage..."
-	@go test -v -race -count=1 -tags=integration -covermode=atomic -coverprofile=coverage-integration.out $(INTEGRATION_PKGS)
-	@echo "Generating combined coverage report..."
-	@go test -tags=integration -coverprofile=coverage.out ./...
-	@echo "\n=== Combined Coverage Summary ==="
+	@echo "Running all tests (unit + integration) with coverage..."
+	@go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage.out ./...
+	@echo ""
+	@echo "=== Combined Coverage Summary ==="
 	@go tool cover -func=coverage.out | tail -1
-	@echo "=== Function Coverage Report (coverage.func) ==="
+	@echo ""
+	@echo "Generating function coverage report..."
 	@go tool cover -func=coverage.out > coverage.func
 	@echo "Coverage reports generated: coverage.out, coverage.func"
+	@echo "Generate HTML report with: make coverage-report"
 
 coverage-report: ## Generate HTML coverage report from coverage.out
 	@if [ ! -f coverage.out ]; then echo "Error: coverage.out not found. Run 'make test-coverage-combined' first."; exit 1; fi
