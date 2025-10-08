@@ -272,23 +272,3 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
-
-  sonarqube:
-    name: SonarCloud
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-
-      - name: Download coverage artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: openapi-tool-coverage-report
-          path: tools/openapi
-
-      - name: Scan
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
