@@ -505,3 +505,66 @@ func TestNewProviderOTLPGRPCMetrics(t *testing.T) {
 	defer cancel()
 	_ = provider.Shutdown(shutdownCtx) // Ignore error as collector may not be available
 }
+
+func TestMetricsTransportSettings(t *testing.T) {
+	t.Run("metrics override trace settings", func(t *testing.T) {
+		p := &provider{
+			config: Config{
+				Trace: TraceConfig{
+					Protocol: ProtocolHTTP,
+					Insecure: true,
+					Headers: map[string]string{
+						"trace-header": "trace",
+					},
+				},
+				Metrics: MetricsConfig{
+					Protocol: ProtocolGRPC,
+					Insecure: BoolPtr(false),
+					Headers: map[string]string{
+						"DD-API-KEY": "test-key",
+					},
+				},
+			},
+		}
+
+		protocol, insecure, headers := p.metricsTransportSettings()
+		assert.Equal(t, ProtocolGRPC, protocol)
+		assert.False(t, insecure)
+		assert.Equal(t, map[string]string{"DD-API-KEY": "test-key"}, headers)
+	})
+
+	t.Run("metrics inherit trace settings when unset", func(t *testing.T) {
+		traceHeaders := map[string]string{
+			"Authorization": "Basic trace",
+		}
+		p := &provider{
+			config: Config{
+				Trace: TraceConfig{
+					Protocol: ProtocolHTTP,
+					Insecure: false,
+					Headers:  traceHeaders,
+				},
+				Metrics: MetricsConfig{},
+			},
+		}
+
+		protocol, insecure, headers := p.metricsTransportSettings()
+		assert.Equal(t, ProtocolHTTP, protocol)
+		assert.False(t, insecure)
+		assert.Equal(t, traceHeaders, headers)
+	})
+
+	t.Run("metrics default protocol when trace unset", func(t *testing.T) {
+		p := &provider{
+			config: Config{
+				Trace:   TraceConfig{}, // No protocol or headers configured
+				Metrics: MetricsConfig{},
+			},
+		}
+
+		protocol, insecure, headers := p.metricsTransportSettings()
+		assert.Equal(t, ProtocolHTTP, protocol)
+		assert.False(t, insecure)
+		assert.Nil(t, headers)
+	})
+}

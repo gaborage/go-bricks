@@ -273,10 +273,23 @@ observability:
 
     # endpoint specifies where to send metric data.
     # Special value "stdout" enables console logging for local development.
-    # For production, use OTLP gRPC endpoint: "http://localhost:4318"
+    # For production, use OTLP endpoint (http or grpc, depending on collector).
     # Can be overridden by environment variable: OBSERVABILITY_METRICS_ENDPOINT
     # Default: "stdout"
     endpoint: "stdout"
+
+    # protocol specifies the OTLP protocol to use ("http" or "grpc").
+    # When unset, metrics inherit the trace protocol (default "http").
+    # Can be overridden by OBSERVABILITY_METRICS_PROTOCOL.
+    protocol: ""
+
+    # insecure controls whether to use insecure connections (no TLS).
+    # Omit or set to null to inherit the trace setting (default true).
+    # insecure: false
+
+    # headers allows custom headers for metric exporters (e.g., API keys).
+    # When omitted, metrics inherit trace headers.
+    headers: {}
 
     # interval specifies how often to export metrics.
     # Shorter intervals provide more real-time data but increase overhead.
@@ -312,11 +325,17 @@ observability:
 #     version: "1.2.3"
 #   environment: "production"
 #   trace:
-#     endpoint: "http://localhost:4318"  # DataDog Agent OTLP receiver
+#     endpoint: "grpc://localhost:4317"  # DataDog Agent OTLP receiver (gRPC)
+#     protocol: "grpc"
+#     insecure: true
 #     sample:
 #       rate: 0.1  # 10% sampling for cost control
 #   metrics:
-#     endpoint: "http://localhost:4318"
+#     endpoint: "https://api.datadoghq.com"
+#     protocol: "http"
+#     insecure: false
+#     headers:
+#       DD-API-KEY: "${DATADOG_API_KEY}"
 #     interval: 30s
 
 # High-Volume Production (aggressive sampling):

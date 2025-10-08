@@ -20,5 +20,5 @@ var ErrAlreadyInitialized = errors.New("observability: provider already initiali
 // ErrNotInitialized is returned when attempting to use an uninitialized provider.
 var ErrNotInitialized = errors.New("observability: provider not initialized")
 
-// ErrInvalidProtocol is returned when the trace protocol is not "http" or "grpc".
-var ErrInvalidProtocol = errors.New("observability: trace protocol must be either 'http' or 'grpc'")
+// ErrInvalidProtocol is returned when the protocol (trace or metrics) is not "http" or "grpc".
+var ErrInvalidProtocol = errors.New("observability: protocol must be either 'http' or 'grpc'")

@@ -13,6 +13,12 @@ const (
 	ProtocolGRPC = "grpc"
 )
 
+// BoolPtr returns a pointer to the provided bool value.
+// Helpful when optional boolean configuration fields are used.
+func BoolPtr(v bool) *bool {
+	return &v
+}
+
 // Config defines the configuration for observability features.
 // It supports automatic injection via the GoBricks config system.
 type Config struct {
@@ -98,6 +104,18 @@ type MetricsConfig struct {
 	// For production, use OTLP endpoint (e.g., "http://localhost:4318").
 	Endpoint string `config:"endpoint" default:"stdout"`
 
+	// Protocol specifies the OTLP protocol to use: "http" or "grpc".
+	// If empty, metrics inherit the trace protocol.
+	Protocol string `config:"protocol"`
+
+	// Insecure controls whether to use insecure connections (no TLS).
+	// Only applicable for OTLP endpoints (http/grpc). Falls back to trace setting when unset.
+	Insecure *bool `config:"insecure"`
+
+	// Headers allows custom headers for OTLP exporters (e.g., DataDog API keys).
+	// If nil or empty, metrics inherit trace headers.
+	Headers map[string]string `config:"headers"`
+
 	// Interval specifies how often to export metrics.
 	// Shorter intervals provide more real-time data but increase overhead.
 	Interval time.Duration `config:"interval" default:"10s"`
@@ -122,16 +140,54 @@ func (c *Config) Validate() error {
 		return ErrMissingServiceName
 	}
 
+	if err := c.validateTraceConfig(); err != nil {
+		return err
+	}
+
+	return c.validateMetricsConfig()
+}
+
+func (c *Config) validateTraceConfig() error {
 	if c.Trace.SampleRate < 0.0 || c.Trace.SampleRate > 1.0 {
 		return ErrInvalidSampleRate
 	}
 
-	// Validate protocol for OTLP endpoints
-	if c.Trace.Endpoint != EndpointStdout && c.Trace.Endpoint != "" {
-		protocol := c.Trace.Protocol
-		if protocol != ProtocolHTTP && protocol != ProtocolGRPC {
-			return ErrInvalidProtocol
-		}
+	if c.Trace.Endpoint == EndpointStdout || c.Trace.Endpoint == "" {
+		return nil
+	}
+
+	protocol := c.Trace.Protocol
+	if protocol == "" {
+		protocol = ProtocolHTTP
+	}
+
+	switch protocol {
+	case ProtocolHTTP, ProtocolGRPC:
+		return nil
+	default:
+		return ErrInvalidProtocol
+	}
+}
+
+func (c *Config) validateMetricsConfig() error {
+	if !c.Metrics.Enabled {
+		return nil
+	}
+
+	if c.Metrics.Endpoint == EndpointStdout || c.Metrics.Endpoint == "" {
+		return nil
+	}
+
+	protocol := c.Metrics.Protocol
+	if protocol == "" {
+		protocol = c.Trace.Protocol
+	}
+	if protocol == "" {
+		protocol = ProtocolHTTP
+	}
+
+	if protocol != ProtocolHTTP && protocol != ProtocolGRPC {
+		return ErrInvalidProtocol
 	}
 
 	return nil

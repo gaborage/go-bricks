@@ -8,6 +8,7 @@ The observability package provides production-ready distributed tracing using Op
 - **Protocol Support**: Both OTLP/HTTP and OTLP/gRPC protocols
 - **Configurable Sampling**: Control trace collection rate (0.0 - 1.0)
 - **Custom Headers**: Support for authentication tokens and custom headers
+- **Independent Pipelines**: Configure tracing and metrics with separate transports and credentials
 - **Resource Attributes**: Automatic service name, version, and environment tagging
 - **Graceful Shutdown**: Proper flushing of pending telemetry data
 - **No-op Mode**: Zero overhead when observability is disabled
@@ -130,6 +131,23 @@ observability:
 
 ### Cloud Provider Examples
 
+#### DataDog (traces via agent, metrics direct ingest)
+
+```yaml
+observability:
+  trace:
+    endpoint: "localhost:4317"
+    protocol: "grpc"
+    insecure: true           # OTLP gRPC to the local Datadog agent
+  metrics:
+    enabled: true
+    endpoint: "https://api.datadoghq.com"
+    protocol: "http"
+    insecure: false
+    headers:
+      DD-API-KEY: "${DATADOG_API_KEY}"
+```
+
 #### Grafana Cloud
 
 ```yaml
@@ -190,6 +208,18 @@ observability:
 | `trace.max.queue.size` | int | `2048` | Maximum buffered spans |
 | `trace.max.batch.size` | int | `512` | Maximum spans per batch |
 
+### Metrics Configuration
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `metrics.enabled` | bool | `true` | Enable/disable metrics |
+| `metrics.endpoint` | string | `"stdout"` | Endpoint for metric export (stdout, http, grpc) |
+| `metrics.protocol` | string | Fallback to `trace.protocol` or `"http"` | OTLP protocol for metrics transport |
+| `metrics.insecure` | bool | Fallback to `trace.insecure` | Use insecure connection (no TLS) |
+| `metrics.headers` | map[string]string | Fallback to `trace.headers` | Custom headers for metrics authentication |
+| `metrics.interval` | duration | `10s` | Metric export interval |
+| `metrics.export.timeout` | duration | `30s` | Maximum time for metric export operation |
+
 ## Advanced Usage
 
 ### Custom Provider Configuration
@@ -216,6 +246,17 @@ cfg := &observability.Config{
         ExportTimeout: 30 * time.Second,
         MaxQueueSize:  2048,
         MaxBatchSize:  512,
+    },
+    Metrics: observability.MetricsConfig{
+        Enabled:  true,
+        Endpoint: "https://api.datadoghq.com",
+        Protocol: "http",
+        Insecure: observability.BoolPtr(false),
+        Headers: map[string]string{
+            "DD-API-KEY": "your-api-key",
+        },
+        Interval:      15 * time.Second,
+        ExportTimeout: 45 * time.Second,
     },
 }
 

@@ -55,50 +55,50 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 
 	// Create OTLP exporter based on protocol
 	// Metrics use the same protocol configuration as traces
-	protocol := p.config.Trace.Protocol
+	protocol, useInsecure, headers := p.metricsTransportSettings()
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPMetricExporter()
+		return p.createOTLPHTTPMetricExporter(useInsecure, headers)
 	case ProtocolGRPC:
-		return p.createOTLPGRPCMetricExporter()
+		return p.createOTLPGRPCMetricExporter(useInsecure, headers)
 	default:
 		return nil, fmt.Errorf("metrics protocol '%s': %w", protocol, ErrInvalidProtocol)
 	}
 }
 
 // createOTLPHTTPMetricExporter creates an OTLP HTTP metric exporter.
-func (p *provider) createOTLPHTTPMetricExporter() (sdkmetric.Exporter, error) {
+func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	opts := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(p.config.Metrics.Endpoint),
 	}
 
 	// Configure TLS/insecure connection
-	if p.config.Trace.Insecure {
+	if useInsecure {
 		opts = append(opts, otlpmetrichttp.WithInsecure())
 	}
 
 	// Add custom headers (e.g., for authentication)
-	if len(p.config.Trace.Headers) > 0 {
-		opts = append(opts, otlpmetrichttp.WithHeaders(p.config.Trace.Headers))
+	if len(headers) > 0 {
+		opts = append(opts, otlpmetrichttp.WithHeaders(headers))
 	}
 
 	return otlpmetrichttp.New(context.Background(), opts...)
 }
 
 // createOTLPGRPCMetricExporter creates an OTLP gRPC metric exporter.
-func (p *provider) createOTLPGRPCMetricExporter() (sdkmetric.Exporter, error) {
+func (p *provider) createOTLPGRPCMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(p.config.Metrics.Endpoint),
 	}
 
 	// Configure TLS/insecure connection
-	if p.config.Trace.Insecure {
+	if useInsecure {
 		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
 	}
 
 	// Add custom headers (e.g., for authentication)
-	if len(p.config.Trace.Headers) > 0 {
-		opts = append(opts, otlpmetricgrpc.WithHeaders(p.config.Trace.Headers))
+	if len(headers) > 0 {
+		opts = append(opts, otlpmetricgrpc.WithHeaders(headers))
 	}
 
 	return otlpmetricgrpc.New(context.Background(), opts...)
@@ -170,3 +170,29 @@ func CreateUpDownCounter(meter metric.Meter, name, description string, opts ...m
 
 // Note: Observable instruments (gauges, counters) are created directly using meter.Int64ObservableGauge
 // or meter.Float64ObservableCounter with callbacks. Refer to OpenTelemetry documentation for callback patterns.
+
+// metricsTransportSettings resolves protocol, insecure flag, and headers for metrics exporters.
+// Metrics-specific fields take precedence, otherwise values fall back to trace configuration,
+// and finally to library defaults.
+func (p *provider) metricsTransportSettings() (protocol string, useInsecure bool, headers map[string]string) {
+	if p.config.Metrics.Protocol != "" {
+		protocol = p.config.Metrics.Protocol
+	} else if p.config.Trace.Protocol != "" {
+		protocol = p.config.Trace.Protocol
+	} else {
+		protocol = ProtocolHTTP
+	}
+
+	useInsecure = p.config.Trace.Insecure
+	if p.config.Metrics.Insecure != nil {
+		useInsecure = *p.config.Metrics.Insecure
+	}
+
+	if p.config.Metrics.Headers != nil {
+		headers = p.config.Metrics.Headers
+	} else {
+		headers = p.config.Trace.Headers
+	}
+
+	return protocol, useInsecure, headers
+}

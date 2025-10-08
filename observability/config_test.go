@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	testServiceName = "test-service"
+	testServiceName    = "test-service"
+	testTraceEndpointA = "localhost:4318"
+	testTraceEndpointB = "localhost:4317"
 )
 
 func TestConfigValidateNilConfig(t *testing.T) {
@@ -98,7 +100,7 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4318",
+					Endpoint:   testTraceEndpointA,
 					Protocol:   "http",
 					SampleRate: 1.0,
 				},
@@ -111,9 +113,57 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4317",
+					Endpoint:   testTraceEndpointB,
 					Protocol:   "grpc",
 					SampleRate: 1.0,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics invalid protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled: false,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: testTraceEndpointA,
+					Protocol: "websocket",
+				},
+			},
+			wantErr: ErrInvalidProtocol,
+		},
+		{
+			name: "metrics protocol inherits trace protocol",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled:  true,
+					Endpoint: testTraceEndpointB,
+					Protocol: ProtocolGRPC,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: testTraceEndpointB,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics protocol defaults to http when trace disabled",
+			config: Config{
+				Enabled:     true,
+				ServiceName: testServiceName,
+				Trace: TraceConfig{
+					Enabled: false,
+				},
+				Metrics: MetricsConfig{
+					Enabled:  true,
+					Endpoint: testTraceEndpointA,
 				},
 			},
 			wantErr: nil,
@@ -124,7 +174,7 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4318",
+					Endpoint:   testTraceEndpointA,
 					Protocol:   "websocket",
 					SampleRate: 1.0,
 				},
