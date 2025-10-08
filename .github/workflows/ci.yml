@@ -24,19 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache (Unix)
-        if: matrix.os != 'windows-latest'
-        run: rm -rf ~/go/pkg/mod
-
-      - name: Clear Go modules cache (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          if (Test-Path "$env:USERPROFILE\go\pkg\mod") {
-            Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
-          }
-          exit 0
-        shell: pwsh
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -152,9 +139,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache
-        run: rm -rf ~/go/pkg/mod
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -164,9 +148,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: integration-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: ci-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            integration-${{ runner.os }}-go${{ matrix.go-version }}-
+            ci-${{ runner.os }}-go${{ matrix.go-version }}-
 
       - name: Download dependencies
         run: go mod download
@@ -248,9 +232,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache
-        run: rm -rf ~/go/pkg/mod
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -260,9 +241,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ci-lint-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
+          key: ci-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ci-lint-${{ runner.os }}-go1.25-
+            ci-${{ runner.os }}-go1.25-
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1d64cc17c98f6243ff9c45fc39cc6911222133e3
@@ -298,9 +279,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache
-        run: rm -rf ~/go/pkg/mod
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -310,9 +288,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ci-security-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
+          key: ci-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ci-security-${{ runner.os }}-go1.25-
+            ci-${{ runner.os }}-go1.25-
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -338,19 +316,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clear Go modules cache (Unix)
-        if: matrix.os != 'windows-latest'
-        run: rm -rf ~/go/pkg/mod
-
-      - name: Clear Go modules cache (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          if (Test-Path "$env:USERPROFILE\go\pkg\mod") {
-            Remove-Item -Recurse -Force "$env:USERPROFILE\go\pkg\mod"
-          }
-          exit 0
-        shell: pwsh
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -360,18 +325,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: ci-build-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: ci-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ci-build-${{ runner.os }}-go${{ matrix.go-version }}-
+            ci-${{ runner.os }}-go${{ matrix.go-version }}-
 
       - name: Cache Go build cache (Windows)
         if: matrix.os == 'windows-latest'
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\go-build
-          key: ci-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+          key: ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ci-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
+            ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
 
       - name: Download dependencies
         run: go mod download

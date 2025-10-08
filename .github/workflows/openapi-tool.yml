@@ -43,7 +43,6 @@ jobs:
           key: openapi-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
             openapi-${{ runner.os }}-go${{ matrix.go-version }}-
-            openapi-${{ runner.os }}-
 
       - name: Cache Go build cache (Windows)
         if: matrix.os == 'windows-latest'
@@ -53,7 +52,6 @@ jobs:
           key: openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
             openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
-            openapi-go-build-cache-${{ runner.os }}-
 
       - name: Download dependencies
         run: go mod download
@@ -166,9 +164,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: openapi-lint-${{ runner.os }}-go1.25-${{ hashFiles('tools/openapi/go.sum') }}
+          key: openapi-${{ runner.os }}-go1.25-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
-            openapi-lint-${{ runner.os }}-go1.25-
             openapi-${{ runner.os }}-go1.25-
 
       - name: golangci-lint
@@ -191,9 +188,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: openapi-security-${{ runner.os }}-go1.25-${{ hashFiles('tools/openapi/go.sum') }}
+          key: openapi-${{ runner.os }}-go1.25-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
-            openapi-security-${{ runner.os }}-go1.25-
             openapi-${{ runner.os }}-go1.25-
 
       - name: Install gosec
@@ -229,10 +225,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: openapi-build-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
+          key: openapi-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
-            openapi-build-${{ runner.os }}-go${{ matrix.go-version }}-
-            openapi-build-${{ runner.os }}-
             openapi-${{ runner.os }}-go${{ matrix.go-version }}-
 
       - name: Cache Go build cache (Windows)
@@ -240,10 +234,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\go-build
-          key: openapi-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
+          key: openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
           restore-keys: |
-            openapi-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
-            openapi-build-cache-${{ runner.os }}-
+            openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
 
       - name: Download dependencies
         run: go mod download
