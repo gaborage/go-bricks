@@ -18,6 +18,7 @@ const (
 	httpMethodAttr       = "http.method"
 	dbSystemAttr         = "db.system"
 	dbQuery              = "db.query"
+	databaseQuerySpan    = "database-query"
 	totalRequestsCounter = "requests.total"
 	totalRequestDuration = "requests.duration"
 	moduleOpsCounter     = "module.operations"
@@ -74,7 +75,8 @@ func ExampleNewTestMeterProvider() {
 	// Output: Metrics collected successfully
 }
 
-// ExampleSpanCollector demonstrates the fluent API for filtering and asserting spans.
+// ExampleSpanCollector demonstrates filtering spans by name and attributes.
+// Note: In actual tests, use NewSpanCollector with a testing.T parameter for assertions.
 func ExampleSpanCollector() {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
@@ -82,7 +84,7 @@ func ExampleSpanCollector() {
 	tracer := tp.Tracer("example")
 
 	// Create multiple spans with different attributes
-	_, span1 := tracer.Start(context.Background(), "database-query")
+	_, span1 := tracer.Start(context.Background(), databaseQuerySpan)
 	span1.SetAttributes(attribute.String(dbSystemAttr, "postgresql"))
 	span1.End()
 
@@ -90,12 +92,35 @@ func ExampleSpanCollector() {
 	span2.SetAttributes(attribute.String(httpMethodAttr, "POST"))
 	span2.End()
 
-	_, span3 := tracer.Start(context.Background(), "database-query")
+	_, span3 := tracer.Start(context.Background(), databaseQuerySpan)
 	span3.SetAttributes(attribute.String(dbSystemAttr, "mongodb"))
 	span3.End()
 
-	fmt.Println("Created 3 spans")
-	// Output: Created 3 spans
+	// Get spans and count them by filtering
+	spans := tp.Exporter.GetSpans()
+
+	// Count database query spans
+	dbCount := 0
+	pgCount := 0
+	for i := range spans {
+		if spans[i].Name == databaseQuerySpan {
+			dbCount++
+			// Check for PostgreSQL attribute
+			for _, attr := range spans[i].Attributes {
+				if attr.Key == attribute.Key(dbSystemAttr) && attr.Value.AsString() == "postgresql" {
+					pgCount++
+					break
+				}
+			}
+		}
+	}
+
+	fmt.Printf("Database queries: %d\n", dbCount)
+	fmt.Printf("PostgreSQL queries: %d\n", pgCount)
+
+	// Output:
+	// Database queries: 2
+	// PostgreSQL queries: 1
 }
 
 // TestExampleSpanAssertions shows common span assertion patterns.
@@ -264,7 +289,8 @@ func TestExampleModuleInstrumentation(t *testing.T) {
 	span.SetAttributes(attribute.String("operation", "test"))
 	span.End()
 
-	counter, _ := meter.Int64Counter(moduleOpsCounter)
+	counter, err := meter.Int64Counter(moduleOpsCounter)
+	require.NoError(t, err)
 	counter.Add(context.Background(), 1)
 
 	// Assert spans
