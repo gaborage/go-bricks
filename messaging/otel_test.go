@@ -121,7 +121,7 @@ func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
 
 	attrs := span.Attributes
 	assertAttribute(t, attrs, "messaging.rabbitmq.exchange", testExchange)
-	assertAttribute(t, attrs, "messaging.rabbitmq.routing_key", testRoutingKey)
+	assertAttribute(t, attrs, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
 
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
@@ -226,6 +226,32 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 	assert.Equal(t, codes.Error, span.Status.Code)
 	assert.Contains(t, span.Status.Description, "deadline exceeded")
 
+	// Verify retry events were recorded
+	require.NotEmpty(t, span.Events, "Expected retry events to be recorded")
+	hasRetryEvent := false
+	for _, event := range span.Events {
+		if event.Name != "amqp.publish.retry" {
+			continue
+		}
+		hasRetryEvent = true
+		// Verify retry attributes
+		attrs := event.Attributes
+		foundReason := false
+		foundRetryCount := false
+		for _, attr := range attrs {
+			if attr.Key == "reason" && attr.Value.AsString() == "confirmation timeout" {
+				foundReason = true
+			}
+			if attr.Key == "retry_count" {
+				foundRetryCount = true
+				assert.Greater(t, int(attr.Value.AsInt64()), 0, "retry_count should be greater than 0")
+			}
+		}
+		assert.True(t, foundReason, "Expected 'reason' attribute with value 'confirmation timeout'")
+		assert.True(t, foundRetryCount, "Expected 'retry_count' attribute")
+	}
+	assert.True(t, hasRetryEvent, "Expected at least one 'amqp.publish.retry' event to be recorded")
+
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
 	close(fakeCh.notifyCloseCh)
@@ -266,7 +292,7 @@ func TestStartConsumeSpanCreatesSpanWithAttributes(t *testing.T) {
 	assertAttribute(t, attrs, string(semconv.MessagingDestinationNameKey), testQueueOtel)
 	assertAttribute(t, attrs, string(semconv.MessagingMessageBodySizeKey), int64(len(delivery.Body)))
 	assertAttribute(t, attrs, "messaging.rabbitmq.exchange", testExchange)
-	assertAttribute(t, attrs, "messaging.rabbitmq.routing_key", testRoutingKey)
+	assertAttribute(t, attrs, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
 	assertAttribute(t, attrs, string(semconv.MessagingMessageIDKey), "msg-123")
 	assertAttribute(t, attrs, string(semconv.MessagingMessageConversationIDKey), "corr-456")
 }
@@ -298,8 +324,11 @@ func TestStartConsumeSpanExtractsTraceContext(t *testing.T) {
 	span := spans[0]
 	assert.Equal(t, testQueueOtel+" receive", span.Name)
 
-	// Verify span has the trace ID from the traceparent header
-	assert.NotEqual(t, trace.TraceID{}, span.SpanContext.TraceID())
+	// Verify span has a valid trace ID (extraction happened successfully)
+	// The extraction from headers creates a parent span context, and the tracer
+	// creates a child span. In production, this would preserve the TraceID from
+	// the traceparent header.
+	assert.NotEqual(t, trace.TraceID{}, span.SpanContext.TraceID(), "Span should have a valid TraceID")
 }
 
 func TestConsumeSpanWithMinimalDelivery(t *testing.T) {
