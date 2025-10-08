@@ -28,23 +28,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ci-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-${{ runner.os }}-go${{ matrix.go-version }}-
-
-      - name: Cache Go build cache (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
-        with:
-          path: ~\AppData\Local\go-build
-          key: ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -143,14 +128,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ci-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-${{ runner.os }}-go${{ matrix.go-version }}-
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -181,6 +160,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Download unit test coverage
         uses: actions/download-artifact@v5
@@ -236,14 +217,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.25'
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ci-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-${{ runner.os }}-go1.25-
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1d64cc17c98f6243ff9c45fc39cc6911222133e3
@@ -283,14 +258,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.25'
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ci-${{ runner.os }}-go1.25-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-${{ runner.os }}-go1.25-
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -320,23 +289,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ci-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-${{ runner.os }}-go${{ matrix.go-version }}-
-
-      - name: Cache Go build cache (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
-        with:
-          path: ~\AppData\Local\go-build
-          key: ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ci-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Download dependencies
         run: go mod download
