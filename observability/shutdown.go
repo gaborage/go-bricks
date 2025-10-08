@@ -15,6 +15,10 @@ const (
 // It creates a context with timeout and calls the provider's Shutdown method.
 // Returns an error if shutdown fails or times out.
 func Shutdown(provider Provider, timeout time.Duration) error {
+	if provider == nil {
+		return nil
+	}
+
 	if timeout <= 0 {
 		timeout = DefaultShutdownTimeout
 	}

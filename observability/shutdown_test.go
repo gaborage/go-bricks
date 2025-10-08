@@ -46,6 +46,10 @@ func TestShutdownSuccess(t *testing.T) {
 	assert.True(t, mock.shutdownCalled)
 }
 
+func TestShutdownNilProvider(t *testing.T) {
+	assert.NoError(t, Shutdown(nil, time.Second))
+}
+
 func TestShutdownError(t *testing.T) {
 	expectedErr := errors.New("shutdown failed")
 	mock := &mockProvider{shutdownErr: expectedErr}
@@ -79,6 +83,12 @@ func TestMustShutdownSuccess(t *testing.T) {
 		MustShutdown(mock, 1*time.Second)
 	})
 	assert.True(t, mock.shutdownCalled)
+}
+
+func TestMustShutdownNilProvider(t *testing.T) {
+	assert.NotPanics(t, func() {
+		MustShutdown(nil, time.Second)
+	})
 }
 
 func TestMustShutdownPanic(t *testing.T) {
