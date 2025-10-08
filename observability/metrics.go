@@ -55,20 +55,19 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 
 	// Create OTLP exporter based on protocol
 	// Metrics use the same protocol configuration as traces
-	protocol, _, _ := p.metricsTransportSettings()
+	protocol, useInsecure, headers := p.metricsTransportSettings()
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPMetricExporter()
+		return p.createOTLPHTTPMetricExporter(useInsecure, headers)
 	case ProtocolGRPC:
-		return p.createOTLPGRPCMetricExporter()
+		return p.createOTLPGRPCMetricExporter(useInsecure, headers)
 	default:
 		return nil, fmt.Errorf("metrics protocol '%s': %w", protocol, ErrInvalidProtocol)
 	}
 }
 
 // createOTLPHTTPMetricExporter creates an OTLP HTTP metric exporter.
-func (p *provider) createOTLPHTTPMetricExporter() (sdkmetric.Exporter, error) {
-	_, useInsecure, headers := p.metricsTransportSettings()
+func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	opts := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(p.config.Metrics.Endpoint),
 	}
@@ -87,8 +86,7 @@ func (p *provider) createOTLPHTTPMetricExporter() (sdkmetric.Exporter, error) {
 }
 
 // createOTLPGRPCMetricExporter creates an OTLP gRPC metric exporter.
-func (p *provider) createOTLPGRPCMetricExporter() (sdkmetric.Exporter, error) {
-	_, useInsecure, headers := p.metricsTransportSettings()
+func (p *provider) createOTLPGRPCMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(p.config.Metrics.Endpoint),
 	}
