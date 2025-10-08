@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	testServiceName = "test-service"
+	testServiceName    = "test-service"
+	testTraceEndpointA = "localhost:4318"
+	testTraceEndpointB = "localhost:4317"
 )
 
 func TestConfigValidateNilConfig(t *testing.T) {
@@ -98,7 +100,7 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4318",
+					Endpoint:   testTraceEndpointA,
 					Protocol:   "http",
 					SampleRate: 1.0,
 				},
@@ -111,7 +113,7 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4317",
+					Endpoint:   testTraceEndpointB,
 					Protocol:   "grpc",
 					SampleRate: 1.0,
 				},
@@ -128,7 +130,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Metrics: MetricsConfig{
 					Enabled:  true,
-					Endpoint: "localhost:4318",
+					Endpoint: testTraceEndpointA,
 					Protocol: "websocket",
 				},
 			},
@@ -141,12 +143,12 @@ func TestConfigValidate(t *testing.T) {
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
 					Enabled:  true,
-					Endpoint: "localhost:4317",
+					Endpoint: testTraceEndpointB,
 					Protocol: ProtocolGRPC,
 				},
 				Metrics: MetricsConfig{
 					Enabled:  true,
-					Endpoint: "localhost:4317",
+					Endpoint: testTraceEndpointB,
 				},
 			},
 			wantErr: nil,
@@ -161,7 +163,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Metrics: MetricsConfig{
 					Enabled:  true,
-					Endpoint: "localhost:4318",
+					Endpoint: testTraceEndpointA,
 				},
 			},
 			wantErr: nil,
@@ -172,7 +174,7 @@ func TestConfigValidate(t *testing.T) {
 				Enabled:     true,
 				ServiceName: testServiceName,
 				Trace: TraceConfig{
-					Endpoint:   "localhost:4318",
+					Endpoint:   testTraceEndpointA,
 					Protocol:   "websocket",
 					SampleRate: 1.0,
 				},

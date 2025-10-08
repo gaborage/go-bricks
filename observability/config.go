@@ -16,8 +16,7 @@ const (
 // BoolPtr returns a pointer to the provided bool value.
 // Helpful when optional boolean configuration fields are used.
 func BoolPtr(v bool) *bool {
-	value := v
-	return &value
+	return &v
 }
 
 // Config defines the configuration for observability features.
@@ -157,7 +156,12 @@ func (c *Config) validateTraceConfig() error {
 		return nil
 	}
 
-	switch c.Trace.Protocol {
+	protocol := c.Trace.Protocol
+	if protocol == "" {
+		protocol = ProtocolHTTP
+	}
+
+	switch protocol {
 	case ProtocolHTTP, ProtocolGRPC:
 		return nil
 	default:
