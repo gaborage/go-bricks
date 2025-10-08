@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"maps"
-	"strconv"
 	"sync"
 	"time"
 
@@ -57,6 +56,8 @@ const (
 	messagingSystemRabbitMQ = "rabbitmq"
 	operationPublish        = "publish"
 	operationReceive        = "receive"
+	contentTypeOctetStream  = "application/octet-stream"
+	eventPublishRetry       = "amqp.publish.retry"
 )
 
 var (
@@ -115,7 +116,7 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 		trace.WithTimestamp(startTime),
 	)
 
-	// Set messaging semantic attributes
+	// Set messaging semantic attributes using semconv v1.32.0 helpers where available
 	attrs := []attribute.KeyValue{
 		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
 		semconv.MessagingOperationName(operationPublish),
@@ -126,11 +127,40 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", options.Exchange))
 	}
 	if options.RoutingKey != "" {
-		attrs = append(attrs, attribute.String("messaging.rabbitmq.routing_key", options.RoutingKey))
+		// Use official semconv helper for RabbitMQ routing key
+		attrs = append(attrs, semconv.MessagingRabbitMQDestinationRoutingKey(options.RoutingKey))
 	}
 	span.SetAttributes(attrs...)
 
 	return ctx, span
+}
+
+// preparePublishing creates an AMQP publishing message with headers, trace context, and message IDs.
+func preparePublishing(ctx context.Context, options PublishOptions, data []byte) amqp.Publishing {
+	publishing := amqp.Publishing{
+		ContentType: contentTypeOctetStream,
+		Body:        data,
+		Headers:     amqp.Table{},
+	}
+
+	if options.Headers != nil {
+		maps.Copy(publishing.Headers, options.Headers)
+	}
+
+	// Inject trace headers using centralized trace package
+	accessor := &amqpHeaderAccessor{headers: publishing.Headers}
+	gobrickstrace.InjectIntoHeaders(ctx, accessor)
+
+	// AMQP-specific: populate CorrelationId and MessageId
+	traceID := gobrickstrace.EnsureTraceID(ctx)
+	if publishing.CorrelationId == "" {
+		publishing.CorrelationId = traceID
+	}
+	if publishing.MessageId == "" {
+		publishing.MessageId = uuid.New().String()
+	}
+
+	return publishing
 }
 
 // PublishToExchange publishes a message to a specific exchange with routing key.
@@ -141,18 +171,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
 	defer span.End()
 
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		c.log.Warn().
-			Str("exchange", options.Exchange).
-			Str("routing_key", options.RoutingKey).
-			Msg("AMQP client not ready, message not published")
-		span.SetStatus(codes.Error, "AMQP client not ready")
-		return nil // Return nil to avoid failing the business operation
-	}
-	c.m.RUnlock()
-
+	retryCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -166,9 +185,45 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		default:
 		}
 
-		err := c.unsafePublish(ctx, options, data)
+		// Atomically capture both channel and confirm notification channel under a single lock
+		// to prevent mismatch during reconnection
+		c.m.RLock()
+		if !c.isReady {
+			c.m.RUnlock()
+			c.log.Warn().
+				Str("exchange", options.Exchange).
+				Str("routing_key", options.RoutingKey).
+				Msg("AMQP client not ready, message not published")
+			span.SetStatus(codes.Error, "AMQP client not ready")
+			return nil // Return nil to avoid failing the business operation
+		}
+		channel := c.channel
+		confirmCh := c.notifyConfirm
+		c.m.RUnlock()
+
+		// Prepare message with headers, trace context, and message IDs
+		publishing := preparePublishing(ctx, options, data)
+		messageID := publishing.MessageId
+		correlationID := publishing.CorrelationId
+
+		// Publish using the captured channel
+		err := channel.PublishWithContext(
+			ctx,
+			options.Exchange,
+			options.RoutingKey,
+			options.Mandatory,
+			options.Immediate,
+			publishing,
+		)
+
 		if err != nil {
-			c.log.Warn().Err(err).Msg("Publish failed, retrying...")
+			retryCount++
+			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
+			span.AddEvent(eventPublishRetry, trace.WithAttributes(
+				attribute.String("reason", "publish error"),
+				attribute.String("error", err.Error()),
+				attribute.Int("retry_count", retryCount),
+			))
 			select {
 			case <-ctx.Done():
 				span.RecordError(ctx.Err())
@@ -183,7 +238,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			continue
 		}
 
-		// Wait for confirmation
+		// Wait for confirmation on the captured confirm channel
 		select {
 		case <-ctx.Done():
 			span.RecordError(ctx.Err())
@@ -193,7 +248,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			span.RecordError(errShutdown)
 			span.SetStatus(codes.Error, errShutdown.Error())
 			return errShutdown
-		case confirm := <-c.notifyConfirm:
+		case confirm := <-confirmCh:
 			if confirm.Ack {
 				// Track elapsed time and increment AMQP counter in context for request tracking
 				elapsed := time.Since(startTime)
@@ -204,24 +259,36 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 					Str("routing_key", options.RoutingKey).
 					Uint64("delivery_tag", confirm.DeliveryTag).
 					Msg("Message published successfully")
+
+				// Add message IDs to span for cross-system correlation
+				span.SetAttributes(
+					semconv.MessagingMessageID(messageID),
+					semconv.MessagingMessageConversationID(correlationID),
+				)
 				span.SetStatus(codes.Ok, "")
 				return nil
 			}
 			// NACK received - retry the publish
+			retryCount++
 			c.log.Warn().
 				Uint64("delivery_tag", confirm.DeliveryTag).
+				Int("retry_count", retryCount).
 				Msg("Message publish not acknowledged, retrying...")
-			span.AddEvent("amqp.publish.retry", trace.WithAttributes(
+			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "message not acknowledged"),
-				attribute.String("delivery_tag", strconv.FormatUint(confirm.DeliveryTag, 10)),
+				// #nosec G115 -- delivery tags are sequential and never overflow int in practice
+				semconv.MessagingRabbitMQMessageDeliveryTag(int(confirm.DeliveryTag)),
+				attribute.Int("retry_count", retryCount),
 			))
 			// Continue to retry the publish operation
 			continue
 		case <-time.After(c.connectionTimeout):
 			// Confirmation timeout - retry the publish
-			c.log.Warn().Msg("Publish confirmation timeout, retrying...")
-			span.AddEvent("amqp.publish.retry", trace.WithAttributes(
+			retryCount++
+			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
+			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "confirmation timeout"),
+				attribute.Int("retry_count", retryCount),
 			))
 			// Continue to retry the publish operation
 			continue
@@ -482,19 +549,25 @@ func (a *amqpHeaderAccessor) Set(key string, value any) {
 // This should be called by consumers when processing messages.
 // The returned context should be used for downstream operations, and the span must be ended when done.
 func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName string) (context.Context, trace.Span) {
+	tracer := otel.Tracer(messagingTracerName)
+	if delivery == nil {
+		// No delivery, return a no-op span
+		return tracer.Start(ctx, queueName+" "+operationReceive, trace.WithSpanKind(trace.SpanKindConsumer))
+	}
 	// Extract trace context from message headers
 	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
 	ctx = gobrickstrace.ExtractFromHeaders(ctx, accessor)
 
 	// Create span for consume operation
-	tracer := otel.Tracer(messagingTracerName)
+	// Uses "receive" operation as this span covers receiving from broker;
+	// application code can create child "process" spans for message handling if needed
 	spanName := queueName + " " + operationReceive
 
 	ctx, span := tracer.Start(ctx, spanName,
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	)
 
-	// Set messaging semantic attributes
+	// Set messaging semantic attributes using semconv v1.32.0 helpers where available
 	attrs := []attribute.KeyValue{
 		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
 		semconv.MessagingOperationName(operationReceive),
@@ -505,7 +578,8 @@ func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName st
 		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", delivery.Exchange))
 	}
 	if delivery.RoutingKey != "" {
-		attrs = append(attrs, attribute.String("messaging.rabbitmq.routing_key", delivery.RoutingKey))
+		// Use official semconv helper for RabbitMQ routing key
+		attrs = append(attrs, semconv.MessagingRabbitMQDestinationRoutingKey(delivery.RoutingKey))
 	}
 	if delivery.MessageId != "" {
 		attrs = append(attrs, semconv.MessagingMessageID(delivery.MessageId))
@@ -528,30 +602,7 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 	channel := c.channel
 	c.m.RUnlock()
 
-	publishing := amqp.Publishing{
-		ContentType: "application/octet-stream",
-		Body:        data,
-		Headers:     amqp.Table{},
-	}
-
-	if options.Headers != nil {
-		maps.Copy(publishing.Headers, options.Headers)
-	}
-
-	// Inject trace headers using centralized trace package
-	accessor := &amqpHeaderAccessor{headers: publishing.Headers}
-	gobrickstrace.InjectIntoHeaders(ctx, accessor)
-
-	// AMQP-specific: populate CorrelationId and MessageId
-	// CorrelationId should correlate across a trace; MessageId should be unique per message
-	traceID := gobrickstrace.EnsureTraceID(ctx)
-	if publishing.CorrelationId == "" {
-		publishing.CorrelationId = traceID
-	}
-	if publishing.MessageId == "" {
-		// Prefer a unique ID per message for dedup/observability
-		publishing.MessageId = uuid.New().String()
-	}
+	publishing := preparePublishing(ctx, options, data)
 
 	return channel.PublishWithContext(
 		ctx,
