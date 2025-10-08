@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -261,7 +262,7 @@ func (p *provider) Shutdown(ctx context.Context) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("shutdown errors: %v", errs)
+		return fmt.Errorf("shutdown errors: %w", errors.Join(errs...))
 	}
 
 	return nil
@@ -289,7 +290,7 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("flush errors: %v", errs)
+		return fmt.Errorf("flush errors: %w", errors.Join(errs...))
 	}
 
 	return nil
