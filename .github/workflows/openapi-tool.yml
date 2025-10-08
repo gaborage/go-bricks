@@ -45,6 +45,16 @@ jobs:
             openapi-${{ runner.os }}-go${{ matrix.go-version }}-
             openapi-${{ runner.os }}-
 
+      - name: Cache Go build cache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\go-build
+          key: openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
+          restore-keys: |
+            openapi-go-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
+            openapi-go-build-cache-${{ runner.os }}-
+
       - name: Download dependencies
         run: go mod download
 
@@ -77,49 +87,62 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          # Run tests with awareness of platform-specific failures
-          $ErrorActionPreference = "Continue"
-          $packages = go list ./... | Where-Object { $_ -notmatch 'models' }
-          $hasFailures = $false
+          $packages = go list ./...
+
+          if (-not $packages) {
+            Write-Host "No packages found to test"
+            exit 1
+          }
+
+          $testOutput = go test -race $packages 2>&1
+          $exitCode = $LASTEXITCODE
+
+          if ($exitCode -eq 0) {
+            Write-Host $testOutput
+            exit 0
+          }
+
+          Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
+          $knownPatterns = @(
+            'Expected /tmp.*got D:',
+            'wantErr true'
+          )
+          $unexpectedFailure = $false
 
           foreach ($pkg in $packages) {
-            Write-Host "Testing package: $pkg" -ForegroundColor Cyan
+            Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
+            $pkgOutput = go test -race $pkg 2>&1
+            $pkgExitCode = $LASTEXITCODE
 
-            # Run test and capture output
-            $testOutput = ""
-            $exitCode = 0
-            try {
-              # Only generate coverage on Windows if we're in the coverage-generating scenario
-              # But since Windows tests handle platform-specific issues, just run without coverage
-              $testOutput = & go test -race -covermode atomic $pkg 2>&1 | Out-String
-              $exitCode = $LASTEXITCODE
-            } catch {
-              $testOutput = $_.Exception.Message
-              $exitCode = 1
+            if ($pkgExitCode -eq 0) {
+              Write-Host $pkgOutput
+              continue
             }
 
-            if ($exitCode -ne 0) {
-              Write-Host "Package ${pkg} had test failures:" -ForegroundColor Yellow
-              Write-Host $testOutput -ForegroundColor White
-
-              # Check if failures are known platform-specific issues
-              if ($testOutput -match "Expected /tmp.*got D:" -or $testOutput -match "wantErr true") {
-                Write-Host "Known Windows platform compatibility issue - continuing" -ForegroundColor Yellow
-              } else {
-                Write-Host "Unexpected test failure for ${pkg}" -ForegroundColor Red
-                $hasFailures = $true
+            $isKnownIssue = $false
+            foreach ($pattern in $knownPatterns) {
+              if ($pkgOutput -match $pattern) {
+                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
+                $isKnownIssue = $true
+                break
               }
+            }
+
+            if (-not $isKnownIssue) {
+              Write-Host "Unexpected test failure in $pkg" -ForegroundColor Red
+              Write-Host $pkgOutput
+              $unexpectedFailure = $true
             } else {
-              Write-Host "Package ${pkg} PASSED" -ForegroundColor Green
+              Write-Host $pkgOutput
             }
           }
 
-          if ($hasFailures) {
-            Write-Host "Some tests had unexpected failures" -ForegroundColor Red
+          if ($unexpectedFailure) {
             exit 1
-          } else {
-            Write-Host "Windows testing completed - core functionality verified" -ForegroundColor Green
           }
+
+          Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
+          exit 0
 
       - name: Upload coverage artifact for SonarCloud (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
@@ -211,6 +234,16 @@ jobs:
             openapi-build-${{ runner.os }}-go${{ matrix.go-version }}-
             openapi-build-${{ runner.os }}-
             openapi-${{ runner.os }}-go${{ matrix.go-version }}-
+
+      - name: Cache Go build cache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\go-build
+          key: openapi-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-${{ hashFiles('tools/openapi/go.sum') }}
+          restore-keys: |
+            openapi-build-cache-${{ runner.os }}-go${{ matrix.go-version }}-
+            openapi-build-cache-${{ runner.os }}-
 
       - name: Download dependencies
         run: go mod download
