@@ -87,7 +87,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          $packages = go list ./... | Where-Object { $_ -notmatch 'models' }
+          $packages = go list ./... | Where-Object { $_ -notmatch '/models(/|$)' }
           if (-not $packages) {
             Write-Host "No packages found to test"
             exit 1
