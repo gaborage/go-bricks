@@ -757,8 +757,8 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			mockConn := &mockStatsConnection{stats: tc.stats}
 
 			// Register pool metrics
-			cleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
-			defer cleanup()
+			connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+			defer connCleanup()
 
 			// Force metrics collection by collecting from meter provider
 			rm := mp.Collect(t)
@@ -803,8 +803,8 @@ func TestRegisterConnectionPoolMetricsWithInvalidTypes(t *testing.T) {
 	}
 
 	// Should not panic
-	cleanup2 := RegisterConnectionPoolMetrics(mockConn, "postgresql")
-	defer cleanup2()
+	connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+	defer connCleanup()
 
 	// Collect metrics - should succeed without panic
 	rm := mp.Collect(t)
@@ -827,8 +827,8 @@ func TestRegisterConnectionPoolMetricsStatsError(t *testing.T) {
 
 	// Should not panic during registration or collection
 	assert.NotPanics(t, func() {
-		cleanup2 := RegisterConnectionPoolMetrics(mockConn, "postgresql")
-		defer cleanup2()
+		connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+		defer connCleanup()
 
 		// Collect metrics - should succeed without panic (callback logs error but doesn't fail)
 		_ = mp.Collect(t)
@@ -864,4 +864,67 @@ func TestNoOpCleanup(t *testing.T) {
 		cleanup()
 		cleanup()
 	})
+}
+
+// TestExtractTableNameWithMySQLBackticks tests that table extraction works with MySQL backtick-quoted identifiers.
+func TestExtractTableNameWithMySQLBackticks(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		expected string
+	}{
+		// MySQL backtick-quoted table names
+		{"mysql_select_backticks", "SELECT * FROM `users`", "users"},
+		{"mysql_insert_backticks", "INSERT INTO `orders` VALUES (1)", "orders"},
+		{"mysql_update_backticks", "UPDATE `products` SET price = 100", "products"},
+		{"mysql_delete_backticks", "DELETE FROM `sessions` WHERE id = 1", "sessions"},
+
+		// MySQL schema-qualified with backticks
+		{"mysql_schema_table_backticks", "SELECT * FROM `mydb`.`users`", "users"},
+		{"mysql_schema_only_backticks", "SELECT * FROM mydb.`users`", "users"},
+		{"mysql_table_only_backticks", "SELECT * FROM `mydb`.users", "users"},
+
+		// Mixed quote styles (PostgreSQL double quotes)
+		{"postgres_double_quotes", "SELECT * FROM \"users\"", "users"},
+		{"postgres_schema_table", "SELECT * FROM \"public\".\"users\"", "users"},
+
+		// ANSI SQL single quotes (less common but valid)
+		{"ansi_single_quotes", "SELECT * FROM 'users'", "users"},
+
+		// No quotes (most common)
+		{"no_quotes_select", "SELECT * FROM users", "users"},
+		{"no_quotes_insert", "INSERT INTO orders VALUES (1)", "orders"},
+
+		// Case insensitivity
+		{"mysql_uppercase_backticks", "select * from `USERS`", "users"},
+		{"mysql_mixed_case", "SELECT * FROM `UserAccounts`", "useraccounts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractTableName(tt.query)
+			assert.Equal(t, tt.expected, result, "Table name should be correctly extracted from query")
+		})
+	}
+}
+
+// TestExtractTableNameBackwardCompatibility ensures existing patterns still work after MySQL backtick support.
+func TestExtractTableNameBackwardCompatibility(t *testing.T) {
+	// Verify all existing test cases from TestRecordDBMetricsWithTableAttribute still work
+	legacyQueries := []struct {
+		query    string
+		expected string
+	}{
+		{"SELECT * FROM users", "users"},
+		{"INSERT INTO orders VALUES (1)", "orders"},
+		{"UPDATE products SET price = 100", "products"},
+		{"DELETE FROM sessions WHERE id = 1", "sessions"},
+		{"select * from USERS", "users"}, // case insensitive
+		{"BEGIN TRANSACTION", "unknown"}, // non-DML
+	}
+
+	for _, tc := range legacyQueries {
+		result := extractTableName(tc.query)
+		assert.Equal(t, tc.expected, result, "Legacy query should still extract table correctly: %s", tc.query)
+	}
 }

@@ -65,7 +65,9 @@ func logMetricError(metricName string, err error) {
 // to use a consistent cleanup pattern regardless of whether metrics were successfully registered.
 func noOpCleanup() func() {
 	// Return empty function - nothing to clean up if registration failed
-	return func() {}
+	return func() {
+		// No-op
+	}
 }
 
 // asInt64 safely converts various Go numeric types to int64.
@@ -247,12 +249,22 @@ func isSQLNoRowsError(err error) bool {
 var (
 	// Regex patterns for extracting table names from SQL queries
 	// These patterns handle common DML operations and account for quoted identifiers
+	// Supports PostgreSQL/Oracle (double quotes), MySQL (backticks), and ANSI SQL (single quotes)
 	// They also handle schema-qualified tables (schema.table) by capturing the table name after the dot
-	selectTableRegex = regexp.MustCompile(`(?i)FROM\s+(?:["']?\w+["']?\.)?["']?(\w+)["']?`)
-	insertTableRegex = regexp.MustCompile(`(?i)INSERT\s+INTO\s+(?:["']?\w+["']?\.)?["']?(\w+)["']?`)
-	updateTableRegex = regexp.MustCompile(`(?i)UPDATE\s+(?:["']?\w+["']?\.)?["']?(\w+)["']?`)
-	deleteTableRegex = regexp.MustCompile(`(?i)DELETE\s+FROM\s+(?:["']?\w+["']?\.)?["']?(\w+)["']?`)
+	selectTableRegex = regexp.MustCompile("(?i)FROM\\s+(?:[`\"']?\\w+[`\"']?\\.)?[`\"']?(\\w+)[`\"']?")
+	insertTableRegex = regexp.MustCompile("(?i)INSERT\\s+INTO\\s+(?:[`\"']?\\w+[`\"']?\\.)?[`\"']?(\\w+)[`\"']?")
+	updateTableRegex = regexp.MustCompile("(?i)UPDATE\\s+(?:[`\"']?\\w+[`\"']?\\.)?[`\"']?(\\w+)[`\"']?")
+	deleteTableRegex = regexp.MustCompile("(?i)DELETE\\s+FROM\\s+(?:[`\"']?\\w+[`\"']?\\.)?[`\"']?(\\w+)[`\"']?")
 )
+
+// tryExtractTable attempts to extract a table name from the query using the provided regex.
+// Returns the lowercase table name if found, empty string otherwise.
+func tryExtractTable(pattern *regexp.Regexp, query string) string {
+	if matches := pattern.FindStringSubmatch(query); len(matches) > 1 {
+		return strings.ToLower(matches[1])
+	}
+	return ""
+}
 
 // extractTableName attempts to extract the primary table name from a SQL query.
 // It uses regex patterns to identify tables in SELECT, INSERT, UPDATE, and DELETE statements.
@@ -268,40 +280,110 @@ func extractTableName(query string) string {
 		return "unknown"
 	}
 
-	// Try each pattern based on likely query type
+	// Try each pattern based on query type
 	queryUpper := strings.ToUpper(query)
 
 	// SELECT queries
 	if strings.HasPrefix(queryUpper, "SELECT") {
-		if matches := selectTableRegex.FindStringSubmatch(query); len(matches) > 1 {
-			return strings.ToLower(matches[1])
+		if table := tryExtractTable(selectTableRegex, query); table != "" {
+			return table
 		}
 	}
 
 	// INSERT queries
 	if strings.HasPrefix(queryUpper, "INSERT") {
-		if matches := insertTableRegex.FindStringSubmatch(query); len(matches) > 1 {
-			return strings.ToLower(matches[1])
+		if table := tryExtractTable(insertTableRegex, query); table != "" {
+			return table
 		}
 	}
 
 	// UPDATE queries
 	if strings.HasPrefix(queryUpper, "UPDATE") {
-		if matches := updateTableRegex.FindStringSubmatch(query); len(matches) > 1 {
-			return strings.ToLower(matches[1])
+		if table := tryExtractTable(updateTableRegex, query); table != "" {
+			return table
 		}
 	}
 
 	// DELETE queries
 	if strings.HasPrefix(queryUpper, "DELETE") {
-		if matches := deleteTableRegex.FindStringSubmatch(query); len(matches) > 1 {
-			return strings.ToLower(matches[1])
+		if table := tryExtractTable(deleteTableRegex, query); table != "" {
+			return table
 		}
 	}
 
 	// For DDL, transactions, and other operations, return "unknown"
 	// These operations are typically less frequent and table-specific metrics aren't as critical
 	return "unknown"
+}
+
+// createGauge creates an observable gauge and logs errors without failing.
+// Returns the created gauge or nil if creation failed.
+func createGauge(meter metric.Meter, name, description string) metric.Int64ObservableGauge {
+	gauge, err := meter.Int64ObservableGauge(name, metric.WithDescription(description))
+	logMetricError(name, err)
+	return gauge
+}
+
+// collectInstruments collects non-nil observable instruments into a slice.
+// This helper eliminates repetitive nil-checking code.
+func collectInstruments(gauges ...metric.Int64ObservableGauge) []metric.Observable {
+	var instruments []metric.Observable
+	for _, g := range gauges {
+		if g != nil {
+			instruments = append(instruments, g)
+		}
+	}
+	return instruments
+}
+
+// extractPoolStats extracts integer pool statistics from the stats map using type-safe conversion.
+// Returns three values: inUse (active connections), idle (idle connections), maxOpen (maximum configured).
+func extractPoolStats(stats map[string]any) (inUse, idle, maxOpen int64) {
+	if val, ok := asInt64(stats["in_use"]); ok {
+		inUse = val
+	}
+	if val, ok := asInt64(stats["idle"]); ok {
+		idle = val
+	}
+	if val, ok := asInt64(stats["max_open_connections"]); ok {
+		maxOpen = val
+	}
+	return
+}
+
+// poolMetricsRegistration encapsulates pool metrics gauge state and observation logic.
+// This struct reduces complexity by isolating the callback implementation.
+type poolMetricsRegistration struct {
+	conn interface {
+		Stats() (map[string]any, error)
+	}
+	activeGauge metric.Int64ObservableGauge
+	idleGauge   metric.Int64ObservableGauge
+	totalGauge  metric.Int64ObservableGauge
+	attrs       []attribute.KeyValue
+}
+
+// observePoolStats reads connection pool statistics and updates gauges.
+// This method is called automatically during metrics collection (typically every 30s).
+func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer metric.Observer) error {
+	stats, err := r.conn.Stats()
+	if err != nil {
+		return nil // Best-effort - don't fail metrics collection
+	}
+
+	inUse, idle, maxOpen := extractPoolStats(stats)
+
+	if r.activeGauge != nil {
+		observer.ObserveInt64(r.activeGauge, inUse, metric.WithAttributes(r.attrs...))
+	}
+	if r.idleGauge != nil {
+		observer.ObserveInt64(r.idleGauge, idle, metric.WithAttributes(r.attrs...))
+	}
+	if r.totalGauge != nil {
+		observer.ObserveInt64(r.totalGauge, maxOpen, metric.WithAttributes(r.attrs...))
+	}
+
+	return nil
 }
 
 // RegisterConnectionPoolMetrics registers ObservableGauges for connection pool metrics.
@@ -322,90 +404,30 @@ func RegisterConnectionPoolMetrics(conn interface {
 }, vendor string) func() {
 	meter := getDBMeter()
 	if meter == nil {
-		return noOpCleanup() // No-op cleanup if meter not initialized
+		return noOpCleanup()
 	}
 
-	// Normalize vendor name for consistent labeling
-	dbSystem := normalizeDBVendor(vendor)
-	attrs := []attribute.KeyValue{
-		attribute.String("db.system", dbSystem),
+	// Create registration state with normalized vendor attributes
+	reg := &poolMetricsRegistration{
+		conn: conn,
+		attrs: []attribute.KeyValue{
+			attribute.String("db.system", normalizeDBVendor(vendor)),
+		},
 	}
 
-	// Register all three gauges, logging errors but continuing on failure
-	activeGauge, err := meter.Int64ObservableGauge(
-		metricPoolActive,
-		metric.WithDescription("Number of active database connections"),
-	)
-	logMetricError(metricPoolActive, err)
+	// Create gauges using helper function
+	reg.activeGauge = createGauge(meter, metricPoolActive, "Number of active database connections")
+	reg.idleGauge = createGauge(meter, metricPoolIdle, "Number of idle database connections")
+	reg.totalGauge = createGauge(meter, metricPoolTotal, "Maximum number of database connections configured")
 
-	idleGauge, err := meter.Int64ObservableGauge(
-		metricPoolIdle,
-		metric.WithDescription("Number of idle database connections"),
-	)
-	logMetricError(metricPoolIdle, err)
-
-	totalGauge, err := meter.Int64ObservableGauge(
-		metricPoolTotal,
-		metric.WithDescription("Maximum number of database connections configured"),
-	)
-	logMetricError(metricPoolTotal, err)
-
-	// Collect successfully created gauges for callback registration
-	var instruments []metric.Observable
-	if activeGauge != nil {
-		instruments = append(instruments, activeGauge)
-	}
-	if idleGauge != nil {
-		instruments = append(instruments, idleGauge)
-	}
-	if totalGauge != nil {
-		instruments = append(instruments, totalGauge)
-	}
-
-	// If no gauges were created successfully, return no-op cleanup
+	// Collect non-nil gauges for callback registration
+	instruments := collectInstruments(reg.activeGauge, reg.idleGauge, reg.totalGauge)
 	if len(instruments) == 0 {
 		return noOpCleanup()
 	}
 
-	// Register callback that reads pool stats and updates gauges
-	registration, err := meter.RegisterCallback(
-		func(_ context.Context, observer metric.Observer) error {
-			stats, err := conn.Stats()
-			if err != nil {
-				// Log error but don't fail - metrics are best-effort
-				return nil
-			}
-
-			// Extract pool statistics using type-safe conversion
-			// Database drivers may return different numeric types (int, int64, uint, float64)
-			// so we use asInt64() to handle all variants gracefully
-			var inUse, idle, maxOpen int64
-			if val, ok := asInt64(stats["in_use"]); ok {
-				inUse = val
-			}
-			if val, ok := asInt64(stats["idle"]); ok {
-				idle = val
-			}
-			if val, ok := asInt64(stats["max_open_connections"]); ok {
-				maxOpen = val
-			}
-
-			// Update only the successfully created gauges
-			if activeGauge != nil {
-				observer.ObserveInt64(activeGauge, inUse, metric.WithAttributes(attrs...))
-			}
-			if idleGauge != nil {
-				observer.ObserveInt64(idleGauge, idle, metric.WithAttributes(attrs...))
-			}
-			if totalGauge != nil {
-				observer.ObserveInt64(totalGauge, maxOpen, metric.WithAttributes(attrs...))
-			}
-
-			return nil
-		},
-		instruments...,
-	)
-
+	// Register callback with extracted method
+	registration, err := meter.RegisterCallback(reg.observePoolStats, instruments...)
 	if err != nil {
 		logMetricError("pool_metrics_callback", err)
 		return noOpCleanup()
