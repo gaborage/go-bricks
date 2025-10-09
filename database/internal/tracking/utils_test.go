@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -330,4 +331,70 @@ func TestTrackDBOperationNoLoggerOrContext(t *testing.T) {
 	}()
 	TrackDBOperation(context.Background(), nil, "SELECT", nil, time.Now(), 0, nil)
 	TrackDBOperation(context.Background(), &Context{}, "SELECT", nil, time.Now(), 0, nil)
+}
+
+// TestExtractRowsAffected tests the extractRowsAffected helper function.
+func TestExtractRowsAffected(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   sql.Result
+		err      error
+		expected int64
+	}{
+		{
+			name:     "nil_result",
+			result:   nil,
+			err:      nil,
+			expected: 0,
+		},
+		{
+			name:     "error_present",
+			result:   &mockResult{rows: 5},
+			err:      errors.New("database error"),
+			expected: 0,
+		},
+		{
+			name:     "successful_operation",
+			result:   &mockResult{rows: 10},
+			err:      nil,
+			expected: 10,
+		},
+		{
+			name:     "zero_rows_affected",
+			result:   &mockResult{rows: 0},
+			err:      nil,
+			expected: 0,
+		},
+		{
+			name:     "rows_affected_error",
+			result:   &mockResult{rows: 5, rowsErr: errors.New("rows affected failed")},
+			err:      nil,
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractRowsAffected(tt.result, tt.err)
+			assert.Equal(t, tt.expected, result, "extractRowsAffected should return expected value")
+		})
+	}
+}
+
+// mockResult is a mock implementation of sql.Result for testing.
+type mockResult struct {
+	rows    int64
+	lastID  int64
+	rowsErr error
+}
+
+func (m *mockResult) LastInsertId() (int64, error) {
+	return m.lastID, nil
+}
+
+func (m *mockResult) RowsAffected() (int64, error) {
+	if m.rowsErr != nil {
+		return 0, m.rowsErr
+	}
+	return m.rows, nil
 }

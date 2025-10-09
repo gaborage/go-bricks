@@ -29,6 +29,10 @@ const (
 	metricPoolIdle   = "db.connection.pool.idle"
 	metricPoolTotal  = "db.connection.pool.total"
 
+	metricDbSQLTable  = "db.sql.table"
+	metricDbOperation = "db.operation.name"
+	metricDbSystem    = "db.system"
+
 	// I/O metrics
 	metricRowsAffected = "db.rows.affected"
 )
@@ -62,6 +66,79 @@ func logMetricError(metricName string, err error) {
 func noOpCleanup() func() {
 	// Return empty function - nothing to clean up if registration failed
 	return func() {}
+}
+
+// asInt64 safely converts various Go numeric types to int64.
+// This function handles all common numeric kinds that database drivers might return in Stats() maps.
+//
+// Supported types:
+//   - Signed integers: int, int8, int16, int32, int64
+//   - Unsigned integers: uint, uint8, uint16, uint32, uint64 (with overflow check)
+//   - Floating-point: float32, float64 (truncated to int64)
+//
+// Returns (value, true) on successful conversion, (0, false) for:
+//   - Non-numeric types (string, bool, struct, nil, etc.)
+//   - uint64 values exceeding math.MaxInt64 (overflow)
+//
+// Examples:
+//
+//	asInt64(int(42))        // (42, true)
+//	asInt64(int64(100))     // (100, true)
+//	asInt64(uint32(50))     // (50, true)
+//	asInt64(float64(99.7))  // (99, true) - truncated
+//	asInt64("42")           // (0, false) - non-numeric
+//	asInt64(nil)            // (0, false) - nil value
+//
+//nolint:gocyclo // Type switch for numeric conversion requires many cases by nature
+func asInt64(v any) (int64, bool) {
+	if v == nil {
+		return 0, false
+	}
+
+	switch val := v.(type) {
+	// Signed integers
+	case int:
+		return int64(val), true
+	case int8:
+		return int64(val), true
+	case int16:
+		return int64(val), true
+	case int32:
+		return int64(val), true
+	case int64:
+		return val, true
+
+	// Unsigned integers (with overflow check for uint64)
+	case uint:
+		// uint might be 32 or 64 bits depending on platform
+		// Safe conversion since uint max is either 2^32-1 or 2^64-1
+		if val <= uint(9223372036854775807) { // math.MaxInt64
+			return int64(val), true
+		}
+		return 0, false
+	case uint8:
+		return int64(val), true
+	case uint16:
+		return int64(val), true
+	case uint32:
+		return int64(val), true
+	case uint64:
+		// Check for overflow: uint64 can exceed int64 max value
+		if val <= 9223372036854775807 { // math.MaxInt64
+			return int64(val), true
+		}
+		return 0, false
+
+	// Floating-point (truncate to int64)
+	case float32:
+		return int64(val), true
+	case float64:
+		return int64(val), true
+
+	// Unsupported type
+	default:
+		return 0, false
+	}
 }
 
 // initDBMeter initializes the OpenTelemetry meter and metric instruments.
@@ -136,9 +213,9 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 
 	// Common attributes for both metrics
 	commonAttrs := []attribute.KeyValue{
-		attribute.String("db.system", vendor),
-		attribute.String("db.operation.name", operation),
-		attribute.String("table", table),
+		attribute.String(metricDbSystem, vendor),
+		attribute.String(metricDbOperation, operation),
+		attribute.String(metricDbSQLTable, table),
 	}
 
 	// Record counter with error attribute
@@ -299,16 +376,18 @@ func RegisterConnectionPoolMetrics(conn interface {
 				return nil
 			}
 
-			// Extract pool statistics
+			// Extract pool statistics using type-safe conversion
+			// Database drivers may return different numeric types (int, int64, uint, float64)
+			// so we use asInt64() to handle all variants gracefully
 			var inUse, idle, maxOpen int64
-			if val, ok := stats["in_use"].(int); ok {
-				inUse = int64(val)
+			if val, ok := asInt64(stats["in_use"]); ok {
+				inUse = val
 			}
-			if val, ok := stats["idle"].(int); ok {
-				idle = int64(val)
+			if val, ok := asInt64(stats["idle"]); ok {
+				idle = val
 			}
-			if val, ok := stats["max_open_connections"].(int); ok {
-				maxOpen = int64(val)
+			if val, ok := asInt64(stats["max_open_connections"]); ok {
+				maxOpen = val
 			}
 
 			// Update only the successfully created gauges

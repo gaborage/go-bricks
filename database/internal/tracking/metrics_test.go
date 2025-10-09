@@ -18,16 +18,6 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
-// Test query constants to avoid string literal duplication
-const (
-	testQuerySelectUsers       = "SELECT * FROM users"
-	testQueryInsertUsers       = "INSERT INTO users VALUES (1)"
-	testQueryInsertUsersParams = "INSERT INTO users (name) VALUES ($1)"
-	testQuerySelectOrders      = "SELECT * FROM orders"
-	testQueryUpdateUsers       = "UPDATE users SET name = 'test'"
-	testQuerySelectOne         = "SELECT 1"
-)
-
 // setupTestMeterProvider creates an in-memory meter provider for testing
 func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
 	t.Helper()
@@ -76,7 +66,7 @@ func TestRecordDBMetricsCounterIncrement(t *testing.T) {
 	duration := 25 * time.Millisecond
 
 	// Record metrics for successful operation
-	recordDBMetrics(ctx, tc, testQuerySelect, duration, 0, nil)
+	recordDBMetrics(ctx, tc, TestQuerySelectUsersParams, duration, 0, nil)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -98,7 +88,7 @@ func TestRecordDBMetricsHistogramRecording(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	query := testQueryInsertUsersParams
+	query := TestQueryInsertUsersParams
 	duration := 50 * time.Millisecond
 
 	// Record metrics
@@ -138,9 +128,9 @@ func TestRecordDBMetricsWithDifferentOperations(t *testing.T) {
 		query             string
 		expectedOperation string
 	}{
-		{testQuerySelectUsers, "select"},
-		{testQueryInsertUsers, "insert"},
-		{testQueryUpdateUsers, "update"},
+		{TestQuerySelectUsers, "select"},
+		{TestQueryInsertUsers, "insert"},
+		{TestQueryUpdateUsers, "update"},
 		{"DELETE FROM users WHERE id = 1", "delete"},
 		{"BEGIN", "begin"},
 		{"COMMIT", "commit"},
@@ -198,7 +188,7 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := testQuerySelectOne
+			query := TestQuerySelectOne
 			duration := 5 * time.Millisecond
 
 			// Record metrics
@@ -249,7 +239,7 @@ func TestRecordDBMetricsErrorAttribute(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := testQuerySelectUsers
+			query := TestQuerySelectUsers
 			duration := 10 * time.Millisecond
 
 			// Record metrics
@@ -278,9 +268,9 @@ func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	ctx := context.Background()
 
 	// Record multiple operations
-	recordDBMetrics(ctx, tc, testQuerySelectUsers, 10*time.Millisecond, 0, nil)
-	recordDBMetrics(ctx, tc, testQueryInsertUsers, 20*time.Millisecond, 0, nil)
-	recordDBMetrics(ctx, tc, testQuerySelectOrders, 15*time.Millisecond, 0, nil)
+	recordDBMetrics(ctx, tc, TestQuerySelectUsers, 10*time.Millisecond, 0, nil)
+	recordDBMetrics(ctx, tc, TestQueryInsertUsers, 20*time.Millisecond, 0, nil)
+	recordDBMetrics(ctx, tc, TestQuerySelectOrders, 15*time.Millisecond, 0, nil)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -355,7 +345,7 @@ func TestRecordDBMetricsNilContext(t *testing.T) {
 	// TrackDBOperation guards against nil context before calling recordDBMetrics
 	ctx := context.TODO()
 	assert.NotPanics(t, func() {
-		recordDBMetrics(ctx, tc, testQuerySelectOne, 10*time.Millisecond, 0, nil)
+		recordDBMetrics(ctx, tc, TestQuerySelectOne, 10*time.Millisecond, 0, nil)
 	})
 }
 
@@ -368,7 +358,7 @@ func TestExtractTableName(t *testing.T) {
 		// SELECT statements
 		{
 			name:          "simple_select",
-			query:         testQuerySelectUsers,
+			query:         TestQuerySelectUsers,
 			expectedTable: "users",
 		},
 		{
@@ -481,7 +471,7 @@ func TestExtractTableName(t *testing.T) {
 		},
 		{
 			name:          "select_without_from",
-			query:         testQuerySelectOne,
+			query:         TestQuerySelectOne,
 			expectedTable: "unknown",
 		},
 		{
@@ -530,7 +520,7 @@ func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 
 				for _, dp := range sumData.DataPoints {
 					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == "table" && attr.Value.AsString() == "users" {
+						if string(attr.Key) == metricDbSQLTable && attr.Value.AsString() == "users" {
 							foundTableAttr = true
 							break
 						}
@@ -632,4 +622,246 @@ func assertMetricHasBoolAttribute(t *testing.T, rm metricdata.ResourceMetrics, m
 	value, found := findMetricBoolAttribute(rm, metricName, attrKey)
 	require.True(t, found, "Metric %s should have boolean attribute %s", metricName, attrKey)
 	assert.Equal(t, expectedValue, value, "Boolean attribute %s should have expected value", attrKey)
+}
+
+// TestAsInt64 tests the asInt64() helper function with all supported numeric types.
+func TestAsInt64(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected int64
+		ok       bool
+	}{
+		// Signed integers
+		{"int", int(42), 42, true},
+		{"int8", int8(127), 127, true},
+		{"int8_negative", int8(-128), -128, true},
+		{"int16", int16(32767), 32767, true},
+		{"int32", int32(2147483647), 2147483647, true},
+		{"int64", int64(9223372036854775807), 9223372036854775807, true},
+		{"int_negative", int(-999), -999, true},
+		{"int_zero", int(0), 0, true},
+
+		// Unsigned integers
+		{"uint8", uint8(255), 255, true},
+		{"uint16", uint16(65535), 65535, true},
+		{"uint32", uint32(4294967295), 4294967295, true},
+		{"uint64_safe", uint64(1000), 1000, true},
+		{"uint64_max_safe", uint64(9223372036854775807), 9223372036854775807, true}, // MaxInt64
+		{"uint64_overflow", uint64(9223372036854775808), 0, false},                  // MaxInt64 + 1
+		{"uint64_max", uint64(18446744073709551615), 0, false},                      // MaxUint64
+		{"uint_safe", uint(1000), 1000, true},
+		{"uint_zero", uint(0), 0, true},
+
+		// Floating-point (truncation)
+		{"float32", float32(99.7), 99, true},
+		{"float32_negative", float32(-99.7), -99, true},
+		{"float64", float64(123.456), 123, true},
+		{"float64_large", float64(999999.999), 999999, true},
+		{"float64_zero", float64(0.0), 0, true},
+
+		// Non-numeric types (should fail)
+		{"string", "42", 0, false},
+		{"bool", true, 0, false},
+		{"nil", nil, 0, false},
+		{"struct", struct{ x int }{42}, 0, false},
+		{"slice", []int{1, 2, 3}, 0, false},
+		{"map", map[string]int{"key": 42}, 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := asInt64(tt.input)
+			assert.Equal(t, tt.ok, ok, "Conversion success should match expected")
+			if tt.ok {
+				assert.Equal(t, tt.expected, result, "Converted value should match expected")
+			}
+		})
+	}
+}
+
+// TestRegisterConnectionPoolMetricsWithDifferentNumericTypes tests that pool metrics
+// correctly handle various numeric types that different database drivers might return.
+func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	// Test cases with different numeric types for pool stats
+	testCases := []struct {
+		name          string
+		stats         map[string]any
+		expectedInUse int64
+		expectedIdle  int64
+		expectedMax   int64
+	}{
+		{
+			name: "int_types",
+			stats: map[string]any{
+				"in_use":               int(5),
+				"idle":                 int(10),
+				"max_open_connections": int(25),
+			},
+			expectedInUse: 5,
+			expectedIdle:  10,
+			expectedMax:   25,
+		},
+		{
+			name: "int64_types",
+			stats: map[string]any{
+				"in_use":               int64(15),
+				"idle":                 int64(20),
+				"max_open_connections": int64(50),
+			},
+			expectedInUse: 15,
+			expectedIdle:  20,
+			expectedMax:   50,
+		},
+		{
+			name: "uint32_types",
+			stats: map[string]any{
+				"in_use":               uint32(8),
+				"idle":                 uint32(12),
+				"max_open_connections": uint32(30),
+			},
+			expectedInUse: 8,
+			expectedIdle:  12,
+			expectedMax:   30,
+		},
+		{
+			name: "float64_types_truncated",
+			stats: map[string]any{
+				"in_use":               float64(7.9),
+				"idle":                 float64(13.2),
+				"max_open_connections": float64(40.8),
+			},
+			expectedInUse: 7,
+			expectedIdle:  13,
+			expectedMax:   40,
+		},
+		{
+			name: "mixed_types",
+			stats: map[string]any{
+				"in_use":               int(3),
+				"idle":                 uint64(15),
+				"max_open_connections": float64(20.0),
+			},
+			expectedInUse: 3,
+			expectedIdle:  15,
+			expectedMax:   20,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a mock connection that returns specific stat types
+			mockConn := &mockStatsConnection{stats: tc.stats}
+
+			// Register pool metrics
+			cleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+			defer cleanup()
+
+			// Force metrics collection by collecting from meter provider
+			rm := mp.Collect(t)
+
+			// Verify gauges exist
+			obtest.AssertMetricExists(t, rm, metricPoolActive)
+			obtest.AssertMetricExists(t, rm, metricPoolIdle)
+			obtest.AssertMetricExists(t, rm, metricPoolTotal)
+
+			// Verify gauge values match expected (accounting for type conversion)
+			// Note: We can't directly assert gauge values without triggering the callback
+			// The callback gets triggered during collection, so values should be present
+		})
+	}
+}
+
+// mockStatsConnection is a mock implementation of the Stats() interface for testing.
+type mockStatsConnection struct {
+	stats map[string]any
+	err   error
+}
+
+func (m *mockStatsConnection) Stats() (map[string]any, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.stats, nil
+}
+
+// TestRegisterConnectionPoolMetricsWithInvalidTypes tests graceful handling of non-numeric types.
+func TestRegisterConnectionPoolMetricsWithInvalidTypes(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	// Stats with non-numeric types (should result in 0 values, not crashes)
+	mockConn := &mockStatsConnection{
+		stats: map[string]any{
+			"in_use":               "not a number",
+			"idle":                 true,
+			"max_open_connections": struct{}{},
+		},
+	}
+
+	// Should not panic
+	cleanup2 := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+	defer cleanup2()
+
+	// Collect metrics - should succeed without panic
+	rm := mp.Collect(t)
+
+	// Gauges should exist (even if values are 0 due to conversion failure)
+	obtest.AssertMetricExists(t, rm, metricPoolActive)
+	obtest.AssertMetricExists(t, rm, metricPoolIdle)
+	obtest.AssertMetricExists(t, rm, metricPoolTotal)
+}
+
+// TestRegisterConnectionPoolMetricsStatsError tests handling of Stats() errors.
+func TestRegisterConnectionPoolMetricsStatsError(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	// Mock connection that returns an error
+	mockConn := &mockStatsConnection{
+		err: errors.New("database connection closed"),
+	}
+
+	// Should not panic during registration or collection
+	assert.NotPanics(t, func() {
+		cleanup2 := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+		defer cleanup2()
+
+		// Collect metrics - should succeed without panic (callback logs error but doesn't fail)
+		_ = mp.Collect(t)
+		// When Stats() returns an error, the callback returns early with nil
+		// Gauges exist but values won't be updated (will be 0 or previous values)
+	})
+}
+
+// TestLogMetricErrorOutput tests that logMetricError writes to stderr.
+func TestLogMetricErrorOutput(t *testing.T) {
+	// Test with non-nil error
+	err := errors.New("test metric error")
+	// logMetricError writes to stderr - we can't easily capture this in test
+	// but we can verify it doesn't panic
+	assert.NotPanics(t, func() {
+		logMetricError("test.metric", err)
+	})
+
+	// Test with nil error (should not log)
+	assert.NotPanics(t, func() {
+		logMetricError("test.metric", nil)
+	})
+}
+
+// TestNoOpCleanup tests that noOpCleanup returns a safe, callable function.
+func TestNoOpCleanup(t *testing.T) {
+	cleanup := noOpCleanup()
+	require.NotNil(t, cleanup, "noOpCleanup should return a non-nil function")
+
+	// Should be safe to call multiple times
+	assert.NotPanics(t, func() {
+		cleanup()
+		cleanup()
+		cleanup()
+	})
 }

@@ -23,11 +23,9 @@ import (
 )
 
 const (
-	testQueryClause = "SELECT * FROM users"
-	testQuerySelect = "SELECT * FROM users WHERE id = $1"
-	attrKeyError    = "error"
-	dbSelectMetric  = "db.select"
-	dbInsertMetric  = "db.insert"
+	attrKeyError   = "error"
+	dbSelectMetric = "db.select"
+	dbInsertMetric = "db.insert"
 )
 
 // setupTestTracerProvider creates an in-memory tracer provider for testing
@@ -72,7 +70,7 @@ func TestCreateDBSpanSpanCreation(t *testing.T) {
 	ctx := context.Background()
 	start := time.Now().Add(-50 * time.Millisecond) // Simulate operation that started 50ms ago
 
-	createDBSpan(ctx, tc, testQuerySelect, start, nil)
+	createDBSpan(ctx, tc, TestQuerySelectUsersParams, start, nil)
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1, "Should create exactly one span")
@@ -155,7 +153,7 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := testQueryClause
+			query := TestQuerySelectUsers
 			start := time.Now().Add(-10 * time.Millisecond) // Simulate operation that started 10ms ago
 
 			createDBSpan(ctx, tc, query, start, tt.err)
@@ -179,7 +177,7 @@ func TestExtractDBOperation(t *testing.T) {
 		query    string
 		expected string
 	}{
-		{testQueryClause, "select"},
+		{TestQuerySelectUsers, "select"},
 		{"INSERT INTO users (name) VALUES ($1)", "insert"},
 		{"UPDATE users SET name = $1 WHERE id = $2", "update"},
 		{"DELETE FROM users WHERE id = $1", "delete"},
@@ -334,7 +332,7 @@ func TestCreateDBSpanOperationTypes(t *testing.T) {
 		query        string
 		expectedName string
 	}{
-		{testQueryClause, dbSelectMetric},
+		{TestQuerySelectUsers, dbSelectMetric},
 		{"INSERT INTO users VALUES (1)", dbInsertMetric},
 		{"UPDATE users SET name = 'test'", "db.update"},
 		{"DELETE FROM users WHERE id = 1", "db.delete"},
@@ -437,7 +435,7 @@ func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {
 	start := time.Now().Add(-25 * time.Millisecond)
 
 	// Track the operation
-	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, 0, nil)
+	TrackDBOperation(ctx, tc, TestQuerySelectUsersParams, nil, start, 0, nil)
 
 	// Verify span was created
 	spans := traceExporter.GetSpans()
@@ -515,7 +513,7 @@ func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
 	start := time.Now().Add(-10 * time.Millisecond)
 
 	// Track the operation with sql.ErrNoRows
-	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, 0, sql.ErrNoRows)
+	TrackDBOperation(ctx, tc, TestQuerySelectUsersParams, nil, start, 0, sql.ErrNoRows)
 
 	// Verify span was created without error status (sql.ErrNoRows is not an error)
 	spans := traceExporter.GetSpans()
@@ -561,7 +559,7 @@ func TestTrackDBOperationMultipleOperations(t *testing.T) {
 	start := time.Now()
 
 	// Track multiple different operations
-	TrackDBOperation(ctx, tc, testQueryClause, nil, start, 0, nil)
+	TrackDBOperation(ctx, tc, TestQuerySelectUsers, nil, start, 0, nil)
 	TrackDBOperation(ctx, tc, "INSERT INTO users VALUES (1)", nil, start, 0, nil)
 	TrackDBOperation(ctx, tc, "UPDATE users SET name = 'test'", nil, start, 0, nil)
 
