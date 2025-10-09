@@ -23,6 +23,14 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// OpenTelemetry instrumentation - creates spans for HTTP requests
 	// Skip health/ready probes to avoid noisy traces
+	// IMPORTANT: We explicitly pass WithTracerProvider(otel.GetTracerProvider()) to capture
+	// the global provider at middleware setup time. The otelecho.Middleware() function caches
+	// the tracer provider when called, NOT at request time.
+	//
+	// In the standard bootstrap flow (app.NewWithConfig), observability is initialized BEFORE
+	// the server is created, so the real provider is captured here. However, explicit wiring
+	// makes this dependency clear and ensures correct behavior if SetupMiddlewares is called
+	// directly (e.g., in tests or custom server initialization scenarios).
 	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 	e.Use(otelecho.Middleware(
 		cfg.App.Name,

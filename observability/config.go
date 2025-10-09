@@ -19,6 +19,12 @@ func BoolPtr(v bool) *bool {
 	return &v
 }
 
+// Float64Ptr returns a pointer to the provided float64 value.
+// Helpful when optional float64 configuration fields are used.
+func Float64Ptr(v float64) *float64 {
+	return &v
+}
+
 // Config defines the configuration for observability features.
 // It supports automatic unmarshaling via the GoBricks config system using mapstructure tags.
 type Config struct {
@@ -93,14 +99,23 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Insecure = true
 	}
 
-	// Sample rate default
-	if c.Trace.Sample.Rate == 0.0 {
-		c.Trace.Sample.Rate = 1.0
+	// Sample rate default - only set when nil (not explicitly provided)
+	// If explicitly set to 0.0, we respect that choice (and warn in NewProvider)
+	if c.Trace.Sample.Rate == nil {
+		c.Trace.Sample.Rate = Float64Ptr(1.0)
 	}
 
-	// Batch defaults
+	// Batch defaults - use environment-aware settings
+	// Development: faster export for better debugging experience
+	// Production: larger batches for efficiency
 	if c.Trace.Batch.Timeout == 0 {
-		c.Trace.Batch.Timeout = 5 * time.Second
+		if c.Environment == "development" || c.Trace.Endpoint == EndpointStdout {
+			// Development: 500ms for near-instant span visibility
+			c.Trace.Batch.Timeout = 500 * time.Millisecond
+		} else {
+			// Production: 5s for efficient batching
+			c.Trace.Batch.Timeout = 5 * time.Second
+		}
 	}
 	if c.Trace.Batch.Size == 0 {
 		c.Trace.Batch.Size = 512
@@ -187,9 +202,10 @@ type TraceConfig struct {
 // SampleConfig defines sampling configuration for traces.
 type SampleConfig struct {
 	// Rate controls what fraction of traces to collect (0.0 to 1.0).
-	// 1.0 means collect all traces, 0.1 means collect 10% of traces.
+	// 1.0 means collect all traces, 0.1 means collect 10% of traces, 0.0 means collect nothing.
 	// Lower values reduce overhead and costs.
-	Rate float64 `mapstructure:"rate"`
+	// nil = apply default (1.0), explicit value = use that value (including 0.0).
+	Rate *float64 `mapstructure:"rate"`
 }
 
 // BatchConfig defines batch processing configuration for traces.
@@ -295,8 +311,12 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) validateTraceConfig() error {
-	if c.Trace.Sample.Rate < 0.0 || c.Trace.Sample.Rate > 1.0 {
-		return ErrInvalidSampleRate
+	// Validate sample rate if explicitly set
+	if c.Trace.Sample.Rate != nil {
+		rate := *c.Trace.Sample.Rate
+		if rate < 0.0 || rate > 1.0 {
+			return ErrInvalidSampleRate
+		}
 	}
 
 	if c.Trace.Endpoint == EndpointStdout || c.Trace.Endpoint == "" {

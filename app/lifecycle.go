@@ -244,47 +244,35 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
 }
 
-// Shutdown gracefully shuts down the application with the given context.
-// It closes database connections, messaging client, observability, and stops the HTTP server.
-// Returns an aggregated error if any components fail to shut down.
-func (a *App) Shutdown(ctx context.Context) error {
-	var errs []error
-	shutdownStart := time.Now()
-
-	// Shutdown modules first
-	a.logger.Info().Msg("Shutting down modules")
-	if err := a.registry.Shutdown(); err != nil {
-		errs = append(errs, fmt.Errorf("modules: %w", err))
-		a.logger.Error().Err(err).Msg("Failed to shutdown modules")
-	} else {
-		a.logger.Info().Dur("duration", time.Since(shutdownStart)).Msg("Modules shutdown completed")
+// shutdownPhase executes a shutdown phase with timing, logging, and error handling
+func (a *App) shutdownPhase(phaseName string, shutdownFn func() error, errs *[]error) {
+	if shutdownFn == nil {
+		return
 	}
 
-	// Shutdown server
-	if a.server != nil {
-		serverStart := time.Now()
-		a.logger.Info().Msg("Shutting down HTTP server")
-		if err := a.server.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf(serverErrorMsg, err))
-			a.logger.Error().Err(err).Msg("Failed to shutdown server")
-		} else {
-			a.logger.Info().Dur("duration", time.Since(serverStart)).Msg("HTTP server shutdown completed")
-		}
+	phaseStart := time.Now()
+	a.logger.Info().Msgf("Shutting down %s", phaseName)
+
+	if err := shutdownFn(); err != nil {
+		*errs = append(*errs, err)
+		a.logger.Error().Err(err).Msgf("Failed to shutdown %s", phaseName)
+		return
 	}
 
-	// Shutdown observability (flush pending telemetry)
-	if a.observability != nil {
-		obsStart := time.Now()
-		a.logger.Info().Msg("Shutting down observability provider")
-		if err := a.observability.Shutdown(ctx); err != nil {
-			errs = append(errs, fmt.Errorf("observability: %w", err))
-			a.logger.Error().Err(err).Msg("Failed to shutdown observability")
-		} else {
-			a.logger.Info().Dur("duration", time.Since(obsStart)).Msg("Observability shutdown completed")
-		}
-	}
+	a.logger.Info().Dur("duration", time.Since(phaseStart)).Msgf("%s shutdown completed", capitalizeFirst(phaseName))
+}
 
-	// Stop cleanup loops for managers
+// capitalizeFirst capitalizes the first letter of a string
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
+}
+
+// shutdownManagers stops cleanup loops for database and messaging managers
+func (a *App) shutdownManagers() {
 	managerStart := time.Now()
 	if a.dbManager != nil {
 		a.logger.Info().Msg("Stopping database manager cleanup loop")
@@ -295,16 +283,79 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.messagingManager.StopCleanup()
 	}
 	a.logger.Info().Dur("duration", time.Since(managerStart)).Msg("Manager cleanup loops stopped")
+}
 
-	// Close remaining resources
+// shutdownObservability flushes and shuts down the observability provider
+func (a *App) shutdownObservability(ctx context.Context, errs *[]error) {
+	if a.observability == nil {
+		return
+	}
+
+	obsStart := time.Now()
+
+	// Force flush pending spans/metrics before shutdown
+	a.logger.Info().Msg("Flushing pending observability data")
+	if err := a.observability.ForceFlush(ctx); err != nil {
+		a.logger.Warn().Err(err).Msg("Failed to flush observability data")
+		// Continue with shutdown even if flush fails
+	}
+
+	// Now shut down observability provider
+	a.logger.Info().Msg("Shutting down observability provider")
+	if err := a.observability.Shutdown(ctx); err != nil {
+		*errs = append(*errs, fmt.Errorf("observability: %w", err))
+		a.logger.Error().Err(err).Msg("Failed to shutdown observability")
+	} else {
+		a.logger.Info().Dur("duration", time.Since(obsStart)).Msg("Observability shutdown completed")
+	}
+}
+
+// shutdownClosers closes all remaining resources registered with the app
+func (a *App) shutdownClosers(errs *[]error) {
+	if len(a.closers) == 0 {
+		return
+	}
+
 	closerStart := time.Now()
 	a.logger.Info().Msgf("Closing %d remaining resources", len(a.closers))
 	for _, closer := range a.closers {
-		a.shutdownResource(closer, &errs)
+		a.shutdownResource(closer, errs)
 	}
 	a.logger.Info().Dur("duration", time.Since(closerStart)).Msg("Resource closing completed")
+}
 
-	a.logger.Info().Msg("Application shutdown complete")
+// Shutdown gracefully shuts down the application with the given context.
+// It closes database connections, messaging client, observability, and stops the HTTP server.
+// Returns an aggregated error if any components fail to shut down.
+func (a *App) Shutdown(ctx context.Context) error {
+	var errs []error
+	shutdownStart := time.Now()
+
+	// Shutdown modules first
+	a.shutdownPhase("modules", func() error {
+		return a.registry.Shutdown()
+	}, &errs)
+
+	// Shutdown server
+	if a.server != nil {
+		a.shutdownPhase("HTTP server", func() error {
+			if err := a.server.Shutdown(ctx); err != nil {
+				return fmt.Errorf(serverErrorMsg, err)
+			}
+			return nil
+		}, &errs)
+	}
+
+	// Flush and shutdown observability (export pending telemetry)
+	a.shutdownObservability(ctx, &errs)
+
+	// Stop cleanup loops for managers
+	a.shutdownManagers()
+
+	// Close remaining resources
+	a.shutdownClosers(&errs)
+
+	a.logger.Info().Dur("total_duration", time.Since(shutdownStart)).Msg("Application shutdown complete")
 
 	// Return aggregated errors if any occurred
 	if len(errs) > 0 {
