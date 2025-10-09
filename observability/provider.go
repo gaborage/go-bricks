@@ -66,14 +66,14 @@ func NewProvider(cfg *Config) (Provider, error) {
 	}
 
 	// Initialize trace provider if tracing is enabled
-	if cfg.Trace.Enabled {
+	if cfg.Trace.Enabled != nil && *cfg.Trace.Enabled {
 		if err := p.initTraceProvider(); err != nil {
 			return nil, fmt.Errorf("failed to initialize trace provider: %w", err)
 		}
 	}
 
 	// Initialize meter provider if metrics are enabled
-	if cfg.Metrics.Enabled {
+	if cfg.Metrics.Enabled != nil && *cfg.Metrics.Enabled {
 		if err := p.initMeterProvider(); err != nil {
 			return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
 		}
@@ -123,14 +123,14 @@ func (p *provider) initTraceProvider() error {
 	// Create batch span processor with configured options
 	bsp := sdktrace.NewBatchSpanProcessor(
 		exporter,
-		sdktrace.WithBatchTimeout(p.config.Trace.BatchTimeout),
-		sdktrace.WithExportTimeout(p.config.Trace.ExportTimeout),
-		sdktrace.WithMaxQueueSize(p.config.Trace.MaxQueueSize),
-		sdktrace.WithMaxExportBatchSize(p.config.Trace.MaxBatchSize),
+		sdktrace.WithBatchTimeout(p.config.Trace.Batch.Timeout),
+		sdktrace.WithExportTimeout(p.config.Trace.Export.Timeout),
+		sdktrace.WithMaxQueueSize(p.config.Trace.Max.Queue.Size),
+		sdktrace.WithMaxExportBatchSize(p.config.Trace.Max.Batch.Size),
 	)
 
 	// Create tracer provider with sampler
-	sampler := sdktrace.TraceIDRatioBased(p.config.Trace.SampleRate)
+	sampler := sdktrace.TraceIDRatioBased(p.config.Trace.Sample.Rate)
 
 	p.tracerProvider = sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
@@ -150,8 +150,8 @@ func (p *provider) createResource() (*resource.Resource, error) {
 	customRes, err := resource.New(
 		context.Background(),
 		resource.WithAttributes(
-			semconv.ServiceName(p.config.ServiceName),
-			semconv.ServiceVersion(p.config.ServiceVersion),
+			semconv.ServiceName(p.config.Service.Name),
+			semconv.ServiceVersion(p.config.Service.Version),
 			semconv.DeploymentEnvironmentName(p.config.Environment),
 		),
 	)

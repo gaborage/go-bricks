@@ -189,15 +189,17 @@ func TestCreateObservableCounter(t *testing.T) {
 func TestMeterProviderIntegration(t *testing.T) {
 	// Test that MeterProvider is properly initialized with metrics enabled
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 			Interval: 1 * time.Second,
 		},
 		Trace: TraceConfig{
-			Enabled: false, // Disable tracing for this test
+			Enabled: BoolPtr(false), // Disable tracing for this test
 		},
 	}
 
@@ -219,13 +221,15 @@ func TestMeterProviderIntegration(t *testing.T) {
 func TestMeterProviderWithMetricsDisabled(t *testing.T) {
 	// Test that when metrics are disabled, we get a no-op MeterProvider
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled: false, // Metrics disabled
+			Enabled: BoolPtr(false), // Metrics disabled
 		},
 		Trace: TraceConfig{
-			Enabled: false,
+			Enabled: BoolPtr(false),
 		},
 	}
 
@@ -246,14 +250,16 @@ func TestMeterProviderWithMetricsDisabled(t *testing.T) {
 
 func TestMeterProviderShutdown(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 		},
 		Trace: TraceConfig{
-			Enabled: false,
+			Enabled: BoolPtr(false),
 		},
 	}
 
@@ -269,14 +275,16 @@ func TestMeterProviderShutdown(t *testing.T) {
 
 func TestMeterProviderForceFlush(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 		},
 		Trace: TraceConfig{
-			Enabled: false,
+			Enabled: BoolPtr(false),
 		},
 	}
 

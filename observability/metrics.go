@@ -30,7 +30,7 @@ func (p *provider) initMeterProvider() error {
 	reader := sdkmetric.NewPeriodicReader(
 		exporter,
 		sdkmetric.WithInterval(p.config.Metrics.Interval),
-		sdkmetric.WithTimeout(p.config.Metrics.ExportTimeout),
+		sdkmetric.WithTimeout(p.config.Metrics.Export.Timeout),
 	)
 
 	// Create meter provider

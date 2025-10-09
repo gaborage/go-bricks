@@ -38,8 +38,10 @@ func TestNewProviderDisabled(t *testing.T) {
 
 func TestNewProviderInvalidConfig(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: "", // Missing required field
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: "", // Missing required field
+		},
 	}
 
 	provider, err := NewProvider(cfg)
@@ -50,18 +52,33 @@ func TestNewProviderInvalidConfig(t *testing.T) {
 
 func TestNewProviderTracingEnabled(t *testing.T) {
 	cfg := &Config{
-		Enabled:        true,
-		ServiceName:    testServiceName,
-		ServiceVersion: "1.0.0",
-		Environment:    "test",
+		Enabled: true,
+		Service: ServiceConfig{
+			Name:    testServiceName,
+			Version: "1.0.0",
+		},
+		Environment: "test",
 		Trace: TraceConfig{
-			Enabled:       true,
-			Endpoint:      "stdout",
-			SampleRate:    1.0,
-			BatchTimeout:  100 * time.Millisecond,
-			ExportTimeout: 1 * time.Second,
-			MaxQueueSize:  100,
-			MaxBatchSize:  10,
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
+			Batch: BatchConfig{
+				Timeout: 100 * time.Millisecond,
+				Size:    10,
+			},
+			Export: ExportConfig{
+				Timeout: 1 * time.Second,
+			},
+			Max: MaxConfig{
+				Queue: QueueConfig{
+					Size: 100,
+				},
+				Batch: MaxBatchConfig{
+					Size: 10,
+				},
+			},
 		},
 	}
 
@@ -102,14 +119,18 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   testOTLPHTTPEndpoint,
-			Protocol:   "http",
-			Insecure:   true,
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: testOTLPHTTPEndpoint,
+			Protocol: "http",
+			Insecure: true,
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -146,14 +167,18 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   testOTLPGRPCEndpoint,
-			Protocol:   "grpc",
-			Insecure:   true,
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: testOTLPGRPCEndpoint,
+			Protocol: "grpc",
+			Insecure: true,
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -188,10 +213,12 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 
 func TestNewProviderOTLPWithHeaders(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: testOTLPHTTPEndpoint,
 			Protocol: "http",
 			Insecure: true,
@@ -199,7 +226,9 @@ func TestNewProviderOTLPWithHeaders(t *testing.T) {
 				"Authorization":   "Bearer test-token",
 				"X-Custom-Header": "custom-value",
 			},
-			SampleRate: 1.0,
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -237,13 +266,17 @@ func TestNewProviderOTLPWithHeaders(t *testing.T) {
 
 func TestNewProviderUnsupportedProtocol(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   testOTLPHTTPEndpoint,
-			Protocol:   "websocket",
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: testOTLPHTTPEndpoint,
+			Protocol: "websocket",
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -267,12 +300,16 @@ func TestNewProviderTracingSampleRate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &Config{
-				Enabled:     true,
-				ServiceName: testServiceName,
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
 				Trace: TraceConfig{
-					Enabled:    true,
-					Endpoint:   "stdout",
-					SampleRate: tt.sampleRate,
+					Enabled:  BoolPtr(true),
+					Endpoint: "stdout",
+					Sample: SampleConfig{
+						Rate: tt.sampleRate,
+					},
 				},
 			}
 
@@ -304,8 +341,10 @@ func TestProviderShutdownTimeout(t *testing.T) {
 
 	provider := &provider{
 		config: Config{
-			Enabled:     true,
-			ServiceName: testServiceName,
+			Enabled: true,
+			Service: ServiceConfig{
+				Name: testServiceName,
+			},
 		},
 		tracerProvider: tp,
 	}
@@ -343,12 +382,16 @@ func (b *blockingSpanExporter) Shutdown(ctx context.Context) error {
 
 func TestProviderMultipleShutdowns(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   "stdout",
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -366,12 +409,16 @@ func TestProviderMultipleShutdowns(t *testing.T) {
 
 func TestMustNewProviderSuccess(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   "stdout",
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 	}
 
@@ -386,8 +433,10 @@ func TestMustNewProviderSuccess(t *testing.T) {
 
 func TestMustNewProviderPanic(t *testing.T) {
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: "", // Invalid: missing service name
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: "", // Invalid: missing service name
+		},
 	}
 
 	// Should panic with invalid config
@@ -399,10 +448,12 @@ func TestMustNewProviderPanic(t *testing.T) {
 func TestTracerProviderNilCase(t *testing.T) {
 	// Create provider with only metrics enabled (no tracer provider)
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 		},
 	}
@@ -429,10 +480,12 @@ func TestNewProviderOTLPHTTPMetrics(t *testing.T) {
 	// Note: This test verifies the exporter is created correctly
 	// but does not require a real collector to be running
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: testOTLPHTTPEndpoint,
 			Interval: 10 * time.Second,
 		},
@@ -470,10 +523,12 @@ func TestNewProviderOTLPGRPCMetrics(t *testing.T) {
 	// Note: This test verifies the exporter is created correctly
 	// but does not require a real collector to be running
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: testOTLPGRPCEndpoint,
 			Interval: 10 * time.Second,
 		},

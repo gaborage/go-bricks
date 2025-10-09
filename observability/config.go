@@ -20,109 +20,256 @@ func BoolPtr(v bool) *bool {
 }
 
 // Config defines the configuration for observability features.
-// It supports automatic injection via the GoBricks config system.
+// It supports automatic unmarshaling via the GoBricks config system using mapstructure tags.
 type Config struct {
 	// Enabled controls whether observability is active.
 	// When false, all observability operations become no-ops.
-	Enabled bool `config:"observability.enabled" default:"false"`
+	Enabled bool `mapstructure:"enabled"`
 
-	// ServiceName identifies the service in traces and metrics.
-	// This is required when observability is enabled.
-	ServiceName string `config:"observability.service.name" required:"true"`
-
-	// ServiceVersion specifies the version of the service.
-	// Used for filtering and grouping in observability backends.
-	ServiceVersion string `config:"observability.service.version" default:"unknown"`
+	// Service contains service identification metadata.
+	Service ServiceConfig `mapstructure:"service"`
 
 	// Environment indicates the deployment environment (e.g., production, staging, development).
-	Environment string `config:"observability.environment" default:"development"`
+	Environment string `mapstructure:"environment"`
 
-	// TraceConfig contains tracing-specific configuration.
-	Trace TraceConfig `config:"observability.trace"`
+	// Trace contains tracing-specific configuration.
+	Trace TraceConfig `mapstructure:"trace"`
 
-	// MetricsConfig contains metrics-specific configuration.
-	Metrics MetricsConfig `config:"observability.metrics"`
+	// Metrics contains metrics-specific configuration.
+	Metrics MetricsConfig `mapstructure:"metrics"`
+}
+
+// ServiceConfig contains service identification metadata.
+type ServiceConfig struct {
+	// Name identifies the service in traces and metrics.
+	// This is required when observability is enabled.
+	Name string `mapstructure:"name"`
+
+	// Version specifies the version of the service.
+	// Used for filtering and grouping in observability backends.
+	Version string `mapstructure:"version"`
+}
+
+// ApplyDefaults sets default values for any config fields that are not specified.
+// This is called after unmarshaling to ensure all fields have sensible defaults.
+func (c *Config) ApplyDefaults() {
+	// Service defaults
+	if c.Service.Version == "" {
+		c.Service.Version = "unknown"
+	}
+
+	// Environment default
+	if c.Environment == "" {
+		c.Environment = "development"
+	}
+
+	// Trace defaults
+	c.applyTraceDefaults()
+
+	// Metrics defaults
+	c.applyMetricsDefaults()
+}
+
+func (c *Config) applyTraceDefaults() {
+	// Set endpoint default first
+	if c.Trace.Endpoint == "" {
+		c.Trace.Endpoint = EndpointStdout
+	}
+
+	// Trace enabled default (true when not explicitly set and observability is enabled)
+	// Only set when nil (unset). If explicitly set to false, preserve it.
+	if c.Enabled && c.Trace.Enabled == nil {
+		c.Trace.Enabled = BoolPtr(true)
+	}
+
+	if c.Trace.Protocol == "" {
+		c.Trace.Protocol = ProtocolHTTP
+	}
+
+	// Insecure defaults to true for local development
+	// Note: With mapstructure, we can't distinguish between explicitly false and unset
+	// We'll assume insecure=true as default for stdout endpoint
+	if c.Trace.Endpoint == EndpointStdout {
+		c.Trace.Insecure = true
+	}
+
+	// Sample rate default
+	if c.Trace.Sample.Rate == 0.0 {
+		c.Trace.Sample.Rate = 1.0
+	}
+
+	// Batch defaults
+	if c.Trace.Batch.Timeout == 0 {
+		c.Trace.Batch.Timeout = 5 * time.Second
+	}
+	if c.Trace.Batch.Size == 0 {
+		c.Trace.Batch.Size = 512
+	}
+
+	// Export timeout default
+	if c.Trace.Export.Timeout == 0 {
+		c.Trace.Export.Timeout = 30 * time.Second
+	}
+
+	// Max queue and batch size defaults
+	if c.Trace.Max.Queue.Size == 0 {
+		c.Trace.Max.Queue.Size = 2048
+	}
+	if c.Trace.Max.Batch.Size == 0 {
+		c.Trace.Max.Batch.Size = 512
+	}
+}
+
+func (c *Config) applyMetricsDefaults() {
+	// Set endpoint default first
+	if c.Metrics.Endpoint == "" {
+		c.Metrics.Endpoint = EndpointStdout
+	}
+
+	// Metrics enabled default (true when not explicitly set and observability is enabled)
+	// Only set when nil (unset). If explicitly set to false, preserve it.
+	if c.Enabled && c.Metrics.Enabled == nil {
+		c.Metrics.Enabled = BoolPtr(true)
+	}
+
+	// Interval default
+	if c.Metrics.Interval == 0 {
+		c.Metrics.Interval = 10 * time.Second
+	}
+
+	// Export timeout default
+	if c.Metrics.Export.Timeout == 0 {
+		c.Metrics.Export.Timeout = 30 * time.Second
+	}
 }
 
 // TraceConfig defines configuration for distributed tracing.
 type TraceConfig struct {
 	// Enabled controls whether tracing is active.
 	// Can be used to disable tracing while keeping metrics enabled.
-	Enabled bool `config:"enabled" default:"true"`
+	// nil = apply default (true when observability is enabled), false = explicitly disabled.
+	Enabled *bool `mapstructure:"enabled"`
 
 	// Endpoint specifies where to send trace data.
 	// Special value "stdout" enables console logging for local development.
 	// For production, use OTLP endpoint (e.g., "http://localhost:4318" for HTTP or "localhost:4317" for gRPC).
-	Endpoint string `config:"endpoint" default:"stdout"`
+	Endpoint string `mapstructure:"endpoint"`
 
 	// Protocol specifies the OTLP protocol to use: "http" or "grpc".
 	// Only used when Endpoint is not "stdout".
 	// HTTP uses OTLP/HTTP protocol (default port 4318).
 	// gRPC uses OTLP/gRPC protocol (default port 4317).
-	Protocol string `config:"protocol" default:"http"`
+	Protocol string `mapstructure:"protocol"`
 
 	// Insecure controls whether to use insecure connections (no TLS).
 	// Only applicable for OTLP endpoints (http/grpc).
 	// Set to true for local development without TLS.
-	Insecure bool `config:"insecure" default:"true"`
+	Insecure bool `mapstructure:"insecure"`
 
 	// Headers allows custom HTTP headers for OTLP exporters.
 	// Useful for authentication tokens or API keys.
 	// Format: map of header name to header value.
-	Headers map[string]string `config:"headers"`
+	Headers map[string]string `mapstructure:"headers"`
 
-	// SampleRate controls what fraction of traces to collect (0.0 to 1.0).
+	// Sample contains sampling configuration.
+	Sample SampleConfig `mapstructure:"sample"`
+
+	// Batch contains batch processing configuration.
+	Batch BatchConfig `mapstructure:"batch"`
+
+	// Export contains export timeout configuration.
+	Export ExportConfig `mapstructure:"export"`
+
+	// Max contains maximum queue and batch size limits.
+	Max MaxConfig `mapstructure:"max"`
+}
+
+// SampleConfig defines sampling configuration for traces.
+type SampleConfig struct {
+	// Rate controls what fraction of traces to collect (0.0 to 1.0).
 	// 1.0 means collect all traces, 0.1 means collect 10% of traces.
 	// Lower values reduce overhead and costs.
-	SampleRate float64 `config:"sample.rate" default:"1.0"`
+	Rate float64 `mapstructure:"rate"`
+}
 
-	// BatchTimeout specifies how long to wait before sending a batch of spans.
+// BatchConfig defines batch processing configuration for traces.
+type BatchConfig struct {
+	// Timeout specifies how long to wait before sending a batch of spans.
 	// Lower values reduce latency but increase network overhead.
-	BatchTimeout time.Duration `config:"batch.timeout" default:"5s"`
+	Timeout time.Duration `mapstructure:"timeout"`
 
-	// ExportTimeout specifies the maximum time to wait for span export.
-	// Prevents slow backends from blocking the application.
-	ExportTimeout time.Duration `config:"export.timeout" default:"30s"`
-
-	// MaxQueueSize limits the number of spans buffered for export.
-	// Prevents memory exhaustion under high load.
-	MaxQueueSize int `config:"max.queue.size" default:"2048"`
-
-	// MaxBatchSize limits the number of spans per export batch.
+	// Size limits the number of spans per export batch.
 	// Smaller batches reduce latency, larger batches reduce overhead.
-	MaxBatchSize int `config:"max.batch.size" default:"512"`
+	Size int `mapstructure:"size"`
+}
+
+// ExportConfig defines export timeout configuration.
+type ExportConfig struct {
+	// Timeout specifies the maximum time to wait for span export.
+	// Prevents slow backends from blocking the application.
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+// MaxConfig defines maximum queue and batch size limits.
+type MaxConfig struct {
+	// Queue contains queue size configuration.
+	Queue QueueConfig `mapstructure:"queue"`
+
+	// Batch contains batch size configuration.
+	Batch MaxBatchConfig `mapstructure:"batch"`
+}
+
+// QueueConfig defines queue size configuration.
+type QueueConfig struct {
+	// Size limits the number of spans buffered for export.
+	// Prevents memory exhaustion under high load.
+	Size int `mapstructure:"size"`
+}
+
+// MaxBatchConfig defines batch size configuration.
+type MaxBatchConfig struct {
+	// Size limits the number of spans per export batch.
+	// Smaller batches reduce latency, larger batches reduce overhead.
+	Size int `mapstructure:"size"`
 }
 
 // MetricsConfig defines configuration for metrics collection.
 type MetricsConfig struct {
 	// Enabled controls whether metrics collection is active.
 	// Can be used to disable metrics while keeping tracing enabled.
-	Enabled bool `config:"enabled" default:"true"`
+	// nil = apply default (true when observability is enabled), false = explicitly disabled.
+	Enabled *bool `mapstructure:"enabled"`
 
 	// Endpoint specifies where to send metric data.
 	// Special value "stdout" enables console logging for local development.
 	// For production, use OTLP endpoint (e.g., "http://localhost:4318").
-	Endpoint string `config:"endpoint" default:"stdout"`
+	Endpoint string `mapstructure:"endpoint"`
 
 	// Protocol specifies the OTLP protocol to use: "http" or "grpc".
 	// If empty, metrics inherit the trace protocol.
-	Protocol string `config:"protocol"`
+	Protocol string `mapstructure:"protocol"`
 
 	// Insecure controls whether to use insecure connections (no TLS).
 	// Only applicable for OTLP endpoints (http/grpc). Falls back to trace setting when unset.
-	Insecure *bool `config:"insecure"`
+	Insecure *bool `mapstructure:"insecure"`
 
 	// Headers allows custom headers for OTLP exporters (e.g., DataDog API keys).
 	// If nil or empty, metrics inherit trace headers.
-	Headers map[string]string `config:"headers"`
+	Headers map[string]string `mapstructure:"headers"`
 
 	// Interval specifies how often to export metrics.
 	// Shorter intervals provide more real-time data but increase overhead.
-	Interval time.Duration `config:"interval" default:"10s"`
+	Interval time.Duration `mapstructure:"interval"`
 
-	// ExportTimeout specifies the maximum time to wait for metric export.
+	// Export contains export timeout configuration.
+	Export MetricsExportConfig `mapstructure:"export"`
+}
+
+// MetricsExportConfig defines export timeout configuration for metrics.
+type MetricsExportConfig struct {
+	// Timeout specifies the maximum time to wait for metric export.
 	// Prevents slow backends from blocking the application.
-	ExportTimeout time.Duration `config:"export.timeout" default:"30s"`
+	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // Validate checks the configuration for common errors.
@@ -136,7 +283,7 @@ func (c *Config) Validate() error {
 		return nil // No validation needed when disabled
 	}
 
-	if c.ServiceName == "" {
+	if c.Service.Name == "" {
 		return ErrMissingServiceName
 	}
 
@@ -148,7 +295,7 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) validateTraceConfig() error {
-	if c.Trace.SampleRate < 0.0 || c.Trace.SampleRate > 1.0 {
+	if c.Trace.Sample.Rate < 0.0 || c.Trace.Sample.Rate > 1.0 {
 		return ErrInvalidSampleRate
 	}
 
@@ -170,7 +317,8 @@ func (c *Config) validateTraceConfig() error {
 }
 
 func (c *Config) validateMetricsConfig() error {
-	if !c.Metrics.Enabled {
+	// Treat nil as false, only validate if explicitly enabled
+	if c.Metrics.Enabled == nil || !*c.Metrics.Enabled {
 		return nil
 	}
 
