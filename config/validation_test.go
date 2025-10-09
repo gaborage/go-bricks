@@ -20,6 +20,13 @@ const (
 	testTenantHeader             = "X-Tenant-ID"
 	testDomain                   = ".api.example.com"
 	testTenantDBHost             = "tenant-a.db.local"
+	serverPort                   = "server.port"
+	databaseType                 = "database.type"
+	databasePort                 = "database.port"
+	logLevel                     = "log.level"
+	mongoDBReplicaPreference     = "database.mongo.replica.preference"
+	mongoDBWriteConcern          = "database.mongo.concern.write"
+	oracleConnectionIdentifier   = "oracle connection identifier"
 )
 
 func makeSampleTenants() map[string]TenantEntry {
@@ -183,7 +190,7 @@ func TestValidateServerSuccess(t *testing.T) {
 				Port: 1,
 				Timeout: TimeoutConfig{
 					Read:       1 * time.Second,
-					Write:      1 * time.Second,
+					Write:      2 * time.Second,
 					Middleware: 1 * time.Second,
 					Shutdown:   1 * time.Second,
 				},
@@ -240,7 +247,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "server.port",
+			expectedError: serverPort,
 		},
 		{
 			name: "negative_port",
@@ -253,7 +260,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "server.port",
+			expectedError: serverPort,
 		},
 		{
 			name: "port_too_high",
@@ -266,7 +273,7 @@ func TestValidateServerFailures(t *testing.T) {
 					Shutdown:   10 * time.Second,
 				},
 			},
-			expectedError: "server.port",
+			expectedError: serverPort,
 		},
 		{
 			name: "zero_read_timeout",
@@ -311,6 +318,32 @@ func TestValidateServerFailures(t *testing.T) {
 				},
 			},
 			expectedError: "server.timeout.write must be positive",
+		},
+		{
+			name: "middleware_timeout_equal_to_write_timeout",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      10 * time.Second,
+					Middleware: 10 * time.Second,
+					Shutdown:   5 * time.Second,
+				},
+			},
+			expectedError: "server.timeout.middleware must be less than server.timeout.write",
+		},
+		{
+			name: "middleware_timeout_greater_than_write_timeout",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      5 * time.Second,
+					Middleware: 10 * time.Second,
+					Shutdown:   5 * time.Second,
+				},
+			},
+			expectedError: "server.timeout.middleware must be less than server.timeout.write",
 		},
 	}
 
@@ -433,7 +466,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database.type",
+			expectedError: databaseType,
 		},
 		{
 			name: "empty_host",
@@ -465,7 +498,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database.port",
+			expectedError: databasePort,
 		},
 		{
 			name: "negative_port",
@@ -481,7 +514,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database.port",
+			expectedError: databasePort,
 		},
 		{
 			name: "port_too_high",
@@ -497,7 +530,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "database.port",
+			expectedError: databasePort,
 		},
 		{
 			name: "empty_database",
@@ -581,28 +614,28 @@ func TestValidateLogFailures(t *testing.T) {
 			cfg: LogConfig{
 				Level: "invalid",
 			},
-			expectedError: "log.level",
+			expectedError: logLevel,
 		},
 		{
 			name: "empty_level",
 			cfg: LogConfig{
 				Level: "",
 			},
-			expectedError: "log.level",
+			expectedError: logLevel,
 		},
 		{
 			name: "uppercase_level",
 			cfg: LogConfig{
 				Level: "INFO",
 			},
-			expectedError: "log.level",
+			expectedError: logLevel,
 		},
 		{
 			name: "mixed_case_level",
 			cfg: LogConfig{
 				Level: "Debug",
 			},
-			expectedError: "log.level",
+			expectedError: logLevel,
 		},
 	}
 
@@ -909,7 +942,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				// Missing required fields
 			},
 			expectError:   true,
-			errorContains: "database.type",
+			errorContains: databaseType,
 		},
 		{
 			name: "type_only_fails_validation",
@@ -1015,7 +1048,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.port",
+			errorContains: databasePort,
 		},
 		{
 			name: "connection_string_with_invalid_type",
@@ -1029,7 +1062,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.type",
+			errorContains: databaseType,
 		},
 		{
 			name: "connection_string_missing_max_conns_applies_default",
@@ -1058,7 +1091,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.type",
+			errorContains: databaseType,
 		},
 		{
 			name: "invalid_port_range",
@@ -1075,7 +1108,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.port",
+			errorContains: databasePort,
 		},
 	}
 
@@ -1471,7 +1504,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.mongo.replica.preference",
+			errorContains: mongoDBReplicaPreference,
 		},
 		{
 			name: "invalid write concern",
@@ -1488,7 +1521,7 @@ func TestValidateMongoDBFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.mongo.concern.write",
+			errorContains: mongoDBWriteConcern,
 		},
 		{
 			name: "non-MongoDB type should not validate MongoDB fields",
@@ -1549,7 +1582,7 @@ func TestValidateMongoDBReadPreference(t *testing.T) {
 			err := validateMongoDBReadPreference(tt.preference)
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "database.mongo.replica.preference")
+				assert.Contains(t, err.Error(), mongoDBReplicaPreference)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1585,7 +1618,7 @@ func TestValidateMongoDBWriteConcern(t *testing.T) {
 			err := validateMongoDBWriteConcern(tt.concern)
 			if tt.expectError {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "database.mongo.concern.write")
+				assert.Contains(t, err.Error(), mongoDBWriteConcern)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -1628,7 +1661,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.mongo.replica.preference",
+			errorContains: mongoDBReplicaPreference,
 		},
 		{
 			name: "invalid write concern with connection string",
@@ -1642,7 +1675,7 @@ func TestValidateMongoDBWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "database.mongo.concern.write",
+			errorContains: mongoDBWriteConcern,
 		},
 	}
 
@@ -1716,7 +1749,7 @@ func TestValidateOracleFields(t *testing.T) {
 				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "Oracle config with service name and SID",
@@ -1733,7 +1766,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "Oracle config with service name and database name",
@@ -1750,7 +1783,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "Oracle config with SID and database name",
@@ -1767,7 +1800,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "Oracle config with all three connection identifiers",
@@ -1785,7 +1818,7 @@ func TestValidateOracleFields(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "non-Oracle type should not validate Oracle fields",
@@ -1851,7 +1884,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 		{
 			name: "Oracle with connection string but no identifiers",
@@ -1861,7 +1894,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 				// No Service.Name, SID, or Database
 			},
 			expectError:   true,
-			errorContains: "oracle connection identifier",
+			errorContains: oracleConnectionIdentifier,
 		},
 	}
 

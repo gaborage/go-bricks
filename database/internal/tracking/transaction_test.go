@@ -92,7 +92,7 @@ func TestTransactionQueryLogs(t *testing.T) {
 		t.Fatalf("expected Query args to be forwarded")
 	}
 	events := recLogger.events()
-	if len(events) != 1 || events[0].Level != "debug" {
+	if len(events) != 1 || events[0].Level != levelDebug {
 		t.Fatalf("expected debug event, got %+v", events)
 	}
 	if events[0].Fields["query"] != "SELECT" {

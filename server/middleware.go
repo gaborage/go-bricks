@@ -90,13 +90,14 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 		ContentSecurityPolicy: "default-src 'self'",
 	}))
 
-	// Body limit
-	e.Use(middleware.BodyLimit("10M"))
-
-	// Timeout
+	// Timeout - moved before BodyLimit to catch timeouts early in the chain
+	// This prevents timeouts from racing with request body parsing
 	e.Use(middleware.TimeoutWithConfig(middleware.TimeoutConfig{
 		Timeout: cfg.Server.Timeout.Middleware,
 	}))
+
+	// Body limit
+	e.Use(middleware.BodyLimit("10M"))
 
 	// Gzip
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
