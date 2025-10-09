@@ -520,7 +520,7 @@ func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 
 				for _, dp := range sumData.DataPoints {
 					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == metricDbSQLTable && attr.Value.AsString() == "users" {
+						if string(attr.Key) == metricDBSQLTable && attr.Value.AsString() == "users" {
 							foundTableAttr = true
 							break
 						}
@@ -764,9 +764,9 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			rm := mp.Collect(t)
 
 			// Verify gauges exist
-			obtest.AssertMetricExists(t, rm, metricPoolActive)
-			obtest.AssertMetricExists(t, rm, metricPoolIdle)
-			obtest.AssertMetricExists(t, rm, metricPoolTotal)
+			obtest.AssertMetricExists(t, rm, metricDBPoolActive)
+			obtest.AssertMetricExists(t, rm, metricDBPoolIdle)
+			obtest.AssertMetricExists(t, rm, metricDBPoolTotal)
 
 			// Verify gauge values match expected (accounting for type conversion)
 			// Note: We can't directly assert gauge values without triggering the callback
@@ -810,9 +810,9 @@ func TestRegisterConnectionPoolMetricsWithInvalidTypes(t *testing.T) {
 	rm := mp.Collect(t)
 
 	// Gauges should exist (even if values are 0 due to conversion failure)
-	obtest.AssertMetricExists(t, rm, metricPoolActive)
-	obtest.AssertMetricExists(t, rm, metricPoolIdle)
-	obtest.AssertMetricExists(t, rm, metricPoolTotal)
+	obtest.AssertMetricExists(t, rm, metricDBPoolActive)
+	obtest.AssertMetricExists(t, rm, metricDBPoolIdle)
+	obtest.AssertMetricExists(t, rm, metricDBPoolTotal)
 }
 
 // TestRegisterConnectionPoolMetricsStatsError tests handling of Stats() errors.

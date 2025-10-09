@@ -26,16 +26,16 @@ const (
 	metricDBDuration = "db.client.operation.duration"
 
 	// Connection pool metrics
-	metricPoolActive = "db.connection.pool.active"
-	metricPoolIdle   = "db.connection.pool.idle"
-	metricPoolTotal  = "db.connection.pool.total"
+	metricDBPoolActive = "db.connection.pool.active"
+	metricDBPoolIdle   = "db.connection.pool.idle"
+	metricDBPoolTotal  = "db.connection.pool.total"
 
-	metricDbSQLTable  = "db.sql.table"
-	metricDbOperation = "db.operation.name"
-	metricDbSystem    = "db.system"
+	metricDBSQLTable  = "db.sql.table"
+	metricDBOperation = "db.operation.name"
+	metricDBSystem    = "db.system"
 
 	// I/O metrics
-	metricRowsAffected = "db.rows.affected"
+	metricDBRowsAffected = "db.rows.affected"
 )
 
 var (
@@ -176,10 +176,10 @@ func initDBMeter() {
 
 	// Initialize counter for rows affected (write operations)
 	dbRowsAffectedCounter, err = dbMeter.Int64Counter(
-		metricRowsAffected,
+		metricDBRowsAffected,
 		metric.WithDescription("Number of rows affected by database operations"),
 	)
-	logMetricError(metricRowsAffected, err)
+	logMetricError(metricDBRowsAffected, err)
 }
 
 // getDBMeter returns the initialized database meter, initializing it if necessary.
@@ -215,9 +215,9 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 
 	// Common attributes for both metrics
 	commonAttrs := []attribute.KeyValue{
-		attribute.String(metricDbSystem, vendor),
-		attribute.String(metricDbOperation, operation),
-		attribute.String(metricDbSQLTable, table),
+		attribute.String(metricDBSystem, vendor),
+		attribute.String(metricDBOperation, operation),
+		attribute.String(metricDBSQLTable, table),
 	}
 
 	// Record counter with error attribute
@@ -416,9 +416,9 @@ func RegisterConnectionPoolMetrics(conn interface {
 	}
 
 	// Create gauges using helper function
-	reg.activeGauge = createGauge(meter, metricPoolActive, "Number of active database connections")
-	reg.idleGauge = createGauge(meter, metricPoolIdle, "Number of idle database connections")
-	reg.totalGauge = createGauge(meter, metricPoolTotal, "Maximum number of database connections configured")
+	reg.activeGauge = createGauge(meter, metricDBPoolActive, "Number of active database connections")
+	reg.idleGauge = createGauge(meter, metricDBPoolIdle, "Number of idle database connections")
+	reg.totalGauge = createGauge(meter, metricDBPoolTotal, "Maximum number of database connections configured")
 
 	// Collect non-nil gauges for callback registration
 	instruments := collectInstruments(reg.activeGauge, reg.idleGauge, reg.totalGauge)
