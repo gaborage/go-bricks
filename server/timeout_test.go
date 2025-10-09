@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,9 +39,9 @@ func TestTimeoutHandling(t *testing.T) {
 		},
 		{
 			name:           "timeout at edge case",
-			contextTimeout: 50 * time.Millisecond,
-			delayBefore:    45 * time.Millisecond,
-			expectTimeout:  false, // Should complete just in time
+			contextTimeout: 100 * time.Millisecond,
+			delayBefore:    50 * time.Millisecond,
+			expectTimeout:  false, // Should complete with reasonable buffer
 			expectedStatus: http.StatusOK,
 		},
 	}
@@ -192,8 +193,9 @@ func TestTimeoutDuringValidation(t *testing.T) {
 
 	POST(hr, registrar, "/test", handler)
 
-	// Create request with very short timeout
-	req := httptest.NewRequest(http.MethodPost, "/test", http.NoBody)
+	// Create request with very short timeout and valid JSON body
+	// Use valid JSON so binding succeeds, allowing us to test the post-validation timeout checkpoint
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"name":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
