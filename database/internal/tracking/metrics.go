@@ -70,79 +70,73 @@ func noOpCleanup() func() {
 	}
 }
 
-// asInt64 safely converts various Go numeric types to int64.
-// This function handles all common numeric kinds that database drivers might return in Stats() maps.
-//
-// Supported types:
-//   - Signed integers: int, int8, int16, int32, int64
-//   - Unsigned integers: uint, uint8, uint16, uint32, uint64 (with overflow check)
-//   - Floating-point: float32, float64 (truncated to int64)
-//
-// Returns (value, true) on successful conversion, (0, false) for:
-//   - Non-numeric types (string, bool, struct, nil, etc.)
-//   - uint64 values exceeding math.MaxInt64 (overflow)
-//
-// Examples:
-//
-//	asInt64(int(42))        // (42, true)
-//	asInt64(int64(100))     // (100, true)
-//	asInt64(uint32(50))     // (50, true)
-//	asInt64(float64(99.7))  // (99, true) - truncated
-//	asInt64("42")           // (0, false) - non-numeric
-//	asInt64(nil)            // (0, false) - nil value
-//
-//nolint:gocyclo // Type switch for numeric conversion requires many cases by nature
 func asInt64(v any) (int64, bool) {
-	if v == nil {
-		return 0, false
-	}
+    if v == nil {
+        return 0, false
+    }
 
-	switch val := v.(type) {
-	// Signed integers
-	case int:
-		return int64(val), true
-	case int8:
-		return int64(val), true
-	case int16:
-		return int64(val), true
-	case int32:
-		return int64(val), true
-	case int64:
-		return val, true
+    switch val := v.(type) {
+    // Signed integers
+    case int:
+        return int64(val), true
+    case int8:
+        return int64(val), true
+    case int16:
+        return int64(val), true
+    case int32:
+        return int64(val), true
+    case int64:
+        return val, true
 
-	// Unsigned integers (with overflow check for uint64)
-	case uint:
-		// uint might be 32 or 64 bits depending on platform
-		// Safe conversion since uint max is either 2^32-1 or 2^64-1
-		if val <= uint(9223372036854775807) { // math.MaxInt64
-			return int64(val), true
-		}
-		return 0, false
-	case uint8:
-		return int64(val), true
-	case uint16:
-		return int64(val), true
-	case uint32:
-		return int64(val), true
-	case uint64:
-		// Check for overflow: uint64 can exceed int64 max value
-		if val <= 9223372036854775807 { // math.MaxInt64
-			return int64(val), true
-		}
-		return 0, false
+    // Unsigned integers (with overflow check for uint64)
+    case uint:
+        // Convert to uint64 to avoid 32-bit overflow on constants
+        u := uint64(val)
+        const maxInt64U = uint64(1<<63 - 1)
+        if u <= maxInt64U {
+            return int64(u), true
+        }
+        return 0, false
+    case uint8:
+        return int64(val), true
+    case uint16:
+        return int64(val), true
+    case uint32:
+        return int64(val), true
+    case uint64:
+        // Check for overflow: uint64 can exceed int64 max value
+        const maxInt64U = uint64(1<<63 - 1)
+        if val <= maxInt64U {
+            return int64(val), true
+        }
+        return 0, false
 
-	// Floating-point (truncate to int64)
-	case float32:
-		return int64(val), true
-	case float64:
-		return int64(val), true
+    // Floating-point (truncate to int64) with range/NaN/Inf checks
+    case float32:
+        f := float64(val)
+        const (
+            maxInt64F = float64(1<<63 - 1)
+            minInt64F = -float64(1 << 63)
+        )
+        if math.IsNaN(f) || math.IsInf(f, 0) || f < minInt64F || f > maxInt64F {
+            return 0, false
+        }
+        return int64(f), true
+    case float64:
+        const (
+            maxInt64F = float64(1<<63 - 1)
+            minInt64F = -float64(1 << 63)
+        )
+        if math.IsNaN(val) || math.IsInf(val, 0) || val < minInt64F || val > maxInt64F {
+            return 0, false
+        }
+        return int64(val), true
 
-	// Unsupported type
-	default:
-		return 0, false
-	}
+    // Unsupported type
+    default:
+        return 0, false
+    }
 }
-
 // initDBMeter initializes the OpenTelemetry meter and metric instruments.
 // This function is called lazily and only once using sync.Once to ensure
 // thread-safe initialization.
