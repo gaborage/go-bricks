@@ -104,15 +104,19 @@ func TestMustShutdownPanic(t *testing.T) {
 func TestForceFlushBothProvidersFail(t *testing.T) {
 	// Test that ForceFlush aggregates errors from both trace and meter providers
 	cfg := &Config{
-		Enabled:     true,
-		ServiceName: testServiceName,
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
 		Trace: TraceConfig{
-			Enabled:    true,
-			Endpoint:   "stdout",
-			SampleRate: 1.0,
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: 1.0,
+			},
 		},
 		Metrics: MetricsConfig{
-			Enabled:  true,
+			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 		},
 	}

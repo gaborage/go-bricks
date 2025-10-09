@@ -80,12 +80,15 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 	// Create observability config
 	var obsCfg observability.Config
 
-	// Try to inject configuration
-	if err := b.cfg.InjectInto(&obsCfg); err != nil {
+	// Try to unmarshal configuration from the "observability" key
+	if err := b.cfg.Unmarshal("observability", &obsCfg); err != nil {
 		// Configuration missing or invalid - use defaults (observability disabled)
 		b.log.Debug().Err(err).Msg("Observability configuration not found or invalid, using no-op provider")
 		return observability.MustNewProvider(&observability.Config{Enabled: false})
 	}
+
+	// Apply default values for fields not specified in config
+	obsCfg.ApplyDefaults()
 
 	// Create provider (will be no-op if Enabled is false)
 	provider, err := observability.NewProvider(&obsCfg)
@@ -96,7 +99,7 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 
 	if obsCfg.Enabled {
 		b.log.Info().
-			Str("service", obsCfg.ServiceName).
+			Str("service", obsCfg.Service.Name).
 			Str("environment", obsCfg.Environment).
 			Msg("Observability initialized")
 	} else {
