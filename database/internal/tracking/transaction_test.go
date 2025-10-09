@@ -112,7 +112,7 @@ func TestTransactionExecLogsError(t *testing.T) {
 		t.Fatalf("expected error from Exec")
 	}
 	events := recLogger.events()
-	if len(events) != 1 || events[0].Level != "error" {
+	if len(events) != 1 || events[0].Level != levelError {
 		t.Fatalf("expected error log, got %+v", events)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,14 +14,18 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 const (
 	testQueryClause = "SELECT * FROM users"
+	testQuerySelect = "SELECT * FROM users WHERE id = $1"
+	attrKeyError    = "error"
 )
 
 // setupTestTracerProvider creates an in-memory tracer provider for testing
@@ -63,10 +68,9 @@ func TestCreateDBSpanSpanCreation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	query := "SELECT * FROM users WHERE id = $1"
 	start := time.Now().Add(-50 * time.Millisecond) // Simulate operation that started 50ms ago
 
-	createDBSpan(ctx, tc, query, start, nil)
+	createDBSpan(ctx, tc, testQuerySelect, start, nil)
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1, "Should create exactly one span")
@@ -362,4 +366,214 @@ func TestCreateDBSpanOperationTypes(t *testing.T) {
 				"Span name should match operation type")
 		})
 	}
+}
+
+// setupTestObservabilityProviders creates both trace and meter providers for testing
+func setupTestObservabilityProviders(t *testing.T) (
+	traceExporter *tracetest.InMemoryExporter,
+	meterProvider *obtest.TestMeterProvider,
+	cleanup func(),
+) {
+	t.Helper()
+
+	// Save original global state
+	originalTP := otel.GetTracerProvider()
+	originalMP := otel.GetMeterProvider()
+	originalPropagator := otel.GetTextMapPropagator()
+
+	// Create trace provider
+	traceExporter = tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(traceExporter),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	// Create meter provider
+	meterProvider = obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(meterProvider)
+
+	// Reset meter initialization to pick up test provider
+	meterOnce = sync.Once{}
+	dbMeter = nil
+	dbCallsCounter = nil
+	dbDurationHistogram = nil
+
+	// Return cleanup function
+	cleanup = func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			t.Logf("Failed to shutdown test tracer provider: %v", err)
+		}
+		if err := meterProvider.Shutdown(context.Background()); err != nil {
+			t.Logf("Failed to shutdown test meter provider: %v", err)
+		}
+		otel.SetTracerProvider(originalTP)
+		otel.SetMeterProvider(originalMP)
+		otel.SetTextMapPropagator(originalPropagator)
+		// Reset state for other tests
+		meterOnce = sync.Once{}
+		dbMeter = nil
+		dbCallsCounter = nil
+		dbDurationHistogram = nil
+	}
+
+	return traceExporter, meterProvider, cleanup
+}
+
+func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {
+	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+
+	log := logger.New("disabled", false)
+	tc := &Context{
+		Logger:   log,
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+
+	ctx := context.Background()
+	start := time.Now().Add(-25 * time.Millisecond)
+
+	// Track the operation
+	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, nil)
+
+	// Verify span was created
+	spans := traceExporter.GetSpans()
+	require.Len(t, spans, 1, "Should create exactly one span")
+	assert.Equal(t, "db.select", spans[0].Name, "Span name should be db.select")
+
+	// Verify metrics were recorded
+	rm := meterProvider.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
+}
+
+func TestTrackDBOperationWithError(t *testing.T) {
+	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+
+	log := logger.New("disabled", false)
+	tc := &Context{
+		Logger:   log,
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+
+	ctx := context.Background()
+	query := "INSERT INTO users (name) VALUES ($1)"
+	start := time.Now().Add(-15 * time.Millisecond)
+	testErr := errors.New("duplicate key violation")
+
+	// Track the operation with error
+	TrackDBOperation(ctx, tc, query, nil, start, testErr)
+
+	// Verify span was created with error status
+	spans := traceExporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "db.insert", spans[0].Name)
+	assert.Equal(t, codes.Error, spans[0].Status.Code, "Span should have error status")
+
+	// Verify metrics were recorded with error=true
+	rm := meterProvider.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
+
+	// Verify error attribute on counter
+	var foundErrorTrue bool
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == metricDBCalls {
+				sumData, ok := m.Data.(metricdata.Sum[int64])
+				require.True(t, ok)
+				for _, dp := range sumData.DataPoints {
+					for _, attr := range dp.Attributes.ToSlice() {
+						if string(attr.Key) == attrKeyError && attr.Value.AsBool() {
+							foundErrorTrue = true
+						}
+					}
+				}
+			}
+		}
+	}
+	assert.True(t, foundErrorTrue, "Should have metric with error=true attribute")
+}
+
+func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
+	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+
+	log := logger.New("disabled", false)
+	tc := &Context{
+		Logger:   log,
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+
+	ctx := context.Background()
+	start := time.Now().Add(-10 * time.Millisecond)
+
+	// Track the operation with sql.ErrNoRows
+	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, sql.ErrNoRows)
+
+	// Verify span was created without error status (sql.ErrNoRows is not an error)
+	spans := traceExporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, codes.Unset, spans[0].Status.Code, "sql.ErrNoRows should not set error status")
+
+	// Verify metrics were recorded with error=false
+	rm := meterProvider.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricDBCalls)
+
+	// Verify error attribute is false
+	var foundErrorFalse bool
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == metricDBCalls {
+				sumData, ok := m.Data.(metricdata.Sum[int64])
+				require.True(t, ok)
+				for _, dp := range sumData.DataPoints {
+					for _, attr := range dp.Attributes.ToSlice() {
+						if string(attr.Key) == attrKeyError && !attr.Value.AsBool() {
+							foundErrorFalse = true
+						}
+					}
+				}
+			}
+		}
+	}
+	assert.True(t, foundErrorFalse, "sql.ErrNoRows should have error=false attribute")
+}
+
+func TestTrackDBOperationMultipleOperations(t *testing.T) {
+	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+
+	log := logger.New("disabled", false)
+	tc := &Context{
+		Logger:   log,
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+
+	// Track multiple different operations
+	TrackDBOperation(ctx, tc, "SELECT * FROM users", nil, start, nil)
+	TrackDBOperation(ctx, tc, "INSERT INTO users VALUES (1)", nil, start, nil)
+	TrackDBOperation(ctx, tc, "UPDATE users SET name = 'test'", nil, start, nil)
+
+	// Verify 3 spans were created
+	spans := traceExporter.GetSpans()
+	require.Len(t, spans, 3, "Should create three spans")
+
+	spanNames := []string{spans[0].Name, spans[1].Name, spans[2].Name}
+	assert.Contains(t, spanNames, "db.select")
+	assert.Contains(t, spanNames, "db.insert")
+	assert.Contains(t, spanNames, "db.update")
+
+	// Verify metrics were recorded for all operations
+	rm := meterProvider.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }

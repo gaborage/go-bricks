@@ -63,6 +63,11 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		createDBSpan(ctx, tc, query, start, err)
 	}
 
+	// Record OpenTelemetry metrics for database operation
+	if ctx != nil {
+		recordDBMetrics(ctx, tc, query, elapsed, err)
+	}
+
 	// Truncate query string to safe max length to avoid unbounded payloads
 	truncatedQuery := query
 	if tc.Settings.MaxQueryLength() > 0 && len(query) > tc.Settings.MaxQueryLength() {
