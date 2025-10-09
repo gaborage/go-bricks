@@ -50,7 +50,7 @@ func (tx *Transaction) Query(ctx context.Context, query string, args ...any) (*s
 	rows, err := tx.tx.Query(ctx, query, args...)
 
 	// Track performance metrics
-	tx.trackTx(ctx, query, args, start, err)
+	tx.trackTx(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 
 	return rows, err
 }
@@ -62,7 +62,7 @@ func (tx *Transaction) QueryRow(ctx context.Context, query string, args ...any) 
 	row := tx.tx.QueryRow(ctx, query, args...)
 
 	return rowtracker.Wrap(row, func(err error) {
-		tx.trackTx(ctx, query, args, start, err)
+		tx.trackTx(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 	})
 }
 
@@ -72,7 +72,7 @@ func (tx *Transaction) Exec(ctx context.Context, query string, args ...any) (sql
 	result, err := tx.tx.Exec(ctx, query, args...)
 
 	// Track performance metrics
-	tx.trackTx(ctx, query, args, start, err)
+	tx.trackTx(ctx, query, args, start, extractRowsAffected(result, err), err)
 
 	return result, err
 }
@@ -83,7 +83,7 @@ func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Stateme
 	stmt, err := tx.tx.Prepare(ctx, query)
 
 	// Track performance metrics
-	tx.trackTx(ctx, "TX_PREPARE: "+query, nil, start, err)
+	tx.trackTx(ctx, "TX_PREPARE: "+query, nil, start, 0, err) // Prepare doesn't affect rows
 
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func (tx *Transaction) Commit() error {
 	err := tx.tx.Commit()
 
 	// Track performance metrics
-	tx.trackTx(context.Background(), "TX_COMMIT", nil, start, err)
+	tx.trackTx(context.Background(), "TX_COMMIT", nil, start, 0, err) // COMMIT doesn't affect rows
 
 	// Return the original error
 	return err
@@ -110,13 +110,13 @@ func (tx *Transaction) Rollback() error {
 	err := tx.tx.Rollback()
 
 	// Track performance metrics
-	tx.trackTx(context.Background(), "TX_ROLLBACK", nil, start, err)
+	tx.trackTx(context.Background(), "TX_ROLLBACK", nil, start, 0, err) // ROLLBACK doesn't affect rows
 
 	// Return the original error
 	return err
 }
 
 // trackTx tracks transaction operation performance
-func (tx *Transaction) trackTx(ctx context.Context, query string, args []any, start time.Time, err error) {
-	TrackDBOperation(ctx, tx.tc, query, args, start, err)
+func (tx *Transaction) trackTx(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
+	TrackDBOperation(ctx, tx.tc, query, args, start, rowsAffected, err)
 }

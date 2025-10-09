@@ -9,15 +9,17 @@ import (
 	go_ora "github.com/sijms/go-ora/v2"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/tracking"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
 
 // Connection implements the types.Interface for Oracle
 type Connection struct {
-	db     *sql.DB
-	config *config.DatabaseConfig
-	logger logger.Logger
+	db             *sql.DB
+	config         *config.DatabaseConfig
+	logger         logger.Logger
+	metricsCleanup func() // Cleanup function for unregistering metrics callback
 }
 
 var (
@@ -88,11 +90,17 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	}
 	ev.Msg("Connected to Oracle database")
 
-	return &Connection{
+	conn := &Connection{
 		db:     db,
 		config: cfg,
 		logger: log,
-	}, nil
+	}
+
+	// Register connection pool metrics for observability
+	// Store cleanup function to allow proper unregistration during Close()
+	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle")
+
+	return conn, nil
 }
 
 // Statement wraps sql.Stmt to implement types.Statement
@@ -228,6 +236,12 @@ func (c *Connection) Stats() (map[string]any, error) {
 // Close closes the database connection
 func (c *Connection) Close() error {
 	c.logger.Info().Msg("Closing Oracle database connection")
+
+	// Unregister metrics callback to allow garbage collection
+	if c.metricsCleanup != nil {
+		c.metricsCleanup()
+	}
+
 	return c.db.Close()
 }
 

@@ -69,7 +69,7 @@ func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	start := time.Now()
 	rows, err := s.stmt.Query(ctx, args...)
 
-	s.trackStmt(ctx, "STMT_QUERY", args, start, err)
+	s.trackStmt(ctx, "STMT_QUERY", args, start, 0, err) // Read operations don't have rows affected
 	return rows, err
 }
 
@@ -80,7 +80,7 @@ func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
 	row := s.stmt.QueryRow(ctx, args...)
 
 	return rowtracker.Wrap(row, func(err error) {
-		s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, err)
+		s.trackStmt(ctx, "STMT_QUERY_ROW", args, start, 0, err) // Read operations don't have rows affected
 	})
 }
 
@@ -89,7 +89,7 @@ func (s *Statement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	start := time.Now()
 	result, err := s.stmt.Exec(ctx, args...)
 
-	s.trackStmt(ctx, "STMT_EXEC", args, start, err)
+	s.trackStmt(ctx, "STMT_EXEC", args, start, extractRowsAffected(result, err), err)
 	return result, err
 }
 
@@ -99,7 +99,7 @@ func (s *Statement) Close() error {
 }
 
 // trackStmt tracks prepared statement performance
-func (s *Statement) trackStmt(ctx context.Context, operation string, args []any, start time.Time, err error) {
+func (s *Statement) trackStmt(ctx context.Context, operation string, args []any, start time.Time, rowsAffected int64, err error) {
 	op := operation
 	if s.query != "" {
 		op = operation + ": " + s.query
@@ -109,5 +109,5 @@ func (s *Statement) trackStmt(ctx context.Context, operation string, args []any,
 		Vendor:   s.vendor,
 		Settings: s.settings,
 	}
-	TrackDBOperation(ctx, tc, op, args, start, err)
+	TrackDBOperation(ctx, tc, op, args, start, rowsAffected, err)
 }

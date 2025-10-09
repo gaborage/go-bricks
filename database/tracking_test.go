@@ -304,7 +304,7 @@ func TestTrackDBOperation(t *testing.T) {
 
 	// Test successful operation
 	tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-	TrackDBOperation(ctx, tc, "SELECT * FROM test", nil, start, nil)
+	TrackDBOperation(ctx, tc, "SELECT * FROM test", nil, start, 0, nil)
 
 	assertDBCounter(ctx, t, 1)
 	// elapsed should be >= 10ms in nanoseconds
@@ -322,7 +322,7 @@ func TestTrackDBOperationWithError(t *testing.T) {
 
 	// This should not panic
 	tc := &TrackingContext{Logger: log, Vendor: "oracle", Settings: settings}
-	TrackDBOperation(ctx, tc, selectAllInvalid, nil, start, testErr)
+	TrackDBOperation(ctx, tc, selectAllInvalid, nil, start, 0, testErr)
 
 	// Verify counter was still incremented despite error
 	assertDBCounter(ctx, t, 1)
@@ -443,7 +443,7 @@ func TestTrackDBOperationNilLogger(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		tc := &TrackingContext{Logger: nil, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, selectOne, nil, start, nil)
+		TrackDBOperation(ctx, tc, selectOne, nil, start, 0, nil)
 	})
 }
 
@@ -456,7 +456,7 @@ func TestTrackDBOperationSqlErrNoRows(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, "SELECT * FROM users WHERE id = 999", nil, start, sql.ErrNoRows)
+		TrackDBOperation(ctx, tc, "SELECT * FROM users WHERE id = 999", nil, start, 0, sql.ErrNoRows)
 	})
 }
 
@@ -472,7 +472,7 @@ func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, "SELECT * FROM huge_table", nil, slowStart, nil)
+		TrackDBOperation(ctx, tc, "SELECT * FROM huge_table", nil, slowStart, 0, nil)
 	})
 }
 
@@ -487,7 +487,7 @@ func TestTrackDBOperationRegularError(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		tc := &TrackingContext{Logger: log, Vendor: "oracle", Settings: settings}
-		TrackDBOperation(ctx, tc, selectAllUsers, nil, start, regularErr)
+		TrackDBOperation(ctx, tc, selectAllUsers, nil, start, 0, regularErr)
 	})
 }
 

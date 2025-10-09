@@ -44,7 +44,10 @@ const (
 // error is logged (with sql.ErrNoRows logged at debug level); if there is no error and the duration
 // exceeds the configured slow-query threshold a warning is emitted, otherwise a debug message is
 // emitted.
-func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any, start time.Time, err error) {
+//
+// The rowsAffected parameter represents the number of rows affected by write operations (INSERT, UPDATE, DELETE).
+// For read operations (SELECT), pass 0.
+func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
 	// Guard against nil tracking context or logger with no-op default
 	if tc == nil || tc.Logger == nil {
 		return
@@ -65,7 +68,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 
 	// Record OpenTelemetry metrics for database operation
 	if ctx != nil {
-		recordDBMetrics(ctx, tc, query, elapsed, err)
+		recordDBMetrics(ctx, tc, query, elapsed, rowsAffected, err)
 	}
 
 	// Truncate query string to safe max length to avoid unbounded payloads
@@ -100,6 +103,22 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	} else {
 		logEvent.Debug().Msg("Database operation executed")
 	}
+}
+
+// extractRowsAffected safely extracts the number of rows affected from a sql.Result.
+// Returns 0 if the result is nil, an error occurred during query execution, or
+// RowsAffected() fails. This is a best-effort helper for I/O metrics tracking.
+func extractRowsAffected(result sql.Result, err error) int64 {
+	if result == nil || err != nil {
+		return 0
+	}
+
+	affected, affErr := result.RowsAffected()
+	if affErr != nil {
+		return 0
+	}
+
+	return affected
 }
 
 // TruncateString returns value truncated to at most maxLen characters.

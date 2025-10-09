@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -191,7 +192,7 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	}
 
 	start := time.Now().Add(-25 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, 0, nil)
 
 	if logger.GetDBCounter(ctx) != 1 {
 		t.Fatalf("expected db counter to increment")
@@ -230,7 +231,7 @@ func TestTrackDBOperationTruncatesQueryAndLogsArgs(t *testing.T) {
 	}
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "oracle", Settings: settings}, "SELECT something", []any{"verylongparameter", []byte{0x1, 0x2}}, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "oracle", Settings: settings}, "SELECT something", []any{"verylongparameter", []byte{0x1, 0x2}}, start, 0, nil)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -261,7 +262,7 @@ func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
 	}
 
 	start := time.Now().Add(-20 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, nil)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -282,7 +283,7 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 	settings := Settings{slowQueryThreshold: time.Second}
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, sql.ErrNoRows)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, sql.ErrNoRows)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -304,7 +305,7 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 
 	failure := errors.New("boom")
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, failure)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, failure)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -328,6 +329,72 @@ func TestTrackDBOperationNoLoggerOrContext(t *testing.T) {
 			t.Fatalf("expected no panic when logger is nil: %v", r)
 		}
 	}()
-	TrackDBOperation(context.Background(), nil, "SELECT", nil, time.Now(), nil)
-	TrackDBOperation(context.Background(), &Context{}, "SELECT", nil, time.Now(), nil)
+	TrackDBOperation(context.Background(), nil, "SELECT", nil, time.Now(), 0, nil)
+	TrackDBOperation(context.Background(), &Context{}, "SELECT", nil, time.Now(), 0, nil)
+}
+
+// TestExtractRowsAffected tests the extractRowsAffected helper function.
+func TestExtractRowsAffected(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   sql.Result
+		err      error
+		expected int64
+	}{
+		{
+			name:     "nil_result",
+			result:   nil,
+			err:      nil,
+			expected: 0,
+		},
+		{
+			name:     "error_present",
+			result:   &mockResult{rows: 5},
+			err:      errors.New("database error"),
+			expected: 0,
+		},
+		{
+			name:     "successful_operation",
+			result:   &mockResult{rows: 10},
+			err:      nil,
+			expected: 10,
+		},
+		{
+			name:     "zero_rows_affected",
+			result:   &mockResult{rows: 0},
+			err:      nil,
+			expected: 0,
+		},
+		{
+			name:     "rows_affected_error",
+			result:   &mockResult{rows: 5, rowsErr: errors.New("rows affected failed")},
+			err:      nil,
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractRowsAffected(tt.result, tt.err)
+			assert.Equal(t, tt.expected, result, "extractRowsAffected should return expected value")
+		})
+	}
+}
+
+// mockResult is a mock implementation of sql.Result for testing.
+type mockResult struct {
+	rows    int64
+	lastID  int64
+	rowsErr error
+}
+
+func (m *mockResult) LastInsertId() (int64, error) {
+	return m.lastID, nil
+}
+
+func (m *mockResult) RowsAffected() (int64, error) {
+	if m.rowsErr != nil {
+		return 0, m.rowsErr
+	}
+	return m.rows, nil
 }
