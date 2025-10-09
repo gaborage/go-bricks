@@ -26,6 +26,8 @@ const (
 	testQueryClause = "SELECT * FROM users"
 	testQuerySelect = "SELECT * FROM users WHERE id = $1"
 	attrKeyError    = "error"
+	dbSelectMetric  = "db.select"
+	dbInsertMetric  = "db.insert"
 )
 
 // setupTestTracerProvider creates an in-memory tracer provider for testing
@@ -76,7 +78,7 @@ func TestCreateDBSpanSpanCreation(t *testing.T) {
 	require.Len(t, spans, 1, "Should create exactly one span")
 
 	span := spans[0]
-	assert.Equal(t, "db.select", span.Name, "Span name should be db.select")
+	assert.Equal(t, dbSelectMetric, span.Name, "Span name should be db.select")
 	assert.Equal(t, codes.Unset, span.Status.Code, "Success queries should have Unset status")
 }
 
@@ -153,7 +155,7 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := "SELECT * FROM users"
+			query := testQueryClause
 			start := time.Now().Add(-10 * time.Millisecond) // Simulate operation that started 10ms ago
 
 			createDBSpan(ctx, tc, query, start, tt.err)
@@ -332,8 +334,8 @@ func TestCreateDBSpanOperationTypes(t *testing.T) {
 		query        string
 		expectedName string
 	}{
-		{testQueryClause, "db.select"},
-		{"INSERT INTO users VALUES (1)", "db.insert"},
+		{testQueryClause, dbSelectMetric},
+		{"INSERT INTO users VALUES (1)", dbInsertMetric},
 		{"UPDATE users SET name = 'test'", "db.update"},
 		{"DELETE FROM users WHERE id = 1", "db.delete"},
 		{"BEGIN", "db.begin"},
@@ -435,12 +437,12 @@ func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {
 	start := time.Now().Add(-25 * time.Millisecond)
 
 	// Track the operation
-	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, nil)
+	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, 0, nil)
 
 	// Verify span was created
 	spans := traceExporter.GetSpans()
 	require.Len(t, spans, 1, "Should create exactly one span")
-	assert.Equal(t, "db.select", spans[0].Name, "Span name should be db.select")
+	assert.Equal(t, dbSelectMetric, spans[0].Name, "Span name should be db.select")
 
 	// Verify metrics were recorded
 	rm := meterProvider.Collect(t)
@@ -465,12 +467,12 @@ func TestTrackDBOperationWithError(t *testing.T) {
 	testErr := errors.New("duplicate key violation")
 
 	// Track the operation with error
-	TrackDBOperation(ctx, tc, query, nil, start, testErr)
+	TrackDBOperation(ctx, tc, query, nil, start, 0, testErr)
 
 	// Verify span was created with error status
 	spans := traceExporter.GetSpans()
 	require.Len(t, spans, 1)
-	assert.Equal(t, "db.insert", spans[0].Name)
+	assert.Equal(t, dbInsertMetric, spans[0].Name)
 	assert.Equal(t, codes.Error, spans[0].Status.Code, "Span should have error status")
 
 	// Verify metrics were recorded with error=true
@@ -513,7 +515,7 @@ func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
 	start := time.Now().Add(-10 * time.Millisecond)
 
 	// Track the operation with sql.ErrNoRows
-	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, sql.ErrNoRows)
+	TrackDBOperation(ctx, tc, testQuerySelect, nil, start, 0, sql.ErrNoRows)
 
 	// Verify span was created without error status (sql.ErrNoRows is not an error)
 	spans := traceExporter.GetSpans()
@@ -559,17 +561,17 @@ func TestTrackDBOperationMultipleOperations(t *testing.T) {
 	start := time.Now()
 
 	// Track multiple different operations
-	TrackDBOperation(ctx, tc, "SELECT * FROM users", nil, start, nil)
-	TrackDBOperation(ctx, tc, "INSERT INTO users VALUES (1)", nil, start, nil)
-	TrackDBOperation(ctx, tc, "UPDATE users SET name = 'test'", nil, start, nil)
+	TrackDBOperation(ctx, tc, testQueryClause, nil, start, 0, nil)
+	TrackDBOperation(ctx, tc, "INSERT INTO users VALUES (1)", nil, start, 0, nil)
+	TrackDBOperation(ctx, tc, "UPDATE users SET name = 'test'", nil, start, 0, nil)
 
 	// Verify 3 spans were created
 	spans := traceExporter.GetSpans()
 	require.Len(t, spans, 3, "Should create three spans")
 
 	spanNames := []string{spans[0].Name, spans[1].Name, spans[2].Name}
-	assert.Contains(t, spanNames, "db.select")
-	assert.Contains(t, spanNames, "db.insert")
+	assert.Contains(t, spanNames, dbSelectMetric)
+	assert.Contains(t, spanNames, dbInsertMetric)
 	assert.Contains(t, spanNames, "db.update")
 
 	// Verify metrics were recorded for all operations

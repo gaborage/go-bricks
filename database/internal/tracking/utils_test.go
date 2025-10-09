@@ -191,7 +191,7 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	}
 
 	start := time.Now().Add(-25 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, 0, nil)
 
 	if logger.GetDBCounter(ctx) != 1 {
 		t.Fatalf("expected db counter to increment")
@@ -230,7 +230,7 @@ func TestTrackDBOperationTruncatesQueryAndLogsArgs(t *testing.T) {
 	}
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "oracle", Settings: settings}, "SELECT something", []any{"verylongparameter", []byte{0x1, 0x2}}, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "oracle", Settings: settings}, "SELECT something", []any{"verylongparameter", []byte{0x1, 0x2}}, start, 0, nil)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -261,7 +261,7 @@ func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
 	}
 
 	start := time.Now().Add(-20 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, nil)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, nil)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -282,7 +282,7 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 	settings := Settings{slowQueryThreshold: time.Second}
 
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, sql.ErrNoRows)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, sql.ErrNoRows)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -304,7 +304,7 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 
 	failure := errors.New("boom")
 	start := time.Now().Add(-10 * time.Millisecond)
-	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, failure)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, failure)
 
 	events := recLogger.events()
 	if len(events) != 1 {
@@ -328,6 +328,6 @@ func TestTrackDBOperationNoLoggerOrContext(t *testing.T) {
 			t.Fatalf("expected no panic when logger is nil: %v", r)
 		}
 	}()
-	TrackDBOperation(context.Background(), nil, "SELECT", nil, time.Now(), nil)
-	TrackDBOperation(context.Background(), &Context{}, "SELECT", nil, time.Now(), nil)
+	TrackDBOperation(context.Background(), nil, "SELECT", nil, time.Now(), 0, nil)
+	TrackDBOperation(context.Background(), &Context{}, "SELECT", nil, time.Now(), 0, nil)
 }

@@ -43,7 +43,7 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 
 	// Track performance metrics
-	db.trackQuery(ctx, query, args, start, err)
+	db.trackQuery(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 
 	return rows, err
 }
@@ -55,7 +55,7 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) ty
 	row := types.NewRowFromSQL(db.DB.QueryRowContext(ctx, query, args...))
 
 	return rowtracker.Wrap(row, func(err error) {
-		db.trackQuery(ctx, query, args, start, err)
+		db.trackQuery(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 	})
 }
 
@@ -65,7 +65,7 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	result, err := db.DB.ExecContext(ctx, query, args...)
 
 	// Track performance metrics
-	db.trackQuery(ctx, query, args, start, err)
+	db.trackQuery(ctx, query, args, start, extractRowsAffected(result, err), err)
 
 	return result, err
 }
@@ -76,7 +76,7 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (types.Statement
 	stmt, err := db.DB.PrepareContext(ctx, query)
 
 	// Track performance metrics
-	db.trackQuery(ctx, "PREPARE: "+query, nil, start, err)
+	db.trackQuery(ctx, "PREPARE: "+query, nil, start, 0, err) // Prepare doesn't affect rows
 
 	if err != nil {
 		return nil, err
@@ -87,13 +87,13 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (types.Statement
 }
 
 // trackQuery tracks database query performance and logs the results
-func (db *DB) trackQuery(ctx context.Context, query string, args []any, start time.Time, err error) {
+func (db *DB) trackQuery(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
 	tc := &Context{
 		Logger:   db.logger,
 		Vendor:   db.vendor,
 		Settings: db.settings,
 	}
-	TrackDBOperation(ctx, tc, query, args, start, err)
+	TrackDBOperation(ctx, tc, query, args, start, rowsAffected, err)
 }
 
 // Connection wraps database.Interface to provide comprehensive performance tracking.
@@ -127,7 +127,7 @@ func (tc *Connection) Query(ctx context.Context, query string, args ...any) (*sq
 	start := time.Now()
 	rows, err := tc.conn.Query(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, args, start, err)
+	tc.trackOperation(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 	return rows, err
 }
 
@@ -138,7 +138,7 @@ func (tc *Connection) QueryRow(ctx context.Context, query string, args ...any) t
 	row := tc.conn.QueryRow(ctx, query, args...)
 
 	return rowtracker.Wrap(row, func(err error) {
-		tc.trackOperation(ctx, query, args, start, err)
+		tc.trackOperation(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 	})
 }
 
@@ -147,7 +147,7 @@ func (tc *Connection) Exec(ctx context.Context, query string, args ...any) (sql.
 	start := time.Now()
 	result, err := tc.conn.Exec(ctx, query, args...)
 
-	tc.trackOperation(ctx, query, args, start, err)
+	tc.trackOperation(ctx, query, args, start, extractRowsAffected(result, err), err)
 	return result, err
 }
 
@@ -156,7 +156,7 @@ func (tc *Connection) Prepare(ctx context.Context, query string) (types.Statemen
 	start := time.Now()
 	stmt, err := tc.conn.Prepare(ctx, query)
 
-	tc.trackOperation(ctx, "PREPARE: "+query, nil, start, err)
+	tc.trackOperation(ctx, "PREPARE: "+query, nil, start, 0, err) // Prepare doesn't affect rows
 
 	if err != nil {
 		return nil, err
@@ -169,7 +169,7 @@ func (tc *Connection) Prepare(ctx context.Context, query string) (types.Statemen
 func (tc *Connection) Begin(ctx context.Context) (types.Tx, error) {
 	start := time.Now()
 	tx, err := tc.conn.Begin(ctx)
-	tc.trackOperation(ctx, "BEGIN", nil, start, err)
+	tc.trackOperation(ctx, "BEGIN", nil, start, 0, err) // BEGIN doesn't affect rows
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (tc *Connection) Begin(ctx context.Context) (types.Tx, error) {
 func (tc *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
 	start := time.Now()
 	tx, err := tc.conn.BeginTx(ctx, opts)
-	tc.trackOperation(ctx, "BEGIN_TX", nil, start, err)
+	tc.trackOperation(ctx, "BEGIN_TX", nil, start, 0, err) // BEGIN_TX doesn't affect rows
 	if err != nil {
 		return nil, err
 	}
@@ -219,16 +219,16 @@ func (tc *Connection) CreateMigrationTable(ctx context.Context) error {
 	start := time.Now()
 	err := tc.conn.CreateMigrationTable(ctx)
 
-	tc.trackOperation(ctx, "CREATE_MIGRATION_TABLE", nil, start, err)
+	tc.trackOperation(ctx, "CREATE_MIGRATION_TABLE", nil, start, 0, err) // DDL doesn't report rows affected
 	return err
 }
 
 // trackOperation tracks database operation performance
-func (tc *Connection) trackOperation(ctx context.Context, query string, args []any, start time.Time, err error) {
+func (tc *Connection) trackOperation(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
 	trackingCtx := &Context{
 		Logger:   tc.logger,
 		Vendor:   tc.vendor,
 		Settings: tc.settings,
 	}
-	TrackDBOperation(ctx, trackingCtx, query, args, start, err)
+	TrackDBOperation(ctx, trackingCtx, query, args, start, rowsAffected, err)
 }

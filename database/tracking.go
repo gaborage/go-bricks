@@ -18,10 +18,11 @@ type (
 
 // Re-export internal functions as public API
 var (
-	NewTrackedDB         = tracking.NewDB
-	NewTrackedConnection = tracking.NewConnection
-	TrackDBOperation     = tracking.TrackDBOperation
-	NewTrackingSettings  = tracking.NewSettings
+	NewTrackedDB                  = tracking.NewDB
+	NewTrackedConnection          = tracking.NewConnection
+	TrackDBOperation              = tracking.TrackDBOperation
+	NewTrackingSettings           = tracking.NewSettings
+	RegisterConnectionPoolMetrics = tracking.RegisterConnectionPoolMetrics
 )
 
 // Re-export internal constants

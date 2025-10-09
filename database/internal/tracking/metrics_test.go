@@ -11,10 +11,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+)
+
+// Test query constants to avoid string literal duplication
+const (
+	testQuerySelectUsers       = "SELECT * FROM users"
+	testQueryInsertUsers       = "INSERT INTO users VALUES (1)"
+	testQueryInsertUsersParams = "INSERT INTO users (name) VALUES ($1)"
+	testQuerySelectOrders      = "SELECT * FROM orders"
+	testQueryUpdateUsers       = "UPDATE users SET name = 'test'"
+	testQuerySelectOne         = "SELECT 1"
 )
 
 // setupTestMeterProvider creates an in-memory meter provider for testing
@@ -65,7 +76,7 @@ func TestRecordDBMetricsCounterIncrement(t *testing.T) {
 	duration := 25 * time.Millisecond
 
 	// Record metrics for successful operation
-	recordDBMetrics(ctx, tc, testQuerySelect, duration, nil)
+	recordDBMetrics(ctx, tc, testQuerySelect, duration, 0, nil)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -87,11 +98,11 @@ func TestRecordDBMetricsHistogramRecording(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	query := "INSERT INTO users (name) VALUES ($1)"
+	query := testQueryInsertUsersParams
 	duration := 50 * time.Millisecond
 
 	// Record metrics
-	recordDBMetrics(ctx, tc, query, duration, nil)
+	recordDBMetrics(ctx, tc, query, duration, 0, nil)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -127,9 +138,9 @@ func TestRecordDBMetricsWithDifferentOperations(t *testing.T) {
 		query             string
 		expectedOperation string
 	}{
-		{"SELECT * FROM users", "select"},
-		{"INSERT INTO users VALUES (1)", "insert"},
-		{"UPDATE users SET name = 'test'", "update"},
+		{testQuerySelectUsers, "select"},
+		{testQueryInsertUsers, "insert"},
+		{testQueryUpdateUsers, "update"},
 		{"DELETE FROM users WHERE id = 1", "delete"},
 		{"BEGIN", "begin"},
 		{"COMMIT", "commit"},
@@ -151,33 +162,13 @@ func TestRecordDBMetricsWithDifferentOperations(t *testing.T) {
 			duration := 10 * time.Millisecond
 
 			// Record metrics
-			recordDBMetrics(ctx, tc, op.query, duration, nil)
+			recordDBMetrics(ctx, tc, op.query, duration, 0, nil)
 
 			// Collect metrics
 			rm := mp.Collect(t)
 
-			// Find the counter metric and verify operation attribute
-			var foundOperation bool
-			for _, sm := range rm.ScopeMetrics {
-				for _, m := range sm.Metrics {
-					if m.Name == metricDBCalls {
-						sumData, ok := m.Data.(metricdata.Sum[int64])
-						require.True(t, ok, "Expected sum data type for counter")
-
-						for _, dp := range sumData.DataPoints {
-							// Check if this data point has the expected operation
-							for _, attr := range dp.Attributes.ToSlice() {
-								if string(attr.Key) == "db.operation.name" && attr.Value.AsString() == op.expectedOperation {
-									foundOperation = true
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			assert.True(t, foundOperation, "Should find metric with operation %s", op.expectedOperation)
+			// Verify operation attribute using helper
+			assertMetricHasAttribute(t, rm, metricDBCalls, "db.operation.name", op.expectedOperation)
 		})
 	}
 }
@@ -207,36 +198,17 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := "SELECT 1"
+			query := testQuerySelectOne
 			duration := 5 * time.Millisecond
 
 			// Record metrics
-			recordDBMetrics(ctx, tc, query, duration, nil)
+			recordDBMetrics(ctx, tc, query, duration, 0, nil)
 
 			// Collect metrics
 			rm := mp.Collect(t)
 
-			// Verify db.system attribute
-			var foundSystem bool
-			for _, sm := range rm.ScopeMetrics {
-				for _, m := range sm.Metrics {
-					if m.Name == metricDBCalls {
-						sumData, ok := m.Data.(metricdata.Sum[int64])
-						require.True(t, ok)
-
-						for _, dp := range sumData.DataPoints {
-							for _, attr := range dp.Attributes.ToSlice() {
-								if string(attr.Key) == "db.system" && attr.Value.AsString() == v.expectedSystem {
-									foundSystem = true
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			assert.True(t, foundSystem, "Should find metric with db.system=%s", v.expectedSystem)
+			// Verify db.system attribute using helper
+			assertMetricHasAttribute(t, rm, metricDBCalls, "db.system", v.expectedSystem)
 		})
 	}
 }
@@ -277,39 +249,17 @@ func TestRecordDBMetricsErrorAttribute(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			query := "SELECT * FROM users"
+			query := testQuerySelectUsers
 			duration := 10 * time.Millisecond
 
 			// Record metrics
-			recordDBMetrics(ctx, tc, query, duration, tt.err)
+			recordDBMetrics(ctx, tc, query, duration, 0, tt.err)
 
 			// Collect metrics
 			rm := mp.Collect(t)
 
-			// Verify error attribute on counter
-			var foundErrorAttr bool
-			var errorAttrValue bool
-			for _, sm := range rm.ScopeMetrics {
-				for _, m := range sm.Metrics {
-					if m.Name == metricDBCalls {
-						sumData, ok := m.Data.(metricdata.Sum[int64])
-						require.True(t, ok)
-
-						for _, dp := range sumData.DataPoints {
-							for _, attr := range dp.Attributes.ToSlice() {
-								if string(attr.Key) == attrKeyError {
-									foundErrorAttr = true
-									errorAttrValue = attr.Value.AsBool()
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			require.True(t, foundErrorAttr, "Error attribute should be present on counter")
-			assert.Equal(t, tt.expectedError, errorAttrValue, "Error attribute value should match expected")
+			// Verify error attribute using helper
+			assertMetricHasBoolAttribute(t, rm, metricDBCalls, attrKeyError, tt.expectedError)
 		})
 	}
 }
@@ -328,9 +278,9 @@ func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	ctx := context.Background()
 
 	// Record multiple operations
-	recordDBMetrics(ctx, tc, "SELECT * FROM users", 10*time.Millisecond, nil)
-	recordDBMetrics(ctx, tc, "INSERT INTO users VALUES (1)", 20*time.Millisecond, nil)
-	recordDBMetrics(ctx, tc, "SELECT * FROM orders", 15*time.Millisecond, nil)
+	recordDBMetrics(ctx, tc, testQuerySelectUsers, 10*time.Millisecond, 0, nil)
+	recordDBMetrics(ctx, tc, testQueryInsertUsers, 20*time.Millisecond, 0, nil)
+	recordDBMetrics(ctx, tc, testQuerySelectOrders, 15*time.Millisecond, 0, nil)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -405,6 +355,281 @@ func TestRecordDBMetricsNilContext(t *testing.T) {
 	// TrackDBOperation guards against nil context before calling recordDBMetrics
 	ctx := context.TODO()
 	assert.NotPanics(t, func() {
-		recordDBMetrics(ctx, tc, "SELECT 1", 10*time.Millisecond, nil)
+		recordDBMetrics(ctx, tc, testQuerySelectOne, 10*time.Millisecond, 0, nil)
 	})
+}
+
+func TestExtractTableName(t *testing.T) {
+	tests := []struct {
+		name          string
+		query         string
+		expectedTable string
+	}{
+		// SELECT statements
+		{
+			name:          "simple_select",
+			query:         testQuerySelectUsers,
+			expectedTable: "users",
+		},
+		{
+			name:          "select_with_where",
+			query:         "SELECT id, name FROM customers WHERE id = 1",
+			expectedTable: "customers",
+		},
+		{
+			name:          "select_with_join",
+			query:         "SELECT u.id FROM users u JOIN orders o ON u.id = o.user_id",
+			expectedTable: "users", // Returns first table
+		},
+		{
+			name:          "select_quoted_table",
+			query:         `SELECT * FROM "users"`,
+			expectedTable: "users",
+		},
+		{
+			name:          "select_lowercase_from",
+			query:         "select * from products",
+			expectedTable: "products",
+		},
+		{
+			name:          "select_with_schema",
+			query:         "SELECT * FROM public.users", // Extracts table without schema
+			expectedTable: "users",
+		},
+
+		// INSERT statements
+		{
+			name:          "simple_insert",
+			query:         "INSERT INTO users (name, email) VALUES ('John', 'john@example.com')",
+			expectedTable: "users",
+		},
+		{
+			name:          "insert_quoted",
+			query:         `INSERT INTO "customers" VALUES (1, 'Alice')`,
+			expectedTable: "customers",
+		},
+		{
+			name:          "insert_lowercase",
+			query:         "insert into products (name) values ('Widget')",
+			expectedTable: "products",
+		},
+
+		// UPDATE statements
+		{
+			name:          "simple_update",
+			query:         "UPDATE users SET name = 'Jane' WHERE id = 1",
+			expectedTable: "users",
+		},
+		{
+			name:          "update_quoted",
+			query:         `UPDATE "customers" SET email = 'new@example.com'`,
+			expectedTable: "customers",
+		},
+		{
+			name:          "update_lowercase",
+			query:         "update products set price = 99.99",
+			expectedTable: "products",
+		},
+
+		// DELETE statements
+		{
+			name:          "simple_delete",
+			query:         "DELETE FROM users WHERE id = 1",
+			expectedTable: "users",
+		},
+		{
+			name:          "delete_quoted",
+			query:         `DELETE FROM "customers" WHERE active = false`,
+			expectedTable: "customers",
+		},
+		{
+			name:          "delete_lowercase",
+			query:         "delete from products where discontinued = true",
+			expectedTable: "products",
+		},
+
+		// Edge cases
+		{
+			name:          "empty_query",
+			query:         "",
+			expectedTable: "unknown",
+		},
+		{
+			name:          "whitespace_only",
+			query:         "   ",
+			expectedTable: "unknown",
+		},
+		{
+			name:          "begin_transaction",
+			query:         "BEGIN",
+			expectedTable: "unknown",
+		},
+		{
+			name:          "commit",
+			query:         "COMMIT",
+			expectedTable: "unknown",
+		},
+		{
+			name:          "create_table",
+			query:         "CREATE TABLE users (id INT PRIMARY KEY)",
+			expectedTable: "unknown", // DDL operations return unknown
+		},
+		{
+			name:          "drop_table",
+			query:         "DROP TABLE users",
+			expectedTable: "unknown",
+		},
+		{
+			name:          "select_without_from",
+			query:         testQuerySelectOne,
+			expectedTable: "unknown",
+		},
+		{
+			name:          "complex_subquery",
+			query:         "SELECT * FROM (SELECT id FROM users) AS subquery",
+			expectedTable: "users", // Extracts from main FROM clause
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractTableName(tt.query)
+			assert.Equal(t, tt.expectedTable, result, "Table name should match expected")
+		})
+	}
+}
+
+func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	log := logger.New("disabled", false)
+	tc := &Context{
+		Logger:   log,
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+
+	ctx := context.Background()
+	query := "SELECT * FROM users WHERE id = $1"
+	duration := 25 * time.Millisecond
+
+	// Record metrics
+	recordDBMetrics(ctx, tc, query, duration, 0, nil)
+
+	// Collect metrics
+	rm := mp.Collect(t)
+
+	// Verify table attribute is present
+	var foundTableAttr bool
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == metricDBCalls {
+				sumData, ok := m.Data.(metricdata.Sum[int64])
+				require.True(t, ok)
+
+				for _, dp := range sumData.DataPoints {
+					for _, attr := range dp.Attributes.ToSlice() {
+						if string(attr.Key) == "table" && attr.Value.AsString() == "users" {
+							foundTableAttr = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	assert.True(t, foundTableAttr, "Should have table attribute with value 'users'")
+}
+
+// attributeFinder is a function type that extracts a value from an attribute.
+// It returns the extracted value and true if the attribute matches the key.
+type attributeFinder func(attr attribute.KeyValue, attrKey string) (any, bool)
+
+// findMetricAttribute is a generic helper that searches for an attribute in the specified metric.
+// It uses the provided finder function to extract and match attributes.
+func findMetricAttribute(rm metricdata.ResourceMetrics, metricName, attrKey string, finder attributeFinder) (any, bool) {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != metricName {
+				continue
+			}
+
+			// Handle different metric data types
+			switch data := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, dp := range data.DataPoints {
+					for _, attr := range dp.Attributes.ToSlice() {
+						if value, found := finder(attr, attrKey); found {
+							return value, true
+						}
+					}
+				}
+			case metricdata.Histogram[float64]:
+				for _, dp := range data.DataPoints {
+					for _, attr := range dp.Attributes.ToSlice() {
+						if value, found := finder(attr, attrKey); found {
+							return value, true
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+// findMetricAttributeValue searches for a string attribute in the specified metric.
+// It iterates through all ScopeMetrics, Metrics, and DataPoints to find the attribute.
+// Returns the attribute value and true if found, empty string and false otherwise.
+func findMetricAttributeValue(rm metricdata.ResourceMetrics, metricName, attrKey string) (value string, found bool) {
+	stringFinder := func(attr attribute.KeyValue, key string) (any, bool) {
+		if string(attr.Key) == key {
+			return attr.Value.AsString(), true
+		}
+		return "", false
+	}
+
+	result, found := findMetricAttribute(rm, metricName, attrKey, stringFinder)
+	if found {
+		return result.(string), true
+	}
+	return "", false
+}
+
+// findMetricBoolAttribute searches for a boolean attribute in the specified metric.
+// It iterates through all ScopeMetrics, Metrics, and DataPoints to find the attribute.
+// Returns the attribute value and true if found, false and false otherwise.
+func findMetricBoolAttribute(rm metricdata.ResourceMetrics, metricName, attrKey string) (value, found bool) {
+	boolFinder := func(attr attribute.KeyValue, key string) (any, bool) {
+		if string(attr.Key) == key {
+			return attr.Value.AsBool(), true
+		}
+		return false, false
+	}
+
+	result, found := findMetricAttribute(rm, metricName, attrKey, boolFinder)
+	if found {
+		return result.(bool), true
+	}
+	return false, false
+}
+
+// assertMetricHasAttribute asserts that the specified metric has an attribute with the expected value.
+// This helper reduces complexity by encapsulating the nested iteration logic.
+func assertMetricHasAttribute(t *testing.T, rm metricdata.ResourceMetrics, metricName, attrKey, expectedValue string) {
+	t.Helper()
+	value, found := findMetricAttributeValue(rm, metricName, attrKey)
+	require.True(t, found, "Metric %s should have attribute %s", metricName, attrKey)
+	assert.Equal(t, expectedValue, value, "Attribute %s should have expected value", attrKey)
+}
+
+// assertMetricHasBoolAttribute asserts that the specified metric has a boolean attribute with the expected value.
+// This helper reduces complexity by encapsulating the nested iteration logic.
+func assertMetricHasBoolAttribute(t *testing.T, rm metricdata.ResourceMetrics, metricName, attrKey string, expectedValue bool) {
+	t.Helper()
+	value, found := findMetricBoolAttribute(rm, metricName, attrKey)
+	require.True(t, found, "Metric %s should have boolean attribute %s", metricName, attrKey)
+	assert.Equal(t, expectedValue, value, "Boolean attribute %s should have expected value", attrKey)
 }
