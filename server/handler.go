@@ -64,6 +64,17 @@ func WrapHandler[T any, R any](
 	cfg *config.Config,
 ) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// Check if context is already cancelled/timed out before processing
+		// This prevents race conditions with timeout middleware
+		ctx := c.Request().Context()
+		select {
+		case <-ctx.Done():
+			// Context cancelled or deadline exceeded
+			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout or cancelled"), cfg)
+		default:
+			// Continue processing
+		}
+
 		// Create request instance
 		var request T
 
@@ -82,6 +93,15 @@ func WrapHandler[T any, R any](
 				_ = vErr.WithDetails("error", err.Error())
 			}
 			return formatErrorResponse(c, vErr, cfg)
+		}
+
+		// Check context again before calling business logic
+		// (binding/validation may have taken time)
+		select {
+		case <-ctx.Done():
+			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout during validation"), cfg)
+		default:
+			// Continue processing
 		}
 
 		// Create handler context

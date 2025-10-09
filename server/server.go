@@ -228,6 +228,13 @@ func (s *Server) readyCheck(c echo.Context) error {
 }
 
 func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
+	// Special handling for context deadline exceeded (timeout errors)
+	if goerrors.Is(err, context.DeadlineExceeded) {
+		timeoutErr := NewServiceUnavailableError("Request processing timed out")
+		_ = formatErrorResponse(c, timeoutErr, cfg)
+		return
+	}
+
 	// If this is a structured API error, reuse its fields
 	var apiErr IAPIError
 	if goerrors.As(err, &apiErr) {

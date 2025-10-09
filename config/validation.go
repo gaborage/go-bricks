@@ -106,6 +106,17 @@ func validateServer(cfg *ServerConfig) error {
 		return NewValidationError("server.timeout.middleware", errMustBePositive)
 	}
 
+	// Middleware timeout should be less than write timeout to allow graceful error responses
+	// Otherwise the write timeout will trigger first, causing connection drops
+	if cfg.Timeout.Middleware >= cfg.Timeout.Write {
+		return &ConfigError{
+			Category: "invalid",
+			Field:    "server.timeout.middleware",
+			Message:  fmt.Sprintf("must be less than server.timeout.write (%v)", cfg.Timeout.Write),
+			Action:   "reduce server.timeout.middleware or increase server.timeout.write",
+		}
+	}
+
 	if cfg.Timeout.Shutdown <= 0 {
 		return NewValidationError("server.timeout.shutdown", errMustBePositive)
 	}
