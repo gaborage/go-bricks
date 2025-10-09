@@ -104,12 +104,18 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 	traceEnabled := obsCfg.Trace.Enabled != nil && *obsCfg.Trace.Enabled
 	metricsEnabled := obsCfg.Metrics.Enabled != nil && *obsCfg.Metrics.Enabled
 
+	// Format sample rate for logging (handle nil pointer)
+	sampleRateStr := "nil"
+	if obsCfg.Trace.Sample.Rate != nil {
+		sampleRateStr = strconv.FormatFloat(*obsCfg.Trace.Sample.Rate, 'f', 2, 64)
+	}
+
 	b.log.Debug().
 		Str("trace_enabled", strconv.FormatBool(traceEnabled)).
 		Str("trace_endpoint", obsCfg.Trace.Endpoint).
 		Str("trace_protocol", obsCfg.Trace.Protocol).
 		Str("trace_insecure", strconv.FormatBool(obsCfg.Trace.Insecure)).
-		Str("trace_sample_rate", strconv.FormatFloat(obsCfg.Trace.Sample.Rate, 'f', 2, 64)).
+		Str("trace_sample_rate", sampleRateStr).
 		Str("metrics_enabled", strconv.FormatBool(metricsEnabled)).
 		Str("metrics_endpoint", obsCfg.Metrics.Endpoint).
 		Str("metrics_protocol", obsCfg.Metrics.Protocol).

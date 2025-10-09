@@ -67,8 +67,8 @@ func NewProvider(cfg *Config) (Provider, error) {
 	// This ensures zero sample rates or missing timeouts get safe defaults
 	safeCfg := *cfg // Copy to avoid mutating caller's config
 	safeCfg.ApplyDefaults()
-	debugLogger.Printf("Config after applying defaults - sample_rate=%.2f, batch_timeout=%v",
-		safeCfg.Trace.Sample.Rate, safeCfg.Trace.Batch.Timeout)
+	debugLogger.Printf("Config after applying defaults - sample_rate=%s, batch_timeout=%v",
+		formatSampleRate(safeCfg.Trace.Sample.Rate), safeCfg.Trace.Batch.Timeout)
 
 	// Now validate the defaulted config
 	if err := safeCfg.Validate(); err != nil {
@@ -76,12 +76,8 @@ func NewProvider(cfg *Config) (Provider, error) {
 		return nil, fmt.Errorf("invalid observability config: %w", err)
 	}
 
-	// Defensive check: warn if sample rate is zero (drops all spans)
-	if safeCfg.Enabled && safeCfg.Trace.Enabled != nil && *safeCfg.Trace.Enabled {
-		if safeCfg.Trace.Sample.Rate == 0.0 {
-			debugLogger.Println("WARNING: Trace sample rate is 0.0 - NO SPANS will be recorded!")
-		}
-	}
+	// Defensive check: warn if sample rate is explicitly zero (drops all spans)
+	warnIfZeroSampleRate(&safeCfg)
 
 	// Return no-op provider if observability is disabled
 	if !safeCfg.Enabled {
@@ -186,8 +182,13 @@ func (p *provider) initTraceProvider() error {
 	processor := newDebugSpanProcessor(bsp)
 
 	// Create tracer provider with sampler
-	sampler := sdktrace.TraceIDRatioBased(p.config.Trace.Sample.Rate)
-	debugLogger.Printf("Creating TracerProvider with sampler rate=%.2f", p.config.Trace.Sample.Rate)
+	// Sample rate should always be set by ApplyDefaults, but use 1.0 as final fallback
+	sampleRate := 1.0
+	if p.config.Trace.Sample.Rate != nil {
+		sampleRate = *p.config.Trace.Sample.Rate
+	}
+	sampler := sdktrace.TraceIDRatioBased(sampleRate)
+	debugLogger.Printf("Creating TracerProvider with sampler rate=%.2f", sampleRate)
 
 	p.tracerProvider = sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
@@ -379,4 +380,25 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// formatSampleRate formats a sample rate pointer for logging.
+// Returns a user-friendly string representation.
+func formatSampleRate(rate *float64) string {
+	if rate == nil {
+		return "nil (will use default)"
+	}
+	return fmt.Sprintf("%.2f", *rate)
+}
+
+// warnIfZeroSampleRate logs a warning if the sample rate is explicitly set to 0.0.
+// This helps users understand why no spans are being recorded.
+func warnIfZeroSampleRate(cfg *Config) {
+	if cfg.Enabled && cfg.Trace.Enabled != nil && *cfg.Trace.Enabled {
+		if cfg.Trace.Sample.Rate != nil && *cfg.Trace.Sample.Rate == 0.0 {
+			debugLogger.Println("WARNING: Trace sample rate is explicitly set to 0.0")
+			debugLogger.Println("         This means NO SPANS will be recorded or exported")
+			debugLogger.Println("         If this is unintentional, remove 'trace.sample.rate: 0.0' from your config")
+		}
+	}
 }

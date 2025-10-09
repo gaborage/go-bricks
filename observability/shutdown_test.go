@@ -112,7 +112,7 @@ func TestForceFlushBothProvidersFail(t *testing.T) {
 			Enabled:  BoolPtr(true),
 			Endpoint: "stdout",
 			Sample: SampleConfig{
-				Rate: 1.0,
+				Rate: Float64Ptr(1.0),
 			},
 		},
 		Metrics: MetricsConfig{

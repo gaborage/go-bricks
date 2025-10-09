@@ -38,7 +38,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Trace: TraceConfig{
 					Sample: SampleConfig{
-						Rate: 0.5,
+						Rate: Float64Ptr(0.5),
 					},
 				},
 			},
@@ -70,7 +70,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Trace: TraceConfig{
 					Sample: SampleConfig{
-						Rate: -0.1,
+						Rate: Float64Ptr(-0.1),
 					},
 				},
 			},
@@ -85,7 +85,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Trace: TraceConfig{
 					Sample: SampleConfig{
-						Rate: 1.1,
+						Rate: Float64Ptr(1.1),
 					},
 				},
 			},
@@ -100,7 +100,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Trace: TraceConfig{
 					Sample: SampleConfig{
-						Rate: 0.0,
+						Rate: Float64Ptr(0.0),
 					},
 				},
 			},
@@ -115,7 +115,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Trace: TraceConfig{
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 				},
 			},
@@ -132,7 +132,7 @@ func TestConfigValidate(t *testing.T) {
 					Endpoint: testTraceEndpointA,
 					Protocol: "http",
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 				},
 			},
@@ -149,7 +149,7 @@ func TestConfigValidate(t *testing.T) {
 					Endpoint: testTraceEndpointB,
 					Protocol: "grpc",
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 				},
 			},
@@ -220,7 +220,7 @@ func TestConfigValidate(t *testing.T) {
 					Endpoint: testTraceEndpointA,
 					Protocol: "websocket",
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 				},
 			},
@@ -237,7 +237,7 @@ func TestConfigValidate(t *testing.T) {
 					Endpoint: "stdout",
 					Protocol: "invalid",
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 				},
 			},
@@ -322,7 +322,8 @@ metrics:
 	assert.True(t, obsCfg.Trace.Insecure, "Trace insecure should be true")
 
 	// Verify deeply nested trace sample config
-	assert.Equal(t, 0.5, obsCfg.Trace.Sample.Rate, "Sample rate should be 0.5")
+	require.NotNil(t, obsCfg.Trace.Sample.Rate, "Sample rate should not be nil")
+	assert.Equal(t, 0.5, *obsCfg.Trace.Sample.Rate, "Sample rate should be 0.5")
 
 	// Verify deeply nested trace batch config
 	assert.Equal(t, 10*time.Second, obsCfg.Trace.Batch.Timeout, "Batch timeout should be 10s")
@@ -372,7 +373,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Protocol: ProtocolHTTP,
 					Insecure: true,
 					Sample: SampleConfig{
-						Rate: 1.0,
+						Rate: Float64Ptr(1.0),
 					},
 					Batch: BatchConfig{
 						Timeout: 500 * time.Millisecond, // Development environment with stdout endpoint
@@ -411,7 +412,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 				Trace: TraceConfig{
 					Endpoint: "http://custom:4318",
 					Sample: SampleConfig{
-						Rate: 0.1,
+						Rate: Float64Ptr(0.1),
 					},
 				},
 			},
@@ -428,7 +429,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Protocol: ProtocolHTTP,
 					Insecure: false, // Non-stdout endpoints default to false (secure)
 					Sample: SampleConfig{
-						Rate: 0.1,
+						Rate: Float64Ptr(0.1),
 					},
 					Batch: BatchConfig{
 						Timeout: 500 * time.Millisecond, // Development environment gets fast export
