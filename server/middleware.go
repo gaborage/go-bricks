@@ -7,6 +7,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
+	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -22,13 +23,18 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// OpenTelemetry instrumentation - creates spans for HTTP requests
 	// Skip health/ready probes to avoid noisy traces
-	// NOTE: We do NOT pass WithTracerProvider() here - the middleware will use
-	// otel.GetTracerProvider() at REQUEST TIME, not setup time. This ensures
-	// the middleware picks up the global provider even if observability is
-	// initialized after server setup.
+	// IMPORTANT: We explicitly pass WithTracerProvider(otel.GetTracerProvider()) to capture
+	// the global provider at middleware setup time. The otelecho.Middleware() function caches
+	// the tracer provider when called, NOT at request time.
+	//
+	// In the standard bootstrap flow (app.NewWithConfig), observability is initialized BEFORE
+	// the server is created, so the real provider is captured here. However, explicit wiring
+	// makes this dependency clear and ensures correct behavior if SetupMiddlewares is called
+	// directly (e.g., in tests or custom server initialization scenarios).
 	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 	e.Use(otelecho.Middleware(
 		cfg.App.Name,
+		otelecho.WithTracerProvider(otel.GetTracerProvider()),
 		otelecho.WithSkipper(func(c echo.Context) bool {
 			return probeSkipper(c)
 		}),
