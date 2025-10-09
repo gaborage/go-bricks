@@ -272,9 +272,18 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Shutdown observability (flush pending telemetry)
+	// Flush and shutdown observability (export pending telemetry)
 	if a.observability != nil {
 		obsStart := time.Now()
+
+		// Force flush pending spans/metrics before shutdown
+		a.logger.Info().Msg("Flushing pending observability data")
+		if err := a.observability.ForceFlush(ctx); err != nil {
+			a.logger.Warn().Err(err).Msg("Failed to flush observability data")
+			// Continue with shutdown even if flush fails
+		}
+
+		// Now shut down observability provider
 		a.logger.Info().Msg("Shutting down observability provider")
 		if err := a.observability.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("observability: %w", err))

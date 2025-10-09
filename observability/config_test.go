@@ -375,7 +375,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 						Rate: 1.0,
 					},
 					Batch: BatchConfig{
-						Timeout: 5 * time.Second,
+						Timeout: 500 * time.Millisecond, // Development environment with stdout endpoint
 						Size:    512,
 					},
 					Export: ExportConfig{
@@ -431,7 +431,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 						Rate: 0.1,
 					},
 					Batch: BatchConfig{
-						Timeout: 5 * time.Second,
+						Timeout: 500 * time.Millisecond, // Development environment gets fast export
 						Size:    512,
 					},
 					Export: ExportConfig{

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"strconv"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/observability"
@@ -77,6 +79,8 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 // initializeObservability creates and configures the observability provider.
 // Returns a no-op provider if observability is disabled or configuration is missing.
 func (b *appBootstrap) initializeObservability() observability.Provider {
+	b.log.Debug().Msg("Starting observability initialization")
+
 	// Create observability config
 	var obsCfg observability.Config
 
@@ -87,8 +91,29 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		return observability.MustNewProvider(&observability.Config{Enabled: false})
 	}
 
+	b.log.Debug().
+		Str("enabled", strconv.FormatBool(obsCfg.Enabled)).
+		Str("service_name", obsCfg.Service.Name).
+		Str("service_version", obsCfg.Service.Version).
+		Str("environment", obsCfg.Environment).
+		Msg("Raw observability config loaded from YAML")
+
 	// Apply default values for fields not specified in config
 	obsCfg.ApplyDefaults()
+
+	traceEnabled := obsCfg.Trace.Enabled != nil && *obsCfg.Trace.Enabled
+	metricsEnabled := obsCfg.Metrics.Enabled != nil && *obsCfg.Metrics.Enabled
+
+	b.log.Debug().
+		Str("trace_enabled", strconv.FormatBool(traceEnabled)).
+		Str("trace_endpoint", obsCfg.Trace.Endpoint).
+		Str("trace_protocol", obsCfg.Trace.Protocol).
+		Str("trace_insecure", strconv.FormatBool(obsCfg.Trace.Insecure)).
+		Str("trace_sample_rate", strconv.FormatFloat(obsCfg.Trace.Sample.Rate, 'f', 2, 64)).
+		Str("metrics_enabled", strconv.FormatBool(metricsEnabled)).
+		Str("metrics_endpoint", obsCfg.Metrics.Endpoint).
+		Str("metrics_protocol", obsCfg.Metrics.Protocol).
+		Msg("Observability config after applying defaults")
 
 	// Create provider (will be no-op if Enabled is false)
 	provider, err := observability.NewProvider(&obsCfg)
@@ -101,9 +126,11 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		b.log.Info().
 			Str("service", obsCfg.Service.Name).
 			Str("environment", obsCfg.Environment).
-			Msg("Observability initialized")
+			Str("trace_endpoint", obsCfg.Trace.Endpoint).
+			Str("metrics_endpoint", obsCfg.Metrics.Endpoint).
+			Msg("Observability initialized successfully")
 	} else {
-		b.log.Debug().Msg("Observability disabled")
+		b.log.Debug().Msg("Observability disabled by configuration")
 	}
 
 	return provider

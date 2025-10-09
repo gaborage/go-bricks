@@ -93,14 +93,22 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Insecure = true
 	}
 
-	// Sample rate default
+	// Sample rate default - ALWAYS set to 1.0 if zero to prevent silent span dropping
 	if c.Trace.Sample.Rate == 0.0 {
 		c.Trace.Sample.Rate = 1.0
 	}
 
-	// Batch defaults
+	// Batch defaults - use environment-aware settings
+	// Development: faster export for better debugging experience
+	// Production: larger batches for efficiency
 	if c.Trace.Batch.Timeout == 0 {
-		c.Trace.Batch.Timeout = 5 * time.Second
+		if c.Environment == "development" || c.Trace.Endpoint == EndpointStdout {
+			// Development: 500ms for near-instant span visibility
+			c.Trace.Batch.Timeout = 500 * time.Millisecond
+		} else {
+			// Production: 5s for efficient batching
+			c.Trace.Batch.Timeout = 5 * time.Second
+		}
 	}
 	if c.Trace.Batch.Size == 0 {
 		c.Trace.Batch.Size = 512
