@@ -145,7 +145,13 @@ func asInt64(v any) (int64, bool) {
 
 // initDBMeter initializes the OpenTelemetry meter and metric instruments.
 // This function is called lazily and only once using sync.Once to ensure
-// thread-safe initialization.
+// initDBMeter initializes the package-level OpenTelemetry meter and the database
+// operation duration histogram.
+//
+// The function is thread-safe and idempotent: it can be called multiple times but
+// performs initialization only once. The duration histogram is configured to
+// record operation durations in seconds. Initialization errors are logged but
+// do not cause a panic.
 func initDBMeter() {
 	meterInitMu.Lock()
 	defer meterInitMu.Unlock()
@@ -189,7 +195,11 @@ func getDBMeter() metric.Meter {
 // The function is non-blocking and handles errors gracefully - metric recording failures
 // will not impact database operation execution.
 //
-// Note: rowsAffected parameter retained for future use with db.client.response.returned_rows histogram.
+// recordDBMetrics records a database operation duration to the configured OpenTelemetry histogram using OTLP semantic attributes.
+// 
+// It attaches `db.system.name` (vendor) and `db.operation.name` (operation). If present, it also adds `db.collection.name` (table)
+// and `db.namespace` (tc.Namespace). Duration is recorded in seconds. If the global meter or histogram is not initialized, the call
+// is a no-op. The `rowsAffected` and `error` parameters are currently unused and retained for future instrumentation.
 func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, _ int64, _ error) {
 	// Ensure meter is initialized
 	meter := getDBMeter()
@@ -255,7 +265,10 @@ func tryExtractTable(pattern *regexp.Regexp, query string) string {
 // For multi-table queries (e.g., JOINs), it returns the first table encountered.
 // For queries where the table cannot be determined, it returns "unknown".
 //
-// This is a lightweight parser optimized for common cases - it's not a full SQL parser.
+// extractTableName returns the table or collection name referenced by a common SQL DML
+// statement (SELECT, INSERT, UPDATE, DELETE) in the provided query, or unknownTable if
+// a table cannot be determined.
+// It is a lightweight extractor optimized for common cases and is not a full SQL parser.
 func extractTableName(query string) string {
 	// Normalize whitespace for easier parsing
 	query = strings.TrimSpace(query)
@@ -320,7 +333,10 @@ func collectInstruments(gauges ...metric.Int64ObservableGauge) []metric.Observab
 }
 
 // extractPoolStats extracts integer pool statistics from the stats map using type-safe conversion.
-// Returns three values: inUse (active connections), idle (idle connections), maxOpen (maximum configured).
+// extractPoolStats extracts connection counts from a stats map and returns
+// the number of in-use (active) connections, idle connections, and the
+// configured maximum open connections. Missing or non-numeric entries are
+// treated as zero and values are converted using asInt64.
 func extractPoolStats(stats map[string]any) (inUse, idle, maxOpen int64) {
 	if val, ok := asInt64(stats["in_use"]); ok {
 		inUse = val
@@ -397,7 +413,9 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // Returns a cleanup function that can be called to unregister the metrics (optional).
 //
 // This function uses graceful degradation - if any gauge fails to register, it continues
-// with the remaining gauges. Only gauges that were successfully created will be updated.
+// RegisterConnectionPoolMetrics registers OpenTelemetry gauges for a database connection pool and returns a cleanup function to unregister them.
+//
+// RegisterConnectionPoolMetrics creates observable gauges for connection counts (with a `state` attribute), maximum idle connections, and maximum open connections using the global DB meter. The provided conn must implement Stats() (map[string]any, error); its returned values are read during collection to populate the gauges. If the meter is unavailable or no instruments can be created, the function returns a no-op cleanup. The returned cleanup function unregisters the metric callback; any unregister errors are logged but do not propagate.
 func RegisterConnectionPoolMetrics(conn interface {
 	Stats() (map[string]any, error)
 }, vendor string) func() {

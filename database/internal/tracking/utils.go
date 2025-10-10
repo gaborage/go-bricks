@@ -156,7 +156,13 @@ func TruncateString(value string, maxLen int) string {
 // using TruncateString. Byte slices are replaced with the placeholder
 // "<bytes len=N>" where N is the byte length. Other values are formatted with
 // "%v" and then truncated to maxLen. The returned slice has the same length and
-// element order as the input.
+// SanitizeArgs returns a sanitized copy of the input argument slice suitable for logging.
+// 
+// For string values the returned element is truncated to at most maxLen runes. For []byte
+// values the returned element is the placeholder "<bytes len=N>" where N is the byte length.
+// For all other values the element is formatted with "%v" and then truncated to at most
+// maxLen runes. The returned slice preserves the input order and length. If args is empty,
+// nil is returned.
 func SanitizeArgs(args []any, maxLen int) []any {
 	if len(args) == 0 {
 		return nil
@@ -177,7 +183,10 @@ func SanitizeArgs(args []any, maxLen int) []any {
 
 // createDBSpan creates an OpenTelemetry span for a database operation.
 // It adds standard database semantic attributes per OTel spec v1.32.0 and records errors.
-// The span uses the exact operation start time for accurate distributed tracing.
+// createDBSpan starts an OpenTelemetry span for a database operation using the provided start time.
+// It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
+// `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
+// (excluding `sql.ErrNoRows`) on the span, and ends the span.
 func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
 	tracer := otel.Tracer(dbTracerName)
 
@@ -244,7 +253,12 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 }
 
 // extractDBOperation extracts the operation type from a SQL query.
-// Returns lowercase operation name (select, insert, update, delete, etc.)
+// extractDBOperation determines the database operation name from the given SQL query.
+// It returns a lowercase operation such as "select", "insert", "update", "delete",
+// "create", "drop", "alter", or "truncate". If the query is empty or the first token
+// is not a recognized operation, it returns defaultOperation. Special cases are also
+// handled for PREPARE:, BEGIN/BEGIN_TX -> "begin", COMMIT -> "commit", ROLLBACK -> "rollback",
+// and CREATE_MIGRATION_TABLE -> "create_table".
 func extractDBOperation(query string) string {
 	// Trim whitespace and get first word
 	query = strings.TrimSpace(query)
@@ -288,7 +302,12 @@ func extractDBOperation(query string) string {
 // Returns vendor-specific db.system.name values per OTel spec:
 // - "postgresql" for PostgreSQL
 // - "oracle.db" for Oracle (note the .db suffix required by spec)
-// - "mongodb" for MongoDB
+// normalizeDBVendor maps common database vendor identifiers to the OpenTelemetry
+// `db.system.name` values.
+// It lowercases the input and maps known aliases (for example: "postgres" or
+// "postgresql" → "postgresql", "oracle" → "oracle.db", "mongo" or "mongodb" →
+// "mongodb", "mysql" → "mysql", "sqlite" or "sqlite3" → "sqlite"). If no mapping
+// applies, the lowercased input is returned unchanged.
 func normalizeDBVendor(vendor string) string {
 	vendor = strings.ToLower(vendor)
 	switch vendor {
@@ -309,7 +328,7 @@ func normalizeDBVendor(vendor string) string {
 
 // BuildPostgreSQLNamespace builds the db.namespace attribute for PostgreSQL.
 // Per OTel spec, this combines database and schema name as "{database}.{schema}".
-// Since we don't have runtime schema info, we use the default "public" schema.
+// If database is empty, it returns an empty string.
 func BuildPostgreSQLNamespace(database string) string {
 	if database == "" {
 		return ""
@@ -319,7 +338,10 @@ func BuildPostgreSQLNamespace(database string) string {
 
 // BuildOracleNamespace builds the db.namespace attribute for Oracle.
 // Per OTel spec, format is "{service_name}|{database_name}|{instance_name}".
-// Priority: Service Name → SID → Database field (most common to least used).
+// BuildOracleNamespace builds an Oracle db.namespace value using the first available identifier
+// from serviceName, sid, or database.
+// It returns "{serviceName}||" when serviceName is non-empty, "|{sid}|" when sid is non-empty and serviceName is empty,
+// "||{database}" when database is non-empty and both serviceName and sid are empty, and "" if all inputs are empty.
 func BuildOracleNamespace(serviceName, sid, database string) string {
 	if serviceName != "" {
 		return serviceName + "||" // Service name with empty database and instance
@@ -334,7 +356,8 @@ func BuildOracleNamespace(serviceName, sid, database string) string {
 }
 
 // BuildMongoDBNamespace builds the db.namespace attribute for MongoDB.
-// Per OTel spec, this is simply the database name.
+// BuildMongoDBNamespace builds the db.namespace value for MongoDB according to OpenTelemetry conventions by returning the provided database name.
+// If database is empty, an empty string is returned.
 func BuildMongoDBNamespace(database string) string {
 	return database
 }
