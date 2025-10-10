@@ -146,16 +146,6 @@ func TruncateString(value string, maxLen int) string {
 	return string(r[:maxLen-3]) + "..."
 }
 
-// SanitizeArgs returns a sanitized copy of the provided argument slice suitable for logging.
-//
-// If args is empty, it returns nil. String values are truncated using TruncateString with
-// maxLen; byte slices are replaced with the placeholder "<bytes len=N>"; all other values
-// are formatted with "%v" and then truncated using TruncateString. The returned slice has
-// SanitizeArgs returns a sanitized copy of args suitable for logging.
-// If args is empty it returns nil. String values are truncated to maxLen runes
-// using TruncateString. Byte slices are replaced with the placeholder
-// "<bytes len=N>" where N is the byte length. Other values are formatted with
-// "%v" and then truncated to maxLen. The returned slice has the same length and
 // SanitizeArgs returns a sanitized copy of the input argument slice suitable for logging.
 //
 // For string values the returned element is truncated to at most maxLen runes. For []byte
@@ -261,30 +251,41 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 // and CREATE_MIGRATION_TABLE -> "create_table".
 func extractDBOperation(query string) string {
 	// Trim whitespace and get first word
-	query = strings.TrimSpace(query)
-	if query == "" {
+	q := strings.TrimSpace(query)
+	if q == "" {
 		return defaultOperation
 	}
 
 	// Handle special operations
-	if strings.HasPrefix(query, "PREPARE:") {
+	q = strings.TrimSuffix(q, ";")
+	upper := strings.ToUpper(q)
+
+	// Handle PREPARE: prefix
+	if strings.HasPrefix(upper, "PREPARE:") {
 		return "prepare"
 	}
-	if query == "BEGIN" || query == "BEGIN_TX" {
+
+	switch upper {
+	case "BEGIN", "BEGIN_TX":
 		return "begin"
-	}
-	if query == "COMMIT" {
+	case "COMMIT":
 		return "commit"
-	}
-	if query == "ROLLBACK" {
+	case "ROLLBACK":
 		return "rollback"
-	}
-	if query == "CREATE_MIGRATION_TABLE" {
+	case "CREATE_MIGRATION_TABLE":
 		return "create_table"
 	}
 
 	// Extract first word (SQL command)
-	parts := strings.Fields(query)
+	parts := strings.FieldsFunc(q, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', '(', ';':
+			return true
+		default:
+			return false
+		}
+	})
+
 	if len(parts) == 0 {
 		return defaultOperation
 	}
@@ -338,21 +339,17 @@ func BuildPostgreSQLNamespace(database, schema string) string {
 }
 
 // BuildOracleNamespace builds the db.namespace attribute for Oracle.
-// Per OTel spec, format is "{service_name}|{database_name}|{instance_name}".
-// It preserves all provided identifiers and leaves segments empty only when
-// data is unavailable.
+// Per OTel spec, format is "{service_name}|{sid}|{database}".
+// Returns empty string only when all inputs are empty. When any value is provided,
+// returns the full format with empty placeholders for missing values.
+// Examples: "PRODDB||", "|ORCL|", "||mydb", "PRODDB|ORCL|mydb"
 func BuildOracleNamespace(serviceName, sid, database string) string {
+	// Return empty only if all values are empty
 	if serviceName == "" && sid == "" && database == "" {
 		return ""
 	}
-	parts := []string{serviceName, "", ""}
-	if sid != "" {
-		parts[1] = sid
-	}
-	if database != "" {
-		parts[2] = database
-	}
-	return strings.Join(parts, "|")
+	// Return full format with all values (empty strings for missing ones)
+	return serviceName + "|" + sid + "|" + database
 }
 
 // BuildMongoDBNamespace builds the db.namespace attribute for MongoDB.

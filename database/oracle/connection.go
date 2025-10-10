@@ -96,9 +96,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		logger: log,
 	}
 
-	// Register connection pool metrics for observability
+	// Register connection pool metrics for observability with server metadata
 	// Store cleanup function to allow proper unregistration during Close()
-	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle")
+	namespace := tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
+	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
 }

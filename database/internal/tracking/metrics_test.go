@@ -676,8 +676,8 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			// Create a mock connection that returns specific stat types
 			mockConn := &mockStatsConnection{stats: tc.stats}
 
-			// Register pool metrics
-			connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+			// Register pool metrics with server metadata
+			connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql", "localhost", 5432, "testdb.public")
 			defer connCleanup()
 
 			// Force metrics collection by collecting from meter provider
@@ -688,10 +688,6 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			obtest.AssertMetricExists(t, rm, metricDBConnectionCount)   // with state attribute
 			obtest.AssertMetricExists(t, rm, metricDBConnectionIdleMax) // max configured idle
 			obtest.AssertMetricExists(t, rm, metricDBConnectionMax)     // max configured connections
-
-			// Verify gauge values match expected (accounting for type conversion)
-			// Note: We can't directly assert gauge values without triggering the callback
-			// The callback gets triggered during collection, so values should be present
 		})
 	}
 }
@@ -723,8 +719,8 @@ func TestRegisterConnectionPoolMetricsWithInvalidTypes(t *testing.T) {
 		},
 	}
 
-	// Should not panic
-	connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+	// Should not panic - test with minimal server metadata
+	connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql", "", 0, "")
 	defer connCleanup()
 
 	// Collect metrics - should succeed without panic
@@ -747,15 +743,13 @@ func TestRegisterConnectionPoolMetricsStatsError(t *testing.T) {
 		err: errors.New("database connection closed"),
 	}
 
-	// Should not panic during registration or collection
+	// Should not panic during registration or collection, even with empty server metadata
 	assert.NotPanics(t, func() {
-		connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql")
+		connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql", "localhost", 5432, "")
 		defer connCleanup()
 
 		// Collect metrics - should succeed without panic (callback logs error but doesn't fail)
 		_ = mp.Collect(t)
-		// When Stats() returns an error, the callback returns early with nil
-		// Gauges exist but values won't be updated (will be 0 or previous values)
 	})
 }
 

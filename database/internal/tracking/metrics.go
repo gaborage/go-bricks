@@ -181,25 +181,28 @@ func getDBMeter() metric.Meter {
 }
 
 // recordDBMetrics records OpenTelemetry metrics for a database operation.
-// This function is called by TrackDBOperation to emit metrics alongside traces and logs.
 //
-// Metrics recorded per OTel semantic conventions v1.32.0:
-// - db.client.operation.duration: Histogram of operation durations in seconds
+// Purpose: Records operation duration as an OpenTelemetry histogram alongside traces and logs
+// emitted by TrackDBOperation.
 //
-// Attributes per OTel spec:
-// - db.system.name: Database vendor (postgresql, oracle.db, mongodb)
-// - db.operation.name: Operation type (select, insert, update, etc.)
-// - db.collection.name: Table/collection name
-// - db.namespace: Vendor-specific namespace format
+// OTel Metric (per semantic conventions v1.32.0):
+// - Name: db.client.operation.duration
+// - Type: Histogram
+// - Units: seconds
 //
-// The function is non-blocking and handles errors gracefully - metric recording failures
-// will not impact database operation execution.
+// Attributes Added:
+// - db.system.name: Database vendor (postgresql, oracle.db, mongodb) - always included
+// - db.operation.name: Operation type (select, insert, update, delete, etc.) - always included
+// - db.collection.name: Table/collection name - optional, included when available
+// - db.namespace: Vendor-specific namespace format - optional, included when available
 //
-// recordDBMetrics records a database operation duration to the configured OpenTelemetry histogram using OTLP semantic attributes.
+// Non-blocking Behavior:
+// If the global meter or histogram is not initialized, the function is a no-op and returns
+// immediately without error. Metric recording failures will not impact database operation
+// execution.
 //
-// It attaches `db.system.name` (vendor) and `db.operation.name` (operation). If present, it also adds `db.collection.name` (table)
-// and `db.namespace` (tc.Namespace). Duration is recorded in seconds. If the global meter or histogram is not initialized, the call
-// is a no-op. The `rowsAffected` and `error` parameters are currently unused and retained for future instrumentation.
+// Note: The rowsAffected and error parameters are currently unused and retained for future
+// instrumentation enhancements.
 func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, _ int64, _ error) {
 	// Ensure meter is initialized
 	meter := getDBMeter()
@@ -405,6 +408,10 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // - db.client.connection.idle.max: Maximum configured idle connections
 // - db.client.connection.max: Maximum configured connections
 //
+// Server Metadata Attributes:
+// All metrics include server.address, server.port, and db.namespace (when available) in addition
+// to db.system.name for full OTel compliance and correlation with operation metrics.
+//
 // The gauges are updated automatically when metrics are collected (typically every 30s).
 // Returns a cleanup function that can be called to unregister the metrics (optional).
 //
@@ -412,18 +419,31 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // with others and provides partial metrics coverage.
 func RegisterConnectionPoolMetrics(conn interface {
 	Stats() (map[string]any, error)
-}, vendor string) func() {
+}, vendor, serverAddress string, serverPort int, namespace string) func() {
 	meter := getDBMeter()
 	if meter == nil {
 		return noOpCleanup()
 	}
 
-	// Create registration state with normalized vendor attributes
+	// Create registration state with normalized vendor and server metadata attributes
+	baseAttrs := []attribute.KeyValue{
+		attribute.String(attrDBSystem, normalizeDBVendor(vendor)),
+	}
+
+	// Add server metadata attributes for correlation with operation metrics
+	if serverAddress != "" {
+		baseAttrs = append(baseAttrs, attribute.String("server.address", serverAddress))
+	}
+	if serverPort > 0 {
+		baseAttrs = append(baseAttrs, attribute.Int("server.port", serverPort))
+	}
+	if namespace != "" {
+		baseAttrs = append(baseAttrs, attribute.String(attrDBNamespace, namespace))
+	}
+
 	reg := &poolMetricsRegistration{
-		conn: conn,
-		baseAttrs: []attribute.KeyValue{
-			attribute.String(attrDBSystem, normalizeDBVendor(vendor)),
-		},
+		conn:      conn,
+		baseAttrs: baseAttrs,
 	}
 
 	// Create gauges per OTel semantic conventions

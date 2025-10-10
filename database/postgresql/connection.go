@@ -129,9 +129,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		logger: log,
 	}
 
-	// Register connection pool metrics for observability
+	// Register connection pool metrics for observability with server metadata
 	// Store cleanup function to allow proper unregistration during Close()
-	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "postgresql")
+	namespace := tracking.BuildPostgreSQLNamespace(cfg.Database, cfg.PostgreSQL.Schema)
+	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "postgresql", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
 }
