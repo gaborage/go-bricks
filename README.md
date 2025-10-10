@@ -168,14 +168,14 @@ See the [config-injection example](https://github.com/gaborage/go-bricks-demo-pr
 Clear, actionable error messages for configuration and startup failures.
 
 ### Error Format
-```
+```text
 config_<category>: <field> <message> <action>
 ```
 
 **Categories**: `missing` (required field), `invalid` (bad value), `not_configured` (optional feature), `connection` (resource failure)
 
 ### Examples
-```
+```text
 config_missing: database.host required set DATABASE_HOST env var or add database.host to config.yaml
 
 config_invalid: database.port invalid port; must be between 1 and 65535 must be one of: 1-65535

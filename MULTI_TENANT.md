@@ -54,7 +54,7 @@ multitenant:
 Implement the `app.TenantStore` interface to integrate with external systems like AWS Secrets Manager, HashiCorp Vault, or custom databases. The interface requires implementing three methods:
 
 - `DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)` - Returns database configuration for a specific tenant
-- `AMQPURL(ctx context.Context, key string) (string, error)` - Returns AMQP connection URL for a specific tenant
+- `BrokerURL(ctx context.Context, key string) (string, error)` - Returns the tenant's messaging broker connection URL
 - `IsDynamic() bool` - Returns true if tenant configuration can change at runtime (dynamic) or false if static
 
 The `IsDynamic()` flag controls framework behavior for caching and configuration refresh. Dynamic stores (external sources like AWS Secrets Manager) return `true`, while static stores (YAML-based) return `false`. The framework handles connection pooling, caching, and lifecycle management automatically once the store implementation returns the configuration.
