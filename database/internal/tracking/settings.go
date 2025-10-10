@@ -27,11 +27,17 @@ type Settings struct {
 
 // Context groups tracking-related parameters to reduce function parameter count.
 // This context is passed to tracking functions to provide consistent access to
-// logger, database vendor information, and tracking settings.
+// logger, database vendor information, tracking settings, and server connection metadata
+// for OpenTelemetry semantic convention attributes.
 type Context struct {
 	Logger   logger.Logger
 	Vendor   string
 	Settings Settings
+
+	// Server connection metadata for OTel attributes
+	ServerAddress string // server.address attribute (database host)
+	ServerPort    int    // server.port attribute (database port)
+	Namespace     string // db.namespace attribute (vendor-specific format)
 }
 
 // NewSettings creates Settings populated from the provided database configuration.

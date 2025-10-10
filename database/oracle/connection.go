@@ -96,9 +96,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		logger: log,
 	}
 
-	// Register connection pool metrics for observability
+	// Register connection pool metrics for observability with server metadata
 	// Store cleanup function to allow proper unregistration during Close()
-	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle")
+	namespace := tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
+	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
 }
@@ -220,7 +221,7 @@ func (c *Connection) Health(ctx context.Context) error {
 // Stats returns database connection statistics
 func (c *Connection) Stats() (map[string]any, error) {
 	stats := c.db.Stats()
-	return map[string]any{
+	result := map[string]any{
 		"max_open_connections": stats.MaxOpenConnections,
 		"open_connections":     stats.OpenConnections,
 		"in_use":               stats.InUse,
@@ -230,7 +231,14 @@ func (c *Connection) Stats() (map[string]any, error) {
 		"max_idle_closed":      stats.MaxIdleClosed,
 		"max_idle_time_closed": stats.MaxIdleTimeClosed,
 		"max_lifetime_closed":  stats.MaxLifetimeClosed,
-	}, nil
+	}
+
+	// Add configured max idle connections if config is available
+	if c.config != nil {
+		result["max_idle_connections"] = int(c.config.Pool.Idle.Connections)
+	}
+
+	return result, nil
 }
 
 // Close closes the database connection

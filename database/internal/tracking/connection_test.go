@@ -14,14 +14,17 @@ import (
 )
 
 const (
-	levelDebug         = "debug"
-	levelError         = "error"
-	levelInfo          = "info"
-	levelWarn          = "warn"
-	levelFatal         = "fatal"
-	simpleSelect       = "SELECT"
-	createMockErrorMsg = "failed to create sqlmock: %v"
-	selectOne          = "SELECT 1"
+	levelDebug                 = "debug"
+	levelError                 = "error"
+	levelInfo                  = "info"
+	levelWarn                  = "warn"
+	levelFatal                 = "fatal"
+	simpleSelect               = "SELECT"
+	createMockErrorMsg         = "failed to create sqlmock: %v"
+	selectOne                  = "SELECT 1"
+	unmetExpectationsErrMsg    = "unmet expectations: %v"
+	unexpectedDebugLevelErrMsg = "expected debug level, got %s"
+	unexpectedQueryFieldErrMsg = "unexpected query field, got %v"
 )
 
 type stubConnection struct {
@@ -180,7 +183,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+		t.Fatalf(unmetExpectationsErrMsg, err)
 	}
 
 	events := recLogger.events()
@@ -189,14 +192,63 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	}
 	event := events[0]
 	if event.Level != levelDebug {
-		t.Fatalf("expected debug level, got %s", event.Level)
+		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
 	}
 	if event.Fields["query"] != selectOne {
-		t.Fatalf("unexpected query field: %v", event.Fields["query"])
+		t.Fatalf(unexpectedQueryFieldErrMsg, event.Fields["query"])
 	}
 	argsField, ok := event.Fields["args"].([]any)
 	if !ok || len(argsField) != 1 || argsField[0] != "1" {
 		t.Fatalf("expected logged args, got %v", event.Fields["args"])
+	}
+}
+
+func TestDBQueryRowContextTracksOperations(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf(createMockErrorMsg, err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"col"}).AddRow(42))
+
+	cfg := &config.DatabaseConfig{}
+	cfg.Query.Log.Parameters = true
+	cfg.Query.Log.MaxLength = 100
+
+	recLogger := newRecordingLogger()
+	tracked := NewDB(db, recLogger, "postgresql", cfg)
+	ctx := logger.WithDBCounter(context.Background())
+
+	row := tracked.QueryRowContext(ctx, selectOne, 1)
+	if row == nil {
+		t.Fatalf("expected row result")
+	}
+
+	// Scan the row to trigger the rowtracker callback
+	var result int
+	err = row.Scan(&result)
+	if err != nil {
+		t.Fatalf("expected no error on scan, got %v", err)
+	}
+	if result != 42 {
+		t.Fatalf("expected result 42, got %d", result)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf(unmetExpectationsErrMsg, err)
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf("expected single event, got %d", len(events))
+	}
+	event := events[0]
+	if event.Level != levelDebug {
+		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
+	}
+	if event.Fields["query"] != selectOne {
+		t.Fatalf(unexpectedQueryFieldErrMsg, event.Fields["query"])
 	}
 }
 
@@ -219,7 +271,7 @@ func TestDBExecContextLogsErrors(t *testing.T) {
 		t.Fatalf("expected exec error, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
+		t.Fatalf(unmetExpectationsErrMsg, err)
 	}
 	events := recLogger.events()
 	if len(events) != 1 || events[0].Level != levelError {
@@ -284,6 +336,112 @@ func TestNewConnectionDelegatesAndLogs(t *testing.T) {
 	if len(events) != 1 || events[0].Fields["query"] != simpleSelect {
 		t.Fatalf("expected log entry for query, got %+v", events)
 	}
+}
+
+func TestConnectionQueryRowTracksOperations(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf(createMockErrorMsg, err)
+	}
+	defer db.Close()
+
+	// Set up mock to return a row that can be scanned
+	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(99))
+
+	// Create a tracked DB connection using the sqlmock DB
+	recLogger := newRecordingLogger()
+	trackedDB := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
+
+	// Wrap it in a Connection to test Connection.QueryRow
+	underlying := &mockConnectionFromDB{trackedDB: trackedDB}
+	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
+
+	ctx := logger.WithDBCounter(context.Background())
+	row := conn.QueryRow(ctx, selectOne, 1)
+	if row == nil {
+		t.Fatalf("expected row result")
+	}
+
+	// Scan the row to trigger the rowtracker callback which logs the operation
+	var result int
+	err = row.Scan(&result)
+	if err != nil {
+		t.Fatalf("expected no error on scan, got %v", err)
+	}
+	if result != 99 {
+		t.Fatalf("expected result 99, got %d", result)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf(unmetExpectationsErrMsg, err)
+	}
+
+	// We expect 2 events: one from the underlying trackedDB, one from the Connection wrapper
+	events := recLogger.events()
+	if len(events) < 1 {
+		t.Fatalf("expected at least one event, got %d", len(events))
+	}
+	// The last event should be from the Connection.QueryRow wrapper
+	event := events[len(events)-1]
+	if event.Level != levelDebug {
+		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
+	}
+	if event.Fields["query"] != selectOne {
+		t.Fatalf(unexpectedQueryFieldErrMsg, event.Fields["query"])
+	}
+}
+
+// mockConnectionFromDB wraps a *DB to implement types.Interface for testing Connection.QueryRow
+type mockConnectionFromDB struct {
+	trackedDB *DB
+}
+
+func (m *mockConnectionFromDB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return m.trackedDB.QueryContext(ctx, query, args...)
+}
+
+func (m *mockConnectionFromDB) QueryRow(ctx context.Context, query string, args ...any) types.Row {
+	return m.trackedDB.QueryRowContext(ctx, query, args...)
+}
+
+func (m *mockConnectionFromDB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return m.trackedDB.ExecContext(ctx, query, args...)
+}
+
+func (m *mockConnectionFromDB) Prepare(ctx context.Context, query string) (types.Statement, error) {
+	return m.trackedDB.PrepareContext(ctx, query)
+}
+
+func (m *mockConnectionFromDB) Begin(_ context.Context) (types.Tx, error) {
+	return &stubTx{}, nil
+}
+
+func (m *mockConnectionFromDB) BeginTx(_ context.Context, _ *sql.TxOptions) (types.Tx, error) {
+	return &stubTx{}, nil
+}
+
+func (m *mockConnectionFromDB) Health(ctx context.Context) error {
+	return m.trackedDB.PingContext(ctx)
+}
+
+func (m *mockConnectionFromDB) Stats() (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+func (m *mockConnectionFromDB) Close() error {
+	return m.trackedDB.Close()
+}
+
+func (m *mockConnectionFromDB) DatabaseType() string {
+	return "postgresql"
+}
+
+func (m *mockConnectionFromDB) GetMigrationTable() string {
+	return "flyway_schema_history"
+}
+
+func (m *mockConnectionFromDB) CreateMigrationTable(context.Context) error {
+	return nil
 }
 
 func TestConnectionExecErrorIsLogged(t *testing.T) {
@@ -407,5 +565,25 @@ func TestConnectionPassthroughMethods(t *testing.T) {
 	}
 	if conn.GetMigrationTable() != "schema" {
 		t.Fatalf("unexpected migration table")
+	}
+}
+
+func TestConnectionSetServerInfo(t *testing.T) {
+	underlying := &stubConnection{databaseTypeValue: "postgresql"}
+	recLogger := newRecordingLogger()
+	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
+
+	// Set server metadata
+	conn.SetServerInfo("localhost", 5432, "mydb.public")
+
+	// Verify metadata was set by checking internal fields
+	if conn.serverAddress != "localhost" {
+		t.Fatalf("expected serverAddress to be 'localhost', got %s", conn.serverAddress)
+	}
+	if conn.serverPort != 5432 {
+		t.Fatalf("expected serverPort to be 5432, got %d", conn.serverPort)
+	}
+	if conn.namespace != "mydb.public" {
+		t.Fatalf("expected namespace to be 'mydb.public', got %s", conn.namespace)
 	}
 }

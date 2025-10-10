@@ -398,3 +398,150 @@ func (m *mockResult) RowsAffected() (int64, error) {
 	}
 	return m.rows, nil
 }
+
+// TestBuildPostgreSQLNamespace tests the PostgreSQL namespace builder.
+func TestBuildPostgreSQLNamespace(t *testing.T) {
+	tests := []struct {
+		name     string
+		database string
+		schema   string
+		expected string
+	}{
+		{
+			name:     "withDatabaseAndSchema",
+			database: "mydb",
+			schema:   "public",
+			expected: "mydb.public",
+		},
+		{
+			name:     "withCustomSchema",
+			database: "mydb",
+			schema:   "analytics",
+			expected: "mydb.analytics",
+		},
+		{
+			name:     "emptyDatabase",
+			database: "",
+			schema:   "public",
+			expected: "",
+		},
+		{
+			name:     "emptySchema",
+			database: "mydb",
+			schema:   "",
+			expected: "",
+		},
+		{
+			name:     "bothEmpty",
+			database: "",
+			schema:   "",
+			expected: "",
+		},
+		{
+			name:     "complexNames",
+			database: "my_app_db",
+			schema:   "user_data",
+			expected: "my_app_db.user_data",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildPostgreSQLNamespace(tt.database, tt.schema)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestBuildOracleNamespace tests the Oracle namespace builder with priority logic.
+func TestBuildOracleNamespace(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceName string
+		sid         string
+		database    string
+		expected    string
+	}{
+		{
+			name:        "serviceNameOnly",
+			serviceName: "PRODDB",
+			sid:         "",
+			database:    "",
+			expected:    "PRODDB||",
+		},
+		{
+			name:        "sidOnly",
+			serviceName: "",
+			sid:         "ORCL",
+			database:    "",
+			expected:    "|ORCL|",
+		},
+		{
+			name:        "databaseOnly",
+			serviceName: "",
+			sid:         "",
+			database:    "appdb",
+			expected:    "||appdb",
+		},
+		{
+			name:        "serviceNameTakesPrecedence",
+			serviceName: "PRODDB",
+			sid:         "ORCL",
+			database:    "appdb",
+			expected:    "PRODDB|ORCL|appdb",
+		},
+		{
+			name:        "sidTakesPrecedenceOverDatabase",
+			serviceName: "",
+			sid:         "ORCL",
+			database:    "appdb",
+			expected:    "|ORCL|appdb",
+		},
+		{
+			name:        "allEmpty",
+			serviceName: "",
+			sid:         "",
+			database:    "",
+			expected:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildOracleNamespace(tt.serviceName, tt.sid, tt.database)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestBuildMongoDBNamespace tests the MongoDB namespace builder.
+func TestBuildMongoDBNamespace(t *testing.T) {
+	tests := []struct {
+		name     string
+		database string
+		expected string
+	}{
+		{
+			name:     "withDatabase",
+			database: "analytics",
+			expected: "analytics",
+		},
+		{
+			name:     "emptyDatabase",
+			database: "",
+			expected: "",
+		},
+		{
+			name:     "complexDatabaseName",
+			database: "user_analytics_db",
+			expected: "user_analytics_db",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildMongoDBNamespace(tt.database)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
