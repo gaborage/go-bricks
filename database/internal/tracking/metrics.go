@@ -196,7 +196,7 @@ func getDBMeter() metric.Meter {
 // will not impact database operation execution.
 //
 // recordDBMetrics records a database operation duration to the configured OpenTelemetry histogram using OTLP semantic attributes.
-// 
+//
 // It attaches `db.system.name` (vendor) and `db.operation.name` (operation). If present, it also adds `db.collection.name` (table)
 // and `db.namespace` (tc.Namespace). Duration is recorded in seconds. If the global meter or histogram is not initialized, the call
 // is a no-op. The `rowsAffected` and `error` parameters are currently unused and retained for future instrumentation.
@@ -259,12 +259,6 @@ func tryExtractTable(pattern *regexp.Regexp, query string) string {
 	return ""
 }
 
-// extractTableName attempts to extract the primary table name from a SQL query.
-// It uses regex patterns to identify tables in SELECT, INSERT, UPDATE, and DELETE statements.
-//
-// For multi-table queries (e.g., JOINs), it returns the first table encountered.
-// For queries where the table cannot be determined, it returns "unknown".
-//
 // extractTableName returns the table or collection name referenced by a common SQL DML
 // statement (SELECT, INSERT, UPDATE, DELETE) in the provided query, or unknownTable if
 // a table cannot be determined.
@@ -332,17 +326,19 @@ func collectInstruments(gauges ...metric.Int64ObservableGauge) []metric.Observab
 	return instruments
 }
 
-// extractPoolStats extracts integer pool statistics from the stats map using type-safe conversion.
 // extractPoolStats extracts connection counts from a stats map and returns
 // the number of in-use (active) connections, idle connections, and the
 // configured maximum open connections. Missing or non-numeric entries are
 // treated as zero and values are converted using asInt64.
-func extractPoolStats(stats map[string]any) (inUse, idle, maxOpen int64) {
+func extractPoolStats(stats map[string]any) (inUse, idle, maxIdle, maxOpen int64) {
 	if val, ok := asInt64(stats["in_use"]); ok {
 		inUse = val
 	}
 	if val, ok := asInt64(stats["idle"]); ok {
 		idle = val
+	}
+	if val, ok := asInt64(stats["max_idle_connections"]); ok {
+		maxIdle = val
 	}
 	if val, ok := asInt64(stats["max_open_connections"]); ok {
 		maxOpen = val
@@ -370,7 +366,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 		return nil // Best-effort - don't fail metrics collection
 	}
 
-	inUse, idle, maxOpen := extractPoolStats(stats)
+	inUse, idle, maxIdle, maxOpen := extractPoolStats(stats)
 
 	// Record connection count with state attribute per OTel spec
 	if r.connectionCountGauge != nil {
@@ -389,7 +385,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 
 	// Record configuration limits
 	if r.idleMaxGauge != nil {
-		observer.ObserveInt64(r.idleMaxGauge, idle, metric.WithAttributes(r.baseAttrs...))
+		observer.ObserveInt64(r.idleMaxGauge, maxIdle, metric.WithAttributes(r.baseAttrs...))
 	}
 	if r.maxGauge != nil {
 		observer.ObserveInt64(r.maxGauge, maxOpen, metric.WithAttributes(r.baseAttrs...))
@@ -413,9 +409,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // Returns a cleanup function that can be called to unregister the metrics (optional).
 //
 // This function uses graceful degradation - if any gauge fails to register, it continues
-// RegisterConnectionPoolMetrics registers OpenTelemetry gauges for a database connection pool and returns a cleanup function to unregister them.
-//
-// RegisterConnectionPoolMetrics creates observable gauges for connection counts (with a `state` attribute), maximum idle connections, and maximum open connections using the global DB meter. The provided conn must implement Stats() (map[string]any, error); its returned values are read during collection to populate the gauges. If the meter is unavailable or no instruments can be created, the function returns a no-op cleanup. The returned cleanup function unregisters the metric callback; any unregister errors are logged but do not propagate.
+// with others and provides partial metrics coverage.
 func RegisterConnectionPoolMetrics(conn interface {
 	Stats() (map[string]any, error)
 }, vendor string) func() {

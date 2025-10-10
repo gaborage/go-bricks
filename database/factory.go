@@ -13,7 +13,7 @@ import (
 
 // NewConnection creates a tracked database connection for the provided configuration.
 // NewConnection creates a tracked database connection based on the provided configuration.
-// 
+//
 // It initializes a concrete driver connection for the configured database type, wraps it with
 // performance/tracing tracking, and attaches server metadata (host, port and an OTel namespace)
 // to the tracking wrapper when available.
@@ -48,7 +48,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	var namespace string
 	switch cfg.Type {
 	case PostgreSQL:
-		namespace = tracking.BuildPostgreSQLNamespace(cfg.Database)
+		namespace = tracking.BuildPostgreSQLNamespace(cfg.Database, cfg.PostgreSQL.Schema)
 	case Oracle:
 		namespace = tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
 	}

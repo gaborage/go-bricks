@@ -93,8 +93,9 @@ type DatabaseConfig struct {
 	Query QueryConfig `koanf:"query" json:"query" yaml:"query" toml:"query" mapstructure:"query"`
 	TLS   TLSConfig   `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`
 
-	Oracle OracleConfig `koanf:"oracle" json:"oracle" yaml:"oracle" toml:"oracle" mapstructure:"oracle"`
-	Mongo  MongoConfig  `koanf:"mongo" json:"mongo" yaml:"mongo" toml:"mongo" mapstructure:"mongo"`
+	PostgreSQL PostgreSQLConfig `koanf:"postgresql" json:"postgresql" yaml:"postgresql" toml:"postgresql" mapstructure:"postgresql"`
+	Oracle     OracleConfig     `koanf:"oracle" json:"oracle" yaml:"oracle" toml:"oracle" mapstructure:"oracle"`
+	Mongo      MongoConfig      `koanf:"mongo" json:"mongo" yaml:"mongo" toml:"mongo" mapstructure:"mongo"`
 }
 
 // PoolConfig holds connection pool settings.
@@ -147,6 +148,11 @@ type TLSConfig struct {
 }
 
 // OracleConfig holds Oracle-specific database settings.
+// PostgreSQLConfig holds PostgreSQL-specific database settings.
+type PostgreSQLConfig struct {
+	Schema string `koanf:"schema" json:"schema" yaml:"schema" toml:"schema" mapstructure:"schema"`
+}
+
 type OracleConfig struct {
 	Service ServiceConfig `koanf:"service" json:"service" yaml:"service" toml:"service" mapstructure:"service"`
 }

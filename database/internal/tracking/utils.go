@@ -157,7 +157,7 @@ func TruncateString(value string, maxLen int) string {
 // "<bytes len=N>" where N is the byte length. Other values are formatted with
 // "%v" and then truncated to maxLen. The returned slice has the same length and
 // SanitizeArgs returns a sanitized copy of the input argument slice suitable for logging.
-// 
+//
 // For string values the returned element is truncated to at most maxLen runes. For []byte
 // values the returned element is the placeholder "<bytes len=N>" where N is the byte length.
 // For all other values the element is formatted with "%v" and then truncated to at most
@@ -328,31 +328,31 @@ func normalizeDBVendor(vendor string) string {
 
 // BuildPostgreSQLNamespace builds the db.namespace attribute for PostgreSQL.
 // Per OTel spec, this combines database and schema name as "{database}.{schema}".
-// If database is empty, it returns an empty string.
-func BuildPostgreSQLNamespace(database string) string {
-	if database == "" {
+// Returns empty string when schema is unknown (don't assume defaults like "public").
+// Only returns "{database}.{schema}" when both database and schema are provided.
+func BuildPostgreSQLNamespace(database, schema string) string {
+	if database == "" || schema == "" {
 		return ""
 	}
-	return database + ".public"
+	return database + "." + schema
 }
 
 // BuildOracleNamespace builds the db.namespace attribute for Oracle.
 // Per OTel spec, format is "{service_name}|{database_name}|{instance_name}".
-// BuildOracleNamespace builds an Oracle db.namespace value using the first available identifier
-// from serviceName, sid, or database.
-// It returns "{serviceName}||" when serviceName is non-empty, "|{sid}|" when sid is non-empty and serviceName is empty,
-// "||{database}" when database is non-empty and both serviceName and sid are empty, and "" if all inputs are empty.
+// It preserves all provided identifiers and leaves segments empty only when
+// data is unavailable.
 func BuildOracleNamespace(serviceName, sid, database string) string {
-	if serviceName != "" {
-		return serviceName + "||" // Service name with empty database and instance
+	if serviceName == "" && sid == "" && database == "" {
+		return ""
 	}
+	parts := []string{serviceName, "", ""}
 	if sid != "" {
-		return "|" + sid + "|" // SID as database with empty service and instance
+		parts[1] = sid
 	}
 	if database != "" {
-		return "||" + database // Database as instance with empty service and database
+		parts[2] = database
 	}
-	return ""
+	return strings.Join(parts, "|")
 }
 
 // BuildMongoDBNamespace builds the db.namespace attribute for MongoDB.
