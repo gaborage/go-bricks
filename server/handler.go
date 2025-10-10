@@ -444,9 +444,12 @@ func formatSuccessResponseWithStatus(c echo.Context, data any, status int, heade
 	if status == 0 {
 		status = http.StatusOK
 	}
-	for k, vals := range headers {
-		for _, v := range vals {
-			c.Response().Header().Add(k, v)
+	// SAFETY: Check if response is still valid before adding headers
+	if resp := c.Response(); resp != nil {
+		for k, vals := range headers {
+			for _, v := range vals {
+				resp.Header().Add(k, v)
+			}
 		}
 	}
 
@@ -498,30 +501,41 @@ func getTraceID(c echo.Context) string {
 		return requestID
 	}
 	// Then try the response header (may be set by request ID middleware)
-	if requestID := c.Response().Header().Get(echo.HeaderXRequestID); requestID != "" {
-		return requestID
+	// SAFETY: After a timeout, c.Response() may be nil due to timeoutHandler invalidating
+	// the underlying ResponseWriter. We check for nil to prevent panic.
+	if resp := c.Response(); resp != nil {
+		if requestID := resp.Header().Get(echo.HeaderXRequestID); requestID != "" {
+			return requestID
+		}
 	}
 	// Generate a new UUID if none provided
 	newID := uuid.New().String()
-	// Set it so downstream might pick it up
-	c.Response().Header().Set(echo.HeaderXRequestID, newID)
+	// Set it so downstream might pick it up (only if response is still valid)
+	if resp := c.Response(); resp != nil {
+		resp.Header().Set(echo.HeaderXRequestID, newID)
+	}
 	return newID
 }
 
 // ensureTraceParentHeader ensures the response contains a W3C traceparent header.
 // It propagates the inbound header when present, otherwise generates a new one.
 func ensureTraceParentHeader(c echo.Context) {
+	// SAFETY: Check if response is still valid (may be nil after timeout)
+	resp := c.Response()
+	if resp == nil {
+		return
+	}
 	// If already set, do nothing
-	if c.Response().Header().Get(gobrickshttp.HeaderTraceParent) != "" {
+	if resp.Header().Get(gobrickshttp.HeaderTraceParent) != "" {
 		return
 	}
 	// Prefer inbound header
 	if tp := c.Request().Header.Get(gobrickshttp.HeaderTraceParent); tp != "" {
-		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, tp)
+		resp.Header().Set(gobrickshttp.HeaderTraceParent, tp)
 		return
 	}
 	// Generate new traceparent and set
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
+	resp.Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
 }
 
 // RouteRegistrar abstracts the subset of Echo's routing features that modules need
