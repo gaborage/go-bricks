@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	"github.com/google/uuid"
 )
@@ -175,10 +176,16 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	for {
 		select {
 		case <-ctx.Done():
+			// Record failed publish metrics before returning
+			elapsed := time.Since(startTime)
+			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
 			span.RecordError(ctx.Err())
 			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
+			// Record failed publish metrics before returning
+			elapsed := time.Since(startTime)
+			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
 			span.RecordError(errShutdown)
 			span.SetStatus(codes.Error, errShutdown.Error())
 			return errShutdown
@@ -219,6 +226,10 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		if err != nil {
 			retryCount++
 			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
+
+			// Record retry metric
+			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "publish_error")
+
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "publish error"),
 				attribute.String("error", err.Error()),
@@ -226,10 +237,16 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			))
 			select {
 			case <-ctx.Done():
+				// Record failed publish metrics before returning
+				elapsed := time.Since(startTime)
+				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
 				span.RecordError(ctx.Err())
 				span.SetStatus(codes.Error, ctx.Err().Error())
 				return ctx.Err()
 			case <-c.done:
+				// Record failed publish metrics before returning
+				elapsed := time.Since(startTime)
+				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
 				span.RecordError(errShutdown)
 				span.SetStatus(codes.Error, errShutdown.Error())
 				return errShutdown
@@ -241,10 +258,16 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		// Wait for confirmation on the captured confirm channel
 		select {
 		case <-ctx.Done():
+			// Record failed publish metrics before returning
+			elapsed := time.Since(startTime)
+			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
 			span.RecordError(ctx.Err())
 			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
+			// Record failed publish metrics before returning
+			elapsed := time.Since(startTime)
+			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
 			span.RecordError(errShutdown)
 			span.SetStatus(codes.Error, errShutdown.Error())
 			return errShutdown
@@ -254,6 +277,10 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				elapsed := time.Since(startTime)
 				logger.IncrementAMQPCounter(ctx)
 				logger.AddAMQPElapsed(ctx, elapsed.Nanoseconds())
+
+				// Record AMQP publish metrics
+				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, nil)
+
 				c.log.Debug().
 					Str("exchange", options.Exchange).
 					Str("routing_key", options.RoutingKey).
@@ -274,6 +301,10 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				Uint64("delivery_tag", confirm.DeliveryTag).
 				Int("retry_count", retryCount).
 				Msg("Message publish not acknowledged, retrying...")
+
+			// Record retry metric
+			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "nack")
+
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "message not acknowledged"),
 				// #nosec G115 -- delivery tags are sequential and never overflow int in practice
@@ -286,6 +317,10 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// Confirmation timeout - retry the publish
 			retryCount++
 			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
+
+			// Record retry metric
+			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "timeout")
+
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "confirmation timeout"),
 				attribute.Int("retry_count", retryCount),
@@ -391,11 +426,15 @@ func (c *AMQPClientImpl) Close() error {
 		if closeErr := c.channel.Close(); closeErr != nil {
 			err = closeErr
 		}
+		// Record channel close event
+		tracking.RecordChannelEvent("close", nil)
 	}
 	if c.connection != nil {
 		if closeErr := c.connection.Close(); closeErr != nil && err == nil {
 			err = closeErr
 		}
+		// Record connection close event
+		tracking.RecordConnectionEvent("close", nil)
 	}
 
 	c.log.Info().Msg("AMQP client closed")
@@ -439,6 +478,10 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	}
 	// Store as interface and also return underlying real connection when available
 	c.changeConnection(ac)
+
+	// Record connection create event
+	tracking.RecordConnectionEvent("create", nil)
+
 	c.log.Info().Msg("Connected to AMQP broker")
 	// If the underlying type is realConnection, return its concrete pointer; otherwise nil
 	if rc, ok := ac.(realConnection); ok {
@@ -470,6 +513,8 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 				return true
 			case <-c.notifyConnClose:
 				c.log.Info().Msg("AMQP connection closed, reconnecting...")
+				// Record connection close event
+				tracking.RecordConnectionEvent("close", nil)
 				return false
 			case <-time.After(c.reInitDelay):
 			}
@@ -481,9 +526,13 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 			return true
 		case <-c.notifyConnClose:
 			c.log.Info().Msg("AMQP connection closed, reconnecting...")
+			// Record connection close event
+			tracking.RecordConnectionEvent("close", nil)
 			return false
 		case <-c.notifyChanClose:
 			c.log.Info().Msg("AMQP channel closed, reinitializing...")
+			// Record channel close event
+			tracking.RecordChannelEvent("close", nil)
 		}
 	}
 }
@@ -504,6 +553,9 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	c.m.Lock()
 	c.isReady = true
 	c.m.Unlock()
+
+	// Record channel create event
+	tracking.RecordChannelEvent("create", nil)
 
 	c.log.Info().Msg("AMQP client initialized and ready")
 	return nil
@@ -588,6 +640,10 @@ func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName st
 		attrs = append(attrs, semconv.MessagingMessageConversationID(delivery.CorrelationId))
 	}
 	span.SetAttributes(attrs...)
+
+	// Automatically record consume metrics
+	// Duration is 0 at initial receive time - application can track processing duration separately
+	tracking.RecordAMQPConsumeMetrics(ctx, delivery, queueName, 0, nil)
 
 	return ctx, span
 }
