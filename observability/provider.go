@@ -22,19 +22,29 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials/insecure"
+
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
 // debugLogger is a simple logger for observability debugging
 var debugLogger = log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
 
 // Provider is the interface for observability providers.
-// It manages the lifecycle of tracing and metrics providers.
+// It manages the lifecycle of tracing, metrics, and logging providers.
 type Provider interface {
 	// TracerProvider returns the configured trace provider.
 	TracerProvider() trace.TracerProvider
 
 	// MeterProvider returns the configured meter provider.
 	MeterProvider() metric.MeterProvider
+
+	// LoggerProvider returns the configured logger provider.
+	// Returns nil if logging is disabled.
+	LoggerProvider() *sdklog.LoggerProvider
+
+	// ShouldDisableStdout returns true if stdout should be disabled when OTLP is enabled.
+	// This method provides configuration access for logger integration.
+	ShouldDisableStdout() bool
 
 	// Shutdown gracefully shuts down the provider, flushing any pending data.
 	// It should be called during application shutdown.
@@ -50,6 +60,7 @@ type provider struct {
 	config         Config
 	tracerProvider *sdktrace.TracerProvider
 	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *sdklog.LoggerProvider
 	mu             sync.Mutex
 }
 
@@ -121,6 +132,22 @@ func NewProvider(cfg *Config) (Provider, error) {
 		debugLogger.Println("Meter provider skipped (disabled)")
 	}
 
+	// Initialize logger provider if logs are enabled
+	logsEnabled := safeCfg.Logs.Enabled != nil && *safeCfg.Logs.Enabled
+	debugLogger.Printf("Logs configuration: enabled=%v, endpoint=%s, protocol=%s",
+		logsEnabled, safeCfg.Logs.Endpoint, safeCfg.Logs.Protocol)
+
+	if logsEnabled {
+		debugLogger.Println("Initializing logger provider...")
+		if err := p.initLogProvider(); err != nil {
+			debugLogger.Printf("Failed to initialize logger provider: %v", err)
+			return nil, fmt.Errorf("failed to initialize logger provider: %w", err)
+		}
+		debugLogger.Println("Logger provider initialized successfully")
+	} else {
+		debugLogger.Println("Logger provider skipped (disabled)")
+	}
+
 	// Set global providers
 	if p.tracerProvider != nil {
 		debugLogger.Println("Setting global tracer provider")
@@ -130,6 +157,7 @@ func NewProvider(cfg *Config) (Provider, error) {
 		debugLogger.Println("Setting global meter provider")
 		otel.SetMeterProvider(p.meterProvider)
 	}
+	// Note: OTel doesn't have a global logger provider setter like traces/metrics
 
 	// Set global propagator for W3C trace context
 	debugLogger.Println("Setting W3C trace context propagator")
@@ -326,6 +354,19 @@ func (p *provider) MeterProvider() metric.MeterProvider {
 	return p.meterProvider
 }
 
+// LoggerProvider returns the configured logger provider.
+// Returns nil if logging is disabled (caller should check for nil).
+func (p *provider) LoggerProvider() *sdklog.LoggerProvider {
+	return p.loggerProvider
+}
+
+// ShouldDisableStdout returns true if stdout should be disabled when OTLP is enabled.
+// This implements the logger.OTelProvider interface to provide configuration access
+// without exposing the entire Config struct publicly.
+func (p *provider) ShouldDisableStdout() bool {
+	return p.config.Logs.DisableStdout
+}
+
 // Shutdown gracefully shuts down the provider.
 //
 //nolint:dupl // Shutdown and ForceFlush have similar structure but different semantics
@@ -344,6 +385,12 @@ func (p *provider) Shutdown(ctx context.Context) error {
 	if p.meterProvider != nil {
 		if err := p.meterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("failed to shutdown meter provider: %w", err))
+		}
+	}
+
+	if p.loggerProvider != nil {
+		if err := p.loggerProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to shutdown logger provider: %w", err))
 		}
 	}
 
@@ -372,6 +419,12 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 	if p.meterProvider != nil {
 		if err := p.meterProvider.ForceFlush(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("failed to flush meter provider: %w", err))
+		}
+	}
+
+	if p.loggerProvider != nil {
+		if err := p.loggerProvider.ForceFlush(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush logger provider: %w", err))
 		}
 	}
 

@@ -57,9 +57,15 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 	// Initialize observability provider (no-op if disabled)
 	obsProvider := b.initializeObservability()
 
-	// Create ModuleDeps using the resource provider and observability
+	// Enhance logger with OTLP export if enabled
+	// This creates a new logger instance that exports to both stdout and OTLP
+	// (or OTLP-only if DisableStdout is configured). The original bootstrap logger
+	// remains unchanged to preserve initialization logs.
+	enhancedLogger := b.enhanceLoggerWithOTel(obsProvider)
+
+	// Create ModuleDeps using the enhanced logger and observability
 	deps := &ModuleDeps{
-		Logger:        b.log,
+		Logger:        enhancedLogger, // Use enhanced logger with OTLP export
 		Config:        b.cfg,
 		Tracer:        obsProvider.TracerProvider().Tracer(b.cfg.App.Name),
 		MeterProvider: obsProvider.MeterProvider(),
@@ -103,11 +109,17 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 
 	traceEnabled := obsCfg.Trace.Enabled != nil && *obsCfg.Trace.Enabled
 	metricsEnabled := obsCfg.Metrics.Enabled != nil && *obsCfg.Metrics.Enabled
+	logsEnabled := obsCfg.Logs.Enabled != nil && *obsCfg.Logs.Enabled
 
 	// Format sample rate for logging (handle nil pointer)
-	sampleRateStr := "nil"
+	traceSampleRateStr := "nil"
 	if obsCfg.Trace.Sample.Rate != nil {
-		sampleRateStr = strconv.FormatFloat(*obsCfg.Trace.Sample.Rate, 'f', 2, 64)
+		traceSampleRateStr = strconv.FormatFloat(*obsCfg.Trace.Sample.Rate, 'f', 2, 64)
+	}
+
+	logsSampleRateStr := "nil"
+	if obsCfg.Logs.Sample.Rate != nil {
+		logsSampleRateStr = strconv.FormatFloat(*obsCfg.Logs.Sample.Rate, 'f', 2, 64)
 	}
 
 	b.log.Debug().
@@ -115,10 +127,15 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		Str("trace_endpoint", obsCfg.Trace.Endpoint).
 		Str("trace_protocol", obsCfg.Trace.Protocol).
 		Str("trace_insecure", strconv.FormatBool(obsCfg.Trace.Insecure)).
-		Str("trace_sample_rate", sampleRateStr).
+		Str("trace_sample_rate", traceSampleRateStr).
 		Str("metrics_enabled", strconv.FormatBool(metricsEnabled)).
 		Str("metrics_endpoint", obsCfg.Metrics.Endpoint).
 		Str("metrics_protocol", obsCfg.Metrics.Protocol).
+		Str("logs_enabled", strconv.FormatBool(logsEnabled)).
+		Str("logs_endpoint", obsCfg.Logs.Endpoint).
+		Str("logs_protocol", obsCfg.Logs.Protocol).
+		Str("logs_sample_rate", logsSampleRateStr).
+		Str("logs_disable_stdout", strconv.FormatBool(obsCfg.Logs.DisableStdout)).
 		Msg("Observability config after applying defaults")
 
 	// Create provider (will be no-op if Enabled is false)
@@ -134,10 +151,55 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 			Str("environment", obsCfg.Environment).
 			Str("trace_endpoint", obsCfg.Trace.Endpoint).
 			Str("metrics_endpoint", obsCfg.Metrics.Endpoint).
+			Str("logs_endpoint", obsCfg.Logs.Endpoint).
 			Msg("Observability initialized successfully")
 	} else {
 		b.log.Debug().Msg("Observability disabled by configuration")
 	}
 
 	return provider
+}
+
+// enhanceLoggerWithOTel attaches OTLP log export to the logger if observability is enabled.
+// Returns the original logger if OTLP logging is disabled or if the logger type doesn't support it.
+//
+// This method implements the integration point between the logger and observability packages,
+// enabling automatic export of structured logs to OTLP collectors for centralized logging.
+func (b *appBootstrap) enhanceLoggerWithOTel(provider observability.Provider) logger.Logger {
+	// Check if the provider has a logger provider (i.e., OTLP log export is enabled)
+	if provider == nil || provider.LoggerProvider() == nil {
+		b.log.Debug().Msg("OTLP log export disabled, using standard logger")
+		return b.log
+	}
+
+	// Type assertion to access the WithOTelProvider method
+	// The logger.Logger interface doesn't expose this method to avoid coupling,
+	// but ZeroLogger implements it for observability integration.
+	zerologger, ok := b.log.(*logger.ZeroLogger)
+	if !ok {
+		b.log.Warn().Msg("Logger does not support OTLP export (not a ZeroLogger instance)")
+		return b.log
+	}
+
+	b.log.Debug().
+		Str("disable_stdout", strconv.FormatBool(provider.ShouldDisableStdout())).
+		Msg("Enhancing logger with OTLP export")
+
+	// Enhance the logger with OTLP export
+	// This will panic if the logger is in pretty mode (fail-fast configuration validation)
+	enhancedLogger := zerologger.WithOTelProvider(provider)
+
+	b.log.Info().
+		Str("mode", getLogOutputMode(provider.ShouldDisableStdout())).
+		Msg("OTLP log export enabled")
+
+	return enhancedLogger
+}
+
+// getLogOutputMode returns a human-readable description of the log output mode.
+func getLogOutputMode(disableStdout bool) string {
+	if disableStdout {
+		return "OTLP-only"
+	}
+	return "stdout+OTLP"
 }

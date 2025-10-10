@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ZeroLogger wraps zerolog.Logger to implement the Logger interface.
@@ -16,6 +19,7 @@ import (
 type ZeroLogger struct {
 	zlog   *zerolog.Logger
 	filter *SensitiveDataFilter
+	pretty bool // tracks if logger uses pretty (console) formatting vs JSON
 }
 
 // Ensure ZeroLogger implements the interface
@@ -57,7 +61,7 @@ func New(level string, pretty bool) *ZeroLogger {
 	// Initialize the sensitive data filter with default configuration
 	filter := NewSensitiveDataFilter(DefaultFilterConfig())
 
-	return &ZeroLogger{zlog: &l, filter: filter}
+	return &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
 }
 
 // NewWithFilter creates a new ZeroLogger instance with custom filter configuration.
@@ -94,17 +98,50 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 	// Initialize the sensitive data filter with provided configuration
 	filter := NewSensitiveDataFilter(filterConfig)
 
-	return &ZeroLogger{zlog: &l, filter: filter}
+	return &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
 }
 
 // WithContext returns a logger with context information attached.
+// It follows a two-phase approach for maximum flexibility:
+//
+// Phase 1 (Explicit): If the context contains an explicit zerolog logger
+// (set via zerolog.Ctx), that logger takes precedence. This maintains
+// backward compatibility with existing code that uses zerolog's context pattern.
+//
+// Phase 2 (Automatic): If no explicit logger is found, automatically extracts
+// trace_id and span_id from the OpenTelemetry span context and adds them as
+// fields. This enables automatic trace correlation without requiring explicit
+// logger management in every handler.
+//
+// This hybrid approach provides:
+//   - Deterministic behavior: same context always produces same logger
+//   - Backward compatibility: existing zerolog.Ctx usage continues to work
+//   - Automatic correlation: trace IDs appear in logs without boilerplate
 func (l *ZeroLogger) WithContext(ctx any) Logger {
 	if c, ok := ctx.(context.Context); ok {
+		// OPTION 1: Explicit logger in context (backward compatibility)
+		// Check if there's an explicit zerolog logger set in the context
 		zl := zerolog.Ctx(c)
-		if zl == nil || zl.GetLevel() == zerolog.Disabled {
-			return l
+		if zl != nil && zl.GetLevel() != zerolog.Disabled {
+			return &ZeroLogger{zlog: zl, filter: l.filter, pretty: l.pretty}
 		}
-		return &ZeroLogger{zlog: zl, filter: l.filter}
+
+		// OPTION 2: Extract trace context for automatic correlation
+		// If there's an active span in the context, inject trace_id and span_id
+		// as structured fields. This enables log-trace correlation in observability
+		// backends (e.g., clicking trace_id in Grafana jumps to Jaeger trace).
+		span := trace.SpanFromContext(c)
+		if span.SpanContext().IsValid() {
+			log := l.zlog.With().
+				Str("trace_id", span.SpanContext().TraceID().String()).
+				Str("span_id", span.SpanContext().SpanID().String()).
+				Logger()
+			return &ZeroLogger{
+				zlog:   &log,
+				filter: l.filter,
+				pretty: l.pretty,
+			}
+		}
 	}
 	return l
 }
@@ -116,5 +153,77 @@ func (l *ZeroLogger) WithFields(fields map[string]any) Logger {
 		fields = l.filter.FilterFields(fields)
 	}
 	log := l.zlog.With().Fields(fields).Logger()
-	return &ZeroLogger{zlog: &log, filter: l.filter}
+	return &ZeroLogger{zlog: &log, filter: l.filter, pretty: l.pretty}
+}
+
+// OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
+// and configuration. This interface allows the logger package to integrate with
+// observability without creating circular dependencies.
+type OTelProvider interface {
+	// LoggerProvider returns the configured logger provider.
+	// Returns nil if logging is disabled.
+	LoggerProvider() *sdklog.LoggerProvider
+
+	// ShouldDisableStdout returns true if stdout should be disabled when OTLP is enabled.
+	// This method is implemented via type assertion to avoid exposing internal config.
+	ShouldDisableStdout() bool
+}
+
+// WithOTelProvider attaches an OpenTelemetry logger provider for OTLP log export.
+// Returns the same logger if provider is nil/disabled, or creates a new logger
+// with dual output (stdout + OTLP) or OTLP-only based on the provider's configuration.
+//
+// IMPORTANT: OTLP export requires JSON mode (pretty=false). This method fails fast
+// with a panic if pretty mode is active, ensuring configuration errors are caught
+// during initialization rather than silently degrading observability.
+//
+// Configuration conflict detection:
+//   - If logger is created with pretty=true AND OTLP export is enabled, panics with
+//     clear error message directing user to fix their configuration.
+//
+// Output modes:
+//   - DisableStdout=false (default): logs go to both stdout and OTLP (useful for dev)
+//   - DisableStdout=true: logs only go to OTLP (production efficiency)
+func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
+	// Nil provider check - return original logger
+	if provider == nil || provider.LoggerProvider() == nil {
+		return l
+	}
+
+	// Fail-fast: pretty mode incompatible with OTLP bridge
+	// The OTel bridge requires JSON output to parse log entries, but pretty mode
+	// outputs human-readable console format. Rather than silently skip OTLP export,
+	// we fail fast to ensure users are aware of the configuration conflict.
+	if l.pretty {
+		panic("OTLP log export requires JSON mode (pretty=false). " +
+			"Configuration conflict detected: logger.pretty=true AND observability.logs.enabled=true. " +
+			"Fix: Set logger.pretty=false in config or disable observability.logs.enabled")
+	}
+
+	// Create OTel bridge to convert zerolog JSON to OTel log records
+	bridge := NewOTelBridge(provider.LoggerProvider())
+	if bridge == nil {
+		// Bridge creation failed gracefully (e.g., nil provider)
+		return l
+	}
+
+	// Determine output destination based on DisableStdout configuration
+	var output io.Writer
+	if provider.ShouldDisableStdout() {
+		// OTLP only - reduces disk I/O in production
+		output = bridge
+	} else {
+		// Both stdout and OTLP - useful for local debugging
+		output = io.MultiWriter(os.Stdout, bridge)
+	}
+
+	// Swap the writer while preserving all existing context, fields, and hooks
+	// Using Output() instead of zerolog.New() maintains the logger's accumulated state
+	newLog := l.zlog.Output(output)
+
+	return &ZeroLogger{
+		zlog:   &newLog,
+		filter: l.filter,
+		pretty: false, // Always false - validated above
+	}
 }
