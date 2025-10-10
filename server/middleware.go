@@ -72,11 +72,19 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// Recovery
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
 		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			log.Error().
+			logEvent := log.Error().
 				Err(err).
-				Str("request_id", c.Response().Header().Get(echo.HeaderXRequestID)).
-				Bytes("stack", stack).
-				Msg("Panic recovered")
+				Bytes("stack", stack)
+
+			// SAFETY: Response may be nil after timeout, safely extract request ID
+			if resp := c.Response(); resp != nil {
+				logEvent.Str("request_id", resp.Header().Get(echo.HeaderXRequestID))
+			} else {
+				// Fallback to request header if response is unavailable
+				logEvent.Str("request_id", c.Request().Header.Get(echo.HeaderXRequestID))
+			}
+
+			logEvent.Msg("Panic recovered")
 			return err
 		},
 	}))

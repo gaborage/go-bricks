@@ -13,6 +13,16 @@ func TraceContext() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			req := c.Request()
 
+			// SAFETY: Check if the request context has already been cancelled (e.g., by timeout).
+			// If so, we should return early to avoid accessing potentially invalidated Echo state.
+			select {
+			case <-req.Context().Done():
+				// Context already cancelled, return the error without processing
+				return req.Context().Err()
+			default:
+				// Context still active, proceed normally
+			}
+
 			// Resolve or generate the trace ID using existing server logic
 			traceID := getTraceID(c)
 

@@ -15,7 +15,11 @@ func Timing() echo.MiddlewareFunc {
 			err := next(c)
 			duration := time.Since(start)
 
-			c.Response().Header().Set("X-Response-Time", duration.String())
+			// SAFETY: Check if response is still valid (may be nil after timeout)
+			// This middleware runs AFTER the timeout middleware in the chain
+			if resp := c.Response(); resp != nil {
+				resp.Header().Set("X-Response-Time", duration.String())
+			}
 			return err
 		}
 	}

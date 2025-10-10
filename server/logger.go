@@ -61,6 +61,12 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 			// Resolve the same trace ID used in API responses
 			traceID := getTraceID(c)
 
+			// SAFETY: Response may be nil after timeout, safely extract traceparent
+			traceparent := ""
+			if resp := c.Response(); resp != nil {
+				traceparent = resp.Header().Get(gobrickshttp.HeaderTraceParent)
+			}
+
 			event.
 				Str("request_id", v.RequestID).
 				Str("method", v.Method).
@@ -77,7 +83,7 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 				// Log unified trace ID (matches response meta.traceId)
 				Str("trace_id", traceID).
 				// Also log W3C traceparent if present for distributed tracing
-				Str("traceparent", c.Response().Header().Get(gobrickshttp.HeaderTraceParent)).
+				Str("traceparent", traceparent).
 				Msg("Request")
 			return nil
 		},
