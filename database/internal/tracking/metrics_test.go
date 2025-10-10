@@ -608,66 +608,77 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 
 	// Test cases with different numeric types for pool stats
 	testCases := []struct {
-		name          string
-		stats         map[string]any
-		expectedInUse int64
-		expectedIdle  int64
-		expectedMax   int64
+		name            string
+		stats           map[string]any
+		expectedInUse   int64
+		expectedIdle    int64
+		expectedIdleMax int64
+		expectedMax     int64
 	}{
 		{
 			name: "int_types",
 			stats: map[string]any{
 				"in_use":               int(5),
 				"idle":                 int(10),
+				"max_idle_connections": int(15),
 				"max_open_connections": int(25),
 			},
-			expectedInUse: 5,
-			expectedIdle:  10,
-			expectedMax:   25,
+			expectedInUse:   5,
+			expectedIdle:    10,
+			expectedIdleMax: 15,
+			expectedMax:     25,
 		},
 		{
 			name: "int64_types",
 			stats: map[string]any{
 				"in_use":               int64(15),
 				"idle":                 int64(20),
+				"max_idle_connections": int64(35),
 				"max_open_connections": int64(50),
 			},
-			expectedInUse: 15,
-			expectedIdle:  20,
-			expectedMax:   50,
+			expectedInUse:   15,
+			expectedIdle:    20,
+			expectedIdleMax: 35,
+			expectedMax:     50,
 		},
 		{
 			name: "uint32_types",
 			stats: map[string]any{
 				"in_use":               uint32(8),
 				"idle":                 uint32(12),
+				"max_idle_connections": uint32(18),
 				"max_open_connections": uint32(30),
 			},
-			expectedInUse: 8,
-			expectedIdle:  12,
-			expectedMax:   30,
+			expectedInUse:   8,
+			expectedIdle:    12,
+			expectedIdleMax: 18,
+			expectedMax:     30,
 		},
 		{
 			name: "float64_types_truncated",
 			stats: map[string]any{
 				"in_use":               float64(7.9),
 				"idle":                 float64(13.2),
+				"max_idle_connections": float64(25.7),
 				"max_open_connections": float64(40.8),
 			},
-			expectedInUse: 7,
-			expectedIdle:  13,
-			expectedMax:   40,
+			expectedInUse:   7,
+			expectedIdle:    13,
+			expectedIdleMax: 25,
+			expectedMax:     40,
 		},
 		{
 			name: "mixed_types",
 			stats: map[string]any{
 				"in_use":               int(3),
 				"idle":                 uint64(15),
+				"max_idle_connections": int64(18),
 				"max_open_connections": float64(20.0),
 			},
-			expectedInUse: 3,
-			expectedIdle:  15,
-			expectedMax:   20,
+			expectedInUse:   3,
+			expectedIdle:    15,
+			expectedIdleMax: 18,
+			expectedMax:     20,
 		},
 	}
 
@@ -688,6 +699,9 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			obtest.AssertMetricExists(t, rm, metricDBConnectionCount)   // with state attribute
 			obtest.AssertMetricExists(t, rm, metricDBConnectionIdleMax) // max configured idle
 			obtest.AssertMetricExists(t, rm, metricDBConnectionMax)     // max configured connections
+
+			// Verify the idle-max gauge has the correct value from max_idle_connections
+			obtest.AssertMetricValue(t, rm, metricDBConnectionIdleMax, tc.expectedIdleMax)
 		})
 	}
 }

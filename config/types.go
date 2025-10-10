@@ -147,12 +147,12 @@ type TLSConfig struct {
 	CAFile   string `koanf:"ca" json:"ca" yaml:"ca" toml:"ca" mapstructure:"ca"`
 }
 
-// OracleConfig holds Oracle-specific database settings.
 // PostgreSQLConfig holds PostgreSQL-specific database settings.
 type PostgreSQLConfig struct {
 	Schema string `koanf:"schema" json:"schema" yaml:"schema" toml:"schema" mapstructure:"schema"`
 }
 
+// OracleConfig holds Oracle-specific database settings.
 type OracleConfig struct {
 	Service ServiceConfig `koanf:"service" json:"service" yaml:"service" toml:"service" mapstructure:"service"`
 }
