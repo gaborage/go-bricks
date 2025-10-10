@@ -12,7 +12,14 @@ import (
 )
 
 // NewConnection creates a tracked database connection for the provided configuration.
-// It returns an error when cfg is nil, cfg.Type is unsupported (supported: "postgresql", "oracle"), or driver initialization fails.
+// NewConnection creates a tracked database connection based on the provided configuration.
+// 
+// It initializes a concrete driver connection for the configured database type, wraps it with
+// performance/tracing tracking, and attaches server metadata (host, port and an OTel namespace)
+// to the tracking wrapper when available.
+//
+// Errors are returned if cfg is nil, cfg.Type is not supported (supported: "postgresql", "oracle"),
+// or if the underlying driver initialization fails.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
