@@ -21,9 +21,9 @@ const (
 	// Default operation type for unidentified queries
 	defaultOperation = "query"
 
-	// Database vendor normalization constants
+	// Database vendor normalization constants matching OTel semantic conventions
 	dbVendorPostgreSQL = "postgresql"
-	dbVendorOracle     = "oracle"
+	dbVendorOracle     = "oracle.db" // OTel spec requires "oracle.db" not "oracle"
 	dbVendorMongoDB    = "mongodb"
 	dbVendorMySQL      = "mysql"
 	dbVendorSQLite     = "sqlite"
@@ -176,13 +176,14 @@ func SanitizeArgs(args []any, maxLen int) []any {
 }
 
 // createDBSpan creates an OpenTelemetry span for a database operation.
-// It adds standard database semantic attributes and records errors.
+// It adds standard database semantic attributes per OTel spec v1.32.0 and records errors.
 // The span uses the exact operation start time for accurate distributed tracing.
 func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
 	tracer := otel.Tracer(dbTracerName)
 
-	// Determine operation type from query
+	// Determine operation type and table/collection name from query
 	operation := extractDBOperation(query)
+	table := extractTableName(query)
 	spanName := fmt.Sprintf("db.%s", operation)
 
 	// Start span with the actual operation start time for accurate timing
@@ -191,21 +192,40 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 		trace.WithSpanKind(trace.SpanKindClient),
 	)
 
-	// Add database semantic attributes using v1.32.0 conventions
+	// Add database semantic attributes per OTel v1.32.0 spec
 	// Truncate query for safety (span attributes should be reasonable size)
 	truncatedQuery := query
 	if len(query) > maxDBQueryAttrLen {
 		truncatedQuery = TruncateString(query, maxDBQueryAttrLen)
 	}
 
+	// Required and recommended attributes per OTel spec
 	attrs := []attribute.KeyValue{
-		attribute.String("db.system", normalizeDBVendor(tc.Vendor)),
-		semconv.DBQueryText(truncatedQuery),
+		attribute.String("db.system.name", normalizeDBVendor(tc.Vendor)), // db.system.name (required)
+		semconv.DBQueryText(truncatedQuery),                              // db.query.text (recommended)
 	}
 
 	// Add operation name if identified
 	if operation != defaultOperation {
-		attrs = append(attrs, semconv.DBOperationName(operation))
+		attrs = append(attrs, semconv.DBOperationName(operation)) // db.operation.name (recommended)
+	}
+
+	// Add collection/table name if identified
+	if table != "" && table != "unknown" {
+		attrs = append(attrs, semconv.DBCollectionName(table)) // db.collection.name (recommended)
+	}
+
+	// Add namespace if available (conditionally required per OTel spec)
+	if tc.Namespace != "" {
+		attrs = append(attrs, semconv.DBNamespace(tc.Namespace)) // db.namespace
+	}
+
+	// Add server connection info if available (recommended per OTel spec)
+	if tc.ServerAddress != "" {
+		attrs = append(attrs, semconv.ServerAddress(tc.ServerAddress)) // server.address
+	}
+	if tc.ServerPort > 0 {
+		attrs = append(attrs, semconv.ServerPort(tc.ServerPort)) // server.port
 	}
 
 	span.SetAttributes(attrs...)
@@ -265,13 +285,17 @@ func extractDBOperation(query string) string {
 }
 
 // normalizeDBVendor normalizes the database vendor name to match OTel semantic conventions.
+// Returns vendor-specific db.system.name values per OTel spec:
+// - "postgresql" for PostgreSQL
+// - "oracle.db" for Oracle (note the .db suffix required by spec)
+// - "mongodb" for MongoDB
 func normalizeDBVendor(vendor string) string {
 	vendor = strings.ToLower(vendor)
 	switch vendor {
 	case "postgres", dbVendorPostgreSQL:
 		return dbVendorPostgreSQL
-	case dbVendorOracle:
-		return dbVendorOracle
+	case "oracle", dbVendorOracle:
+		return dbVendorOracle // Returns "oracle.db" per OTel spec
 	case dbVendorMongoDB, "mongo":
 		return dbVendorMongoDB
 	case dbVendorMySQL:
@@ -281,4 +305,36 @@ func normalizeDBVendor(vendor string) string {
 	default:
 		return vendor
 	}
+}
+
+// BuildPostgreSQLNamespace builds the db.namespace attribute for PostgreSQL.
+// Per OTel spec, this combines database and schema name as "{database}.{schema}".
+// Since we don't have runtime schema info, we use the default "public" schema.
+func BuildPostgreSQLNamespace(database string) string {
+	if database == "" {
+		return ""
+	}
+	return database + ".public"
+}
+
+// BuildOracleNamespace builds the db.namespace attribute for Oracle.
+// Per OTel spec, format is "{service_name}|{database_name}|{instance_name}".
+// Priority: Service Name → SID → Database field (most common to least used).
+func BuildOracleNamespace(serviceName, sid, database string) string {
+	if serviceName != "" {
+		return serviceName + "||" // Service name with empty database and instance
+	}
+	if sid != "" {
+		return "|" + sid + "|" // SID as database with empty service and instance
+	}
+	if database != "" {
+		return "||" + database // Database as instance with empty service and database
+	}
+	return ""
+}
+
+// BuildMongoDBNamespace builds the db.namespace attribute for MongoDB.
+// Per OTel spec, this is simply the database name.
+func BuildMongoDBNamespace(database string) string {
+	return database
 }

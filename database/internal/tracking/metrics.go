@@ -21,21 +21,23 @@ const (
 	// Meter name for database metrics instrumentation
 	dbMeterName = "go-bricks/database"
 
-	// Metric names following OpenTelemetry semantic conventions
-	metricDBCalls    = "db.client.calls"
-	metricDBDuration = "db.client.operation.duration"
+	// Metric names following OpenTelemetry semantic conventions v1.32.0
+	metricDBDuration = "db.client.operation.duration" // Histogram in seconds
 
-	// Connection pool metrics
-	metricDBPoolActive = "db.connection.pool.active"
-	metricDBPoolIdle   = "db.connection.pool.idle"
-	metricDBPoolTotal  = "db.connection.pool.total"
+	// Connection pool metrics per OTel spec
+	metricDBConnectionCount   = "db.client.connection.count"    // Gauge with state attribute
+	metricDBConnectionIdleMax = "db.client.connection.idle.max" // Max configured idle connections
+	metricDBConnectionMax     = "db.client.connection.max"      // Max configured connections
 
-	metricDBSQLTable  = "db.sql.table"
-	metricDBOperation = "db.operation.name"
-	metricDBSystem    = "db.system"
+	// Attribute keys per OTel semantic conventions
+	attrDBSystem         = "db.system.name"
+	attrDBOperation      = "db.operation.name"
+	attrDBCollectionName = "db.collection.name"
+	attrDBNamespace      = "db.namespace"
+	attrConnectionState  = "state" // Values: "idle", "used"
 
-	// I/O metrics
-	metricDBRowsAffected = "db.rows.affected"
+	// Special values for table/collection name
+	unknownTable = "unknown"
 )
 
 var (
@@ -44,10 +46,8 @@ var (
 	meterOnce   sync.Once
 	meterInitMu sync.Mutex
 
-	// Metric instruments
-	dbCallsCounter        metric.Int64Counter
-	dbDurationHistogram   metric.Float64Histogram
-	dbRowsAffectedCounter metric.Int64Counter
+	// Metric instruments following OTel semantic conventions
+	dbDurationHistogram metric.Float64Histogram // Duration in seconds
 
 	// Connection pool metrics are registered per-connection via callbacks
 	// They use ObservableGauges which are registered externally
@@ -158,28 +158,14 @@ func initDBMeter() {
 	// Get meter from global meter provider
 	dbMeter = otel.Meter(dbMeterName)
 
-	// Initialize counter for database calls
+	// Initialize histogram for operation duration per OTel spec (in seconds, not milliseconds)
 	var err error
-	dbCallsCounter, err = dbMeter.Int64Counter(
-		metricDBCalls,
-		metric.WithDescription("Total number of database client calls"),
-	)
-	logMetricError(metricDBCalls, err)
-
-	// Initialize histogram for operation duration
 	dbDurationHistogram, err = dbMeter.Float64Histogram(
 		metricDBDuration,
-		metric.WithDescription("Duration of database operations in milliseconds"),
-		metric.WithUnit("ms"),
+		metric.WithDescription("Duration of database client operations"),
+		metric.WithUnit("s"), // OTel spec requires seconds, not milliseconds
 	)
 	logMetricError(metricDBDuration, err)
-
-	// Initialize counter for rows affected (write operations)
-	dbRowsAffectedCounter, err = dbMeter.Int64Counter(
-		metricDBRowsAffected,
-		metric.WithDescription("Number of rows affected by database operations"),
-	)
-	logMetricError(metricDBRowsAffected, err)
 }
 
 // getDBMeter returns the initialized database meter, initializing it if necessary.
@@ -191,14 +177,20 @@ func getDBMeter() metric.Meter {
 // recordDBMetrics records OpenTelemetry metrics for a database operation.
 // This function is called by TrackDBOperation to emit metrics alongside traces and logs.
 //
-// Metrics recorded:
-// - db.client.calls: Counter of total operations (with db.system, db.operation.name, error attributes)
-// - db.client.operation.duration: Histogram of operation durations in milliseconds
-// - db.rows.affected: Counter of rows affected by write operations (0 for read operations)
+// Metrics recorded per OTel semantic conventions v1.32.0:
+// - db.client.operation.duration: Histogram of operation durations in seconds
+//
+// Attributes per OTel spec:
+// - db.system.name: Database vendor (postgresql, oracle.db, mongodb)
+// - db.operation.name: Operation type (select, insert, update, etc.)
+// - db.collection.name: Table/collection name
+// - db.namespace: Vendor-specific namespace format
 //
 // The function is non-blocking and handles errors gracefully - metric recording failures
 // will not impact database operation execution.
-func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, rowsAffected int64, err error) {
+//
+// Note: rowsAffected parameter retained for future use with db.client.response.returned_rows histogram.
+func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, _ int64, _ error) {
 	// Ensure meter is initialized
 	meter := getDBMeter()
 	if meter == nil {
@@ -210,33 +202,24 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 	table := extractTableName(query)
 	vendor := normalizeDBVendor(tc.Vendor)
 
-	// Determine if operation resulted in error (excluding sql.ErrNoRows which is not an error)
-	isError := err != nil && !isSQLNoRowsError(err)
-
-	// Common attributes for both metrics
-	commonAttrs := []attribute.KeyValue{
-		attribute.String(metricDBSystem, vendor),
-		attribute.String(metricDBOperation, operation),
-		attribute.String(metricDBSQLTable, table),
+	// Build attributes per OTel semantic conventions
+	attrs := []attribute.KeyValue{
+		attribute.String(attrDBSystem, vendor),
+		attribute.String(attrDBOperation, operation),
 	}
 
-	// Record counter with error attribute
-	if dbCallsCounter != nil {
-		counterAttrs := make([]attribute.KeyValue, 0, len(commonAttrs)+1)
-		counterAttrs = append(counterAttrs, commonAttrs...)
-		counterAttrs = append(counterAttrs, attribute.Bool("error", isError))
-		dbCallsCounter.Add(ctx, 1, metric.WithAttributes(counterAttrs...))
+	// Add optional attributes if available
+	if table != "" && table != unknownTable {
+		attrs = append(attrs, attribute.String(attrDBCollectionName, table))
+	}
+	if tc.Namespace != "" {
+		attrs = append(attrs, attribute.String(attrDBNamespace, tc.Namespace))
 	}
 
-	// Record histogram with duration in milliseconds
+	// Record histogram with duration in seconds (not milliseconds)
 	if dbDurationHistogram != nil {
-		durationMs := float64(duration.Nanoseconds()) / 1e6 // Convert ns to ms
-		dbDurationHistogram.Record(ctx, durationMs, metric.WithAttributes(commonAttrs...))
-	}
-
-	// Record rows affected counter (only for successful operations with row count > 0)
-	if dbRowsAffectedCounter != nil && rowsAffected > 0 && !isError {
-		dbRowsAffectedCounter.Add(ctx, rowsAffected, metric.WithAttributes(commonAttrs...))
+		durationSec := float64(duration.Nanoseconds()) / 1e9 // Convert ns to seconds per OTel spec
+		dbDurationHistogram.Record(ctx, durationSec, metric.WithAttributes(attrs...))
 	}
 }
 
@@ -277,7 +260,7 @@ func extractTableName(query string) string {
 	// Normalize whitespace for easier parsing
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "unknown"
+		return unknownTable
 	}
 
 	// Try each pattern based on query type
@@ -313,7 +296,7 @@ func extractTableName(query string) string {
 
 	// For DDL, transactions, and other operations, return "unknown"
 	// These operations are typically less frequent and table-specific metrics aren't as critical
-	return "unknown"
+	return unknownTable
 }
 
 // createGauge creates an observable gauge and logs errors without failing.
@@ -352,18 +335,18 @@ func extractPoolStats(stats map[string]any) (inUse, idle, maxOpen int64) {
 }
 
 // poolMetricsRegistration encapsulates pool metrics gauge state and observation logic.
-// This struct reduces complexity by isolating the callback implementation.
+// This struct implements OTel semantic conventions using state attribute for connection counts.
 type poolMetricsRegistration struct {
 	conn interface {
 		Stats() (map[string]any, error)
 	}
-	activeGauge metric.Int64ObservableGauge
-	idleGauge   metric.Int64ObservableGauge
-	totalGauge  metric.Int64ObservableGauge
-	attrs       []attribute.KeyValue
+	connectionCountGauge metric.Int64ObservableGauge // Single gauge with state attribute
+	idleMaxGauge         metric.Int64ObservableGauge // Max configured idle connections
+	maxGauge             metric.Int64ObservableGauge // Max configured connections
+	baseAttrs            []attribute.KeyValue        // db.system.name attribute
 }
 
-// observePoolStats reads connection pool statistics and updates gauges.
+// observePoolStats reads connection pool statistics and updates gauges per OTel spec.
 // This method is called automatically during metrics collection (typically every 30s).
 func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer metric.Observer) error {
 	stats, err := r.conn.Stats()
@@ -373,26 +356,42 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 
 	inUse, idle, maxOpen := extractPoolStats(stats)
 
-	if r.activeGauge != nil {
-		observer.ObserveInt64(r.activeGauge, inUse, metric.WithAttributes(r.attrs...))
+	// Record connection count with state attribute per OTel spec
+	if r.connectionCountGauge != nil {
+		// state=used for active connections
+		usedAttrs := make([]attribute.KeyValue, len(r.baseAttrs)+1)
+		copy(usedAttrs, r.baseAttrs)
+		usedAttrs[len(r.baseAttrs)] = attribute.String(attrConnectionState, "used")
+		observer.ObserveInt64(r.connectionCountGauge, inUse, metric.WithAttributes(usedAttrs...))
+
+		// state=idle for idle connections
+		idleAttrs := make([]attribute.KeyValue, len(r.baseAttrs)+1)
+		copy(idleAttrs, r.baseAttrs)
+		idleAttrs[len(r.baseAttrs)] = attribute.String(attrConnectionState, "idle")
+		observer.ObserveInt64(r.connectionCountGauge, idle, metric.WithAttributes(idleAttrs...))
 	}
-	if r.idleGauge != nil {
-		observer.ObserveInt64(r.idleGauge, idle, metric.WithAttributes(r.attrs...))
+
+	// Record configuration limits
+	if r.idleMaxGauge != nil {
+		observer.ObserveInt64(r.idleMaxGauge, idle, metric.WithAttributes(r.baseAttrs...))
 	}
-	if r.totalGauge != nil {
-		observer.ObserveInt64(r.totalGauge, maxOpen, metric.WithAttributes(r.attrs...))
+	if r.maxGauge != nil {
+		observer.ObserveInt64(r.maxGauge, maxOpen, metric.WithAttributes(r.baseAttrs...))
 	}
 
 	return nil
 }
 
-// RegisterConnectionPoolMetrics registers ObservableGauges for connection pool metrics.
+// RegisterConnectionPoolMetrics registers ObservableGauges for connection pool metrics
+// following OpenTelemetry semantic conventions v1.32.0.
+//
 // This function should be called once per database connection during initialization.
 //
-// It creates three gauges that report:
-// - db.connection.pool.active: Number of connections currently in use
-// - db.connection.pool.idle: Number of idle connections in the pool
-// - db.connection.pool.total: Maximum number of connections configured
+// Metrics registered per OTel spec:
+// - db.client.connection.count{state="used"}: Active connections in use
+// - db.client.connection.count{state="idle"}: Idle connections in pool
+// - db.client.connection.idle.max: Maximum configured idle connections
+// - db.client.connection.max: Maximum configured connections
 //
 // The gauges are updated automatically when metrics are collected (typically every 30s).
 // Returns a cleanup function that can be called to unregister the metrics (optional).
@@ -410,18 +409,21 @@ func RegisterConnectionPoolMetrics(conn interface {
 	// Create registration state with normalized vendor attributes
 	reg := &poolMetricsRegistration{
 		conn: conn,
-		attrs: []attribute.KeyValue{
-			attribute.String("db.system", normalizeDBVendor(vendor)),
+		baseAttrs: []attribute.KeyValue{
+			attribute.String(attrDBSystem, normalizeDBVendor(vendor)),
 		},
 	}
 
-	// Create gauges using helper function
-	reg.activeGauge = createGauge(meter, metricDBPoolActive, "Number of active database connections")
-	reg.idleGauge = createGauge(meter, metricDBPoolIdle, "Number of idle database connections")
-	reg.totalGauge = createGauge(meter, metricDBPoolTotal, "Maximum number of database connections configured")
+	// Create gauges per OTel semantic conventions
+	reg.connectionCountGauge = createGauge(meter, metricDBConnectionCount,
+		"Number of connections that are currently in state described by the state attribute")
+	reg.idleMaxGauge = createGauge(meter, metricDBConnectionIdleMax,
+		"The maximum number of idle open connections allowed")
+	reg.maxGauge = createGauge(meter, metricDBConnectionMax,
+		"The maximum number of open connections allowed")
 
 	// Collect non-nil gauges for callback registration
-	instruments := collectInstruments(reg.activeGauge, reg.idleGauge, reg.totalGauge)
+	instruments := collectInstruments(reg.connectionCountGauge, reg.idleMaxGauge, reg.maxGauge)
 	if len(instruments) == 0 {
 		return noOpCleanup()
 	}

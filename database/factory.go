@@ -35,7 +35,23 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	}
 
 	// Wrap the connection with performance tracking
-	return tracking.NewConnection(conn, log, cfg), nil
+	trackedConn := tracking.NewConnection(conn, log, cfg)
+
+	// Set server metadata for OTel attributes based on database type
+	var namespace string
+	switch cfg.Type {
+	case PostgreSQL:
+		namespace = tracking.BuildPostgreSQLNamespace(cfg.Database)
+	case Oracle:
+		namespace = tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
+	}
+
+	// Set server info on the tracking wrapper
+	if tc, ok := trackedConn.(*tracking.Connection); ok {
+		tc.SetServerInfo(cfg.Host, cfg.Port, namespace)
+	}
+
+	return trackedConn, nil
 }
 
 // ValidateDatabaseType reports an error when dbType is not among the supported database types.

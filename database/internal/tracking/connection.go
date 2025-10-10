@@ -104,6 +104,11 @@ type Connection struct {
 	logger   logger.Logger
 	vendor   string
 	settings Settings
+
+	// Server connection metadata for OTel attributes
+	serverAddress string
+	serverPort    int
+	namespace     string
 }
 
 // NewConnection returns a database.Interface that wraps conn and records query/operation
@@ -226,9 +231,20 @@ func (tc *Connection) CreateMigrationTable(ctx context.Context) error {
 // trackOperation tracks database operation performance
 func (tc *Connection) trackOperation(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
 	trackingCtx := &Context{
-		Logger:   tc.logger,
-		Vendor:   tc.vendor,
-		Settings: tc.settings,
+		Logger:        tc.logger,
+		Vendor:        tc.vendor,
+		Settings:      tc.settings,
+		ServerAddress: tc.serverAddress,
+		ServerPort:    tc.serverPort,
+		Namespace:     tc.namespace,
 	}
 	TrackDBOperation(ctx, trackingCtx, query, args, start, rowsAffected, err)
+}
+
+// SetServerInfo sets the server connection metadata for OTel attributes.
+// This should be called after creating the Connection to populate server address, port, and namespace.
+func (tc *Connection) SetServerInfo(address string, port int, namespace string) {
+	tc.serverAddress = address
+	tc.serverPort = port
+	tc.namespace = namespace
 }

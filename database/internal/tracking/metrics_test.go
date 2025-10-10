@@ -32,7 +32,6 @@ func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup
 	// Reset meter initialization to pick up test provider
 	meterOnce = sync.Once{}
 	dbMeter = nil
-	dbCallsCounter = nil
 	dbDurationHistogram = nil
 
 	// Return cleanup function
@@ -44,7 +43,6 @@ func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup
 		// Reset state for other tests
 		meterOnce = sync.Once{}
 		dbMeter = nil
-		dbCallsCounter = nil
 		dbDurationHistogram = nil
 	}
 
@@ -71,9 +69,8 @@ func TestRecordDBMetricsCounterIncrement(t *testing.T) {
 	// Collect metrics
 	rm := mp.Collect(t)
 
-	// Assert counter exists and has correct value
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
-	obtest.AssertMetricValue(t, rm, metricDBCalls, int64(1))
+	// Assert duration histogram exists (calls counter was removed per OTel spec)
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }
 
 func TestRecordDBMetricsHistogramRecording(t *testing.T) {
@@ -113,10 +110,10 @@ func TestRecordDBMetricsHistogramRecording(t *testing.T) {
 			require.True(t, ok, "Expected histogram data type")
 			require.NotEmpty(t, histogramData.DataPoints, "Expected at least one data point")
 
-			// Verify duration value (50ms)
+			// Verify duration value (50ms = 0.050 seconds per OTel spec)
 			dp := histogramData.DataPoints[0]
-			expectedDurationMs := 50.0
-			assert.InDelta(t, expectedDurationMs, dp.Sum, 1.0, "Duration should be approximately 50ms")
+			expectedDurationSec := 0.050 // 50ms in seconds
+			assert.InDelta(t, expectedDurationSec, dp.Sum, 0.001, "Duration should be approximately 0.050 seconds")
 		}
 	}
 
@@ -158,7 +155,7 @@ func TestRecordDBMetricsWithDifferentOperations(t *testing.T) {
 			rm := mp.Collect(t)
 
 			// Verify operation attribute using helper
-			assertMetricHasAttribute(t, rm, metricDBCalls, "db.operation.name", op.expectedOperation)
+			assertMetricHasAttribute(t, rm, metricDBDuration, "db.operation.name", op.expectedOperation)
 		})
 	}
 }
@@ -170,7 +167,7 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 	}{
 		{"postgresql", "postgresql"},
 		{"postgres", "postgresql"},
-		{"oracle", "oracle"},
+		{"oracle", "oracle.db"}, // OTel spec requires .db suffix
 		{"mongodb", "mongodb"},
 		{"mongo", "mongodb"},
 	}
@@ -197,62 +194,14 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 			// Collect metrics
 			rm := mp.Collect(t)
 
-			// Verify db.system attribute using helper
-			assertMetricHasAttribute(t, rm, metricDBCalls, "db.system", v.expectedSystem)
+			// Verify db.system.name attribute using helper (per OTel spec)
+			assertMetricHasAttribute(t, rm, metricDBDuration, "db.system.name", v.expectedSystem)
 		})
 	}
 }
 
-func TestRecordDBMetricsErrorAttribute(t *testing.T) {
-	tests := []struct {
-		name          string
-		err           error
-		expectedError bool
-	}{
-		{
-			name:          "no_error",
-			err:           nil,
-			expectedError: false,
-		},
-		{
-			name:          "sql_err_no_rows_not_an_error",
-			err:           sql.ErrNoRows,
-			expectedError: false,
-		},
-		{
-			name:          "actual_error",
-			err:           errors.New("connection refused"),
-			expectedError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mp, cleanup := setupTestMeterProvider(t)
-			defer cleanup()
-
-			log := logger.New("disabled", false)
-			tc := &Context{
-				Logger:   log,
-				Vendor:   "postgresql",
-				Settings: NewSettings(nil),
-			}
-
-			ctx := context.Background()
-			query := TestQuerySelectUsers
-			duration := 10 * time.Millisecond
-
-			// Record metrics
-			recordDBMetrics(ctx, tc, query, duration, 0, tt.err)
-
-			// Collect metrics
-			rm := mp.Collect(t)
-
-			// Verify error attribute using helper
-			assertMetricHasBoolAttribute(t, rm, metricDBCalls, attrKeyError, tt.expectedError)
-		})
-	}
-}
+// TestRecordDBMetricsErrorAttribute removed - error tracking no longer in metrics per OTel spec.
+// Errors are tracked in spans only. Metrics focus on performance (duration) per OTel v1.32.0.
 
 func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
@@ -275,9 +224,7 @@ func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	// Collect metrics
 	rm := mp.Collect(t)
 
-	// Counter should have 3 total calls
-	// Note: We can't directly sum across different attribute sets, so we check that metric exists
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	// Duration histogram should exist with multiple data points
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }
 
@@ -510,17 +457,17 @@ func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 	// Collect metrics
 	rm := mp.Collect(t)
 
-	// Verify table attribute is present
+	// Verify table attribute is present with new OTel attribute name
 	var foundTableAttr bool
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
-			if m.Name == metricDBCalls {
-				sumData, ok := m.Data.(metricdata.Sum[int64])
+			if m.Name == metricDBDuration {
+				histData, ok := m.Data.(metricdata.Histogram[float64])
 				require.True(t, ok)
 
-				for _, dp := range sumData.DataPoints {
+				for _, dp := range histData.DataPoints {
 					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == metricDBSQLTable && attr.Value.AsString() == "users" {
+						if string(attr.Key) == attrDBCollectionName && attr.Value.AsString() == "users" {
 							foundTableAttr = true
 							break
 						}
@@ -588,24 +535,6 @@ func findMetricAttributeValue(rm metricdata.ResourceMetrics, metricName, attrKey
 	return "", false
 }
 
-// findMetricBoolAttribute searches for a boolean attribute in the specified metric.
-// It iterates through all ScopeMetrics, Metrics, and DataPoints to find the attribute.
-// Returns the attribute value and true if found, false and false otherwise.
-func findMetricBoolAttribute(rm metricdata.ResourceMetrics, metricName, attrKey string) (value, found bool) {
-	boolFinder := func(attr attribute.KeyValue, key string) (any, bool) {
-		if string(attr.Key) == key {
-			return attr.Value.AsBool(), true
-		}
-		return false, false
-	}
-
-	result, found := findMetricAttribute(rm, metricName, attrKey, boolFinder)
-	if found {
-		return result.(bool), true
-	}
-	return false, false
-}
-
 // assertMetricHasAttribute asserts that the specified metric has an attribute with the expected value.
 // This helper reduces complexity by encapsulating the nested iteration logic.
 func assertMetricHasAttribute(t *testing.T, rm metricdata.ResourceMetrics, metricName, attrKey, expectedValue string) {
@@ -613,15 +542,6 @@ func assertMetricHasAttribute(t *testing.T, rm metricdata.ResourceMetrics, metri
 	value, found := findMetricAttributeValue(rm, metricName, attrKey)
 	require.True(t, found, "Metric %s should have attribute %s", metricName, attrKey)
 	assert.Equal(t, expectedValue, value, "Attribute %s should have expected value", attrKey)
-}
-
-// assertMetricHasBoolAttribute asserts that the specified metric has a boolean attribute with the expected value.
-// This helper reduces complexity by encapsulating the nested iteration logic.
-func assertMetricHasBoolAttribute(t *testing.T, rm metricdata.ResourceMetrics, metricName, attrKey string, expectedValue bool) {
-	t.Helper()
-	value, found := findMetricBoolAttribute(rm, metricName, attrKey)
-	require.True(t, found, "Metric %s should have boolean attribute %s", metricName, attrKey)
-	assert.Equal(t, expectedValue, value, "Boolean attribute %s should have expected value", attrKey)
 }
 
 // TestAsInt64 tests the asInt64() helper function with all supported numeric types.
@@ -764,9 +684,10 @@ func TestRegisterConnectionPoolMetricsWithDifferentNumericTypes(t *testing.T) {
 			rm := mp.Collect(t)
 
 			// Verify gauges exist
-			obtest.AssertMetricExists(t, rm, metricDBPoolActive)
-			obtest.AssertMetricExists(t, rm, metricDBPoolIdle)
-			obtest.AssertMetricExists(t, rm, metricDBPoolTotal)
+			// Verify new OTel-compliant pool metrics
+			obtest.AssertMetricExists(t, rm, metricDBConnectionCount)   // with state attribute
+			obtest.AssertMetricExists(t, rm, metricDBConnectionIdleMax) // max configured idle
+			obtest.AssertMetricExists(t, rm, metricDBConnectionMax)     // max configured connections
 
 			// Verify gauge values match expected (accounting for type conversion)
 			// Note: We can't directly assert gauge values without triggering the callback
@@ -810,9 +731,10 @@ func TestRegisterConnectionPoolMetricsWithInvalidTypes(t *testing.T) {
 	rm := mp.Collect(t)
 
 	// Gauges should exist (even if values are 0 due to conversion failure)
-	obtest.AssertMetricExists(t, rm, metricDBPoolActive)
-	obtest.AssertMetricExists(t, rm, metricDBPoolIdle)
-	obtest.AssertMetricExists(t, rm, metricDBPoolTotal)
+	// Verify new OTel-compliant pool metrics
+	obtest.AssertMetricExists(t, rm, metricDBConnectionCount)   // with state attribute
+	obtest.AssertMetricExists(t, rm, metricDBConnectionIdleMax) // max configured idle
+	obtest.AssertMetricExists(t, rm, metricDBConnectionMax)     // max configured connections
 }
 
 // TestRegisterConnectionPoolMetricsStatsError tests handling of Stats() errors.

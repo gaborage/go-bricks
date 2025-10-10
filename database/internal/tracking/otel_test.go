@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -23,9 +22,9 @@ import (
 )
 
 const (
-	attrKeyError   = "error"
-	dbSelectMetric = "db.select"
-	dbInsertMetric = "db.insert"
+	dbSelectMetric     = "db.select"
+	dbInsertMetric     = "db.insert"
+	oracleDBVendorName = "oracle.db" // OTel spec requires .db suffix
 )
 
 // setupTestTracerProvider creates an in-memory tracer provider for testing
@@ -107,10 +106,11 @@ func TestCreateDBSpanSpanAttributes(t *testing.T) {
 		attrMap[string(attr.Key)] = attr.Value.AsInterface()
 	}
 
-	// Verify standard database attributes
-	assert.Equal(t, "postgresql", attrMap["db.system"], "Should have db.system attribute")
+	// Verify standard database attributes per OTel v1.32.0
+	assert.Equal(t, "postgresql", attrMap["db.system.name"], "Should have db.system.name attribute per OTel spec")
 	assert.Equal(t, query, attrMap["db.query.text"], "Should have db.query.text attribute")
 	assert.Equal(t, "insert", attrMap["db.operation.name"], "Should have db.operation.name attribute")
+	assert.Equal(t, "users", attrMap["db.collection.name"], "Should have db.collection.name attribute (table name)")
 }
 
 func TestCreateDBSpanErrorRecording(t *testing.T) {
@@ -213,8 +213,9 @@ func TestNormalizeDBVendor(t *testing.T) {
 		{"postgresql", "postgresql"},
 		{"Postgres", "postgresql"},
 		{"POSTGRESQL", "postgresql"},
-		{"oracle", "oracle"},
-		{"Oracle", "oracle"},
+		{"oracle", oracleDBVendorName},           // OTel spec requires .db suffix
+		{"Oracle", oracleDBVendorName},           // OTel spec requires .db suffix
+		{oracleDBVendorName, oracleDBVendorName}, // Already normalized
 		{"mongodb", "mongodb"},
 		{"mongo", "mongodb"},
 		{"MongoDB", "mongodb"},
@@ -286,7 +287,7 @@ func TestCreateDBSpanDifferentVendors(t *testing.T) {
 	}{
 		{"postgresql", "postgresql"},
 		{"postgres", "postgresql"},
-		{"oracle", "oracle"},
+		{"oracle", oracleDBVendorName}, // OTel spec requires .db suffix
 		{"mongodb", "mongodb"},
 		{"mongo", "mongodb"},
 	}
@@ -312,17 +313,17 @@ func TestCreateDBSpanDifferentVendors(t *testing.T) {
 			spans := exporter.GetSpans()
 			require.Len(t, spans, 1)
 
-			// Find db.system attribute
+			// Find db.system.name attribute (per OTel spec v1.32.0)
 			attrs := spans[0].Attributes
 			var systemAttr string
 			for _, attr := range attrs {
-				if string(attr.Key) == "db.system" {
+				if string(attr.Key) == "db.system.name" {
 					systemAttr = attr.Value.AsString()
 				}
 			}
 
 			assert.Equal(t, v.expectedSystem, systemAttr,
-				"Vendor %s should normalize to %s", v.vendor, v.expectedSystem)
+				"Vendor %s should normalize to %s in db.system.name attribute", v.vendor, v.expectedSystem)
 		})
 	}
 }
@@ -396,7 +397,6 @@ func setupTestObservabilityProviders(t *testing.T) (
 	// Reset meter initialization to pick up test provider
 	meterOnce = sync.Once{}
 	dbMeter = nil
-	dbCallsCounter = nil
 	dbDurationHistogram = nil
 
 	// Return cleanup function
@@ -413,7 +413,6 @@ func setupTestObservabilityProviders(t *testing.T) (
 		// Reset state for other tests
 		meterOnce = sync.Once{}
 		dbMeter = nil
-		dbCallsCounter = nil
 		dbDurationHistogram = nil
 	}
 
@@ -444,7 +443,8 @@ func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {
 
 	// Verify metrics were recorded
 	rm := meterProvider.Collect(t)
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	// Calls counter removed per OTel spec - only duration histogram remains
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }
 
@@ -473,29 +473,14 @@ func TestTrackDBOperationWithError(t *testing.T) {
 	assert.Equal(t, dbInsertMetric, spans[0].Name)
 	assert.Equal(t, codes.Error, spans[0].Status.Code, "Span should have error status")
 
-	// Verify metrics were recorded with error=true
+	// Verify metrics were recorded
 	rm := meterProvider.Collect(t)
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	// Calls counter removed per OTel spec - only duration histogram remains
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 
-	// Verify error attribute on counter
-	var foundErrorTrue bool
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name == metricDBCalls {
-				sumData, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sumData.DataPoints {
-					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == attrKeyError && attr.Value.AsBool() {
-							foundErrorTrue = true
-						}
-					}
-				}
-			}
-		}
-	}
-	assert.True(t, foundErrorTrue, "Should have metric with error=true attribute")
+	// Note: Error tracking moved to spans only per OTel spec v1.32.0
+	// Metrics focus on performance (duration), errors are tracked in span status
+	// The test above already verified span status is Error
 }
 
 func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
@@ -522,26 +507,11 @@ func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
 
 	// Verify metrics were recorded with error=false
 	rm := meterProvider.Collect(t)
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	// Calls counter removed per OTel spec - only duration histogram remains
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
 
-	// Verify error attribute is false
-	var foundErrorFalse bool
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name == metricDBCalls {
-				sumData, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sumData.DataPoints {
-					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == attrKeyError && !attr.Value.AsBool() {
-							foundErrorFalse = true
-						}
-					}
-				}
-			}
-		}
-	}
-	assert.True(t, foundErrorFalse, "sql.ErrNoRows should have error=false attribute")
+	// Note: Error tracking moved to spans only per OTel spec v1.32.0
+	// Metrics focus on performance (duration), errors are in span status
 }
 
 func TestTrackDBOperationMultipleOperations(t *testing.T) {
@@ -574,6 +544,7 @@ func TestTrackDBOperationMultipleOperations(t *testing.T) {
 
 	// Verify metrics were recorded for all operations
 	rm := meterProvider.Collect(t)
-	obtest.AssertMetricExists(t, rm, metricDBCalls)
+	// Calls counter removed per OTel spec - only duration histogram remains
+	obtest.AssertMetricExists(t, rm, metricDBDuration)
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 }
