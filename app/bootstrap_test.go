@@ -11,11 +11,62 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
 	testConfigFile = "config.yaml"
 )
+
+type testObservabilityProvider struct {
+	loggerProvider *sdklog.LoggerProvider
+	disableStdout  bool
+}
+
+func (m *testObservabilityProvider) TracerProvider() trace.TracerProvider {
+	return tracenoop.NewTracerProvider()
+}
+
+func (m *testObservabilityProvider) MeterProvider() metric.MeterProvider {
+	return metricnoop.NewMeterProvider()
+}
+
+func (m *testObservabilityProvider) LoggerProvider() *sdklog.LoggerProvider {
+	return m.loggerProvider
+}
+
+func (m *testObservabilityProvider) ShouldDisableStdout() bool {
+	return m.disableStdout
+}
+
+func (m *testObservabilityProvider) Shutdown(context.Context) error {
+	return nil
+}
+
+func (m *testObservabilityProvider) ForceFlush(context.Context) error {
+	return nil
+}
+
+func TestEnhanceLoggerWithOTelReplacesBootstrapLogger(t *testing.T) {
+	bootstrap := &appBootstrap{
+		log: logger.New("info", false),
+	}
+	original := bootstrap.log
+
+	provider := &testObservabilityProvider{
+		loggerProvider: sdklog.NewLoggerProvider(),
+	}
+
+	enhanced := bootstrap.enhanceLoggerWithOTel(provider)
+
+	assert.NotNil(t, enhanced)
+	assert.Same(t, enhanced, bootstrap.log)
+	assert.NotSame(t, original, enhanced)
+}
 
 // clearTestEnvironmentVariables clears environment variables that could interfere with config loading.
 // This is necessary because environment variables have the highest priority in the config loader.

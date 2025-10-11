@@ -58,9 +58,8 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 	obsProvider := b.initializeObservability()
 
 	// Enhance logger with OTLP export if enabled
-	// This creates a new logger instance that exports to both stdout and OTLP
-	// (or OTLP-only if DisableStdout is configured). The original bootstrap logger
-	// remains unchanged to preserve initialization logs.
+	// This upgrades the bootstrap logger so all subsequent components share a single
+	// stdout + OTLP (or OTLP-only) instance.
 	enhancedLogger := b.enhanceLoggerWithOTel(obsProvider)
 
 	// Create ModuleDeps using the enhanced logger and observability
@@ -188,6 +187,9 @@ func (b *appBootstrap) enhanceLoggerWithOTel(provider observability.Provider) lo
 	// Enhance the logger with OTLP export
 	// This will panic if the logger is in pretty mode (fail-fast configuration validation)
 	enhancedLogger := zerologger.WithOTelProvider(provider)
+
+	// Replace bootstrap logger so subsequent components reuse the enhanced instance
+	b.log = enhancedLogger
 
 	b.log.Info().
 		Str("mode", getLogOutputMode(provider.ShouldDisableStdout())).
