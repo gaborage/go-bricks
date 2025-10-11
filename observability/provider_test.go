@@ -835,20 +835,20 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 
 func TestNewProviderCleansUpOnMetricsInitFailure(t *testing.T) {
 	var recordingTraceExporter *recordingSpanExporter
-	prevTraceWrapper := traceExporterWrapper
-	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+	prevTraceWrapper := getTraceExporterWrapper()
+	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
 		recordingTraceExporter = &recordingSpanExporter{
 			SpanExporter: exporter,
 		}
 		return recordingTraceExporter
-	}
+	})
 	metricsInitErr := errors.New("metrics init hook failure")
 	prevMetricHook := metricInitHook
 	metricInitHook = func() error {
 		return metricsInitErr
 	}
 	t.Cleanup(func() {
-		traceExporterWrapper = prevTraceWrapper
+		setTraceExporterWrapper(prevTraceWrapper)
 		metricInitHook = prevMetricHook
 	})
 
@@ -888,29 +888,29 @@ func TestNewProviderCleansUpOnMetricsInitFailure(t *testing.T) {
 
 func TestNewProviderCleansUpOnLogsInitFailure(t *testing.T) {
 	var recordingTraceExporter *recordingSpanExporter
-	prevTraceWrapper := traceExporterWrapper
-	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+	prevTraceWrapper := getTraceExporterWrapper()
+	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
 		recordingTraceExporter = &recordingSpanExporter{
 			SpanExporter: exporter,
 		}
 		return recordingTraceExporter
-	}
+	})
 	var metricExporterRecorder *recordingMetricExporter
-	prevMetricWrapper := metricExporterWrapper
-	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter {
+	prevMetricWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(exporter sdkmetric.Exporter) sdkmetric.Exporter {
 		metricExporterRecorder = &recordingMetricExporter{
 			Exporter: exporter,
 		}
 		return metricExporterRecorder
-	}
+	})
 	logsInitErr := errors.New("logs init hook failure")
 	prevLogHook := logInitHook
 	logInitHook = func() error {
 		return logsInitErr
 	}
 	t.Cleanup(func() {
-		traceExporterWrapper = prevTraceWrapper
-		metricExporterWrapper = prevMetricWrapper
+		setTraceExporterWrapper(prevTraceWrapper)
+		setMetricExporterWrapper(prevMetricWrapper)
 		logInitHook = prevLogHook
 	})
 
@@ -955,15 +955,15 @@ func TestNewProviderCleansUpOnLogsInitFailure(t *testing.T) {
 
 func TestNewProviderNoCleanupOnSuccess(t *testing.T) {
 	var recordingTraceExporter *recordingSpanExporter
-	prevTraceWrapper := traceExporterWrapper
-	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+	prevTraceWrapper := getTraceExporterWrapper()
+	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
 		recordingTraceExporter = &recordingSpanExporter{
 			SpanExporter: exporter,
 		}
 		return recordingTraceExporter
-	}
+	})
 	t.Cleanup(func() {
-		traceExporterWrapper = prevTraceWrapper
+		setTraceExporterWrapper(prevTraceWrapper)
 	})
 
 	// Test that cleanup is NOT called when initialization succeeds

@@ -69,7 +69,7 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 			debugLogger.Printf("Failed to create stdout log exporter: %v", err)
 			return nil, err
 		}
-		return logExporterWrapper(exporter), nil
+		return getLogExporterWrapper()(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -83,13 +83,13 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 		if err != nil {
 			return nil, err
 		}
-		return logExporterWrapper(exporter), nil
+		return getLogExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
 		exporter, err := p.createOTLPGRPCLogExporter()
 		if err != nil {
 			return nil, err
 		}
-		return logExporterWrapper(exporter), nil
+		return getLogExporterWrapper()(exporter), nil
 	default:
 		debugLogger.Printf("Invalid log protocol: %s", protocol)
 		return nil, fmt.Errorf("log protocol '%s': %w", protocol, ErrInvalidProtocol)

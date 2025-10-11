@@ -44,7 +44,7 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "IP rate limit exceeded",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},
@@ -53,11 +53,20 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "Too many requests from this IP",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},
 	}
 
 	return middleware.RateLimiterWithConfig(config)
+}
+
+// safeGetRequestID safely extracts request ID from response or falls back to request header.
+// SAFETY: Response may be nil after timeout or in edge cases, so we check before accessing.
+func safeGetRequestID(c echo.Context) string {
+	if resp := c.Response(); resp != nil {
+		return resp.Header().Get(echo.HeaderXRequestID)
+	}
+	return c.Request().Header.Get(echo.HeaderXRequestID)
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // TestTimeoutHandling tests that the enhanced handler properly detects and handles timeouts
@@ -216,6 +218,139 @@ func TestTimeoutDuringValidation(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
+// TestTimeoutWithLoggerMiddleware tests the specific scenario that caused production panics:
+// timeout + logger middleware attempting to log response status after deadline exceeded.
+// This test ensures the custom Timeout middleware prevents response invalidation.
+func TestTimeoutWithLoggerMiddleware(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Timeout: config.TimeoutConfig{
+				Middleware: 50 * time.Millisecond,
+			},
+		},
+		App: config.AppConfig{
+			Env: config.EnvDevelopment,
+		},
+	}
+
+	// Set up custom error handler
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, cfg)
+	}
+
+	// Apply timeout middleware
+	e.Use(Timeout(cfg.Server.Timeout.Middleware))
+
+	// Apply logger middleware (this is where the panic occurred in production)
+	// Use a thread-safe no-op logger for concurrency tests
+	log := &noopLogger{}
+	e.Use(LoggerWithConfig(log, LoggerConfig{
+		HealthPath:           "/health",
+		ReadyPath:            "/ready",
+		SlowRequestThreshold: 1 * time.Second,
+	}))
+
+	// Slow handler that exceeds timeout and respects context cancellation
+	e.GET("/slow", func(c echo.Context) error {
+		// Simulate slow operation that checks context
+		select {
+		case <-time.After(100 * time.Millisecond): // Exceeds 50ms timeout
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		case <-c.Request().Context().Done():
+			// Context cancelled - return the error to trigger timeout handling
+			return c.Request().Context().Err()
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/slow", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	// Should not panic, should return 503 Service Unavailable
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "Expected 503 for timeout")
+	assert.Contains(t, rec.Body.String(), "timed out", "Response should mention timeout")
+
+	// Verify the response is a properly formatted API error
+	var response map[string]any
+	err := json.Unmarshal(rec.Body.Bytes(), &response)
+	assert.NoError(t, err, "Response should be valid JSON")
+	assert.NotNil(t, response["error"], "Response should have error field")
+	assert.NotNil(t, response["meta"], "Response should have meta field")
+}
+
+// TestTimeoutWithLoggerHighConcurrency simulates the production load test scenario
+// with multiple concurrent requests timing out to ensure no panics occur.
+func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Timeout: config.TimeoutConfig{
+				Middleware: 20 * time.Millisecond,
+			},
+		},
+		App: config.AppConfig{
+			Env: config.EnvDevelopment,
+		},
+	}
+
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, cfg)
+	}
+
+	e.Use(Timeout(cfg.Server.Timeout.Middleware))
+	log := &noopLogger{}
+	e.Use(LoggerWithConfig(log, LoggerConfig{
+		HealthPath:           "/health",
+		ReadyPath:            "/ready",
+		SlowRequestThreshold: 1 * time.Second,
+	}))
+
+	e.GET("/endpoint", func(c echo.Context) error {
+		// Simulate slow operation that checks context
+		select {
+		case <-time.After(50 * time.Millisecond): // Always times out
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		case <-c.Request().Context().Done():
+			return c.Request().Context().Err()
+		}
+	})
+
+	// Simulate 50 concurrent requests (scaled down from 200 VUs for test speed)
+	concurrency := 50
+	done := make(chan bool, concurrency)
+	panicOccurred := false
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Panic occurred: %v", r)
+					panicOccurred = true
+				}
+				done <- true
+			}()
+
+			req := httptest.NewRequest(http.MethodGet, "/endpoint", http.NoBody)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+
+			// All requests should timeout gracefully
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("Expected 503, got %d", rec.Code)
+			}
+		}()
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < concurrency; i++ {
+		<-done
+	}
+
+	assert.False(t, panicOccurred, "No panics should occur during concurrent timeouts")
+}
+
 // EmptyRequest is a request type with no fields for simple handlers
 type EmptyRequest struct{}
 
@@ -223,3 +358,33 @@ type EmptyRequest struct{}
 type Response struct {
 	Message string `json:"message"`
 }
+
+// noopLogger is a thread-safe no-op logger for concurrency tests
+type noopLogger struct{}
+
+type noopLogEvent struct{}
+
+func (n *noopLogger) Info() logger.LogEvent                     { return &noopLogEvent{} }
+func (n *noopLogger) Error() logger.LogEvent                    { return &noopLogEvent{} }
+func (n *noopLogger) Debug() logger.LogEvent                    { return &noopLogEvent{} }
+func (n *noopLogger) Warn() logger.LogEvent                     { return &noopLogEvent{} }
+func (n *noopLogger) Fatal() logger.LogEvent                    { return &noopLogEvent{} }
+func (n *noopLogger) WithContext(_ any) logger.Logger           { return n }
+func (n *noopLogger) WithFields(_ map[string]any) logger.Logger { return n }
+func (e *noopLogEvent) Msg(_ string) {
+	// No-op
+}
+func (e *noopLogEvent) Msgf(_ string, _ ...any) {
+	// No-op
+}
+func (e *noopLogEvent) Err(_ error) logger.LogEvent                   { return e }
+func (e *noopLogEvent) Str(_, _ string) logger.LogEvent               { return e }
+func (e *noopLogEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *noopLogEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *noopLogEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *noopLogEvent) Float64(_ string, _ float64) logger.LogEvent   { return e }
+func (e *noopLogEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *noopLogEvent) Any(_ string, _ any) logger.LogEvent           { return e }
+func (e *noopLogEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *noopLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *noopLogEvent) Interface(_ string, _ any) logger.LogEvent     { return e }

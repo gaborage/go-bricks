@@ -69,7 +69,12 @@ func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
 
 			// Calculate request latency (thread-safe read)
 			latency := time.Since(reqCtx.getStartTime())
-			status := c.Response().Status
+
+			// SAFETY: Response may be nil in edge cases (panics, future refactoring)
+			status := 0
+			if resp := c.Response(); resp != nil {
+				status = resp.Status
+			}
 
 			// Update peak severity based on final HTTP status
 			updateSeverityFromStatus(reqCtx, status, err)
@@ -149,7 +154,16 @@ func logActionSummary(
 	// Get request details
 	method := c.Request().Method
 	uri := c.Request().URL.Path
-	requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+
+	// SAFETY: Response may be nil after timeout, safely extract request ID
+	requestID := ""
+	if resp := c.Response(); resp != nil {
+		requestID = resp.Header().Get(echo.HeaderXRequestID)
+	} else {
+		// Fallback to request header if response is unavailable
+		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+	}
+
 	route := c.Path() // Echo route pattern (e.g., /api/users/:id)
 
 	// Emit action log with OpenTelemetry HTTP semantic conventions

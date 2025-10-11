@@ -66,7 +66,7 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 			debugLogger.Printf("Failed to create stdout metric exporter: %v", err)
 			return nil, err
 		}
-		return metricExporterWrapper(exporter), nil
+		return getMetricExporterWrapper()(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -81,13 +81,13 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 		if err != nil {
 			return nil, err
 		}
-		return metricExporterWrapper(exporter), nil
+		return getMetricExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
 		exporter, err := p.createOTLPGRPCMetricExporter(useInsecure, headers)
 		if err != nil {
 			return nil, err
 		}
-		return metricExporterWrapper(exporter), nil
+		return getMetricExporterWrapper()(exporter), nil
 	default:
 		debugLogger.Printf("Invalid metrics protocol: %s", protocol)
 		return nil, fmt.Errorf("metrics protocol '%s': %w", protocol, ErrInvalidProtocol)

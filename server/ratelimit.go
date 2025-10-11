@@ -47,7 +47,7 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "Rate limit exceeded",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},
@@ -56,7 +56,7 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "Too many requests",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},

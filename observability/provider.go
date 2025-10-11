@@ -34,17 +34,45 @@ import (
 var debugLogger = initDebugLogger()
 
 // Exporter wrappers enable tests to intercept exporter construction without affecting production code.
+// Access is protected by wrapperMu to prevent data races when tests modify wrappers concurrently.
 var (
-	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
-		return exporter
-	}
-	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter {
-		return exporter
-	}
-	logExporterWrapper = func(exporter sdklog.Exporter) sdklog.Exporter {
-		return exporter
-	}
+	wrapperMu             sync.RWMutex
+	traceExporterWrapper  = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter { return exporter }
+	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter { return exporter }
+	logExporterWrapper    = func(exporter sdklog.Exporter) sdklog.Exporter { return exporter }
 )
+
+// Thread-safe getters for exporter wrappers
+func getTraceExporterWrapper() func(sdktrace.SpanExporter) sdktrace.SpanExporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return traceExporterWrapper
+}
+
+func getMetricExporterWrapper() func(sdkmetric.Exporter) sdkmetric.Exporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return metricExporterWrapper
+}
+
+func getLogExporterWrapper() func(sdklog.Exporter) sdklog.Exporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return logExporterWrapper
+}
+
+// Thread-safe setters for exporter wrappers (test use only)
+func setTraceExporterWrapper(wrapper func(sdktrace.SpanExporter) sdktrace.SpanExporter) {
+	wrapperMu.Lock()
+	defer wrapperMu.Unlock()
+	traceExporterWrapper = wrapper
+}
+
+func setMetricExporterWrapper(wrapper func(sdkmetric.Exporter) sdkmetric.Exporter) {
+	wrapperMu.Lock()
+	defer wrapperMu.Unlock()
+	metricExporterWrapper = wrapper
+}
 
 // initDebugLogger initializes the debug logger based on environment variables.
 // Returns a logger that writes to stderr if debugging is enabled, or a no-op logger otherwise.
@@ -316,7 +344,7 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 			debugLogger.Printf("Failed to create stdout trace exporter: %v", err)
 			return nil, err
 		}
-		return traceExporterWrapper(exporter), nil
+		return getTraceExporterWrapper()(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -330,13 +358,13 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 		if err != nil {
 			return nil, err
 		}
-		return traceExporterWrapper(exporter), nil
+		return getTraceExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
 		exporter, err := p.createOTLPGRPCExporter()
 		if err != nil {
 			return nil, err
 		}
-		return traceExporterWrapper(exporter), nil
+		return getTraceExporterWrapper()(exporter), nil
 	default:
 		debugLogger.Printf("Invalid trace protocol: %s", protocol)
 		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
