@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -88,7 +89,7 @@ func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
 			// - Trace logs already emitted during request lifecycle (if explicit WARN+ logs occurred)
 			shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
 			if shouldLogActionSummary {
-				logActionSummary(c, log, cfg, reqCtx, latency, status, err)
+				logActionSummary(c, log, cfg, latency, status, err)
 			}
 
 			return err
@@ -112,7 +113,6 @@ func logActionSummary(
 	c echo.Context,
 	log logger.Logger,
 	cfg LoggerConfig,
-	_ *requestLogContext,
 	latency time.Duration,
 	status int,
 	err error,
@@ -241,5 +241,5 @@ func createLogEvent(log logger.Logger, level string) logger.LogEvent {
 // createActionMessage generates a human-readable message for action logs.
 // Example: "GET /api/users completed in 123ms with status 200"
 func createActionMessage(method, path string, latency time.Duration, status int) string {
-	return method + " " + path + " completed in " + latency.String() + " with status " + string(rune('0'+status/100)) + "xx"
+	return method + " " + path + " completed in " + latency.String() + " with status " + strconv.Itoa(status/100) + "xx"
 }

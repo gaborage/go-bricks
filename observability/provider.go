@@ -42,6 +42,10 @@ var (
 	logExporterWrapper    = func(exporter sdklog.Exporter) sdklog.Exporter { return exporter }
 )
 
+const (
+	cleanupTimeout = 5 * time.Second
+)
+
 // Thread-safe getters for exporter wrappers
 func getTraceExporterWrapper() func(sdktrace.SpanExporter) sdktrace.SpanExporter {
 	wrapperMu.RLock()
@@ -536,7 +540,7 @@ func (p *provider) cleanupPartialInit() {
 	debugLogger.Println("Cleaning up partially initialized providers due to init error")
 
 	// Use background context with timeout for cleanup (don't inherit cancelled context)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 
 	if err := p.Shutdown(ctx); err != nil {

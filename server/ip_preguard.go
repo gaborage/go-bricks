@@ -61,12 +61,3 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 
 	return middleware.RateLimiterWithConfig(config)
 }
-
-// safeGetRequestID safely extracts request ID from response or falls back to request header.
-// SAFETY: Response may be nil after timeout or in edge cases, so we check before accessing.
-func safeGetRequestID(c echo.Context) string {
-	if resp := c.Response(); resp != nil {
-		return resp.Header().Get(echo.HeaderXRequestID)
-	}
-	return c.Request().Header.Get(echo.HeaderXRequestID)
-}
