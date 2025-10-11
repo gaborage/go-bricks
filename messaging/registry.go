@@ -443,8 +443,9 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	// Extract trace context using centralized trace package
 	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, accessor)
+	contextLog := log.WithContext(msgCtx)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
-	tlog := log.WithFields(map[string]any{"trace_id": traceID})
+	tlog := contextLog.WithFields(map[string]any{"correlation_id": traceID})
 
 	tlog.Debug().
 		Str("message_id", delivery.MessageId).

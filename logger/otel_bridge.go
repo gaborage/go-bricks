@@ -121,6 +121,19 @@ func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
 		delete(entry, "trace_flags")
 	}
 
+	if (!traceIDOK || !spanIDOK) && entry != nil {
+		if parsedTraceID, parsedSpanID, parsedFlags, ok := parseTraceParent(entry["traceparent"]); ok {
+			traceID = parsedTraceID
+			spanID = parsedSpanID
+			traceIDOK = true
+			spanIDOK = true
+			if !flagsOK {
+				flags = parsedFlags
+				flagsOK = true
+			}
+		}
+	}
+
 	if !traceIDOK || !spanIDOK {
 		return trace.SpanContext{}, false
 	}
@@ -185,6 +198,35 @@ func parseTraceFlags(value any) (trace.TraceFlags, bool) {
 		}
 	}
 	return 0, false
+}
+
+func parseTraceParent(value any) (trace.TraceID, trace.SpanID, trace.TraceFlags, bool) {
+	str, ok := value.(string)
+	if !ok || str == "" {
+		return trace.TraceID{}, trace.SpanID{}, 0, false
+	}
+
+	parts := strings.Split(str, "-")
+	if len(parts) != 4 {
+		return trace.TraceID{}, trace.SpanID{}, 0, false
+	}
+
+	traceID, err := trace.TraceIDFromHex(parts[1])
+	if err != nil {
+		return trace.TraceID{}, trace.SpanID{}, 0, false
+	}
+
+	spanID, err := trace.SpanIDFromHex(parts[2])
+	if err != nil {
+		return trace.TraceID{}, trace.SpanID{}, 0, false
+	}
+
+	flagsValue, err := strconv.ParseUint(parts[3], 16, 8)
+	if err != nil {
+		return trace.TraceID{}, trace.SpanID{}, 0, false
+	}
+
+	return traceID, spanID, trace.TraceFlags(uint8(flagsValue)), true
 }
 
 // mapZerologLevelToOTel maps zerolog log levels to OpenTelemetry severity levels.

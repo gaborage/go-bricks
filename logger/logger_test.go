@@ -11,11 +11,14 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	originalLoggerErrorMsg = "should return original logger"
 	maskedValue            = "[MASKED]"
+	testMessage            = "test message"
 )
 
 func TestNew(t *testing.T) {
@@ -498,7 +501,7 @@ func TestSensitiveDataFilterRun(_ *testing.T) {
 	filter := NewSensitiveDataFilter(nil)
 
 	// The Run method is a no-op placeholder, but we need to call it for coverage
-	filter.Run(nil, zerolog.InfoLevel, "test message")
+	filter.Run(nil, zerolog.InfoLevel, testMessage)
 
 	// No assertions needed since it's a placeholder method
 	// But this covers the 0% coverage method
@@ -606,7 +609,7 @@ func TestSensitiveDataFilterRunMethodCoverage(t *testing.T) {
 	filter := NewSensitiveDataFilter(DefaultFilterConfig())
 
 	// Test Run method directly (currently 0% coverage)
-	filter.Run(nil, zerolog.InfoLevel, "test message")
+	filter.Run(nil, zerolog.InfoLevel, testMessage)
 
 	// The Run method is a placeholder implementation, so just ensuring it doesn't panic
 	assert.NotNil(t, filter)
@@ -870,4 +873,222 @@ func TestExtractFieldNameCoverage(t *testing.T) {
 		_, exists = resultMap["DashName"]
 		assert.False(t, exists)
 	})
+}
+
+// TestWithOTelProvider_PrettyModeConflict tests that enabling OTLP export
+// with pretty mode triggers a fail-fast panic with a clear error message.
+func TestWithOTelProviderPrettyModeConflict(t *testing.T) {
+	logger := New("info", true) // pretty=true
+
+	provider := sdklog.NewLoggerProvider()
+	defer provider.Shutdown(context.Background())
+
+	mockProvider := &mockOTelProvider{
+		loggerProvider: provider,
+		disableStdout:  false,
+	}
+
+	// Should panic with clear error message
+	assert.PanicsWithValue(t,
+		"OTLP log export requires JSON mode (pretty=false). "+
+			"Configuration conflict detected: logger.pretty=true AND observability.logs.enabled=true. "+
+			"Fix: Set logger.pretty=false in config or disable observability.logs.enabled",
+		func() {
+			logger.WithOTelProvider(mockProvider)
+		})
+}
+
+// TestWithOTelProvider_NilProvider tests graceful handling when provider is nil
+func TestWithOTelProviderNilProvider(t *testing.T) {
+	logger := New("info", false)
+
+	// Should return original logger without modification
+	result := logger.WithOTelProvider(nil)
+	assert.Equal(t, logger, result, "Should return original logger for nil provider")
+}
+
+// TestWithOTelProvider_NilLoggerProvider tests when provider exists but LoggerProvider is nil
+func TestWithOTelProviderNilLoggerProvider(t *testing.T) {
+	logger := New("info", false)
+
+	provider := &mockOTelProvider{
+		loggerProvider: nil,
+		disableStdout:  false,
+	}
+
+	// Should return original logger
+	result := logger.WithOTelProvider(provider)
+	assert.Equal(t, logger, result, "Should return original logger when LoggerProvider is nil")
+}
+
+// TestWithOTelProvider_PreservesContext tests that WithOTelProvider preserves
+// existing logger context and fields (using Output() instead of zerolog.New())
+func TestWithOTelProviderPreservesContext(t *testing.T) {
+	// Create logger with initial context
+	logger := New("info", false).WithFields(map[string]any{
+		"service": "test-service",
+		"version": "1.0.0",
+	})
+
+	provider := sdklog.NewLoggerProvider()
+	defer provider.Shutdown(context.Background())
+
+	mockProvider := &mockOTelProvider{
+		loggerProvider: provider,
+		disableStdout:  true, // OTLP-only for simpler testing
+	}
+
+	// Enhance with OTLP (need to cast to *ZeroLogger since it's not on Logger interface)
+	zeroLogger := logger.(*ZeroLogger)
+	enhanced := zeroLogger.WithOTelProvider(mockProvider)
+
+	// We can't easily capture the bridge output, but we can verify the logger still works
+	// and that the returned logger is different from the original
+	assert.NotEqual(t, logger, enhanced, "Should return new logger instance")
+	assert.False(t, enhanced.pretty, "Enhanced logger should have pretty=false")
+
+	// Verify that calling methods on enhanced logger doesn't panic
+	assert.NotPanics(t, func() {
+		enhanced.Info().Msg(testMessage)
+	})
+}
+
+// TestWithOTelProvider_DisableStdoutModes tests both output modes
+func TestWithOTelProviderDisableStdoutModes(t *testing.T) {
+	tests := []struct {
+		name          string
+		disableStdout bool
+		description   string
+	}{
+		{
+			name:          "stdout_and_otlp",
+			disableStdout: false,
+			description:   "Both stdout and OTLP export (dev mode)",
+		},
+		{
+			name:          "otlp_only",
+			disableStdout: true,
+			description:   "OTLP-only export (production mode)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := New("info", false)
+			provider := sdklog.NewLoggerProvider()
+			defer provider.Shutdown(context.Background())
+
+			mockProvider := &mockOTelProvider{
+				loggerProvider: provider,
+				disableStdout:  tt.disableStdout,
+			}
+
+			enhanced := logger.WithOTelProvider(mockProvider)
+
+			// Verify new logger instance was created
+			assert.NotEqual(t, logger, enhanced)
+			assert.False(t, enhanced.pretty)
+
+			// Verify logger is functional
+			assert.NotPanics(t, func() {
+				enhanced.Info().Msg("Test")
+			})
+		})
+	}
+}
+
+// TestWithContext_TraceCorrelation tests automatic injection of trace_id and span_id
+func TestWithContextTraceCorrelation(t *testing.T) {
+	logger := New("info", false)
+
+	// Create context with mock span
+	traceIDHex := "0123456789abcdef0123456789abcdef"
+	spanIDHex := "0123456789abcdef"
+	ctx := createContextWithSpan(t, traceIDHex, spanIDHex)
+
+	// Get logger with context
+	contextLogger := logger.WithContext(ctx)
+
+	// Capture output
+	var buf bytes.Buffer
+	zl := contextLogger.(*ZeroLogger).zlog
+	newZLog := zl.Output(&buf)
+	testLogger := &ZeroLogger{zlog: &newZLog, filter: contextLogger.(*ZeroLogger).filter, pretty: false}
+
+	// Log a message
+	testLogger.Info().Msg(testMessage)
+
+	// Verify trace_id and span_id are in output
+	output := buf.String()
+	assert.Contains(t, output, traceIDHex, "Should include trace_id")
+	assert.Contains(t, output, spanIDHex, "Should include span_id")
+	assert.Contains(t, output, testMessage, "Should include message")
+}
+
+// TestWithContext_NoSpan tests behavior when context has no span
+func TestWithContextNoSpan(t *testing.T) {
+	logger := New("info", false)
+
+	// Context without span
+	ctx := context.Background()
+
+	// Should return original logger
+	result := logger.WithContext(ctx)
+	assert.Equal(t, logger, result, "Should return original logger when no span in context")
+}
+
+// TestWithContext_PreservesPrettyFlag tests that pretty flag is preserved
+func TestWithContextPreservesPrettyFlag(t *testing.T) {
+	tests := []struct {
+		name   string
+		pretty bool
+	}{
+		{"pretty_true", true},
+		{"pretty_false", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := New("info", tt.pretty)
+			ctx := context.Background()
+
+			result := logger.WithContext(ctx)
+			resultLogger := result.(*ZeroLogger)
+
+			assert.Equal(t, tt.pretty, resultLogger.pretty, "Pretty flag should be preserved")
+		})
+	}
+}
+
+// mockOTelProvider implements OTelProvider interface for testing
+type mockOTelProvider struct {
+	loggerProvider *sdklog.LoggerProvider
+	disableStdout  bool
+}
+
+func (m *mockOTelProvider) LoggerProvider() *sdklog.LoggerProvider {
+	return m.loggerProvider
+}
+
+func (m *mockOTelProvider) ShouldDisableStdout() bool {
+	return m.disableStdout
+}
+
+// Helper function to create context with mock span for trace correlation testing
+func createContextWithSpan(t *testing.T, traceIDHex, spanIDHex string) context.Context {
+	t.Helper()
+
+	traceID, err := trace.TraceIDFromHex(traceIDHex)
+	require.NoError(t, err)
+
+	spanID, err := trace.SpanIDFromHex(spanIDHex)
+	require.NoError(t, err)
+
+	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.TraceFlags(trace.FlagsSampled),
+	})
+
+	return trace.ContextWithSpanContext(context.Background(), spanCtx)
 }

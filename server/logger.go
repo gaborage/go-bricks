@@ -30,14 +30,17 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 				return nil
 			}
 
-			event := log.Info()
+			ctx := c.Request().Context()
+			contextLog := log.WithContext(ctx)
+
+			event := contextLog.Info()
 			resultCode := "OK"
 
 			if v.Status >= 500 {
-				event = log.Error()
+				event = contextLog.Error()
 				resultCode = "ERROR"
 			} else if v.Status >= 400 {
-				event = log.Warn()
+				event = contextLog.Warn()
 				resultCode = "WARN"
 			}
 
@@ -47,7 +50,6 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 			}
 
 			// Tenant context
-			ctx := c.Request().Context()
 			if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
 				event = event.Str("tenant", tenantID)
 			}
@@ -69,6 +71,7 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 
 			event.
 				Str("request_id", v.RequestID).
+				Str("correlation_id", traceID).
 				Str("method", v.Method).
 				Str("uri", v.URI).
 				Str("result_code", resultCode).
@@ -80,8 +83,6 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 				Int64("db_elapsed", dbElapsed).
 				Str("ip", c.RealIP()).
 				Str("user_agent", c.Request().UserAgent()).
-				// Log unified trace ID (matches response meta.traceId)
-				Str("trace_id", traceID).
 				// Also log W3C traceparent if present for distributed tracing
 				Str("traceparent", traceparent).
 				Msg("Request")

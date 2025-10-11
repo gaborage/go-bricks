@@ -56,8 +56,8 @@ func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 
-// Test that the request logger logs the same trace_id as the response meta.traceId
-func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {
+// Test that the request logger logs the same correlation_id as the response meta.traceId
+func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
 	e.Use(Logger(recLog, testHealthPath, testReadyPath))
@@ -82,9 +82,9 @@ func TestRequestLoggerUsesSameTraceIDAsResponse(t *testing.T) {
 	traceID, _ := resp.Meta["traceId"].(string)
 	require.NotEmpty(t, traceID)
 
-	// The logger should have captured the same trace_id
+	// The logger should have captured the same correlation_id
 	require.NotNil(t, recLog.last)
-	require.Equal(t, traceID, recLog.last.fields["trace_id"])
+	require.Equal(t, traceID, recLog.last.fields["correlation_id"])
 }
 
 func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
