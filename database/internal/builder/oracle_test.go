@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	countClause  = "COUNT(*)"
-	sumClause    = "SUM(amount)"
-	assertFormat = "input: %s"
+	countClause            = "COUNT(*)"
+	sumClause              = "SUM(amount)"
+	assertFormat           = "input: %s"
+	testIncompleteFunction = "COUNT("
 )
 
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
@@ -233,7 +234,7 @@ func TestOracleSQLFunctionDetection(t *testing.T) {
 		},
 		{
 			name:     "incomplete_function",
-			input:    "COUNT(",
+			input:    testIncompleteFunction,
 			expected: false,
 		},
 		{
@@ -856,7 +857,7 @@ func TestIsBalancedParentheses(t *testing.T) {
 		{"extra_opening", "COUNT((", false},
 		{"extra_closing", "COUNT())", false},
 		{"missing_opening", "COUNT)", false},
-		{"missing_closing", "COUNT(", false},
+		{"missing_closing", testIncompleteFunction, false},
 		{"wrong_order", ")COUNT(", false},
 		{"nested_unbalanced", "FUNC(OTHER()", false},
 		{"multiple_unbalanced", "FUNC()) + OTHER(", false},
@@ -1027,7 +1028,7 @@ func TestEnhancedSQLFunctionDetectionWithBalancedParentheses(t *testing.T) {
 		// Invalid unbalanced cases (now properly detected)
 		{"extra_opening_paren", "COUNT((", false},
 		{"extra_closing_paren", "COUNT())", false},
-		{"missing_closing_paren", "COUNT(", false},
+		{"missing_closing_paren", testIncompleteFunction, false},
 		{"wrong_paren_order", ")COUNT(", false},
 		{"nested_unbalanced", "UPPER(TRIM(name)", false},
 
