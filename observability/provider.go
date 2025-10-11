@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -31,6 +32,19 @@ import (
 // It only outputs when GOBRICKS_DEBUG environment variable is set to "true".
 // This prevents noisy [OBSERVABILITY] logs in production environments.
 var debugLogger = initDebugLogger()
+
+// Exporter wrappers enable tests to intercept exporter construction without affecting production code.
+var (
+	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		return exporter
+	}
+	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter {
+		return exporter
+	}
+	logExporterWrapper = func(exporter sdklog.Exporter) sdklog.Exporter {
+		return exporter
+	}
+)
 
 // initDebugLogger initializes the debug logger based on environment variables.
 // Returns a logger that writes to stderr if debugging is enabled, or a no-op logger otherwise.
@@ -115,6 +129,15 @@ func NewProvider(cfg *Config) (Provider, error) {
 		config: safeCfg, // Use the defaulted config
 	}
 
+	// Set up cleanup for partial initialization failures
+	// This ensures we don't leak goroutines/connections if later init steps fail
+	var initSuccess bool
+	defer func() {
+		if !initSuccess {
+			p.cleanupPartialInit()
+		}
+	}()
+
 	// Initialize trace provider if tracing is enabled
 	traceEnabled := isProviderEnabled(safeCfg.Trace.Enabled)
 	traceConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
@@ -142,6 +165,8 @@ func NewProvider(cfg *Config) (Provider, error) {
 	// Register global providers and propagator
 	p.registerGlobalProviders()
 
+	// Mark initialization as successful to skip cleanup
+	initSuccess = true
 	debugLogger.Println("Observability provider created successfully")
 	return p, nil
 }
@@ -284,9 +309,14 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	// Use stdout exporter for local development
 	if endpoint == EndpointStdout {
 		debugLogger.Println("Using stdout trace exporter (pretty print)")
-		return stdouttrace.New(
+		exporter, err := stdouttrace.New(
 			stdouttrace.WithPrettyPrint(),
 		)
+		if err != nil {
+			debugLogger.Printf("Failed to create stdout trace exporter: %v", err)
+			return nil, err
+		}
+		return traceExporterWrapper(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -296,9 +326,17 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPExporter()
+		exporter, err := p.createOTLPHTTPExporter()
+		if err != nil {
+			return nil, err
+		}
+		return traceExporterWrapper(exporter), nil
 	case ProtocolGRPC:
-		return p.createOTLPGRPCExporter()
+		exporter, err := p.createOTLPGRPCExporter()
+		if err != nil {
+			return nil, err
+		}
+		return traceExporterWrapper(exporter), nil
 	default:
 		debugLogger.Printf("Invalid trace protocol: %s", protocol)
 		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
@@ -460,6 +498,25 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// cleanupPartialInit safely shuts down any partially initialized providers.
+// Called when provider initialization fails mid-way to prevent resource leaks.
+// Uses a background context with timeout to ensure cleanup completes even if the
+// initialization context was cancelled.
+func (p *provider) cleanupPartialInit() {
+	debugLogger.Println("Cleaning up partially initialized providers due to init error")
+
+	// Use background context with timeout for cleanup (don't inherit cancelled context)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := p.Shutdown(ctx); err != nil {
+		// Log cleanup errors but don't fail - we're already handling an error
+		debugLogger.Printf("Cleanup errors (non-fatal): %v", err)
+	} else {
+		debugLogger.Println("Partial initialization cleanup completed successfully")
+	}
 }
 
 // formatSampleRate formats a sample rate pointer for logging.

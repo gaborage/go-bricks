@@ -2,11 +2,14 @@ package observability
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -828,4 +831,201 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestNewProviderCleansUpOnMetricsInitFailure(t *testing.T) {
+	var recordingTraceExporter *recordingSpanExporter
+	prevTraceWrapper := traceExporterWrapper
+	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		recordingTraceExporter = &recordingSpanExporter{
+			SpanExporter: exporter,
+		}
+		return recordingTraceExporter
+	}
+	metricsInitErr := errors.New("metrics init hook failure")
+	prevMetricHook := metricInitHook
+	metricInitHook = func() error {
+		return metricsInitErr
+	}
+	t.Cleanup(func() {
+		traceExporterWrapper = prevTraceWrapper
+		metricInitHook = prevMetricHook
+	})
+
+	// Test that if metrics initialization fails, the trace provider is properly cleaned up
+	// This prevents goroutine and connection leaks
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: Float64Ptr(1.0),
+			},
+		},
+		Metrics: MetricsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: EndpointStdout,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	assert.Error(t, err, "expected metrics init hook failure")
+	assert.Nil(t, provider, "provider should be nil on failure")
+	assert.ErrorIs(t, err, metricsInitErr)
+	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
+	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
+
+	// The test verifies that:
+	// 1. NewProvider returns an error (metrics init failed)
+	// 2. cleanupPartialInit() was called via defer
+	// 3. Trace provider (which was initialized) was shut down
+	// Without the cleanup, the BatchSpanProcessor goroutine would leak
+}
+
+func TestNewProviderCleansUpOnLogsInitFailure(t *testing.T) {
+	var recordingTraceExporter *recordingSpanExporter
+	prevTraceWrapper := traceExporterWrapper
+	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		recordingTraceExporter = &recordingSpanExporter{
+			SpanExporter: exporter,
+		}
+		return recordingTraceExporter
+	}
+	var metricExporterRecorder *recordingMetricExporter
+	prevMetricWrapper := metricExporterWrapper
+	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter {
+		metricExporterRecorder = &recordingMetricExporter{
+			Exporter: exporter,
+		}
+		return metricExporterRecorder
+	}
+	logsInitErr := errors.New("logs init hook failure")
+	prevLogHook := logInitHook
+	logInitHook = func() error {
+		return logsInitErr
+	}
+	t.Cleanup(func() {
+		traceExporterWrapper = prevTraceWrapper
+		metricExporterWrapper = prevMetricWrapper
+		logInitHook = prevLogHook
+	})
+
+	// Test that if logs initialization fails, both trace and metrics providers are cleaned up
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: Float64Ptr(1.0),
+			},
+		},
+		Metrics: MetricsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+		},
+		Logs: LogsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: EndpointStdout,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	assert.Error(t, err, "expected logs init hook failure")
+	assert.Nil(t, provider, "provider should be nil on failure")
+	assert.ErrorIs(t, err, logsInitErr)
+	require.NotNil(t, recordingTraceExporter, "trace exporter should be created before failure")
+	require.NotNil(t, metricExporterRecorder, "metric exporter should be created before failure")
+	assert.True(t, recordingTraceExporter.ShutdownCalled(), "trace exporter should be shutdown via cleanup")
+	assert.True(t, metricExporterRecorder.ShutdownCalled(), "metric exporter should be shutdown via cleanup")
+
+	// The test verifies that:
+	// 1. NewProvider returns an error (logs init failed)
+	// 2. cleanupPartialInit() was called via defer
+	// 3. Both trace and metrics providers (which were initialized) were shut down
+	// Without the cleanup, both BatchSpanProcessor and PeriodicReader goroutines would leak
+}
+
+func TestNewProviderNoCleanupOnSuccess(t *testing.T) {
+	var recordingTraceExporter *recordingSpanExporter
+	prevTraceWrapper := traceExporterWrapper
+	traceExporterWrapper = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		recordingTraceExporter = &recordingSpanExporter{
+			SpanExporter: exporter,
+		}
+		return recordingTraceExporter
+	}
+	t.Cleanup(func() {
+		traceExporterWrapper = prevTraceWrapper
+	})
+
+	// Test that cleanup is NOT called when initialization succeeds
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: testServiceName,
+		},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout",
+			Sample: SampleConfig{
+				Rate: Float64Ptr(1.0),
+			},
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+	require.NotNil(t, recordingTraceExporter)
+	assert.False(t, recordingTraceExporter.ShutdownCalled(), "cleanup should not run on successful init")
+
+	// Verify provider is functional (cleanup wasn't called)
+	tp := provider.TracerProvider()
+	assert.NotNil(t, tp)
+
+	tracer := tp.Tracer("test")
+	_, span := tracer.Start(context.Background(), testSpanName)
+	assert.NotNil(t, span)
+	span.End()
+
+	// Proper shutdown (not cleanup)
+	err = provider.Shutdown(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, recordingTraceExporter.ShutdownCalled(), "provider shutdown should trigger exporter shutdown")
+}
+
+type recordingSpanExporter struct {
+	sdktrace.SpanExporter
+	shutdownCalled atomic.Bool
+}
+
+func (r *recordingSpanExporter) Shutdown(ctx context.Context) error {
+	r.shutdownCalled.Store(true)
+	return r.SpanExporter.Shutdown(ctx)
+}
+
+func (r *recordingSpanExporter) ShutdownCalled() bool {
+	return r.shutdownCalled.Load()
+}
+
+type recordingMetricExporter struct {
+	sdkmetric.Exporter
+	shutdownCalled atomic.Bool
+}
+
+func (r *recordingMetricExporter) Shutdown(ctx context.Context) error {
+	r.shutdownCalled.Store(true)
+	return r.Exporter.Shutdown(ctx)
+}
+
+func (r *recordingMetricExporter) ShutdownCalled() bool {
+	return r.shutdownCalled.Load()
 }

@@ -16,6 +16,9 @@ import (
 // Re-export insecure credentials to avoid variable shadowing
 var grpcInsecureCredentials = insecure.NewCredentials
 
+// logInitHook allows tests to inject failures after exporter creation but before provider setup.
+var logInitHook func() error
+
 // initLogProvider initializes the OpenTelemetry logger provider with dual-mode logging.
 func (p *provider) initLogProvider() error {
 	// Create resource with service information (reuse from trace provider)
@@ -36,6 +39,12 @@ func (p *provider) initLogProvider() error {
 		return fmt.Errorf("failed to create dual-mode processor: %w", err)
 	}
 
+	if logInitHook != nil {
+		if hookErr := logInitHook(); hookErr != nil {
+			return hookErr
+		}
+	}
+
 	// Create logger provider
 	p.loggerProvider = sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
@@ -53,9 +62,14 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 	// Use stdout exporter for local development
 	if endpoint == EndpointStdout {
 		debugLogger.Println("Using stdout log exporter (pretty print)")
-		return stdoutlog.New(
+		exporter, err := stdoutlog.New(
 			stdoutlog.WithPrettyPrint(),
 		)
+		if err != nil {
+			debugLogger.Printf("Failed to create stdout log exporter: %v", err)
+			return nil, err
+		}
+		return logExporterWrapper(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -65,9 +79,17 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPLogExporter()
+		exporter, err := p.createOTLPHTTPLogExporter()
+		if err != nil {
+			return nil, err
+		}
+		return logExporterWrapper(exporter), nil
 	case ProtocolGRPC:
-		return p.createOTLPGRPCLogExporter()
+		exporter, err := p.createOTLPGRPCLogExporter()
+		if err != nil {
+			return nil, err
+		}
+		return logExporterWrapper(exporter), nil
 	default:
 		debugLogger.Printf("Invalid log protocol: %s", protocol)
 		return nil, fmt.Errorf("log protocol '%s': %w", protocol, ErrInvalidProtocol)

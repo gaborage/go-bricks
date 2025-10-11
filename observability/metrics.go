@@ -12,6 +12,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// metricInitHook allows tests to inject errors after exporter creation but before provider setup.
+var metricInitHook func() error
+
 // initMeterProvider initializes the OpenTelemetry meter provider.
 func (p *provider) initMeterProvider() error {
 	// Create resource with service information (reuse from trace provider)
@@ -24,6 +27,12 @@ func (p *provider) initMeterProvider() error {
 	exporter, err := p.createMetricExporter()
 	if err != nil {
 		return fmt.Errorf("failed to create metric exporter: %w", err)
+	}
+
+	if metricInitHook != nil {
+		if hookErr := metricInitHook(); hookErr != nil {
+			return hookErr
+		}
 	}
 
 	// Create periodic reader with configured interval
@@ -50,9 +59,14 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 	// Use stdout exporter for local development
 	if endpoint == EndpointStdout {
 		debugLogger.Println("Using stdout metric exporter (pretty print)")
-		return stdoutmetric.New(
+		exporter, err := stdoutmetric.New(
 			stdoutmetric.WithPrettyPrint(),
 		)
+		if err != nil {
+			debugLogger.Printf("Failed to create stdout metric exporter: %v", err)
+			return nil, err
+		}
+		return metricExporterWrapper(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -63,9 +77,17 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPMetricExporter(useInsecure, headers)
+		exporter, err := p.createOTLPHTTPMetricExporter(useInsecure, headers)
+		if err != nil {
+			return nil, err
+		}
+		return metricExporterWrapper(exporter), nil
 	case ProtocolGRPC:
-		return p.createOTLPGRPCMetricExporter(useInsecure, headers)
+		exporter, err := p.createOTLPGRPCMetricExporter(useInsecure, headers)
+		if err != nil {
+			return nil, err
+		}
+		return metricExporterWrapper(exporter), nil
 	default:
 		debugLogger.Printf("Invalid metrics protocol: %s", protocol)
 		return nil, fmt.Errorf("metrics protocol '%s': %w", protocol, ErrInvalidProtocol)
