@@ -462,3 +462,186 @@ func TestDetermineSeverityPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// TestFormatStatusForMessage verifies proper formatting of status codes for log messages.
+// Standard HTTP codes (100-599) are formatted as "Nxx", while non-standard codes
+// use the full status number.
+func TestFormatStatusForMessage(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   string
+	}{
+		// Edge case: status = 0 (no response)
+		{
+			name:   "zero status code",
+			status: 0,
+			want:   "0",
+		},
+		// Edge case: status < 100 (invalid)
+		{
+			name:   "status code 99",
+			status: 99,
+			want:   "99",
+		},
+		// Standard HTTP status codes (100-599)
+		{
+			name:   "informational 1xx",
+			status: 100,
+			want:   "1xx",
+		},
+		{
+			name:   "informational 101",
+			status: 101,
+			want:   "1xx",
+		},
+		{
+			name:   "success 200",
+			status: 200,
+			want:   "2xx",
+		},
+		{
+			name:   "success 201",
+			status: 201,
+			want:   "2xx",
+		},
+		{
+			name:   "redirect 301",
+			status: 301,
+			want:   "3xx",
+		},
+		{
+			name:   "client error 400",
+			status: 400,
+			want:   "4xx",
+		},
+		{
+			name:   "client error 404",
+			status: 404,
+			want:   "4xx",
+		},
+		{
+			name:   "server error 500",
+			status: 500,
+			want:   "5xx",
+		},
+		{
+			name:   "server error 503",
+			status: 503,
+			want:   "5xx",
+		},
+		{
+			name:   "boundary 599",
+			status: 599,
+			want:   "5xx",
+		},
+		// Edge case: status >= 600 (non-standard)
+		{
+			name:   "non-standard 600",
+			status: 600,
+			want:   "600",
+		},
+		{
+			name:   "non-standard 999",
+			status: 999,
+			want:   "999",
+		},
+		{
+			name:   "very large status code",
+			status: 1234,
+			want:   "1234",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatStatusForMessage(tt.status)
+			require.Equal(t, tt.want, got, "unexpected status format")
+		})
+	}
+}
+
+// TestCreateActionMessage verifies the complete message formatting including
+// method, path, latency, and status code handling.
+func TestCreateActionMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		latency time.Duration
+		status  int
+		want    string
+	}{
+		{
+			name:    "standard success request",
+			method:  "GET",
+			path:    "/api/users",
+			latency: 123 * time.Millisecond,
+			status:  200,
+			want:    "GET /api/users completed in 123ms with status 2xx",
+		},
+		{
+			name:    "post request with 201",
+			method:  "POST",
+			path:    "/api/users",
+			latency: 456 * time.Millisecond,
+			status:  201,
+			want:    "POST /api/users completed in 456ms with status 2xx",
+		},
+		{
+			name:    "client error 404",
+			method:  "GET",
+			path:    "/api/not-found",
+			latency: 50 * time.Millisecond,
+			status:  404,
+			want:    "GET /api/not-found completed in 50ms with status 4xx",
+		},
+		{
+			name:    "server error 500",
+			method:  "POST",
+			path:    "/api/error",
+			latency: 100 * time.Millisecond,
+			status:  500,
+			want:    "POST /api/error completed in 100ms with status 5xx",
+		},
+		{
+			name:    "edge case: zero status",
+			method:  "GET",
+			path:    "/api/timeout",
+			latency: 5 * time.Second,
+			status:  0,
+			want:    "GET /api/timeout completed in 5s with status 0",
+		},
+		{
+			name:    "edge case: status 99",
+			method:  "GET",
+			path:    "/api/invalid",
+			latency: 10 * time.Millisecond,
+			status:  99,
+			want:    "GET /api/invalid completed in 10ms with status 99",
+		},
+		{
+			name:    "edge case: status 600",
+			method:  "GET",
+			path:    "/api/custom",
+			latency: 200 * time.Millisecond,
+			status:  600,
+			want:    "GET /api/custom completed in 200ms with status 600",
+		},
+		{
+			name:    "edge case: very large status",
+			method:  "DELETE",
+			path:    "/api/weird",
+			latency: 1 * time.Millisecond,
+			status:  999,
+			want:    "DELETE /api/weird completed in 1ms with status 999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := createActionMessage(tt.method, tt.path, tt.latency, tt.status)
+			require.Equal(t, tt.want, got, "unexpected action message format")
+		})
+	}
+}

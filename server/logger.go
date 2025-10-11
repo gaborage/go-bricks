@@ -239,7 +239,19 @@ func createLogEvent(log logger.Logger, level string) logger.LogEvent {
 }
 
 // createActionMessage generates a human-readable message for action logs.
-// Example: "GET /api/users completed in 123ms with status 200"
+// Example: "GET /api/users completed in 123ms with status 2xx"
+// For non-standard status codes (< 100 or >= 600), the full status code is used.
 func createActionMessage(method, path string, latency time.Duration, status int) string {
-	return method + " " + path + " completed in " + latency.String() + " with status " + strconv.Itoa(status/100) + "xx"
+	statusStr := formatStatusForMessage(status)
+	return method + " " + path + " completed in " + latency.String() + " with status " + statusStr
+}
+
+// formatStatusForMessage formats HTTP status codes for log messages.
+// Standard codes (100-599) are formatted as "Nxx" (e.g., "2xx", "4xx").
+// Non-standard codes return the full status string (e.g., "0", "600").
+func formatStatusForMessage(status int) string {
+	if status >= 100 && status < 600 {
+		return strconv.Itoa(status/100) + "xx"
+	}
+	return strconv.Itoa(status)
 }
