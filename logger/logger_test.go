@@ -207,6 +207,31 @@ func TestNewWithFilter(t *testing.T) {
 	}
 }
 
+func TestWithContextPropagatesSeverityHook(t *testing.T) {
+	base := New("info", false)
+	var buf bytes.Buffer
+	custom := zerolog.New(&buf).With().Timestamp().Logger()
+	base.zlog = &custom
+
+	var captured []zerolog.Level
+	ctx := WithSeverityHook(context.Background(), func(level zerolog.Level) {
+		captured = append(captured, level)
+	})
+
+	logWithCtx := base.WithContext(ctx)
+
+	logWithCtx.Warn().Msg("warn message")
+	logWithCtx.Error().Msg("error message")
+	logWithCtx.Info().Msg("info message")
+
+	assert.Equal(t, []zerolog.Level{zerolog.WarnLevel, zerolog.ErrorLevel}, captured)
+
+	logWithFields := logWithCtx.WithFields(map[string]any{"foo": "bar"})
+	logWithFields.Warn().Msg("warn again")
+
+	assert.Equal(t, []zerolog.Level{zerolog.WarnLevel, zerolog.ErrorLevel, zerolog.WarnLevel}, captured)
+}
+
 func TestCallerMarshalFuncSetup(t *testing.T) {
 	// Test that calling New multiple times doesn't reset the caller marshal function
 	// This tests the sync.Once behavior
@@ -1087,7 +1112,7 @@ func createContextWithSpan(t *testing.T, traceIDHex, spanIDHex string) context.C
 	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    traceID,
 		SpanID:     spanID,
-		TraceFlags: trace.TraceFlags(trace.FlagsSampled),
+		TraceFlags: trace.FlagsSampled,
 	})
 
 	return trace.ContextWithSpanContext(context.Background(), spanCtx)

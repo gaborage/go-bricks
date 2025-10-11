@@ -54,14 +54,36 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 	var rec log.Record
 
 	ctx := context.Background()
+	var traceIDStr, spanIDStr string
+
 	if spanCtx, ok := extractSpanContext(entry); ok {
 		ctx = trace.ContextWithSpanContext(ctx, spanCtx)
+
+		// Extract trace_id and span_id for log attributes (enables backend queries)
+		if spanCtx.IsValid() {
+			traceIDStr = spanCtx.TraceID().String()
+			spanIDStr = spanCtx.SpanID().String()
+		}
 	}
 
 	applyTimestamp(&rec, entry)
 	applySeverity(&rec, entry)
 	applyBody(&rec, entry)
 	applyAttributes(&rec, entry)
+
+	// Add trace correlation attributes if available
+	if traceIDStr != "" {
+		rec.AddAttributes(
+			log.String("trace_id", traceIDStr),
+			log.String("span_id", spanIDStr),
+		)
+	}
+
+	// Default to trace logs unless caller explicitly sets log.type
+	// This ensures all application logs are categorized for dual-mode routing
+	if !hasLogTypeAttribute(&rec) {
+		rec.AddAttributes(log.String("log.type", "trace"))
+	}
 
 	return rec, ctx
 }
@@ -129,7 +151,6 @@ func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
 			spanIDOK = true
 			if !flagsOK {
 				flags = parsedFlags
-				flagsOK = true
 			}
 		}
 	}
@@ -296,4 +317,18 @@ func jsonStringify(v interface{}) string {
 		return ""
 	}
 	return string(bytes)
+}
+
+// hasLogTypeAttribute checks if a log record already has a log.type attribute.
+// This prevents overwriting caller-specified log types (e.g., "action" from middleware).
+func hasLogTypeAttribute(rec *log.Record) bool {
+	found := false
+	rec.WalkAttributes(func(kv log.KeyValue) bool {
+		if kv.Key == "log.type" {
+			found = true
+			return false // Stop iteration
+		}
+		return true // Continue
+	})
+	return found
 }

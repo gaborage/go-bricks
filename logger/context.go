@@ -3,6 +3,8 @@ package logger
 import (
 	"context"
 	"sync/atomic"
+
+	"github.com/rs/zerolog"
 )
 
 // contextKey is the type for context keys to avoid collisions
@@ -17,6 +19,8 @@ const (
 	amqpElapsedKey contextKey = "amqp_elapsed_nanos"
 	// dbElapsedKey is the context key for tracking total database elapsed time per request
 	dbElapsedKey contextKey = "db_elapsed_nanos"
+	// severityHookKey stores a callback for request-level severity tracking
+	severityHookKey contextKey = "severity_hook"
 )
 
 // WithAMQPCounter creates a new context with an AMQP message counter and elapsed time tracker
@@ -26,6 +30,26 @@ func WithAMQPCounter(ctx context.Context) context.Context {
 	ctx = context.WithValue(ctx, amqpCounterKey, &counter)
 	ctx = context.WithValue(ctx, amqpElapsedKey, &elapsed)
 	return ctx
+}
+
+// WithSeverityHook attaches a severity hook to the context. The hook is used by the
+// logging adapter to propagate WARN/ERROR logs back to request middleware for routing.
+func WithSeverityHook(ctx context.Context, hook func(zerolog.Level)) context.Context {
+	if ctx == nil || hook == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, severityHookKey, hook)
+}
+
+// severityHookFromContext retrieves the severity hook from the context when present.
+func severityHookFromContext(ctx context.Context) func(zerolog.Level) {
+	if ctx == nil {
+		return nil
+	}
+	if hook, ok := ctx.Value(severityHookKey).(func(zerolog.Level)); ok {
+		return hook
+	}
+	return nil
 }
 
 // IncrementAMQPCounter increments the AMQP message counter in the context

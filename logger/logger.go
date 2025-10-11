@@ -17,9 +17,10 @@ import (
 // ZeroLogger wraps zerolog.Logger to implement the Logger interface.
 // It provides structured logging functionality with configurable output formatting.
 type ZeroLogger struct {
-	zlog   *zerolog.Logger
-	filter *SensitiveDataFilter
-	pretty bool // tracks if logger uses pretty (console) formatting vs JSON
+	zlog         *zerolog.Logger
+	filter       *SensitiveDataFilter
+	pretty       bool // tracks if logger uses pretty (console) formatting vs JSON
+	severityHook func(zerolog.Level)
 }
 
 // Ensure ZeroLogger implements the interface
@@ -119,11 +120,16 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 //   - Automatic correlation: trace IDs appear in logs without boilerplate
 func (l *ZeroLogger) WithContext(ctx any) Logger {
 	if c, ok := ctx.(context.Context); ok {
+		hook := l.severityHook
+		if ctxHook := severityHookFromContext(c); ctxHook != nil {
+			hook = ctxHook
+		}
+
 		// OPTION 1: Explicit logger in context (backward compatibility)
 		// Check if there's an explicit zerolog logger set in the context
 		zl := zerolog.Ctx(c)
 		if zl != nil && zl.GetLevel() != zerolog.Disabled {
-			return &ZeroLogger{zlog: zl, filter: l.filter, pretty: l.pretty}
+			return &ZeroLogger{zlog: zl, filter: l.filter, pretty: l.pretty, severityHook: hook}
 		}
 
 		// OPTION 2: Extract trace context for automatic correlation
@@ -137,10 +143,18 @@ func (l *ZeroLogger) WithContext(ctx any) Logger {
 				Str("span_id", span.SpanContext().SpanID().String()).
 				Logger()
 			return &ZeroLogger{
-				zlog:   &log,
-				filter: l.filter,
-				pretty: l.pretty,
+				zlog:         &log,
+				filter:       l.filter,
+				pretty:       l.pretty,
+				severityHook: hook,
 			}
+		}
+
+		return &ZeroLogger{
+			zlog:         l.zlog,
+			filter:       l.filter,
+			pretty:       l.pretty,
+			severityHook: hook,
 		}
 	}
 	return l
@@ -153,7 +167,7 @@ func (l *ZeroLogger) WithFields(fields map[string]any) Logger {
 		fields = l.filter.FilterFields(fields)
 	}
 	log := l.zlog.With().Fields(fields).Logger()
-	return &ZeroLogger{zlog: &log, filter: l.filter, pretty: l.pretty}
+	return &ZeroLogger{zlog: &log, filter: l.filter, pretty: l.pretty, severityHook: l.severityHook}
 }
 
 // OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
@@ -222,8 +236,9 @@ func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
 	newLog := l.zlog.Output(output)
 
 	return &ZeroLogger{
-		zlog:   &newLog,
-		filter: l.filter,
-		pretty: false, // Always false - validated above
+		zlog:         &newLog,
+		filter:       l.filter,
+		pretty:       false, // Always false - validated above
+		severityHook: l.severityHook,
 	}
 }

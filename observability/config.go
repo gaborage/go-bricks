@@ -197,14 +197,23 @@ func (c *Config) applyLogsDefaults() {
 		c.Logs.Headers = c.Trace.Headers
 	}
 
-	// Sample rate default - only set when nil (not explicitly provided)
+	// Deprecated: Sample rate configuration (dual-mode logging uses different approach)
 	if c.Logs.Sample.Rate == nil {
 		c.Logs.Sample.Rate = Float64Ptr(1.0)
+	} else if *c.Logs.Sample.Rate != 1.0 {
+		debugLogger.Println("Deprecated: logs.sample.rate is ignored in dual-mode logging. Action logs are always sampled (100%), trace logs filter by severity (WARN+).")
 	}
 
-	// AlwaysSampleHigh defaults to true - ensures WARN/ERROR/FATAL always exported
+	// Deprecated: AlwaysSampleHigh configuration (replaced by dual-mode routing)
 	if c.Logs.Sample.AlwaysSampleHigh == nil {
 		c.Logs.Sample.AlwaysSampleHigh = BoolPtr(true)
+	} else if !*c.Logs.Sample.AlwaysSampleHigh {
+		debugLogger.Println("Deprecated: logs.sample.always_sample_high is ignored in dual-mode logging. Trace logs are always WARN+ only.")
+	}
+
+	// Slow request threshold default (used by action log severity calculation)
+	if c.Logs.SlowRequestThreshold == 0 {
+		c.Logs.SlowRequestThreshold = 1 * time.Second
 	}
 
 	// Apply batch, export, and queue defaults
@@ -407,6 +416,8 @@ type LogsConfig struct {
 	Headers map[string]string `mapstructure:"headers"`
 
 	// Sample contains sampling configuration for logs.
+	// Deprecated: Sampling logic replaced by dual-mode logging in v2.1.
+	// Action logs are always sampled (100%), trace logs filter by severity (WARN+ only).
 	Sample LogSampleConfig `mapstructure:"sample"`
 
 	// Batch contains batch processing configuration (reused from TraceConfig pattern).
@@ -417,6 +428,12 @@ type LogsConfig struct {
 
 	// Max contains maximum queue and batch size limits (reused from TraceConfig pattern).
 	Max MaxConfig `mapstructure:"max"`
+
+	// SlowRequestThreshold defines the latency threshold for marking HTTP requests as slow.
+	// Requests exceeding this duration are logged with result_code="WARN" in action logs.
+	// This is a system-wide threshold (no per-route overrides).
+	// Default: 1 second.
+	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"`
 }
 
 // LogSampleConfig defines sampling configuration for logs.
