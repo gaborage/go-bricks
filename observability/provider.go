@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -22,19 +24,88 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials/insecure"
+
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
-// debugLogger is a simple logger for observability debugging
-var debugLogger = log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
+// debugLogger is a simple logger for observability debugging.
+// It only outputs when GOBRICKS_DEBUG environment variable is set to "true".
+// This prevents noisy [OBSERVABILITY] logs in production environments.
+var debugLogger = initDebugLogger()
+
+// Exporter wrappers enable tests to intercept exporter construction without affecting production code.
+// Access is protected by wrapperMu to prevent data races when tests modify wrappers concurrently.
+var (
+	wrapperMu             sync.RWMutex
+	traceExporterWrapper  = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter { return exporter }
+	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter { return exporter }
+	logExporterWrapper    = func(exporter sdklog.Exporter) sdklog.Exporter { return exporter }
+)
+
+const (
+	cleanupTimeout = 5 * time.Second
+)
+
+// Thread-safe getters for exporter wrappers
+func getTraceExporterWrapper() func(sdktrace.SpanExporter) sdktrace.SpanExporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return traceExporterWrapper
+}
+
+func getMetricExporterWrapper() func(sdkmetric.Exporter) sdkmetric.Exporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return metricExporterWrapper
+}
+
+func getLogExporterWrapper() func(sdklog.Exporter) sdklog.Exporter {
+	wrapperMu.RLock()
+	defer wrapperMu.RUnlock()
+	return logExporterWrapper
+}
+
+// Thread-safe setters for exporter wrappers (test use only)
+func setTraceExporterWrapper(wrapper func(sdktrace.SpanExporter) sdktrace.SpanExporter) {
+	wrapperMu.Lock()
+	defer wrapperMu.Unlock()
+	traceExporterWrapper = wrapper
+}
+
+func setMetricExporterWrapper(wrapper func(sdkmetric.Exporter) sdkmetric.Exporter) {
+	wrapperMu.Lock()
+	defer wrapperMu.Unlock()
+	metricExporterWrapper = wrapper
+}
+
+// initDebugLogger initializes the debug logger based on environment variables.
+// Returns a logger that writes to stderr if debugging is enabled, or a no-op logger otherwise.
+func initDebugLogger() *log.Logger {
+	// Check if debug logging is enabled via environment variable
+	debug := os.Getenv("GOBRICKS_DEBUG")
+	if debug == "true" || debug == "1" {
+		return log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
+	}
+	// Return a no-op logger that discards all output
+	return log.New(io.Discard, "", 0)
+}
 
 // Provider is the interface for observability providers.
-// It manages the lifecycle of tracing and metrics providers.
+// It manages the lifecycle of tracing, metrics, and logging providers.
 type Provider interface {
 	// TracerProvider returns the configured trace provider.
 	TracerProvider() trace.TracerProvider
 
 	// MeterProvider returns the configured meter provider.
 	MeterProvider() metric.MeterProvider
+
+	// LoggerProvider returns the configured logger provider.
+	// Returns nil if logging is disabled.
+	LoggerProvider() *sdklog.LoggerProvider
+
+	// ShouldDisableStdout returns true if stdout should be disabled when OTLP is enabled.
+	// This method provides configuration access for logger integration.
+	ShouldDisableStdout() bool
 
 	// Shutdown gracefully shuts down the provider, flushing any pending data.
 	// It should be called during application shutdown.
@@ -50,6 +121,7 @@ type provider struct {
 	config         Config
 	tracerProvider *sdktrace.TracerProvider
 	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *sdklog.LoggerProvider
 	mu             sync.Mutex
 }
 
@@ -89,55 +161,44 @@ func NewProvider(cfg *Config) (Provider, error) {
 		config: safeCfg, // Use the defaulted config
 	}
 
-	// Initialize trace provider if tracing is enabled
-	traceEnabled := safeCfg.Trace.Enabled != nil && *safeCfg.Trace.Enabled
-	debugLogger.Printf("Trace configuration: enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
-		traceEnabled, safeCfg.Trace.Endpoint, safeCfg.Trace.Protocol, safeCfg.Trace.Insecure)
-
-	if traceEnabled {
-		debugLogger.Println("Initializing trace provider...")
-		if err := p.initTraceProvider(); err != nil {
-			debugLogger.Printf("Failed to initialize trace provider: %v", err)
-			return nil, fmt.Errorf("failed to initialize trace provider: %w", err)
+	// Set up cleanup for partial initialization failures
+	// This ensures we don't leak goroutines/connections if later init steps fail
+	var initSuccess bool
+	defer func() {
+		if !initSuccess {
+			p.cleanupPartialInit()
 		}
-		debugLogger.Println("Trace provider initialized successfully")
-	} else {
-		debugLogger.Println("Trace provider skipped (disabled)")
+	}()
+
+	// Initialize trace provider if tracing is enabled
+	traceEnabled := isProviderEnabled(safeCfg.Trace.Enabled)
+	traceConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
+		traceEnabled, safeCfg.Trace.Endpoint, safeCfg.Trace.Protocol, safeCfg.Trace.Insecure)
+	if err := initializeProvider("Trace", traceEnabled, traceConfig, p.initTraceProvider); err != nil {
+		return nil, err
 	}
 
 	// Initialize meter provider if metrics are enabled
-	metricsEnabled := safeCfg.Metrics.Enabled != nil && *safeCfg.Metrics.Enabled
-	debugLogger.Printf("Metrics configuration: enabled=%v, endpoint=%s, protocol=%s",
+	metricsEnabled := isProviderEnabled(safeCfg.Metrics.Enabled)
+	metricsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
 		metricsEnabled, safeCfg.Metrics.Endpoint, safeCfg.Metrics.Protocol)
-
-	if metricsEnabled {
-		debugLogger.Println("Initializing meter provider...")
-		if err := p.initMeterProvider(); err != nil {
-			debugLogger.Printf("Failed to initialize meter provider: %v", err)
-			return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
-		}
-		debugLogger.Println("Meter provider initialized successfully")
-	} else {
-		debugLogger.Println("Meter provider skipped (disabled)")
+	if err := initializeProvider("Metrics", metricsEnabled, metricsConfig, p.initMeterProvider); err != nil {
+		return nil, err
 	}
 
-	// Set global providers
-	if p.tracerProvider != nil {
-		debugLogger.Println("Setting global tracer provider")
-		otel.SetTracerProvider(p.tracerProvider)
-	}
-	if p.meterProvider != nil {
-		debugLogger.Println("Setting global meter provider")
-		otel.SetMeterProvider(p.meterProvider)
+	// Initialize logger provider if logs are enabled
+	logsEnabled := isProviderEnabled(safeCfg.Logs.Enabled)
+	logsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
+		logsEnabled, safeCfg.Logs.Endpoint, safeCfg.Logs.Protocol)
+	if err := initializeProvider("Logs", logsEnabled, logsConfig, p.initLogProvider); err != nil {
+		return nil, err
 	}
 
-	// Set global propagator for W3C trace context
-	debugLogger.Println("Setting W3C trace context propagator")
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
+	// Register global providers and propagator
+	p.registerGlobalProviders()
 
+	// Mark initialization as successful to skip cleanup
+	initSuccess = true
 	debugLogger.Println("Observability provider created successfully")
 	return p, nil
 }
@@ -150,6 +211,57 @@ func MustNewProvider(cfg *Config) Provider {
 		panic(fmt.Errorf("failed to create observability provider: %w", err))
 	}
 	return p
+}
+
+// isProviderEnabled safely checks if a provider is enabled by handling nil pointer checks.
+func isProviderEnabled(enabled *bool) bool {
+	return enabled != nil && *enabled
+}
+
+// initializeProvider handles the common pattern of initializing a provider with logging.
+// It logs the configuration, attempts initialization, and returns wrapped errors on failure.
+func initializeProvider(
+	name string,
+	enabled bool,
+	config string,
+	initFunc func() error,
+) error {
+	debugLogger.Printf("%s configuration: %s", name, config)
+
+	if !enabled {
+		debugLogger.Printf("%s provider skipped (disabled)", name)
+		return nil
+	}
+
+	debugLogger.Printf("Initializing %s provider...", name)
+	if err := initFunc(); err != nil {
+		debugLogger.Printf("Failed to initialize %s provider: %v", name, err)
+		return fmt.Errorf("failed to initialize %s provider: %w", name, err)
+	}
+
+	debugLogger.Printf("%s provider initialized successfully", name)
+	return nil
+}
+
+// registerGlobalProviders sets up the global OpenTelemetry providers and propagator.
+func (p *provider) registerGlobalProviders() {
+	// Set global providers
+	if p.tracerProvider != nil {
+		debugLogger.Println("Setting global tracer provider")
+		otel.SetTracerProvider(p.tracerProvider)
+	}
+	if p.meterProvider != nil {
+		debugLogger.Println("Setting global meter provider")
+		otel.SetMeterProvider(p.meterProvider)
+	}
+	// Note: OTel doesn't have a global logger provider setter like traces/metrics
+
+	// Set global propagator for W3C trace context
+	debugLogger.Println("Setting W3C trace context propagator")
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 }
 
 // initTraceProvider initializes the OpenTelemetry trace provider.
@@ -229,9 +341,14 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	// Use stdout exporter for local development
 	if endpoint == EndpointStdout {
 		debugLogger.Println("Using stdout trace exporter (pretty print)")
-		return stdouttrace.New(
+		exporter, err := stdouttrace.New(
 			stdouttrace.WithPrettyPrint(),
 		)
+		if err != nil {
+			debugLogger.Printf("Failed to create stdout trace exporter: %v", err)
+			return nil, err
+		}
+		return getTraceExporterWrapper()(exporter), nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -241,9 +358,17 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		return p.createOTLPHTTPExporter()
+		exporter, err := p.createOTLPHTTPExporter()
+		if err != nil {
+			return nil, err
+		}
+		return getTraceExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
-		return p.createOTLPGRPCExporter()
+		exporter, err := p.createOTLPGRPCExporter()
+		if err != nil {
+			return nil, err
+		}
+		return getTraceExporterWrapper()(exporter), nil
 	default:
 		debugLogger.Printf("Invalid trace protocol: %s", protocol)
 		return nil, fmt.Errorf("trace protocol '%s': %w", protocol, ErrInvalidProtocol)
@@ -326,6 +451,19 @@ func (p *provider) MeterProvider() metric.MeterProvider {
 	return p.meterProvider
 }
 
+// LoggerProvider returns the configured logger provider.
+// Returns nil if logging is disabled (caller should check for nil).
+func (p *provider) LoggerProvider() *sdklog.LoggerProvider {
+	return p.loggerProvider
+}
+
+// ShouldDisableStdout returns true if stdout should be disabled when OTLP is enabled.
+// This implements the logger.OTelProvider interface to provide configuration access
+// without exposing the entire Config struct publicly.
+func (p *provider) ShouldDisableStdout() bool {
+	return p.config.Logs.DisableStdout
+}
+
 // Shutdown gracefully shuts down the provider.
 //
 //nolint:dupl // Shutdown and ForceFlush have similar structure but different semantics
@@ -344,6 +482,12 @@ func (p *provider) Shutdown(ctx context.Context) error {
 	if p.meterProvider != nil {
 		if err := p.meterProvider.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("failed to shutdown meter provider: %w", err))
+		}
+	}
+
+	if p.loggerProvider != nil {
+		if err := p.loggerProvider.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to shutdown logger provider: %w", err))
 		}
 	}
 
@@ -375,11 +519,36 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 		}
 	}
 
+	if p.loggerProvider != nil {
+		if err := p.loggerProvider.ForceFlush(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("failed to flush logger provider: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("flush errors: %w", errors.Join(errs...))
 	}
 
 	return nil
+}
+
+// cleanupPartialInit safely shuts down any partially initialized providers.
+// Called when provider initialization fails mid-way to prevent resource leaks.
+// Uses a background context with timeout to ensure cleanup completes even if the
+// initialization context was cancelled.
+func (p *provider) cleanupPartialInit() {
+	debugLogger.Println("Cleaning up partially initialized providers due to init error")
+
+	// Use background context with timeout for cleanup (don't inherit cancelled context)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+
+	if err := p.Shutdown(ctx); err != nil {
+		// Log cleanup errors but don't fail - we're already handling an error
+		debugLogger.Printf("Cleanup errors (non-fatal): %v", err)
+	} else {
+		debugLogger.Println("Partial initialization cleanup completed successfully")
+	}
 }
 
 // formatSampleRate formats a sample rate pointer for logging.

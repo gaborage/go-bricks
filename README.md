@@ -325,11 +325,88 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
 
 ## Observability and Operations
 
-- **Structured logging** via Zerolog.
+- **OpenTelemetry first**: native traces, metrics, and dual-mode logs.
+- **Structured logging** via Zerolog with OTLP export for action + trace streams.
 - **Tracing** propagates W3C `traceparent` headers.
 - **Metrics** capture HTTP/messaging/database timings.
 - **Health endpoints**: `/health` (liveness) and `/ready` (readiness with DB/messaging checks).
 - **Graceful shutdown** coordinates servers, consumers, and background workers.
+
+### Configuring OpenTelemetry (Traces + Dual-Mode Logs)
+
+1. **Enable observability in configuration**
+
+   ```yaml
+   observability:
+     enabled: true
+     service:
+       name: checkout-api
+       version: 1.2.3
+       environment: production
+     trace:
+       enabled: true
+       endpoint: otel-collector:4317
+       protocol: grpc        # http for OTLP/HTTP
+       insecure: true        # disable TLS when talking to a collector inside the VPC
+       export:
+         timeout: 5s
+     logs:
+       enabled: true
+       endpoint: otel-collector:4317
+       protocol: grpc
+       insecure: true
+       slow_request_threshold: 750ms   # requests slower than this become WARN result_code
+       export:
+         timeout: 5s
+       batch:
+         timeout: 3s
+       max:
+         queue:
+           size: 2048
+         batch:
+           size: 512
+   ```
+
+   - All application logs default to `log.type="trace"` and only WARN+ severities are exported (≈95 % volume reduction).
+   - Middleware writes synthesized request summaries with `log.type="action"` for every healthy request; they keep INFO-level retention.
+
+2. **Initialize the OpenTelemetry provider and hook the logger**
+
+   ```go
+   import (
+       "github.com/gaborage/go-bricks/logger"
+       "github.com/gaborage/go-bricks/observability"
+       "github.com/gaborage/go-bricks/server"
+   )
+
+   func wireLogging(cfg *config.Config, e *echo.Echo) (observability.Provider, logger.Logger, error) {
+       obsProvider, err := observability.NewProvider(&cfg.Observability)
+       if err != nil {
+           return nil, nil, err
+       }
+
+       appLogger := logger.New(cfg.Log.Level, cfg.Log.Pretty).
+           WithOTelProvider(obsProvider)
+
+       e.Use(server.LoggerWithConfig(appLogger, server.LoggerConfig{
+           HealthPath:           "/health",
+           ReadyPath:            "/ready",
+           SlowRequestThreshold: cfg.Observability.Logs.SlowRequestThreshold,
+       }))
+
+       return obsProvider, appLogger, nil
+   }
+   ```
+
+   - The bridge automatically enriches Zerolog output with `trace_id`, `span_id`, and `log.type`.
+   - `server.LoggerWithConfig` emits action logs and registers the WARN/ERROR hook so requests with elevated severity stay in the trace stream.
+
+3. **Route the two log classes in your backend**
+
+   - **Grafana Loki**: `logql` query `{log.type="action"}` for request summaries, `{log.type="trace", trace_id="abc"}` for correlated traces.
+   - **Datadog**: create indexes `@log.type:action` (long retention) and `@log.type:trace` (short retention) to control costs.
+
+4. **Local development tip**: set `observability.trace.endpoint=stdout` and `observability.logs.endpoint=stdout` to pretty-print spans and logs without running a collector.
 
 ---
 

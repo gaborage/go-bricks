@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -373,4 +374,25 @@ func TestLargeElapsedValues(t *testing.T) {
 	// Values should wrap around to negative due to int64 overflow
 	assert.Equal(t, int64(-9223372036854775808), GetAMQPElapsed(ctx))
 	assert.Equal(t, int64(-9223372036854775808), GetDBElapsed(ctx))
+}
+
+func TestWithSeverityHook(t *testing.T) {
+	called := 0
+	hookedCtx := WithSeverityHook(context.Background(), func(level zerolog.Level) {
+		called++
+		assert.Equal(t, zerolog.WarnLevel, level)
+	})
+
+	hook := severityHookFromContext(hookedCtx)
+	assert.NotNil(t, hook)
+
+	hook(zerolog.WarnLevel)
+	assert.Equal(t, 1, called)
+
+	// Nil hook should leave context unchanged
+	ctxWithoutHook := WithSeverityHook(context.Background(), nil)
+	assert.Nil(t, severityHookFromContext(ctxWithoutHook))
+
+	// Background context without hook returns nil
+	assert.Nil(t, severityHookFromContext(context.Background()))
 }

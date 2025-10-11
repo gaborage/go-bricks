@@ -44,7 +44,7 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "IP rate limit exceeded",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},
@@ -53,7 +53,7 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 				"error": map[string]any{
 					"message":    "Too many requests from this IP",
 					"status":     http.StatusTooManyRequests,
-					"request_id": context.Response().Header().Get(echo.HeaderXRequestID),
+					"request_id": safeGetRequestID(context),
 				},
 			})
 		},

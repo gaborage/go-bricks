@@ -15,6 +15,10 @@ const (
 	testServiceName    = "test-service"
 	testTraceEndpointA = "localhost:4318"
 	testTraceEndpointB = "localhost:4317"
+	testAuthToken      = "Bearer test-token"
+	xTraceHeaderKey    = "X-Trace-Key"
+	testTraceValue     = "trace-value"
+	xLogsHeaderKey     = "X-Logs-Key"
 )
 
 func TestConfigValidateNilConfig(t *testing.T) {
@@ -498,6 +502,96 @@ func TestConfigApplyDefaults(t *testing.T) {
 			assert.Equal(t, tt.expected.Metrics.Export.Timeout, cfg.Metrics.Export.Timeout)
 		})
 	}
+}
+
+// TestLogsHeadersMapIsolation verifies that logs headers are properly cloned
+// from trace headers to avoid aliasing (mutations to one shouldn't affect the other).
+func TestLogsHeadersMapIsolation(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name: "test",
+		},
+		Trace: TraceConfig{
+			Headers: map[string]string{
+				"Authorization": testAuthToken,
+				xTraceHeaderKey: testTraceValue,
+			},
+		},
+	}
+
+	// Apply defaults (this is where the cloning happens)
+	cfg.ApplyDefaults()
+
+	// Verify logs inherited trace headers
+	require.NotNil(t, cfg.Logs.Headers, "Logs headers should be inherited from trace")
+	assert.Equal(t, testAuthToken, cfg.Logs.Headers["Authorization"])
+	assert.Equal(t, testTraceValue, cfg.Logs.Headers[xTraceHeaderKey])
+
+	// Mutate logs headers
+	cfg.Logs.Headers["Authorization"] = "Bearer logs-token"
+	cfg.Logs.Headers[xLogsHeaderKey] = "logs-value"
+	delete(cfg.Logs.Headers, xTraceHeaderKey)
+
+	// Verify trace headers remain unchanged (no aliasing)
+	assert.Equal(t, testAuthToken, cfg.Trace.Headers["Authorization"],
+		"Trace Authorization should be unchanged after mutating logs headers")
+	assert.Equal(t, testTraceValue, cfg.Trace.Headers[xTraceHeaderKey],
+		"Trace X-Trace-Key should be unchanged after mutating logs headers")
+	assert.NotContains(t, cfg.Trace.Headers, xLogsHeaderKey,
+		"Trace headers should not have keys added to logs headers")
+
+	// Verify logs headers have the mutations
+	assert.Equal(t, "Bearer logs-token", cfg.Logs.Headers["Authorization"])
+	assert.Equal(t, "logs-value", cfg.Logs.Headers[xLogsHeaderKey])
+	assert.NotContains(t, cfg.Logs.Headers, xTraceHeaderKey)
+}
+
+// TestCloneHeaderMapNil verifies that cloning a nil map returns nil.
+func TestCloneHeaderMapNil(t *testing.T) {
+	result := cloneHeaderMap(nil)
+	assert.Nil(t, result, "Cloning nil map should return nil")
+}
+
+// TestCloneHeaderMapEmpty verifies that cloning an empty map returns an empty map.
+func TestCloneHeaderMapEmpty(t *testing.T) {
+	original := make(map[string]string)
+	clone := cloneHeaderMap(original)
+
+	require.NotNil(t, clone, "Clone should not be nil")
+	assert.Empty(t, clone, "Clone should be empty")
+
+	// Verify they're different map instances
+	clone["test"] = "value"
+	assert.NotContains(t, original, "test", "Original map should not be affected by mutations to clone")
+}
+
+// TestCloneHeaderMapWithValues verifies proper cloning behavior.
+func TestCloneHeaderMapWithValues(t *testing.T) {
+	original := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "value3",
+	}
+
+	clone := cloneHeaderMap(original)
+
+	// Verify contents match
+	require.NotNil(t, clone)
+	assert.Equal(t, len(original), len(clone))
+	for k, v := range original {
+		assert.Equal(t, v, clone[k], "Clone should have same value for key %s", k)
+	}
+
+	// Verify they're different map instances by mutating clone
+	clone["key1"] = "modified"
+	clone["key4"] = "new"
+	delete(clone, "key2")
+
+	// Original should be unchanged
+	assert.Equal(t, "value1", original["key1"], "Original should not be affected")
+	assert.Equal(t, "value2", original["key2"], "Original should not be affected")
+	assert.NotContains(t, original, "key4", "Original should not have new keys from clone")
 }
 
 // TestConfigEnvironmentVariableOverrides validates that environment variables

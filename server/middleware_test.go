@@ -317,7 +317,7 @@ func TestGzipMiddleware(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "gzip", rec.Header().Get("Content-Encoding"))
-		assert.Contains(t, rec.Header().Get("Vary"), "Accept-Encoding")
+		assert.Contains(t, rec.Header().Values(echo.HeaderVary), "Accept-Encoding")
 
 		// Compressed response should be smaller than original
 		assert.Less(t, len(rec.Body.Bytes()), len(largeResponse))

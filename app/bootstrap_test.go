@@ -11,11 +11,188 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
-	testConfigFile = "config.yaml"
+	testConfigFile              = "config.yaml"
+	bootstrapLoggerUnchangedMsg = "Bootstrap logger should remain unchanged"
 )
+
+type testObservabilityProvider struct {
+	loggerProvider *sdklog.LoggerProvider
+	disableStdout  bool
+}
+
+func (m *testObservabilityProvider) TracerProvider() trace.TracerProvider {
+	return tracenoop.NewTracerProvider()
+}
+
+func (m *testObservabilityProvider) MeterProvider() metric.MeterProvider {
+	return metricnoop.NewMeterProvider()
+}
+
+func (m *testObservabilityProvider) LoggerProvider() *sdklog.LoggerProvider {
+	return m.loggerProvider
+}
+
+func (m *testObservabilityProvider) ShouldDisableStdout() bool {
+	return m.disableStdout
+}
+
+func (m *testObservabilityProvider) Shutdown(context.Context) error {
+	return nil
+}
+
+func (m *testObservabilityProvider) ForceFlush(context.Context) error {
+	return nil
+}
+
+func TestEnhanceLoggerWithOTelReplacesBootstrapLogger(t *testing.T) {
+	bootstrap := &appBootstrap{
+		log: logger.New("info", false),
+	}
+	original := bootstrap.log
+
+	provider := &testObservabilityProvider{
+		loggerProvider: sdklog.NewLoggerProvider(),
+	}
+	t.Cleanup(func() {
+		// Shutdown the logger provider to prevent resource leaks
+		err := provider.loggerProvider.Shutdown(context.Background())
+		require.NoError(t, err, "LoggerProvider shutdown should succeed")
+	})
+
+	enhanced := bootstrap.enhanceLoggerWithOTel(provider)
+
+	assert.NotNil(t, enhanced)
+	assert.Same(t, enhanced, bootstrap.log)
+	assert.NotSame(t, original, enhanced)
+}
+
+// TestEnhanceLoggerWithOTelNilProvider verifies that a nil provider
+// returns the original logger without enhancement.
+func TestEnhanceLoggerWithOTelNilProvider(t *testing.T) {
+	bootstrap := &appBootstrap{
+		log: logger.New("info", false),
+	}
+	original := bootstrap.log
+
+	// Call with nil provider
+	result := bootstrap.enhanceLoggerWithOTel(nil)
+
+	// Should return original logger unchanged
+	assert.NotNil(t, result)
+	assert.Same(t, original, result, "Should return original logger when provider is nil")
+	assert.Same(t, original, bootstrap.log, bootstrapLoggerUnchangedMsg)
+}
+
+// TestEnhanceLoggerWithOTelNilLoggerProvider verifies that a provider
+// with nil LoggerProvider returns the original logger.
+func TestEnhanceLoggerWithOTelNilLoggerProvider(t *testing.T) {
+	bootstrap := &appBootstrap{
+		log: logger.New("info", false),
+	}
+	original := bootstrap.log
+
+	// Create provider with nil LoggerProvider
+	provider := &testObservabilityProvider{
+		loggerProvider: nil, // OTLP log export disabled
+	}
+
+	result := bootstrap.enhanceLoggerWithOTel(provider)
+
+	// Should return original logger unchanged
+	assert.NotNil(t, result)
+	assert.Same(t, original, result, "Should return original logger when LoggerProvider is nil")
+	assert.Same(t, original, bootstrap.log, bootstrapLoggerUnchangedMsg)
+}
+
+// mockLogger is a mock implementation of logger.Logger for testing
+// the non-ZeroLogger code path.
+type mockLogger struct {
+	debugCalled bool
+	warnCalled  bool
+}
+
+func (m *mockLogger) Debug() logger.LogEvent {
+	m.debugCalled = true
+	return &mockLogEvent{}
+}
+
+func (m *mockLogger) Info() logger.LogEvent {
+	return &mockLogEvent{}
+}
+
+func (m *mockLogger) Warn() logger.LogEvent {
+	m.warnCalled = true
+	return &mockLogEvent{}
+}
+
+func (m *mockLogger) Error() logger.LogEvent {
+	return &mockLogEvent{}
+}
+
+func (m *mockLogger) Fatal() logger.LogEvent {
+	return &mockLogEvent{}
+}
+
+func (m *mockLogger) WithContext(any) logger.Logger {
+	return m
+}
+
+func (m *mockLogger) WithFields(map[string]any) logger.Logger {
+	return m
+}
+
+// mockLogEvent is a mock implementation of logger.LogEvent
+type mockLogEvent struct{}
+
+func (e *mockLogEvent) Msg(string) {
+	// No-op
+}
+func (e *mockLogEvent) Msgf(string, ...any) {
+	// No-op
+}
+func (e *mockLogEvent) Err(error) logger.LogEvent                 { return e }
+func (e *mockLogEvent) Str(string, string) logger.LogEvent        { return e }
+func (e *mockLogEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *mockLogEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *mockLogEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *mockLogEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *mockLogEvent) Interface(string, any) logger.LogEvent     { return e }
+func (e *mockLogEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+
+// TestEnhanceLoggerWithOTelNonZeroLogger verifies that when the logger
+// is not a ZeroLogger instance, it logs a warning and returns the original logger.
+func TestEnhanceLoggerWithOTelNonZeroLogger(t *testing.T) {
+	mockLog := &mockLogger{}
+	bootstrap := &appBootstrap{
+		log: mockLog,
+	}
+
+	provider := &testObservabilityProvider{
+		loggerProvider: sdklog.NewLoggerProvider(),
+	}
+	t.Cleanup(func() {
+		// Shutdown the logger provider to prevent resource leaks
+		err := provider.loggerProvider.Shutdown(context.Background())
+		require.NoError(t, err, "LoggerProvider shutdown should succeed")
+	})
+
+	result := bootstrap.enhanceLoggerWithOTel(provider)
+
+	// Should return original logger unchanged
+	assert.Same(t, mockLog, result, "Should return original logger for non-ZeroLogger")
+	assert.Same(t, mockLog, bootstrap.log, bootstrapLoggerUnchangedMsg)
+
+	// Verify that a warning was logged
+	assert.True(t, mockLog.warnCalled, "Should log a warning when logger is not a ZeroLogger")
+}
 
 // clearTestEnvironmentVariables clears environment variables that could interfere with config loading.
 // This is necessary because environment variables have the highest priority in the config loader.

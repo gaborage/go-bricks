@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/metric"
 	metricznoop "go.opentelemetry.io/otel/metric/noop"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -26,6 +27,14 @@ func (m *mockProvider) TracerProvider() trace.TracerProvider {
 
 func (m *mockProvider) MeterProvider() metric.MeterProvider {
 	return metricznoop.NewMeterProvider()
+}
+
+func (m *mockProvider) LoggerProvider() *sdklog.LoggerProvider {
+	return nil
+}
+
+func (m *mockProvider) ShouldDisableStdout() bool {
+	return false
 }
 
 func (m *mockProvider) Shutdown(_ context.Context) error {

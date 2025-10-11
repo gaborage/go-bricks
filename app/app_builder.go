@@ -90,6 +90,10 @@ func (b *Builder) ResolveDependencies() *Builder {
 	}
 
 	b.bundle = b.bootstrap.dependencies()
+	if b.bundle != nil && b.bundle.deps != nil && b.bundle.deps.Logger != nil {
+		// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
+		b.logger = b.bundle.deps.Logger
+	}
 	return b
 }
 

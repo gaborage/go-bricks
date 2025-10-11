@@ -113,6 +113,11 @@ func WrapHandler[T any, R any](
 		// Call the business logic handler
 		response, apiErr := handlerFunc(request, handlerCtx)
 
+		// Stop if the context was cancelled or the deadline fired while the handler was running.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+
 		// Handle errors
 		if apiErr != nil {
 			return formatErrorResponse(c, apiErr, cfg)

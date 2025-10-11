@@ -5,6 +5,7 @@ import (
 
 	"go.opentelemetry.io/otel/metric"
 	metricznoop "go.opentelemetry.io/otel/metric/noop"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -33,6 +34,18 @@ func (n *noopProvider) TracerProvider() trace.TracerProvider {
 // MeterProvider returns a no-op meter provider.
 func (n *noopProvider) MeterProvider() metric.MeterProvider {
 	return n.meterProvider
+}
+
+// LoggerProvider returns nil for the no-op provider.
+// Callers should check for nil before using.
+func (n *noopProvider) LoggerProvider() *sdklog.LoggerProvider {
+	return nil
+}
+
+// ShouldDisableStdout returns false for the no-op provider.
+// Since OTLP is disabled, stdout should remain enabled.
+func (n *noopProvider) ShouldDisableStdout() bool {
+	return false
 }
 
 // Shutdown is a no-op for the no-op provider.
