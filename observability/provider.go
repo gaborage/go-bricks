@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
@@ -26,8 +27,22 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
-// debugLogger is a simple logger for observability debugging
-var debugLogger = log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
+// debugLogger is a simple logger for observability debugging.
+// It only outputs when GOBRICKS_DEBUG environment variable is set to "true".
+// This prevents noisy [OBSERVABILITY] logs in production environments.
+var debugLogger = initDebugLogger()
+
+// initDebugLogger initializes the debug logger based on environment variables.
+// Returns a logger that writes to stderr if debugging is enabled, or a no-op logger otherwise.
+func initDebugLogger() *log.Logger {
+	// Check if debug logging is enabled via environment variable
+	debug := os.Getenv("GOBRICKS_DEBUG")
+	if debug == "true" || debug == "1" {
+		return log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
+	}
+	// Return a no-op logger that discards all output
+	return log.New(io.Discard, "", 0)
+}
 
 // Provider is the interface for observability providers.
 // It manages the lifecycle of tracing, metrics, and logging providers.
