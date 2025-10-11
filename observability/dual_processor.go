@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"errors"
 
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -80,10 +81,7 @@ func (p *DualModeLogProcessor) Shutdown(ctx context.Context) error {
 	errAction := p.actionProcessor.Shutdown(ctx)
 	errTrace := p.traceProcessor.Shutdown(ctx)
 
-	if errAction != nil {
-		return errAction
-	}
-	return errTrace
+	return errors.Join(errTrace, errAction)
 }
 
 // ForceFlush flushes both processors.
@@ -92,10 +90,7 @@ func (p *DualModeLogProcessor) ForceFlush(ctx context.Context) error {
 	errAction := p.actionProcessor.ForceFlush(ctx)
 	errTrace := p.traceProcessor.ForceFlush(ctx)
 
-	if errAction != nil {
-		return errAction
-	}
-	return errTrace
+	return errors.Join(errTrace, errAction)
 }
 
 // extractLogType safely extracts the log.type attribute from a record.

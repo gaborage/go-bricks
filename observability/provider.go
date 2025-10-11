@@ -101,53 +101,78 @@ func NewProvider(cfg *Config) (Provider, error) {
 	}
 
 	// Initialize trace provider if tracing is enabled
-	traceEnabled := safeCfg.Trace.Enabled != nil && *safeCfg.Trace.Enabled
-	debugLogger.Printf("Trace configuration: enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
+	traceEnabled := isProviderEnabled(safeCfg.Trace.Enabled)
+	traceConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
 		traceEnabled, safeCfg.Trace.Endpoint, safeCfg.Trace.Protocol, safeCfg.Trace.Insecure)
-
-	if traceEnabled {
-		debugLogger.Println("Initializing trace provider...")
-		if err := p.initTraceProvider(); err != nil {
-			debugLogger.Printf("Failed to initialize trace provider: %v", err)
-			return nil, fmt.Errorf("failed to initialize trace provider: %w", err)
-		}
-		debugLogger.Println("Trace provider initialized successfully")
-	} else {
-		debugLogger.Println("Trace provider skipped (disabled)")
+	if err := initializeProvider("Trace", traceEnabled, traceConfig, p.initTraceProvider); err != nil {
+		return nil, err
 	}
 
 	// Initialize meter provider if metrics are enabled
-	metricsEnabled := safeCfg.Metrics.Enabled != nil && *safeCfg.Metrics.Enabled
-	debugLogger.Printf("Metrics configuration: enabled=%v, endpoint=%s, protocol=%s",
+	metricsEnabled := isProviderEnabled(safeCfg.Metrics.Enabled)
+	metricsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
 		metricsEnabled, safeCfg.Metrics.Endpoint, safeCfg.Metrics.Protocol)
-
-	if metricsEnabled {
-		debugLogger.Println("Initializing meter provider...")
-		if err := p.initMeterProvider(); err != nil {
-			debugLogger.Printf("Failed to initialize meter provider: %v", err)
-			return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
-		}
-		debugLogger.Println("Meter provider initialized successfully")
-	} else {
-		debugLogger.Println("Meter provider skipped (disabled)")
+	if err := initializeProvider("Metrics", metricsEnabled, metricsConfig, p.initMeterProvider); err != nil {
+		return nil, err
 	}
 
 	// Initialize logger provider if logs are enabled
-	logsEnabled := safeCfg.Logs.Enabled != nil && *safeCfg.Logs.Enabled
-	debugLogger.Printf("Logs configuration: enabled=%v, endpoint=%s, protocol=%s",
+	logsEnabled := isProviderEnabled(safeCfg.Logs.Enabled)
+	logsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
 		logsEnabled, safeCfg.Logs.Endpoint, safeCfg.Logs.Protocol)
-
-	if logsEnabled {
-		debugLogger.Println("Initializing logger provider...")
-		if err := p.initLogProvider(); err != nil {
-			debugLogger.Printf("Failed to initialize logger provider: %v", err)
-			return nil, fmt.Errorf("failed to initialize logger provider: %w", err)
-		}
-		debugLogger.Println("Logger provider initialized successfully")
-	} else {
-		debugLogger.Println("Logger provider skipped (disabled)")
+	if err := initializeProvider("Logs", logsEnabled, logsConfig, p.initLogProvider); err != nil {
+		return nil, err
 	}
 
+	// Register global providers and propagator
+	p.registerGlobalProviders()
+
+	debugLogger.Println("Observability provider created successfully")
+	return p, nil
+}
+
+// MustNewProvider creates a new observability provider and panics on error.
+// This is useful for initialization where provider creation must succeed or fail fast.
+func MustNewProvider(cfg *Config) Provider {
+	p, err := NewProvider(cfg)
+	if err != nil {
+		panic(fmt.Errorf("failed to create observability provider: %w", err))
+	}
+	return p
+}
+
+// isProviderEnabled safely checks if a provider is enabled by handling nil pointer checks.
+func isProviderEnabled(enabled *bool) bool {
+	return enabled != nil && *enabled
+}
+
+// initializeProvider handles the common pattern of initializing a provider with logging.
+// It logs the configuration, attempts initialization, and returns wrapped errors on failure.
+func initializeProvider(
+	name string,
+	enabled bool,
+	config string,
+	initFunc func() error,
+) error {
+	debugLogger.Printf("%s configuration: %s", name, config)
+
+	if !enabled {
+		debugLogger.Printf("%s provider skipped (disabled)", name)
+		return nil
+	}
+
+	debugLogger.Printf("Initializing %s provider...", name)
+	if err := initFunc(); err != nil {
+		debugLogger.Printf("Failed to initialize %s provider: %v", name, err)
+		return fmt.Errorf("failed to initialize %s provider: %w", name, err)
+	}
+
+	debugLogger.Printf("%s provider initialized successfully", name)
+	return nil
+}
+
+// registerGlobalProviders sets up the global OpenTelemetry providers and propagator.
+func (p *provider) registerGlobalProviders() {
 	// Set global providers
 	if p.tracerProvider != nil {
 		debugLogger.Println("Setting global tracer provider")
@@ -165,19 +190,6 @@ func NewProvider(cfg *Config) (Provider, error) {
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
-
-	debugLogger.Println("Observability provider created successfully")
-	return p, nil
-}
-
-// MustNewProvider creates a new observability provider and panics on error.
-// This is useful for initialization where provider creation must succeed or fail fast.
-func MustNewProvider(cfg *Config) Provider {
-	p, err := NewProvider(cfg)
-	if err != nil {
-		panic(fmt.Errorf("failed to create observability provider: %w", err))
-	}
-	return p
 }
 
 // initTraceProvider initializes the OpenTelemetry trace provider.
