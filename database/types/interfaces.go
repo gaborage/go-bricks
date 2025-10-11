@@ -13,9 +13,51 @@ import (
 	"github.com/Masterminds/squirrel"
 )
 
+// Filter represents a composable WHERE clause filter that can be combined with AND/OR/NOT operators.
+// Filters are created through FilterFactory methods obtained from QueryBuilder.Filter().
+//
+// Filter embeds squirrel.Sqlizer for compatibility with Squirrel's query builder, and adds
+// ToSQL() as a convenience method with idiomatic Go naming (uppercase SQL).
+//
+// This is an interface to support mocking and testing. The concrete implementation is in
+// database/internal/builder package.
+type Filter interface {
+	squirrel.Sqlizer
+
+	// ToSQL is a convenience method with idiomatic Go naming.
+	// It should delegate to ToSql() in implementations.
+	ToSQL() (sql string, args []any, err error)
+}
+
+// FilterFactory provides methods for creating composable, type-safe query filters.
+// Filters maintain vendor-specific quoting rules and can be combined with AND/OR/NOT logic.
+type FilterFactory interface {
+	// Comparison operators
+	Eq(column string, value any) Filter
+	NotEq(column string, value any) Filter
+	Lt(column string, value any) Filter
+	Lte(column string, value any) Filter
+	Gt(column string, value any) Filter
+	Gte(column string, value any) Filter
+	In(column string, values any) Filter
+	NotIn(column string, values any) Filter
+	Like(column, pattern string) Filter
+	Null(column string) Filter
+	NotNull(column string) Filter
+	Between(column string, lowerBound, upperBound any) Filter
+
+	// Logical operators
+	And(filters ...Filter) Filter
+	Or(filters ...Filter) Filter
+	Not(filter Filter) Filter
+
+	// Raw escape hatch
+	Raw(condition string, args ...any) Filter
+}
+
 // SelectQueryBuilder defines the interface for enhanced SELECT query building with type safety.
 // This interface extends basic squirrel.SelectBuilder functionality with additional methods
-// for type-safe WHERE clauses, JOIN operations, and vendor-specific query features.
+// for composable filters, JOIN operations, and vendor-specific query features.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
 	From(from ...string) SelectQueryBuilder
@@ -31,20 +73,8 @@ type SelectQueryBuilder interface {
 	Offset(offset uint64) SelectQueryBuilder
 	Paginate(limit, offset uint64) SelectQueryBuilder
 
-	// Type-safe WHERE clause methods
-	WhereEq(column string, value any) SelectQueryBuilder
-	WhereNotEq(column string, value any) SelectQueryBuilder
-	WhereLt(column string, value any) SelectQueryBuilder
-	WhereLte(column string, value any) SelectQueryBuilder
-	WhereGt(column string, value any) SelectQueryBuilder
-	WhereGte(column string, value any) SelectQueryBuilder
-	WhereIn(column string, values any) SelectQueryBuilder
-	WhereNotIn(column string, values any) SelectQueryBuilder
-	WhereLike(column, pattern string) SelectQueryBuilder
-	WhereNull(column string) SelectQueryBuilder
-	WhereNotNull(column string) SelectQueryBuilder
-	WhereBetween(column string, lowerBound, upperBound any) SelectQueryBuilder
-	WhereRaw(condition string, args ...any) SelectQueryBuilder
+	// Composable WHERE clause
+	Where(filter Filter) SelectQueryBuilder
 
 	// SQL generation
 	ToSQL() (sql string, args []any, err error)
@@ -156,6 +186,9 @@ type Interface interface {
 type QueryBuilderInterface interface {
 	// Vendor information
 	Vendor() string
+
+	// Filter factory
+	Filter() FilterFactory
 
 	// Query builders
 	Select(columns ...string) SelectQueryBuilder

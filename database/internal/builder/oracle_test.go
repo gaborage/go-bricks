@@ -448,28 +448,29 @@ func TestTypeSafeWhereMethodsWithOracleReservedWords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query dbtypes.SelectQueryBuilder
+			f := qb.Filter()
 
 			// Build query based on the test case
 			switch tt.method {
 			case "WhereEq":
 				switch tt.column {
 				case "number":
-					query = qb.Select("id", "name", "number").From("accounts").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "name", "number").From("accounts").Where(f.Eq(tt.column, tt.value))
 				case "level":
-					query = qb.Select("id", "level").From("users").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "level").From("users").Where(f.Eq(tt.column, tt.value))
 				default:
-					query = qb.Select("id", "name").From("users").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "name").From("users").Where(f.Eq(tt.column, tt.value))
 				}
 			case "WhereNotEq":
-				query = qb.Select("id", "size").From("products").WhereNotEq(tt.column, tt.value)
+				query = qb.Select("id", "size").From("products").Where(f.NotEq(tt.column, tt.value))
 			case "WhereGt":
-				query = qb.Select("id", "access").From("permissions").WhereGt(tt.column, tt.value)
+				query = qb.Select("id", "access").From("permissions").Where(f.Gt(tt.column, tt.value))
 			case "WhereLt":
-				query = qb.Select("id", "order").From("items").WhereLt(tt.column, tt.value)
+				query = qb.Select("id", "order").From("items").Where(f.Lt(tt.column, tt.value))
 			case "WhereIn":
-				query = qb.Select("id", "mode").From("settings").WhereIn(tt.column, tt.value)
+				query = qb.Select("id", "mode").From("settings").Where(f.In(tt.column, tt.value))
 			case "WhereNull":
-				query = qb.Select("id", "comment").From("posts").WhereNull(tt.column)
+				query = qb.Select("id", "comment").From("posts").Where(f.Null(tt.column))
 			}
 
 			sql, args, err := query.ToSQL()
@@ -515,10 +516,11 @@ func TestWhereRawForComplexOracleQueries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query dbtypes.SelectQueryBuilder
+			f := qb.Filter()
 			if tt.name == "oracle_specific_rownum" {
-				query = qb.Select("id", "name").From("users").WhereRaw(tt.condition, tt.args...)
+				query = qb.Select("id", "name").From("users").Where(f.Raw(tt.condition, tt.args...))
 			} else {
-				query = qb.Select("id", "name").From("accounts").WhereRaw(tt.condition, tt.args...)
+				query = qb.Select("id", "name").From("accounts").Where(f.Raw(tt.condition, tt.args...))
 			}
 
 			sql, args, err := query.ToSQL()
@@ -539,9 +541,10 @@ func TestFixesOriginalOracleIdentifierBug(t *testing.T) {
 	//                                                                                                               ^^^^^^ unquoted
 
 	// Using type-safe WHERE method should properly quote the reserved word
+	f := qb.Filter()
 	query := qb.Select("id", "name", "number", "balance", "created_at", "created_by", "updated_at", "updated_by").
 		From("accounts").
-		WhereEq("number", "54763470")
+		Where(f.Eq("number", "54763470"))
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)

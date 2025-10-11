@@ -62,6 +62,21 @@ func (qb *QueryBuilder) Vendor() string {
 	return qb.vendor
 }
 
+// Filter returns a FilterFactory for creating composable WHERE clause filters.
+// The factory provides type-safe methods (Eq, Lt, Gt, etc.) that automatically handle
+// vendor-specific column quoting, as well as composition methods (And, Or, Not).
+//
+// Example:
+//
+//	f := qb.Filter()
+//	query := qb.Select("*").From("users").Where(f.And(
+//	    f.Eq("status", "active"),
+//	    f.Gt("age", 18),
+//	))
+func (qb *QueryBuilder) Filter() *FilterFactory {
+	return newFilterFactory(qb)
+}
+
 // Select creates a SELECT query builder with vendor-specific column quoting.
 // For Oracle, it applies identifier quoting to handle reserved words appropriately.
 func (qb *QueryBuilder) Select(columns ...string) *SelectQueryBuilder {
@@ -286,121 +301,46 @@ func (sqb *SelectQueryBuilder) Offset(offset uint64) dbtypes.SelectQueryBuilder 
 	return sqb
 }
 
-// WhereEq adds an equality condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereEq(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Eq(column, value))
-	return sqb
-}
-
-// WhereNotEq adds a not-equal condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotEq(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.NotEq(column, value))
-	return sqb
-}
-
-// WhereLt adds a less-than condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereLt(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Lt(column, value))
-	return sqb
-}
-
-// WhereLte adds a less-than-or-equal condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereLte(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.LtOrEq(column, value))
-	return sqb
-}
-
-// WhereGt adds a greater-than condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereGt(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Gt(column, value))
-	return sqb
-}
-
-// WhereGte adds a greater-than-or-equal condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereGte(column string, value any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.GtOrEq(column, value))
-	return sqb
-}
-
-// WhereIn adds an IN condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereIn(column string, values any) dbtypes.SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Eq{quotedColumn: values})
-	return sqb
-}
-
-// WhereNotIn adds a NOT IN condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotIn(column string, values any) dbtypes.SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.NotEq{quotedColumn: values})
-	return sqb
-}
-
-// WhereLike adds a case-insensitive LIKE condition to the WHERE clause.
-// This uses vendor-specific case-insensitive logic:
-// - PostgreSQL: Uses ILIKE operator
-// - Oracle: Uses UPPER() function on both column and value
-// - Other vendors: Uses standard LIKE
-func (sqb *SelectQueryBuilder) WhereLike(column, pattern string) dbtypes.SelectQueryBuilder {
-	condition := sqb.qb.BuildCaseInsensitiveLike(column, pattern)
-	sqb.selectBuilder = sqb.selectBuilder.Where(condition)
-	return sqb
-}
-
-// WhereNull adds an IS NULL condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNull(column string) dbtypes.SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Eq{quotedColumn: nil})
-	return sqb
-}
-
-// WhereNotNull adds an IS NOT NULL condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereNotNull(column string) dbtypes.SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.NotEq{quotedColumn: nil})
-	return sqb
-}
-
-// WhereBetween adds a BETWEEN condition to the WHERE clause.
-// The column name is automatically quoted according to database vendor rules.
-func (sqb *SelectQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) dbtypes.SelectQueryBuilder {
-	quotedColumn := sqb.qb.quoteColumnForQuery(column)
-	condition := squirrel.And{
-		squirrel.GtOrEq{quotedColumn: lowerBound},
-		squirrel.LtOrEq{quotedColumn: upperBound},
-	}
-	sqb.selectBuilder = sqb.selectBuilder.Where(condition)
-	return sqb
-}
-
-// WhereRaw adds a raw SQL WHERE condition to the query.
+// Where adds a filter to the WHERE clause.
+// Multiple calls to Where() will be combined with AND logic.
 //
-// WARNING: This method bypasses all identifier quoting and SQL injection protection.
-// It is the caller's responsibility to:
-//   - Properly quote any identifiers (especially Oracle reserved words like "number", "level", "size")
-//   - Ensure the SQL fragment is valid for the target database
-//   - Never concatenate user input directly into the condition string
+// Create filters using the FilterFactory obtained from QueryBuilder.Filter():
 //
-// Use this method ONLY when the type-safe methods cannot express your condition.
-// For Oracle, remember to quote reserved words: WhereRaw(`"number" = ?`, value)
+// Simple condition:
 //
-// Examples:
+//	f := qb.Filter()
+//	query.Where(f.Eq("status", "active"))
 //
-//	sqb.WhereRaw(`"number" = ?`, accountNumber)  // Oracle reserved word
-//	sqb.WhereRaw(`ROWNUM <= ?`, 10)              // Oracle-specific syntax
-//	sqb.WhereRaw(`ST_Distance(location, ?) < ?`, point, radius) // Spatial queries
-func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Where(condition, args...)
+// Multiple conditions with AND:
+//
+//	f := qb.Filter()
+//	query.Where(f.And(
+//	    f.Eq("status", "active"),
+//	    f.Gt("age", 18),
+//	))
+//
+// OR conditions:
+//
+//	f := qb.Filter()
+//	query.Where(f.Or(
+//	    f.Eq("status", "active"),
+//	    f.Eq("role", "admin"),
+//	))
+//
+// Complex nested logic:
+//
+//	f := qb.Filter()
+//	query.Where(f.And(
+//	    f.Or(
+//	        f.Eq("status", "active"),
+//	        f.Eq("status", "pending"),
+//	    ),
+//	    f.Gt("balance", 1000),
+//	))
+func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryBuilder {
+	// Pass the filter directly to squirrel - it implements squirrel.Sqlizer
+	// Squirrel will call ToSql() and handle placeholder numbering across multiple Where() calls
+	sqb.selectBuilder = sqb.selectBuilder.Where(filter)
 	return sqb
 }
 

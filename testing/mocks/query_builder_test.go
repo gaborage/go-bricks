@@ -15,6 +15,120 @@ type MockSelectQueryBuilder struct {
 	mock.Mock
 }
 
+// MockFilterFactory provides a mock implementation of types.FilterFactory for testing
+type MockFilterFactory struct {
+	mock.Mock
+}
+
+func (m *MockFilterFactory) Eq(column string, value any) types.Filter {
+	args := m.MethodCalled("Eq", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotEq(column string, value any) types.Filter {
+	args := m.MethodCalled("NotEq", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Lt(column string, value any) types.Filter {
+	args := m.MethodCalled("Lt", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Lte(column string, value any) types.Filter {
+	args := m.MethodCalled("Lte", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Gt(column string, value any) types.Filter {
+	args := m.MethodCalled("Gt", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Gte(column string, value any) types.Filter {
+	args := m.MethodCalled("Gte", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) In(column string, values any) types.Filter {
+	args := m.MethodCalled("In", column, values)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotIn(column string, values any) types.Filter {
+	args := m.MethodCalled("NotIn", column, values)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Like(column, pattern string) types.Filter {
+	args := m.MethodCalled("Like", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Null(column string) types.Filter {
+	args := m.MethodCalled("Null", column)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotNull(column string) types.Filter {
+	args := m.MethodCalled("NotNull", column)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Between(column string, lowerBound, upperBound any) types.Filter {
+	args := m.MethodCalled("Between", column, lowerBound, upperBound)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) And(filters ...types.Filter) types.Filter {
+	callArgs := make([]any, len(filters))
+	for i, filter := range filters {
+		callArgs[i] = filter
+	}
+	args := m.MethodCalled("And", callArgs...)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Or(filters ...types.Filter) types.Filter {
+	callArgs := make([]any, len(filters))
+	for i, filter := range filters {
+		callArgs[i] = filter
+	}
+	args := m.MethodCalled("Or", callArgs...)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Not(filter types.Filter) types.Filter {
+	args := m.MethodCalled("Not", filter)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Raw(condition string, args ...any) types.Filter {
+	callArgs := append([]any{condition}, args...)
+	mockArgs := m.MethodCalled("Raw", callArgs...)
+	return mockArgs.Get(0).(types.Filter)
+}
+
+var _ types.FilterFactory = (*MockFilterFactory)(nil)
+
+// MockFilter provides a mock implementation of types.Filter for testing
+type MockFilter struct {
+	mock.Mock
+}
+
+func (m *MockFilter) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+}
+
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (m *MockFilter) ToSql() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSql")
+	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+}
+
+var _ types.Filter = (*MockFilter)(nil)
+
 func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	callArgs := make([]any, len(from))
 	for i, table := range from {
@@ -54,9 +168,8 @@ func (m *MockSelectQueryBuilder) CrossJoin(join string, rest ...any) types.Selec
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) Where(pred any, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{pred}, rest...)
-	args := m.MethodCalled("Where", callArgs...)
+func (m *MockSelectQueryBuilder) Where(filter types.Filter) types.SelectQueryBuilder {
+	args := m.MethodCalled("Where", filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -99,72 +212,6 @@ func (m *MockSelectQueryBuilder) Paginate(limit, offset uint64) types.SelectQuer
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) WhereEq(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereEq", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotEq(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotEq", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLt(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLt", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLte(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLte", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereGt(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereGt", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereGte(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereGte", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereIn(column string, values any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereIn", column, values)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotIn(column string, values any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotIn", column, values)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLike(column, pattern string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLike", column, pattern)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNull(column string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNull", column)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotNull(column string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotNull", column)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereBetween", column, lowerBound, upperBound)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereRaw(condition string, args ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{condition}, args...)
-	mockArgs := m.MethodCalled("WhereRaw", callArgs...)
-	return mockArgs.Get(0).(types.SelectQueryBuilder)
-}
-
 func (m *MockSelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
 	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
@@ -188,7 +235,8 @@ func (s *ExampleUserService) BuildUserSearchQuery(searchTerm string) types.Selec
 	query := s.qb.Select("id", "name", "email").From("users")
 
 	if searchTerm != "" {
-		query = query.WhereLike("name", searchTerm)
+		f := s.qb.Filter()
+		query = query.Where(f.Like("name", searchTerm))
 	}
 
 	return query
@@ -218,13 +266,18 @@ func TestMockQueryBuilderQueryConstruction(t *testing.T) {
 	// Create and configure mocks
 	mockQB := &MockQueryBuilder{}
 	mockSelectBuilder := &MockSelectQueryBuilder{}
+	mockFilterFactory := &MockFilterFactory{}
+	mockFilter := &MockFilter{}
 	defer mockQB.AssertExpectations(t)
 	defer mockSelectBuilder.AssertExpectations(t)
+	defer mockFilterFactory.AssertExpectations(t)
 
 	// Set expectations
 	mockQB.On("Select", "id", "name", "email").Return(mockSelectBuilder)
 	mockSelectBuilder.On("From", "users").Return(mockSelectBuilder)
-	mockSelectBuilder.On("WhereLike", "name", "john").Return(mockSelectBuilder)
+	mockQB.On("Filter").Return(mockFilterFactory)
+	mockFilterFactory.On("Like", "name", "john").Return(mockFilter)
+	mockSelectBuilder.On("Where", mockFilter).Return(mockSelectBuilder)
 
 	// Test the service
 	service := NewExampleUserService(mockQB)

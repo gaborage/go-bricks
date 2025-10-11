@@ -213,7 +213,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereLte",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereLte("age", 30).ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.Lte("age", 30)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE age <= $1`,
@@ -221,7 +222,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereGte",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereGte("age", 18).ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.Gte("age", 18)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE age >= $1`,
@@ -229,7 +231,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereNotIn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereNotIn("status", []string{"banned", "deleted"}).ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.NotIn("status", []string{"banned", "deleted"})).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE status NOT IN ($1,$2)`,
@@ -237,7 +240,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereNull",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereNull("deleted_at").ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.Null("deleted_at")).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE deleted_at IS NULL`,
@@ -245,7 +249,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereNotNull",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereNotNull("email").ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.NotNull("email")).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE email IS NOT NULL`,
@@ -253,7 +258,8 @@ func TestWhereClauseMethods(t *testing.T) {
 		{
 			name: "WhereBetween",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").WhereBetween("age", 18, 65).ToSQL()
+				f := qb.Filter()
+				sql, _, _ := qb.Select("*").From("users").Where(f.Between("age", 18, 65)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE (age >= $1 AND age <= $2)`,
@@ -291,7 +297,8 @@ func TestWhereLike(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.vendor, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			sql, args, err := qb.Select("*").From("users").WhereLike("name", "john").ToSQL()
+			f := qb.Filter()
+			sql, args, err := qb.Select("*").From("users").Where(f.Like("name", "john")).ToSQL()
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedSQL, sql)
 			assert.Len(t, args, 1)

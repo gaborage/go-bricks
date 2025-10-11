@@ -26,6 +26,12 @@ func (qb *QueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
 	return qb.QueryBuilder.Select(columns...)
 }
 
+// Filter returns a FilterFactory for creating composable WHERE clause filters.
+// This method overrides the embedded builder to provide the correct interface.
+func (qb *QueryBuilder) Filter() types.FilterFactory {
+	return qb.QueryBuilder.Filter()
+}
+
 // Interface compliance check: ensure *QueryBuilder implements types.QueryBuilderInterface
 var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 
