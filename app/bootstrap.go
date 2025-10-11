@@ -185,15 +185,15 @@ func (b *appBootstrap) enhanceLoggerWithOTel(provider observability.Provider) lo
 		Msg("Enhancing logger with OTLP export")
 
 	// Enhance the logger with OTLP export
+	b.log.Info().
+		Str("mode", getLogOutputMode(provider.ShouldDisableStdout())).
+		Msg("OTLP log export enabled")
+
 	// This will panic if the logger is in pretty mode (fail-fast configuration validation)
 	enhancedLogger := zerologger.WithOTelProvider(provider)
 
 	// Replace bootstrap logger so subsequent components reuse the enhanced instance
 	b.log = enhancedLogger
-
-	b.log.Info().
-		Str("mode", getLogOutputMode(provider.ShouldDisableStdout())).
-		Msg("OTLP log export enabled")
 
 	return enhancedLogger
 }

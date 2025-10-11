@@ -28,6 +28,19 @@ func Float64Ptr(v float64) *float64 {
 	return &v
 }
 
+// cloneHeaderMap creates a deep copy of a header map to avoid aliasing.
+// Returns nil if the input is nil.
+func cloneHeaderMap(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(headers))
+	for k, v := range headers {
+		clone[k] = v
+	}
+	return clone
+}
+
 // Config defines the configuration for observability features.
 // It supports automatic unmarshaling via the GoBricks config system using mapstructure tags.
 type Config struct {
@@ -192,9 +205,10 @@ func (c *Config) applyLogsDefaults() {
 		c.Logs.Insecure = BoolPtr(c.Trace.Insecure)
 	}
 
-	// Headers default - inherit from trace configuration if not set
+	// Headers default - clone from trace configuration if not set
+	// Clone the map to avoid aliasing (mutations to Logs.Headers shouldn't affect Trace.Headers)
 	if c.Logs.Headers == nil && c.Trace.Headers != nil {
-		c.Logs.Headers = c.Trace.Headers
+		c.Logs.Headers = cloneHeaderMap(c.Trace.Headers)
 	}
 
 	// Deprecated: Sample rate configuration (dual-mode logging uses different approach)

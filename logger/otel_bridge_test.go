@@ -126,3 +126,78 @@ func TestBuildLogRecordWithTraceParentFallback(t *testing.T) {
 	assert.Equal(t, "bbbbbbbbbbbbbbbb", spanCtx.SpanID().String())
 	assert.Equal(t, trace.TraceFlags(0x01), spanCtx.TraceFlags())
 }
+
+func TestBuildLogRecordAddsTraceAttributes(t *testing.T) {
+	entry := map[string]any{
+		"trace_id":    "0123456789abcdef0123456789abcdef",
+		"span_id":     "fedcba9876543210",
+		"trace_flags": "1",
+		"message":     "test message",
+		"level":       "info",
+	}
+
+	rec, ctx := buildLogRecord(entry)
+
+	// Verify context has span context
+	spanCtx := trace.SpanContextFromContext(ctx)
+	require.True(t, spanCtx.IsValid(), "span context should be populated")
+
+	// Verify trace attributes are added to the record
+	var foundTraceID, foundSpanID, foundTraceFlags bool
+	var traceIDValue, spanIDValue string
+	var traceFlagsValue int64
+
+	rec.WalkAttributes(func(kv log.KeyValue) bool {
+		switch kv.Key {
+		case "trace_id":
+			if kv.Value.Kind() == log.KindString {
+				traceIDValue = kv.Value.AsString()
+				foundTraceID = true
+			}
+		case "span_id":
+			if kv.Value.Kind() == log.KindString {
+				spanIDValue = kv.Value.AsString()
+				foundSpanID = true
+			}
+		case "trace_flags":
+			if kv.Value.Kind() == log.KindInt64 {
+				traceFlagsValue = kv.Value.AsInt64()
+				foundTraceFlags = true
+			}
+		}
+		return true // Continue iteration
+	})
+
+	assert.True(t, foundTraceID, "trace_id attribute should be present")
+	assert.True(t, foundSpanID, "span_id attribute should be present")
+	assert.True(t, foundTraceFlags, "trace_flags attribute should be present")
+
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", traceIDValue)
+	assert.Equal(t, "fedcba9876543210", spanIDValue)
+	assert.Equal(t, int64(1), traceFlagsValue)
+}
+
+func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
+	entry := map[string]any{
+		"message": "test message without trace",
+		"level":   "info",
+	}
+
+	rec, ctx := buildLogRecord(entry)
+
+	// Verify context has no span context
+	spanCtx := trace.SpanContextFromContext(ctx)
+	assert.False(t, spanCtx.IsValid(), "span context should not be present")
+
+	// Verify no trace attributes are added
+	var foundTraceAttr bool
+	rec.WalkAttributes(func(kv log.KeyValue) bool {
+		if kv.Key == "trace_id" || kv.Key == "span_id" || kv.Key == "trace_flags" {
+			foundTraceAttr = true
+			return false // Stop iteration
+		}
+		return true
+	})
+
+	assert.False(t, foundTraceAttr, "no trace attributes should be added when trace context is absent")
+}

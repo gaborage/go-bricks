@@ -5,6 +5,7 @@ import (
 
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -23,6 +24,13 @@ type DualModeLogProcessor struct {
 
 // NewDualModeLogProcessor creates a new dual-mode log processor.
 func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor) *DualModeLogProcessor {
+	if actionProcessor == nil {
+		panic("observability: actionProcessor cannot be nil")
+	}
+	if traceProcessor == nil {
+		panic("observability: traceProcessor cannot be nil")
+	}
+
 	return &DualModeLogProcessor{
 		actionProcessor: actionProcessor,
 		traceProcessor:  traceProcessor,
@@ -31,6 +39,9 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor) *
 
 // OnEmit routes the log record to the appropriate processor based on log.type attribute.
 func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) error {
+	// Enrich record with trace context from context parameter
+	enrichTraceContext(ctx, rec)
+
 	logType := extractLogType(rec)
 
 	// Action logs: export all severities (INFO, WARN, ERROR)
@@ -103,4 +114,113 @@ func extractLogType(rec *sdklog.Record) string {
 	})
 
 	return logType
+}
+
+// enrichTraceContext populates the SDK log record's canonical trace fields (TraceID, SpanID, TraceFlags)
+// from two sources (in order of preference):
+//  1. Span context in the provided context (primary source from active traces)
+//  2. String attributes "trace_id" and "span_id" in the log record (fallback for parsed logs)
+//
+// This dual-source approach ensures canonical fields are populated even when:
+//   - Logs are parsed from JSON without active trace context (OTelBridge)
+//   - Logs are forwarded through async processors that may lose context
+//   - External systems emit logs with trace correlation attributes
+//
+// The trace IDs are also kept as string attributes for text-based queryability.
+func enrichTraceContext(ctx context.Context, rec *sdklog.Record) {
+	// Primary source: Extract from context if available
+	if enrichFromContext(ctx, rec) {
+		return
+	}
+
+	// Fallback source: Extract from record attributes when context doesn't have trace
+	enrichFromAttributes(rec)
+}
+
+// enrichFromContext populates canonical trace fields from the span context.
+// Returns true if fields were successfully populated.
+func enrichFromContext(ctx context.Context, rec *sdklog.Record) bool {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return false
+	}
+
+	traceID := spanCtx.TraceID()
+	spanID := spanCtx.SpanID()
+	if !traceID.IsValid() || !spanID.IsValid() {
+		return false
+	}
+
+	rec.SetTraceID(traceID)
+	rec.SetSpanID(spanID)
+	rec.SetTraceFlags(spanCtx.TraceFlags())
+	return true
+}
+
+// traceAttributeCollector holds parsed trace correlation attributes.
+type traceAttributeCollector struct {
+	traceIDStr   string
+	spanIDStr    string
+	traceFlags   trace.TraceFlags
+	foundTraceID bool
+	foundSpanID  bool
+	foundFlags   bool
+}
+
+// collect extracts trace correlation attributes from a key-value pair.
+// Returns false to stop iteration when all required attributes are found.
+func (c *traceAttributeCollector) collect(kv log.KeyValue) bool {
+	switch kv.Key {
+	case "trace_id":
+		if kv.Value.Kind() == log.KindString {
+			c.traceIDStr = kv.Value.AsString()
+			c.foundTraceID = true
+		}
+	case "span_id":
+		if kv.Value.Kind() == log.KindString {
+			c.spanIDStr = kv.Value.AsString()
+			c.foundSpanID = true
+		}
+	case "trace_flags":
+		if kv.Value.Kind() == log.KindInt64 {
+			flagsInt := kv.Value.AsInt64()
+			if flagsInt >= 0 && flagsInt <= 255 {
+				c.traceFlags = trace.TraceFlags(uint8(flagsInt))
+				c.foundFlags = true
+			}
+		}
+	}
+	// Continue iteration until all required fields found
+	return !c.foundTraceID || !c.foundSpanID || !c.foundFlags
+}
+
+// enrichFromAttributes populates canonical trace fields from log record attributes.
+// This handles logs parsed from JSON (OTelBridge) or forwarded from external systems.
+func enrichFromAttributes(rec *sdklog.Record) {
+	collector := &traceAttributeCollector{}
+	rec.WalkAttributes(collector.collect)
+
+	if !collector.foundTraceID || !collector.foundSpanID {
+		return
+	}
+
+	// Parse and validate trace ID
+	traceID, err := trace.TraceIDFromHex(collector.traceIDStr)
+	if err != nil || !traceID.IsValid() {
+		return
+	}
+
+	// Parse and validate span ID
+	spanID, err := trace.SpanIDFromHex(collector.spanIDStr)
+	if err != nil || !spanID.IsValid() {
+		return
+	}
+
+	// Populate canonical fields (only after validation to avoid zeroing on parse errors)
+	rec.SetTraceID(traceID)
+	rec.SetSpanID(spanID)
+	if collector.foundFlags {
+		rec.SetTraceFlags(collector.traceFlags)
+	}
+	// If trace_flags not found, TraceFlags defaults to 0 (not sampled) which is valid
 }

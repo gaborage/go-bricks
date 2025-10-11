@@ -67,8 +67,8 @@ func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
 			// Execute request
 			err := next(c)
 
-			// Calculate request latency
-			latency := time.Since(reqCtx.startTime)
+			// Calculate request latency (thread-safe read)
+			latency := time.Since(reqCtx.getStartTime())
 			status := c.Response().Status
 
 			// Update peak severity based on final HTTP status
@@ -81,7 +81,7 @@ func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
 			// This ensures that error responses always produce a final log entry, either as:
 			// - An action log with WARN/ERROR severity (if no explicit logs during execution)
 			// - Trace logs already emitted during request lifecycle (if explicit WARN+ logs occurred)
-			shouldLogActionSummary := !reqCtx.hadExplicitWarning
+			shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
 			if shouldLogActionSummary {
 				logActionSummary(c, log, cfg, reqCtx, latency, status, err)
 			}
@@ -201,7 +201,8 @@ func determineSeverity(
 
 	// WARN (result_code): Slow request (latency exceeds threshold)
 	// Log level stays INFO, but result_code is WARN for filtering slow requests
-	if latency > threshold {
+	// Only check if threshold is positive (zero or negative disables slow request detection)
+	if threshold > 0 && latency > threshold {
 		return levelInfo, codeWarn
 	}
 

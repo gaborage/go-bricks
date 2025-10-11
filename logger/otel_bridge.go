@@ -55,14 +55,20 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 
 	ctx := context.Background()
 	var traceIDStr, spanIDStr string
+	var traceFlags trace.TraceFlags
+	hasTraceContext := false
 
 	if spanCtx, ok := extractSpanContext(entry); ok {
 		ctx = trace.ContextWithSpanContext(ctx, spanCtx)
 
-		// Extract trace_id and span_id for log attributes (enables backend queries)
+		// Extract trace_id, span_id, and trace_flags for log attributes
+		// These string/int attributes enable backend queries and serve as fallback
+		// for enriching canonical OTLP trace fields when context is unavailable.
 		if spanCtx.IsValid() {
 			traceIDStr = spanCtx.TraceID().String()
 			spanIDStr = spanCtx.SpanID().String()
+			traceFlags = spanCtx.TraceFlags()
+			hasTraceContext = true
 		}
 	}
 
@@ -72,10 +78,13 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 	applyAttributes(&rec, entry)
 
 	// Add trace correlation attributes if available
-	if traceIDStr != "" {
+	// - String format (trace_id, span_id) enables text-based queries
+	// - Int format (trace_flags) enables fallback enrichment of canonical fields
+	if hasTraceContext {
 		rec.AddAttributes(
 			log.String("trace_id", traceIDStr),
 			log.String("span_id", spanIDStr),
+			log.Int64("trace_flags", int64(traceFlags)),
 		)
 	}
 

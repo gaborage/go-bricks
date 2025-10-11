@@ -1,6 +1,7 @@
 package server
 
 import (
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -14,7 +15,11 @@ const RequestLogContextKey = "_request_log_ctx"
 // requestLogContext tracks request-scoped logging state for dual-mode logging.
 // It's stored in Echo's context (via c.Set/c.Get) to track severity escalation
 // and determine whether to emit an action log summary or let trace logs flow.
+//
+// Thread-safety: All fields are protected by mu to allow concurrent access from
+// multiple goroutines (e.g., severity hook callbacks, async request handlers).
 type requestLogContext struct {
+	mu                 sync.Mutex    // Protects all fields below
 	startTime          time.Time     // Request start time
 	peakSeverity       zerolog.Level // Highest severity observed during request lifecycle
 	hasWarning         bool          // Quick flag: true if any WARN+ log emitted
@@ -57,7 +62,11 @@ func (r *requestLogContext) escalateSeverityFromStatus(level zerolog.Level) {
 }
 
 // escalateSeverityInternal is the internal implementation of severity escalation.
+// Thread-safe: Protected by mutex to handle concurrent calls from multiple goroutines.
 func (r *requestLogContext) escalateSeverityInternal(level zerolog.Level, isExplicit bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if level > r.peakSeverity {
 		r.peakSeverity = level
 	}
@@ -71,6 +80,20 @@ func (r *requestLogContext) escalateSeverityInternal(level zerolog.Level, isExpl
 	}
 }
 
+// getStartTime returns the request start time in a thread-safe manner.
+func (r *requestLogContext) getStartTime() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.startTime
+}
+
+// hadExplicitWarningOccurred returns whether an explicit WARN+ log was emitted in a thread-safe manner.
+func (r *requestLogContext) hadExplicitWarningOccurred() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hadExplicitWarning
+}
+
 // EscalateSeverity allows application code to explicitly escalate request severity.
 // Useful for non-logging events that should trigger WARN+ action logs (e.g., rate limiting).
 //
@@ -79,6 +102,8 @@ func (r *requestLogContext) escalateSeverityInternal(level zerolog.Level, isExpl
 //	if rateLimit.Exceeded() {
 //	    server.EscalateSeverity(c, zerolog.WarnLevel)
 //	}
+//
+// Thread-safe: Can be called from multiple goroutines concurrently.
 func EscalateSeverity(c echo.Context, level zerolog.Level) {
 	if reqCtx := getRequestLogContext(c); reqCtx != nil {
 		reqCtx.escalateSeverity(level)

@@ -1065,7 +1065,7 @@ observability:
 ### Observability Benefits in Practice
 
 #### Before (Fragmented)
-```
+```text
 Developer Workflow:
 1. Check application logs (stdout/files)
 2. Find error message
@@ -1080,7 +1080,7 @@ Challenges:
 ```
 
 #### After (Unified)
-```
+```text
 Developer Workflow:
 1. Open Grafana Explore
 2. Search logs by trace_id
