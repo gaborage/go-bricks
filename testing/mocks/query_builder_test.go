@@ -129,6 +129,64 @@ func (m *MockFilter) ToSql() (sql string, args []any, err error) {
 
 var _ types.Filter = (*MockFilter)(nil)
 
+// MockUpdateQueryBuilder provides a mock implementation of types.UpdateQueryBuilder for testing
+type MockUpdateQueryBuilder struct {
+	mock.Mock
+}
+
+func (m *MockUpdateQueryBuilder) Set(column string, value any) types.UpdateQueryBuilder {
+	args := m.MethodCalled("Set", column, value)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) SetMap(clauses map[string]any) types.UpdateQueryBuilder {
+	args := m.MethodCalled("SetMap", clauses)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) Where(filter types.Filter) types.UpdateQueryBuilder {
+	args := m.MethodCalled("Where", filter)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+}
+
+var _ types.UpdateQueryBuilder = (*MockUpdateQueryBuilder)(nil)
+
+// MockDeleteQueryBuilder provides a mock implementation of types.DeleteQueryBuilder for testing
+type MockDeleteQueryBuilder struct {
+	mock.Mock
+}
+
+func (m *MockDeleteQueryBuilder) Where(filter types.Filter) types.DeleteQueryBuilder {
+	args := m.MethodCalled("Where", filter)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) Limit(limit uint64) types.DeleteQueryBuilder {
+	args := m.MethodCalled("Limit", limit)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) OrderBy(orderBys ...string) types.DeleteQueryBuilder {
+	callArgs := make([]any, len(orderBys))
+	for i, col := range orderBys {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("OrderBy", callArgs...)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+}
+
+var _ types.DeleteQueryBuilder = (*MockDeleteQueryBuilder)(nil)
+
 func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	callArgs := make([]any, len(from))
 	for i, table := range from {
@@ -138,33 +196,28 @@ func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) Join(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("Join", callArgs...)
+func (m *MockSelectQueryBuilder) JoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("JoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) LeftJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("LeftJoin", callArgs...)
+func (m *MockSelectQueryBuilder) LeftJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("LeftJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) RightJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("RightJoin", callArgs...)
+func (m *MockSelectQueryBuilder) RightJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("RightJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) InnerJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("InnerJoin", callArgs...)
+func (m *MockSelectQueryBuilder) InnerJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("InnerJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) CrossJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("CrossJoin", callArgs...)
+func (m *MockSelectQueryBuilder) CrossJoinOn(table string) types.SelectQueryBuilder {
+	args := m.MethodCalled("CrossJoinOn", table)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -310,20 +363,20 @@ func TestMockQueryBuilderEmptySearchTerm(t *testing.T) {
 func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	mockQB := &MockQueryBuilder{}
 	mockSelectBuilder := &MockSelectQueryBuilder{}
+	mockUpdateBuilder := &MockUpdateQueryBuilder{}
+	mockDeleteBuilder := &MockDeleteQueryBuilder{}
 	defer mockQB.AssertExpectations(t)
 
 	// Test helper methods
 	insertBuilder := squirrel.Insert("users")
-	updateBuilder := squirrel.Update("users")
-	deleteBuilder := squirrel.Delete("users")
 	likeCondition := squirrel.ILike{"name": "%test%"}
 
 	// Use helper methods to set expectations
 	mockQB.ExpectVendor("postgresql")
 	mockQB.ExpectSelect([]string{"*"}, mockSelectBuilder)
 	mockQB.ExpectInsert("users", insertBuilder)
-	mockQB.ExpectUpdate("users", updateBuilder)
-	mockQB.ExpectDelete("users", deleteBuilder)
+	mockQB.ExpectUpdate("users", mockUpdateBuilder)
+	mockQB.ExpectDelete("users", mockDeleteBuilder)
 	mockQB.ExpectCaseInsensitiveLike("name", "test", likeCondition)
 	mockQB.ExpectCurrentTimestamp("NOW()")
 	mockQB.ExpectUUIDGeneration("gen_random_uuid()")
@@ -334,8 +387,8 @@ func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	assert.Equal(t, "postgresql", mockQB.Vendor())
 	assert.Equal(t, mockSelectBuilder, mockQB.Select("*"))
 	assert.Equal(t, insertBuilder, mockQB.Insert("users"))
-	assert.Equal(t, updateBuilder, mockQB.Update("users"))
-	assert.Equal(t, deleteBuilder, mockQB.Delete("users"))
+	assert.Equal(t, mockUpdateBuilder, mockQB.Update("users"))
+	assert.Equal(t, mockDeleteBuilder, mockQB.Delete("users"))
 	assert.Equal(t, likeCondition, mockQB.BuildCaseInsensitiveLike("name", "test"))
 	assert.Equal(t, "NOW()", mockQB.BuildCurrentTimestamp())
 	assert.Equal(t, "gen_random_uuid()", mockQB.BuildUUIDGeneration())

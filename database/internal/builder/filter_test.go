@@ -115,19 +115,55 @@ func TestFilterInNotIn(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	f := qb.Filter()
 
-	// Test IN - filter returns ? placeholders
-	filterIn := f.In("status", []string{"active", "pending"})
-	sql, args, err := filterIn.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, "status IN (?,?)", sql)
-	assert.Equal(t, []any{"active", "pending"}, args)
+	t.Run("In with slice", func(t *testing.T) {
+		filterIn := f.In("status", []string{"active", "pending"})
+		sql, args, err := filterIn.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "status IN (?,?)", sql)
+		assert.Equal(t, []any{"active", "pending"}, args)
+	})
 
-	// Test NOT IN - filter returns ? placeholders
-	filterNotIn := f.NotIn("status", []string{"deleted", "banned"})
-	sql, args, err = filterNotIn.ToSQL()
-	require.NoError(t, err)
-	assert.Equal(t, "status NOT IN (?,?)", sql)
-	assert.Equal(t, []any{"deleted", "banned"}, args)
+	t.Run("In with scalar (normalized to slice)", func(t *testing.T) {
+		filterIn := f.In("status", "active")
+		sql, args, err := filterIn.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "status IN (?)", sql)
+		assert.Equal(t, []any{"active"}, args)
+	})
+
+	t.Run("In with nil (empty slice - always false)", func(t *testing.T) {
+		filterIn := f.In("status", nil)
+		sql, args, err := filterIn.ToSQL()
+		require.NoError(t, err)
+		// Squirrel generates (1=0) for empty IN - logically "always false"
+		assert.Equal(t, "(1=0)", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("NotIn with slice", func(t *testing.T) {
+		filterNotIn := f.NotIn("status", []string{"deleted", "banned"})
+		sql, args, err := filterNotIn.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "status NOT IN (?,?)", sql)
+		assert.Equal(t, []any{"deleted", "banned"}, args)
+	})
+
+	t.Run("NotIn with scalar (normalized to slice)", func(t *testing.T) {
+		filterNotIn := f.NotIn("status", "deleted")
+		sql, args, err := filterNotIn.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "status NOT IN (?)", sql)
+		assert.Equal(t, []any{"deleted"}, args)
+	})
+
+	t.Run("NotIn with nil (empty slice - always true)", func(t *testing.T) {
+		filterNotIn := f.NotIn("status", nil)
+		sql, args, err := filterNotIn.ToSQL()
+		require.NoError(t, err)
+		// Squirrel generates (1=1) for empty NOT IN - logically "always true"
+		assert.Equal(t, "(1=1)", sql)
+		assert.Empty(t, args)
+	})
 }
 
 func TestFilterLike(t *testing.T) {

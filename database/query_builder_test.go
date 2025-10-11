@@ -177,7 +177,7 @@ func TestQueryBuilderUpdate(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			query := qb.Update(tt.table).Set("name", "test")
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -223,9 +223,10 @@ func TestQueryBuilderDelete(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Delete(tt.table).Where("id = ?", 1)
+			f := qb.Filter()
+			query := qb.Delete(tt.table).Where(f.Eq("id", 1))
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -830,9 +831,10 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 
 	// Build a complex query with joins
 	f := qb.Filter()
+	jf := qb.JoinFilter()
 	query := qb.Select("u.id", "u.name", "p.title").
 		From("users u").
-		Join("posts p ON u.id = p.user_id").
+		JoinOn("posts p", jf.EqColumn("u.id", "p.user_id")).
 		Where(f.Eq("u.active", true)).
 		Where(f.Like("p.title", "go")).
 		OrderBy("u.name ASC").

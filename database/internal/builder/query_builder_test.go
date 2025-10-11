@@ -9,10 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	testJoinClause = "profiles ON users.id = profiles.user_id"
-)
-
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
@@ -186,20 +182,78 @@ func TestInsertWithColumns(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
 
-	builder := qb.Update("users")
-	sql, _, err := builder.Set("name", "John").ToSql()
-	require.NoError(t, err)
-	assert.Contains(t, sql, "UPDATE users SET name = $1")
+	t.Run("Simple UPDATE with Set", func(t *testing.T) {
+		builder := qb.Update("users")
+		sql, args, err := builder.Set("name", "John").ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "UPDATE users SET name = $1")
+		assert.Equal(t, []any{"John"}, args)
+	})
+
+	t.Run("UPDATE with WHERE filter", func(t *testing.T) {
+		builder := qb.Update("users")
+		sql, args, err := builder.
+			Set("name", "John").
+			Where(f.Eq("id", 123)).
+			ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "UPDATE users SET name = $1")
+		assert.Contains(t, sql, "WHERE id = $2")
+		assert.Equal(t, []any{"John", 123}, args)
+	})
+
+	t.Run("UPDATE with SetMap", func(t *testing.T) {
+		builder := qb.Update("users")
+		sql, _, err := builder.
+			SetMap(map[string]any{
+				"name":   "John",
+				"status": "active",
+			}).
+			ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "UPDATE users SET")
+		assert.Contains(t, sql, "name = ")
+		assert.Contains(t, sql, "status = ")
+	})
 }
 
 func TestDelete(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
 
-	builder := qb.Delete("users")
-	sql, _, err := builder.ToSql()
-	require.NoError(t, err)
-	assert.Equal(t, "DELETE FROM users", sql)
+	t.Run("Simple DELETE", func(t *testing.T) {
+		builder := qb.Delete("users")
+		sql, _, err := builder.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "DELETE FROM users", sql)
+	})
+
+	t.Run("DELETE with WHERE filter", func(t *testing.T) {
+		builder := qb.Delete("users")
+		sql, args, err := builder.
+			Where(f.Eq("status", "deleted")).
+			ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "DELETE FROM users WHERE status = $1")
+		assert.Equal(t, []any{"deleted"}, args)
+	})
+
+	t.Run("DELETE with complex filter", func(t *testing.T) {
+		builder := qb.Delete("users")
+		sql, args, err := builder.
+			Where(f.And(
+				f.Eq("status", "deleted"),
+				f.Lt("deleted_at", "2024-01-01"),
+			)).
+			ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "DELETE FROM users WHERE")
+		assert.Contains(t, sql, "status = ")
+		assert.Contains(t, sql, "deleted_at < ")
+		assert.Equal(t, []any{"deleted", "2024-01-01"}, args)
+	})
 }
 
 // Test WHERE clause methods
@@ -306,7 +360,7 @@ func TestWhereLike(t *testing.T) {
 	}
 }
 
-// Test JOIN methods
+// Test JOIN methods with type-safe JoinFilter (v2.0+)
 func TestJoinMethods(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -314,44 +368,70 @@ func TestJoinMethods(t *testing.T) {
 		expectedSQL string
 	}{
 		{
-			name: "Join",
+			name: "JoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").Join(testJoinClause).ToSQL()
+				jf := qb.JoinFilter()
+				sql, _, _ := qb.Select("*").From("users").
+					JoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+					ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users JOIN profiles ON users.id = profiles.user_id`,
 		},
 		{
-			name: "LeftJoin",
+			name: "LeftJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").LeftJoin(testJoinClause).ToSQL()
+				jf := qb.JoinFilter()
+				sql, _, _ := qb.Select("*").From("users").
+					LeftJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+					ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users LEFT JOIN profiles ON users.id = profiles.user_id`,
 		},
 		{
-			name: "RightJoin",
+			name: "RightJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").RightJoin(testJoinClause).ToSQL()
+				jf := qb.JoinFilter()
+				sql, _, _ := qb.Select("*").From("users").
+					RightJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+					ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users RIGHT JOIN profiles ON users.id = profiles.user_id`,
 		},
 		{
-			name: "InnerJoin",
+			name: "InnerJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").InnerJoin(testJoinClause).ToSQL()
+				jf := qb.JoinFilter()
+				sql, _, _ := qb.Select("*").From("users").
+					InnerJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+					ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users INNER JOIN profiles ON users.id = profiles.user_id`,
 		},
 		{
-			name: "CrossJoin",
+			name: "CrossJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").CrossJoin("roles").ToSQL()
+				sql, _, _ := qb.Select("*").From("users").CrossJoinOn("roles").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users CROSS JOIN roles`,
+		},
+		{
+			name: "JoinOn with complex condition",
+			setupQuery: func(qb *QueryBuilder) string {
+				jf := qb.JoinFilter()
+				sql, _, _ := qb.Select("*").From("users").
+					JoinOn("profiles", jf.And(
+						jf.EqColumn("users.id", "profiles.user_id"),
+						jf.GtColumn("profiles.created_at", "users.created_at"),
+					)).
+					ToSQL()
+				return sql
+			},
+			expectedSQL: `SELECT * FROM users JOIN profiles ON (users.id = profiles.user_id AND profiles.created_at > users.created_at)`,
 		},
 	}
 

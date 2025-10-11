@@ -4,10 +4,16 @@
 package builder
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+)
+
+const (
+	errorMarker       = "ERROR: "
+	joinOnPlaceholder = "%s ON %s"
 )
 
 // QueryBuilder provides vendor-specific SQL query building.
@@ -29,6 +35,26 @@ type SelectQueryBuilder struct {
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
 var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
+
+// UpdateQueryBuilder provides a type-safe interface for building UPDATE queries
+// with Filter API support and vendor-specific column quoting.
+type UpdateQueryBuilder struct {
+	qb            *QueryBuilder
+	updateBuilder squirrel.UpdateBuilder
+}
+
+// check if UpdateQueryBuilder implements dbtypes.UpdateQueryBuilder
+var _ dbtypes.UpdateQueryBuilder = (*UpdateQueryBuilder)(nil)
+
+// DeleteQueryBuilder provides a type-safe interface for building DELETE queries
+// with Filter API support.
+type DeleteQueryBuilder struct {
+	qb            *QueryBuilder
+	deleteBuilder squirrel.DeleteBuilder
+}
+
+// check if DeleteQueryBuilder implements dbtypes.DeleteQueryBuilder
+var _ dbtypes.DeleteQueryBuilder = (*DeleteQueryBuilder)(nil)
 
 // ========== QueryBuilder Methods ==========
 
@@ -77,6 +103,21 @@ func (qb *QueryBuilder) Filter() dbtypes.FilterFactory {
 	return newFilterFactory(qb)
 }
 
+// JoinFilter returns a JoinFilterFactory for creating composable JOIN ON conditions.
+// The factory provides type-safe methods (EqColumn, LtColumn, GtColumn, etc.) for comparing
+// columns to other columns (not values) with automatic vendor-specific quoting.
+//
+// Example:
+//
+//	jf := qb.JoinFilter()
+//	query := qb.Select("*").From("users").JoinOn("profiles", jf.And(
+//	    jf.EqColumn("users.id", "profiles.user_id"),
+//	    jf.GtColumn("profiles.created_at", "users.created_at"),
+//	))
+func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
+	return newJoinFilterFactory(qb)
+}
+
 // Select creates a SELECT query builder with vendor-specific column quoting.
 // For Oracle, it applies identifier quoting to handle reserved words appropriately.
 func (qb *QueryBuilder) Select(columns ...string) *SelectQueryBuilder {
@@ -98,14 +139,38 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squir
 	return qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...)
 }
 
-// Update creates an UPDATE query builder for the specified table
-func (qb *QueryBuilder) Update(table string) squirrel.UpdateBuilder {
-	return qb.statementBuilder.Update(table)
+// Update creates an UPDATE query builder for the specified table with Filter API support.
+// The returned UpdateQueryBuilder provides type-safe filtering and vendor-specific column quoting.
+//
+// Example:
+//
+//	f := qb.Filter()
+//	query := qb.Update("users").
+//	    Set("status", "active").
+//	    Set("updated_at", time.Now()).
+//	    Where(f.Eq("id", 123))
+func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
+	return &UpdateQueryBuilder{
+		qb:            qb,
+		updateBuilder: qb.statementBuilder.Update(table),
+	}
 }
 
-// Delete creates a DELETE query builder for the specified table
-func (qb *QueryBuilder) Delete(table string) squirrel.DeleteBuilder {
-	return qb.statementBuilder.Delete(table)
+// Delete creates a DELETE query builder for the specified table with Filter API support.
+// The returned DeleteQueryBuilder provides type-safe filtering.
+//
+// Example:
+//
+//	f := qb.Filter()
+//	query := qb.Delete("users").Where(f.And(
+//	    f.Eq("status", "deleted"),
+//	    f.Lt("deleted_at", threshold),
+//	))
+func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
+	return &DeleteQueryBuilder{
+		qb:            qb,
+		deleteBuilder: qb.statementBuilder.Delete(table),
+	}
 }
 
 // BuildCaseInsensitiveLike creates a case-insensitive LIKE expression.
@@ -344,33 +409,78 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 	return sqb
 }
 
-// Join adds a JOIN clause to the query
-func (sqb *SelectQueryBuilder) Join(join string, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.Join(join, rest...)
+// JoinOn adds a type-safe JOIN clause to the query using JoinFilter for column comparisons.
+// The table name is automatically quoted according to vendor rules.
+//
+// Example:
+//
+//	jf := qb.JoinFilter()
+//	query.JoinOn("profiles", jf.EqColumn("users.id", "profiles.user_id"))
+func (sqb *SelectQueryBuilder) JoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableForQuery(table)
+	condition, args, err := filter.ToSQL()
+	if err != nil {
+		// Invalid filter - inject error marker into query
+		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		return sqb
+	}
+
+	joinClause := fmt.Sprintf(joinOnPlaceholder, quotedTable, condition)
+	sqb.selectBuilder = sqb.selectBuilder.Join(joinClause, args...)
 	return sqb
 }
 
-// LeftJoin adds a LEFT JOIN clause to the query
-func (sqb *SelectQueryBuilder) LeftJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.LeftJoin(join, rest...)
+// LeftJoinOn adds a type-safe LEFT JOIN clause to the query using JoinFilter.
+// The table name is automatically quoted according to vendor rules.
+func (sqb *SelectQueryBuilder) LeftJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableForQuery(table)
+	condition, args, err := filter.ToSQL()
+	if err != nil {
+		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		return sqb
+	}
+
+	joinClause := fmt.Sprintf(joinOnPlaceholder, quotedTable, condition)
+	sqb.selectBuilder = sqb.selectBuilder.LeftJoin(joinClause, args...)
 	return sqb
 }
 
-// RightJoin adds a RIGHT JOIN clause to the query
-func (sqb *SelectQueryBuilder) RightJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.RightJoin(join, rest...)
+// RightJoinOn adds a type-safe RIGHT JOIN clause to the query using JoinFilter.
+// The table name is automatically quoted according to vendor rules.
+func (sqb *SelectQueryBuilder) RightJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableForQuery(table)
+	condition, args, err := filter.ToSQL()
+	if err != nil {
+		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		return sqb
+	}
+
+	joinClause := fmt.Sprintf(joinOnPlaceholder, quotedTable, condition)
+	sqb.selectBuilder = sqb.selectBuilder.RightJoin(joinClause, args...)
 	return sqb
 }
 
-// InnerJoin adds an INNER JOIN clause to the query
-func (sqb *SelectQueryBuilder) InnerJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.InnerJoin(join, rest...)
+// InnerJoinOn adds a type-safe INNER JOIN clause to the query using JoinFilter.
+// The table name is automatically quoted according to vendor rules.
+func (sqb *SelectQueryBuilder) InnerJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableForQuery(table)
+	condition, args, err := filter.ToSQL()
+	if err != nil {
+		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		return sqb
+	}
+
+	joinClause := fmt.Sprintf(joinOnPlaceholder, quotedTable, condition)
+	sqb.selectBuilder = sqb.selectBuilder.InnerJoin(joinClause, args...)
 	return sqb
 }
 
-// CrossJoin adds a CROSS JOIN clause to the query
-func (sqb *SelectQueryBuilder) CrossJoin(join string, rest ...any) dbtypes.SelectQueryBuilder {
-	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(join, rest...)
+// CrossJoinOn adds a CROSS JOIN clause to the query.
+// Cross joins do not have ON conditions, so no JoinFilter is needed.
+// The table name is automatically quoted according to vendor rules.
+func (sqb *SelectQueryBuilder) CrossJoinOn(table string) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableForQuery(table)
+	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(quotedTable)
 	return sqb
 }
 
@@ -438,4 +548,65 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	}
 
 	return builder.ToSql()
+}
+
+// ========== UpdateQueryBuilder Methods ==========
+
+// Set sets a column to a value in the UPDATE statement.
+// Column names are automatically quoted according to database vendor rules.
+func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQueryBuilder {
+	quotedColumn := uqb.qb.quoteColumnForQuery(column)
+	uqb.updateBuilder = uqb.updateBuilder.Set(quotedColumn, value)
+	return uqb
+}
+
+// SetMap sets multiple columns to values in the UPDATE statement.
+// Column names are automatically quoted according to database vendor rules.
+func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
+	quotedClauses := make(map[string]any, len(clauses))
+	for k, v := range clauses {
+		quotedClauses[uqb.qb.quoteColumnForQuery(k)] = v
+	}
+	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
+	return uqb
+}
+
+// Where adds a filter to the WHERE clause.
+// Multiple calls to Where() will be combined with AND logic.
+func (uqb *UpdateQueryBuilder) Where(filter dbtypes.Filter) dbtypes.UpdateQueryBuilder {
+	uqb.updateBuilder = uqb.updateBuilder.Where(filter)
+	return uqb
+}
+
+// ToSQL generates the final SQL query and arguments.
+func (uqb *UpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	return uqb.updateBuilder.ToSql()
+}
+
+// ========== DeleteQueryBuilder Methods ==========
+
+// Where adds a filter to the WHERE clause.
+// Multiple calls to Where() will be combined with AND logic.
+func (dqb *DeleteQueryBuilder) Where(filter dbtypes.Filter) dbtypes.DeleteQueryBuilder {
+	dqb.deleteBuilder = dqb.deleteBuilder.Where(filter)
+	return dqb
+}
+
+// Limit sets the maximum number of rows to delete.
+// Note: LIMIT in DELETE is not standard SQL and may not be supported by all databases.
+func (dqb *DeleteQueryBuilder) Limit(limit uint64) dbtypes.DeleteQueryBuilder {
+	dqb.deleteBuilder = dqb.deleteBuilder.Limit(limit)
+	return dqb
+}
+
+// OrderBy adds ORDER BY clauses to the DELETE statement.
+// Note: ORDER BY in DELETE is not standard SQL and may not be supported by all databases.
+func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBuilder {
+	dqb.deleteBuilder = dqb.deleteBuilder.OrderBy(orderBys...)
+	return dqb
+}
+
+// ToSQL generates the final SQL query and arguments.
+func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	return dqb.deleteBuilder.ToSql()
 }

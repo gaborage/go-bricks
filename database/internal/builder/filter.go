@@ -1,6 +1,8 @@
 package builder
 
 import (
+	"reflect"
+
 	"github.com/Masterminds/squirrel"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -87,18 +89,56 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 	return Filter{sqlizer: ff.qb.GtOrEq(column, value)}
 }
 
+// normalizeToSlice ensures the value is a slice for IN/NOT IN operations.
+// This prevents squirrel.Eq from generating "column = ?" instead of "column IN (?)".
+//
+// Squirrel's Eq checks value type at runtime:
+//   - Slice/Array → generates "column IN (?, ?, ...)"
+//   - Scalar → generates "column = ?"
+//
+// By normalizing scalars to single-element slices, we ensure consistent IN semantics.
+func normalizeToSlice(value any) any {
+	if value == nil {
+		return []any{}
+	}
+
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		// Already a slice/array - return as-is
+		return value
+	default:
+		// Scalar value - wrap in single-element slice
+		return []any{value}
+	}
+}
+
 // In creates an IN filter (column IN (values...)).
+// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
 // Column names are automatically quoted according to database vendor rules.
+//
+// Examples:
+//
+//	f.In("status", []string{"active", "pending"})  // IN with multiple values
+//	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	quotedColumn := ff.qb.quoteColumnForQuery(column)
-	return Filter{sqlizer: squirrel.Eq{quotedColumn: values}}
+	normalized := normalizeToSlice(values)
+	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
+// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
 // Column names are automatically quoted according to database vendor rules.
+//
+// Examples:
+//
+//	f.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
+//	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	quotedColumn := ff.qb.quoteColumnForQuery(column)
-	return Filter{sqlizer: squirrel.NotEq{quotedColumn: values}}
+	normalized := normalizeToSlice(values)
+	return Filter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
 }
 
 // Like creates a case-insensitive LIKE filter.
