@@ -73,7 +73,7 @@ func (qb *QueryBuilder) Vendor() string {
 //	    f.Eq("status", "active"),
 //	    f.Gt("age", 18),
 //	))
-func (qb *QueryBuilder) Filter() *FilterFactory {
+func (qb *QueryBuilder) Filter() dbtypes.FilterFactory {
 	return newFilterFactory(qb)
 }
 

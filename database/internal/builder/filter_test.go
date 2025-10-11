@@ -451,11 +451,12 @@ func TestFilterEmptyDynamicBuilding(t *testing.T) {
 	filters := []dbtypes.Filter{}
 
 	// And() with no filters should work gracefully
+	// Squirrel produces (1=1) for empty And(), which is logically "always true"
 	finalFilter := f.And(filters...)
 	sql, args, err := finalFilter.ToSQL()
 
 	require.NoError(t, err)
-	// Should produce valid SQL (empty parentheses or equivalent)
-	assert.NotEmpty(t, sql)
+	// Squirrel's And() with no conditions produces a tautology
+	assert.Equal(t, "(1=1)", sql)
 	assert.Empty(t, args)
 }
