@@ -8,6 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testStatusFilterSQL = "status = ?"
+)
+
 // ========== Basic Filter Tests ==========
 
 func TestFilterEq(t *testing.T) {
@@ -23,7 +27,7 @@ func TestFilterEq(t *testing.T) {
 			vendor:      dbtypes.PostgreSQL,
 			column:      "status",
 			value:       "active",
-			expectedSQL: "status = ?",
+			expectedSQL: testStatusFilterSQL,
 		},
 		{
 			name:        "oracle_eq_reserved",
@@ -314,7 +318,7 @@ func TestFilterComplexNestedLogic(t *testing.T) {
 	sql, args, err := filter.ToSQL()
 	require.NoError(t, err)
 	// Verify structure (exact SQL may vary slightly) - filters use ? placeholders
-	assert.Contains(t, sql, "status = ?")
+	assert.Contains(t, sql, testStatusFilterSQL)
 	assert.Contains(t, sql, "role = ?")
 	assert.Contains(t, sql, "balance > ?")
 	assert.Contains(t, sql, "vip = ?")
@@ -495,4 +499,104 @@ func TestFilterEmptyDynamicBuilding(t *testing.T) {
 	// Squirrel's And() with no conditions produces a tautology
 	assert.Equal(t, "(1=1)", sql)
 	assert.Empty(t, args)
+}
+
+// ========== Nil Filter Handling Tests ==========
+
+func TestFilterAndOrNilHandling(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	t.Run("And with nil filters", func(t *testing.T) {
+		// Mix of nil and valid filters
+		validFilter := f.Eq("status", "active")
+		combinedFilter := f.And(
+			nil,                  // nil should be skipped
+			validFilter,          // valid filter
+			nil,                  // another nil
+			f.Gt("balance", 100), // another valid filter
+		)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testStatusFilterSQL)
+		assert.Contains(t, sql, "balance > ?")
+		assert.Contains(t, sql, "AND")
+		assert.Equal(t, []any{"active", 100}, args)
+	})
+
+	t.Run("And with all nil filters", func(t *testing.T) {
+		// All nil filters should produce empty And
+		combinedFilter := f.And(nil, nil, nil)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		// Empty And() produces (1=1)
+		assert.Equal(t, "(1=1)", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Or with nil filters", func(t *testing.T) {
+		// Mix of nil and valid filters
+		combinedFilter := f.Or(
+			nil,
+			f.Eq("status", "pending"),
+			nil,
+			f.Eq("status", "active"),
+		)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testStatusFilterSQL)
+		assert.Contains(t, sql, "OR")
+		assert.Equal(t, []any{"pending", "active"}, args)
+	})
+
+	t.Run("Or with all nil filters", func(t *testing.T) {
+		// All nil filters should produce empty Or
+		combinedFilter := f.Or(nil, nil)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		// Empty Or() produces (1=0)
+		assert.Equal(t, "(1=0)", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Nested And/Or with nil filters", func(t *testing.T) {
+		// Complex nesting with nils mixed in
+		complexFilter := f.And(
+			nil,
+			f.Or(
+				nil,
+				f.Eq("type", "premium"),
+				nil,
+			),
+			nil,
+			f.Gt("age", 18),
+		)
+
+		sql, args, err := complexFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "type = ?")
+		assert.Contains(t, sql, "age > ?")
+		assert.Equal(t, []any{"premium", 18}, args)
+	})
+}
+
+// TestFilterNilDoesNotPanic ensures nil filters don't cause panics when ToSQL is called
+func TestFilterNilDoesNotPanic(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	// This should not panic (was the bug before the fix)
+	assert.NotPanics(t, func() {
+		filter := f.And(nil, f.Eq("id", 1))
+		_, _, _ = filter.ToSQL()
+	})
+
+	assert.NotPanics(t, func() {
+		filter := f.Or(nil, f.Eq("status", "active"), nil)
+		_, _, _ = filter.ToSQL()
+	})
 }

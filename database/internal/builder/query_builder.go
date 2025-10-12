@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	errorMarker       = "ERROR: "
 	joinOnPlaceholder = "%s ON %s"
 )
 
@@ -31,6 +30,7 @@ type SelectQueryBuilder struct {
 	selectBuilder squirrel.SelectBuilder
 	limit         uint64 // 0 means no limit
 	offset        uint64 // 0 means no offset
+	err           error  // Captured error from filter operations
 }
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
@@ -420,8 +420,8 @@ func (sqb *SelectQueryBuilder) JoinOn(table string, filter dbtypes.JoinFilter) d
 	quotedTable := sqb.qb.quoteTableForQuery(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
-		// Invalid filter - inject error marker into query
-		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		// Capture error to be returned from ToSQL()
+		sqb.err = fmt.Errorf("JoinOn filter error: %w", err)
 		return sqb
 	}
 
@@ -436,7 +436,8 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table string, filter dbtypes.JoinFilte
 	quotedTable := sqb.qb.quoteTableForQuery(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
-		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		// Capture error to be returned from ToSQL()
+		sqb.err = fmt.Errorf("LeftJoinOn filter error: %w", err)
 		return sqb
 	}
 
@@ -451,7 +452,8 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table string, filter dbtypes.JoinFilt
 	quotedTable := sqb.qb.quoteTableForQuery(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
-		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		// Capture error to be returned from ToSQL()
+		sqb.err = fmt.Errorf("RightJoinOn filter error: %w", err)
 		return sqb
 	}
 
@@ -466,7 +468,8 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table string, filter dbtypes.JoinFilt
 	quotedTable := sqb.qb.quoteTableForQuery(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
-		sqb.selectBuilder = sqb.selectBuilder.Where(squirrel.Expr(errorMarker + err.Error()))
+		// Capture error to be returned from ToSQL()
+		sqb.err = fmt.Errorf("InnerJoinOn filter error: %w", err)
 		return sqb
 	}
 
@@ -526,6 +529,11 @@ func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) dbtypes.SelectQuer
 // ToSQL generates the final SQL query string and arguments.
 // For Oracle, pagination uses OFFSET...FETCH syntax; for others, uses LIMIT/OFFSET.
 func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	// Return any captured filter errors first
+	if sqb.err != nil {
+		return "", nil, sqb.err
+	}
+
 	builder := sqb.selectBuilder
 
 	// Apply pagination based on vendor
@@ -602,7 +610,11 @@ func (dqb *DeleteQueryBuilder) Limit(limit uint64) dbtypes.DeleteQueryBuilder {
 // OrderBy adds ORDER BY clauses to the DELETE statement.
 // Note: ORDER BY in DELETE is not standard SQL and may not be supported by all databases.
 func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBuilder {
-	dqb.deleteBuilder = dqb.deleteBuilder.OrderBy(orderBys...)
+	quotedOrderBys := make([]string, len(orderBys))
+	for i, orderBy := range orderBys {
+		quotedOrderBys[i] = dqb.qb.quoteIdentifierForClause(orderBy)
+	}
+	dqb.deleteBuilder = dqb.deleteBuilder.OrderBy(quotedOrderBys...)
 	return dqb
 }
 

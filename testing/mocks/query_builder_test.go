@@ -118,13 +118,25 @@ type MockFilter struct {
 
 func (m *MockFilter) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		if cast, ok := v.([]any); ok {
+			outArgs = cast
+		}
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 //nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
 func (m *MockFilter) ToSql() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSql")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		if cast, ok := v.([]any); ok {
+			outArgs = cast
+		}
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 var _ types.Filter = (*MockFilter)(nil)
@@ -465,4 +477,50 @@ func BenchmarkMockQueryBuilder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		mockQB.Select("id", "name")
 	}
+}
+
+// ========== Nil-Safe Mock ToSQL Tests ==========
+
+func TestMockFilterNilSafeToSQL(t *testing.T) {
+	mockFilter := &MockFilter{}
+
+	t.Run("ToSQL with nil args", func(t *testing.T) {
+		// Configure mock to return nil for args (common pattern)
+		mockFilter.On("ToSQL").Return("status = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockFilter.ToSQL()
+
+		assert.Equal(t, "status = ?", sql)
+		assert.Nil(t, args) // nil args is valid, not a panic
+		assert.NoError(t, err)
+		mockFilter.AssertExpectations(t)
+	})
+
+	t.Run("ToSql with nil args", func(t *testing.T) {
+		mockFilter2 := &MockFilter{}
+		// Configure mock to return nil for args
+		mockFilter2.On("ToSql").Return("id = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockFilter2.ToSql()
+
+		assert.Equal(t, "id = ?", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockFilter2.AssertExpectations(t)
+	})
+
+	t.Run("ToSQL with valid []any args", func(t *testing.T) {
+		mockFilter3 := &MockFilter{}
+		expectedArgs := []any{"active", 100}
+		mockFilter3.On("ToSQL").Return("status = ? AND age > ?", expectedArgs, nil)
+
+		sql, args, err := mockFilter3.ToSQL()
+
+		assert.Equal(t, "status = ? AND age > ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockFilter3.AssertExpectations(t)
+	})
 }

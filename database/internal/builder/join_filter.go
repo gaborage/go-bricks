@@ -121,6 +121,7 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 
 // And combines multiple join filters with AND logic.
 // Returns a filter that matches when ALL provided filters match.
+// Nil filters are treated as no-ops and skipped.
 //
 // Example:
 //
@@ -130,14 +131,17 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 //	    jf.GtColumn("profiles.created_at", "users.created_at"),
 //	)
 func (jff *JoinFilterFactory) And(filters ...dbtypes.JoinFilter) dbtypes.JoinFilter {
-	sqlizers := make(squirrel.And, len(filters))
-	for i, filter := range filters {
+	sqlizers := make(squirrel.And, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			continue // Skip nil filters - treat as no-op
+		}
 		// Extract the underlying squirrel.Sqlizer
 		if concreteFilter, ok := filter.(JoinFilter); ok {
-			sqlizers[i] = concreteFilter.sqlizer
+			sqlizers = append(sqlizers, concreteFilter.sqlizer)
 		} else {
 			// Fallback: use the filter as-is (it implements Sqlizer)
-			sqlizers[i] = filter
+			sqlizers = append(sqlizers, filter)
 		}
 	}
 	return JoinFilter{sqlizer: sqlizers}
@@ -145,6 +149,7 @@ func (jff *JoinFilterFactory) And(filters ...dbtypes.JoinFilter) dbtypes.JoinFil
 
 // Or combines multiple join filters with OR logic.
 // Returns a filter that matches when ANY provided filter matches.
+// Nil filters are treated as no-ops and skipped.
 //
 // Example:
 //
@@ -154,14 +159,17 @@ func (jff *JoinFilterFactory) And(filters ...dbtypes.JoinFilter) dbtypes.JoinFil
 //	    jf.EqColumn("users.secondary_email", "contacts.email"),
 //	)
 func (jff *JoinFilterFactory) Or(filters ...dbtypes.JoinFilter) dbtypes.JoinFilter {
-	sqlizers := make(squirrel.Or, len(filters))
-	for i, filter := range filters {
+	sqlizers := make(squirrel.Or, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			continue // Skip nil filters - treat as no-op
+		}
 		// Extract the underlying squirrel.Sqlizer
 		if concreteFilter, ok := filter.(JoinFilter); ok {
-			sqlizers[i] = concreteFilter.sqlizer
+			sqlizers = append(sqlizers, concreteFilter.sqlizer)
 		} else {
 			// Fallback: use the filter as-is
-			sqlizers[i] = filter
+			sqlizers = append(sqlizers, filter)
 		}
 	}
 	return JoinFilter{sqlizer: sqlizers}

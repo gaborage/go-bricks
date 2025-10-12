@@ -179,6 +179,7 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 
 // And combines multiple filters with AND logic.
 // Returns a filter that matches when ALL provided filters match.
+// Nil filters are treated as no-ops and skipped.
 //
 // Example:
 //
@@ -188,15 +189,18 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 //	    f.Gt("age", 18),
 //	)
 func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
-	sqlizers := make(squirrel.And, len(filters))
-	for i, filter := range filters {
+	sqlizers := make(squirrel.And, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			continue // Skip nil filters - treat as no-op
+		}
 		// Extract the underlying squirrel.Sqlizer
 		// We know all filters are actually our Filter type
 		if concreteFilter, ok := filter.(Filter); ok {
-			sqlizers[i] = concreteFilter.sqlizer
+			sqlizers = append(sqlizers, concreteFilter.sqlizer)
 		} else {
 			// Fallback: use the filter as-is (it implements Sqlizer via ToSQL)
-			sqlizers[i] = filter
+			sqlizers = append(sqlizers, filter)
 		}
 	}
 	return Filter{sqlizer: sqlizers}
@@ -204,6 +208,7 @@ func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
 
 // Or combines multiple filters with OR logic.
 // Returns a filter that matches when ANY provided filter matches.
+// Nil filters are treated as no-ops and skipped.
 //
 // Example:
 //
@@ -213,14 +218,17 @@ func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
 //	    f.Eq("role", "admin"),
 //	)
 func (ff *FilterFactory) Or(filters ...dbtypes.Filter) dbtypes.Filter {
-	sqlizers := make(squirrel.Or, len(filters))
-	for i, filter := range filters {
+	sqlizers := make(squirrel.Or, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			continue // Skip nil filters - treat as no-op
+		}
 		// Extract the underlying squirrel.Sqlizer
 		if concreteFilter, ok := filter.(Filter); ok {
-			sqlizers[i] = concreteFilter.sqlizer
+			sqlizers = append(sqlizers, concreteFilter.sqlizer)
 		} else {
 			// Fallback: use the filter as-is
-			sqlizers[i] = filter
+			sqlizers = append(sqlizers, filter)
 		}
 	}
 	return Filter{sqlizer: sqlizers}

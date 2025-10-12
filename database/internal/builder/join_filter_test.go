@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	testLeftJoinColumn  = "users.id"
-	testRightJoinColumn = "profiles.user_id"
-	testExpectedJoinSQL = "users.id = profiles.user_id"
+	testLeftJoinColumn   = "users.id"
+	testRightJoinColumn  = "profiles.user_id"
+	testExpectedJoinSQL  = "users.id = profiles.user_id"
+	testContactsEmail    = "contacts.email"
+	testRightJoinColumnB = "b.a_id"
 )
 
 func TestJoinFilterEqColumn(t *testing.T) {
@@ -126,8 +128,8 @@ func TestJoinFilterOr(t *testing.T) {
 	jf := qb.JoinFilter()
 
 	filter := jf.Or(
-		jf.EqColumn("users.primary_email", "contacts.email"),
-		jf.EqColumn("users.secondary_email", "contacts.email"),
+		jf.EqColumn("users.primary_email", testContactsEmail),
+		jf.EqColumn("users.secondary_email", testContactsEmail),
 	)
 
 	sql, args, err := filter.ToSQL()
@@ -179,4 +181,105 @@ func TestJoinFilterEmptyOr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "(1=0)", sql)
 	assert.Empty(t, args)
+}
+
+// ========== Nil JoinFilter Handling Tests ==========
+
+func TestJoinFilterAndOrNilHandling(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	t.Run("And with nil join filters", func(t *testing.T) {
+		// Mix of nil and valid join filters
+		validFilter := jf.EqColumn("users.id", "profiles.user_id")
+		combinedFilter := jf.And(
+			nil,         // nil should be skipped
+			validFilter, // valid filter
+			nil,         // another nil
+			jf.GtColumn("profiles.created_at", "users.created_at"),
+		)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "users.id = profiles.user_id")
+		assert.Contains(t, sql, "profiles.created_at > users.created_at")
+		assert.Contains(t, sql, "AND")
+		assert.Empty(t, args) // No placeholders in column comparisons
+	})
+
+	t.Run("And with all nil filters", func(t *testing.T) {
+		// All nil filters should produce empty And
+		combinedFilter := jf.And(nil, nil, nil)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		// Empty And() produces (1=1)
+		assert.Equal(t, "(1=1)", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Or with nil join filters", func(t *testing.T) {
+		// Mix of nil and valid join filters
+		combinedFilter := jf.Or(
+			nil,
+			jf.EqColumn("users.primary_email", testContactsEmail),
+			nil,
+			jf.EqColumn("users.secondary_email", testContactsEmail),
+		)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "users.primary_email = contacts.email")
+		assert.Contains(t, sql, "users.secondary_email = contacts.email")
+		assert.Contains(t, sql, "OR")
+		assert.Empty(t, args)
+	})
+
+	t.Run("Or with all nil filters", func(t *testing.T) {
+		// All nil filters should produce empty Or
+		combinedFilter := jf.Or(nil, nil)
+
+		sql, args, err := combinedFilter.ToSQL()
+		require.NoError(t, err)
+		// Empty Or() produces (1=0)
+		assert.Equal(t, "(1=0)", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Nested And/Or with nil filters", func(t *testing.T) {
+		// Complex nesting with nils mixed in
+		complexFilter := jf.And(
+			nil,
+			jf.Or(
+				nil,
+				jf.EqColumn("a.id", testRightJoinColumnB),
+				nil,
+			),
+			nil,
+			jf.GtColumn("a.created_at", "b.created_at"),
+		)
+
+		sql, args, err := complexFilter.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "a.id = b.a_id")
+		assert.Contains(t, sql, "a.created_at > b.created_at")
+		assert.Empty(t, args)
+	})
+}
+
+// TestJoinFilterNilDoesNotPanic ensures nil join filters don't cause panics
+func TestJoinFilterNilDoesNotPanic(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	// This should not panic (was the bug before the fix)
+	assert.NotPanics(t, func() {
+		filter := jf.And(nil, jf.EqColumn("a.id", testRightJoinColumnB))
+		_, _, _ = filter.ToSQL()
+	})
+
+	assert.NotPanics(t, func() {
+		filter := jf.Or(nil, jf.EqColumn("a.id", testRightJoinColumnB), nil)
+		_, _, _ = filter.ToSQL()
+	})
 }

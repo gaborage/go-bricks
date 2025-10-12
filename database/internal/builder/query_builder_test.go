@@ -1,12 +1,17 @@
 package builder
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Masterminds/squirrel"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	joinFilterErrorMsg = "mock join filter error"
 )
 
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
@@ -500,4 +505,115 @@ func TestQueryModifiers(t *testing.T) {
 			assert.Equal(t, tt.expectedSQL, sql)
 		})
 	}
+}
+
+// ========== JoinFilter Error Propagation Tests ==========
+
+// mockErrorJoinFilter is a test helper that always returns an error from ToSQL()
+type mockErrorJoinFilter struct{}
+
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (m mockErrorJoinFilter) ToSql() (sql string, args []any, err error) {
+	return "", nil, errors.New(joinFilterErrorMsg)
+}
+
+func (m mockErrorJoinFilter) ToSQL() (sql string, args []any, err error) {
+	return "", nil, errors.New(joinFilterErrorMsg)
+}
+
+func TestJoinFilterErrorPropagation(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	errorFilter := mockErrorJoinFilter{}
+
+	t.Run("JoinOn propagates error", func(t *testing.T) {
+		query := qb.Select("*").
+			From("users").
+			JoinOn("profiles", errorFilter)
+
+		sql, args, err := query.ToSQL()
+
+		// Error should be propagated, not injected into SQL
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "JoinOn filter error")
+		assert.Contains(t, err.Error(), joinFilterErrorMsg)
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+
+	t.Run("LeftJoinOn propagates error", func(t *testing.T) {
+		query := qb.Select("*").
+			From("users").
+			LeftJoinOn("profiles", errorFilter)
+
+		sql, args, err := query.ToSQL()
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "LeftJoinOn filter error")
+		assert.Contains(t, err.Error(), joinFilterErrorMsg)
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+
+	t.Run("RightJoinOn propagates error", func(t *testing.T) {
+		query := qb.Select("*").
+			From("users").
+			RightJoinOn("profiles", errorFilter)
+
+		sql, args, err := query.ToSQL()
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "RightJoinOn filter error")
+		assert.Contains(t, err.Error(), joinFilterErrorMsg)
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+
+	t.Run("InnerJoinOn propagates error", func(t *testing.T) {
+		query := qb.Select("*").
+			From("users").
+			InnerJoinOn("profiles", errorFilter)
+
+		sql, args, err := query.ToSQL()
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "InnerJoinOn filter error")
+		assert.Contains(t, err.Error(), joinFilterErrorMsg)
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+
+	t.Run("Error from first join prevents SQL generation", func(t *testing.T) {
+		// Even with subsequent valid operations, the error should be preserved
+		jf := qb.JoinFilter()
+		query := qb.Select("*").
+			From("users").
+			JoinOn("profiles", errorFilter).
+			LeftJoinOn("orders", jf.EqColumn("users.id", "orders.user_id")). // Valid join after error
+			Where(qb.Filter().Eq("status", "active"))                        // Valid where
+
+		sql, args, err := query.ToSQL()
+
+		// Original error should still be returned
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "JoinOn filter error")
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+}
+
+// TestJoinFilterNoErrorInjection verifies errors are NOT injected into SQL
+func TestJoinFilterNoErrorInjection(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	errorFilter := mockErrorJoinFilter{}
+
+	query := qb.Select("*").
+		From("users").
+		JoinOn("profiles", errorFilter)
+
+	sql, _, _ := query.ToSQL()
+
+	// SQL should be empty, NOT contain "WHERE ERROR:"
+	assert.Empty(t, sql)
+	assert.NotContains(t, sql, "ERROR:")
+	assert.NotContains(t, sql, "WHERE ERROR:")
 }
