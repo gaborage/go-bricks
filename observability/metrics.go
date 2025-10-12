@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
@@ -36,10 +37,13 @@ func (p *provider) initMeterProvider() error {
 	}
 
 	// Create periodic reader with configured interval
+	// Include runtime producer to enable Go scheduler histogram metrics (go.schedule.duration)
+	debugLogger.Println("Registering runtime producer for scheduler histogram metrics")
 	reader := sdkmetric.NewPeriodicReader(
 		exporter,
 		sdkmetric.WithInterval(p.config.Metrics.Interval),
 		sdkmetric.WithTimeout(p.config.Metrics.Export.Timeout),
+		sdkmetric.WithProducer(runtime.NewProducer()),
 	)
 
 	// Create meter provider
@@ -47,6 +51,25 @@ func (p *provider) initMeterProvider() error {
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
 	)
+
+	// Start Go runtime metrics collection (memory, GC, goroutines, CPU, config)
+	// This automatically exports metrics when the periodic reader triggers:
+	//   - go.memory.used, go.memory.limit, go.memory.allocated, go.memory.allocations
+	//   - go.memory.gc.goal
+	//   - go.goroutine.count
+	//   - go.processor.limit (GOMAXPROCS)
+	//   - go.config.gogc
+	// Default ReadMemStats interval: 15 seconds (performance-safe)
+	//
+	// Note: runtime.Start() can be called multiple times safely - the meter provider's
+	// RegisterCallback() handles duplicate registrations internally. Any error returned
+	// indicates a genuine issue with metric instrumentation setup.
+	debugLogger.Println("Starting Go runtime metrics collection")
+	err = runtime.Start(runtime.WithMeterProvider(p.meterProvider))
+	if err != nil {
+		return fmt.Errorf("failed to start runtime metrics: %w", err)
+	}
+	debugLogger.Println("Runtime metrics collection started successfully")
 
 	return nil
 }
