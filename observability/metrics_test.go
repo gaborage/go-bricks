@@ -305,3 +305,185 @@ func TestMeterProviderForceFlush(t *testing.T) {
 	err = provider.ForceFlush(ctx)
 	assert.NoError(t, err)
 }
+
+// TestRuntimeMetricsExported verifies that Go runtime metrics are automatically
+// collected and exported when observability is enabled.
+func TestRuntimeMetricsExported(t *testing.T) {
+	// Create test exporter to capture metrics
+	exporter := &inMemoryMetricExporter{}
+
+	// Create minimal config with metrics enabled
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name:    "test-runtime-service",
+			Version: "1.0.0",
+		},
+		Environment: EnvironmentDevelopment,
+		Metrics: MetricsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "stdout", // Use stdout to avoid network calls
+			Interval: 100 * time.Millisecond,
+		},
+	}
+	cfg.ApplyDefaults()
+
+	// Wrap exporter for testing
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(_ sdkmetric.Exporter) sdkmetric.Exporter {
+		return exporter
+	})
+	defer setMetricExporterWrapper(originalWrapper)
+
+	// Create provider (should start runtime metrics collection)
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err, "provider creation should succeed")
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(ctx)
+	}()
+
+	// Wait for metrics collection cycle to complete
+	// Runtime metrics are collected asynchronously via callbacks
+	time.Sleep(200 * time.Millisecond)
+
+	// Force flush to ensure all metrics are exported
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = provider.ForceFlush(ctx)
+	require.NoError(t, err, "force flush should succeed")
+
+	// Retrieve exported metrics
+	metrics := exporter.GetMetrics()
+
+	// Assert standard runtime metrics exist
+	t.Run("StandardMetrics", func(t *testing.T) {
+		// Memory metrics
+		assertMetricExists(t, metrics, "go.memory.used", "memory usage metric should exist")
+		assertMetricExists(t, metrics, "go.memory.allocated", "heap allocations metric should exist")
+		assertMetricExists(t, metrics, "go.memory.allocations", "allocation count metric should exist")
+
+		// GC metrics
+		assertMetricExists(t, metrics, "go.memory.gc.goal", "GC goal metric should exist")
+
+		// Goroutine metrics
+		assertMetricExists(t, metrics, "go.goroutine.count", "goroutine count metric should exist")
+
+		// Processor metrics
+		assertMetricExists(t, metrics, "go.processor.limit", "GOMAXPROCS metric should exist")
+
+		// Config metrics
+		assertMetricExists(t, metrics, "go.config.gogc", "GOGC config metric should exist")
+	})
+
+	// Assert scheduler histogram metrics exist (from runtime.Producer)
+	t.Run("SchedulerMetrics", func(t *testing.T) {
+		assertMetricExists(t, metrics, "go.schedule.duration", "scheduler latency histogram should exist")
+	})
+
+	// Verify at least one metric has non-zero data points
+	t.Run("NonZeroDataPoints", func(t *testing.T) {
+		foundNonZero := false
+		for _, rm := range metrics {
+			for _, sm := range rm.ScopeMetrics {
+				if len(sm.Metrics) > 0 {
+					foundNonZero = true
+					break
+				}
+			}
+		}
+		assert.True(t, foundNonZero, "at least one metric should have data points")
+	})
+}
+
+// TestRuntimeMetricsDisabledWhenMetricsDisabled verifies that runtime metrics
+// are not collected when metrics are explicitly disabled.
+func TestRuntimeMetricsDisabledWhenMetricsDisabled(t *testing.T) {
+	// Create test exporter
+	exporter := &inMemoryMetricExporter{}
+
+	// Create config with metrics explicitly disabled
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name:    "test-runtime-service",
+			Version: "1.0.0",
+		},
+		Metrics: MetricsConfig{
+			Enabled: BoolPtr(false), // Explicitly disabled
+		},
+	}
+	cfg.ApplyDefaults()
+
+	// Wrap exporter for testing
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(_ sdkmetric.Exporter) sdkmetric.Exporter {
+		return exporter
+	})
+	defer setMetricExporterWrapper(originalWrapper)
+
+	// Create provider
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err, "provider creation should succeed")
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(ctx)
+	}()
+
+	// Wait briefly
+	time.Sleep(100 * time.Millisecond)
+
+	// Metrics should be empty (no meter provider created)
+	metrics := exporter.GetMetrics()
+	assert.Empty(t, metrics, "no metrics should be collected when metrics are disabled")
+}
+
+// assertMetricExists checks if a metric with the given name exists in the exported metrics.
+func assertMetricExists(t *testing.T, metrics []metricdata.ResourceMetrics, name string, msgAndArgs ...interface{}) {
+	t.Helper()
+
+	for _, rm := range metrics {
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name == name {
+					return // Found it!
+				}
+			}
+		}
+	}
+
+	// Not found - fail the test
+	assert.Fail(t, "metric not found", "Expected metric '%s' to exist in exported metrics. %v", name, msgAndArgs)
+}
+
+// inMemoryMetricExporter is a test exporter that captures metrics in memory.
+type inMemoryMetricExporter struct {
+	metrics []metricdata.ResourceMetrics
+}
+
+func (e *inMemoryMetricExporter) Temporality(sdkmetric.InstrumentKind) metricdata.Temporality {
+	return metricdata.CumulativeTemporality
+}
+
+func (e *inMemoryMetricExporter) Aggregation(sdkmetric.InstrumentKind) sdkmetric.Aggregation {
+	return sdkmetric.AggregationDefault{}
+}
+
+func (e *inMemoryMetricExporter) Export(_ context.Context, rm *metricdata.ResourceMetrics) error {
+	e.metrics = append(e.metrics, *rm)
+	return nil
+}
+
+func (e *inMemoryMetricExporter) ForceFlush(_ context.Context) error {
+	return nil
+}
+
+func (e *inMemoryMetricExporter) Shutdown(_ context.Context) error {
+	return nil
+}
+
+func (e *inMemoryMetricExporter) GetMetrics() []metricdata.ResourceMetrics {
+	return e.metrics
+}
