@@ -13,17 +13,102 @@ import (
 	"github.com/Masterminds/squirrel"
 )
 
+// Filter represents a composable WHERE clause filter that can be combined with AND/OR/NOT operators.
+// Filters are created through FilterFactory methods obtained from QueryBuilder.Filter().
+//
+// Filter embeds squirrel.Sqlizer for compatibility with Squirrel's query builder, and adds
+// ToSQL() as a convenience method with idiomatic Go naming (uppercase SQL).
+//
+// This is an interface to support mocking and testing. The concrete implementation is in
+// database/internal/builder package.
+type Filter interface {
+	squirrel.Sqlizer
+
+	// ToSQL is a convenience method with idiomatic Go naming.
+	// It should delegate to ToSql() in implementations.
+	ToSQL() (sql string, args []any, err error)
+}
+
+// FilterFactory provides methods for creating composable, type-safe query filters.
+// Filters maintain vendor-specific quoting rules and can be combined with AND/OR/NOT logic.
+type FilterFactory interface {
+	// Comparison operators
+	Eq(column string, value any) Filter
+	NotEq(column string, value any) Filter
+	Lt(column string, value any) Filter
+	Lte(column string, value any) Filter
+	Gt(column string, value any) Filter
+	Gte(column string, value any) Filter
+	In(column string, values any) Filter
+	NotIn(column string, values any) Filter
+	Like(column, pattern string) Filter
+	Null(column string) Filter
+	NotNull(column string) Filter
+	Between(column string, lowerBound, upperBound any) Filter
+
+	// Logical operators
+	And(filters ...Filter) Filter
+	Or(filters ...Filter) Filter
+	Not(filter Filter) Filter
+
+	// Raw escape hatch
+	Raw(condition string, args ...any) Filter
+}
+
+// JoinFilter represents a filter specifically for JOIN ON conditions where columns are compared
+// to other columns (not to values). This follows Single Responsibility Principle by separating
+// column-to-column comparisons (JOIN) from column-to-value comparisons (WHERE).
+//
+// JoinFilters are created through JoinFilterFactory methods obtained from QueryBuilder.JoinFilter().
+//
+// Example:
+//
+//	jf := qb.JoinFilter()
+//	query := qb.Select("*").From("users").JoinOn("profiles", jf.EqColumn("users.id", "profiles.user_id"))
+//
+// This is an interface to support mocking and testing. The concrete implementation is in
+// database/internal/builder package.
+type JoinFilter interface {
+	squirrel.Sqlizer
+
+	// ToSQL is a convenience method with idiomatic Go naming.
+	// It should delegate to ToSql() in implementations.
+	ToSQL() (sql string, args []any, err error)
+}
+
+// JoinFilterFactory provides methods for creating type-safe JOIN ON filters.
+// JoinFilters compare columns to other columns (not values) and maintain vendor-specific quoting.
+type JoinFilterFactory interface {
+	// Column comparison operators
+	EqColumn(leftColumn, rightColumn string) JoinFilter
+	NotEqColumn(leftColumn, rightColumn string) JoinFilter
+	LtColumn(leftColumn, rightColumn string) JoinFilter
+	LteColumn(leftColumn, rightColumn string) JoinFilter
+	GtColumn(leftColumn, rightColumn string) JoinFilter
+	GteColumn(leftColumn, rightColumn string) JoinFilter
+
+	// Logical operators for complex JOIN conditions
+	And(filters ...JoinFilter) JoinFilter
+	Or(filters ...JoinFilter) JoinFilter
+
+	// Raw escape hatch for complex JOIN conditions
+	Raw(condition string, args ...any) JoinFilter
+}
+
 // SelectQueryBuilder defines the interface for enhanced SELECT query building with type safety.
 // This interface extends basic squirrel.SelectBuilder functionality with additional methods
-// for type-safe WHERE clauses, JOIN operations, and vendor-specific query features.
+// for composable filters, JOIN operations, and vendor-specific query features.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
 	From(from ...string) SelectQueryBuilder
-	Join(join string, rest ...any) SelectQueryBuilder
-	LeftJoin(join string, rest ...any) SelectQueryBuilder
-	RightJoin(join string, rest ...any) SelectQueryBuilder
-	InnerJoin(join string, rest ...any) SelectQueryBuilder
-	CrossJoin(join string, rest ...any) SelectQueryBuilder
+
+	// Type-safe JOIN methods with JoinFilter (v2.0+)
+	JoinOn(table string, filter JoinFilter) SelectQueryBuilder
+	LeftJoinOn(table string, filter JoinFilter) SelectQueryBuilder
+	RightJoinOn(table string, filter JoinFilter) SelectQueryBuilder
+	InnerJoinOn(table string, filter JoinFilter) SelectQueryBuilder
+	CrossJoinOn(table string) SelectQueryBuilder
+
 	GroupBy(groupBys ...string) SelectQueryBuilder
 	Having(pred any, rest ...any) SelectQueryBuilder
 	OrderBy(orderBys ...string) SelectQueryBuilder
@@ -31,20 +116,36 @@ type SelectQueryBuilder interface {
 	Offset(offset uint64) SelectQueryBuilder
 	Paginate(limit, offset uint64) SelectQueryBuilder
 
-	// Type-safe WHERE clause methods
-	WhereEq(column string, value any) SelectQueryBuilder
-	WhereNotEq(column string, value any) SelectQueryBuilder
-	WhereLt(column string, value any) SelectQueryBuilder
-	WhereLte(column string, value any) SelectQueryBuilder
-	WhereGt(column string, value any) SelectQueryBuilder
-	WhereGte(column string, value any) SelectQueryBuilder
-	WhereIn(column string, values any) SelectQueryBuilder
-	WhereNotIn(column string, values any) SelectQueryBuilder
-	WhereLike(column, pattern string) SelectQueryBuilder
-	WhereNull(column string) SelectQueryBuilder
-	WhereNotNull(column string) SelectQueryBuilder
-	WhereBetween(column string, lowerBound, upperBound any) SelectQueryBuilder
-	WhereRaw(condition string, args ...any) SelectQueryBuilder
+	// Composable WHERE clause
+	Where(filter Filter) SelectQueryBuilder
+
+	// SQL generation
+	ToSQL() (sql string, args []any, err error)
+}
+
+// UpdateQueryBuilder defines the interface for UPDATE query building with type-safe filtering.
+// This interface wraps squirrel.UpdateBuilder with Filter API support and vendor-specific quoting.
+type UpdateQueryBuilder interface {
+	// Data modification
+	Set(column string, value any) UpdateQueryBuilder
+	SetMap(clauses map[string]any) UpdateQueryBuilder
+
+	// Filtering
+	Where(filter Filter) UpdateQueryBuilder
+
+	// SQL generation
+	ToSQL() (sql string, args []any, err error)
+}
+
+// DeleteQueryBuilder defines the interface for DELETE query building with type-safe filtering.
+// This interface wraps squirrel.DeleteBuilder with Filter API support.
+type DeleteQueryBuilder interface {
+	// Filtering
+	Where(filter Filter) DeleteQueryBuilder
+
+	// Batch operations
+	Limit(limit uint64) DeleteQueryBuilder
+	OrderBy(orderBys ...string) DeleteQueryBuilder
 
 	// SQL generation
 	ToSQL() (sql string, args []any, err error)
@@ -157,12 +258,16 @@ type QueryBuilderInterface interface {
 	// Vendor information
 	Vendor() string
 
+	// Filter factories
+	Filter() FilterFactory
+	JoinFilter() JoinFilterFactory
+
 	// Query builders
 	Select(columns ...string) SelectQueryBuilder
 	Insert(table string) squirrel.InsertBuilder
 	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
-	Update(table string) squirrel.UpdateBuilder
-	Delete(table string) squirrel.DeleteBuilder
+	Update(table string) UpdateQueryBuilder
+	Delete(table string) DeleteQueryBuilder
 
 	// Vendor-specific helpers
 	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer

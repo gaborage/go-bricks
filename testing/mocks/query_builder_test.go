@@ -10,10 +10,208 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
+const (
+	TestToSQLWithErrors  = "ToSQL with errors"
+	TestToSQLWithAnyArgs = "ToSQL with valid []any args"
+	TestToSQLWithNilArgs = "ToSQL with nil args"
+)
+
 // MockSelectQueryBuilder provides a mock implementation of types.SelectQueryBuilder for testing
 type MockSelectQueryBuilder struct {
 	mock.Mock
 }
+
+// MockFilterFactory provides a mock implementation of types.FilterFactory for testing
+type MockFilterFactory struct {
+	mock.Mock
+}
+
+func (m *MockFilterFactory) Eq(column string, value any) types.Filter {
+	args := m.MethodCalled("Eq", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotEq(column string, value any) types.Filter {
+	args := m.MethodCalled("NotEq", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Lt(column string, value any) types.Filter {
+	args := m.MethodCalled("Lt", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Lte(column string, value any) types.Filter {
+	args := m.MethodCalled("Lte", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Gt(column string, value any) types.Filter {
+	args := m.MethodCalled("Gt", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Gte(column string, value any) types.Filter {
+	args := m.MethodCalled("Gte", column, value)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) In(column string, values any) types.Filter {
+	args := m.MethodCalled("In", column, values)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotIn(column string, values any) types.Filter {
+	args := m.MethodCalled("NotIn", column, values)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Like(column, pattern string) types.Filter {
+	args := m.MethodCalled("Like", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Null(column string) types.Filter {
+	args := m.MethodCalled("Null", column)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotNull(column string) types.Filter {
+	args := m.MethodCalled("NotNull", column)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Between(column string, lowerBound, upperBound any) types.Filter {
+	args := m.MethodCalled("Between", column, lowerBound, upperBound)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) And(filters ...types.Filter) types.Filter {
+	callArgs := make([]any, len(filters))
+	for i, filter := range filters {
+		callArgs[i] = filter
+	}
+	args := m.MethodCalled("And", callArgs...)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Or(filters ...types.Filter) types.Filter {
+	callArgs := make([]any, len(filters))
+	for i, filter := range filters {
+		callArgs[i] = filter
+	}
+	args := m.MethodCalled("Or", callArgs...)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Not(filter types.Filter) types.Filter {
+	args := m.MethodCalled("Not", filter)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) Raw(condition string, args ...any) types.Filter {
+	callArgs := append([]any{condition}, args...)
+	mockArgs := m.MethodCalled("Raw", callArgs...)
+	return mockArgs.Get(0).(types.Filter)
+}
+
+var _ types.FilterFactory = (*MockFilterFactory)(nil)
+
+// MockFilter provides a mock implementation of types.Filter for testing
+type MockFilter struct {
+	mock.Mock
+}
+
+func (m *MockFilter) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		if cast, ok := v.([]any); ok {
+			outArgs = cast
+		}
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
+}
+
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (m *MockFilter) ToSql() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSql")
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		if cast, ok := v.([]any); ok {
+			outArgs = cast
+		}
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
+}
+
+var _ types.Filter = (*MockFilter)(nil)
+
+// MockUpdateQueryBuilder provides a mock implementation of types.UpdateQueryBuilder for testing
+type MockUpdateQueryBuilder struct {
+	mock.Mock
+}
+
+func (m *MockUpdateQueryBuilder) Set(column string, value any) types.UpdateQueryBuilder {
+	args := m.MethodCalled("Set", column, value)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) SetMap(clauses map[string]any) types.UpdateQueryBuilder {
+	args := m.MethodCalled("SetMap", clauses)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) Where(filter types.Filter) types.UpdateQueryBuilder {
+	args := m.MethodCalled("Where", filter)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
+func (m *MockUpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
+}
+
+var _ types.UpdateQueryBuilder = (*MockUpdateQueryBuilder)(nil)
+
+// MockDeleteQueryBuilder provides a mock implementation of types.DeleteQueryBuilder for testing
+type MockDeleteQueryBuilder struct {
+	mock.Mock
+}
+
+func (m *MockDeleteQueryBuilder) Where(filter types.Filter) types.DeleteQueryBuilder {
+	args := m.MethodCalled("Where", filter)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) Limit(limit uint64) types.DeleteQueryBuilder {
+	args := m.MethodCalled("Limit", limit)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) OrderBy(orderBys ...string) types.DeleteQueryBuilder {
+	callArgs := make([]any, len(orderBys))
+	for i, col := range orderBys {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("OrderBy", callArgs...)
+	return args.Get(0).(types.DeleteQueryBuilder)
+}
+
+func (m *MockDeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
+}
+
+var _ types.DeleteQueryBuilder = (*MockDeleteQueryBuilder)(nil)
 
 func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	callArgs := make([]any, len(from))
@@ -24,39 +222,33 @@ func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) Join(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("Join", callArgs...)
+func (m *MockSelectQueryBuilder) JoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("JoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) LeftJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("LeftJoin", callArgs...)
+func (m *MockSelectQueryBuilder) LeftJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("LeftJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) RightJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("RightJoin", callArgs...)
+func (m *MockSelectQueryBuilder) RightJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("RightJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) InnerJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("InnerJoin", callArgs...)
+func (m *MockSelectQueryBuilder) InnerJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+	args := m.MethodCalled("InnerJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) CrossJoin(join string, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{join}, rest...)
-	args := m.MethodCalled("CrossJoin", callArgs...)
+func (m *MockSelectQueryBuilder) CrossJoinOn(table string) types.SelectQueryBuilder {
+	args := m.MethodCalled("CrossJoinOn", table)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) Where(pred any, rest ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{pred}, rest...)
-	args := m.MethodCalled("Where", callArgs...)
+func (m *MockSelectQueryBuilder) Where(filter types.Filter) types.SelectQueryBuilder {
+	args := m.MethodCalled("Where", filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -99,75 +291,13 @@ func (m *MockSelectQueryBuilder) Paginate(limit, offset uint64) types.SelectQuer
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) WhereEq(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereEq", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotEq(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotEq", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLt(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLt", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLte(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLte", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereGt(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereGt", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereGte(column string, value any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereGte", column, value)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereIn(column string, values any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereIn", column, values)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotIn(column string, values any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotIn", column, values)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereLike(column, pattern string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereLike", column, pattern)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNull(column string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNull", column)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereNotNull(column string) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereNotNull", column)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereBetween(column string, lowerBound, upperBound any) types.SelectQueryBuilder {
-	args := m.MethodCalled("WhereBetween", column, lowerBound, upperBound)
-	return args.Get(0).(types.SelectQueryBuilder)
-}
-
-func (m *MockSelectQueryBuilder) WhereRaw(condition string, args ...any) types.SelectQueryBuilder {
-	callArgs := append([]any{condition}, args...)
-	mockArgs := m.MethodCalled("WhereRaw", callArgs...)
-	return mockArgs.Get(0).(types.SelectQueryBuilder)
-}
-
 func (m *MockSelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 // Compile-time verification that MockSelectQueryBuilder implements the interface
@@ -188,7 +318,8 @@ func (s *ExampleUserService) BuildUserSearchQuery(searchTerm string) types.Selec
 	query := s.qb.Select("id", "name", "email").From("users")
 
 	if searchTerm != "" {
-		query = query.WhereLike("name", searchTerm)
+		f := s.qb.Filter()
+		query = query.Where(f.Like("name", searchTerm))
 	}
 
 	return query
@@ -218,13 +349,18 @@ func TestMockQueryBuilderQueryConstruction(t *testing.T) {
 	// Create and configure mocks
 	mockQB := &MockQueryBuilder{}
 	mockSelectBuilder := &MockSelectQueryBuilder{}
+	mockFilterFactory := &MockFilterFactory{}
+	mockFilter := &MockFilter{}
 	defer mockQB.AssertExpectations(t)
 	defer mockSelectBuilder.AssertExpectations(t)
+	defer mockFilterFactory.AssertExpectations(t)
 
 	// Set expectations
 	mockQB.On("Select", "id", "name", "email").Return(mockSelectBuilder)
 	mockSelectBuilder.On("From", "users").Return(mockSelectBuilder)
-	mockSelectBuilder.On("WhereLike", "name", "john").Return(mockSelectBuilder)
+	mockQB.On("Filter").Return(mockFilterFactory)
+	mockFilterFactory.On("Like", "name", "john").Return(mockFilter)
+	mockSelectBuilder.On("Where", mockFilter).Return(mockSelectBuilder)
 
 	// Test the service
 	service := NewExampleUserService(mockQB)
@@ -257,20 +393,20 @@ func TestMockQueryBuilderEmptySearchTerm(t *testing.T) {
 func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	mockQB := &MockQueryBuilder{}
 	mockSelectBuilder := &MockSelectQueryBuilder{}
+	mockUpdateBuilder := &MockUpdateQueryBuilder{}
+	mockDeleteBuilder := &MockDeleteQueryBuilder{}
 	defer mockQB.AssertExpectations(t)
 
 	// Test helper methods
 	insertBuilder := squirrel.Insert("users")
-	updateBuilder := squirrel.Update("users")
-	deleteBuilder := squirrel.Delete("users")
 	likeCondition := squirrel.ILike{"name": "%test%"}
 
 	// Use helper methods to set expectations
 	mockQB.ExpectVendor("postgresql")
 	mockQB.ExpectSelect([]string{"*"}, mockSelectBuilder)
 	mockQB.ExpectInsert("users", insertBuilder)
-	mockQB.ExpectUpdate("users", updateBuilder)
-	mockQB.ExpectDelete("users", deleteBuilder)
+	mockQB.ExpectUpdate("users", mockUpdateBuilder)
+	mockQB.ExpectDelete("users", mockDeleteBuilder)
 	mockQB.ExpectCaseInsensitiveLike("name", "test", likeCondition)
 	mockQB.ExpectCurrentTimestamp("NOW()")
 	mockQB.ExpectUUIDGeneration("gen_random_uuid()")
@@ -281,8 +417,8 @@ func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	assert.Equal(t, "postgresql", mockQB.Vendor())
 	assert.Equal(t, mockSelectBuilder, mockQB.Select("*"))
 	assert.Equal(t, insertBuilder, mockQB.Insert("users"))
-	assert.Equal(t, updateBuilder, mockQB.Update("users"))
-	assert.Equal(t, deleteBuilder, mockQB.Delete("users"))
+	assert.Equal(t, mockUpdateBuilder, mockQB.Update("users"))
+	assert.Equal(t, mockDeleteBuilder, mockQB.Delete("users"))
 	assert.Equal(t, likeCondition, mockQB.BuildCaseInsensitiveLike("name", "test"))
 	assert.Equal(t, "NOW()", mockQB.BuildCurrentTimestamp())
 	assert.Equal(t, "gen_random_uuid()", mockQB.BuildUUIDGeneration())
@@ -359,4 +495,176 @@ func BenchmarkMockQueryBuilder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		mockQB.Select("id", "name")
 	}
+}
+
+// ========== Nil-Safe Mock ToSQL Tests ==========
+
+func TestMockFilterNilSafeToSQL(t *testing.T) {
+	mockFilter := &MockFilter{}
+
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		// Configure mock to return nil for args (common pattern)
+		mockFilter.On("ToSQL").Return("status = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockFilter.ToSQL()
+
+		assert.Equal(t, "status = ?", sql)
+		assert.Nil(t, args) // nil args is valid, not a panic
+		assert.NoError(t, err)
+		mockFilter.AssertExpectations(t)
+	})
+
+	t.Run("ToSql with nil args", func(t *testing.T) {
+		mockFilter2 := &MockFilter{}
+		// Configure mock to return nil for args
+		mockFilter2.On("ToSql").Return("id = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockFilter2.ToSql()
+
+		assert.Equal(t, "id = ?", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockFilter2.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockFilter3 := &MockFilter{}
+		expectedArgs := []any{"active", 100}
+		mockFilter3.On("ToSQL").Return("status = ? AND age > ?", expectedArgs, nil)
+
+		sql, args, err := mockFilter3.ToSQL()
+
+		assert.Equal(t, "status = ? AND age > ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockFilter3.AssertExpectations(t)
+	})
+}
+
+// TestMockUpdateQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockUpdateQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		// Configure mock to return nil for args (common in error testing)
+		mockUpdate.On("ToSQL").Return("UPDATE users SET name = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Equal(t, "UPDATE users SET name = ?", sql)
+		assert.Nil(t, args) // nil args is valid
+		assert.NoError(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		expectedArgs := []any{"John", 123}
+		mockUpdate.On("ToSQL").Return("UPDATE users SET name = ? WHERE id = ?", expectedArgs, nil)
+
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Equal(t, "UPDATE users SET name = ? WHERE id = ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		mockUpdate.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+}
+
+// TestMockDeleteQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockDeleteQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		// Configure mock to return nil for args
+		mockDelete.On("ToSQL").Return("DELETE FROM users", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Equal(t, "DELETE FROM users", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		expectedArgs := []any{123}
+		mockDelete.On("ToSQL").Return("DELETE FROM users WHERE id = ?", expectedArgs, nil)
+
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Equal(t, "DELETE FROM users WHERE id = ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		mockDelete.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+}
+
+// TestMockSelectQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		// Configure mock to return nil for args (e.g., SELECT * with no WHERE clause)
+		mockSelect.On("ToSQL").Return("SELECT * FROM users", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Equal(t, "SELECT * FROM users", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockSelect.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		expectedArgs := []any{"active", 18}
+		mockSelect.On("ToSQL").Return("SELECT * FROM users WHERE status = ? AND age > ?", expectedArgs, nil)
+
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Equal(t, "SELECT * FROM users WHERE status = ? AND age > ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockSelect.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		mockSelect.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockSelect.AssertExpectations(t)
+	})
 }

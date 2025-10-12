@@ -177,7 +177,7 @@ func TestQueryBuilderUpdate(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			query := qb.Update(tt.table).Set("name", "test")
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -223,9 +223,10 @@ func TestQueryBuilderDelete(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Delete(tt.table).Where("id = ?", 1)
+			f := qb.Filter()
+			query := qb.Delete(tt.table).Where(f.Eq("id", 1))
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -275,7 +276,8 @@ func TestQueryBuilderBuildCaseInsensitiveLike(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 
 			// Use the condition in a query to generate SQL
-			query := qb.Select("*").From("table").WhereLike(tt.column, tt.value)
+			f := qb.Filter()
+			query := qb.Select("*").From("table").Where(f.Like(tt.column, tt.value))
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
@@ -610,9 +612,10 @@ func TestQueryBuilderOracleWhereClauseInQuery(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
 	// Test that the WHERE clause helper creates properly quoted SQL
+	f := qb.Filter()
 	query := qb.Select("id", "name", "number").
 		From("accounts").
-		WhereEq("number", "12345")
+		Where(f.Eq("number", "12345"))
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
@@ -713,7 +716,8 @@ func TestQueryBuilderPlaceholderFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Select("*").From("table").WhereEq("id", 1)
+			f := qb.Filter()
+			query := qb.Select("*").From("table").Where(f.Eq("id", 1))
 
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
@@ -727,10 +731,11 @@ func TestQueryBuilderIntegrationTest(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	// Build a complex SELECT query
+	f := qb.Filter()
 	query := qb.Select("id", "name", "email").
 		From("users").
-		WhereEq("active", true).
-		WhereLike("name", "john").
+		Where(f.Eq("active", true)).
+		Where(f.Like("name", "john")).
 		OrderBy("name ASC").
 		Paginate(10, 5)
 
@@ -758,7 +763,8 @@ func TestQueryBuilderWithSqlmock(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	// Build a SELECT query
-	query := qb.Select("id", "name").From("users").WhereEq("active", true)
+	f := qb.Filter()
+	query := qb.Select("id", "name").From("users").Where(f.Eq("active", true))
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
@@ -824,11 +830,13 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 	qb := NewQueryBuilder(PostgreSQL)
 
 	// Build a complex query with joins
+	f := qb.Filter()
+	jf := qb.JoinFilter()
 	query := qb.Select("u.id", "u.name", "p.title").
 		From("users u").
-		Join("posts p ON u.id = p.user_id").
-		WhereEq("u.active", true).
-		WhereLike("p.title", "go").
+		JoinOn("posts p", jf.EqColumn("u.id", "p.user_id")).
+		Where(f.Eq("u.active", true)).
+		Where(f.Like("p.title", "go")).
 		OrderBy("u.name ASC").
 		Paginate(5, 0)
 

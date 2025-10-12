@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	countClause  = "COUNT(*)"
-	sumClause    = "SUM(amount)"
-	assertFormat = "input: %s"
+	countClause            = "COUNT(*)"
+	sumClause              = "SUM(amount)"
+	assertFormat           = "input: %s"
+	testIncompleteFunction = "COUNT("
+	testTableName          = "schema.number"
 )
 
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
@@ -233,7 +235,7 @@ func TestOracleSQLFunctionDetection(t *testing.T) {
 		},
 		{
 			name:     "incomplete_function",
-			input:    "COUNT(",
+			input:    testIncompleteFunction,
 			expected: false,
 		},
 		{
@@ -448,28 +450,29 @@ func TestTypeSafeWhereMethodsWithOracleReservedWords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query dbtypes.SelectQueryBuilder
+			f := qb.Filter()
 
 			// Build query based on the test case
 			switch tt.method {
 			case "WhereEq":
 				switch tt.column {
 				case "number":
-					query = qb.Select("id", "name", "number").From("accounts").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "name", "number").From("accounts").Where(f.Eq(tt.column, tt.value))
 				case "level":
-					query = qb.Select("id", "level").From("users").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "level").From("users").Where(f.Eq(tt.column, tt.value))
 				default:
-					query = qb.Select("id", "name").From("users").WhereEq(tt.column, tt.value)
+					query = qb.Select("id", "name").From("users").Where(f.Eq(tt.column, tt.value))
 				}
 			case "WhereNotEq":
-				query = qb.Select("id", "size").From("products").WhereNotEq(tt.column, tt.value)
+				query = qb.Select("id", "size").From("products").Where(f.NotEq(tt.column, tt.value))
 			case "WhereGt":
-				query = qb.Select("id", "access").From("permissions").WhereGt(tt.column, tt.value)
+				query = qb.Select("id", "access").From("permissions").Where(f.Gt(tt.column, tt.value))
 			case "WhereLt":
-				query = qb.Select("id", "order").From("items").WhereLt(tt.column, tt.value)
+				query = qb.Select("id", "order").From("items").Where(f.Lt(tt.column, tt.value))
 			case "WhereIn":
-				query = qb.Select("id", "mode").From("settings").WhereIn(tt.column, tt.value)
+				query = qb.Select("id", "mode").From("settings").Where(f.In(tt.column, tt.value))
 			case "WhereNull":
-				query = qb.Select("id", "comment").From("posts").WhereNull(tt.column)
+				query = qb.Select("id", "comment").From("posts").Where(f.Null(tt.column))
 			}
 
 			sql, args, err := query.ToSQL()
@@ -515,10 +518,11 @@ func TestWhereRawForComplexOracleQueries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query dbtypes.SelectQueryBuilder
+			f := qb.Filter()
 			if tt.name == "oracle_specific_rownum" {
-				query = qb.Select("id", "name").From("users").WhereRaw(tt.condition, tt.args...)
+				query = qb.Select("id", "name").From("users").Where(f.Raw(tt.condition, tt.args...))
 			} else {
-				query = qb.Select("id", "name").From("accounts").WhereRaw(tt.condition, tt.args...)
+				query = qb.Select("id", "name").From("accounts").Where(f.Raw(tt.condition, tt.args...))
 			}
 
 			sql, args, err := query.ToSQL()
@@ -539,9 +543,10 @@ func TestFixesOriginalOracleIdentifierBug(t *testing.T) {
 	//                                                                                                               ^^^^^^ unquoted
 
 	// Using type-safe WHERE method should properly quote the reserved word
+	f := qb.Filter()
 	query := qb.Select("id", "name", "number", "balance", "created_at", "created_by", "updated_at", "updated_by").
 		From("accounts").
-		WhereEq("number", "54763470")
+		Where(f.Eq("number", "54763470"))
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
@@ -853,7 +858,7 @@ func TestIsBalancedParentheses(t *testing.T) {
 		{"extra_opening", "COUNT((", false},
 		{"extra_closing", "COUNT())", false},
 		{"missing_opening", "COUNT)", false},
-		{"missing_closing", "COUNT(", false},
+		{"missing_closing", testIncompleteFunction, false},
 		{"wrong_order", ")COUNT(", false},
 		{"nested_unbalanced", "FUNC(OTHER()", false},
 		{"multiple_unbalanced", "FUNC()) + OTHER(", false},
@@ -897,7 +902,7 @@ func TestOracleFromClauseQuoting(t *testing.T) {
 		},
 		{
 			name:        "qualified_table_name",
-			tables:      []string{"schema.number"},
+			tables:      []string{testTableName},
 			expectedSQL: `SELECT * FROM schema."number"`,
 			shouldQuote: true,
 		},
@@ -996,7 +1001,7 @@ func TestQuoteOracleIdentifierForClause(t *testing.T) {
 		{"qualified_function", "SCHEMA.FUNC(arg)", "SCHEMA.FUNC(arg)"},
 
 		// Qualified identifiers
-		{"qualified_reserved", "schema.number", `schema."number"`},
+		{"qualified_reserved", testTableName, `schema."number"`},
 		{"qualified_normal", "schema.name", "schema.name"},
 	}
 
@@ -1024,7 +1029,7 @@ func TestEnhancedSQLFunctionDetectionWithBalancedParentheses(t *testing.T) {
 		// Invalid unbalanced cases (now properly detected)
 		{"extra_opening_paren", "COUNT((", false},
 		{"extra_closing_paren", "COUNT())", false},
-		{"missing_closing_paren", "COUNT(", false},
+		{"missing_closing_paren", testIncompleteFunction, false},
 		{"wrong_paren_order", ")COUNT(", false},
 		{"nested_unbalanced", "UPPER(TRIM(name)", false},
 
@@ -1038,6 +1043,153 @@ func TestEnhancedSQLFunctionDetectionWithBalancedParentheses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isSQLFunction(tt.input)
 			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
+		})
+	}
+}
+
+// TestOracleUpdateTableQuoting tests that UPDATE statements properly quote table names
+// for reserved words and mixed-case identifiers, preventing Oracle syntax errors.
+func TestOracleUpdateTableQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	f := qb.Filter()
+
+	tests := []struct {
+		name           string
+		table          string
+		setColumn      string
+		whereColumn    string
+		expectedSQL    string
+		expectSetQuote bool
+	}{
+		{
+			name:           "reserved_word_table",
+			table:          "number",
+			setColumn:      "level", // reserved word
+			whereColumn:    "size",  // reserved word
+			expectedSQL:    `UPDATE "number" SET "level" = :1 WHERE "size" = :2`,
+			expectSetQuote: true,
+		},
+		{
+			name:           "regular_table",
+			table:          "users",
+			setColumn:      "name",
+			whereColumn:    "id",
+			expectedSQL:    `UPDATE users SET name = :1 WHERE id = :2`,
+			expectSetQuote: false,
+		},
+		{
+			name:           "schema_qualified_reserved_word",
+			table:          testTableName,
+			setColumn:      "level",
+			whereColumn:    "order",
+			expectedSQL:    `UPDATE schema."number" SET "level" = :1 WHERE "order" = :2`,
+			expectSetQuote: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := qb.Update(tt.table).
+				Set(tt.setColumn, "active").
+				Where(f.Eq(tt.whereColumn, 123)).
+				ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql, "SQL should match expected UPDATE statement")
+			assert.Equal(t, []any{"active", 123}, args)
+		})
+	}
+}
+
+// TestOracleUpdateSetMapQuoting tests that SetMap properly quotes columns in UPDATE statements
+func TestOracleUpdateSetMapQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	sql, _, err := qb.Update("number").
+		SetMap(map[string]any{
+			"level": "active", // reserved word
+			"size":  42,       // reserved word
+		}).
+		ToSQL()
+
+	require.NoError(t, err)
+	assert.Contains(t, sql, `UPDATE "number" SET`, "Table should be quoted")
+	assert.Contains(t, sql, `"level" = `, "Reserved word column should be quoted")
+	assert.Contains(t, sql, `"size" = `, "Reserved word column should be quoted")
+}
+
+// TestOracleDeleteTableQuoting tests that DELETE statements properly quote table names
+// for reserved words and mixed-case identifiers, preventing Oracle syntax errors.
+func TestOracleDeleteTableQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	f := qb.Filter()
+
+	tests := []struct {
+		name        string
+		table       string
+		whereColumn string
+		expectedSQL string
+	}{
+		{
+			name:        "reserved_word_table",
+			table:       "number",
+			whereColumn: "level", // reserved word
+			expectedSQL: `DELETE FROM "number" WHERE "level" = :1`,
+		},
+		{
+			name:        "regular_table",
+			table:       "users",
+			whereColumn: "id",
+			expectedSQL: `DELETE FROM users WHERE id = :1`,
+		},
+		{
+			name:        "schema_qualified_reserved_word",
+			table:       testTableName,
+			whereColumn: "level",
+			expectedSQL: `DELETE FROM schema."number" WHERE "level" = :1`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := qb.Delete(tt.table).
+				Where(f.Eq(tt.whereColumn, 123)).
+				ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql, "SQL should match expected DELETE statement")
+			assert.Equal(t, []any{123}, args)
+		})
+	}
+}
+
+// TestOracleDeleteWithoutWhereQuoting tests that DELETE without WHERE quotes table name
+func TestOracleDeleteWithoutWhereQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	tests := []struct {
+		name        string
+		table       string
+		expectedSQL string
+	}{
+		{
+			name:        "reserved_word_table",
+			table:       "number",
+			expectedSQL: `DELETE FROM "number"`,
+		},
+		{
+			name:        "regular_table",
+			table:       "users",
+			expectedSQL: `DELETE FROM users`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, _, err := qb.Delete(tt.table).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql, "SQL should match expected DELETE FROM clause")
 		})
 	}
 }

@@ -267,17 +267,48 @@ AMQP/RabbitMQ support with validate-once, replay-many declaration pattern:
 
 ## Database
 
-Unified interface supporting PostgreSQL, Oracle, and MongoDB with vendor-specific optimizations.
+Unified interface supporting PostgreSQL, Oracle, and MongoDB with vendor-specific optimizations and type-safe query building across all operations.
 
-### Type-Safe Query Builder
+### Type-Safe Filter API
+
+GoBricks provides a composable Filter API that works across SELECT, UPDATE, DELETE, and JOIN operations:
+
 ```go
-// Type-safe WHERE methods prevent SQL errors
-query := qb.Select("id", "number").
-    From("accounts").
-    WhereEq("number", value)  // Auto-quotes Oracle reserved words
+// Build reusable filters
+f := qb.Filter()
+
+// SELECT with filters
+users := qb.Select("id", "name", "email").
+    From("users").
+    Where(f.Eq("status", "active")).
+    Where(f.Gt("created_at", startDate))
+
+// UPDATE with filters
+qb.Update("users").
+    Set("status", "inactive").
+    Where(f.Lt("last_login", cutoffDate))
+
+// DELETE with filters
+qb.Delete("users").
+    Where(f.Eq("status", "deleted")).
+    Where(f.Lt("deleted_at", retentionDate))
+
+// JOIN with type-safe column comparisons
+jf := qb.JoinFilter()
+query := qb.Select("u.name", "p.bio").
+    From("users u").
+    LeftJoinOn("profiles p", jf.EqColumn("u.id", "p.user_id")).
+    Where(f.NotNull("p.bio"))
 ```
 
-**Available Methods**: `WhereEq`, `WhereNotEq`, `WhereLt/Lte/Gt/Gte`, `WhereIn/NotIn`, `WhereLike`, `WhereNull/NotNull`, `WhereBetween`, `WhereRaw`
+**Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
+
+**JoinFilter Methods**: `EqColumn`, `NotEqColumn`, `LtColumn`, `LteColumn`, `GtColumn`, `GteColumn`, `And`, `Or`, `Raw`
+
+All methods automatically handle:
+- **Vendor-specific quoting** (Oracle reserved words like `NUMBER`, `DATE`)
+- **Placeholder formatting** (`$1` for PostgreSQL, `:1` for Oracle)
+- **Type safety** at compile time with refactor-friendly interfaces
 
 ### Database Support
 - **PostgreSQL**: `$1, $2` placeholders, pgx driver, advanced features
@@ -288,6 +319,7 @@ query := qb.Select("id", "number").
 - Connection pooling and health monitoring
 - Flyway integration for schema migrations
 - Performance tracking via OpenTelemetry
+- Type-safe query builders prevent runtime SQL errors
 
 ---
 
