@@ -10,6 +10,12 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
+const (
+	TestToSQLWithErrors  = "ToSQL with errors"
+	TestToSQLWithAnyArgs = "ToSQL with valid []any args"
+	TestToSQLWithNilArgs = "ToSQL with nil args"
+)
+
 // MockSelectQueryBuilder provides a mock implementation of types.SelectQueryBuilder for testing
 type MockSelectQueryBuilder struct {
 	mock.Mock
@@ -163,7 +169,11 @@ func (m *MockUpdateQueryBuilder) Where(filter types.Filter) types.UpdateQueryBui
 
 func (m *MockUpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 var _ types.UpdateQueryBuilder = (*MockUpdateQueryBuilder)(nil)
@@ -194,7 +204,11 @@ func (m *MockDeleteQueryBuilder) OrderBy(orderBys ...string) types.DeleteQueryBu
 
 func (m *MockDeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 var _ types.DeleteQueryBuilder = (*MockDeleteQueryBuilder)(nil)
@@ -279,7 +293,11 @@ func (m *MockSelectQueryBuilder) Paginate(limit, offset uint64) types.SelectQuer
 
 func (m *MockSelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	mockArgs := m.MethodCalled("ToSQL")
-	return mockArgs.String(0), mockArgs.Get(1).([]any), mockArgs.Error(2)
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
 }
 
 // Compile-time verification that MockSelectQueryBuilder implements the interface
@@ -484,7 +502,7 @@ func BenchmarkMockQueryBuilder(b *testing.B) {
 func TestMockFilterNilSafeToSQL(t *testing.T) {
 	mockFilter := &MockFilter{}
 
-	t.Run("ToSQL with nil args", func(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
 		// Configure mock to return nil for args (common pattern)
 		mockFilter.On("ToSQL").Return("status = ?", nil, nil)
 
@@ -511,7 +529,7 @@ func TestMockFilterNilSafeToSQL(t *testing.T) {
 		mockFilter2.AssertExpectations(t)
 	})
 
-	t.Run("ToSQL with valid []any args", func(t *testing.T) {
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
 		mockFilter3 := &MockFilter{}
 		expectedArgs := []any{"active", 100}
 		mockFilter3.On("ToSQL").Return("status = ? AND age > ?", expectedArgs, nil)
@@ -522,5 +540,131 @@ func TestMockFilterNilSafeToSQL(t *testing.T) {
 		assert.Equal(t, expectedArgs, args)
 		assert.NoError(t, err)
 		mockFilter3.AssertExpectations(t)
+	})
+}
+
+// TestMockUpdateQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockUpdateQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		// Configure mock to return nil for args (common in error testing)
+		mockUpdate.On("ToSQL").Return("UPDATE users SET name = ?", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Equal(t, "UPDATE users SET name = ?", sql)
+		assert.Nil(t, args) // nil args is valid
+		assert.NoError(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		expectedArgs := []any{"John", 123}
+		mockUpdate.On("ToSQL").Return("UPDATE users SET name = ? WHERE id = ?", expectedArgs, nil)
+
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Equal(t, "UPDATE users SET name = ? WHERE id = ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockUpdate := &MockUpdateQueryBuilder{}
+		mockUpdate.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockUpdate.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockUpdate.AssertExpectations(t)
+	})
+}
+
+// TestMockDeleteQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockDeleteQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		// Configure mock to return nil for args
+		mockDelete.On("ToSQL").Return("DELETE FROM users", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Equal(t, "DELETE FROM users", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		expectedArgs := []any{123}
+		mockDelete.On("ToSQL").Return("DELETE FROM users WHERE id = ?", expectedArgs, nil)
+
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Equal(t, "DELETE FROM users WHERE id = ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockDelete := &MockDeleteQueryBuilder{}
+		mockDelete.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockDelete.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockDelete.AssertExpectations(t)
+	})
+}
+
+// TestMockSelectQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		// Configure mock to return nil for args (e.g., SELECT * with no WHERE clause)
+		mockSelect.On("ToSQL").Return("SELECT * FROM users", nil, nil)
+
+		// This should not panic
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Equal(t, "SELECT * FROM users", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockSelect.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		expectedArgs := []any{"active", 18}
+		mockSelect.On("ToSQL").Return("SELECT * FROM users WHERE status = ? AND age > ?", expectedArgs, nil)
+
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Equal(t, "SELECT * FROM users WHERE status = ? AND age > ?", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockSelect.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockSelect := &MockSelectQueryBuilder{}
+		mockSelect.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockSelect.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockSelect.AssertExpectations(t)
 	})
 }

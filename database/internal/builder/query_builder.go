@@ -141,6 +141,7 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squir
 
 // Update creates an UPDATE query builder for the specified table with Filter API support.
 // The returned UpdateQueryBuilder provides type-safe filtering and vendor-specific column quoting.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
 // Example:
 //
@@ -150,14 +151,16 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squir
 //	    Set("updated_at", time.Now()).
 //	    Where(f.Eq("id", 123))
 func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
+	quotedTable := qb.quoteTableForQuery(table)
 	return &UpdateQueryBuilder{
 		qb:            qb,
-		updateBuilder: qb.statementBuilder.Update(table),
+		updateBuilder: qb.statementBuilder.Update(quotedTable),
 	}
 }
 
 // Delete creates a DELETE query builder for the specified table with Filter API support.
 // The returned DeleteQueryBuilder provides type-safe filtering.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
 // Example:
 //
@@ -167,9 +170,10 @@ func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
 //	    f.Lt("deleted_at", threshold),
 //	))
 func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
+	quotedTable := qb.quoteTableForQuery(table)
 	return &DeleteQueryBuilder{
 		qb:            qb,
-		deleteBuilder: qb.statementBuilder.Delete(table),
+		deleteBuilder: qb.statementBuilder.Delete(quotedTable),
 	}
 }
 
