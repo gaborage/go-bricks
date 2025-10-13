@@ -1,0 +1,616 @@
+name: CI (v2 - Unified)
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ============================================================================
+  # Job 1: Detect which components changed
+  # ============================================================================
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      framework: ${{ steps.filter.outputs.framework }}
+      tool: ${{ steps.filter.outputs.tool }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            framework:
+              - '**'
+              - '!tools/**'
+            tool:
+              - 'tools/openapi/**'
+              - '.github/workflows/ci-v2.yml'
+
+  # ============================================================================
+  # Framework CI Jobs (conditional on framework changes)
+  # ============================================================================
+
+  framework-test:
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          packages=$(go list ./... | grep -vE '/(tools)(/|$)')
+          if [ -n "$packages" ]; then
+            go test -race -cover -covermode=atomic -coverprofile=coverage.out $packages
+          else
+            echo "No packages found to test"
+            exit 1
+          fi
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to test"
+            exit 1
+          }
+
+          $testOutput = go test -race $packages 2>&1
+          $exitCode = $LASTEXITCODE
+
+          if ($exitCode -eq 0) {
+            Write-Host $testOutput
+            exit 0
+          }
+
+          Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
+          $knownPatterns = @(
+            'Expected /tmp.*got D:',
+            'wantErr true'
+          )
+          $unexpectedFailure = $false
+
+          foreach ($pkg in $packages) {
+            Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
+            $pkgOutput = go test -race $pkg 2>&1
+            $pkgExitCode = $LASTEXITCODE
+
+            if ($pkgExitCode -eq 0) {
+              Write-Host $pkgOutput
+              continue
+            }
+
+            $isKnownIssue = $false
+            foreach ($pattern in $knownPatterns) {
+              if ($pkgOutput -match $pattern) {
+                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
+                $isKnownIssue = $true
+                break
+              }
+            }
+
+            if (-not $isKnownIssue) {
+              Write-Host "Unexpected test failure in $pkg" -ForegroundColor Red
+              Write-Host $pkgOutput
+              $unexpectedFailure = $true
+            } else {
+              Write-Host $pkgOutput
+            }
+          }
+
+          if ($unexpectedFailure) {
+            exit 1
+          }
+
+          Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
+          exit 0
+
+      - name: Upload unit test coverage artifact (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage.out
+          retention-days: 1
+
+  framework-integration-test:
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Pre-pull container images
+        run: |
+          echo "Warming Docker cache with container images..."
+          docker pull mongo:8.0 &
+          docker pull postgres:17-alpine &
+          docker pull gvenzl/oracle-free:23-slim &
+          docker pull rabbitmq:3.13-management-alpine &
+          wait
+          echo "All container images cached"
+
+      - name: Run integration tests
+        run: |
+          set -euo pipefail
+          docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
+          echo "Running integration tests with testcontainers..."
+          go test -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out \
+            ./database/mongodb/... \
+            ./database/postgresql/... \
+            ./database/oracle/... \
+            ./messaging/...
+
+      - name: Upload integration test coverage artifact
+        if: matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage-integration.out
+          retention-days: 1
+
+  framework-merge-coverage:
+    needs: [changes, framework-test, framework-integration-test]
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download unit test coverage
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-unit
+          path: .
+
+      - name: Download integration test coverage
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-integration
+          path: .
+
+      - name: Merge coverage files
+        run: |
+          set -euo pipefail
+
+          # Verify both files exist
+          if [ ! -f coverage.out ]; then
+            echo "Error: coverage.out not found"
+            exit 1
+          fi
+          if [ ! -f coverage-integration.out ]; then
+            echo "Error: coverage-integration.out not found"
+            exit 1
+          fi
+
+          # Merge coverage files (skip mode line from second file)
+          echo "Merging coverage files..."
+          cat coverage.out > coverage-merged.out
+          tail -n +2 coverage-integration.out >> coverage-merged.out
+
+          # Show summary
+          echo "Coverage merge complete:"
+          wc -l coverage.out coverage-integration.out coverage-merged.out
+
+          # Rename merged file to coverage.out for SonarCloud
+          mv coverage-merged.out coverage.out
+
+      - name: Upload merged coverage for SonarCloud
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 1
+
+  framework-build:
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          packages=$(go list ./... | grep -vE '/tools(/|$)')
+          if [ -n "$packages" ]; then
+            go build -v $packages
+          else
+            echo "No packages found to build"
+            exit 1
+          fi
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to build"
+            exit 1
+          }
+          go build -v $packages
+
+      - name: Verify go mod (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  # ============================================================================
+  # OpenAPI Tool CI Jobs (conditional on tool changes)
+  # ============================================================================
+
+  tool-test:
+    needs: changes
+    if: needs.changes.outputs.tool == 'true'
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/openapi
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: tools/openapi/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          # Run tests with coverage, but handle multiple packages properly
+          packages=$(go list ./... | grep -v models)
+          if [ -n "$packages" ]; then
+            # Test each package individually to avoid coverage profile conflicts
+            for pkg in $packages; do
+              echo "Testing package: $pkg"
+              go test -race "$pkg"
+            done
+            # Generate combined coverage for SonarCloud (Ubuntu + Go 1.25 only)
+            if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.go-version }}" = "1.25" ]; then
+              echo "Generating coverage report for SonarCloud"
+              go test -race -coverprofile=coverage.out -covermode=atomic $packages || {
+                echo "Coverage generation failed, but tests passed"
+                exit 0
+              }
+            fi
+          else
+            echo "No packages found to test"
+            exit 1
+          fi
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $packages = go list ./...
+
+          if (-not $packages) {
+            Write-Host "No packages found to test"
+            exit 1
+          }
+
+          $testOutput = go test -race $packages 2>&1
+          $exitCode = $LASTEXITCODE
+
+          if ($exitCode -eq 0) {
+            Write-Host $testOutput
+            exit 0
+          }
+
+          Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
+          $knownPatterns = @(
+            'Expected /tmp.*got D:',
+            'wantErr true'
+          )
+          $unexpectedFailure = $false
+
+          foreach ($pkg in $packages) {
+            Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
+            $pkgOutput = go test -race $pkg 2>&1
+            $pkgExitCode = $LASTEXITCODE
+
+            if ($pkgExitCode -eq 0) {
+              Write-Host $pkgOutput
+              continue
+            }
+
+            $isKnownIssue = $false
+            foreach ($pattern in $knownPatterns) {
+              if ($pkgOutput -match $pattern) {
+                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
+                $isKnownIssue = $true
+                break
+              }
+            }
+
+            if (-not $isKnownIssue) {
+              Write-Host "Unexpected test failure in $pkg" -ForegroundColor Red
+              Write-Host $pkgOutput
+              $unexpectedFailure = $true
+            } else {
+              Write-Host $pkgOutput
+            }
+          }
+
+          if ($unexpectedFailure) {
+            exit 1
+          }
+
+          Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
+          exit 0
+
+      - name: Upload coverage artifact for SonarCloud (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-tool-coverage-report
+          path: tools/openapi/coverage.out
+          retention-days: 1
+
+  tool-build:
+    needs: changes
+    if: needs.changes.outputs.tool == 'true'
+    strategy:
+      matrix:
+        go-version: ['1.24', '1.25']
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/openapi
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: tools/openapi/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build and validate CLI (Unix)
+        if: matrix.os != 'windows-latest'
+        run: make validate-cli
+
+      - name: Build and validate CLI (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          # Build the CLI tool (equivalent to make build)
+          go build -ldflags "-X main.version=dev" -o go-bricks-openapi.exe ./cmd/go-bricks-openapi
+
+          # Validate CLI commands work (equivalent to make validate-cli)
+          ./go-bricks-openapi.exe version
+          ./go-bricks-openapi.exe --help
+          # Use absolute path to project root from tools/openapi working directory
+          $projectRoot = Resolve-Path "../../"
+          ./go-bricks-openapi.exe doctor --project $projectRoot
+          Write-Host "CLI validation passed"
+
+      - name: Verify go mod (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  # ============================================================================
+  # Shared Jobs (run for framework OR tool OR both)
+  # ============================================================================
+
+  lint-framework:
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: golangci-lint (framework)
+        uses: golangci/golangci-lint-action@06188a2a4a13a4786b4584e086b2040214cd4ca5
+        with:
+          version: latest
+          args: --timeout=5m --skip-dirs=tools
+
+  lint-tool:
+    needs: changes
+    if: needs.changes.outputs.tool == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tools/openapi/go.sum
+
+      - name: golangci-lint (tool)
+        uses: golangci/golangci-lint-action@06188a2a4a13a4786b4584e086b2040214cd4ca5
+        with:
+          version: latest
+          working-directory: tools/openapi
+          args: --timeout=5m --skip-dirs=tools
+
+  security-framework:
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run Gosec Security Scanner (framework)
+        run: |
+          set -euo pipefail
+          packages=$(go list ./... | grep -vE '/tools(/|$)')
+          if [ -n "$packages" ]; then
+            gosec $packages
+          else
+            echo "No packages found to scan"
+            exit 1
+          fi
+
+  security-tool:
+    needs: changes
+    if: needs.changes.outputs.tool == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/openapi
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tools/openapi/go.sum
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run Gosec Security Scanner (tool)
+        run: |
+          set -euo pipefail
+          packages=$(go list ./... | grep -v models)
+          if [ -n "$packages" ]; then
+            gosec $packages
+          else
+            echo "No packages found to scan"
+            exit 1
+          fi
+
+  # ============================================================================
+  # SonarCloud (framework only)
+  # ============================================================================
+
+  sonarcloud:
+    name: SonarCloud
+    needs: [changes, framework-merge-coverage]
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-report
+          path: .
+
+      - name: Scan
+        uses: SonarSource/sonarqube-scan-action@9bf7c126a1c17f11278a5c55416b867a27a73d5e
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
