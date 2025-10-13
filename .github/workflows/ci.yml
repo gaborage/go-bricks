@@ -138,8 +138,12 @@ jobs:
         run: |
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
-          echo "Running integration tests with testcontainers..."
-          go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./database/mongodb/...
+          echo "Running integration tests with testcontainers (MongoDB, PostgreSQL, Oracle, RabbitMQ)..."
+          go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out \
+            ./database/mongodb/... \
+            ./database/postgresql/... \
+            ./database/oracle/... \
+            ./messaging/...
 
       - name: Upload integration test coverage artifact
         if: matrix.go-version == '1.25'
