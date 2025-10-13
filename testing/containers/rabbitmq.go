@@ -21,8 +21,6 @@ type RabbitMQContainerConfig struct {
 	Username string
 	// Password for RabbitMQ authentication (default: "guest")
 	Password string
-	// VHost is the virtual host (default: "/")
-	VHost string
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
 }
@@ -30,13 +28,13 @@ type RabbitMQContainerConfig struct {
 // DefaultRabbitMQConfig returns a RabbitMQContainerConfig populated with sensible defaults.
 //
 // The returned configuration sets ImageTag to "3.13-management-alpine", Username to "guest",
-// Password to "guest", VHost to "/", and StartupTimeout to 60 seconds.
+// Password to "guest", and StartupTimeout to 60 seconds. The container uses the default
+// RabbitMQ virtual host "/".
 func DefaultRabbitMQConfig() *RabbitMQContainerConfig {
 	return &RabbitMQContainerConfig{
 		ImageTag:       "3.13-management-alpine",
 		Username:       "guest",
 		Password:       "guest",
-		VHost:          "/",
 		StartupTimeout: 60 * time.Second,
 	}
 }
