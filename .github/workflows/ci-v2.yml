@@ -429,6 +429,7 @@ jobs:
           name: openapi-tool-coverage-report
           path: tools/openapi/coverage.out
           retention-days: 1
+          if-no-files-found: ignore
 
   tool-build:
     needs: changes
