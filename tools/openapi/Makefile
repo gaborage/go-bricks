@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt update clean install demo check
+.PHONY: help build test lint fmt update clean install demo check update test-coverage validate-cli dev-deps release-dry-run
 
 # Binary name
 BINARY_NAME := go-bricks-openapi
