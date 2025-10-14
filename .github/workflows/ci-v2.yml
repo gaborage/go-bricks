@@ -92,8 +92,7 @@ jobs:
 
           Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
           $knownPatterns = @(
-            'Expected /tmp.*got D:',
-            'wantErr true'
+            'Expected /tmp.*got D:'
           )
           $unexpectedFailure = $false
 
@@ -232,7 +231,12 @@ jobs:
             exit 1
           fi
 
-          # Merge coverage files (skip mode line from second file)
+          # Merge coverage files using simple concatenation
+          # This approach is optimal for our use case because:
+          # - No coverage line overlaps (unit tests cover different code than integration tests)
+          # - Both files from same source code and test run (same Go version, same build)
+          # - Both use covermode=atomic consistently
+          # - Zero external dependencies (tools like gocovmerge would add unnecessary complexity)
           echo "Merging coverage files..."
           cat coverage.out > coverage-merged.out
           tail -n +2 coverage-integration.out >> coverage-merged.out
@@ -379,8 +383,7 @@ jobs:
 
           Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
           $knownPatterns = @(
-            'Expected /tmp.*got D:',
-            'wantErr true'
+            'Expected /tmp.*got D:'
           )
           $unexpectedFailure = $false
 
@@ -523,7 +526,7 @@ jobs:
         with:
           version: latest
           working-directory: tools/openapi
-          args: --timeout=5m --skip-dirs=tools
+          args: --timeout=5m
 
   security-framework:
     needs: changes
