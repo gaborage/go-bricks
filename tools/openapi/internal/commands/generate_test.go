@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -329,6 +330,13 @@ func TestRunGenerateErrorCases(t *testing.T) {
 		{
 			name: "directory creation permission error simulation",
 			setup: func(t *testing.T) *GenerateOptions {
+				// Skip on Windows - chmod doesn't restrict directory operations the same way
+				// Windows uses ACLs, not Unix permission bits, so os.Chmod(0444) won't
+				// prevent creating subdirectories like it does on Unix/Linux
+				if runtime.GOOS == "windows" {
+					t.Skip("Skipping permission test on Windows - chmod behavior differs from Unix")
+				}
+
 				tempDir := t.TempDir()
 				// Try to create in a read-only directory to simulate permission error
 				readOnlyDir := filepath.Join(tempDir, "readonly")
