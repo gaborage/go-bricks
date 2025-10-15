@@ -18,6 +18,12 @@ import (
 const (
 	serverImportPath = "github.com/gaborage/go-bricks/server"
 	appImportPath    = "github.com/gaborage/go-bricks/app"
+
+	// Framework types that should be filtered out from request/response extraction
+	frameworkTypeHandlerContext = "HandlerContext"
+	frameworkTypeAPIError       = "IAPIError"
+	frameworkTypeError          = "error"
+	frameworkPkgServer          = "server"
 )
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
@@ -34,6 +40,25 @@ func New(projectRoot string) *ProjectAnalyzer {
 		fileSet:     token.NewFileSet(),
 		constants:   make(map[string]string),
 	}
+}
+
+// isFrameworkType checks if a type should be filtered out as a framework type.
+// Returns true for framework types that shouldn't be treated as request/response types.
+func (a *ProjectAnalyzer) isFrameworkType(typeName, pkgName string) bool {
+	// Standard framework types (HandlerContext, IAPIError, error)
+	if typeName == frameworkTypeHandlerContext ||
+		typeName == frameworkTypeAPIError ||
+		typeName == frameworkTypeError {
+		return true
+	}
+
+	// Qualified server package types (server.HandlerContext, server.IAPIError)
+	if pkgName == frameworkPkgServer &&
+		(typeName == frameworkTypeHandlerContext || typeName == frameworkTypeAPIError) {
+		return true
+	}
+
+	return false
 }
 
 // AnalyzeProject discovers modules and routes from a go-bricks project
@@ -295,7 +320,7 @@ func (a *ProjectAnalyzer) isModuleDepsField(field *ast.Field) bool {
 func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, structName string) []models.Route {
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		return a.collectRoutesFromFile(astFile, structName, map[string]struct{}{"server": {}})
+		return a.collectRoutesFromFile(astFile, filePath, structName, map[string]struct{}{"server": {}})
 	}
 
 	var routes []models.Route
@@ -313,14 +338,14 @@ func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, 
 		if len(aliases) == 0 {
 			continue
 		}
-		routes = append(routes, a.collectRoutesFromFile(file, structName, aliases)...)
+		routes = append(routes, a.collectRoutesFromFile(file, filePath, structName, aliases)...)
 	}
 
 	return routes
 }
 
 // collectRoutesFromFile gathers routes for a specific module struct from a single file
-func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, structName string, serverAliases map[string]struct{}) []models.Route {
+func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) []models.Route {
 	var routes []models.Route
 
 	for _, decl := range astFile.Decls {
@@ -337,7 +362,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, structName st
 			continue
 		}
 
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, serverAliases)...)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, serverAliases)...)
 	}
 
 	return routes
@@ -345,15 +370,15 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, structName st
 
 // extractRoutesFromFuncBody extracts route registrations from function statements
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, map[string]struct{}{"server": {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", map[string]struct{}{"server": {}})
 }
 
 // extractRoutesFromFuncBodyWithAliases extracts route registrations with explicit server aliases
-func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockStmt, serverAliases map[string]struct{}) []models.Route {
+func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockStmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) []models.Route {
 	var routes []models.Route
 
 	for _, stmt := range body.List {
-		if route := a.extractRouteFromStatement(stmt, serverAliases); route != nil {
+		if route := a.extractRouteFromStatement(stmt, astFile, filePath, structName, serverAliases); route != nil {
 			routes = append(routes, *route)
 		}
 	}
@@ -361,37 +386,79 @@ func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockSt
 	return routes
 }
 
-// extractRouteFromStatement extracts a route from a statement like server.GET(...)
-func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, serverAliases map[string]struct{}) *models.Route {
+// validateServerCall validates that a statement is a valid server.METHOD() call.
+// Returns the call expression, HTTP method name, and whether the validation succeeded.
+func (a *ProjectAnalyzer) validateServerCall(stmt ast.Stmt, serverAliases map[string]struct{}) (*ast.CallExpr, string, bool) {
 	exprStmt, ok := stmt.(*ast.ExprStmt)
 	if !ok {
-		return nil
+		return nil, "", false
 	}
 
 	callExpr, ok := exprStmt.X.(*ast.CallExpr)
 	if !ok {
-		return nil
+		return nil, "", false
 	}
 
-	// Check if this is a server method call (GET, POST, etc.)
 	selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return nil
+		return nil, "", false
 	}
 
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
 	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, "server") {
-		return nil
+		return nil, "", false
 	}
 
 	method := selExpr.Sel.Name
 	if !a.isHTTPMethod(method) {
-		return nil
+		return nil, "", false
 	}
 
-	// Extract route path and handler from arguments
 	if len(callExpr.Args) < 3 {
-		return nil // Need at least hr, r, path, handler
+		return nil, "", false
+	}
+
+	return callExpr, method, true
+}
+
+// extractHandlerInfo extracts handler name and type information from a route call.
+// Returns handler name, request type, and response type.
+func (a *ProjectAnalyzer) extractHandlerInfo(
+	callExpr *ast.CallExpr,
+	astFile *ast.File,
+	filePath string,
+	structName string,
+) (handlerName string, reqType, respType *models.TypeInfo) {
+	if len(callExpr.Args) <= 3 {
+		return "", nil, nil
+	}
+
+	selExpr, ok := callExpr.Args[3].(*ast.SelectorExpr)
+	if !ok {
+		return "", nil, nil
+	}
+
+	handlerName = selExpr.Sel.Name
+
+	// Extract handler signature if we have required context
+	if astFile != nil && filePath != "" && structName != "" {
+		var err error
+		reqType, respType, err = a.extractHandlerSignature(astFile, filePath, structName, handlerName)
+		if err != nil {
+			// Don't fail - some routes use inline handlers
+			reqType, respType = nil, nil
+		}
+	}
+
+	return handlerName, reqType, respType
+}
+
+// extractRouteFromStatement extracts a route from a statement like server.GET(...)
+func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) *models.Route {
+	// Validate this is a server.METHOD() call
+	callExpr, method, valid := a.validateServerCall(stmt, serverAliases)
+	if !valid {
+		return nil
 	}
 
 	route := &models.Route{
@@ -399,17 +466,15 @@ func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, serverAliases
 		Tags:   []string{},
 	}
 
-	// Extract path from the third argument (handle both literals and constants)
+	// Extract route path
 	route.Path = a.extractPathFromArg(callExpr.Args[2])
 
-	// Extract handler name from the fourth argument
-	if len(callExpr.Args) > 3 {
-		if selExpr, ok := callExpr.Args[3].(*ast.SelectorExpr); ok {
-			route.HandlerName = selExpr.Sel.Name
-		}
-	}
+	// Extract handler information
+	route.HandlerName, route.Request, route.Response = a.extractHandlerInfo(
+		callExpr, astFile, filePath, structName,
+	)
 
-	// Extract metadata from remaining arguments (server.WithTags, server.WithSummary, etc.)
+	// Extract metadata from remaining arguments
 	for i := 4; i < len(callExpr.Args); i++ {
 		a.extractRouteMetadata(callExpr.Args[i], route, serverAliases)
 	}
@@ -856,4 +921,143 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 	}
 
 	return nil
+}
+
+// typeInfoFromExpr converts an AST type expression to TypeInfo
+// Handles identifiers, pointers, and qualified type names
+func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *models.TypeInfo {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		// Skip framework types
+		if a.isFrameworkType(t.Name, "") {
+			return nil
+		}
+		return &models.TypeInfo{
+			Name:      t.Name,
+			Package:   packageName,
+			IsPointer: false,
+		}
+
+	case *ast.StarExpr:
+		// Pointer type: *TypeName
+		if ident, ok := t.X.(*ast.Ident); ok {
+			if a.isFrameworkType(ident.Name, "") {
+				return nil
+			}
+			return &models.TypeInfo{
+				Name:      ident.Name,
+				Package:   packageName,
+				IsPointer: true,
+			}
+		}
+		// Handle qualified pointer types: *pkg.TypeName
+		if selExpr, ok := t.X.(*ast.SelectorExpr); ok {
+			if pkg, ok := selExpr.X.(*ast.Ident); ok {
+				if a.isFrameworkType(selExpr.Sel.Name, pkg.Name) {
+					return nil
+				}
+				return &models.TypeInfo{
+					Name:      selExpr.Sel.Name,
+					Package:   pkg.Name,
+					IsPointer: true,
+				}
+			}
+		}
+
+	case *ast.SelectorExpr:
+		// Qualified type: pkg.TypeName
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			if a.isFrameworkType(t.Sel.Name, pkg.Name) {
+				return nil
+			}
+			return &models.TypeInfo{
+				Name:      t.Sel.Name,
+				Package:   pkg.Name,
+				IsPointer: false,
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractRequestType extracts request type from handler parameters.
+// Returns the first non-framework type parameter, or nil if none found.
+func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName string) *models.TypeInfo {
+	if params == nil || len(params.List) == 0 {
+		return nil
+	}
+
+	// First parameter that isn't a framework type is the request
+	// (HandlerContext can appear in first or second position)
+	firstParam := params.List[0]
+	return a.typeInfoFromExpr(firstParam.Type, packageName)
+}
+
+// extractResponseType extracts response type from handler return values.
+// Returns the first non-framework type result, or nil if none found.
+func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageName string) *models.TypeInfo {
+	if results == nil || len(results.List) == 0 {
+		return nil
+	}
+
+	// First result is response type (second is IAPIError or error, filtered by typeInfoFromExpr)
+	firstResult := results.List[0]
+	return a.typeInfoFromExpr(firstResult.Type, packageName)
+}
+
+// findHandlerInFile searches a single AST file for a handler method
+// Returns request and response TypeInfo if found
+func (a *ProjectAnalyzer) findHandlerInFile(
+	astFile *ast.File,
+	structName string,
+	handlerName string,
+) (requestType, responseType *models.TypeInfo) {
+	for _, decl := range astFile.Decls {
+		funcDecl, ok := decl.(*ast.FuncDecl)
+		if !ok || funcDecl.Name.Name != handlerName {
+			continue
+		}
+
+		// Check receiver matches the module struct
+		if !a.isMethodOnStruct(funcDecl.Recv, structName) {
+			continue
+		}
+
+		// Extract types using helpers
+		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
+		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name)
+
+		return requestType, responseType
+	}
+
+	return nil, nil
+}
+
+// extractHandlerSignature extracts request and response type information from a handler method
+// Searches current file first, then falls back to other files in the package
+func (a *ProjectAnalyzer) extractHandlerSignature(
+	astFile *ast.File,
+	filePath string,
+	structName string,
+	handlerName string,
+) (reqType, respType *models.TypeInfo, err error) {
+	// Try current file first
+	if reqType, respType := a.findHandlerInFile(astFile, structName, handlerName); reqType != nil || respType != nil {
+		return reqType, respType, nil
+	}
+
+	// Try other files in the package
+	files, err := a.parsePackage(filePath, astFile.Name.Name)
+	if err == nil && files != nil {
+		for _, file := range files {
+			if reqType, respType := a.findHandlerInFile(file, structName, handlerName); reqType != nil || respType != nil {
+				return reqType, respType, nil
+			}
+		}
+	}
+
+	// Handler not found - this is not necessarily an error
+	// Some routes might use inline handlers or external handlers
+	return nil, nil, fmt.Errorf("handler %s not found for struct %s", handlerName, structName)
 }

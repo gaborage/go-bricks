@@ -187,6 +187,38 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestIsFrameworkType(t *testing.T) {
+	analyzer := New("")
+
+	tests := []struct {
+		name     string
+		typeName string
+		pkgName  string
+		expected bool
+	}{
+		{"HandlerContext without package", "HandlerContext", "", true},
+		{"IAPIError without package", "IAPIError", "", true},
+		{"error type", "error", "", true},
+		{"server.HandlerContext qualified", "HandlerContext", "server", true},
+		{"server.IAPIError qualified", "IAPIError", "server", true},
+		{"user type without package", "CreateUserReq", "", false},
+		{"user type with package", "CreateUserReq", "models", false},
+		{"other package type", "SomeType", "otherpkg", false},
+		{"HandlerContext with wrong package", "HandlerContext", "otherpkg", true},
+		{"IAPIError with wrong package", "IAPIError", "otherpkg", true},
+		{"unrelated type in server package", "UnrelatedType", "server", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := analyzer.isFrameworkType(tt.typeName, tt.pkgName)
+			if result != tt.expected {
+				t.Errorf("isFrameworkType(%q, %q) = %v, expected %v", tt.typeName, tt.pkgName, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestAnalyzeProject(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
@@ -1349,7 +1381,7 @@ func (m *Module) Init(deps *config.Config) error { return nil }`
 			t.Fatalf(parseFailedFormat, err)
 		}
 
-		result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, "test.go"))
+		result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, testFileName))
 		if result != nil {
 			t.Error("Expected no module found for wrong init parameter type")
 		}
@@ -2083,5 +2115,319 @@ func (m *Module) Shutdown() error {
 			t.Errorf("Module %s route path should be %s, got %s", module.Name, expectedPath, route.Path)
 			t.Logf("This would indicate constants leakage between packages")
 		}
+	}
+}
+
+// TestTypeInfoFromExpr tests AST type expression parsing
+func TestTypeInfoFromExpr(t *testing.T) {
+	analyzer := New("")
+
+	tests := []struct {
+		name        string
+		typeExpr    string
+		expected    *models.TypeInfo
+		description string
+	}{
+		{
+			name:        "simple identifier",
+			typeExpr:    "CreateUserReq",
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: false},
+			description: "should extract simple type name",
+		},
+		{
+			name:        "pointer type",
+			typeExpr:    "*CreateUserReq",
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: true},
+			description: "should extract pointer type",
+		},
+		{
+			name:        "qualified type",
+			typeExpr:    "models.CreateUserReq",
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models", IsPointer: false},
+			description: "should extract qualified type with package",
+		},
+		{
+			name:        "qualified pointer type",
+			typeExpr:    "*models.CreateUserReq",
+			expected:    &models.TypeInfo{Name: "CreateUserReq", Package: "models", IsPointer: true},
+			description: "should extract qualified pointer type",
+		},
+		{
+			name:        "HandlerContext (skip)",
+			typeExpr:    "HandlerContext",
+			expected:    nil,
+			description: "should skip framework HandlerContext type",
+		},
+		{
+			name:        "qualified HandlerContext (skip)",
+			typeExpr:    "server.HandlerContext",
+			expected:    nil,
+			description: "should skip qualified server.HandlerContext type",
+		},
+		{
+			name:        "IAPIError (skip)",
+			typeExpr:    "IAPIError",
+			expected:    nil,
+			description: "should skip framework IAPIError type",
+		},
+		{
+			name:        "qualified IAPIError (skip)",
+			typeExpr:    "server.IAPIError",
+			expected:    nil,
+			description: "should skip qualified server.IAPIError type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a minimal function with the type expression
+			code := `package test
+import "github.com/gaborage/go-bricks/server"
+func test(param ` + tt.typeExpr + `) {}`
+
+			// Parse the code
+			fset := token.NewFileSet()
+			astFile, err := parser.ParseFile(fset, testFileName, code, 0)
+			if err != nil {
+				t.Fatalf("Failed to parse code: %v", err)
+			}
+
+			// Find the function and extract the parameter type
+			var expr ast.Expr
+			for _, decl := range astFile.Decls {
+				if funcDecl, ok := decl.(*ast.FuncDecl); ok {
+					if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) > 0 {
+						expr = funcDecl.Type.Params.List[0].Type
+						break
+					}
+				}
+			}
+
+			if expr == nil {
+				t.Fatal("Failed to find parameter type expression")
+			}
+
+			// Test the typeInfoFromExpr function
+			result := analyzer.typeInfoFromExpr(expr, "test")
+
+			// Verify the result
+			if tt.expected == nil {
+				if result != nil {
+					t.Errorf("%s: expected nil, got %+v", tt.description, result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("%s: expected %+v, got nil", tt.description, tt.expected)
+				} else {
+					if result.Name != tt.expected.Name {
+						t.Errorf("%s: expected name %q, got %q", tt.description, tt.expected.Name, result.Name)
+					}
+					if result.Package != tt.expected.Package {
+						t.Errorf("%s: expected package %q, got %q", tt.description, tt.expected.Package, result.Package)
+					}
+					if result.IsPointer != tt.expected.IsPointer {
+						t.Errorf("%s: expected IsPointer %v, got %v", tt.description, tt.expected.IsPointer, result.IsPointer)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestExtractHandlerSignature tests handler signature extraction
+func TestExtractHandlerSignature(t *testing.T) {
+	tests := []struct {
+		name              string
+		handlerCode       string
+		handlerName       string
+		structName        string
+		expectedRequest   *models.TypeInfo
+		expectedResponse  *models.TypeInfo
+		shouldFindHandler bool
+		description       string
+	}{
+		{
+			name:        "standard handler with request and response",
+			structName:  "Handler",
+			handlerName: "createUser",
+			handlerCode: `package test
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type CreateUserReq struct {
+	Name string
+}
+
+type UserResp struct {
+	ID int
+}
+
+func (h *Handler) createUser(req CreateUserReq, ctx server.HandlerContext) (UserResp, server.IAPIError) {
+	return UserResp{}, nil
+}`,
+			expectedRequest:   &models.TypeInfo{Name: "CreateUserReq", Package: "test", IsPointer: false},
+			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test", IsPointer: false},
+			shouldFindHandler: true,
+			description:       "should extract request and response types from standard handler",
+		},
+		{
+			name:        "handler with pointer types",
+			structName:  "Handler",
+			handlerName: "updateUser",
+			handlerCode: `package test
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type UpdateUserReq struct {
+	Name string
+}
+
+type UserResp struct {
+	ID int
+}
+
+func (h *Handler) updateUser(req *UpdateUserReq, ctx server.HandlerContext) (*UserResp, server.IAPIError) {
+	return nil, nil
+}`,
+			expectedRequest:   &models.TypeInfo{Name: "UpdateUserReq", Package: "test", IsPointer: true},
+			expectedResponse:  &models.TypeInfo{Name: "UserResp", Package: "test", IsPointer: true},
+			shouldFindHandler: true,
+			description:       "should extract pointer types correctly",
+		},
+		{
+			name:        "handler with no request type",
+			structName:  "Handler",
+			handlerName: "listUsers",
+			handlerCode: `package test
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type UserListResp struct {
+	Users []string
+}
+
+func (h *Handler) listUsers(ctx server.HandlerContext) (UserListResp, server.IAPIError) {
+	return UserListResp{}, nil
+}`,
+			expectedRequest:   nil,
+			expectedResponse:  &models.TypeInfo{Name: "UserListResp", Package: "test", IsPointer: false},
+			shouldFindHandler: true,
+			description:       "should handle handler with only HandlerContext parameter",
+		},
+		{
+			name:        "handler with error return only",
+			structName:  "Handler",
+			handlerName: "deleteUser",
+			handlerCode: `package test
+
+import "github.com/gaborage/go-bricks/server"
+
+type Handler struct{}
+
+type DeleteUserReq struct {
+	ID int
+}
+
+func (h *Handler) deleteUser(req DeleteUserReq, ctx server.HandlerContext) error {
+	return nil
+}`,
+			expectedRequest:   &models.TypeInfo{Name: "DeleteUserReq", Package: "test", IsPointer: false},
+			expectedResponse:  nil,
+			shouldFindHandler: true,
+			description:       "should handle handler with error-only return",
+		},
+		{
+			name:        "handler not found",
+			structName:  "Handler",
+			handlerName: "nonExistentHandler",
+			handlerCode: `package test
+
+type Handler struct{}
+
+func (h *Handler) actualHandler() {}`,
+			expectedRequest:   nil,
+			expectedResponse:  nil,
+			shouldFindHandler: false,
+			description:       "should return error when handler not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a temporary directory
+			tempDir, err := os.MkdirTemp("", "openapi-test-*")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tempDir)
+
+			// Write the test file
+			testFilePath := filepath.Join(tempDir, "handler.go")
+			if err := os.WriteFile(testFilePath, []byte(tt.handlerCode), 0600); err != nil {
+				t.Fatalf("Failed to write test file: %v", err)
+			}
+
+			// Parse the file
+			fset := token.NewFileSet()
+			astFile, err := parser.ParseFile(fset, testFilePath, nil, parser.ParseComments)
+			if err != nil {
+				t.Fatalf("Failed to parse file: %v", err)
+			}
+
+			// Create analyzer and extract handler signature
+			analyzer := New(tempDir)
+			reqType, respType, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, tt.handlerName)
+
+			// Verify results
+			if tt.shouldFindHandler {
+				if err != nil {
+					t.Errorf("%s: unexpected error: %v", tt.description, err)
+				}
+
+				// Check request type
+				if tt.expectedRequest == nil {
+					if reqType != nil {
+						t.Errorf("%s: expected nil request type, got %+v", tt.description, reqType)
+					}
+				} else {
+					if reqType == nil {
+						t.Errorf("%s: expected request type %+v, got nil", tt.description, tt.expectedRequest)
+					} else {
+						if reqType.Name != tt.expectedRequest.Name {
+							t.Errorf("%s: expected request name %q, got %q", tt.description, tt.expectedRequest.Name, reqType.Name)
+						}
+						if reqType.IsPointer != tt.expectedRequest.IsPointer {
+							t.Errorf("%s: expected request IsPointer %v, got %v", tt.description, tt.expectedRequest.IsPointer, reqType.IsPointer)
+						}
+					}
+				}
+
+				// Check response type
+				if tt.expectedResponse == nil {
+					if respType != nil {
+						t.Errorf("%s: expected nil response type, got %+v", tt.description, respType)
+					}
+				} else {
+					if respType == nil {
+						t.Errorf("%s: expected response type %+v, got nil", tt.description, tt.expectedResponse)
+					} else {
+						if respType.Name != tt.expectedResponse.Name {
+							t.Errorf("%s: expected response name %q, got %q", tt.description, tt.expectedResponse.Name, respType.Name)
+						}
+						if respType.IsPointer != tt.expectedResponse.IsPointer {
+							t.Errorf("%s: expected response IsPointer %v, got %v", tt.description, tt.expectedResponse.IsPointer, respType.IsPointer)
+						}
+					}
+				}
+			} else if err == nil {
+				t.Errorf("%s: expected error for missing handler, got nil", tt.description)
+			}
+		})
 	}
 }
