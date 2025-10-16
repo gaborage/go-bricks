@@ -40,8 +40,8 @@ const (
 	expectedTwoRoutesFormat = "Expected 2 routes, got %d"
 	testServerImportPath    = "github.com/gaborage/go-bricks/server"
 
-	exampleUserEmail    = "user@example.com"
-	exampleUserIDHeader = "X-User-ID"
+	testUserEmail    = "user@example.com"
+	testUserIDHeader = "X-User-ID"
 )
 
 // createTestModuleFile creates a test Go file that represents a go-bricks module
@@ -2621,8 +2621,8 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		},
 		{
 			name:            "example tag",
-			tag:             `example:exampleUserEmail`,
-			expectedExample: exampleUserEmail,
+			tag:             `example:"user@example.com"`,
+			expectedExample: testUserEmail,
 		},
 		{
 			name:             "validate tag",
@@ -2631,10 +2631,10 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		},
 		{
 			name:             "multiple tags",
-			tag:              `json:"email" validate:"required,email" doc:"User email" example:exampleUserEmail`,
+			tag:              `json:"email" validate:"required,email" doc:"User email" example:"user@example.com"`,
 			expectedJSONName: "email",
 			expectedDesc:     "User email",
-			expectedExample:  exampleUserEmail,
+			expectedExample:  testUserEmail,
 			expectedValidate: "required,email",
 		},
 		{
@@ -2652,9 +2652,9 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		},
 		{
 			name:              "param query header precedence (header wins)",
-			tag:               `param:"id" query:"user_id" header:exampleUserIDHeader`,
+			tag:               `param:"id" query:"user_id" header:testUserIDHeader`,
 			expectedParamType: "header",
-			expectedParamName: exampleUserIDHeader,
+			expectedParamName: testUserIDHeader,
 		},
 		{
 			name:              "query header precedence (header wins)",
@@ -2669,12 +2669,12 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		},
 		{
 			name:              "complex combination",
-			tag:               `json:"email,omitempty" query:"email" validate:"required,email,min=5,max=100" doc:"User email address" example:exampleUserEmail`,
+			tag:               `json:"email,omitempty" query:"email" validate:"required,email,min=5,max=100" doc:"User email address" example:"user@example.com"`,
 			expectedJSONName:  "email",
 			expectedParamType: "query",
 			expectedParamName: "email",
 			expectedDesc:      "User email address",
-			expectedExample:   exampleUserEmail,
+			expectedExample:   testUserEmail,
 			expectedValidate:  "required,email,min=5,max=100",
 		},
 	}
@@ -2798,9 +2798,9 @@ func TestParseParameterTags(t *testing.T) {
 		},
 		{
 			name:              "param and header - header wins",
-			tag:               `param:"id" header:exampleUserIDHeader`,
+			tag:               `param:"id" header:"X-User-ID"`,
 			expectedParamType: "header",
-			expectedParamName: exampleUserIDHeader,
+			expectedParamName: testUserIDHeader,
 		},
 		{
 			name:              "query and header - header wins",
@@ -2810,9 +2810,9 @@ func TestParseParameterTags(t *testing.T) {
 		},
 		{
 			name:              "all three tags - header wins",
-			tag:               `param:"id" query:"user_id" header:exampleUserIDHeader`,
+			tag:               `param:"id" query:"user_id" header:"X-User-ID"`,
 			expectedParamType: "header",
-			expectedParamName: exampleUserIDHeader,
+			expectedParamName: testUserIDHeader,
 		},
 	}
 
