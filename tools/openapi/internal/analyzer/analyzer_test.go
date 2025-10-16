@@ -39,6 +39,9 @@ const (
 	expectedOneModuleFormat = "Expected 1 module, got %d"
 	expectedTwoRoutesFormat = "Expected 2 routes, got %d"
 	testServerImportPath    = "github.com/gaborage/go-bricks/server"
+
+	exampleUserEmail    = "user@example.com"
+	exampleUserIDHeader = "X-User-ID"
 )
 
 // createTestModuleFile creates a test Go file that represents a go-bricks module
@@ -2415,6 +2418,412 @@ func (h *Handler) actualHandler() {}`,
 				}
 			} else if err == nil {
 				t.Errorf("%s: expected error for missing handler, got nil", tt.description)
+			}
+		})
+	}
+}
+
+// TestExtractRequestTypeContextFirst tests request type extraction with context-first signatures
+// Addresses CodeRabbit issue: Request type extraction misses ctx-first signatures
+func TestExtractRequestTypeContextFirst(t *testing.T) {
+	analyzer := New("test")
+
+	tests := []struct {
+		name        string
+		code        string
+		expectedReq *models.TypeInfo
+		description string
+	}{
+		{
+			name: "request first, context second",
+			code: `package test
+import "github.com/gaborage/go-bricks/server"
+type Handler struct{}
+type CreateReq struct{}
+func (h *Handler) create(req CreateReq, ctx server.HandlerContext) {}`,
+			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test", IsPointer: false},
+			description: "should extract request from first parameter",
+		},
+		{
+			name: "context first, request second",
+			code: `package test
+import "github.com/gaborage/go-bricks/server"
+type Handler struct{}
+type CreateReq struct{}
+func (h *Handler) create(ctx server.HandlerContext, req CreateReq) {}`,
+			expectedReq: &models.TypeInfo{Name: "CreateReq", Package: "test", IsPointer: false},
+			description: "should extract request from second parameter (ctx-first signature)",
+		},
+		{
+			name: "pointer request with context first",
+			code: `package test
+import "github.com/gaborage/go-bricks/server"
+type Handler struct{}
+type UpdateReq struct{}
+func (h *Handler) update(ctx server.HandlerContext, req *UpdateReq) {}`,
+			expectedReq: &models.TypeInfo{Name: "UpdateReq", Package: "test", IsPointer: true},
+			description: "should handle pointer request type with ctx-first",
+		},
+		{
+			name: "no request type, only context",
+			code: `package test
+import "github.com/gaborage/go-bricks/server"
+type Handler struct{}
+func (h *Handler) list(ctx server.HandlerContext) {}`,
+			expectedReq: nil,
+			description: "should return nil when only framework types present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			astFile, err := parser.ParseFile(fset, "test.go", tt.code, parser.ParseComments)
+			if err != nil {
+				t.Fatalf("%s: failed to parse code: %v", tt.description, err)
+			}
+
+			// Find the function declaration
+			for _, decl := range astFile.Decls {
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+
+				reqType := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
+
+				if tt.expectedReq == nil {
+					if reqType != nil {
+						t.Errorf("%s: expected nil request type, got %+v", tt.description, reqType)
+					}
+				} else {
+					if reqType == nil {
+						t.Errorf("%s: expected request type %+v, got nil", tt.description, tt.expectedReq)
+					} else {
+						if reqType.Name != tt.expectedReq.Name {
+							t.Errorf("%s: expected request name %q, got %q", tt.description, tt.expectedReq.Name, reqType.Name)
+						}
+						if reqType.IsPointer != tt.expectedReq.IsPointer {
+							t.Errorf("%s: expected IsPointer %v, got %v", tt.description, tt.expectedReq.IsPointer, reqType.IsPointer)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestParseStructTagsJSONSkip tests json:"-" tag preservation
+// Addresses CodeRabbit issue: Preserve json:"-" sentinel so generator can skip fields
+func TestParseStructTagsJSONSkip(t *testing.T) {
+	analyzer := New("test")
+
+	tests := []struct {
+		name         string
+		tag          string
+		expectedJSON string
+		description  string
+	}{
+		{
+			name:         "json skip sentinel",
+			tag:          `json:"-"`,
+			expectedJSON: "-",
+			description:  "should preserve json:\"-\" sentinel",
+		},
+		{
+			name:         "json skip with other tags",
+			tag:          `json:"-" validate:"required"`,
+			expectedJSON: "-",
+			description:  "should preserve json:\"-\" even with other tags",
+		},
+		{
+			name:         "normal json tag",
+			tag:          `json:"user_id"`,
+			expectedJSON: "user_id",
+			description:  "should parse normal json tag",
+		},
+		{
+			name:         "json tag with omitempty",
+			tag:          `json:"email,omitempty"`,
+			expectedJSON: "email",
+			description:  "should extract field name from json tag with options",
+		},
+		{
+			name:         "empty json tag",
+			tag:          `json:""`,
+			expectedJSON: "",
+			description:  "should handle empty json tag",
+		},
+		{
+			name:         "no json tag",
+			tag:          `validate:"required"`,
+			expectedJSON: "",
+			description:  "should return empty when no json tag present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tags := analyzer.parseStructTags(tt.tag)
+			if tags.jsonName != tt.expectedJSON {
+				t.Errorf("%s: expected JSONName %q, got %q", tt.description, tt.expectedJSON, tags.jsonName)
+			}
+		})
+	}
+}
+
+// TestParseStructTagsComprehensive tests all tag parsing combinations
+func TestParseStructTagsComprehensive(t *testing.T) {
+	analyzer := New("test")
+
+	tests := []struct {
+		name              string
+		tag               string
+		expectedJSONName  string
+		expectedParamType string
+		expectedParamName string
+		expectedDesc      string
+		expectedExample   string
+		expectedValidate  string
+	}{
+		{
+			name:             "empty tag",
+			tag:              "",
+			expectedJSONName: "",
+		},
+		{
+			name:             "json tag only",
+			tag:              `json:"user_id"`,
+			expectedJSONName: "user_id",
+		},
+		{
+			name:              "param tag",
+			tag:               `param:"id"`,
+			expectedParamType: "path",
+			expectedParamName: "id",
+		},
+		{
+			name:              "query tag",
+			tag:               `query:"page"`,
+			expectedParamType: "query",
+			expectedParamName: "page",
+		},
+		{
+			name:              "header tag",
+			tag:               `header:"Authorization"`,
+			expectedParamType: "header",
+			expectedParamName: "Authorization",
+		},
+		{
+			name:         "doc tag",
+			tag:          `doc:"User email address"`,
+			expectedDesc: "User email address",
+		},
+		{
+			name:            "example tag",
+			tag:             `example:exampleUserEmail`,
+			expectedExample: exampleUserEmail,
+		},
+		{
+			name:             "validate tag",
+			tag:              `validate:"required,email"`,
+			expectedValidate: "required,email",
+		},
+		{
+			name:             "multiple tags",
+			tag:              `json:"email" validate:"required,email" doc:"User email" example:exampleUserEmail`,
+			expectedJSONName: "email",
+			expectedDesc:     "User email",
+			expectedExample:  exampleUserEmail,
+			expectedValidate: "required,email",
+		},
+		{
+			name:              "json with param",
+			tag:               `json:"user_id" param:"id"`,
+			expectedJSONName:  "user_id",
+			expectedParamType: "path",
+			expectedParamName: "id",
+		},
+		{
+			name:              "param query precedence (query wins)",
+			tag:               `param:"id" query:"user_id"`,
+			expectedParamType: "query",
+			expectedParamName: "user_id",
+		},
+		{
+			name:              "param query header precedence (header wins)",
+			tag:               `param:"id" query:"user_id" header:exampleUserIDHeader`,
+			expectedParamType: "header",
+			expectedParamName: exampleUserIDHeader,
+		},
+		{
+			name:              "query header precedence (header wins)",
+			tag:               `query:"page" header:"X-Page"`,
+			expectedParamType: "header",
+			expectedParamName: "X-Page",
+		},
+		{
+			name:             "json with omitempty",
+			tag:              `json:"email,omitempty"`,
+			expectedJSONName: "email",
+		},
+		{
+			name:              "complex combination",
+			tag:               `json:"email,omitempty" query:"email" validate:"required,email,min=5,max=100" doc:"User email address" example:exampleUserEmail`,
+			expectedJSONName:  "email",
+			expectedParamType: "query",
+			expectedParamName: "email",
+			expectedDesc:      "User email address",
+			expectedExample:   exampleUserEmail,
+			expectedValidate:  "required,email,min=5,max=100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tags := analyzer.parseStructTags(tt.tag)
+
+			if tags.jsonName != tt.expectedJSONName {
+				t.Errorf("expected JSONName %q, got %q", tt.expectedJSONName, tags.jsonName)
+			}
+			if tags.paramType != tt.expectedParamType {
+				t.Errorf("expected ParamType %q, got %q", tt.expectedParamType, tags.paramType)
+			}
+			if tags.paramName != tt.expectedParamName {
+				t.Errorf("expected ParamName %q, got %q", tt.expectedParamName, tags.paramName)
+			}
+			if tags.description != tt.expectedDesc {
+				t.Errorf("expected Description %q, got %q", tt.expectedDesc, tags.description)
+			}
+			if tags.example != tt.expectedExample {
+				t.Errorf("expected Example %q, got %q", tt.expectedExample, tags.example)
+			}
+			if tags.rawValidation != tt.expectedValidate {
+				t.Errorf("expected RawValidation %q, got %q", tt.expectedValidate, tags.rawValidation)
+			}
+		})
+	}
+}
+
+// TestParseJSONTagName tests the JSON tag name extraction helper
+func TestParseJSONTagName(t *testing.T) {
+	analyzer := New("test")
+
+	tests := []struct {
+		name     string
+		jsonTag  string
+		expected string
+	}{
+		{
+			name:     "empty tag",
+			jsonTag:  "",
+			expected: "",
+		},
+		{
+			name:     "simple field name",
+			jsonTag:  "user_id",
+			expected: "user_id",
+		},
+		{
+			name:     "field with omitempty",
+			jsonTag:  "email,omitempty",
+			expected: "email",
+		},
+		{
+			name:     "skip sentinel",
+			jsonTag:  "-",
+			expected: "-",
+		},
+		{
+			name:     "skip with options",
+			jsonTag:  "-,omitempty",
+			expected: "-",
+		},
+		{
+			name:     "empty field name",
+			jsonTag:  ",omitempty",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := analyzer.parseJSONTagName(tt.jsonTag)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+// TestParseParameterTags tests the parameter tag extraction helper
+func TestParseParameterTags(t *testing.T) {
+	analyzer := New("test")
+
+	tests := []struct {
+		name              string
+		tag               string
+		expectedParamType string
+		expectedParamName string
+	}{
+		{
+			name:              "no parameter tags",
+			tag:               `json:"id"`,
+			expectedParamType: "",
+			expectedParamName: "",
+		},
+		{
+			name:              "param tag only",
+			tag:               `param:"id"`,
+			expectedParamType: "path",
+			expectedParamName: "id",
+		},
+		{
+			name:              "query tag only",
+			tag:               `query:"page"`,
+			expectedParamType: "query",
+			expectedParamName: "page",
+		},
+		{
+			name:              "header tag only",
+			tag:               `header:"Authorization"`,
+			expectedParamType: "header",
+			expectedParamName: "Authorization",
+		},
+		{
+			name:              "param and query - query wins",
+			tag:               `param:"id" query:"user_id"`,
+			expectedParamType: "query",
+			expectedParamName: "user_id",
+		},
+		{
+			name:              "param and header - header wins",
+			tag:               `param:"id" header:exampleUserIDHeader`,
+			expectedParamType: "header",
+			expectedParamName: exampleUserIDHeader,
+		},
+		{
+			name:              "query and header - header wins",
+			tag:               `query:"page" header:"X-Page"`,
+			expectedParamType: "header",
+			expectedParamName: "X-Page",
+		},
+		{
+			name:              "all three tags - header wins",
+			tag:               `param:"id" query:"user_id" header:exampleUserIDHeader`,
+			expectedParamType: "header",
+			expectedParamName: exampleUserIDHeader,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paramType, paramName := analyzer.parseParameterTags(tt.tag)
+			if paramType != tt.expectedParamType {
+				t.Errorf("expected ParamType %q, got %q", tt.expectedParamType, paramType)
+			}
+			if paramName != tt.expectedParamName {
+				t.Errorf("expected ParamName %q, got %q", tt.expectedParamName, paramName)
 			}
 		})
 	}

@@ -148,6 +148,27 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			description: "should map oneof to enum array",
 		},
 		{
+			name:        "oneof numeric enum int",
+			fieldType:   "int",
+			constraints: map[string]string{"oneof": "1 2 3"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
+			description: "should map oneof to numeric enum for int type",
+		},
+		{
+			name:        "oneof numeric enum float64",
+			fieldType:   "float64",
+			constraints: map[string]string{"oneof": "1.5 2.5 3.5"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{1.5, 2.5, 3.5}}},
+			description: "should map oneof to numeric enum for float64 type",
+		},
+		{
+			name:        "oneof pointer numeric type",
+			fieldType:   "*int",
+			constraints: map[string]string{"oneof": "10 20 30"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(10), int64(20), int64(30)}}},
+			description: "should handle pointer numeric types correctly",
+		},
+		{
 			name:        "regexp pattern",
 			fieldType:   "string",
 			constraints: map[string]string{"regexp": "^[A-Z]+$"},

@@ -43,7 +43,7 @@ func MapConstraintToOpenAPI(fieldType string, constraints map[string]string) []O
 			handled = handleNumericComparison(key, value, baseType)
 		}
 		if handled == nil {
-			handled = handleEnumConstraint(key, value)
+			handled = handleEnumConstraint(key, value, baseType)
 		}
 		if handled == nil {
 			handled = handlePatternConstraint(key, value)
@@ -162,7 +162,8 @@ func handleNumericComparison(key, value, baseType string) []OpenAPIConstraint {
 }
 
 // handleEnumConstraint maps 'oneof' constraint to OpenAPI enum array
-func handleEnumConstraint(key, value string) []OpenAPIConstraint {
+// For numeric types, parses values as numbers; otherwise treats as strings
+func handleEnumConstraint(key, value, baseType string) []OpenAPIConstraint {
 	if key != "oneof" {
 		return nil
 	}
@@ -173,10 +174,21 @@ func handleEnumConstraint(key, value string) []OpenAPIConstraint {
 		return nil
 	}
 
-	// Convert to []any for OpenAPI compatibility
+	// Convert to []any; parse numerics when field is numeric
 	enumArray := make([]any, len(enumValues))
-	for i, v := range enumValues {
-		enumArray[i] = v
+	if isNumericType(baseType) {
+		for i, v := range enumValues {
+			if num, err := parseNumeric(v); err == nil {
+				enumArray[i] = num
+			} else {
+				// Fallback to string if parsing fails
+				enumArray[i] = v
+			}
+		}
+	} else {
+		for i, v := range enumValues {
+			enumArray[i] = v
+		}
 	}
 
 	return []OpenAPIConstraint{{Name: "enum", Value: enumArray}}

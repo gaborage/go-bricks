@@ -1035,10 +1035,15 @@ func (a *ProjectAnalyzer) extractRequestType(params *ast.FieldList, packageName 
 		return nil
 	}
 
-	// First parameter that isn't a framework type is the request
+	// Return the first parameter that is not a framework type
 	// (HandlerContext can appear in first or second position)
-	firstParam := params.List[0]
-	return a.typeInfoFromExpr(firstParam.Type, packageName)
+	for _, p := range params.List {
+		if ti := a.typeInfoFromExpr(p.Type, packageName); ti != nil {
+			return ti
+		}
+	}
+
+	return nil
 }
 
 // extractResponseType extracts response type from handler return values.
@@ -1240,18 +1245,18 @@ func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.F
 // parseFieldTags parses struct tags and populates the FieldInfo
 func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.BasicLit) {
 	tagValue := strings.Trim(tag.Value, "`")
-	jsonName, paramType, paramName, description, example, rawValidation := a.parseStructTags(tagValue)
+	tags := a.parseStructTags(tagValue)
 
-	fieldInfo.JSONName = jsonName
-	fieldInfo.ParamType = paramType
-	fieldInfo.ParamName = paramName
-	fieldInfo.Description = description
-	fieldInfo.Example = example
-	fieldInfo.RawValidation = rawValidation
+	fieldInfo.JSONName = tags.jsonName
+	fieldInfo.ParamType = tags.paramType
+	fieldInfo.ParamName = tags.paramName
+	fieldInfo.Description = tags.description
+	fieldInfo.Example = tags.example
+	fieldInfo.RawValidation = tags.rawValidation
 
 	// Parse validation constraints
-	if rawValidation != "" {
-		fieldInfo.Constraints = a.parseValidationTag(rawValidation)
+	if tags.rawValidation != "" {
+		fieldInfo.Constraints = a.parseValidationTag(tags.rawValidation)
 		// Set Required flag based on constraints
 		if fieldInfo.Constraints[constraintRequired] == boolTrueString {
 			fieldInfo.Required = true
@@ -1286,58 +1291,91 @@ func (a *ProjectAnalyzer) typeToString(expr ast.Expr) string {
 	return "unknown"
 }
 
-// parseStructTags extracts relevant information from struct field tags
-// Returns JSONName, ParamType, ParamName, Description, Example, and RawValidation
-//
-//nolint:gocritic // Multiple returns justified - each represents a distinct struct tag field
-func (a *ProjectAnalyzer) parseStructTags(tag string) (jsonName, paramType, paramName, description, example, rawValidation string) {
-	if tag == "" {
-		return "", "", "", "", "", ""
+// parsedTags holds the extracted information from struct field tags
+type parsedTags struct {
+	jsonName      string
+	paramType     string
+	paramName     string
+	description   string
+	example       string
+	rawValidation string
+}
+
+// parseJSONTagName extracts the field name from a json tag, handling the special "-" sentinel
+// Returns the field name or "-" if the field should be skipped
+func (a *ProjectAnalyzer) parseJSONTagName(jsonTag string) string {
+	if jsonTag == "" {
+		return ""
 	}
 
-	// Parse json tag: `json:"fieldName,omitempty"`
-	if jsonTag := a.extractTag(tag, tagJSON); jsonTag != "" {
-		// Split by comma and take first part as field name
-		parts := strings.Split(jsonTag, ",")
-		if len(parts) > 0 && parts[0] != "" && parts[0] != jsonSkipValue {
-			jsonName = parts[0]
-		}
+	// Split by comma and take first part as field name
+	// Example: "fieldName,omitempty" -> "fieldName"
+	parts := strings.Split(jsonTag, ",")
+	if len(parts) == 0 {
+		return ""
 	}
 
-	// Parse param tag: `param:"id"`
+	switch parts[0] {
+	case jsonSkipValue:
+		// Preserve "-" sentinel so downstream code can skip field
+		return jsonSkipValue
+	default:
+		return parts[0]
+	}
+}
+
+// parseParameterTags extracts parameter type and name from param/query/header tags
+// Precedence: header > query > param (last one wins if multiple are present)
+// Returns paramType ("path", "query", "header") and paramName
+func (a *ProjectAnalyzer) parseParameterTags(tag string) (paramType, paramName string) {
+	// Check param tag: `param:"id"`
 	if paramTag := a.extractTag(tag, tagParam); paramTag != "" {
 		paramType = paramTypePath
 		paramName = paramTag
 	}
 
-	// Parse query tag: `query:"page"`
+	// Check query tag: `query:"page"` (overrides param)
 	if queryTag := a.extractTag(tag, tagQuery); queryTag != "" {
 		paramType = paramTypeQuery
 		paramName = queryTag
 	}
 
-	// Parse header tag: `header:"Authorization"`
+	// Check header tag: `header:"Authorization"` (overrides query and param)
 	if headerTag := a.extractTag(tag, tagHeader); headerTag != "" {
 		paramType = paramTypeHeader
 		paramName = headerTag
 	}
 
-	// Parse doc tag: `doc:"User email address"`
-	if docTag := a.extractTag(tag, tagDoc); docTag != "" {
-		description = docTag
+	return paramType, paramName
+}
+
+// parseStructTags extracts relevant information from struct field tags
+// Returns a parsedTags struct containing JSONName, ParamType, ParamName, Description, Example, and RawValidation
+func (a *ProjectAnalyzer) parseStructTags(tag string) parsedTags {
+	if tag == "" {
+		return parsedTags{}
 	}
+
+	var result parsedTags
+
+	// Parse json tag: `json:"fieldName,omitempty"`
+	if jsonTag := a.extractTag(tag, tagJSON); jsonTag != "" {
+		result.jsonName = a.parseJSONTagName(jsonTag)
+	}
+
+	// Parse parameter tags (param/query/header)
+	result.paramType, result.paramName = a.parseParameterTags(tag)
+
+	// Parse doc tag: `doc:"User email address"`
+	result.description = a.extractTag(tag, tagDoc)
 
 	// Parse example tag: `example:"user@example.com"`
-	if exampleTag := a.extractTag(tag, tagExample); exampleTag != "" {
-		example = exampleTag
-	}
+	result.example = a.extractTag(tag, tagExample)
 
 	// Parse validate tag: `validate:"required,email,min=5"`
-	if validateTag := a.extractTag(tag, tagValidate); validateTag != "" {
-		rawValidation = validateTag
-	}
+	result.rawValidation = a.extractTag(tag, tagValidate)
 
-	return jsonName, paramType, paramName, description, example, rawValidation
+	return result
 }
 
 // extractTag extracts a specific tag value from a struct tag string
