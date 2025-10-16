@@ -2652,7 +2652,7 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		},
 		{
 			name:              "param query header precedence (header wins)",
-			tag:               `param:"id" query:"user_id" header:testUserIDHeader`,
+			tag:               "param:\"id\" query:\"user_id\" header:\"X-User-ID\"",
 			expectedParamType: "header",
 			expectedParamName: testUserIDHeader,
 		},
