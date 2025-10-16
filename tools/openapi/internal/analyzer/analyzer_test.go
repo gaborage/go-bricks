@@ -407,7 +407,6 @@ func TestIsHTTPMethod(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.method, func(t *testing.T) {
 			result := analyzer.isHTTPMethod(tt.method)
 			if result != tt.expected {
@@ -463,7 +462,6 @@ func TestExtractCommentDescription(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			var commentGroup *ast.CommentGroup
 			if tt.comments != nil {
@@ -509,7 +507,6 @@ func TestExtractStringFromExpr(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.extractStringFromExpr(tt.expr)
 			if result != tt.expected {
@@ -560,7 +557,6 @@ func TestExtractPathFromArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.extractPathFromArg(tt.arg)
 			if result != tt.expected {
@@ -649,7 +645,6 @@ func TestIsModuleDepsField(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.isModuleDepsField(tt.field)
 			if result != tt.expected {
@@ -724,7 +719,6 @@ func TestIsMethodOnStruct(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			result := analyzer.isMethodOnStruct(tt.recv, tt.structName)
 			if result != tt.expected {
@@ -818,7 +812,6 @@ package test`,
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
@@ -1225,7 +1218,6 @@ func TestValidateProjectPath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			err := analyzer.validateProjectPath(tt.path)
 			if (err != nil) != tt.wantErr {
@@ -1274,7 +1266,6 @@ func TestValidateGoFilePath(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			err := analyzer.validateGoFilePath(tt.path)
 			if (err != nil) != tt.wantErr {
@@ -1433,7 +1424,6 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
@@ -1624,7 +1614,6 @@ import "fmt"`,
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {
@@ -1756,7 +1745,6 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, tt.content, parser.ParseComments)
 			if err != nil {

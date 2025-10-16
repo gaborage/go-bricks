@@ -17,6 +17,15 @@ const (
 	listAllUsersSummary       = "List all users"
 	generateFailedErrorMsg    = "Generate() failed: %v"
 	resultNotExpectedErrorMsg = "Expected %q, got %q"
+	yamlParsingFailedMsg      = "Failed to parse generated YAML: %v"
+	getUserByIDSummary        = "Get user by ID"
+	createNewUserSummary      = "Create a new user"
+	expectedTypeErrorMsg      = "Expected type %q, got %q"
+	expectedFormatErrorMsg    = "Expected format %q, got %q"
+	pageNumberDescription     = "Page number"
+	parametersHeader          = "parameters:"
+	IDHeader                  = "- name: id"
+	requestBodyHeader         = "requestBody:"
 )
 
 // OpenAPISpec represents the structure of an OpenAPI specification for validation
@@ -34,7 +43,7 @@ func validateBasicOpenAPIStructure(t *testing.T, spec, expectedTitle, expectedVe
 	var parsed OpenAPISpec
 	err := yaml.Unmarshal([]byte(spec), &parsed)
 	if err != nil {
-		t.Fatalf("Failed to parse generated YAML: %v", err)
+		t.Fatalf(yamlParsingFailedMsg, err)
 	}
 
 	// Validate basic structure
@@ -133,7 +142,7 @@ func TestGenerateWithRoutes(t *testing.T) {
 						Method:      "GET",
 						Path:        usersIDAPIPath,
 						HandlerName: "getUser",
-						Summary:     "Get user by ID",
+						Summary:     getUserByIDSummary,
 						Description: "Retrieves a user by their unique identifier",
 						Tags:        []string{"users"},
 					},
@@ -387,14 +396,14 @@ func createTestProjectWithMultipleMethods() *models.Project {
 						Method:      "POST",
 						Path:        usersAPIPath,
 						HandlerName: "createUser",
-						Summary:     "Create a new user",
+						Summary:     createNewUserSummary,
 						Tags:        []string{"users", "creation"},
 					},
 					{
 						Method:      "GET",
 						Path:        usersIDAPIPath,
 						HandlerName: "getUser",
-						Summary:     "Get user by ID",
+						Summary:     getUserByIDSummary,
 						Tags:        []string{"users"},
 					},
 					{
@@ -664,7 +673,7 @@ func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISche
 		return
 	}
 
-	if successSchema.Type != "object" {
+	if successSchema.Type != typeObject {
 		t.Errorf("Expected SuccessResponse type 'object', got %s", successSchema.Type)
 	}
 	if len(successSchema.Properties) != 2 {
@@ -686,7 +695,7 @@ func validateErrorResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema
 		return
 	}
 
-	if errorSchema.Type != "object" {
+	if errorSchema.Type != typeObject {
 		t.Errorf("Expected ErrorResponse type 'object', got %s", errorSchema.Type)
 	}
 	if len(errorSchema.Properties) != 2 {
@@ -694,5 +703,1249 @@ func validateErrorResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema
 	}
 	if len(errorSchema.Required) != 1 || errorSchema.Required[0] != "error" {
 		t.Errorf("Expected ErrorResponse to have 'error' as required field, got %v", errorSchema.Required)
+	}
+}
+
+// Changeset 5: Schema Generation Tests
+
+func TestGenerateSchemasFromTypes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name            string
+		routes          []models.Route
+		expectedCount   int
+		expectedSchemas []string
+	}{
+		{
+			name:          "no routes",
+			routes:        []models.Route{},
+			expectedCount: 0,
+		},
+		{
+			name: "single request type",
+			routes: []models.Route{
+				{
+					Method: "POST",
+					Path:   usersAPIPath,
+					Request: &models.TypeInfo{
+						Name:    "CreateUserReq",
+						Package: "users",
+						Fields: []models.FieldInfo{
+							{Name: "Name", Type: "string", JSONName: "name"},
+						},
+					},
+				},
+			},
+			expectedCount:   1,
+			expectedSchemas: []string{"CreateUserReq"},
+		},
+		{
+			name: "request and response types",
+			routes: []models.Route{
+				{
+					Method: "POST",
+					Path:   usersAPIPath,
+					Request: &models.TypeInfo{
+						Name:    "CreateUserReq",
+						Package: "users",
+						Fields: []models.FieldInfo{
+							{Name: "Name", Type: "string", JSONName: "name"},
+						},
+					},
+					Response: &models.TypeInfo{
+						Name:    "User",
+						Package: "users",
+						Fields: []models.FieldInfo{
+							{Name: "ID", Type: "int64", JSONName: "id"},
+							{Name: "Name", Type: "string", JSONName: "name"},
+						},
+					},
+				},
+			},
+			expectedCount:   2,
+			expectedSchemas: []string{"CreateUserReq", "User"},
+		},
+		{
+			name: "duplicate types across routes",
+			routes: []models.Route{
+				{
+					Method: "POST",
+					Path:   usersAPIPath,
+					Request: &models.TypeInfo{
+						Name:    "CreateUserReq",
+						Package: "users",
+						Fields: []models.FieldInfo{
+							{Name: "Name", Type: "string", JSONName: "name"},
+						},
+					},
+				},
+				{
+					Method: "PUT",
+					Path:   usersIDAPIPath,
+					Request: &models.TypeInfo{
+						Name:    "CreateUserReq", // Same type as POST
+						Package: "users",
+						Fields: []models.FieldInfo{
+							{Name: "Name", Type: "string", JSONName: "name"},
+						},
+					},
+				},
+			},
+			expectedCount:   1, // Should deduplicate
+			expectedSchemas: []string{"CreateUserReq"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schemas := gen.generateSchemasFromTypes(tt.routes)
+
+			if len(schemas) != tt.expectedCount {
+				t.Errorf("Expected %d schemas, got %d", tt.expectedCount, len(schemas))
+			}
+
+			for _, name := range tt.expectedSchemas {
+				if _, exists := schemas[name]; !exists {
+					t.Errorf("Expected schema %q not found", name)
+				}
+			}
+		})
+	}
+}
+
+func TestTypeInfoToSchema(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name          string
+		typeInfo      *models.TypeInfo
+		expectNil     bool
+		expectedType  string
+		expectedProps int
+		expectedReq   []string
+	}{
+		{
+			name:      "nil type info",
+			typeInfo:  nil,
+			expectNil: true,
+		},
+		{
+			name: "empty fields",
+			typeInfo: &models.TypeInfo{
+				Name:   "Empty",
+				Fields: []models.FieldInfo{},
+			},
+			expectNil: true,
+		},
+		{
+			name: "simple struct",
+			typeInfo: &models.TypeInfo{
+				Name:    "User",
+				Package: "users",
+				Fields: []models.FieldInfo{
+					{Name: "ID", Type: "int64", JSONName: "id", Required: true},
+					{Name: "Name", Type: "string", JSONName: "name", Required: true},
+					{Name: "Email", Type: "string", JSONName: "email"},
+				},
+			},
+			expectNil:     false,
+			expectedType:  typeObject,
+			expectedProps: 3,
+			expectedReq:   []string{"id", "name"}, // Sorted
+		},
+		{
+			name: "struct with pointer field",
+			typeInfo: &models.TypeInfo{
+				Name:    "UpdateReq",
+				Package: "users",
+				Fields: []models.FieldInfo{
+					{Name: "Name", Type: "*string", JSONName: "name"},
+				},
+			},
+			expectNil:     false,
+			expectedType:  typeObject,
+			expectedProps: 1,
+			expectedReq:   []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := gen.typeInfoToSchema(tt.typeInfo)
+
+			if tt.expectNil {
+				if schema != nil {
+					t.Error("Expected nil schema")
+				}
+				return
+			}
+
+			if schema == nil {
+				t.Fatal("Expected non-nil schema")
+			}
+
+			if schema.Type != tt.expectedType {
+				t.Errorf(expectedTypeErrorMsg, tt.expectedType, schema.Type)
+			}
+
+			if len(schema.Properties) != tt.expectedProps {
+				t.Errorf("Expected %d properties, got %d", tt.expectedProps, len(schema.Properties))
+			}
+
+			if len(schema.Required) != len(tt.expectedReq) {
+				t.Errorf("Expected %d required fields, got %d", len(tt.expectedReq), len(schema.Required))
+			}
+
+			for i, req := range tt.expectedReq {
+				if schema.Required[i] != req {
+					t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFieldInfoToProperty(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name            string
+		field           *models.FieldInfo
+		expectedType    string
+		expectedFormat  string
+		expectedDesc    string
+		expectedExample any
+		hasMinLength    bool
+		minLengthValue  int
+	}{
+		{
+			name: "string field",
+			field: &models.FieldInfo{
+				Name:     "Name",
+				Type:     "string",
+				JSONName: "name",
+			},
+			expectedType: "string",
+		},
+		{
+			name: "string with description and example",
+			field: &models.FieldInfo{
+				Name:        "Email",
+				Type:        "string",
+				JSONName:    "email",
+				Description: "User email address",
+				Example:     "user@example.com",
+			},
+			expectedType:    "string",
+			expectedDesc:    "User email address",
+			expectedExample: "user@example.com",
+		},
+		{
+			name: "string with min constraint",
+			field: &models.FieldInfo{
+				Name:        "Username",
+				Type:        "string",
+				JSONName:    "username",
+				Constraints: map[string]string{"min": "3"},
+			},
+			expectedType:   "string",
+			hasMinLength:   true,
+			minLengthValue: 3,
+		},
+		{
+			name: "integer field",
+			field: &models.FieldInfo{
+				Name:     "Age",
+				Type:     "int",
+				JSONName: "age",
+			},
+			expectedType:   "integer",
+			expectedFormat: "int32",
+		},
+		{
+			name: "int64 field",
+			field: &models.FieldInfo{
+				Name:     "ID",
+				Type:     "int64",
+				JSONName: "id",
+			},
+			expectedType:   "integer",
+			expectedFormat: "int64",
+		},
+		{
+			name: "float64 field",
+			field: &models.FieldInfo{
+				Name:     "Price",
+				Type:     "float64",
+				JSONName: "price",
+			},
+			expectedType:   "number",
+			expectedFormat: "double",
+		},
+		{
+			name: "boolean field",
+			field: &models.FieldInfo{
+				Name:     "Active",
+				Type:     "bool",
+				JSONName: "active",
+			},
+			expectedType: "boolean",
+		},
+		{
+			name: "array field",
+			field: &models.FieldInfo{
+				Name:     "Tags",
+				Type:     "[]string",
+				JSONName: "tags",
+			},
+			expectedType: "array",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := gen.fieldInfoToProperty(tt.field)
+
+			if prop.Type != tt.expectedType {
+				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
+			}
+
+			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
+				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
+			}
+
+			if tt.expectedDesc != "" && prop.Description != tt.expectedDesc {
+				t.Errorf("Expected description %q, got %q", tt.expectedDesc, prop.Description)
+			}
+
+			if tt.expectedExample != nil && prop.Example != tt.expectedExample {
+				t.Errorf("Expected example %v, got %v", tt.expectedExample, prop.Example)
+			}
+
+			if tt.hasMinLength {
+				if prop.MinLength == nil {
+					t.Error("Expected MinLength to be set")
+				} else if *prop.MinLength != tt.minLengthValue {
+					t.Errorf("Expected MinLength %d, got %d", tt.minLengthValue, *prop.MinLength)
+				}
+			}
+		})
+	}
+}
+
+func TestSetTypeAndFormat(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name           string
+		goType         string
+		expectedType   string
+		expectedFormat string
+		hasItems       bool
+		itemType       string
+	}{
+		{name: "string", goType: "string", expectedType: "string"},
+		{name: "pointer string", goType: "*string", expectedType: "string"},
+		{name: "int", goType: "int", expectedType: "integer", expectedFormat: "int32"},
+		{name: "int32", goType: "int32", expectedType: "integer", expectedFormat: "int32"},
+		{name: "int64", goType: "int64", expectedType: "integer", expectedFormat: "int64"},
+		{name: "uint", goType: "uint", expectedType: "integer", expectedFormat: "int32"},
+		{name: "uint64", goType: "uint64", expectedType: "integer", expectedFormat: "int64"},
+		{name: "float32", goType: "float32", expectedType: "number", expectedFormat: "float"},
+		{name: "float64", goType: "float64", expectedType: "number", expectedFormat: "double"},
+		{name: "bool", goType: "bool", expectedType: "boolean"},
+		{name: "array of strings", goType: "[]string", expectedType: "array", hasItems: true, itemType: "string"},
+		{name: "array of int", goType: "[]int", expectedType: "array", hasItems: true, itemType: "integer"},
+		{name: "map", goType: "map[string]any", expectedType: typeObject},
+		{name: "custom struct", goType: "CustomType", expectedType: typeObject},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := &OpenAPIProperty{}
+			gen.setTypeAndFormat(prop, tt.goType)
+
+			if prop.Type != tt.expectedType {
+				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
+			}
+
+			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
+				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
+			}
+
+			if tt.hasItems {
+				if prop.Items == nil {
+					t.Error("Expected Items to be set for array type")
+				} else if prop.Items.Type != tt.itemType {
+					t.Errorf("Expected item type %q, got %q", tt.itemType, prop.Items.Type)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyConstraints(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name                 string
+		field                *models.FieldInfo
+		expectedFormat       string
+		expectedMinLength    *int
+		expectedMaxLength    *int
+		expectedMinimum      *float64
+		expectedMaximum      *float64
+		expectedExclusiveMin *bool
+		expectedPattern      string
+		expectedEnumCount    int
+	}{
+		{
+			name: "no constraints",
+			field: &models.FieldInfo{
+				Type:        "string",
+				Constraints: map[string]string{},
+			},
+		},
+		{
+			name: "email format",
+			field: &models.FieldInfo{
+				Type:        "string",
+				Constraints: map[string]string{"email": ""},
+			},
+			expectedFormat: "email",
+		},
+		{
+			name: "string min/max length",
+			field: &models.FieldInfo{
+				Type:        "string",
+				Constraints: map[string]string{"min": "5", "max": "50"},
+			},
+			expectedMinLength: intPtr(5),
+			expectedMaxLength: intPtr(50),
+		},
+		{
+			name: "integer min/max",
+			field: &models.FieldInfo{
+				Type:        "int64",
+				Constraints: map[string]string{"min": "1", "max": "100"},
+			},
+			expectedMinimum: float64Ptr(1.0),
+			expectedMaximum: float64Ptr(100.0),
+		},
+		{
+			name: "integer gt (exclusive minimum)",
+			field: &models.FieldInfo{
+				Type:        "int",
+				Constraints: map[string]string{"gt": "0"},
+			},
+			expectedMinimum:      float64Ptr(0.0),
+			expectedExclusiveMin: boolPtr(true),
+		},
+		{
+			name: "regexp pattern",
+			field: &models.FieldInfo{
+				Type:        "string",
+				Constraints: map[string]string{"regexp": "^[A-Z][a-z]+$"},
+			},
+			expectedPattern: "^[A-Z][a-z]+$",
+		},
+		{
+			name: "oneof enum",
+			field: &models.FieldInfo{
+				Type:        "string",
+				Constraints: map[string]string{"oneof": "admin user guest"},
+			},
+			expectedEnumCount: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := &OpenAPIProperty{}
+			gen.applyConstraints(prop, tt.field)
+
+			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
+				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
+			}
+
+			if tt.expectedMinLength != nil {
+				if prop.MinLength == nil {
+					t.Error("Expected MinLength to be set")
+				} else if *prop.MinLength != *tt.expectedMinLength {
+					t.Errorf("Expected MinLength %d, got %d", *tt.expectedMinLength, *prop.MinLength)
+				}
+			}
+
+			if tt.expectedMaxLength != nil {
+				if prop.MaxLength == nil {
+					t.Error("Expected MaxLength to be set")
+				} else if *prop.MaxLength != *tt.expectedMaxLength {
+					t.Errorf("Expected MaxLength %d, got %d", *tt.expectedMaxLength, *prop.MaxLength)
+				}
+			}
+
+			if tt.expectedMinimum != nil {
+				if prop.Minimum == nil {
+					t.Error("Expected Minimum to be set")
+				} else if *prop.Minimum != *tt.expectedMinimum {
+					t.Errorf("Expected Minimum %f, got %f", *tt.expectedMinimum, *prop.Minimum)
+				}
+			}
+
+			if tt.expectedMaximum != nil {
+				if prop.Maximum == nil {
+					t.Error("Expected Maximum to be set")
+				} else if *prop.Maximum != *tt.expectedMaximum {
+					t.Errorf("Expected Maximum %f, got %f", *tt.expectedMaximum, *prop.Maximum)
+				}
+			}
+
+			if tt.expectedExclusiveMin != nil {
+				if prop.ExclusiveMinimum == nil {
+					t.Error("Expected ExclusiveMinimum to be set")
+				} else if *prop.ExclusiveMinimum != *tt.expectedExclusiveMin {
+					t.Errorf("Expected ExclusiveMinimum %v, got %v", *tt.expectedExclusiveMin, *prop.ExclusiveMinimum)
+				}
+			}
+
+			if tt.expectedPattern != "" && prop.Pattern != tt.expectedPattern {
+				t.Errorf("Expected pattern %q, got %q", tt.expectedPattern, prop.Pattern)
+			}
+
+			if tt.expectedEnumCount > 0 {
+				if len(prop.Enum) != tt.expectedEnumCount {
+					t.Errorf("Expected %d enum values, got %d", tt.expectedEnumCount, len(prop.Enum))
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateWithTypedRequestResponse(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	project := &models.Project{
+		Modules: []models.Module{
+			{
+				Name: "users",
+				Routes: []models.Route{
+					{
+						Method:      "POST",
+						Path:        usersAPIPath,
+						HandlerName: "createUser",
+						Summary:     createNewUserSummary,
+						Request: &models.TypeInfo{
+							Name:    "CreateUserReq",
+							Package: "users",
+							Fields: []models.FieldInfo{
+								{
+									Name:        "Name",
+									Type:        "string",
+									JSONName:    "name",
+									Required:    true,
+									Description: "User's full name",
+									Constraints: map[string]string{"min": "2", "max": "100"},
+								},
+								{
+									Name:        "Email",
+									Type:        "string",
+									JSONName:    "email",
+									Required:    true,
+									Constraints: map[string]string{"email": ""},
+								},
+								{
+									Name:        "Age",
+									Type:        "int",
+									JSONName:    "age",
+									Constraints: map[string]string{"gte": "18", "lte": "120"},
+								},
+							},
+						},
+						Response: &models.TypeInfo{
+							Name:    "User",
+							Package: "users",
+							Fields: []models.FieldInfo{
+								{
+									Name:     "ID",
+									Type:     "int64",
+									JSONName: "id",
+									Required: true,
+								},
+								{
+									Name:     "Name",
+									Type:     "string",
+									JSONName: "name",
+									Required: true,
+								},
+								{
+									Name:     "Email",
+									Type:     "string",
+									JSONName: "email",
+									Required: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	spec, err := gen.Generate(project)
+	if err != nil {
+		t.Fatal(usersIDAPIPath, err)
+	}
+
+	// Parse the spec to validate structure
+	var parsed OpenAPISpec
+	err = yaml.Unmarshal([]byte(spec), &parsed)
+	if err != nil {
+		t.Fatalf(yamlParsingFailedMsg, err)
+	}
+
+	// Verify components/schemas section exists and contains generated types
+	components, ok := parsed.Components["schemas"].(map[string]any)
+	if !ok {
+		t.Fatal("Components/schemas should be a map")
+	}
+
+	// Check that generated schemas exist
+	schemaNames := []string{"CreateUserReq", "User", "SuccessResponse", "ErrorResponse"}
+	for _, name := range schemaNames {
+		if _, exists := components[name]; !exists {
+			t.Errorf("Missing schema: %s", name)
+		}
+	}
+
+	// Verify CreateUserReq schema has proper constraints
+	if !strings.Contains(spec, "CreateUserReq:") {
+		t.Error("Missing CreateUserReq schema definition")
+	}
+	if !strings.Contains(spec, "minLength:") {
+		t.Error("Missing minLength constraint")
+	}
+	if !strings.Contains(spec, "format: email") {
+		t.Error("Missing email format constraint")
+	}
+}
+
+// Helper functions for pointer creation in tests
+func intPtr(i int) *int {
+	return &i
+}
+
+func float64Ptr(f float64) *float64 {
+	return &f
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// Changeset 6: Parameter Extraction Tests
+
+func TestExtractParameters(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name              string
+		route             *models.Route
+		expectedParams    int
+		expectedBodyCount int
+		checkParam        func(*testing.T, []Parameter)
+	}{
+		{
+			name: "no request type",
+			route: &models.Route{
+				Method: "GET",
+				Path:   usersAPIPath,
+			},
+			expectedParams:    0,
+			expectedBodyCount: 0,
+		},
+		{
+			name: "path parameter",
+			route: &models.Route{
+				Method: "GET",
+				Path:   usersIDAPIPath,
+				Request: &models.TypeInfo{
+					Name: "GetUserReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:      "ID",
+							Type:      "int64",
+							ParamType: "path",
+							ParamName: "id",
+							Required:  true,
+						},
+					},
+				},
+			},
+			expectedParams:    1,
+			expectedBodyCount: 0,
+			checkParam: func(t *testing.T, params []Parameter) {
+				if params[0].Name != "id" {
+					t.Errorf("Expected param name 'id', got %q", params[0].Name)
+				}
+				if params[0].In != "path" {
+					t.Errorf("Expected param in 'path', got %q", params[0].In)
+				}
+				if !params[0].Required {
+					t.Error("Path parameter should be required")
+				}
+			},
+		},
+		{
+			name: "query parameters",
+			route: &models.Route{
+				Method: "GET",
+				Path:   usersAPIPath,
+				Request: &models.TypeInfo{
+					Name: "ListUsersReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:        "Page",
+							Type:        "int",
+							ParamType:   "query",
+							ParamName:   "page",
+							Description: pageNumberDescription,
+							Constraints: map[string]string{"min": "1"},
+						},
+						{
+							Name:      "Limit",
+							Type:      "int",
+							ParamType: "query",
+							ParamName: "limit",
+						},
+					},
+				},
+			},
+			expectedParams:    2,
+			expectedBodyCount: 0,
+			checkParam: func(t *testing.T, params []Parameter) {
+				if params[0].Name != "page" {
+					t.Errorf("Expected first param 'page', got %q", params[0].Name)
+				}
+				if params[0].Description != pageNumberDescription {
+					t.Errorf("Expected description 'Page number', got %q", params[0].Description)
+				}
+			},
+		},
+		{
+			name: "header parameter",
+			route: &models.Route{
+				Method: "POST",
+				Path:   "/api/upload",
+				Request: &models.TypeInfo{
+					Name: "UploadReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:      "ContentType",
+							Type:      "string",
+							ParamType: "header",
+							ParamName: "Content-Type",
+							Required:  true,
+						},
+					},
+				},
+			},
+			expectedParams:    1,
+			expectedBodyCount: 0,
+			checkParam: func(t *testing.T, params []Parameter) {
+				if params[0].In != "header" {
+					t.Errorf("Expected param in 'header', got %q", params[0].In)
+				}
+				if params[0].Name != "Content-Type" {
+					t.Errorf("Expected param name 'Content-Type', got %q", params[0].Name)
+				}
+			},
+		},
+		{
+			name: "mixed parameters and body",
+			route: &models.Route{
+				Method: "POST",
+				Path:   "/users/:id/update",
+				Request: &models.TypeInfo{
+					Name: "UpdateUserReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:      "ID",
+							Type:      "int64",
+							ParamType: "path",
+							ParamName: "id",
+						},
+						{
+							Name:      "Async",
+							Type:      "bool",
+							ParamType: "query",
+							ParamName: "async",
+						},
+						{
+							Name:     "Name",
+							Type:     "string",
+							JSONName: "name",
+							Required: true,
+						},
+						{
+							Name:     "Email",
+							Type:     "string",
+							JSONName: "email",
+						},
+					},
+				},
+			},
+			expectedParams:    2,
+			expectedBodyCount: 2,
+			checkParam: func(t *testing.T, params []Parameter) {
+				// Should have path and query params, not body fields
+				paramNames := make(map[string]bool)
+				for _, p := range params {
+					paramNames[p.Name] = true
+				}
+				if !paramNames["id"] {
+					t.Error("Expected 'id' path parameter")
+				}
+				if !paramNames["async"] {
+					t.Error("Expected 'async' query parameter")
+				}
+			},
+		},
+		{
+			name: "all body fields (no parameters)",
+			route: &models.Route{
+				Method: "POST",
+				Path:   usersAPIPath,
+				Request: &models.TypeInfo{
+					Name: "CreateUserReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:     "Name",
+							Type:     "string",
+							JSONName: "name",
+						},
+						{
+							Name:     "Email",
+							Type:     "string",
+							JSONName: "email",
+						},
+					},
+				},
+			},
+			expectedParams:    0,
+			expectedBodyCount: 2,
+		},
+		{
+			name: "parameter with example",
+			route: &models.Route{
+				Method: "GET",
+				Path:   usersIDAPIPath,
+				Request: &models.TypeInfo{
+					Name: "GetUserReq",
+					Fields: []models.FieldInfo{
+						{
+							Name:      "ID",
+							Type:      "int64",
+							ParamType: "path",
+							ParamName: "id",
+							Example:   "123",
+						},
+					},
+				},
+			},
+			expectedParams:    1,
+			expectedBodyCount: 0,
+			checkParam: func(t *testing.T, params []Parameter) {
+				if params[0].Example == nil {
+					t.Error("Expected parameter to have example")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params, bodyFields := gen.extractParameters(tt.route)
+
+			if len(params) != tt.expectedParams {
+				t.Errorf("Expected %d parameters, got %d", tt.expectedParams, len(params))
+			}
+
+			if len(bodyFields) != tt.expectedBodyCount {
+				t.Errorf("Expected %d body fields, got %d", tt.expectedBodyCount, len(bodyFields))
+			}
+
+			if tt.checkParam != nil && len(params) > 0 {
+				tt.checkParam(t, params)
+			}
+		})
+	}
+}
+
+func TestWriteParameters(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name           string
+		params         []Parameter
+		expectedOutput []string // Strings that should appear in output
+		notExpected    []string // Strings that should NOT appear
+	}{
+		{
+			name: "single path parameter",
+			params: []Parameter{
+				{
+					Name:     "id",
+					In:       "path",
+					Required: true,
+					Schema: &OpenAPIProperty{
+						Type:   "integer",
+						Format: "int64",
+					},
+				},
+			},
+			expectedOutput: []string{
+				parametersHeader,
+				IDHeader,
+				"in: path",
+				"required: true",
+				"type: integer",
+				"format: int64",
+			},
+		},
+		{
+			name: "query parameter with constraints",
+			params: []Parameter{
+				{
+					Name:        "page",
+					In:          "query",
+					Required:    false,
+					Description: pageNumberDescription,
+					Schema: &OpenAPIProperty{
+						Type:    "integer",
+						Minimum: float64Ptr(1.0),
+					},
+					Example: "1",
+				},
+			},
+			expectedOutput: []string{
+				parametersHeader,
+				"- name: page",
+				"in: query",
+				"required: false",
+				"description: Page number",
+				"minimum: 1",
+				"example: 1",
+			},
+		},
+		{
+			name: "multiple parameters",
+			params: []Parameter{
+				{
+					Name:     "id",
+					In:       "path",
+					Required: true,
+					Schema: &OpenAPIProperty{
+						Type: "integer",
+					},
+				},
+				{
+					Name:     "format",
+					In:       "query",
+					Required: false,
+					Schema: &OpenAPIProperty{
+						Type: "string",
+						Enum: []any{"json", "xml"},
+					},
+				},
+			},
+			expectedOutput: []string{
+				IDHeader,
+				"- name: format",
+				"enum:",
+				"- json",
+				"- xml",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sb strings.Builder
+			gen.writeParameters(&sb, tt.params)
+			output := sb.String()
+
+			for _, expected := range tt.expectedOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain %q, but it didn't.\nOutput:\n%s", expected, output)
+				}
+			}
+
+			for _, notExpected := range tt.notExpected {
+				if strings.Contains(output, notExpected) {
+					t.Errorf("Expected output NOT to contain %q, but it did.\nOutput:\n%s", notExpected, output)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteRequestBody(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name           string
+		bodyFields     []models.FieldInfo
+		schemaName     string
+		expectedOutput []string
+	}{
+		{
+			name: "with schema name",
+			bodyFields: []models.FieldInfo{
+				{Name: "Name", Type: "string"},
+			},
+			schemaName: "CreateUserReq",
+			expectedOutput: []string{
+				requestBodyHeader,
+				"required: true",
+				"content:",
+				"application/json:",
+				"schema:",
+				"$ref: '#/components/schemas/CreateUserReq'",
+			},
+		},
+		{
+			name: "without schema name (inline)",
+			bodyFields: []models.FieldInfo{
+				{Name: "Data", Type: "string"},
+			},
+			schemaName: "",
+			expectedOutput: []string{
+				requestBodyHeader,
+				"type: object",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sb strings.Builder
+			gen.writeRequestBody(&sb, tt.bodyFields, tt.schemaName)
+			output := sb.String()
+
+			for _, expected := range tt.expectedOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain %q.\nOutput:\n%s", expected, output)
+				}
+			}
+		})
+	}
+}
+
+func TestWritePropertySchema(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	tests := []struct {
+		name           string
+		prop           *OpenAPIProperty
+		indent         string
+		expectedOutput []string
+	}{
+		{
+			name: "simple string",
+			prop: &OpenAPIProperty{
+				Type: "string",
+			},
+			indent: "  ",
+			expectedOutput: []string{
+				"  type: string",
+			},
+		},
+		{
+			name: "integer with format and constraints",
+			prop: &OpenAPIProperty{
+				Type:    "integer",
+				Format:  "int64",
+				Minimum: float64Ptr(1.0),
+				Maximum: float64Ptr(100.0),
+			},
+			indent: "    ",
+			expectedOutput: []string{
+				"    type: integer",
+				"    format: int64",
+				"    minimum: 1",
+				"    maximum: 100",
+			},
+		},
+		{
+			name: "string with length and pattern",
+			prop: &OpenAPIProperty{
+				Type:      "string",
+				MinLength: intPtr(3),
+				MaxLength: intPtr(50),
+				Pattern:   "^[a-zA-Z]+$",
+			},
+			indent: "  ",
+			expectedOutput: []string{
+				"minLength: 3",
+				"maxLength: 50",
+				"pattern: ^[a-zA-Z]+$",
+			},
+		},
+		{
+			name: "enum",
+			prop: &OpenAPIProperty{
+				Type: "string",
+				Enum: []any{"red", "green", "blue"},
+			},
+			indent: "  ",
+			expectedOutput: []string{
+				"enum:",
+				"- red",
+				"- green",
+				"- blue",
+			},
+		},
+		{
+			name: "array with items",
+			prop: &OpenAPIProperty{
+				Type: "array",
+				Items: &OpenAPIProperty{
+					Type:   "integer",
+					Format: "int32",
+				},
+			},
+			indent: "  ",
+			expectedOutput: []string{
+				"  type: array",
+				"  items:",
+				"    type: integer",
+				"    format: int32",
+			},
+		},
+		{
+			name: "exclusive bounds",
+			prop: &OpenAPIProperty{
+				Type:             "number",
+				Minimum:          float64Ptr(0.0),
+				ExclusiveMinimum: boolPtr(true),
+			},
+			indent: "  ",
+			expectedOutput: []string{
+				"minimum: 0",
+				"exclusiveMinimum: true",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sb strings.Builder
+			gen.writePropertySchema(&sb, tt.prop, tt.indent)
+			output := sb.String()
+
+			for _, expected := range tt.expectedOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain %q.\nOutput:\n%s", expected, output)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateWithParameters(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	project := &models.Project{
+		Modules: []models.Module{
+			{
+				Name: "users",
+				Routes: []models.Route{
+					{
+						Method:      "GET",
+						Path:        usersIDAPIPath,
+						HandlerName: "getUser",
+						Summary:     getUserByIDSummary,
+						Request: &models.TypeInfo{
+							Name: "GetUserReq",
+							Fields: []models.FieldInfo{
+								{
+									Name:        "ID",
+									Type:        "int64",
+									ParamType:   "path",
+									ParamName:   "id",
+									Description: "User identifier",
+									Constraints: map[string]string{"min": "1"},
+								},
+								{
+									Name:      "Include",
+									Type:      "string",
+									ParamType: "query",
+									ParamName: "include",
+								},
+							},
+						},
+					},
+					{
+						Method:      "POST",
+						Path:        usersAPIPath,
+						HandlerName: "createUser",
+						Summary:     createNewUserSummary,
+						Request: &models.TypeInfo{
+							Name: "CreateUserReq",
+							Fields: []models.FieldInfo{
+								{
+									Name:     "Name",
+									Type:     "string",
+									JSONName: "name",
+									Required: true,
+								},
+								{
+									Name:     "Email",
+									Type:     "string",
+									JSONName: "email",
+									Required: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	spec, err := gen.Generate(project)
+	if err != nil {
+		t.Fatal(usersIDAPIPath, err)
+	}
+
+	// Verify GET /users/:id has parameters
+	if !strings.Contains(spec, parametersHeader) {
+		t.Error("Expected spec to contain 'parameters:' section")
+	}
+	if !strings.Contains(spec, IDHeader) {
+		t.Error("Expected spec to contain path parameter 'id'")
+	}
+	if !strings.Contains(spec, "in: path") {
+		t.Error("Expected spec to contain 'in: path'")
+	}
+	if !strings.Contains(spec, "- name: include") {
+		t.Error("Expected spec to contain query parameter 'include'")
+	}
+	if !strings.Contains(spec, "in: query") {
+		t.Error("Expected spec to contain 'in: query'")
+	}
+
+	// Verify POST /users has requestBody (no parameters)
+	if !strings.Contains(spec, requestBodyHeader) {
+		t.Error("Expected spec to contain 'requestBody:' section")
+	}
+	if !strings.Contains(spec, "$ref: '#/components/schemas/CreateUserReq'") {
+		t.Error("Expected spec to reference CreateUserReq schema in requestBody")
+	}
+
+	// Parse and validate structure
+	var parsed OpenAPISpec
+	err = yaml.Unmarshal([]byte(spec), &parsed)
+	if err != nil {
+		t.Fatalf(yamlParsingFailedMsg, err)
 	}
 }

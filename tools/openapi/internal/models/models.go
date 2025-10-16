@@ -38,11 +38,14 @@ type TypeInfo struct {
 
 // FieldInfo represents a struct field with validation metadata
 type FieldInfo struct {
-	Name        string
-	Type        string
-	JSONName    string
-	Required    bool
-	Description string
-	Example     string
-	Constraints map[string]string
+	Name          string
+	Type          string
+	JSONName      string            // Parsed from `json:"name"` tag
+	ParamType     string            // "path", "query", "header", or "" for body fields
+	ParamName     string            // Parsed from `param:"name"`, `query:"name"`, or `header:"name"` tags
+	Required      bool              // Parsed from `validate:"required"` tag
+	Description   string            // Parsed from `doc:"..."` tag
+	Example       string            // Parsed from `example:"..."` tag
+	RawValidation string            // Raw validation tag string (e.g., "required,email,min=5")
+	Constraints   map[string]string // Parsed validation constraints for OpenAPI mapping
 }

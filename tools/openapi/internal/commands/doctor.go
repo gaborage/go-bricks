@@ -8,12 +8,24 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/gaborage/go-bricks/tools/openapi/internal/analyzer"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 	"github.com/spf13/cobra"
 	"golang.org/x/mod/semver"
 )
 
 const (
-	goModFile = "go.mod"
+	goModFile      = "go.mod"
+	goBricksDep    = "go-bricks"
+	minGoBricksVer = "v0.5.0"
+
+	// File patterns
+	goFileExt   = ".go"
+	testFileExt = "_test.go"
+
+	// Skip directories
+	vendorDir      = "vendor"
+	nodeModulesDir = "node_modules"
 )
 
 var (
@@ -69,49 +81,13 @@ func runDoctor(opts *DoctorOptions) error {
 
 	var hasErrors bool
 
-	// Check Go version
-	goVersion := opts.GoVersion
-	if goVersion == "" {
-		goVersion = runtimeVersionFn()
-	}
-	fmt.Printf("📋 Go Version: %s\n", goVersion)
-	if !isGoVersionSupported(goVersion) {
-		fmt.Println("❌ Go version 1.21+ required")
-		hasErrors = true
-	} else {
-		fmt.Println("✅ Go version compatible")
-	}
+	// Perform all health checks
+	hasErrors = performGoVersionCheck(opts, hasErrors)
+	hasErrors = performProjectStructureCheck(opts, hasErrors)
+	hasErrors = performGoModCheck(opts, hasErrors)
+	performDiagnosticsCheck(opts)
 
-	// Check project structure
-	fmt.Printf("📁 Project Root: %s\n", opts.ProjectRoot)
-	if err := checkProjectStructure(opts.ProjectRoot); err != nil {
-		fmt.Printf("❌ Project structure: %v\n", err)
-		hasErrors = true
-	} else {
-		fmt.Println("✅ Project structure valid")
-	}
-
-	// Check go.mod
-	goModPath := filepath.Join(opts.ProjectRoot, goModFile)
-	if _, err := statFn(goModPath); err != nil {
-		fmt.Println("❌ No go.mod found")
-		hasErrors = true
-	} else {
-		fmt.Println("✅ go.mod found")
-
-		// Basic go-bricks version check (expanded in Phase 1)
-		if err := checkGoBricksCompatibility(goModPath, opts.Verbose); err != nil {
-			if opts.Verbose {
-				fmt.Printf("⚠️  go-bricks compatibility: %v\n", err)
-			}
-			// Non-fatal for now - just warn in verbose mode
-		}
-	}
-
-	// Check build environment
-	fmt.Printf("🔧 GOROOT: %s\n", build.Default.GOROOT)
-	fmt.Printf("🔧 GOPATH: %s\n", build.Default.GOPATH)
-
+	// Final summary
 	fmt.Println()
 	if hasErrors {
 		fmt.Println("❌ Health check failed - please fix the issues above")
@@ -120,6 +96,69 @@ func runDoctor(opts *DoctorOptions) error {
 
 	fmt.Println("✅ All checks passed - ready to generate OpenAPI specs!")
 	return nil
+}
+
+// performGoVersionCheck validates Go version compatibility
+func performGoVersionCheck(opts *DoctorOptions, hasErrors bool) bool {
+	goVersion := opts.GoVersion
+	if goVersion == "" {
+		goVersion = runtimeVersionFn()
+	}
+	fmt.Printf("📋 Go Version: %s\n", goVersion)
+	if !isGoVersionSupported(goVersion) {
+		fmt.Println("❌ Go version 1.21+ required")
+		return true
+	}
+	fmt.Println("✅ Go version compatible")
+	return hasErrors
+}
+
+// performProjectStructureCheck validates project directory structure
+func performProjectStructureCheck(opts *DoctorOptions, hasErrors bool) bool {
+	fmt.Printf("📁 Project Root: %s\n", opts.ProjectRoot)
+	if err := checkProjectStructure(opts.ProjectRoot); err != nil {
+		fmt.Printf("❌ Project structure: %v\n", err)
+		return true
+	}
+	fmt.Println("✅ Project structure valid")
+	return hasErrors
+}
+
+// performGoModCheck validates go.mod existence and go-bricks compatibility
+func performGoModCheck(opts *DoctorOptions, hasErrors bool) bool {
+	goModPath := filepath.Join(opts.ProjectRoot, goModFile)
+	if _, err := statFn(goModPath); err != nil {
+		fmt.Println("❌ No go.mod found")
+		return true
+	}
+	fmt.Println("✅ go.mod found")
+
+	// Basic go-bricks version check (expanded in Phase 1)
+	if err := checkGoBricksCompatibility(goModPath, opts.Verbose); err != nil {
+		if opts.Verbose {
+			fmt.Printf("⚠️  go-bricks compatibility: %v\n", err)
+		}
+		// Non-fatal for now - just warn in verbose mode
+	}
+	return hasErrors
+}
+
+// performDiagnosticsCheck runs module diagnostics and displays build environment
+func performDiagnosticsCheck(opts *DoctorOptions) {
+	// Module diagnostics (analyze project structure)
+	fmt.Println()
+	fmt.Println("📊 Project Diagnostics:")
+	if err := runModuleDiagnostics(opts.ProjectRoot, opts.Verbose); err != nil {
+		if opts.Verbose {
+			fmt.Printf("⚠️  Module diagnostics: %v\n", err)
+		}
+		// Non-fatal - just informational
+	}
+
+	// Check build environment
+	fmt.Println()
+	fmt.Printf("🔧 GOROOT: %s\n", build.Default.GOROOT)
+	fmt.Printf("🔧 GOPATH: %s\n", build.Default.GOPATH)
 }
 
 func isGoVersionSupported(version string) bool {
@@ -162,14 +201,14 @@ func checkProjectStructure(projectRoot string) error {
 		// Skip hidden directories and vendor/node_modules
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+			if strings.HasPrefix(name, ".") || name == vendorDir || name == nodeModulesDir {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		// Check for .go files (excluding test files for basic validation)
-		if strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+		if strings.HasSuffix(path, goFileExt) && !strings.HasSuffix(path, testFileExt) {
 			goFilesFound = true
 			return filepath.SkipAll // Found at least one, we can stop searching
 		}
@@ -188,8 +227,7 @@ func checkProjectStructure(projectRoot string) error {
 	return nil
 }
 
-// checkGoBricksCompatibility performs basic compatibility check with go-bricks framework
-// This is a placeholder implementation that will be expanded in Phase 1
+// checkGoBricksCompatibility performs compatibility check with go-bricks framework
 func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 	// Validate and resolve path securely to prevent path traversal
 	cleanPath, err := validateAndResolvePath(goModPath)
@@ -204,22 +242,241 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 
 	goModContent := string(content)
 
-	// Basic check for go-bricks presence
-	if !strings.Contains(goModContent, "go-bricks") {
-		return fmt.Errorf("go-bricks dependency not found in go.mod")
+	// Parse go-bricks version from go.mod
+	version, isReplace, err := parseGoBricksVersion(goModContent)
+	if err != nil {
+		return err
 	}
 
-	if verbose {
-		fmt.Println("✅ go-bricks dependency detected")
+	// Handle local replace directives
+	if isReplace {
+		if verbose {
+			fmt.Printf("ℹ️  go-bricks: local replace directive detected (%s)\n", version)
+			fmt.Println("   → Skipping version compatibility check (using local development version)")
+		}
+		return nil
 	}
 
-	// Phase 1 will add:
-	// - Semantic version parsing of go-bricks version
-	// - Compatibility matrix checking
-	// - Module interface validation
-	// - Route descriptor version checking
+	// Display version
+	fmt.Printf("📦 go-bricks version: %s\n", version)
+
+	// Check version compatibility
+	if err := checkVersionCompatibility(version); err != nil {
+		fmt.Printf("⚠️  Version compatibility: %v\n", err)
+		fmt.Printf("   → OpenAPI metadata features require %s %s+\n", goBricksDep, minGoBricksVer)
+		// Non-fatal warning
+	} else {
+		fmt.Printf("✅ %s version compatible\n", goBricksDep)
+	}
 
 	return nil
+}
+
+// parseGoBricksVersion extracts the go-bricks version from go.mod content
+// Returns (version, isReplaceDirective, error)
+//
+//nolint:gocritic // Named returns would reduce clarity for boolean flag parameter
+func parseGoBricksVersion(goModContent string) (string, bool, error) {
+	lines := strings.Split(goModContent, "\n")
+
+	// First check for replace directives (local development)
+	if replacePath := findReplaceDirective(lines); replacePath != "" {
+		return replacePath, true, nil
+	}
+
+	// Look for require directive with version
+	if version := findRequireVersion(lines); version != "" {
+		return version, false, nil
+	}
+
+	return "", false, fmt.Errorf("%s dependency not found in go.mod", goBricksDep)
+}
+
+// findReplaceDirective searches for a replace directive in go.mod lines
+func findReplaceDirective(lines []string) string {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "replace") && strings.Contains(trimmed, goBricksDep) {
+			// Format: replace github.com/gaborage/go-bricks => ../local-path
+			parts := strings.Split(trimmed, "=>")
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
+// findRequireVersion searches for a require directive with version in go.mod lines
+func findRequireVersion(lines []string) string {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, goBricksDep) || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+
+		// Format: github.com/gaborage/go-bricks v0.5.0
+		// or:     github.com/gaborage/go-bricks v0.5.0 // indirect
+		fields := strings.Fields(trimmed)
+		if version := extractVersionFromFields(fields); version != "" {
+			return version
+		}
+	}
+	return ""
+}
+
+// extractVersionFromFields extracts version from go.mod require line fields
+func extractVersionFromFields(fields []string) string {
+	for i, field := range fields {
+		if strings.Contains(field, goBricksDep) && i+1 < len(fields) {
+			version := fields[i+1]
+			// Remove "// indirect" or other comments
+			if commentIdx := strings.Index(version, "//"); commentIdx != -1 {
+				version = strings.TrimSpace(version[:commentIdx])
+			}
+			return version
+		}
+	}
+	return ""
+}
+
+// checkVersionCompatibility validates go-bricks version meets minimum requirements
+func checkVersionCompatibility(version string) error {
+	// Ensure version starts with 'v'
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	// Validate semver format
+	if !semver.IsValid(version) {
+		return fmt.Errorf("invalid semantic version format: %s", version)
+	}
+
+	// Check minimum version for OpenAPI metadata support
+	if semver.Compare(version, minGoBricksVer) < 0 {
+		return fmt.Errorf("version %s is below minimum %s", version, minGoBricksVer)
+	}
+
+	return nil
+}
+
+// runModuleDiagnostics analyzes the project and reports module/route statistics
+func runModuleDiagnostics(projectRoot string, verbose bool) error {
+	// Create analyzer
+	a := analyzer.New(projectRoot)
+
+	// Analyze project
+	project, err := a.AnalyzeProject()
+	if err != nil {
+		return fmt.Errorf("failed to analyze project: %w", err)
+	}
+
+	// Calculate statistics
+	stats := calculateProjectStats(project)
+
+	// Display results
+	displayProjectStats(stats, verbose)
+
+	return nil
+}
+
+// ProjectStats holds project analysis statistics
+type ProjectStats struct {
+	ModuleCount         int
+	RouteCount          int
+	TypedRoutes         int
+	TypedRequestRoutes  int
+	TypedResponseRoutes int
+	UntypedRoutes       []string // Handler names of untyped routes
+}
+
+// calculateProjectStats computes statistics from analyzed project
+func calculateProjectStats(project *models.Project) ProjectStats {
+	stats := ProjectStats{
+		ModuleCount:   len(project.Modules),
+		UntypedRoutes: []string{},
+	}
+
+	for _, module := range project.Modules {
+		stats.RouteCount += len(module.Routes)
+		for i := range module.Routes {
+			updateStatsForRoute(&stats, &module.Routes[i])
+		}
+	}
+
+	return stats
+}
+
+// routeClassification holds the type information for a route
+type routeClassification struct {
+	hasRequest  bool
+	hasResponse bool
+	handlerID   string
+}
+
+// classifyRoute determines the type information for a route
+func classifyRoute(route *models.Route) routeClassification {
+	hasRequest := route.Request != nil && len(route.Request.Fields) > 0
+	hasResponse := route.Response != nil && len(route.Response.Fields) > 0
+
+	handlerID := route.HandlerName
+	if handlerID == "" {
+		handlerID = fmt.Sprintf("%s %s", route.Method, route.Path)
+	}
+
+	return routeClassification{
+		hasRequest:  hasRequest,
+		hasResponse: hasResponse,
+		handlerID:   handlerID,
+	}
+}
+
+// updateStatsForRoute updates statistics based on route classification
+func updateStatsForRoute(stats *ProjectStats, route *models.Route) {
+	classification := classifyRoute(route)
+
+	// Update typed route counters
+	if classification.hasRequest || classification.hasResponse {
+		stats.TypedRoutes++
+	} else {
+		// Track untyped routes
+		stats.UntypedRoutes = append(stats.UntypedRoutes, classification.handlerID)
+	}
+
+	// Update specific type counters
+	if classification.hasRequest {
+		stats.TypedRequestRoutes++
+	}
+	if classification.hasResponse {
+		stats.TypedResponseRoutes++
+	}
+}
+
+// displayProjectStats outputs formatted statistics
+func displayProjectStats(stats ProjectStats, verbose bool) {
+	fmt.Printf("   📦 Modules discovered: %d\n", stats.ModuleCount)
+	fmt.Printf("   🛣️  Routes discovered: %d\n", stats.RouteCount)
+
+	if stats.RouteCount > 0 {
+		typeCoverage := (float64(stats.TypedRoutes) / float64(stats.RouteCount)) * 100
+		fmt.Printf("   ✨ Typed routes: %d/%d (%.1f%%)\n", stats.TypedRoutes, stats.RouteCount, typeCoverage)
+
+		if verbose {
+			fmt.Printf("      • Request types: %d\n", stats.TypedRequestRoutes)
+			fmt.Printf("      • Response types: %d\n", stats.TypedResponseRoutes)
+		}
+
+		// Warn about untyped routes
+		if len(stats.UntypedRoutes) > 0 {
+			fmt.Printf("   ⚠️  Routes without type information: %d\n", len(stats.UntypedRoutes))
+			if verbose {
+				fmt.Println("      Missing types for:")
+				for _, handler := range stats.UntypedRoutes {
+					fmt.Printf("      • %s\n", handler)
+				}
+			}
+		}
+	}
 }
 
 // resolveProjectPath converts a relative project path to absolute path

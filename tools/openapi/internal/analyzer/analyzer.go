@@ -24,6 +24,35 @@ const (
 	frameworkTypeAPIError       = "IAPIError"
 	frameworkTypeError          = "error"
 	frameworkPkgServer          = "server"
+
+	// File and directory names
+	goFileExt     = ".go"
+	testFileExt   = "_test.go"
+	goModFileName = "go.mod"
+
+	// Directories to skip during discovery
+	vendorDir      = "vendor"
+	gitDir         = ".git"
+	nodeModulesDir = "node_modules"
+
+	// Struct tag names
+	tagJSON     = "json"
+	tagParam    = "param"
+	tagQuery    = "query"
+	tagHeader   = "header"
+	tagDoc      = "doc"
+	tagExample  = "example"
+	tagValidate = "validate"
+
+	// Parameter types for OpenAPI
+	paramTypePath   = "path"
+	paramTypeQuery  = "query"
+	paramTypeHeader = "header"
+
+	// Special tag values
+	jsonSkipValue      = "-"
+	boolTrueString     = "true"
+	constraintRequired = "required"
 )
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
@@ -85,7 +114,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 
 // discoverProjectMetadata extracts project information from go.mod
 func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
-	goModPath := filepath.Join(a.projectRoot, "go.mod")
+	goModPath := filepath.Join(a.projectRoot, goModFileName)
 	if err := a.validateProjectPath(goModPath); err != nil {
 		return // Skip if path validation fails
 	}
@@ -145,7 +174,7 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 		return filepath.SkipDir
 	}
 
-	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+	if !strings.HasSuffix(path, goFileExt) || strings.HasSuffix(path, testFileExt) {
 		return nil
 	}
 
@@ -168,7 +197,7 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 
 // shouldSkipDir checks if a directory should be skipped during discovery
 func shouldSkipDir(name string) bool {
-	return name == "vendor" || name == ".git" || strings.HasPrefix(name, ".") || name == "node_modules"
+	return name == vendorDir || name == gitDir || strings.HasPrefix(name, ".") || name == nodeModulesDir
 }
 
 // analyzeGoFile parses a Go file and extracts module information
@@ -653,7 +682,7 @@ func (a *ProjectAnalyzer) parsePackage(filePath, packageName string) (files map[
 			return false
 		}
 		name := info.Name()
-		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
+		return strings.HasSuffix(name, goFileExt) && !strings.HasSuffix(name, testFileExt)
 	}, parser.ParseComments)
 	if len(pkgs) == 0 {
 		return nil, err
@@ -916,7 +945,7 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 	}
 
 	// Ensure the cleaned path has a .go suffix
-	if !strings.HasSuffix(cleanPath, ".go") {
+	if !strings.HasSuffix(cleanPath, goFileExt) {
 		return errors.New("not a Go file")
 	}
 
@@ -928,57 +957,75 @@ func (a *ProjectAnalyzer) validateGoFilePath(filePath string) error {
 func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *models.TypeInfo {
 	switch t := expr.(type) {
 	case *ast.Ident:
-		// Skip framework types
-		if a.isFrameworkType(t.Name, "") {
+		return a.handleIdentType(t, packageName)
+	case *ast.StarExpr:
+		return a.handleStarExprType(t, packageName)
+	case *ast.SelectorExpr:
+		return a.handleSelectorExprType(t)
+	}
+
+	return nil
+}
+
+// handleIdentType processes simple identifier types (e.g., TypeName)
+func (a *ProjectAnalyzer) handleIdentType(t *ast.Ident, packageName string) *models.TypeInfo {
+	if a.isFrameworkType(t.Name, "") {
+		return nil
+	}
+	return &models.TypeInfo{
+		Name:      t.Name,
+		Package:   packageName,
+		IsPointer: false,
+	}
+}
+
+// handleStarExprType processes pointer types (e.g., *TypeName or *pkg.TypeName)
+func (a *ProjectAnalyzer) handleStarExprType(t *ast.StarExpr, packageName string) *models.TypeInfo {
+	// Handle simple pointer: *TypeName
+	if ident, ok := t.X.(*ast.Ident); ok {
+		if a.isFrameworkType(ident.Name, "") {
 			return nil
 		}
 		return &models.TypeInfo{
-			Name:      t.Name,
+			Name:      ident.Name,
 			Package:   packageName,
-			IsPointer: false,
+			IsPointer: true,
 		}
+	}
 
-	case *ast.StarExpr:
-		// Pointer type: *TypeName
-		if ident, ok := t.X.(*ast.Ident); ok {
-			if a.isFrameworkType(ident.Name, "") {
+	// Handle qualified pointer: *pkg.TypeName
+	if selExpr, ok := t.X.(*ast.SelectorExpr); ok {
+		if pkg, ok := selExpr.X.(*ast.Ident); ok {
+			if a.isFrameworkType(selExpr.Sel.Name, pkg.Name) {
 				return nil
 			}
 			return &models.TypeInfo{
-				Name:      ident.Name,
-				Package:   packageName,
-				IsPointer: true,
-			}
-		}
-		// Handle qualified pointer types: *pkg.TypeName
-		if selExpr, ok := t.X.(*ast.SelectorExpr); ok {
-			if pkg, ok := selExpr.X.(*ast.Ident); ok {
-				if a.isFrameworkType(selExpr.Sel.Name, pkg.Name) {
-					return nil
-				}
-				return &models.TypeInfo{
-					Name:      selExpr.Sel.Name,
-					Package:   pkg.Name,
-					IsPointer: true,
-				}
-			}
-		}
-
-	case *ast.SelectorExpr:
-		// Qualified type: pkg.TypeName
-		if pkg, ok := t.X.(*ast.Ident); ok {
-			if a.isFrameworkType(t.Sel.Name, pkg.Name) {
-				return nil
-			}
-			return &models.TypeInfo{
-				Name:      t.Sel.Name,
+				Name:      selExpr.Sel.Name,
 				Package:   pkg.Name,
-				IsPointer: false,
+				IsPointer: true,
 			}
 		}
 	}
 
 	return nil
+}
+
+// handleSelectorExprType processes qualified types (e.g., pkg.TypeName)
+func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.TypeInfo {
+	pkg, ok := t.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+
+	if a.isFrameworkType(t.Sel.Name, pkg.Name) {
+		return nil
+	}
+
+	return &models.TypeInfo{
+		Name:      t.Sel.Name,
+		Package:   pkg.Name,
+		IsPointer: false,
+	}
 }
 
 // extractRequestType extracts request type from handler parameters.
@@ -1036,6 +1083,7 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 
 // extractHandlerSignature extracts request and response type information from a handler method
 // Searches current file first, then falls back to other files in the package
+// Also populates struct fields for discovered types
 func (a *ProjectAnalyzer) extractHandlerSignature(
 	astFile *ast.File,
 	filePath string,
@@ -1044,6 +1092,8 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 ) (reqType, respType *models.TypeInfo, err error) {
 	// Try current file first
 	if reqType, respType := a.findHandlerInFile(astFile, structName, handlerName); reqType != nil || respType != nil {
+		a.populateTypeFields(reqType, astFile, filePath)
+		a.populateTypeFields(respType, astFile, filePath)
 		return reqType, respType, nil
 	}
 
@@ -1052,6 +1102,8 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	if err == nil && files != nil {
 		for _, file := range files {
 			if reqType, respType := a.findHandlerInFile(file, structName, handlerName); reqType != nil || respType != nil {
+				a.populateTypeFields(reqType, file, filePath)
+				a.populateTypeFields(respType, file, filePath)
 				return reqType, respType, nil
 			}
 		}
@@ -1060,4 +1112,287 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
 	return nil, nil, fmt.Errorf("handler %s not found for struct %s", handlerName, structName)
+}
+
+// populateTypeFields populates the Fields slice for a TypeInfo by finding its struct definition
+func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
+	if typeInfo == nil {
+		return
+	}
+
+	// Find struct definition
+	structType, _, err := a.findStructDefinition(astFile, filePath, typeInfo.Name)
+	if err != nil {
+		// Struct not found - might be a primitive type or external type
+		return
+	}
+
+	// Extract fields from struct
+	typeInfo.Fields = a.extractStructFields(structType, typeInfo.Package)
+}
+
+// findStructDefinition searches for a struct type definition by name
+// Searches current file first, then other files in the package
+func (a *ProjectAnalyzer) findStructDefinition(
+	astFile *ast.File,
+	filePath string,
+	typeName string,
+) (*ast.StructType, string, error) {
+	// Search current file first
+	if structType, pkgName := a.findStructInFile(astFile, typeName); structType != nil {
+		return structType, pkgName, nil
+	}
+
+	// Try other files in the package
+	files, err := a.parsePackage(filePath, astFile.Name.Name)
+	if err == nil && files != nil {
+		for _, file := range files {
+			if structType, pkgName := a.findStructInFile(file, typeName); structType != nil {
+				return structType, pkgName, nil
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("struct %s not found", typeName)
+}
+
+// findStructInFile searches a single AST file for a struct type definition
+// Returns the struct type and package name if found
+//
+//nolint:gocritic // Named returns would reduce clarity in this AST traversal function
+func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) (*ast.StructType, string) {
+	for _, decl := range astFile.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+
+			return structType, astFile.Name.Name
+		}
+	}
+
+	return nil, ""
+}
+
+// extractStructFields extracts field information from a struct type including struct tags
+func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, _ string) []models.FieldInfo {
+	var fields []models.FieldInfo
+
+	if structType.Fields == nil {
+		return fields
+	}
+
+	for _, field := range structType.Fields.List {
+		fields = append(fields, a.processStructField(field)...)
+	}
+
+	return fields
+}
+
+// processStructField processes a single AST field and returns all associated FieldInfo entries
+func (a *ProjectAnalyzer) processStructField(field *ast.Field) []models.FieldInfo {
+	// Skip fields without names (embedded structs, for now)
+	if len(field.Names) == 0 {
+		return nil
+	}
+
+	fieldInfos := make([]models.FieldInfo, 0, len(field.Names))
+	for _, fieldName := range field.Names {
+		// Skip unexported fields
+		if !fieldName.IsExported() {
+			continue
+		}
+
+		fieldInfo := a.buildFieldInfo(fieldName.Name, field)
+		fieldInfos = append(fieldInfos, fieldInfo)
+	}
+
+	return fieldInfos
+}
+
+// buildFieldInfo creates a FieldInfo from a field name and AST field
+func (a *ProjectAnalyzer) buildFieldInfo(name string, field *ast.Field) models.FieldInfo {
+	fieldInfo := models.FieldInfo{
+		Name:        name,
+		Type:        a.typeToString(field.Type),
+		Constraints: make(map[string]string),
+	}
+
+	// Parse struct tags if present
+	if field.Tag != nil {
+		a.parseFieldTags(&fieldInfo, field.Tag)
+	}
+
+	return fieldInfo
+}
+
+// parseFieldTags parses struct tags and populates the FieldInfo
+func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.BasicLit) {
+	tagValue := strings.Trim(tag.Value, "`")
+	jsonName, paramType, paramName, description, example, rawValidation := a.parseStructTags(tagValue)
+
+	fieldInfo.JSONName = jsonName
+	fieldInfo.ParamType = paramType
+	fieldInfo.ParamName = paramName
+	fieldInfo.Description = description
+	fieldInfo.Example = example
+	fieldInfo.RawValidation = rawValidation
+
+	// Parse validation constraints
+	if rawValidation != "" {
+		fieldInfo.Constraints = a.parseValidationTag(rawValidation)
+		// Set Required flag based on constraints
+		if fieldInfo.Constraints[constraintRequired] == boolTrueString {
+			fieldInfo.Required = true
+		}
+	}
+}
+
+// typeToString converts an AST type expression to a string representation
+func (a *ProjectAnalyzer) typeToString(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+
+	case *ast.StarExpr:
+		return "*" + a.typeToString(t.X)
+
+	case *ast.ArrayType:
+		return "[]" + a.typeToString(t.Elt)
+
+	case *ast.MapType:
+		return "map[" + a.typeToString(t.Key) + "]" + a.typeToString(t.Value)
+
+	case *ast.SelectorExpr:
+		if pkg, ok := t.X.(*ast.Ident); ok {
+			return pkg.Name + "." + t.Sel.Name
+		}
+
+	case *ast.InterfaceType:
+		return "interface{}"
+	}
+
+	return "unknown"
+}
+
+// parseStructTags extracts relevant information from struct field tags
+// Returns JSONName, ParamType, ParamName, Description, Example, and RawValidation
+//
+//nolint:gocritic // Multiple returns justified - each represents a distinct struct tag field
+func (a *ProjectAnalyzer) parseStructTags(tag string) (jsonName, paramType, paramName, description, example, rawValidation string) {
+	if tag == "" {
+		return "", "", "", "", "", ""
+	}
+
+	// Parse json tag: `json:"fieldName,omitempty"`
+	if jsonTag := a.extractTag(tag, tagJSON); jsonTag != "" {
+		// Split by comma and take first part as field name
+		parts := strings.Split(jsonTag, ",")
+		if len(parts) > 0 && parts[0] != "" && parts[0] != jsonSkipValue {
+			jsonName = parts[0]
+		}
+	}
+
+	// Parse param tag: `param:"id"`
+	if paramTag := a.extractTag(tag, tagParam); paramTag != "" {
+		paramType = paramTypePath
+		paramName = paramTag
+	}
+
+	// Parse query tag: `query:"page"`
+	if queryTag := a.extractTag(tag, tagQuery); queryTag != "" {
+		paramType = paramTypeQuery
+		paramName = queryTag
+	}
+
+	// Parse header tag: `header:"Authorization"`
+	if headerTag := a.extractTag(tag, tagHeader); headerTag != "" {
+		paramType = paramTypeHeader
+		paramName = headerTag
+	}
+
+	// Parse doc tag: `doc:"User email address"`
+	if docTag := a.extractTag(tag, tagDoc); docTag != "" {
+		description = docTag
+	}
+
+	// Parse example tag: `example:"user@example.com"`
+	if exampleTag := a.extractTag(tag, tagExample); exampleTag != "" {
+		example = exampleTag
+	}
+
+	// Parse validate tag: `validate:"required,email,min=5"`
+	if validateTag := a.extractTag(tag, tagValidate); validateTag != "" {
+		rawValidation = validateTag
+	}
+
+	return jsonName, paramType, paramName, description, example, rawValidation
+}
+
+// extractTag extracts a specific tag value from a struct tag string
+// Handles both quoted and unquoted tag values
+func (a *ProjectAnalyzer) extractTag(tagStr, tagName string) string {
+	// Look for tagName:"value" or tagName:`value`
+	prefix := tagName + `:"`
+	startIdx := strings.Index(tagStr, prefix)
+	if startIdx == -1 {
+		// Try backtick version
+		prefix = tagName + ":`"
+		startIdx = strings.Index(tagStr, prefix)
+		if startIdx == -1 {
+			return ""
+		}
+	}
+
+	startIdx += len(prefix)
+	endIdx := strings.IndexByte(tagStr[startIdx:], '"')
+	if endIdx == -1 {
+		endIdx = strings.IndexByte(tagStr[startIdx:], '`')
+		if endIdx == -1 {
+			return ""
+		}
+	}
+
+	return tagStr[startIdx : startIdx+endIdx]
+}
+
+// parseValidationTag parses a validation tag string into a constraints map
+// Example: "required,email,min=5,max=100" -> {"required": "true", "email": "true", "min": "5", "max": "100"}
+func (a *ProjectAnalyzer) parseValidationTag(validateTag string) map[string]string {
+	constraints := make(map[string]string)
+	if validateTag == "" {
+		return constraints
+	}
+
+	// Split by comma
+	rules := strings.Split(validateTag, ",")
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+
+		// Check if rule has a value (e.g., "min=5")
+		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
+			key := rule[:equalIdx]
+			value := rule[equalIdx+1:]
+			constraints[key] = value
+		} else {
+			// Boolean constraint (e.g., "required", "email")
+			constraints[rule] = boolTrueString
+		}
+	}
+
+	return constraints
 }
