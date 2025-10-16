@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/analyzer"
@@ -381,9 +382,13 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	for i := range typeInfo.Fields {
 		field := &typeInfo.Fields[i]
 
-		// Skip fields with json:"-" (no JSONName and no other param type)
-		if field.JSONName == "" && field.ParamType == "" {
-			// Use field name as fallback if no json tag
+		// Skip fields explicitly marked with json:"-"
+		if field.JSONName == "-" && field.ParamType == "" {
+			continue
+		}
+
+		// Use field name as fallback if no json tag
+		if field.JSONName == "" {
 			field.JSONName = strings.ToLower(field.Name[:1]) + field.Name[1:]
 		}
 
@@ -561,17 +566,25 @@ func applyEnumConstraint(prop *OpenAPIProperty, value any) {
 	}
 }
 
-// toFloat64Ptr converts int64 or float64 to *float64
+// toFloat64Ptr converts int, int64, float64, or string to *float64
 func toFloat64Ptr(value any) *float64 {
 	switch val := value.(type) {
+	case int:
+		f := float64(val)
+		return &f
 	case int64:
 		f := float64(val)
 		return &f
 	case float64:
 		return &val
+	case string:
+		if v, err := strconv.ParseFloat(val, 64); err == nil {
+			return &v
+		}
 	default:
 		return nil
 	}
+	return nil
 }
 
 // extractParameters separates parameters (path, query, header) from body fields
