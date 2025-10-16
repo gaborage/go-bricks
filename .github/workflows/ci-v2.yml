@@ -502,7 +502,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: golangci-lint (framework)
-        uses: golangci/golangci-lint-action@06188a2a4a13a4786b4584e086b2040214cd4ca5
+        uses: golangci/golangci-lint-action@b68d21b131098f33ec55c11c242113b4a10dc30a
         with:
           version: latest
           args: --timeout=5m --skip-dirs=tools
@@ -523,7 +523,7 @@ jobs:
           cache-dependency-path: tools/openapi/go.sum
 
       - name: golangci-lint (tool)
-        uses: golangci/golangci-lint-action@06188a2a4a13a4786b4584e086b2040214cd4ca5
+        uses: golangci/golangci-lint-action@b68d21b131098f33ec55c11c242113b4a10dc30a
         with:
           version: latest
           working-directory: tools/openapi
@@ -615,6 +615,6 @@ jobs:
           path: .
 
       - name: Scan
-        uses: SonarSource/sonarqube-scan-action@9bf7c126a1c17f11278a5c55416b867a27a73d5e
+        uses: SonarSource/sonarqube-scan-action@40f5b61913e891f9d316696628698051136015be
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
