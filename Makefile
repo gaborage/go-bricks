@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check check-tool test-tool build-tool clean-tool check-all
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -65,3 +65,27 @@ clean: ## Clean build cache
 	go clean -cache -testcache
 
 check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
+
+# ============================================================================
+# Tool Integration Targets
+# ============================================================================
+
+check-tool: ## Run tool checks (fmt, lint, test, validate-cli)
+	@echo "Running OpenAPI tool checks..."
+	@cd tools/openapi && $(MAKE) check
+	@echo "✓ Tool checks passed"
+
+test-tool: ## Run tool tests only (without fmt/lint)
+	@echo "Running OpenAPI tool tests..."
+	@cd tools/openapi && $(MAKE) test
+	@echo "✓ Tool tests passed"
+
+build-tool: ## Build OpenAPI CLI tool
+	@echo "Building OpenAPI CLI tool..."
+	@cd tools/openapi && $(MAKE) build
+	@echo "✓ Tool built successfully"
+
+clean-tool: ## Clean tool build artifacts
+	@cd tools/openapi && $(MAKE) clean
+
+check-all: check check-tool ## Run all checks (framework + tool)

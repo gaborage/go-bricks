@@ -191,8 +191,14 @@ jobs:
           retention-days: 1
 
   framework-merge-coverage:
-    needs: [changes, framework-test, framework-integration-test]
-    if: needs.changes.outputs.framework == 'true'
+    needs: [changes, framework-test, framework-integration-test, tool-test]
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true') &&
+      (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
+      (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
+      (needs.tool-test.result == 'success' || needs.tool-test.result == 'skipped')
     runs-on: ubuntu-latest
 
     steps:
@@ -206,47 +212,105 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Download unit test coverage
+        if: needs.changes.outputs.framework == 'true'
         uses: actions/download-artifact@v5
         with:
           name: coverage-unit
           path: .
 
       - name: Download integration test coverage
+        if: needs.changes.outputs.framework == 'true'
         uses: actions/download-artifact@v5
         with:
           name: coverage-integration
+          path: .
+
+      - name: Download tool coverage
+        if: needs.changes.outputs.tool == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: openapi-tool-coverage-report
           path: .
 
       - name: Merge coverage files
         run: |
           set -euo pipefail
 
-          # Verify both files exist
-          if [ ! -f coverage.out ]; then
-            echo "Error: coverage.out not found"
-            exit 1
+          echo "=== Coverage Merge Process ==="
+          echo "Checking for available coverage files..."
+
+          # Check which coverage files exist
+          has_framework_unit=false
+          has_framework_integration=false
+          has_tool=false
+
+          if [ -f coverage.out ]; then
+            echo "✓ Framework unit tests coverage found"
+            has_framework_unit=true
           fi
-          if [ ! -f coverage-integration.out ]; then
-            echo "Error: coverage-integration.out not found"
+
+          if [ -f coverage-integration.out ]; then
+            echo "✓ Framework integration tests coverage found"
+            has_framework_integration=true
+          fi
+
+          if [ -f tools/openapi/coverage.out ]; then
+            echo "✓ Tool coverage found"
+            has_tool=true
+          fi
+
+          # Ensure at least one coverage file exists
+          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_tool" = false ]; then
+            echo "Error: No coverage files found"
             exit 1
           fi
 
           # Merge coverage files using simple concatenation
           # This approach is optimal for our use case because:
-          # - No coverage line overlaps (unit tests cover different code than integration tests)
-          # - Both files from same source code and test run (same Go version, same build)
-          # - Both use covermode=atomic consistently
+          # - No coverage line overlaps (different test suites cover different code paths)
+          # - All files from same source code (same Go version, same build)
+          # - All use covermode=atomic consistently
           # - Zero external dependencies (tools like gocovmerge would add unnecessary complexity)
+          echo ""
           echo "Merging coverage files..."
-          cat coverage.out > coverage-merged.out
-          tail -n +2 coverage-integration.out >> coverage-merged.out
+
+          # Start with framework unit coverage if available, otherwise create empty file with mode line
+          if [ "$has_framework_unit" = true ]; then
+            cat coverage.out > coverage-merged.out
+          else
+            echo "mode: atomic" > coverage-merged.out
+          fi
+
+          # Append framework integration coverage (skip mode line)
+          if [ "$has_framework_integration" = true ]; then
+            tail -n +2 coverage-integration.out >> coverage-merged.out
+          fi
+
+          # Append tool coverage (skip mode line)
+          if [ "$has_tool" = true ]; then
+            tail -n +2 tools/openapi/coverage.out >> coverage-merged.out
+          fi
 
           # Show summary
-          echo "Coverage merge complete:"
-          wc -l coverage.out coverage-integration.out coverage-merged.out
+          echo ""
+          echo "=== Coverage Merge Summary ==="
+          if [ "$has_framework_unit" = true ]; then
+            wc -l coverage.out | awk '{print "Framework unit:       " $1 " lines"}'
+          fi
+          if [ "$has_framework_integration" = true ]; then
+            wc -l coverage-integration.out | awk '{print "Framework integration:" $1 " lines"}'
+          fi
+          if [ "$has_tool" = true ]; then
+            wc -l tools/openapi/coverage.out | awk '{print "Tool coverage:        " $1 " lines"}'
+          fi
+          wc -l coverage-merged.out | awk '{print "Merged total:         " $1 " lines"}'
 
           # Rename merged file to coverage.out for SonarCloud
           mv coverage-merged.out coverage.out
+
+          echo ""
+          echo "✓ Coverage merge complete - ready for SonarCloud"
 
       - name: Upload merged coverage for SonarCloud
         uses: actions/upload-artifact@v4
@@ -591,13 +655,13 @@ jobs:
           fi
 
   # ============================================================================
-  # SonarCloud (framework only)
+  # SonarCloud (framework + tool coverage)
   # ============================================================================
 
   sonarcloud:
     name: SonarCloud
     needs: [changes, framework-merge-coverage]
-    if: needs.changes.outputs.framework == 'true'
+    if: needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}

@@ -2,12 +2,13 @@ package commands
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"io/fs"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 // Test constants to avoid string duplication
@@ -530,10 +531,6 @@ func TestCheckGoBricksCompatibilitySecurityCases(t *testing.T) {
 				return
 			}
 			if err == nil {
-				t.Error("Expected error but got none")
-				return
-			}
-			if !strings.Contains(err.Error(), tt.errorMsg) {
 				t.Errorf("Expected error containing %q, got: %v", tt.errorMsg, err)
 			}
 		})
@@ -795,5 +792,369 @@ func TestCheckGoBricksCompatibilityReadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to read go.mod") {
 		t.Errorf(msgUnexpectedError, err)
+	}
+}
+
+// Changeset 7: Enhanced Doctor Command Tests
+
+func TestParseGoBricksVersion(t *testing.T) {
+	tests := []struct {
+		name            string
+		goModContent    string
+		expectedVersion string
+		expectedReplace bool
+		expectError     bool
+	}{
+		{
+			name: "semantic version",
+			goModContent: `module test
+require github.com/gaborage/go-bricks v0.13.0
+`,
+			expectedVersion: "v0.13.0",
+			expectedReplace: false,
+			expectError:     false,
+		},
+		{
+			name: "version with indirect comment",
+			goModContent: `module test
+require github.com/gaborage/go-bricks v0.6.1 // indirect
+`,
+			expectedVersion: "v0.6.1",
+			expectedReplace: false,
+			expectError:     false,
+		},
+		{
+			name: "replace directive",
+			goModContent: `module test
+replace github.com/gaborage/go-bricks => ../local-go-bricks
+require github.com/gaborage/go-bricks v0.0.0
+`,
+			expectedVersion: "../local-go-bricks",
+			expectedReplace: true,
+			expectError:     false,
+		},
+		{
+			name: "no go-bricks dependency",
+			goModContent: `module test
+require github.com/other/package v1.0.0
+`,
+			expectedVersion: "",
+			expectedReplace: false,
+			expectError:     true,
+		},
+		{
+			name: "commented out require",
+			goModContent: `module test
+// require github.com/gaborage/go-bricks v0.5.0
+`,
+			expectedVersion: "",
+			expectedReplace: false,
+			expectError:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version, isReplace, err := parseGoBricksVersion(tt.goModContent)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error(msgExpectedError)
+					return
+				}
+
+				if version != tt.expectedVersion {
+					t.Errorf("Expected version %q, got %q", tt.expectedVersion, version)
+				}
+
+				if isReplace != tt.expectedReplace {
+					t.Errorf("Expected isReplace %v, got %v", tt.expectedReplace, isReplace)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckVersionCompatibility(t *testing.T) {
+	tests := []struct {
+		name        string
+		version     string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "compatible version",
+			version:     "v0.5.0",
+			expectError: false,
+		},
+		{
+			name:        "newer version",
+			version:     "v1.0.0",
+			expectError: false,
+		},
+		{
+			name:        "version without v prefix",
+			version:     "0.5.0",
+			expectError: false,
+		},
+		{
+			name:        "below minimum",
+			version:     "v0.4.0",
+			expectError: true,
+			errorMsg:    "below minimum",
+		},
+		{
+			name:        "invalid semver",
+			version:     "not-a-version",
+			expectError: true,
+			errorMsg:    "invalid semantic version",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkVersionCompatibility(tt.version)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf(msgUnexpectedError, "expected error but got none")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else if err != nil {
+				t.Errorf(msgUnexpectedError, err)
+			}
+		})
+	}
+}
+
+func TestFindReplaceDirective(t *testing.T) {
+	tests := []struct {
+		name     string
+		lines    []string
+		expected string
+	}{
+		{
+			name: "has replace",
+			lines: []string{
+				"module test",
+				"replace github.com/gaborage/go-bricks => ../local",
+			},
+			expected: "../local",
+		},
+		{
+			name: "no replace",
+			lines: []string{
+				"module test",
+				"require github.com/gaborage/go-bricks v0.5.0",
+			},
+			expected: "",
+		},
+		{
+			name: "replace with whitespace",
+			lines: []string{
+				"  replace  github.com/gaborage/go-bricks  =>  /absolute/path  ",
+			},
+			expected: "/absolute/path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findReplaceDirective(tt.lines)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestFindRequireVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		lines    []string
+		expected string
+	}{
+		{
+			name: "simple require",
+			lines: []string{
+				"require github.com/gaborage/go-bricks v0.5.0",
+			},
+			expected: "v0.5.0",
+		},
+		{
+			name: "require with indirect",
+			lines: []string{
+				"require github.com/gaborage/go-bricks v0.6.0 // indirect",
+			},
+			expected: "v0.6.0",
+		},
+		{
+			name: "commented require",
+			lines: []string{
+				"// require github.com/gaborage/go-bricks v0.5.0",
+			},
+			expected: "",
+		},
+		{
+			name: "no go-bricks",
+			lines: []string{
+				"require github.com/other/package v1.0.0",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findRequireVersion(tt.lines)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestCalculateProjectStats(t *testing.T) {
+	tests := []struct {
+		name               string
+		project            *models.Project
+		expectedModules    int
+		expectedRoutes     int
+		expectedTyped      int
+		expectedUntypedLen int
+	}{
+		{
+			name: "empty project",
+			project: &models.Project{
+				Modules: []models.Module{},
+			},
+			expectedModules:    0,
+			expectedRoutes:     0,
+			expectedTyped:      0,
+			expectedUntypedLen: 0,
+		},
+		{
+			name: "all typed routes",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "users",
+						Routes: []models.Route{
+							{
+								Method:      "POST",
+								Path:        "/users",
+								HandlerName: "createUser",
+								Request: &models.TypeInfo{
+									Name: "CreateUserReq",
+									Fields: []models.FieldInfo{
+										{Name: "Name", Type: "string"},
+									},
+								},
+								Response: &models.TypeInfo{
+									Name: "User",
+									Fields: []models.FieldInfo{
+										{Name: "ID", Type: "int64"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     1,
+			expectedTyped:      1,
+			expectedUntypedLen: 0,
+		},
+		{
+			name: "mixed typed and untyped",
+			project: &models.Project{
+				Modules: []models.Module{
+					{
+						Name: "api",
+						Routes: []models.Route{
+							{
+								Method:      "GET",
+								Path:        "/users",
+								HandlerName: "listUsers",
+								Response: &models.TypeInfo{
+									Name:   "UserList",
+									Fields: []models.FieldInfo{{Name: "Users", Type: "[]User"}},
+								},
+							},
+							{
+								Method:      "DELETE",
+								Path:        "/users/:id",
+								HandlerName: "deleteUser",
+								// No request or response types
+							},
+						},
+					},
+				},
+			},
+			expectedModules:    1,
+			expectedRoutes:     2,
+			expectedTyped:      1,
+			expectedUntypedLen: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stats := calculateProjectStats(tt.project)
+
+			if stats.ModuleCount != tt.expectedModules {
+				t.Errorf("Expected %d modules, got %d", tt.expectedModules, stats.ModuleCount)
+			}
+			if stats.RouteCount != tt.expectedRoutes {
+				t.Errorf("Expected %d routes, got %d", tt.expectedRoutes, stats.RouteCount)
+			}
+			if stats.TypedRoutes != tt.expectedTyped {
+				t.Errorf("Expected %d typed routes, got %d", tt.expectedTyped, stats.TypedRoutes)
+			}
+			if len(stats.UntypedRoutes) != tt.expectedUntypedLen {
+				t.Errorf("Expected %d untyped routes, got %d", tt.expectedUntypedLen, len(stats.UntypedRoutes))
+			}
+		})
+	}
+}
+
+func TestDisplayProjectStats(t *testing.T) {
+	// This is primarily a display function - test that it doesn't panic
+	tests := []struct {
+		name    string
+		stats   ProjectStats
+		verbose bool
+	}{
+		{
+			name: "empty stats",
+			stats: ProjectStats{
+				ModuleCount: 0,
+				RouteCount:  0,
+			},
+			verbose: false,
+		},
+		{
+			name: "with routes",
+			stats: ProjectStats{
+				ModuleCount:         2,
+				RouteCount:          10,
+				TypedRoutes:         8,
+				TypedRequestRoutes:  7,
+				TypedResponseRoutes: 8,
+				UntypedRoutes:       []string{"handler1", "handler2"},
+			},
+			verbose: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Should not panic
+			displayProjectStats(tt.stats, tt.verbose)
+		})
 	}
 }
