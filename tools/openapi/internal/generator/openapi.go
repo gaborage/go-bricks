@@ -387,12 +387,7 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 			continue
 		}
 
-		// Use field name as fallback if no json tag
-		if field.JSONName == "" {
-			field.JSONName = strings.ToLower(field.Name[:1]) + field.Name[1:]
-		}
-
-		// Use JSONName if set, otherwise use field name
+		// Use JSONName if set, otherwise use field name as fallback
 		propName := field.JSONName
 		if propName == "" {
 			propName = strings.ToLower(field.Name[:1]) + field.Name[1:]
