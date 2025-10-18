@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -468,6 +469,7 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 			m.logger.Error().
 				Str("jobID", entry.metadata.JobID).
 				Interface("panic", r).
+				Str("stackTrace", string(debug.Stack())).
 				Msg("Job panicked - recovered and marked as failed")
 			entry.metadata.incrementFailed()
 		}

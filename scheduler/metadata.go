@@ -66,7 +66,7 @@ func (m *JobMetadata) incrementFailed() {
 	defer m.mu.Unlock()
 	m.FailureCount++
 	m.TotalExecutions++
-	now := time.Now()
+	now := time.Now().UTC()
 	m.LastExecutionTime = &now
 	m.LastExecutionStatus = "failure"
 }
