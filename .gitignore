@@ -21,6 +21,7 @@
 !TESTING.md
 !CONTRIBUTING.md
 !MULTI_TENANT.md
+!CLAUDE.md
 
 !Makefile
 
@@ -34,6 +35,9 @@
 !.github/workflows/*.yaml
 
 !sonar-project.properties
+
+!.specify/**/*
+!specs/**/*
 
 # ...even if they are in subdirectories
 !*/

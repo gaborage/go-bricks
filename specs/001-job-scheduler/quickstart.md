@@ -1,0 +1,483 @@
+# Job Scheduler Quickstart Guide
+
+**GoBricks Framework - Job Scheduler Feature**
+
+This guide shows you how to add scheduled background tasks to your GoBricks application in under 10 lines of code.
+
+---
+
+## Overview
+
+The GoBricks job scheduler enables you to run recurring background tasks with five scheduling patterns:
+
+- **Fixed-rate**: Execute every N duration (e.g., every 30 minutes)
+- **Daily**: Execute once per day at a specific time (e.g., daily at 3:00 AM)
+- **Weekly**: Execute once per week on a specific day and time (e.g., Mondays at 9:00 AM)
+- **Hourly**: Execute once per hour at a specific minute (e.g., every hour at :15)
+- **Monthly**: Execute once per month on a specific day and time (e.g., 1st of month at midnight)
+
+Jobs integrate seamlessly with GoBricks' observability (OpenTelemetry traces, metrics, logs), configuration management, and module system.
+
+---
+
+## Quick Example
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+
+    "github.com/yourusername/gobricks/app"
+    "github.com/yourusername/gobricks/scheduler"
+)
+
+// 1. Define a job by implementing the scheduler.Job interface
+type CleanupJob struct{}
+
+func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
+    ctx.Logger().Info().Str("jobID", ctx.JobID()).Msg("Starting cleanup")
+
+    // Access framework dependencies through JobContext
+    rows, err := ctx.DB().Query(ctx, "DELETE FROM temp_data WHERE created_at < NOW() - INTERVAL '24 hours'")
+    if err != nil {
+        return fmt.Errorf("cleanup failed: %w", err)
+    }
+    defer rows.Close()
+
+    ctx.Logger().Info().Msg("Cleanup completed")
+    return nil
+}
+
+// 2. Register the job in your module's Init method
+type MyModule struct {
+    scheduler scheduler.JobRegistrar
+}
+
+func (m *MyModule) Init(deps *app.ModuleDeps) error {
+    // Get scheduler registrar from module deps
+    m.scheduler = deps.Scheduler
+
+    // Register cleanup job to run daily at 3:00 AM
+    return m.scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+}
+
+func mustParseTime(s string) time.Time {
+    t, _ := time.Parse("15:04", s)
+    return t
+}
+```
+
+**That's it!** Your job will now execute automatically at 3:00 AM every day with full observability (traces, metrics, logs).
+
+---
+
+## Step-by-Step Guide
+
+### Step 1: Create a Job
+
+Implement the `scheduler.Job` interface:
+
+```go
+type ReportGeneratorJob struct {
+    // You can inject dependencies here
+    reportService *ReportService
+}
+
+func (j *ReportGeneratorJob) Execute(ctx scheduler.JobContext) error {
+    // Access job metadata
+    ctx.Logger().Info().
+        Str("jobID", ctx.JobID()).
+        Str("trigger", ctx.TriggerType()). // "scheduled" or "manual"
+        Msg("Generating daily report")
+
+    // Use framework dependencies
+    report, err := j.reportService.Generate(ctx)
+    if err != nil {
+        // Errors are automatically logged and recorded in metrics
+        return fmt.Errorf("report generation failed: %w", err)
+    }
+
+    // Access config
+    recipients := ctx.Config().String("report.recipients")
+
+    // Use messaging
+    if ctx.Messaging() != nil {
+        ctx.Messaging().Publish(ctx, "reports", report)
+    }
+
+    ctx.Logger().Info().Msg("Report generated successfully")
+    return nil
+}
+```
+
+### Step 2: Register the Job
+
+Register your job in your module's `Init()` method using one of the five scheduling patterns:
+
+```go
+func (m *MyModule) Init(deps *app.ModuleDeps) error {
+    registrar := deps.Scheduler
+
+    // Fixed-rate: every 30 minutes
+    err := registrar.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
+
+    // Daily: at 3:00 AM local time
+    err = registrar.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+
+    // Weekly: Mondays at 9:00 AM
+    err = registrar.WeeklyAt("report-job", &ReportJob{}, time.Monday, mustParseTime("09:00"))
+
+    // Hourly: at 15 minutes past every hour
+    err = registrar.HourlyAt("health-check", &HealthCheckJob{}, 15)
+
+    // Monthly: 1st of month at midnight
+    err = registrar.MonthlyAt("billing-job", &BillingJob{}, 1, mustParseTime("00:00"))
+
+    return err
+}
+```
+
+### Step 3: Handle Job Lifecycle
+
+Jobs automatically respect application lifecycle:
+
+```go
+// Startup: Jobs are scheduled automatically when app starts
+// (if you registered them in Init)
+
+// Shutdown: In-flight jobs complete or are cancelled gracefully
+// (configurable timeout, default 30s)
+
+// No additional code required!
+```
+
+---
+
+## Configuration
+
+### Scheduler Configuration
+
+Add to `config.yaml`:
+
+```yaml
+scheduler:
+  # CIDR allowlist for /_sys/job* system APIs
+  # Empty list = allow all IPs (local development default)
+  cidr_allowlist:
+    - "10.0.0.0/8"      # Private network
+    - "192.168.1.0/24"  # Specific subnet
+
+  # Graceful shutdown timeout for in-flight jobs
+  shutdown_timeout: 30s
+```
+
+### Environment Variable Override
+
+```bash
+SCHEDULER_CIDR_ALLOWLIST="10.0.0.0/8,192.168.1.0/24"
+SCHEDULER_SHUTDOWN_TIMEOUT=45s
+```
+
+---
+
+## System APIs
+
+The scheduler exposes two operational endpoints:
+
+### List All Jobs
+
+```bash
+curl http://localhost:8080/_sys/job
+```
+
+**Response**:
+```json
+{
+  "data": [
+    {
+      "jobId": "cleanup-job",
+      "scheduleType": "daily",
+      "cronExpression": "0 3 * * *",
+      "humanReadable": "Daily at 3:00 AM",
+      "nextExecutionTime": "2025-10-18T03:00:00Z",
+      "lastExecutionTime": "2025-10-17T03:00:00Z",
+      "lastExecutionStatus": "success",
+      "totalExecutions": 42,
+      "successCount": 41,
+      "failureCount": 1,
+      "skippedCount": 0
+    }
+  ],
+  "meta": {
+    "total": 1
+  }
+}
+```
+
+### Manually Trigger a Job
+
+```bash
+curl -X POST http://localhost:8080/_sys/job/cleanup-job
+```
+
+**Response (Success)**:
+```json
+{
+  "data": {
+    "jobId": "cleanup-job",
+    "triggered": true,
+    "scheduledNextAt": "2025-10-18T03:00:00Z"
+  },
+  "meta": {}
+}
+```
+
+**Response (Job Already Running)**:
+```json
+{
+  "error": "Job 'cleanup-job' is already running. Trigger skipped."
+}
+```
+
+---
+
+## Observability
+
+### Traces
+
+Every job execution creates an OpenTelemetry span:
+
+```
+job.execute
+├── span.attributes
+│   ├── job.id = "cleanup-job"
+│   ├── job.trigger = "scheduled"  (or "manual")
+│   └── job.status = "success"  (or "failure")
+├── span.duration = 1.234s
+└── child spans (DB queries, HTTP calls, etc.)
+```
+
+### Metrics
+
+The scheduler emits these metrics:
+
+```prometheus
+# Total job executions by status
+job_executions_total{job_id="cleanup-job",status="success"} 41
+job_executions_total{job_id="cleanup-job",status="failure"} 1
+job_executions_total{job_id="cleanup-job",status="skipped"} 0
+
+# Job execution duration (histogram)
+job_execution_duration_seconds{job_id="cleanup-job"} 1.234
+
+# Panic recovery counter
+job_panics_total{job_id="cleanup-job"} 0
+
+# Currently running jobs (gauge)
+job_running{job_id="cleanup-job"} 0
+
+# Total registered jobs
+jobs_registered_total 3
+```
+
+### Logs
+
+**Action Logs** (100% sampled, structured):
+```json
+{
+  "level": "info",
+  "time": "2025-10-17T03:00:00Z",
+  "jobID": "cleanup-job",
+  "trigger": "scheduled",
+  "message": "Starting cleanup"
+}
+```
+
+**Panic Logs** (ERROR level with stack trace):
+```json
+{
+  "level": "error",
+  "time": "2025-10-17T03:00:05Z",
+  "jobID": "cleanup-job",
+  "panic": "runtime error: index out of range",
+  "stack": "goroutine 123 [running]:\n...",
+  "message": "Job panicked"
+}
+```
+
+---
+
+## Advanced Patterns
+
+### Respecting Context Cancellation
+
+Jobs should check `ctx.Done()` for graceful shutdown:
+
+```go
+func (j *LongRunningJob) Execute(ctx scheduler.JobContext) error {
+    for i := 0; i < 1000; i++ {
+        // Check for shutdown signal
+        select {
+        case <-ctx.Done():
+            ctx.Logger().Warn().Msg("Job cancelled during execution")
+            return ctx.Err() // Returns context.Canceled
+        default:
+        }
+
+        // Do work
+        processItem(i)
+    }
+    return nil
+}
+```
+
+### Conditional Job Registration
+
+Register jobs conditionally based on config:
+
+```go
+func (m *MyModule) Init(deps *app.ModuleDeps) error {
+    if deps.Config().Bool("features.cleanup.enabled") {
+        return deps.Scheduler.DailyAt("cleanup", &CleanupJob{}, mustParseTime("03:00"))
+    }
+    return nil // No jobs registered - zero overhead
+}
+```
+
+### Job Dependencies
+
+Inject dependencies into your job struct:
+
+```go
+type NotificationJob struct {
+    emailService *EmailService
+    smsService   *SMSService
+}
+
+func (m *MyModule) Init(deps *app.ModuleDeps) error {
+    job := &NotificationJob{
+        emailService: m.emailService,
+        smsService:   m.smsService,
+    }
+    return deps.Scheduler.DailyAt("notifications", job, mustParseTime("08:00"))
+}
+```
+
+---
+
+## Securing System APIs
+
+### CIDR Allowlist
+
+Protect `/_sys/job*` endpoints with IP-based access control:
+
+```yaml
+scheduler:
+  cidr_allowlist:
+    - "10.0.0.0/8"         # Private network
+    - "172.16.0.0/12"      # Docker internal
+    - "203.0.113.42/32"    # Specific monitoring server
+```
+
+**Behavior**:
+- **Empty list** (default): All IPs allowed (local development)
+- **Non-empty list**: Only matching IPs allowed, others get 403 Forbidden
+
+### Reverse Proxy
+
+For production, consider additional security:
+
+```nginx
+location /_sys/ {
+    # Require authentication
+    auth_basic "System APIs";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    # Or use OAuth2 proxy
+    auth_request /oauth2/auth;
+
+    proxy_pass http://app:8080;
+}
+```
+
+---
+
+## Troubleshooting
+
+### Job Not Executing
+
+**Check scheduler logs**:
+```bash
+grep "jobID" logs/app.log
+```
+
+**Verify job is registered**:
+```bash
+curl http://localhost:8080/_sys/job | jq '.data[] | .jobId'
+```
+
+**Check for validation errors**:
+- Job ID must be unique (duplicate registration fails)
+- Schedule parameters must be valid (e.g., hour 0-23, minute 0-59)
+
+### Job Executions Skipped
+
+**Check overlapping prevention**:
+```bash
+curl http://localhost:8080/_sys/job | jq '.data[] | select(.jobId == "cleanup-job") | .skippedCount'
+```
+
+If `skippedCount` is increasing, the job is taking longer than its interval. Either:
+- Optimize the job to run faster
+- Increase the interval (e.g., every 60 minutes instead of 30)
+
+### Slow Shutdown
+
+**Check in-flight jobs**:
+```
+WARN Shutdown timeout reached, some jobs may not have completed timeout=30s
+```
+
+**Solutions**:
+- Increase `shutdown_timeout` in config
+- Ensure jobs respect `ctx.Done()` for graceful cancellation
+- Optimize long-running jobs
+
+---
+
+## Next Steps
+
+- **See examples**: Check `examples/scheduler/` for complete demo application
+- **Read contracts**: See `contracts/job-system-api.yaml` for OpenAPI spec
+- **Explore data model**: See `data-model.md` for detailed entity definitions
+- **Review architecture**: See `research.md` for design decisions
+
+---
+
+## FAQ
+
+**Q: Can multiple instances of my app run the same job?**
+
+A: No built-in distributed locking in MVP. Each app instance runs its own scheduler independently. For distributed scheduling, consider external solutions (e.g., database-based locking, distributed cron systems).
+
+**Q: What happens if a job panics?**
+
+A: Panic is recovered, logged at ERROR level with full stack trace, execution marked as failed in metrics, scheduler continues operating normally. See FR-021 and clarification #4.
+
+**Q: How do I test scheduled jobs?**
+
+A: Manually trigger via POST `/_sys/job/:jobId` or write unit tests that call `job.Execute(mockContext)` directly.
+
+**Q: Can I schedule jobs at sub-second intervals?**
+
+A: Yes, use `FixedRate` with durations like `100*time.Millisecond`. However, consider performance implications for very high-frequency jobs.
+
+**Q: How do I see job execution history?**
+
+A: Use GET `/_sys/job` for current statistics (total/success/failure/skipped counts, last execution time/status). For historical data, export metrics to a monitoring backend (Prometheus, Grafana).
+
+**Q: Do jobs run during deployments?**
+
+A: Depends on deployment strategy. Blue-green deployments allow old instance jobs to complete before shutdown (respecting `shutdown_timeout`). Rolling deployments may interrupt long-running jobs - ensure jobs are idempotent and handle restarts gracefully.
