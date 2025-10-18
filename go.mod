@@ -5,6 +5,7 @@ go 1.24.6
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/go-co-op/gocron/v2 v2.17.0
 	github.com/go-playground/validator/v10 v10.28.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
@@ -79,6 +80,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
@@ -104,6 +106,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.9 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect

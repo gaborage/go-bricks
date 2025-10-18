@@ -661,7 +661,11 @@ jobs:
   sonarcloud:
     name: SonarCloud
     needs: [changes, framework-merge-coverage]
-    if: needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true'
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true') &&
+      needs.framework-merge-coverage.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}

@@ -20,6 +20,7 @@ type Config struct {
 	Multitenant MultitenantConfig `koanf:"multitenant" json:"multitenant" yaml:"multitenant" toml:"multitenant" mapstructure:"multitenant"`
 	Debug       DebugConfig       `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
 	Source      SourceConfig      `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
+	Scheduler   SchedulerConfig   `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -276,4 +277,22 @@ const (
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {
 	Type string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // SourceTypeStatic for YAML config, SourceTypeDynamic for external stores
+}
+
+// SchedulerConfig holds job scheduler settings.
+type SchedulerConfig struct {
+	// CIDRAllowlist holds CIDR ranges allowed to access /_sys/job* endpoints.
+	// Empty list = localhost-only access (127.0.0.1, ::1) per clarification #2.
+	// Non-empty list = restrict to matching IP ranges only.
+	CIDRAllowlist []string `koanf:"cidrallowlist" json:"cidrallowlist" yaml:"cidrallowlist" toml:"cidrallowlist" mapstructure:"cidrallowlist"`
+
+	// TrustedProxies holds CIDR ranges of trusted reverse proxies.
+	// X-Forwarded-For and X-Real-IP headers are ONLY honored if the immediate peer (RemoteAddr)
+	// matches one of these CIDR ranges. Empty list = do not trust any proxy headers.
+	// This prevents header spoofing attacks.
+	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
+
+	// ShutdownTimeout is the graceful shutdown timeout for in-flight jobs.
+	// Default: 30s per ASSUME-010.
+	ShutdownTimeout time.Duration `koanf:"shutdowntimeout" json:"shutdowntimeout" yaml:"shutdowntimeout" toml:"shutdowntimeout" mapstructure:"shutdowntimeout"`
 }
