@@ -55,7 +55,7 @@ func (m *JobMetadata) incrementSuccess() {
 	defer m.mu.Unlock()
 	m.SuccessCount++
 	m.TotalExecutions++
-	now := time.Now()
+	now := time.Now().UTC()
 	m.LastExecutionTime = &now
 	m.LastExecutionStatus = "success"
 }
@@ -76,8 +76,7 @@ func (m *JobMetadata) incrementSkipped() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.SkippedCount++
-	// Note: skipped executions don't update LastExecutionTime or LastExecutionStatus
-	// per data-model.md line 375
+	m.TotalExecutions++
 }
 
 // snapshot returns a thread-safe copy of the metadata for API responses.

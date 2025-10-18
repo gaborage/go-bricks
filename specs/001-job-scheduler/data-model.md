@@ -304,9 +304,17 @@ package config
 
 type SchedulerConfig struct {
     // CIDR allowlist for /_sys/job* endpoints
-    // Empty list = allow all IPs (local development default)
-    // Non-empty = restrict to matching IP ranges
+    // Empty list = localhost-only (127.0.0.1, ::1) - safer default prevents accidental exposure
+    // Non-empty = restrict to matching IP ranges only
+    // Example: []string{"10.0.0.0/8", "192.168.1.0/24"}
     CIDRAllowlist []string `config:"scheduler.cidr_allowlist"`
+
+    // Trusted proxy CIDR ranges for X-Forwarded-For/X-Real-IP validation
+    // Empty list = do not trust any proxy headers (prevents header spoofing)
+    // Non-empty = only trust headers when immediate peer (RemoteAddr) matches these ranges
+    // Uses RFC 7239 right-to-left XFF resolution to find real client IP
+    // Example: []string{"10.0.0.0/8"} - trust reverse proxies in 10.x network
+    TrustedProxies []string `config:"scheduler.trusted_proxies"`
 
     // Graceful shutdown timeout for in-flight jobs
     // Default: 30s (per ASSUME-010)
@@ -320,14 +328,22 @@ scheduler:
   cidr_allowlist:
     - "10.0.0.0/8"      # Private network
     - "192.168.1.0/24"  # Local network
+  trusted_proxies:
+    - "10.0.0.0/8"      # Trust reverse proxies in private network
   shutdown_timeout: 45s
 ```
 
 **Environment Variable Override**:
 ```bash
 SCHEDULER_CIDR_ALLOWLIST="10.0.0.0/8,192.168.1.0/24"
+SCHEDULER_TRUSTED_PROXIES="10.0.0.0/8"
 SCHEDULER_SHUTDOWN_TIMEOUT=45s
 ```
+
+**Security Notes**:
+- **Localhost-Only Default**: Empty `cidr_allowlist` restricts access to 127.0.0.1 and ::1 only. This prevents accidental exposure of system endpoints when running in production without explicit configuration.
+- **Header Spoofing Prevention**: Empty `trusted_proxies` ignores all X-Forwarded-For and X-Real-IP headers. Only configure trusted proxies when running behind known reverse proxies (e.g., nginx, HAProxy) to prevent attackers from bypassing IP allowlisting with forged headers.
+- **RFC 7239 Compliance**: When trusted proxies are configured, the middleware walks X-Forwarded-For right-to-left to find the first untrusted IP, preventing proxy chain injection attacks.
 
 ---
 

@@ -137,20 +137,16 @@ scheduler/                      # New package
 ├── registrar.go                # JobRegistrar interface and implementation
 ├── schedule.go                 # ScheduleConfiguration types
 ├── metadata.go                 # JobMetadata for system API responses
-├── observability.go            # Span creation, metrics recording, logging integration
-├── overlap_prevention.go       # Mutex-based overlapping execution prevention
+├── errors.go                   # ValidationError and other custom error types
 ├── module.go                   # GoBricks Module interface implementation
-├── scheduler_test.go           # Unit tests for scheduler lifecycle
+├── api_handlers.go             # GET /_sys/job, POST /_sys/job/:jobId handlers
+├── cidr_middleware.go          # CIDR-based IP allowlist middleware
 ├── job_test.go                 # Unit tests for JobContext, execution flow
 ├── registrar_test.go           # Unit tests for registration, validation
-├── overlap_prevention_test.go  # Unit tests for concurrent execution scenarios
+├── module_test.go              # Unit tests for module lifecycle
+├── api_handlers_test.go        # Contract tests for system API endpoints
+├── cidr_middleware_test.go     # Unit tests for CIDR matching, rejection
 └── integration_test.go         # Full lifecycle integration tests
-
-server/                         # Existing package - extend for system APIs
-├── job_handlers.go             # NEW: GET /_sys/job, POST /_sys/job/:jobId handlers
-├── cidr_middleware.go          # NEW: CIDR-based IP allowlist middleware
-├── job_handlers_test.go        # NEW: Contract tests for system APIs
-└── cidr_middleware_test.go     # NEW: Unit tests for CIDR matching, rejection
 
 config/                         # Existing package - extend for scheduler config
 └── scheduler_config.go         # NEW: SchedulerConfig struct with CIDR allowlist, shutdown timeout
@@ -164,7 +160,7 @@ examples/                       # Existing directory
     └── config.yaml             # Example configuration with scheduler settings
 ```
 
-**Structure Decision**: Single project structure (framework component). New `scheduler/` package follows existing GoBricks package organization (`app/`, `config/`, `database/`, `logger/`, `messaging/`, `server/`, `observability/`). System API handlers extend existing `server/` package to maintain HTTP endpoint cohesion. Configuration types in `config/` package maintain consistency with `Config.InjectInto()` pattern.
+**Structure Decision**: Single project structure (framework component). New `scheduler/` package follows existing GoBricks package organization (`app/`, `config/`, `database/`, `logger/`, `messaging/`, `server/`, `observability/`). System API handlers (`api_handlers.go`) and CIDR middleware (`cidr_middleware.go`) are colocated in the `scheduler/` package for tight coupling with scheduler state. Configuration types in `config/` package maintain consistency with `Config.InjectInto()` pattern.
 
 ## Complexity Tracking
 
@@ -236,13 +232,13 @@ See [data-model.md](./data-model.md) for detailed entity definitions.
    - MonthlyAt(jobID string, job Job, dayOfMonth int, localTime time.Time) error
 
 4. **ScheduleConfiguration** (struct)
-   - ScheduleType (fixed-rate | daily | weekly | hourly | monthly)
-   - Duration (for fixed-rate)
-   - TimeOfDay (for daily/weekly/monthly)
-   - DayOfWeek (for weekly)
-   - DayOfMonth (for monthly)
-   - Minute (for hourly)
-   - Timezone *time.Location
+   - Type: ScheduleType (fixed-rate | daily | weekly | hourly | monthly)
+   - Interval: time.Duration (for fixed-rate)
+   - Hour: int (0-23, for daily/weekly/monthly)
+   - Minute: int (0-59, for all time-based schedules)
+   - DayOfWeek: time.Weekday (for weekly)
+   - DayOfMonth: int (1-31, for monthly)
+   - Timezone: *time.Location (nil = system local time)
 
 5. **JobMetadata** (struct - for system API responses)
    - JobID string

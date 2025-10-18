@@ -38,9 +38,14 @@ func TestListJobsHandler(t *testing.T) {
 	assert.Nil(t, apiErr)
 	assert.Equal(t, 200, result.Status)
 	assert.Len(t, result.Data.Jobs, 1)
-	assert.NotNil(t, result.Data.Jobs[0])
-	assert.Equal(t, testJobID, result.Data.Jobs[0].JobID)
-	assert.Equal(t, "fixed-rate", result.Data.Jobs[0].ScheduleType)
+
+	// Verify metadata is complete
+	metadata := result.Data.Jobs[0]
+	assert.NotNil(t, metadata)
+	assert.Equal(t, testJobID, metadata.JobID)
+	assert.Equal(t, "fixed-rate", metadata.ScheduleType)
+	assert.Equal(t, "@every 10s", metadata.CronExpression)
+	assert.Equal(t, "Every 10 seconds", metadata.HumanReadable)
 }
 
 // TestListJobsHandlerEmptyScheduler verifies empty job list when no jobs registered
@@ -79,17 +84,29 @@ func TestTriggerJobHandler(t *testing.T) {
 
 	result, apiErr := module.triggerJobHandler(req, ctx)
 
-	// Verify success
+	// Verify success - handler returns 202 Accepted for async job triggering
 	assert.Nil(t, apiErr)
-	assert.Equal(t, 200, result.Status)
+	assert.Equal(t, 202, result.Status) // HTTP 202 Accepted for async operations
 	assert.Equal(t, testJobID, result.Data.JobID)
 	assert.Equal(t, "manual", result.Data.Trigger)
 
-	// Wait for async execution
-	time.Sleep(100 * time.Millisecond)
+	// Wait for async execution with polling
+	timeout := time.After(1 * time.Second)
+	tick := time.Tick(10 * time.Millisecond)
 
-	// Verify job was executed
-	assert.Greater(t, job.Count(), int64(0))
+	executed := false
+	for !executed {
+		select {
+		case <-timeout:
+			t.Fatal("Timed out waiting for job execution")
+		case <-tick:
+			if job.Count() >= 1 {
+				executed = true
+			}
+		}
+	}
+
+	assert.Greater(t, job.Count(), int64(0), "Job should have executed at least once")
 }
 
 // TestTriggerJobHandlerNotFound verifies 404 for unknown job

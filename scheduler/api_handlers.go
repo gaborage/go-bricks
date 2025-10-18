@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
@@ -15,7 +16,7 @@ type JobListResponse struct {
 
 // JobTriggerResponse represents the response for POST /_sys/job/:jobId
 type JobTriggerResponse struct {
-	JobID   string `json:"job_id"`
+	JobID   string `json:"jobId"`
 	Trigger string `json:"trigger"`
 	Message string `json:"message"`
 }
@@ -41,7 +42,7 @@ func (m *SchedulerModule) listJobsHandler(_ EmptyRequest, _ server.HandlerContex
 		jobs = append(jobs, snapshot)
 	}
 
-	return server.NewResult(200, JobListResponse{Jobs: jobs}), nil
+	return server.NewResult(http.StatusOK, JobListResponse{Jobs: jobs}), nil
 }
 
 // triggerJobHandler manually triggers a job execution
@@ -70,10 +71,10 @@ func (m *SchedulerModule) triggerJobHandler(req JobIDParam, _ server.HandlerCont
 	response := JobTriggerResponse{
 		JobID:   jobID,
 		Trigger: "manual",
-		Message: "Job triggered successfully",
+		Message: "Request accepted: job will run unless an instance is already running",
 	}
 
-	return server.NewResult(200, response), nil
+	return server.NewResult(http.StatusAccepted, response), nil
 }
 
 // executeManualJob executes a job triggered manually (not by scheduler)
@@ -107,11 +108,19 @@ func (m *SchedulerModule) executeManualJob(entry *jobEntry) {
 		"manual", // Trigger type is manual, not scheduled
 		m.logger,
 		func() types.Interface {
-			db, _ := m.getDB(ctx)
+			db, err := m.getDB(ctx)
+			if err != nil {
+				m.logger.Error().Err(err).Msg("Failed to get database connection")
+				return nil
+			}
 			return db
 		},
 		func() messaging.Client {
-			msg, _ := m.getMessaging(ctx)
+			msg, err := m.getMessaging(ctx)
+			if err != nil {
+				m.logger.Error().Err(err).Msg("Failed to get messaging client")
+				return nil
+			}
 			return msg
 		},
 		m.config,

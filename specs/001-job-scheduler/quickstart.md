@@ -29,8 +29,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/yourusername/gobricks/app"
-    "github.com/yourusername/gobricks/scheduler"
+    "github.com/gaborage/gobricks/app"
+    "github.com/gaborage/gobricks/scheduler"
 )
 
 // 1. Define a job by implementing the scheduler.Job interface

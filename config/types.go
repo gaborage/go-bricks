@@ -286,6 +286,12 @@ type SchedulerConfig struct {
 	// Non-empty list = restrict to matching IP ranges only.
 	CIDRAllowlist []string `koanf:"cidr_allowlist" json:"cidr_allowlist" yaml:"cidr_allowlist" toml:"cidr_allowlist" mapstructure:"cidr_allowlist"`
 
+	// TrustedProxies holds CIDR ranges of trusted reverse proxies.
+	// X-Forwarded-For and X-Real-IP headers are ONLY honored if the immediate peer (RemoteAddr)
+	// matches one of these CIDR ranges. Empty list = do not trust any proxy headers.
+	// This prevents header spoofing attacks.
+	TrustedProxies []string `koanf:"trusted_proxies" json:"trusted_proxies" yaml:"trusted_proxies" toml:"trusted_proxies" mapstructure:"trusted_proxies"`
+
 	// ShutdownTimeout is the graceful shutdown timeout for in-flight jobs.
 	// Default: 30s per ASSUME-010.
 	ShutdownTimeout time.Duration `koanf:"shutdown_timeout" json:"shutdown_timeout" yaml:"shutdown_timeout" toml:"shutdown_timeout" mapstructure:"shutdown_timeout"`

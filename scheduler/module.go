@@ -101,10 +101,12 @@ func (m *SchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.Ro
 
 	// Create CIDR middleware for /_sys/job endpoints
 	var allowlist []string
+	var trustedProxies []string
 	if m.config != nil {
 		allowlist = m.config.Scheduler.CIDRAllowlist
+		trustedProxies = m.config.Scheduler.TrustedProxies
 	}
-	cidrMiddleware := CIDRMiddleware(allowlist)
+	cidrMiddleware := CIDRMiddleware(allowlist, trustedProxies)
 
 	// Create a group for system endpoints with CIDR protection
 	sysGroup := r.Group("/_sys")
@@ -125,6 +127,10 @@ func (m *SchedulerModule) DeclareMessaging(_ *messaging.Declarations) {
 // Gracefully shuts down the scheduler per FR-013, FR-014, FR-015.
 func (m *SchedulerModule) Shutdown() error {
 	m.mu.Lock()
+	// Signal shutdown to all job wrappers
+	m.shutdownCancel()
+
+	// If scheduler not initialized, nothing to do
 	if m.scheduler == nil {
 		m.mu.Unlock()
 		m.logger.Info().Msg("Scheduler not initialized, nothing to shut down")
@@ -135,9 +141,6 @@ func (m *SchedulerModule) Shutdown() error {
 	m.mu.Unlock()
 
 	m.logger.Info().Msg("Initiating graceful scheduler shutdown")
-
-	// Signal shutdown to all job wrappers
-	m.shutdownCancel()
 
 	// Get shutdown timeout from config (default 30s per ASSUME-010)
 	timeout := 30 * time.Second
@@ -286,19 +289,27 @@ func (m *SchedulerModule) registerJob(jobID string, job Job, schedule ScheduleCo
 		}
 	}
 
+	// Validate schedule configuration (defensive check)
+	// This provides defense in depth - public methods validate at API boundary,
+	// and this validates before scheduling with gocron
+	if err := schedule.Validate(time.Now()); err != nil {
+		return err // Already a ValidationError from schedule.go
+	}
+
 	// Lazy-initialize scheduler per FR-016
 	if err := m.ensureSchedulerInitialized(); err != nil {
 		return err
 	}
 
-	// Create job entry
+	// Create job entry with complete metadata
 	entry := &jobEntry{
 		job:      job,
 		schedule: schedule,
 		metadata: &JobMetadata{
-			JobID:        jobID,
-			ScheduleType: string(schedule.Type),
-			// CronExpression and HumanReadable will be populated after scheduling
+			JobID:          jobID,
+			ScheduleType:   string(schedule.Type),
+			CronExpression: schedule.ToCronExpression(),
+			HumanReadable:  schedule.ToHumanReadable(),
 		},
 	}
 
@@ -355,7 +366,7 @@ func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error
 
 	case ScheduleTypeHourly:
 		gocronJob, err = m.scheduler.NewJob(
-			gocron.DurationJob(time.Hour),
+			gocron.CronJob(fmt.Sprintf("%d * * * *", entry.schedule.Minute), false),
 			gocron.NewTask(jobFunc),
 		)
 
