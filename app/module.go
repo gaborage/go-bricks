@@ -43,6 +43,26 @@ type JobRegistrar interface {
 	MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error
 }
 
+// JobProvider is an optional interface that modules can implement to register scheduled jobs.
+// Modules implementing this interface will have RegisterJobs() called automatically after
+// all module Init() methods have completed, making module registration order irrelevant.
+//
+// Example:
+//
+//	type JobsModule struct{}
+//
+//	func (m *JobsModule) RegisterJobs(scheduler JobRegistrar) error {
+//	    scheduler.FixedRate("cleanup", &CleanupJob{}, 30*time.Minute)
+//	    scheduler.DailyAt("report", &ReportJob{}, scheduler.ParseTime("03:00"))
+//	    return nil
+//	}
+//
+// The scheduler parameter is guaranteed to be non-nil when this method is called.
+// If no SchedulerModule is registered, this method will not be called.
+type JobProvider interface {
+	RegisterJobs(JobRegistrar) error
+}
+
 // ModuleDeps contains the dependencies that are injected into each module.
 // It provides access to core services like database, logging, messaging, observability, and job scheduling.
 // All modules must use GetDB() and GetMessaging() functions for resource access.

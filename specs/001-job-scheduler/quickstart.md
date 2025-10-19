@@ -1,6 +1,6 @@
 # Job Scheduler Quickstart Guide
 
-**GoBricks Framework - Job Scheduler Feature**
+## GoBricks Framework - Job Scheduler Feature**
 
 This guide shows you how to add scheduled background tasks to your GoBricks application in under 10 lines of code.
 
@@ -50,17 +50,17 @@ func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
     return nil
 }
 
-// 2. Register the job in your module's Init method
-type MyModule struct {
-    scheduler scheduler.JobRegistrar
-}
+// 2. Implement JobProvider interface in your module
+type MyModule struct {}
 
 func (m *MyModule) Init(deps *app.ModuleDeps) error {
-    // Get scheduler registrar from module deps
-    m.scheduler = deps.Scheduler
+    // Module initialization logic here
+    return nil
+}
 
+func (m *MyModule) RegisterJobs(scheduler app.JobRegistrar) error {
     // Register cleanup job to run daily at 3:00 AM
-    return m.scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
+    return scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 }
 ```
 
@@ -109,32 +109,74 @@ func (j *ReportGeneratorJob) Execute(ctx scheduler.JobContext) error {
 
 ### Step 2: Register the Job
 
-Register your job in your module's `Init()` method using one of the five scheduling patterns:
+Implement the `JobProvider` interface in your module to register jobs. The framework calls `RegisterJobs()` automatically after all modules are initialized:
 
 ```go
 func (m *MyModule) Init(deps *app.ModuleDeps) error {
-    registrar := deps.Scheduler
+    // Module initialization logic here
+    return nil
+}
 
+// RegisterJobs is called automatically after all modules are initialized
+func (m *MyModule) RegisterJobs(scheduler app.JobRegistrar) error {
     // Fixed-rate: every 30 minutes
-    err := registrar.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
+    err := scheduler.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
+    if err != nil {
+        return err
+    }
 
     // Daily: at 3:00 AM local time
-    err = registrar.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
+    err = scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
+    if err != nil {
+        return err
+    }
 
     // Weekly: Mondays at 9:00 AM
-    err = registrar.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:00"))
+    err = scheduler.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:00"))
+    if err != nil {
+        return err
+    }
 
     // Hourly: at 15 minutes past every hour
-    err = registrar.HourlyAt("health-check", &HealthCheckJob{}, 15)
+    err = scheduler.HourlyAt("health-check", &HealthCheckJob{}, 15)
+    if err != nil {
+        return err
+    }
 
     // Monthly: 1st of month at midnight
-    err = registrar.MonthlyAt("billing-job", &BillingJob{}, 1, scheduler.ParseTime("00:00"))
-
-    return err
+    return scheduler.MonthlyAt("billing-job", &BillingJob{}, 1, scheduler.ParseTime("00:00"))
 }
 ```
 
-### Step 3: Handle Job Lifecycle
+### Step 3: Register Modules (Order Doesn't Matter!)
+
+With the two-phase registration pattern, you can register modules in any order:
+
+```go
+func main() {
+    app, log, err := app.New()
+    if err != nil {
+        log.Fatal().Err(err).Msg("Failed to create app")
+    }
+
+    // Register modules in any order - framework handles the rest
+    app.RegisterModule(&products.Module{})  // Implements JobProvider
+    app.RegisterModule(scheduler.NewSchedulerModule())
+    app.RegisterModule(&reports.Module{})   // Implements JobProvider
+
+    if err := app.Run(); err != nil {
+        log.Fatal().Err(err).Msg("Application error")
+    }
+}
+```
+
+**How it works**: The framework uses a two-phase initialization:
+1. **Phase 1 (Init)**: All modules initialize via `Init(deps)` - setup dependencies, validate config
+2. **Phase 2 (RegisterJobs)**: Modules implementing `JobProvider` register jobs via `RegisterJobs(scheduler)`
+
+This design eliminates registration order dependencies - jobs are registered after all modules are initialized.
+
+### Step 4: Handle Job Lifecycle
 
 Jobs automatically respect application lifecycle:
 
@@ -239,7 +281,7 @@ curl -X POST http://localhost:8080/_sys/job/cleanup-job
 
 Every job execution creates an OpenTelemetry span:
 
-```
+```text
 job.execute
 ├── span.attributes
 │   ├── job.id = "cleanup-job"
@@ -504,7 +546,7 @@ If `skippedCount` is increasing, the job is taking longer than its interval. Eit
 ### Slow Shutdown
 
 **Check in-flight jobs**:
-```
+```text
 WARN Shutdown timeout reached, some jobs may not have completed timeout=30s
 ```
 

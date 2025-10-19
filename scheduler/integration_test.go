@@ -146,7 +146,7 @@ func (j *longRunningJob) Completed() bool {
 }
 
 // newTestScheduler creates and initializes a scheduler module for testing
-func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*SchedulerModule, JobRegistrar) {
+func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*SchedulerModule, app.JobRegistrar) {
 	module := NewSchedulerModule()
 
 	appDeps := &app.ModuleDeps{

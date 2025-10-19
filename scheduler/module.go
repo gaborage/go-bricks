@@ -31,6 +31,9 @@ const (
 	jobIDAttr           = "job.id"
 	jobStatusAttr       = "job.status"
 	jobScheduleTypeAttr = "job.schedule_type"
+
+	// Error message for job type validation
+	errJobInterfaceMsg = "must implement scheduler.Job interface, got %T"
 )
 
 // SchedulerModule implements the GoBricks Module interface for job scheduling.
@@ -216,7 +219,16 @@ func (m *SchedulerModule) ensureSchedulerInitialized() error {
 // JobRegistrar interface implementation
 
 // FixedRate implements JobRegistrar per FR-003
-func (m *SchedulerModule) FixedRate(jobID string, job Job, interval time.Duration) error {
+func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duration) error {
+	// Validate job implements scheduler.Job interface
+	schedulerJob, ok := job.(Job)
+	if !ok {
+		return &ValidationError{
+			Field:   "job",
+			Message: fmt.Sprintf(errJobInterfaceMsg, job),
+		}
+	}
+
 	// Validate parameters per FR-023
 	if interval <= 0 {
 		return &ValidationError{
@@ -225,17 +237,26 @@ func (m *SchedulerModule) FixedRate(jobID string, job Job, interval time.Duratio
 		}
 	}
 
-	return m.registerJob(jobID, job, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:     ScheduleTypeFixedRate,
 		Interval: interval,
 	})
 }
 
 // DailyAt implements JobRegistrar per FR-004
-func (m *SchedulerModule) DailyAt(jobID string, job Job, localTime time.Time) error {
+func (m *SchedulerModule) DailyAt(jobID string, job any, localTime time.Time) error {
+	// Validate job implements scheduler.Job interface
+	schedulerJob, ok := job.(Job)
+	if !ok {
+		return &ValidationError{
+			Field:   "job",
+			Message: fmt.Sprintf(errJobInterfaceMsg, job),
+		}
+	}
+
 	hour, minute, _ := localTime.Clock()
 
-	return m.registerJob(jobID, job, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:   ScheduleTypeDaily,
 		Hour:   hour,
 		Minute: minute,
@@ -243,10 +264,19 @@ func (m *SchedulerModule) DailyAt(jobID string, job Job, localTime time.Time) er
 }
 
 // WeeklyAt implements JobRegistrar per FR-005
-func (m *SchedulerModule) WeeklyAt(jobID string, job Job, dayOfWeek time.Weekday, localTime time.Time) error {
+func (m *SchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
+	// Validate job implements scheduler.Job interface
+	schedulerJob, ok := job.(Job)
+	if !ok {
+		return &ValidationError{
+			Field:   "job",
+			Message: fmt.Sprintf(errJobInterfaceMsg, job),
+		}
+	}
+
 	hour, minute, _ := localTime.Clock()
 
-	return m.registerJob(jobID, job, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:      ScheduleTypeWeekly,
 		Hour:      hour,
 		Minute:    minute,
@@ -255,7 +285,16 @@ func (m *SchedulerModule) WeeklyAt(jobID string, job Job, dayOfWeek time.Weekday
 }
 
 // HourlyAt implements JobRegistrar per FR-006
-func (m *SchedulerModule) HourlyAt(jobID string, job Job, minute int) error {
+func (m *SchedulerModule) HourlyAt(jobID string, job any, minute int) error {
+	// Validate job implements scheduler.Job interface
+	schedulerJob, ok := job.(Job)
+	if !ok {
+		return &ValidationError{
+			Field:   "job",
+			Message: fmt.Sprintf(errJobInterfaceMsg, job),
+		}
+	}
+
 	// Validate parameters per FR-023
 	if minute < 0 || minute > 59 {
 		return &ValidationError{
@@ -264,14 +303,23 @@ func (m *SchedulerModule) HourlyAt(jobID string, job Job, minute int) error {
 		}
 	}
 
-	return m.registerJob(jobID, job, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:   ScheduleTypeHourly,
 		Minute: minute,
 	})
 }
 
 // MonthlyAt implements JobRegistrar per FR-007
-func (m *SchedulerModule) MonthlyAt(jobID string, job Job, dayOfMonth int, localTime time.Time) error {
+func (m *SchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
+	// Validate job implements scheduler.Job interface
+	schedulerJob, ok := job.(Job)
+	if !ok {
+		return &ValidationError{
+			Field:   "job",
+			Message: fmt.Sprintf(errJobInterfaceMsg, job),
+		}
+	}
+
 	// Validate parameters per FR-023
 	if dayOfMonth < 1 || dayOfMonth > 31 {
 		return &ValidationError{
@@ -282,7 +330,7 @@ func (m *SchedulerModule) MonthlyAt(jobID string, job Job, dayOfMonth int, local
 
 	hour, minute, _ := localTime.Clock()
 
-	return m.registerJob(jobID, job, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:       ScheduleTypeMonthly,
 		Hour:       hour,
 		Minute:     minute,

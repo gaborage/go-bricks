@@ -57,15 +57,25 @@ func (a *App) prepareRuntime() error {
 	}
 
 	// Register debug endpoints if enabled
-	if a.cfg.Debug.Enabled {
-		debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
-		debugHandlers.RegisterDebugEndpoints(a.server.Echo())
+	a.registerDebugHandlers()
+
+	// Register scheduled jobs (after all modules initialized, before routes)
+	if err := a.registry.RegisterJobs(); err != nil {
+		return err
 	}
 
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
 	a.startMaintenanceLoops()
 
 	return nil
+}
+
+// registerDebugHandlers sets up debug endpoints if enabled in configuration
+func (a *App) registerDebugHandlers() {
+	if a.cfg.Debug.Enabled {
+		debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
+		debugHandlers.RegisterDebugEndpoints(a.server.Echo())
+	}
 }
 
 // serve starts the HTTP server in a goroutine and returns an error channel
