@@ -71,12 +71,14 @@ func (m *JobMetadata) incrementFailed() {
 	m.LastExecutionStatus = "failure"
 }
 
-// incrementSkipped updates metadata when job trigger is skipped (overlapping prevention)
+// incrementSkipped updates metadata when job trigger is skipped (overlapping prevention).
+// Per spec clarification: Skipped executions do NOT increment TotalExecutions.
+// Only successful and failed executions count toward the total.
 func (m *JobMetadata) incrementSkipped() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.SkippedCount++
-	m.TotalExecutions++
+	// Note: TotalExecutions is NOT incremented for skipped triggers
 }
 
 // snapshot returns a thread-safe copy of the metadata for API responses.

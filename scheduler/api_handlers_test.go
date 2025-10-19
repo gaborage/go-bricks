@@ -37,10 +37,11 @@ func TestListJobsHandler(t *testing.T) {
 	// Verify success
 	assert.Nil(t, apiErr)
 	assert.Equal(t, 200, result.Status)
-	assert.Len(t, result.Data.Jobs, 1)
+	assert.Len(t, result.Data.Data, 1)
+	assert.Equal(t, 1, result.Data.Meta["total"])
 
 	// Verify metadata is complete
-	metadata := result.Data.Jobs[0]
+	metadata := result.Data.Data[0]
 	assert.NotNil(t, metadata)
 	assert.Equal(t, testJobID, metadata.JobID)
 	assert.Equal(t, "fixed-rate", metadata.ScheduleType)
@@ -62,7 +63,8 @@ func TestListJobsHandlerEmptyScheduler(t *testing.T) {
 
 	assert.Nil(t, apiErr)
 	assert.Equal(t, 200, result.Status)
-	assert.Len(t, result.Data.Jobs, 0)
+	assert.Len(t, result.Data.Data, 0)
+	assert.Equal(t, 0, result.Data.Meta["total"])
 }
 
 // TestTriggerJobHandler verifies POST /_sys/job/:jobId triggers job
@@ -87,8 +89,8 @@ func TestTriggerJobHandler(t *testing.T) {
 	// Verify success - handler returns 202 Accepted for async job triggering
 	assert.Nil(t, apiErr)
 	assert.Equal(t, 202, result.Status) // HTTP 202 Accepted for async operations
-	assert.Equal(t, testJobID, result.Data.JobID)
-	assert.Equal(t, "manual", result.Data.Trigger)
+	assert.Equal(t, testJobID, result.Data.Data.JobID)
+	assert.Equal(t, "manual", result.Data.Data.Trigger)
 
 	// Wait for async execution with polling
 	timeout := time.After(1 * time.Second)

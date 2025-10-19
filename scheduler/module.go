@@ -14,8 +14,23 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/go-co-op/gocron/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+)
+
+// OpenTelemetry attribute names for job scheduler observability.
+// These follow OpenTelemetry naming conventions (https://opentelemetry.io/docs/specs/semconv/general/naming/):
+// - Lowercase with dot-separated namespacing (e.g., job.id, job.status)
+// - Snake_case for multi-word components (e.g., schedule_type)
+//
+// Note: As of 2025, OpenTelemetry has no official semantic conventions for scheduled/batch jobs.
+// These naming choices follow general OTel guidelines and community patterns for custom metrics.
+const (
+	jobIDAttr           = "job.id"
+	jobStatusAttr       = "job.status"
+	jobScheduleTypeAttr = "job.schedule_type"
 )
 
 // SchedulerModule implements the GoBricks Module interface for job scheduling.
@@ -282,6 +297,13 @@ func (m *SchedulerModule) registerJob(jobID string, job Job, schedule ScheduleCo
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Check if shutdown has been initiated
+	select {
+	case <-m.shutdownCtx.Done():
+		return fmt.Errorf("scheduler: cannot register job '%s' - scheduler is shutting down", jobID)
+	default:
+	}
+
 	// Validate unique job ID per FR-022
 	if _, exists := m.jobs[jobID]; exists {
 		return &ValidationError{
@@ -458,41 +480,161 @@ func (m *SchedulerModule) createJobWrapper(entry *jobEntry) func() {
 	}
 }
 
-// executeJob executes the job with panic recovery and metadata updates.
+// executeJob executes the job with panic recovery, metadata updates, and observability instrumentation.
 // Per FR-021: Recover panics, log with stack trace, mark as failed.
+// Per FR-017 to FR-020: Create spans, record metrics, propagate trace context.
 func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
+	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured
+	var span trace.Span
+	if m.tracer != nil {
+		_, span = m.tracer.Start(
+			ctx,
+			"job.execute",
+			trace.WithAttributes(
+				attribute.String(jobIDAttr, entry.metadata.JobID),
+				attribute.String("job.trigger", ctx.TriggerType()),
+			),
+		)
+		defer span.End()
+	}
+
 	start := time.Now()
+	var executionStatus string
 
 	// Panic recovery per FR-021
 	defer func() {
+		duration := time.Since(start)
+
 		if r := recover(); r != nil {
+			executionStatus = "panic"
+
+			// Log panic with stack trace
 			m.logger.Error().
 				Str("jobID", entry.metadata.JobID).
 				Interface("panic", r).
 				Str("stackTrace", string(debug.Stack())).
 				Msg("Job panicked - recovered and marked as failed")
+
+			// Record panic in span (if span exists)
+			if span != nil {
+				span.RecordError(fmt.Errorf("panic: %v", r))
+				span.SetStatus(codes.Error, "panic")
+				span.SetAttributes(attribute.String(jobStatusAttr, "panic"))
+			}
+
+			// Update metadata
 			entry.metadata.incrementFailed()
+
+			// Record metrics
+			m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 		}
 	}()
 
-	// Execute the job
+	// Execute the job with the original JobContext (span is already linked via context)
 	err := entry.job.Execute(ctx)
 
 	duration := time.Since(start)
 
-	// Update metadata based on result
+	// Update metadata and record observability based on result
 	if err != nil {
+		executionStatus = "failure"
+
 		m.logger.Error().
 			Err(err).
 			Str("jobID", entry.metadata.JobID).
 			Dur("duration", duration).
 			Msg("Job execution failed")
+
+		// Record error in span (if span exists)
+		if span != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(jobStatusAttr, "failure"))
+		}
+
 		entry.metadata.incrementFailed()
+		m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 	} else {
+		executionStatus = "success"
+
 		m.logger.Info().
 			Str("jobID", entry.metadata.JobID).
 			Dur("duration", duration).
 			Msg("Job execution completed successfully")
+
+		// Record success in span (if span exists)
+		if span != nil {
+			span.SetStatus(codes.Ok, "completed")
+			span.SetAttributes(attribute.String(jobStatusAttr, "success"))
+		}
+
 		entry.metadata.incrementSuccess()
+		m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+	}
+}
+
+// recordMetrics records OpenTelemetry metrics for job execution.
+// Per FR-018: Emit metrics for execution count, success/failure counts, and duration.
+// Includes schedule_type attribute for analysis by scheduling pattern.
+//
+// Metric naming follows OpenTelemetry conventions (https://opentelemetry.io/docs/specs/semconv/general/metrics/):
+// - job.execution.total (Counter) - Singular "execution" for consistency
+// - job.execution.duration (Histogram) - Duration in seconds (UCUM unit "s")
+// - job.panic.total (Counter) - Singular "panic" for consistency
+//
+// Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
+func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
+	// Skip metrics if meter provider is not configured (e.g., in tests)
+	if m.meterProvider == nil {
+		return
+	}
+
+	meter := m.meterProvider.Meter("scheduler")
+
+	// Record job execution counter
+	executionCounter, err := meter.Int64Counter(
+		"job.execution.total",
+		metric.WithDescription("Total number of job executions by status"),
+	)
+	if err == nil {
+		executionCounter.Add(context.Background(), 1,
+			metric.WithAttributes(
+				attribute.String(jobIDAttr, jobID),
+				attribute.String(jobStatusAttr, status),
+				attribute.String(jobScheduleTypeAttr, scheduleType),
+			),
+		)
+	}
+
+	// Record job execution duration histogram
+	durationHistogram, err := meter.Float64Histogram(
+		"job.execution.duration",
+		metric.WithDescription("Job execution duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err == nil {
+		durationHistogram.Record(context.Background(), duration.Seconds(),
+			metric.WithAttributes(
+				attribute.String(jobIDAttr, jobID),
+				attribute.String(jobStatusAttr, status),
+				attribute.String(jobScheduleTypeAttr, scheduleType),
+			),
+		)
+	}
+
+	// Record panic counter if status is panic
+	if status == "panic" {
+		panicCounter, err := meter.Int64Counter(
+			"job.panic.total",
+			metric.WithDescription("Total number of job panics"),
+		)
+		if err == nil {
+			panicCounter.Add(context.Background(), 1,
+				metric.WithAttributes(
+					attribute.String(jobIDAttr, jobID),
+					attribute.String(jobScheduleTypeAttr, scheduleType),
+				),
+			)
+		}
 	}
 }

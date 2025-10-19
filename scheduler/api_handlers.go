@@ -9,13 +9,20 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// JobListResponse represents the response for GET /_sys/job
+// JobListResponse represents the response for GET /_sys/job using standard GoBricks envelope
 type JobListResponse struct {
-	Jobs []*JobMetadata `json:"jobs"`
+	Data []*JobMetadata         `json:"data"`
+	Meta map[string]interface{} `json:"meta"`
 }
 
-// JobTriggerResponse represents the response for POST /_sys/job/:jobId
+// JobTriggerResponse represents the response for POST /_sys/job/:jobId using standard GoBricks envelope
 type JobTriggerResponse struct {
+	Data JobTriggerData         `json:"data"`
+	Meta map[string]interface{} `json:"meta"`
+}
+
+// JobTriggerData contains the trigger response data
+type JobTriggerData struct {
 	JobID   string `json:"jobId"`
 	Trigger string `json:"trigger"`
 	Message string `json:"message"`
@@ -39,10 +46,27 @@ func (m *SchedulerModule) listJobsHandler(_ EmptyRequest, _ server.HandlerContex
 	jobs := make([]*JobMetadata, 0, len(m.jobs))
 	for _, entry := range m.jobs {
 		snapshot := entry.metadata.snapshot()
+
+		// Populate NextExecutionTime from gocron job
+		if entry.gocronJob != nil {
+			nextRun, err := entry.gocronJob.NextRun()
+			if err == nil && !nextRun.IsZero() {
+				snapshot.NextExecutionTime = &nextRun
+			}
+		}
+
 		jobs = append(jobs, snapshot)
 	}
 
-	return server.NewResult(http.StatusOK, JobListResponse{Jobs: jobs}), nil
+	// Return with standard GoBricks envelope
+	response := JobListResponse{
+		Data: jobs,
+		Meta: map[string]interface{}{
+			"total": len(jobs),
+		},
+	}
+
+	return server.NewResult(http.StatusOK, response), nil
 }
 
 // triggerJobHandler manually triggers a job execution
@@ -68,10 +92,14 @@ func (m *SchedulerModule) triggerJobHandler(req JobIDParam, _ server.HandlerCont
 	// Trigger job execution asynchronously
 	go m.executeManualJob(entry)
 
+	// Return with standard GoBricks envelope
 	response := JobTriggerResponse{
-		JobID:   jobID,
-		Trigger: "manual",
-		Message: "Request accepted: job will run unless an instance is already running",
+		Data: JobTriggerData{
+			JobID:   jobID,
+			Trigger: "manual",
+			Message: "Request accepted: job will run unless an instance is already running",
+		},
+		Meta: map[string]interface{}{},
 	}
 
 	return server.NewResult(http.StatusAccepted, response), nil

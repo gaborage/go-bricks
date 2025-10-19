@@ -60,12 +60,7 @@ func (m *MyModule) Init(deps *app.ModuleDeps) error {
     m.scheduler = deps.Scheduler
 
     // Register cleanup job to run daily at 3:00 AM
-    return m.scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
-}
-
-func mustParseTime(s string) time.Time {
-    t, _ := time.Parse("15:04", s)
-    return t
+    return m.scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 }
 ```
 
@@ -124,16 +119,16 @@ func (m *MyModule) Init(deps *app.ModuleDeps) error {
     err := registrar.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
 
     // Daily: at 3:00 AM local time
-    err = registrar.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+    err = registrar.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 
     // Weekly: Mondays at 9:00 AM
-    err = registrar.WeeklyAt("report-job", &ReportJob{}, time.Monday, mustParseTime("09:00"))
+    err = registrar.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:00"))
 
     // Hourly: at 15 minutes past every hour
     err = registrar.HourlyAt("health-check", &HealthCheckJob{}, 15)
 
     // Monthly: 1st of month at midnight
-    err = registrar.MonthlyAt("billing-job", &BillingJob{}, 1, mustParseTime("00:00"))
+    err = registrar.MonthlyAt("billing-job", &BillingJob{}, 1, scheduler.ParseTime("00:00"))
 
     return err
 }
@@ -164,20 +159,20 @@ Add to `config.yaml`:
 ```yaml
 scheduler:
   # CIDR allowlist for /_sys/job* system APIs
-  # Empty list = allow all IPs (local development default)
-  cidr_allowlist:
+  # Empty list = localhost-only (127.0.0.1, ::1) - safe default
+  cidrallowlist:
     - "10.0.0.0/8"      # Private network
     - "192.168.1.0/24"  # Specific subnet
 
   # Graceful shutdown timeout for in-flight jobs
-  shutdown_timeout: 30s
+  shutdowntimeout: 30s
 ```
 
 ### Environment Variable Override
 
 ```bash
-SCHEDULER_CIDR_ALLOWLIST="10.0.0.0/8,192.168.1.0/24"
-SCHEDULER_SHUTDOWN_TIMEOUT=45s
+SCHEDULER_CIDRALLOWLIST="10.0.0.0/8,192.168.1.0/24"
+SCHEDULER_SHUTDOWNTIMEOUT=45s
 ```
 
 ---
@@ -227,19 +222,14 @@ curl -X POST http://localhost:8080/_sys/job/cleanup-job
 {
   "data": {
     "jobId": "cleanup-job",
-    "triggered": true,
-    "scheduledNextAt": "2025-10-18T03:00:00Z"
+    "trigger": "manual",
+    "message": "Request accepted: job will run unless an instance is already running"
   },
   "meta": {}
 }
 ```
 
-**Response (Job Already Running)**:
-```json
-{
-  "error": "Job 'cleanup-job' is already running. Trigger skipped."
-}
-```
+**Note**: The response is returned immediately (HTTP 202 Accepted). The job executes asynchronously. If already running, it will be skipped with a logged warning.
 
 ---
 
@@ -361,9 +351,63 @@ func (m *MyModule) Init(deps *app.ModuleDeps) error {
         emailService: m.emailService,
         smsService:   m.smsService,
     }
-    return deps.Scheduler.DailyAt("notifications", job, mustParseTime("08:00"))
+    return deps.Scheduler.DailyAt("notifications", job, scheduler.ParseTime("08:00"))
 }
 ```
+
+### Multi-Tenant Job Contexts
+
+When running GoBricks in multi-tenant mode, jobs automatically support tenant-specific resources:
+
+```go
+type TenantReportJob struct {
+    tenantID string
+}
+
+func (j *TenantReportJob) Execute(ctx scheduler.JobContext) error {
+    // DB() and Messaging() resolve dynamically based on tenant context
+    // The context carries tenant information from job registration
+
+    db := ctx.DB()  // Returns tenant-specific database connection
+    if db == nil {
+        return fmt.Errorf("database not available")
+    }
+
+    // Query tenant-specific data
+    rows, err := db.Query(ctx, "SELECT * FROM reports WHERE tenant_id = ?", j.tenantID)
+    if err != nil {
+        return err
+    }
+    defer rows.Close()
+
+    // Send to tenant-specific messaging queue
+    if msg := ctx.Messaging(); msg != nil {
+        msg.Publish(ctx, "tenant.reports", reportData)
+    }
+
+    return nil
+}
+
+func (m *MyModule) Init(deps *app.ModuleDeps) error {
+    // Register jobs for each tenant
+    for _, tenantID := range m.tenantIDs {
+        job := &TenantReportJob{tenantID: tenantID}
+        jobID := fmt.Sprintf("report-%s", tenantID)
+
+        err := deps.Scheduler.DailyAt(jobID, job, scheduler.ParseTime("03:00"))
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+**Key points**:
+- `JobContext.DB()` and `JobContext.Messaging()` are resolver functions
+- In single-tenant mode: Return global DB/messaging instances
+- In multi-tenant mode: Resolve from context based on tenant ID
+- Jobs don't need conditional logic - framework handles tenant resolution
 
 ---
 
@@ -375,15 +419,39 @@ Protect `/_sys/job*` endpoints with IP-based access control:
 
 ```yaml
 scheduler:
-  cidr_allowlist:
+  cidrallowlist:
     - "10.0.0.0/8"         # Private network
     - "172.16.0.0/12"      # Docker internal
     - "203.0.113.42/32"    # Specific monitoring server
 ```
 
 **Behavior**:
-- **Empty list** (default): All IPs allowed (local development)
+- **Empty list** (default): Localhost-only (127.0.0.1, ::1) - prevents accidental exposure
 - **Non-empty list**: Only matching IPs allowed, others get 403 Forbidden
+
+### Trusted Proxies (X-Forwarded-For Validation)
+
+When running behind reverse proxies (nginx, HAProxy, AWS ALB), configure trusted proxy ranges to properly extract client IPs:
+
+```yaml
+scheduler:
+  cidrallowlist:
+    - "10.0.0.0/8"         # Allow private network clients
+  trustedproxies:
+    - "10.0.0.0/8"         # Trust reverse proxies in private network
+```
+
+**How it works (RFC 7239 compliant)**:
+1. Request arrives from reverse proxy at `10.0.0.5`
+2. Request has `X-Forwarded-For: 203.0.113.1, 10.0.0.5`
+3. Middleware checks: Is `10.0.0.5` (immediate peer) trusted? → Yes
+4. Walk XFF right-to-left: `10.0.0.5` (trusted), `203.0.113.1` (untrusted) → Real client is `203.0.113.1`
+5. Check if `203.0.113.1` is in CIDR allowlist
+
+**Security notes**:
+- **Empty `trustedproxies`**: All proxy headers ignored (prevents IP spoofing)
+- **Non-empty `trustedproxies`**: Headers honored only from trusted proxies
+- **Without this**: Attackers can bypass CIDR allowlist by setting fake `X-Forwarded-For` headers
 
 ### Reverse Proxy
 

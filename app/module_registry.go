@@ -28,6 +28,8 @@ func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 
 // Register adds a module to the registry and initializes it.
 // It calls the module's Init method with the injected dependencies.
+// Special handling: If the module implements scheduler.JobRegistrar, it is automatically
+// wired into ModuleDeps.Scheduler for other modules to use.
 func (r *ModuleRegistry) Register(module Module) error {
 	moduleName := module.Name()
 
@@ -37,6 +39,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 
 	if err := module.Init(r.deps); err != nil {
 		return err
+	}
+
+	// Special case: If this module is a JobRegistrar (scheduler module),
+	// make it available to other modules via deps.Scheduler
+	if jobRegistrar, ok := module.(JobRegistrar); ok {
+		r.deps.Scheduler = jobRegistrar
+		r.logger.Info().
+			Str("module", moduleName).
+			Msg("Scheduler module registered - available to other modules via deps.Scheduler")
 	}
 
 	// Add to lifecycle registry

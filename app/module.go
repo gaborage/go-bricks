@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -22,8 +23,28 @@ type Module interface {
 	Shutdown() error
 }
 
+// JobRegistrar defines the interface for scheduling jobs.
+// This interface is defined here to avoid circular imports between app and scheduler packages.
+// The scheduler package implements this interface via SchedulerModule.
+type JobRegistrar interface {
+	// FixedRate schedules a job to run every interval duration
+	FixedRate(jobID string, job any, interval time.Duration) error
+
+	// DailyAt schedules a job to run daily at the specified local time
+	DailyAt(jobID string, job any, localTime time.Time) error
+
+	// WeeklyAt schedules a job to run weekly on the specified day and time
+	WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error
+
+	// HourlyAt schedules a job to run hourly at the specified minute
+	HourlyAt(jobID string, job any, minute int) error
+
+	// MonthlyAt schedules a job to run monthly on the specified day and time
+	MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error
+}
+
 // ModuleDeps contains the dependencies that are injected into each module.
-// It provides access to core services like database, logging, messaging, and observability.
+// It provides access to core services like database, logging, messaging, observability, and job scheduling.
 // All modules must use GetDB() and GetMessaging() functions for resource access.
 type ModuleDeps struct {
 	Logger logger.Logger
@@ -38,6 +59,12 @@ type ModuleDeps struct {
 	// Use this to create custom meters for application-specific metrics.
 	// This is a no-op provider if observability is disabled.
 	MeterProvider metric.MeterProvider
+
+	// Scheduler provides job scheduling capabilities.
+	// Modules can register jobs using methods like FixedRate, DailyAt, WeeklyAt, etc.
+	// This field is nil if no SchedulerModule is registered.
+	// Example: deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, time.Date(0, 0, 0, 3, 0, 0, 0, time.Local))
+	Scheduler JobRegistrar
 
 	// GetDB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.
