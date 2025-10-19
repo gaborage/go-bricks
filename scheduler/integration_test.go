@@ -153,7 +153,9 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*SchedulerMo
 		Logger: logger.New("info", false),
 		Config: &config.Config{
 			Scheduler: config.SchedulerConfig{
-				ShutdownTimeout: shutdownTimeout,
+				Timeout: config.SchedulerTimeoutConfig{
+					Shutdown: shutdownTimeout,
+				},
 			},
 		},
 		Tracer:        nil, // No-op tracer for tests

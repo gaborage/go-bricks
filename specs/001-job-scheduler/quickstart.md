@@ -58,9 +58,10 @@ func (m *MyModule) Init(deps *app.ModuleDeps) error {
     return nil
 }
 
-func (m *MyModule) RegisterJobs(scheduler app.JobRegistrar) error {
+func (m *MyModule) RegisterJobs(reg app.JobRegistrar) error {
     // Register cleanup job to run daily at 3:00 AM
-    return scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
+    localTime, _ := time.Parse("15:04", "03:00")
+    return reg.DailyAt("cleanup-job", &CleanupJob{}, localTime)
 }
 ```
 
@@ -118,33 +119,33 @@ func (m *MyModule) Init(deps *app.ModuleDeps) error {
 }
 
 // RegisterJobs is called automatically after all modules are initialized
-func (m *MyModule) RegisterJobs(scheduler app.JobRegistrar) error {
+func (m *MyModule) RegisterJobs(reg app.JobRegistrar) error {
     // Fixed-rate: every 30 minutes
-    err := scheduler.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
+    err := reg.FixedRate("sync-job", &SyncJob{}, 30*time.Minute)
     if err != nil {
         return err
     }
 
     // Daily: at 3:00 AM local time
-    err = scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
+    err = reg.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
     if err != nil {
         return err
     }
 
     // Weekly: Mondays at 9:00 AM
-    err = scheduler.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:00"))
+    err = reg.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:00"))
     if err != nil {
         return err
     }
 
     // Hourly: at 15 minutes past every hour
-    err = scheduler.HourlyAt("health-check", &HealthCheckJob{}, 15)
+    err = reg.HourlyAt("health-check", &HealthCheckJob{}, 15)
     if err != nil {
         return err
     }
 
     // Monthly: 1st of month at midnight
-    return scheduler.MonthlyAt("billing-job", &BillingJob{}, 1, scheduler.ParseTime("00:00"))
+    return reg.MonthlyAt("billing-job", &BillingJob{}, 1, scheduler.ParseTime("00:00"))
 }
 ```
 
@@ -161,7 +162,6 @@ func main() {
 
     // Register modules in any order - framework handles the rest
     app.RegisterModule(&products.Module{})  // Implements JobProvider
-    app.RegisterModule(scheduler.NewSchedulerModule())
     app.RegisterModule(&reports.Module{})   // Implements JobProvider
 
     if err := app.Run(); err != nil {
@@ -200,21 +200,36 @@ Add to `config.yaml`:
 
 ```yaml
 scheduler:
-  # CIDR allowlist for /_sys/job* system APIs
-  # Empty list = localhost-only (127.0.0.1, ::1) - safe default
-  cidrallowlist:
-    - "10.0.0.0/8"      # Private network
-    - "192.168.1.0/24"  # Specific subnet
+  security:
+    # CIDR allowlist for /_sys/job* system APIs
+    # Empty list = localhost-only (127.0.0.1, ::1) - safe default
+    cidrallowlist:
+      - "10.0.0.0/8"      # Private network
+      - "192.168.1.0/24"  # Specific subnet
 
-  # Graceful shutdown timeout for in-flight jobs
-  shutdowntimeout: 30s
+    # Trust reverse proxies for X-Forwarded-For extraction
+    trustedproxies:
+      - "10.0.0.0/8"      # Trust reverse proxies in private network
+
+  timeout:
+    # Graceful shutdown timeout for in-flight jobs
+    shutdown: 30s
+
+    # Slow job execution threshold for logging
+    # Jobs exceeding this duration get result_code="WARN"
+    slowjob: 30s
 ```
 
 ### Environment Variable Override
 
 ```bash
-SCHEDULER_CIDRALLOWLIST="10.0.0.0/8,192.168.1.0/24"
-SCHEDULER_SHUTDOWNTIMEOUT=45s
+# Security
+SCHEDULER_SECURITY_CIDRALLOWLIST="10.0.0.0/8,192.168.1.0/24"
+SCHEDULER_SECURITY_TRUSTEDPROXIES="10.0.0.0/8"
+
+# Timeouts
+SCHEDULER_TIMEOUT_SHUTDOWN=45s
+SCHEDULER_TIMEOUT_SLOWJOB=60s
 ```
 
 ---
@@ -320,10 +335,33 @@ jobs_registered_total 3
 ```json
 {
   "level": "info",
+  "log.type": "action",
   "time": "2025-10-17T03:00:00Z",
-  "jobID": "cleanup-job",
-  "trigger": "scheduled",
-  "message": "Starting cleanup"
+  "job.id": "cleanup-job",
+  "job.schedule_type": "daily",
+  "job.trigger": "scheduled",
+  "job.execution.duration": 1234000000,
+  "job.status": "success",
+  "result_code": "INFO",
+  "correlation_id": "abc123",
+  "traceparent": "00-abc123-def456-01",
+  "tenant": "acme-corp",
+  "db_queries": 3,
+  "db_elapsed": 450000000,
+  "amqp_published": 1,
+  "amqp_elapsed": 120000000,
+  "message": "Job 'cleanup-job' completed successfully in 1.234s"
+}
+```
+
+**Slow Job Detection** (exceeds 30s threshold):
+```json
+{
+  "level": "info",
+  "log.type": "action",
+  "result_code": "WARN",
+  "job.execution.duration": 45000000000,
+  "message": "Job 'heavy-report' completed successfully in 45s"
 }
 ```
 
@@ -461,10 +499,11 @@ Protect `/_sys/job*` endpoints with IP-based access control:
 
 ```yaml
 scheduler:
-  cidrallowlist:
-    - "10.0.0.0/8"         # Private network
-    - "172.16.0.0/12"      # Docker internal
-    - "203.0.113.42/32"    # Specific monitoring server
+  security:
+    cidrallowlist:
+      - "10.0.0.0/8"         # Private network
+      - "172.16.0.0/12"      # Docker internal
+      - "203.0.113.42/32"    # Specific monitoring server
 ```
 
 **Behavior**:
@@ -477,10 +516,11 @@ When running behind reverse proxies (nginx, HAProxy, AWS ALB), configure trusted
 
 ```yaml
 scheduler:
-  cidrallowlist:
-    - "10.0.0.0/8"         # Allow private network clients
-  trustedproxies:
-    - "10.0.0.0/8"         # Trust reverse proxies in private network
+  security:
+    cidrallowlist:
+      - "10.0.0.0/8"         # Allow private network clients
+    trustedproxies:
+      - "10.0.0.0/8"         # Trust reverse proxies in private network
 ```
 
 **How it works (RFC 7239 compliant)**:

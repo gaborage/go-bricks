@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/go-co-op/gocron/v2"
 	"go.opentelemetry.io/otel/attribute"
@@ -122,8 +123,8 @@ func (m *SchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.Ro
 	var allowlist []string
 	var trustedProxies []string
 	if m.config != nil {
-		allowlist = m.config.Scheduler.CIDRAllowlist
-		trustedProxies = m.config.Scheduler.TrustedProxies
+		allowlist = m.config.Scheduler.Security.CIDRAllowlist
+		trustedProxies = m.config.Scheduler.Security.TrustedProxies
 	}
 	cidrMiddleware := CIDRMiddleware(allowlist, trustedProxies)
 
@@ -163,8 +164,8 @@ func (m *SchedulerModule) Shutdown() error {
 
 	// Get shutdown timeout from config (default 30s per ASSUME-010)
 	timeout := 30 * time.Second
-	if m.config != nil && m.config.Scheduler.ShutdownTimeout > 0 {
-		timeout = m.config.Scheduler.ShutdownTimeout
+	if m.config != nil && m.config.Scheduler.Timeout.Shutdown > 0 {
+		timeout = m.config.Scheduler.Timeout.Shutdown
 	}
 
 	// Stop scheduler (prevents new job triggers)
@@ -583,15 +584,12 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 
 	duration := time.Since(start)
 
+	// Emit structured action log with operational counters and correlation
+	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, ctx.TriggerType(), duration, err, span)
+
 	// Update metadata and record observability based on result
 	if err != nil {
 		executionStatus = "failure"
-
-		m.logger.Error().
-			Err(err).
-			Str("jobID", entry.metadata.JobID).
-			Dur("duration", duration).
-			Msg("Job execution failed")
 
 		// Record error in span (if span exists)
 		if span != nil {
@@ -604,11 +602,6 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 		m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 	} else {
 		executionStatus = "success"
-
-		m.logger.Info().
-			Str("jobID", entry.metadata.JobID).
-			Dur("duration", duration).
-			Msg("Job execution completed successfully")
 
 		// Record success in span (if span exists)
 		if span != nil {
@@ -685,4 +678,111 @@ func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, dura
 			)
 		}
 	}
+}
+
+// logJobResultSummary emits a structured action log for job execution with OpenTelemetry conventions.
+// Similar to HTTP request logging, this provides 100% sampling of job executions with operational counters.
+func (m *SchedulerModule) logJobResultSummary(
+	ctx JobContext,
+	jobID, scheduleType, trigger string,
+	duration time.Duration,
+	err error,
+	span trace.Span,
+) {
+	contextLog := m.logger.WithContext(ctx)
+
+	// Determine severity and result_code
+	logLevel, resultCode := m.determineJobSeverity(duration, err)
+
+	// Create log event
+	event := createJobLogEvent(contextLog, logLevel)
+	if err != nil {
+		event = event.Err(err)
+	}
+
+	// Tenant context
+	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
+		event = event.Str("tenant", tenantID)
+	}
+
+	// Operational counters
+	dbCount := logger.GetDBCounter(ctx)
+	dbElapsed := logger.GetDBElapsed(ctx)
+	amqpCount := logger.GetAMQPCounter(ctx)
+	amqpElapsed := logger.GetAMQPElapsed(ctx)
+
+	// Trace correlation
+	traceID := ""
+	traceparent := ""
+	if span != nil {
+		traceID = span.SpanContext().TraceID().String()
+		traceparent = fmt.Sprintf("00-%s-%s-01",
+			span.SpanContext().TraceID().String(),
+			span.SpanContext().SpanID().String())
+	}
+
+	// Emit structured action log
+	event.
+		Str("log.type", "action").
+		Str("job.id", jobID).
+		Str("job.schedule_type", scheduleType).
+		Str("job.trigger", trigger).
+		Int64("job.execution.duration", duration.Nanoseconds()).
+		Str("job.status", jobStatusFromError(err)).
+		Str("result_code", resultCode).
+		Str("correlation_id", traceID).
+		Str("traceparent", traceparent).
+		Int64("db_queries", dbCount).
+		Int64("db_elapsed", dbElapsed).
+		Int64("amqp_published", amqpCount).
+		Int64("amqp_elapsed", amqpElapsed).
+		Msg(createJobMessage(jobID, duration, err))
+}
+
+// determineJobSeverity calculates log severity and result_code based on execution result and duration.
+func (m *SchedulerModule) determineJobSeverity(duration time.Duration, err error) (logLevel, resultCode string) {
+	// ERROR: Job failed
+	if err != nil {
+		return "error", "ERROR"
+	}
+
+	// WARN: Slow job (succeeded but exceeded threshold)
+	threshold := 30 * time.Second // default
+	if m.config != nil && m.config.Scheduler.Timeout.SlowJob > 0 {
+		threshold = m.config.Scheduler.Timeout.SlowJob
+	}
+	if threshold > 0 && duration > threshold {
+		return "info", "WARN"
+	}
+
+	// INFO: Normal successful job
+	return "info", "INFO"
+}
+
+// createJobLogEvent creates a log event with the specified severity.
+func createJobLogEvent(log logger.Logger, level string) logger.LogEvent {
+	switch level {
+	case "error":
+		return log.Error()
+	case "warn":
+		return log.Warn()
+	default:
+		return log.Info()
+	}
+}
+
+// jobStatusFromError returns "success" or "failure" based on error.
+func jobStatusFromError(err error) string {
+	if err != nil {
+		return "failure"
+	}
+	return "success"
+}
+
+// createJobMessage generates a human-readable message for job logs.
+func createJobMessage(jobID string, duration time.Duration, err error) string {
+	if err != nil {
+		return fmt.Sprintf("Job '%s' failed after %s", jobID, duration)
+	}
+	return fmt.Sprintf("Job '%s' completed successfully in %s", jobID, duration)
 }

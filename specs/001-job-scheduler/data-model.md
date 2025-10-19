@@ -303,41 +303,57 @@ Job.Execute()
 package config
 
 type SchedulerConfig struct {
+    Security SchedulerSecurityConfig `config:"scheduler.security"`
+    Timeout  SchedulerTimeoutConfig  `config:"scheduler.timeout"`
+}
+
+type SchedulerSecurityConfig struct {
     // CIDR allowlist for /_sys/job* endpoints
     // Empty list = localhost-only (127.0.0.1, ::1) - safer default prevents accidental exposure
     // Non-empty = restrict to matching IP ranges only
     // Example: []string{"10.0.0.0/8", "192.168.1.0/24"}
-    CIDRAllowlist []string `config:"scheduler.cidrallowlist"`
+    CIDRAllowlist []string `config:"scheduler.security.cidrallowlist"`
 
     // Trusted proxy CIDR ranges for X-Forwarded-For/X-Real-IP validation
     // Empty list = do not trust any proxy headers (prevents header spoofing)
     // Non-empty = only trust headers when immediate peer (RemoteAddr) matches these ranges
     // Uses RFC 7239 right-to-left XFF resolution to find real client IP
     // Example: []string{"10.0.0.0/8"} - trust reverse proxies in 10.x network
-    TrustedProxies []string `config:"scheduler.trustedproxies"`
+    TrustedProxies []string `config:"scheduler.security.trustedproxies"`
+}
 
+type SchedulerTimeoutConfig struct {
     // Graceful shutdown timeout for in-flight jobs
-    // Default: 30s (per ASSUME-010)
-    ShutdownTimeout time.Duration `config:"scheduler.shutdowntimeout" default:"30s"`
+    // Default: 30s
+    Shutdown time.Duration `config:"scheduler.timeout.shutdown" default:"30s"`
+
+    // Slow job execution threshold for logging
+    // Jobs exceeding this duration are logged with result_code="WARN" even if successful
+    // Zero or negative = disabled. Default: 30s
+    SlowJob time.Duration `config:"scheduler.timeout.slowjob" default:"30s"`
 }
 ```
 
 **Configuration Example** (config.yaml):
 ```yaml
 scheduler:
-  cidrallowlist:
-    - "10.0.0.0/8"      # Private network
-    - "192.168.1.0/24"  # Local network
-  trustedproxies:
-    - "10.0.0.0/8"      # Trust reverse proxies in private network
-  shutdowntimeout: 45s
+  security:
+    cidrallowlist:
+      - "10.0.0.0/8"      # Private network
+      - "192.168.1.0/24"  # Local network
+    trustedproxies:
+      - "10.0.0.0/8"      # Trust reverse proxies in private network
+  timeout:
+    shutdown: 45s
+    slowjob: 60s
 ```
 
 **Environment Variable Override**:
 ```bash
-SCHEDULER_CIDRALLOWLIST="10.0.0.0/8,192.168.1.0/24"
-SCHEDULER_TRUSTEDPROXIES="10.0.0.0/8"
-SCHEDULER_SHUTDOWNTIMEOUT=45s
+SCHEDULER_SECURITY_CIDRALLOWLIST="10.0.0.0/8,192.168.1.0/24"
+SCHEDULER_SECURITY_TRUSTEDPROXIES="10.0.0.0/8"
+SCHEDULER_TIMEOUT_SHUTDOWN=45s
+SCHEDULER_TIMEOUT_SLOWJOB=60s
 ```
 
 **Security Notes**:

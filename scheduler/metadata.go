@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+const (
+	StatusSuccess = "success"
+	StatusFailure = "failure"
+)
+
 // JobMetadata contains information about a registered job for system API responses.
 // Thread-safe access is managed by jobEntry mutex.
 //
@@ -57,7 +62,7 @@ func (m *JobMetadata) incrementSuccess() {
 	m.TotalExecutions++
 	now := time.Now().UTC()
 	m.LastExecutionTime = &now
-	m.LastExecutionStatus = "success"
+	m.LastExecutionStatus = StatusSuccess
 }
 
 // incrementFailed updates metadata after failed job execution (error returned or panic recovered)
@@ -68,7 +73,7 @@ func (m *JobMetadata) incrementFailed() {
 	m.TotalExecutions++
 	now := time.Now().UTC()
 	m.LastExecutionTime = &now
-	m.LastExecutionStatus = "failure"
+	m.LastExecutionStatus = StatusFailure
 }
 
 // incrementSkipped updates metadata when job trigger is skipped (overlapping prevention).
