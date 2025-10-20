@@ -64,13 +64,8 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
-          packages=$(go list ./... | grep -vE '/(tools)(/|$)')
-          if [ -n "$packages" ]; then
-            go test -race -cover -covermode=atomic -coverpkg=./... -coverprofile=coverage.out $packages
-          else
-            echo "No packages found to test"
-            exit 1
-          fi
+          # Test all packages - tools/openapi excluded automatically (separate module)
+          go test -race -cover -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Run tests (Windows)
         if: matrix.os == 'windows-latest'
@@ -176,11 +171,8 @@ jobs:
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
-          go test -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out \
-            ./database/mongodb/... \
-            ./database/postgresql/... \
-            ./database/oracle/... \
-            ./messaging/...
+          # Build tag controls which tests run - only integration tests will execute
+          go test -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
 
       - name: Upload integration test coverage artifact
         if: matrix.go-version == '1.25'
@@ -231,7 +223,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: openapi-tool-coverage-report
-          path: .
+          path: tools/openapi
 
       - name: Merge coverage files
         run: |
@@ -264,6 +256,51 @@ jobs:
           if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_tool" = false ]; then
             echo "Error: No coverage files found"
             exit 1
+          fi
+
+          echo ""
+          echo "=== Coverage File Validation ==="
+
+          # Validate framework unit coverage
+          if [ "$has_framework_unit" = true ]; then
+            unit_lines=$(wc -l < coverage.out)
+            echo "Framework unit coverage: $unit_lines lines"
+
+            # Check if file is suspiciously small (should be >10k lines for full framework)
+            if [ "$unit_lines" -lt 10000 ]; then
+              echo "⚠️  WARNING: Framework unit coverage is unusually small ($unit_lines lines)"
+              echo "    Expected: >10,000 lines for full framework coverage"
+            fi
+
+            # Check first non-mode line to verify it's framework code (not tool code)
+            first_package=$(sed -n '2p' coverage.out | cut -d':' -f1)
+            if echo "$first_package" | grep -q "tools/openapi"; then
+              echo "❌ ERROR: Framework coverage file contains tool packages!"
+              echo "    First package: $first_package"
+              echo "    This indicates artifact download overwrote framework coverage"
+              exit 1
+            else
+              echo "✓ Framework coverage verified (starts with: $first_package)"
+            fi
+          fi
+
+          # Validate integration coverage
+          if [ "$has_framework_integration" = true ]; then
+            integration_lines=$(wc -l < coverage-integration.out)
+            echo "Integration coverage: $integration_lines lines"
+
+            if [ "$integration_lines" -lt 1000 ]; then
+              echo "⚠️  WARNING: Integration coverage is small ($integration_lines lines)"
+            else
+              echo "✓ Integration coverage looks reasonable"
+            fi
+          fi
+
+          # Validate tool coverage
+          if [ "$has_tool" = true ]; then
+            tool_lines=$(wc -l < tools/openapi/coverage.out)
+            echo "Tool coverage: $tool_lines lines"
+            echo "✓ Tool coverage validated"
           fi
 
           # Merge coverage files using simple concatenation
