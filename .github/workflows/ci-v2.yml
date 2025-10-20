@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           packages=$(go list ./... | grep -vE '/(tools)(/|$)')
           if [ -n "$packages" ]; then
-            go test -race -cover -covermode=atomic -coverprofile=coverage.out $packages
+            go test -race -cover -covermode=atomic -coverpkg=./... -coverprofile=coverage.out $packages
           else
             echo "No packages found to test"
             exit 1
@@ -176,7 +176,7 @@ jobs:
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
-          go test -race -tags=integration -covermode=atomic -coverprofile=coverage-integration.out \
+          go test -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out \
             ./database/mongodb/... \
             ./database/postgresql/... \
             ./database/oracle/... \
