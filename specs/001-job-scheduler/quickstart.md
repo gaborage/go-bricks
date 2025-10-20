@@ -614,7 +614,7 @@ A: No built-in distributed locking in MVP. Each app instance runs its own schedu
 
 **Q: What happens if a job panics?**
 
-A: Panic is recovered, logged at ERROR level with full stack trace, execution marked as failed in metrics, scheduler continues operating normally. See FR-021 and clarification #4.
+A: Panic is recovered, logged at ERROR level with full-stack trace, execution marked as failed in metrics, scheduler continues operating normally. See FR-021 and clarification #4.
 
 **Q: How do I test scheduled jobs?**
 

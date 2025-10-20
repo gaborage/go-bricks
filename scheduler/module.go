@@ -56,6 +56,11 @@ type SchedulerModule struct {
 	getDB         func(context.Context) (types.Interface, error)
 	getMessaging  func(context.Context) (messaging.Client, error)
 
+	// OpenTelemetry instruments (pre-created for performance)
+	executionCounter  metric.Int64Counter
+	durationHistogram metric.Float64Histogram
+	panicCounter      metric.Int64Counter
+
 	// Scheduler state
 	scheduler gocron.Scheduler // Lazy-initialized on first job registration
 	jobs      map[string]*jobEntry
@@ -91,6 +96,30 @@ func (m *SchedulerModule) Init(deps *app.ModuleDeps) error {
 	m.config = deps.Config
 	m.tracer = deps.Tracer
 	m.meterProvider = deps.MeterProvider
+
+	// Initialize OpenTelemetry instruments once (performance optimization)
+	if m.meterProvider != nil {
+		meter := m.meterProvider.Meter("scheduler")
+
+		// Create execution counter
+		m.executionCounter, _ = meter.Int64Counter(
+			"job.execution.total",
+			metric.WithDescription("Total number of job executions by status"),
+		)
+
+		// Create duration histogram
+		m.durationHistogram, _ = meter.Float64Histogram(
+			"job.execution.duration",
+			metric.WithDescription("Job execution duration in seconds"),
+			metric.WithUnit("s"),
+		)
+
+		// Create panic counter
+		m.panicCounter, _ = meter.Int64Counter(
+			"job.panic.total",
+			metric.WithDescription("Total number of job panics"),
+		)
+	}
 
 	// Store multi-tenant resource resolvers
 	m.getDB = deps.GetDB
@@ -625,20 +654,9 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 //
 // Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
 func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
-	// Skip metrics if meter provider is not configured (e.g., in tests)
-	if m.meterProvider == nil {
-		return
-	}
-
-	meter := m.meterProvider.Meter("scheduler")
-
 	// Record job execution counter
-	executionCounter, err := meter.Int64Counter(
-		"job.execution.total",
-		metric.WithDescription("Total number of job executions by status"),
-	)
-	if err == nil {
-		executionCounter.Add(context.Background(), 1,
+	if m.executionCounter != nil {
+		m.executionCounter.Add(context.Background(), 1,
 			metric.WithAttributes(
 				attribute.String(jobIDAttr, jobID),
 				attribute.String(jobStatusAttr, status),
@@ -648,13 +666,8 @@ func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, dura
 	}
 
 	// Record job execution duration histogram
-	durationHistogram, err := meter.Float64Histogram(
-		"job.execution.duration",
-		metric.WithDescription("Job execution duration in seconds"),
-		metric.WithUnit("s"),
-	)
-	if err == nil {
-		durationHistogram.Record(context.Background(), duration.Seconds(),
+	if m.durationHistogram != nil {
+		m.durationHistogram.Record(context.Background(), duration.Seconds(),
 			metric.WithAttributes(
 				attribute.String(jobIDAttr, jobID),
 				attribute.String(jobStatusAttr, status),
@@ -664,19 +677,13 @@ func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, dura
 	}
 
 	// Record panic counter if status is panic
-	if status == "panic" {
-		panicCounter, err := meter.Int64Counter(
-			"job.panic.total",
-			metric.WithDescription("Total number of job panics"),
+	if status == "panic" && m.panicCounter != nil {
+		m.panicCounter.Add(context.Background(), 1,
+			metric.WithAttributes(
+				attribute.String(jobIDAttr, jobID),
+				attribute.String(jobScheduleTypeAttr, scheduleType),
+			),
 		)
-		if err == nil {
-			panicCounter.Add(context.Background(), 1,
-				metric.WithAttributes(
-					attribute.String(jobIDAttr, jobID),
-					attribute.String(jobScheduleTypeAttr, scheduleType),
-				),
-			)
-		}
 	}
 }
 
@@ -752,7 +759,7 @@ func (m *SchedulerModule) determineJobSeverity(duration time.Duration, err error
 		threshold = m.config.Scheduler.Timeout.SlowJob
 	}
 	if threshold > 0 && duration > threshold {
-		return "info", "WARN"
+		return "warn", "WARN"
 	}
 
 	// INFO: Normal successful job
