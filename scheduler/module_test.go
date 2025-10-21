@@ -51,11 +51,8 @@ func TestJobExecutionFailure(t *testing.T) {
 	err := registrar.FixedRate("failing-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute and fail
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify job was called
-	assert.True(t, job.wasExecuted(), "Job should have been executed")
+	// Wait until the job executes (<=1s)
+	waitFor(t, job.wasExecuted)
 }
 
 // TestJobExecutionPanic verifies panic recovery
@@ -69,11 +66,8 @@ func TestJobExecutionPanic(t *testing.T) {
 	err := registrar.FixedRate("panic-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute and panic
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify job was called (and panic was recovered)
-	assert.True(t, job.wasExecuted(), "Job should have been executed before panic")
+	// Wait until the job executes (<=1s)
+	waitFor(t, job.wasExecuted)
 }
 
 // TestJobExecutionOverlappingPrevention verifies jobs don't overlap
@@ -133,11 +127,8 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	err = module.FixedRate("panic-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute and panic
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify job was executed
-	assert.True(t, job.wasExecuted(), "Job should have been executed before panic")
+	// Wait until the job executes (<=1s)
+	waitFor(t, job.wasExecuted)
 
 	// Collect metrics
 	rm := mp.Collect(t)
@@ -222,11 +213,8 @@ func TestJobExecutionWithDBGetterError(t *testing.T) {
 	err = module.FixedRate("db-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute
-	time.Sleep(200 * time.Millisecond)
-
-	// Job should execute even with DB error, but DB should be nil
-	assert.True(t, job.wasExecuted(), "Job should execute even when DB getter fails")
+	// Wait until the job executes (<=1s)
+	waitFor(t, job.wasExecuted)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&job.dbWasNil), "DB should be nil when getter fails")
 }
 
@@ -261,11 +249,8 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 	err = module.FixedRate("msg-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait for job to execute
-	time.Sleep(200 * time.Millisecond)
-
-	// Job should execute even with messaging error, but messaging should be nil
-	assert.True(t, job.wasExecuted(), "Job should execute even when messaging getter fails")
+	// Wait until the job executes (<=1s)
+	waitFor(t, job.wasExecuted)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&job.messagingWasNil), "Messaging should be nil when getter fails")
 }
 
@@ -504,4 +489,10 @@ func (j *messagingCheckJob) Execute(ctx JobContext) error {
 
 func (j *messagingCheckJob) wasExecuted() bool {
 	return atomic.LoadInt32(&j.executed) == 1
+}
+
+// place near test helpers (non-diff, supporting snippet)
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	require.Eventually(t, cond, time.Second, 10*time.Millisecond)
 }

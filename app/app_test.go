@@ -297,6 +297,9 @@ func (m *MockSchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, l
 	return m.Called(jobID, job, dayOfMonth, localTime).Error(0)
 }
 
+var _ Module = (*MockSchedulerModule)(nil)
+var _ JobRegistrar = (*MockSchedulerModule)(nil)
+
 // MockJobProviderModule implements Module + JobProvider for testing job registration
 type MockJobProviderModule struct {
 	mock.Mock
@@ -330,6 +333,9 @@ func (m *MockJobProviderModule) Shutdown() error {
 func (m *MockJobProviderModule) RegisterJobs(registrar JobRegistrar) error {
 	return m.Called(registrar).Error(0)
 }
+
+var _ Module = (*MockJobProviderModule)(nil)
+var _ JobProvider = (*MockJobProviderModule)(nil)
 
 type testAppFixture struct {
 	t         *testing.T
