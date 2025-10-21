@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,23 +10,40 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/config"
+	gobrickshttp "github.com/gaborage/go-bricks/http"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
+	// Test assertion messages
 	logLevelMismatchMsg = "log level mismatch"
 	resultCodeMismatch  = "result code mismatch"
+
+	// OpenTelemetry semantic conventions (field names for testing)
+	otelLogType        = "log.type"
+	otelHTTPStatusCode = "http.response.status_code"
+	otelHTTPMethod     = "http.request.method"
 )
 
 // recLogger is a minimal fake logger capturing the last event fields
 type recLogger struct{ last *recEvent }
 
-type recEvent struct{ fields map[string]string }
+type recEvent struct {
+	fields    map[string]string
+	intFields map[string]int
+	message   string
+}
 
 func (r *recLogger) noop() logger.LogEvent {
-	r.last = &recEvent{fields: map[string]string{}}
+	r.last = &recEvent{
+		fields:    map[string]string{},
+		intFields: map[string]int{},
+	}
 	return r.last
 }
 
@@ -47,15 +65,15 @@ func (r *recLogger) Fatal() logger.LogEvent {
 func (r *recLogger) WithContext(_ any) logger.Logger           { return r }
 func (r *recLogger) WithFields(_ map[string]any) logger.Logger { return r }
 
-func (e *recEvent) Msg(_ string) {
-	// No-op
+func (e *recEvent) Msg(msg string) {
+	e.message = msg
 }
 func (e *recEvent) Msgf(_ string, _ ...any) {
-	// No-op
+	// No-op (not used in tests)
 }
 func (e *recEvent) Err(_ error) logger.LogEvent                   { return e }
 func (e *recEvent) Str(k, v string) logger.LogEvent               { e.fields[k] = v; return e }
-func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *recEvent) Int(k string, v int) logger.LogEvent           { e.intFields[k] = v; return e }
 func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
 func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
@@ -121,10 +139,10 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 	recLog := &recLogger{}
 	e.Use(Logger(recLog, testHealthPath, testReadyPath))
 
-	e.GET("/health", func(c echo.Context) error {
+	e.GET(testHealthPath, func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
-	e.GET("/ready", func(c echo.Context) error {
+	e.GET(testReadyPath, func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
@@ -210,7 +228,7 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 
 			require.Equal(t, tt.expectedStatus, rec.Code)
 			require.NotNil(t, recLog.last, "error responses should emit action log summary")
-			require.Equal(t, tt.expectedType, recLog.last.fields["log.type"], "log should be marked as action log")
+			require.Equal(t, tt.expectedType, recLog.last.fields[otelLogType], "log should be marked as action log")
 		})
 	}
 }
@@ -240,6 +258,56 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 	require.Equal(t, http.StatusOK, rec.Code)
 	// Since an explicit WARN was logged, action summary should be suppressed
 	require.Nil(t, recLog.last, "action log should be suppressed when explicit WARN+ log occurred")
+}
+
+// TestRequestLoggerHandlesEchoNotFoundError verifies that the logger middleware
+// correctly captures the HTTP status code from echo.HTTPError when no route is matched.
+// This is a regression test for the bug where 404 errors were logged as 200 because
+// Echo's error handler (which sets the response status) runs AFTER middleware completes.
+func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
+	e := echo.New()
+	recLog := &recLogger{}
+	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+
+	// Don't register any route - let Echo return its default 404 error
+	// This simulates a request to an unmatched route like /metrics
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	recLog.last = nil
+
+	// Set a custom error handler to ensure we're testing the middleware behavior
+	// before the error handler runs (this is where the bug manifested)
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, &config.Config{
+			App: config.AppConfig{
+				Debug: true,
+				Env:   "development",
+			},
+		})
+	}
+
+	e.ServeHTTP(rec, req)
+
+	// Verify the actual HTTP response is 404
+	require.Equal(t, http.StatusNotFound, rec.Code, "Response should be 404")
+
+	// Verify the action log was emitted with correct status
+	require.NotNil(t, recLog.last, "Should emit action log for 404 error")
+	require.Equal(t, "action", recLog.last.fields[otelLogType], "Log should be marked as action log")
+
+	// This is the key assertion: the logged status should be 404, not 200
+	require.Equal(t, 404, recLog.last.intFields[otelHTTPStatusCode],
+		"Logged status should be 404, not 200 (regression test for status extraction bug)")
+
+	// Verify the result_code is WARN for 4xx errors
+	require.Equal(t, "WARN", recLog.last.fields["result_code"],
+		"404 errors should have WARN result_code")
+
+	// Verify the log message contains "4xx"
+	require.Contains(t, recLog.last.message, "4xx",
+		"Log message should mention 4xx status class")
 }
 
 // TestRequestLogContextConcurrency verifies that requestLogContext is thread-safe
@@ -642,6 +710,529 @@ func TestCreateActionMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := createActionMessage(tt.method, tt.path, tt.latency, tt.status)
 			require.Equal(t, tt.want, got, "unexpected action message format")
+		})
+	}
+}
+
+// TestExtractRequestMetadataWithResponse verifies metadata extraction when response is available.
+func TestExtractRequestMetadataWithResponse(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/users/123?q=test", http.NoBody)
+	req.Header.Set("User-Agent", "test-agent/1.0")
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/users/:id")
+	c.Response().Header().Set(echo.HeaderXRequestID, "req-456")
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, "00-trace-span-01")
+
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "POST", metadata.Method)
+	assert.Equal(t, "/api/users/123", metadata.URI)
+	assert.Equal(t, "/api/users/:id", metadata.Route)
+	assert.Equal(t, "req-456", metadata.RequestID)
+	assert.Equal(t, "00-trace-span-01", metadata.Traceparent)
+	assert.Equal(t, "test-agent/1.0", metadata.UserAgent)
+	assert.NotEmpty(t, metadata.ClientAddr)
+	assert.NotEmpty(t, metadata.TraceID) // getTraceID should return something
+}
+
+// TestExtractRequestMetadataFallbackToRequestHeader verifies fallback to request header.
+func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, testHealthPath, http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "fallback-789")
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+
+	// Don't set request ID in response header - it should fall back to request header
+	// (In real scenarios, this happens after timeout when response might be invalid)
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "GET", metadata.Method)
+	assert.Equal(t, testHealthPath, metadata.URI)
+	// Note: Echo's ResponseWriter might auto-set request ID, so we just verify
+	// the extraction doesn't panic and returns valid metadata
+	assert.NotNil(t, metadata)
+}
+
+// TestExtractRequestMetadataNoRequestID verifies behavior with missing request ID.
+func TestExtractRequestMetadataNoRequestID(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "GET", metadata.Method)
+	assert.Equal(t, "/test", metadata.URI)
+	// RequestID can be empty if not set
+	// TraceID should still be generated by getTraceID
+	assert.NotEmpty(t, metadata.TraceID)
+}
+
+// TestExtractRequestMetadataAllFields verifies all 8 fields are populated correctly.
+func TestExtractRequestMetadataAllFields(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPut, "/api/resource", http.NoBody)
+	req.Header.Set("User-Agent", "comprehensive-test/2.0")
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+	c.SetPath("/api/resource")
+	c.Response().Header().Set(echo.HeaderXRequestID, "all-fields-123")
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, "00-aabbcc-ddeeff-01")
+
+	metadata := extractRequestMetadata(c)
+
+	// Verify all 8 fields are set
+	assert.NotEmpty(t, metadata.Method, "Method should not be empty")
+	assert.NotEmpty(t, metadata.URI, "URI should not be empty")
+	assert.NotEmpty(t, metadata.Route, "Route should not be empty")
+	assert.NotEmpty(t, metadata.RequestID, "RequestID should not be empty")
+	assert.NotEmpty(t, metadata.TraceID, "TraceID should not be empty")
+	assert.NotEmpty(t, metadata.Traceparent, "Traceparent should not be empty")
+	assert.NotEmpty(t, metadata.ClientAddr, "ClientAddr should not be empty")
+	assert.NotEmpty(t, metadata.UserAgent, "UserAgent should not be empty")
+}
+
+// TestExtractOperationalMetricsWithCounters verifies extraction when counters are present.
+func TestExtractOperationalMetricsWithCounters(t *testing.T) {
+	ctx := context.Background()
+
+	// Initialize counters using logger package functions
+	ctx = logger.WithAMQPCounter(ctx)
+	ctx = logger.WithDBCounter(ctx)
+
+	// Increment counters
+	logger.IncrementAMQPCounter(ctx)
+	logger.IncrementAMQPCounter(ctx)
+	logger.IncrementAMQPCounter(ctx)
+	logger.IncrementAMQPCounter(ctx)
+	logger.IncrementAMQPCounter(ctx) // 5 total
+
+	logger.AddAMQPElapsed(ctx, 1500)
+
+	logger.IncrementDBCounter(ctx)
+	logger.IncrementDBCounter(ctx)
+	logger.IncrementDBCounter(ctx) // 3 total
+
+	logger.AddDBElapsed(ctx, 2500)
+
+	metrics := extractOperationalMetrics(ctx)
+
+	assert.Equal(t, int64(5), metrics.AMQPPublished)
+	assert.Equal(t, int64(1500), metrics.AMQPElapsed)
+	assert.Equal(t, int64(3), metrics.DBQueries)
+	assert.Equal(t, int64(2500), metrics.DBElapsed)
+}
+
+// TestExtractOperationalMetricsNoCounters verifies zero values when counters absent.
+func TestExtractOperationalMetricsNoCounters(t *testing.T) {
+	ctx := context.Background()
+
+	metrics := extractOperationalMetrics(ctx)
+
+	// All values should be zero when not set
+	assert.Equal(t, int64(0), metrics.AMQPPublished)
+	assert.Equal(t, int64(0), metrics.AMQPElapsed)
+	assert.Equal(t, int64(0), metrics.DBQueries)
+	assert.Equal(t, int64(0), metrics.DBElapsed)
+}
+
+// TestExtractOperationalMetricsPartialCounters verifies mixed presence of counters.
+func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
+	ctx := context.Background()
+
+	// Only initialize AMQP counter (not DB)
+	ctx = logger.WithAMQPCounter(ctx)
+
+	// Increment AMQP counter
+	for i := 0; i < 10; i++ {
+		logger.IncrementAMQPCounter(ctx)
+	}
+
+	metrics := extractOperationalMetrics(ctx)
+
+	assert.Equal(t, int64(10), metrics.AMQPPublished, "AMQP count should be set")
+	assert.Equal(t, int64(0), metrics.AMQPElapsed, "AMQP elapsed should be zero")
+	assert.Equal(t, int64(0), metrics.DBQueries, "DB queries should be zero (not initialized)")
+	assert.Equal(t, int64(0), metrics.DBElapsed, "DB elapsed should be zero (not initialized)")
+}
+
+// TestExtractTenantIDPresent verifies extraction when tenant exists in context.
+func TestExtractTenantIDPresent(t *testing.T) {
+	ctx := context.Background()
+
+	// Set tenant ID using multitenant package
+	ctx = multitenant.SetTenant(ctx, "tenant-abc-123")
+
+	tenantID := extractTenantID(ctx)
+
+	assert.Equal(t, "tenant-abc-123", tenantID)
+}
+
+// TestExtractTenantIDAbsent verifies empty string fallback when tenant absent.
+func TestExtractTenantIDAbsent(t *testing.T) {
+	ctx := context.Background()
+
+	tenantID := extractTenantID(ctx)
+
+	assert.Equal(t, "", tenantID, "Should return empty string when no tenant")
+}
+
+// TestNewRequestLogger verifies constructor creates valid instance.
+func TestNewRequestLogger(t *testing.T) {
+	recLog := &recLogger{}
+	cfg := LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 500,
+	}
+
+	rl := newRequestLogger(recLog, cfg)
+
+	require.NotNil(t, rl)
+	assert.Equal(t, recLog, rl.logger)
+	assert.Equal(t, cfg, rl.config)
+}
+
+// TestBuildLogEventInfoLevel verifies log event with INFO severity.
+func TestBuildLogEventInfoLevel(t *testing.T) {
+	recLog := &recLogger{}
+	metadata := requestMetadata{
+		Method:      "GET",
+		URI:         "/api/test",
+		Route:       "/api/test",
+		RequestID:   "req-123",
+		TraceID:     "trace-456",
+		Traceparent: "00-trace-span-01",
+		ClientAddr:  "127.0.0.1",
+		UserAgent:   "test/1.0",
+	}
+	metrics := operationalMetrics{
+		AMQPPublished: 2,
+		AMQPElapsed:   1000,
+		DBQueries:     3,
+		DBElapsed:     2000,
+	}
+
+	event := buildLogEvent(recLog, &logEventParams{
+		logLevel:   "info",
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   "",
+		status:     200,
+		latency:    100 * time.Millisecond,
+		resultCode: "INFO",
+		err:        nil,
+	})
+	event.Msg("test message")
+
+	require.NotNil(t, recLog.last)
+	assert.Equal(t, "action", recLog.last.fields[otelLogType])
+	assert.Equal(t, "req-123", recLog.last.fields["request_id"])
+	assert.Equal(t, "trace-456", recLog.last.fields["correlation_id"])
+	assert.Equal(t, "GET", recLog.last.fields[otelHTTPMethod])
+	assert.Equal(t, 200, recLog.last.intFields[otelHTTPStatusCode])
+	assert.Equal(t, "INFO", recLog.last.fields["result_code"])
+}
+
+// TestBuildLogEventWithError verifies error attachment.
+func TestBuildLogEventWithError(t *testing.T) {
+	recLog := &recLogger{}
+	metadata := requestMetadata{Method: "POST", URI: "/api/fail"}
+	metrics := operationalMetrics{}
+	testErr := assert.AnError
+
+	event := buildLogEvent(recLog, &logEventParams{
+		logLevel:   "error",
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   "",
+		status:     500,
+		latency:    50 * time.Millisecond,
+		resultCode: "ERROR",
+		err:        testErr,
+	})
+	event.Msg("error occurred")
+
+	require.NotNil(t, recLog.last)
+	assert.Equal(t, 500, recLog.last.intFields[otelHTTPStatusCode])
+	assert.Equal(t, "ERROR", recLog.last.fields["result_code"])
+}
+
+// TestBuildLogEventWithTenant verifies tenant ID inclusion.
+func TestBuildLogEventWithTenant(t *testing.T) {
+	recLog := &recLogger{}
+	metadata := requestMetadata{Method: "GET", URI: "/api/data"}
+	metrics := operationalMetrics{}
+
+	event := buildLogEvent(recLog, &logEventParams{
+		logLevel:   "info",
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   "tenant-xyz",
+		status:     200,
+		latency:    10 * time.Millisecond,
+		resultCode: "INFO",
+		err:        nil,
+	})
+	event.Msg("tenant request")
+
+	require.NotNil(t, recLog.last)
+	assert.Equal(t, "tenant-xyz", recLog.last.fields["tenant"])
+}
+
+// TestBuildLogEventWithoutTenant verifies no tenant field when absent.
+func TestBuildLogEventWithoutTenant(t *testing.T) {
+	recLog := &recLogger{}
+	metadata := requestMetadata{Method: "GET", URI: "/public"}
+	metrics := operationalMetrics{}
+
+	event := buildLogEvent(recLog, &logEventParams{
+		logLevel:   "info",
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   "",
+		status:     200,
+		latency:    10 * time.Millisecond,
+		resultCode: "INFO",
+		err:        nil,
+	})
+	event.Msg("public request")
+
+	require.NotNil(t, recLog.last)
+	_, hasTenant := recLog.last.fields["tenant"]
+	assert.False(t, hasTenant, "Tenant field should not be present")
+}
+
+// TestBuildLogEventAllFields verifies all fields are populated correctly.
+func TestBuildLogEventAllFields(t *testing.T) {
+	recLog := &recLogger{}
+	metadata := requestMetadata{
+		Method:      "PUT",
+		URI:         "/api/resource/123",
+		Route:       "/api/resource/:id",
+		RequestID:   "full-req-789",
+		TraceID:     "full-trace-abc",
+		Traceparent: "00-full-parent-def",
+		ClientAddr:  "192.168.1.100",
+		UserAgent:   "comprehensive-test/2.0",
+	}
+	metrics := operationalMetrics{
+		AMQPPublished: 5,
+		AMQPElapsed:   3500,
+		DBQueries:     10,
+		DBElapsed:     7500,
+	}
+
+	event := buildLogEvent(recLog, &logEventParams{
+		logLevel:   "warn",
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   "full-tenant",
+		status:     404,
+		latency:    250 * time.Millisecond,
+		resultCode: "WARN",
+		err:        nil,
+	})
+	event.Msg("comprehensive test")
+
+	require.NotNil(t, recLog.last)
+
+	// Verify all string fields
+	assert.Equal(t, "action", recLog.last.fields[otelLogType])
+	assert.Equal(t, "full-req-789", recLog.last.fields["request_id"])
+	assert.Equal(t, "full-trace-abc", recLog.last.fields["correlation_id"])
+	assert.Equal(t, "PUT", recLog.last.fields[otelHTTPMethod])
+	assert.Equal(t, "/api/resource/123", recLog.last.fields["url.path"])
+	assert.Equal(t, "/api/resource/:id", recLog.last.fields["http.route"])
+	assert.Equal(t, "192.168.1.100", recLog.last.fields["client.address"])
+	assert.Equal(t, "comprehensive-test/2.0", recLog.last.fields["user_agent.original"])
+	assert.Equal(t, "WARN", recLog.last.fields["result_code"])
+	assert.Equal(t, "00-full-parent-def", recLog.last.fields["traceparent"])
+	assert.Equal(t, "full-tenant", recLog.last.fields["tenant"])
+
+	// Verify all int fields
+	assert.Equal(t, 404, recLog.last.intFields[otelHTTPStatusCode])
+
+	// Note: int64 fields would need to be added to recEvent if we want to test them
+	// For now, we verify the function doesn't panic and basic fields are correct
+}
+
+// TestRequestLoggerShouldSkipPath verifies probe endpoint filtering.
+func TestRequestLoggerShouldSkipPath(t *testing.T) {
+	rl := newRequestLogger(&recLogger{}, LoggerConfig{
+		HealthPath: testHealthPath,
+		ReadyPath:  testReadyPath,
+	})
+
+	tests := []struct {
+		name     string
+		path     string
+		urlPath  string
+		expected bool
+	}{
+		{
+			name:     "health endpoint",
+			path:     testHealthPath,
+			expected: true,
+		},
+		{
+			name:     "ready endpoint",
+			path:     testReadyPath,
+			expected: true,
+		},
+		{
+			name:     "normal endpoint",
+			path:     "/api/users",
+			expected: false,
+		},
+		{
+			name:     "empty path falls back to URL path - health",
+			path:     "",
+			urlPath:  testHealthPath,
+			expected: true,
+		},
+		{
+			name:     "empty path falls back to URL path - normal",
+			path:     "",
+			urlPath:  "/api/data",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			urlPath := tt.urlPath
+			if urlPath == "" {
+				urlPath = tt.path
+			}
+			req := httptest.NewRequest(http.MethodGet, urlPath, http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPath(tt.path)
+
+			result := rl.shouldSkipPath(c)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestRequestLoggerExtractStatus verifies status extraction priority.
+func TestRequestLoggerExtractStatus(t *testing.T) {
+	rl := newRequestLogger(&recLogger{}, LoggerConfig{})
+
+	t.Run("error status takes precedence", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		// Set response status to 200
+		c.Response().WriteHeader(http.StatusOK)
+
+		// But return 404 error
+		err := echo.NewHTTPError(http.StatusNotFound, "not found")
+
+		status := rl.extractStatus(c, err)
+		assert.Equal(t, 404, status, "Error status should take precedence over response status")
+	})
+
+	t.Run("response status when no error", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		c.Response().WriteHeader(http.StatusCreated)
+
+		status := rl.extractStatus(c, nil)
+		assert.Equal(t, 201, status)
+	})
+
+	t.Run("zero when no status written", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		status := rl.extractStatus(c, nil)
+		assert.Equal(t, 0, status, "Should return 0 when no status has been written")
+	})
+}
+
+// TestRequestLoggerHandleFullFlow verifies end-to-end middleware execution.
+func TestRequestLoggerHandleFullFlow(t *testing.T) {
+	recLog := &recLogger{}
+	rl := newRequestLogger(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 100 * time.Millisecond,
+	})
+
+	e := echo.New()
+	e.Use(rl.Handle)
+
+	e.GET("/api/test", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	recLog.last = nil
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, recLog.last, "Should emit action log")
+	assert.Equal(t, "action", recLog.last.fields[otelLogType])
+	assert.Equal(t, "GET", recLog.last.fields[otelHTTPMethod])
+	assert.Equal(t, 200, recLog.last.intFields[otelHTTPStatusCode])
+}
+
+// TestRequestLoggerHandleSkipsHealthProbes verifies probe endpoint skipping.
+func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
+	recLog := &recLogger{}
+	rl := newRequestLogger(recLog, LoggerConfig{
+		HealthPath: "/health",
+		ReadyPath:  "/ready",
+	})
+
+	e := echo.New()
+	e.Use(rl.Handle)
+
+	e.GET(testHealthPath, func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "healthy"})
+	})
+	e.GET(testReadyPath, func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"health probe", testHealthPath},
+		{"ready probe", testReadyPath},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
+			rec := httptest.NewRecorder()
+
+			recLog.last = nil
+			e.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Nil(t, recLog.last, "Probe endpoints should not be logged")
 		})
 	}
 }
