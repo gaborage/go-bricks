@@ -28,6 +28,16 @@ const (
 	otelLogType        = "log.type"
 	otelHTTPStatusCode = "http.response.status_code"
 	otelHTTPMethod     = "http.request.method"
+
+	// Test data constants (prevent SonarQube duplication warnings)
+	testAPIUsersPath       = "/api/users"
+	testAPITestPath        = "/api/test"
+	testTraceSpan01        = "00-trace-span-01"
+	testTraceSpan02        = "00-response-trace-span-02"
+	testRequestTraceSpan01 = "00-request-trace-span-01"
+	testUserAgent          = "comprehensive-test/2.0"
+	testReqFromRequest     = "req-from-request"
+	testFallbackMessage    = "Should fallback to request header when response header empty"
 )
 
 // recLogger is a minimal fake logger capturing the last event fields
@@ -324,11 +334,11 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 	done := make(chan struct{})
 
 	// Writers: Concurrent escalateSeverity calls
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			defer func() { done <- struct{}{} }()
 
-			for j := 0; j < numIterations; j++ {
+			for j := range numIterations {
 				// Alternate between different severity levels and explicit/status escalations
 				if j%2 == 0 {
 					reqCtx.escalateSeverity(zerolog.WarnLevel)
@@ -340,11 +350,11 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 	}
 
 	// Readers: Concurrent reads of fields
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			defer func() { done <- struct{}{} }()
 
-			for j := 0; j < numIterations; j++ {
+			for range numIterations {
 				// Read operations that would race without proper locking
 				_ = reqCtx.getStartTime()
 				_ = reqCtx.hadExplicitWarningOccurred()
@@ -353,7 +363,7 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines*2; i++ {
+	for range numGoroutines * 2 {
 		<-done
 	}
 
@@ -374,7 +384,7 @@ func TestEscalateSeverityConcurrency(t *testing.T) {
 		const numGoroutines = 20
 		done := make(chan struct{})
 
-		for i := 0; i < numGoroutines; i++ {
+		for range numGoroutines {
 			go func() {
 				defer func() { done <- struct{}{} }()
 				// Simulate concurrent severity escalations from async work
@@ -383,7 +393,7 @@ func TestEscalateSeverityConcurrency(t *testing.T) {
 		}
 
 		// Wait for all goroutines
-		for i := 0; i < numGoroutines; i++ {
+		for range numGoroutines {
 			<-done
 		}
 
@@ -643,18 +653,18 @@ func TestCreateActionMessage(t *testing.T) {
 		{
 			name:    "standard success request",
 			method:  "GET",
-			path:    "/api/users",
+			path:    testAPIUsersPath,
 			latency: 123 * time.Millisecond,
 			status:  200,
-			want:    "GET /api/users completed in 123ms with status 2xx",
+			want:    "GET " + testAPIUsersPath + " completed in 123ms with status 2xx",
 		},
 		{
 			name:    "post request with 201",
 			method:  "POST",
-			path:    "/api/users",
+			path:    testAPIUsersPath,
 			latency: 456 * time.Millisecond,
 			status:  201,
-			want:    "POST /api/users completed in 456ms with status 2xx",
+			want:    "POST " + testAPIUsersPath + " completed in 456ms with status 2xx",
 		},
 		{
 			name:    "client error 404",
@@ -724,7 +734,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetPath("/api/users/:id")
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-456")
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, "00-trace-span-01")
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan01)
 
 	metadata := extractRequestMetadata(c)
 
@@ -732,7 +742,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 	assert.Equal(t, "/api/users/123", metadata.URI)
 	assert.Equal(t, "/api/users/:id", metadata.Route)
 	assert.Equal(t, "req-456", metadata.RequestID)
-	assert.Equal(t, "00-trace-span-01", metadata.Traceparent)
+	assert.Equal(t, testTraceSpan01, metadata.Traceparent)
 	assert.Equal(t, "test-agent/1.0", metadata.UserAgent)
 	assert.NotEmpty(t, metadata.ClientAddr)
 	assert.NotEmpty(t, metadata.TraceID) // getTraceID should return something
@@ -779,7 +789,7 @@ func TestExtractRequestMetadataNoRequestID(t *testing.T) {
 func TestExtractRequestMetadataAllFields(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPut, "/api/resource", http.NoBody)
-	req.Header.Set("User-Agent", "comprehensive-test/2.0")
+	req.Header.Set("User-Agent", testUserAgent)
 	rec := httptest.NewRecorder()
 
 	c := e.NewContext(req, rec)
@@ -852,7 +862,7 @@ func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
 	ctx = logger.WithAMQPCounter(ctx)
 
 	// Increment AMQP counter
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		logger.IncrementAMQPCounter(ctx)
 	}
 
@@ -906,11 +916,11 @@ func TestBuildLogEventInfoLevel(t *testing.T) {
 	recLog := &recLogger{}
 	metadata := requestMetadata{
 		Method:      "GET",
-		URI:         "/api/test",
-		Route:       "/api/test",
+		URI:         testAPITestPath,
+		Route:       testAPITestPath,
 		RequestID:   "req-123",
 		TraceID:     "trace-456",
-		Traceparent: "00-trace-span-01",
+		Traceparent: testTraceSpan01,
 		ClientAddr:  "127.0.0.1",
 		UserAgent:   "test/1.0",
 	}
@@ -1022,7 +1032,7 @@ func TestBuildLogEventAllFields(t *testing.T) {
 		TraceID:     "full-trace-abc",
 		Traceparent: "00-full-parent-def",
 		ClientAddr:  "192.168.1.100",
-		UserAgent:   "comprehensive-test/2.0",
+		UserAgent:   testUserAgent,
 	}
 	metrics := operationalMetrics{
 		AMQPPublished: 5,
@@ -1053,7 +1063,7 @@ func TestBuildLogEventAllFields(t *testing.T) {
 	assert.Equal(t, "/api/resource/123", recLog.last.fields["url.path"])
 	assert.Equal(t, "/api/resource/:id", recLog.last.fields["http.route"])
 	assert.Equal(t, "192.168.1.100", recLog.last.fields["client.address"])
-	assert.Equal(t, "comprehensive-test/2.0", recLog.last.fields["user_agent.original"])
+	assert.Equal(t, testUserAgent, recLog.last.fields["user_agent.original"])
 	assert.Equal(t, "WARN", recLog.last.fields["result_code"])
 	assert.Equal(t, "00-full-parent-def", recLog.last.fields["traceparent"])
 	assert.Equal(t, "full-tenant", recLog.last.fields["tenant"])
@@ -1180,11 +1190,11 @@ func TestRequestLoggerHandleFullFlow(t *testing.T) {
 	e := echo.New()
 	e.Use(rl.Handle)
 
-	e.GET("/api/test", func(c echo.Context) error {
+	e.GET(testAPITestPath, func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/test", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, testAPITestPath, http.NoBody)
 	rec := httptest.NewRecorder()
 
 	recLog.last = nil
@@ -1235,4 +1245,86 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 			assert.Nil(t, recLog.last, "Probe endpoints should not be logged")
 		})
 	}
+}
+
+// TestExtractRequestMetadataEmptyResponseHeaders verifies fallback when response exists but headers are empty.
+// This tests the fix for the scenario where middleware ordering causes response headers to be unset
+// even though the response object is non-nil.
+func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, testAPITestPath, http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
+	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+
+	// Response exists but headers are NOT set (middleware ordering issue)
+	// The response headers are empty, so extraction should fall back to request headers
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "GET", metadata.Method)
+	assert.Equal(t, testAPITestPath, metadata.URI)
+	assert.Equal(t, testReqFromRequest, metadata.RequestID, testFallbackMessage)
+	assert.Equal(t, testRequestTraceSpan01, metadata.Traceparent, testFallbackMessage)
+}
+
+// TestExtractRequestMetadataPartialResponseHeaders verifies independent fallback for each header.
+// This ensures that if only one header is empty in the response, only that header falls back.
+func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/partial", http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
+	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+
+	// Only set traceparent in response, leave requestID empty
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, testReqFromRequest, metadata.RequestID, testFallbackMessage)
+	assert.Equal(t, testTraceSpan02, metadata.Traceparent, "Should use response header when present")
+}
+
+// TestExtractRequestMetadataResponseHeadersPriority verifies response headers take precedence when set.
+// This ensures the existing behavior is maintained - response headers are preferred.
+func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/priority", http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
+	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+
+	// Set different values in response headers (middleware may transform them)
+	c.Response().Header().Set(echo.HeaderXRequestID, "req-from-response")
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "req-from-response", metadata.RequestID, "Should prefer response header when both are set")
+	assert.Equal(t, testTraceSpan02, metadata.Traceparent, "Should prefer response header when both are set")
+}
+
+// TestExtractRequestMetadataMissingBothRequestAndResponseHeaders verifies behavior when headers absent everywhere.
+// This ensures the function doesn't panic and returns empty strings gracefully.
+func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/no-headers", http.NoBody)
+	// Don't set any headers in request
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+	// Don't set any headers in response either
+
+	metadata := extractRequestMetadata(c)
+
+	assert.Equal(t, "GET", metadata.Method)
+	assert.Equal(t, "/api/no-headers", metadata.URI)
+	assert.Equal(t, "", metadata.RequestID, "Should return empty string when headers missing everywhere")
+	assert.Equal(t, "", metadata.Traceparent, "Should return empty string when headers missing everywhere")
 }
