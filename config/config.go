@@ -110,6 +110,12 @@ func loadDefaults(k *koanf.Koanf) error {
 
 		// Source configuration defaults
 		"source.type": SourceTypeStatic,
+
+		// Scheduler defaults
+		"scheduler.timeout.shutdown":        "30s",
+		"scheduler.timeout.slowjob":         "25s",
+		"scheduler.security.cidrallowlist":  []string{},
+		"scheduler.security.trustedproxies": []string{},
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

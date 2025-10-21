@@ -28,6 +28,8 @@ func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 
 // Register adds a module to the registry and initializes it.
 // It calls the module's Init method with the injected dependencies.
+// Special handling: If the module implements app.JobRegistrar, it is automatically
+// wired into ModuleDeps.Scheduler for other modules to use.
 func (r *ModuleRegistry) Register(module Module) error {
 	moduleName := module.Name()
 
@@ -37,6 +39,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 
 	if err := module.Init(r.deps); err != nil {
 		return err
+	}
+
+	// Special case: If this module is a JobRegistrar (scheduler module),
+	// make it available to other modules via deps.Scheduler
+	if jobRegistrar, ok := module.(JobRegistrar); ok {
+		r.deps.Scheduler = jobRegistrar
+		r.logger.Info().
+			Str("module", moduleName).
+			Msg("Scheduler module registered - available to other modules via deps.Scheduler")
 	}
 
 	// Add to lifecycle registry
@@ -93,6 +104,39 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 		Int("publishers", stats.Publishers).
 		Int("consumers", stats.Consumers).
 		Msg("Messaging declarations collected and validated successfully")
+
+	return nil
+}
+
+// RegisterJobs calls RegisterJobs on modules that implement JobProvider interface.
+// This method is called after all modules have been initialized, making module registration
+// order irrelevant for job scheduling. If no scheduler is registered, this method skips silently.
+func (r *ModuleRegistry) RegisterJobs() error {
+	// Skip if no scheduler registered
+	if r.deps.Scheduler == nil {
+		r.logger.Debug().Msg("No scheduler registered, skipping job registration")
+		return nil
+	}
+
+	jobProviderCount := 0
+	for _, module := range r.modules {
+		if jobProvider, ok := module.(JobProvider); ok {
+			jobProviderCount++
+			r.logger.Info().
+				Str("module", module.Name()).
+				Msg("Registering module jobs")
+
+			if err := jobProvider.RegisterJobs(r.deps.Scheduler); err != nil {
+				return fmt.Errorf("module '%s' job registration failed: %w", module.Name(), err)
+			}
+		}
+	}
+
+	if jobProviderCount > 0 {
+		r.logger.Info().
+			Int("modules", jobProviderCount).
+			Msg("Job registration completed successfully")
+	}
 
 	return nil
 }

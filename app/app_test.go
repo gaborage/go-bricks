@@ -247,6 +247,96 @@ func (m *MockModule) Shutdown() error {
 	return m.Called().Error(0)
 }
 
+// MockSchedulerModule implements Module + JobRegistrar for testing scheduler wiring
+type MockSchedulerModule struct {
+	mock.Mock
+	name string
+}
+
+func (m *MockSchedulerModule) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return m.Called().String(0)
+}
+
+func (m *MockSchedulerModule) Init(deps *ModuleDeps) error {
+	return m.Called(deps).Error(0)
+}
+
+func (m *MockSchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.Called(hr, r)
+}
+
+func (m *MockSchedulerModule) DeclareMessaging(decls *messaging.Declarations) {
+	m.Called(decls)
+}
+
+func (m *MockSchedulerModule) Shutdown() error {
+	return m.Called().Error(0)
+}
+
+// JobRegistrar interface implementation
+func (m *MockSchedulerModule) FixedRate(jobID string, job any, interval time.Duration) error {
+	return m.Called(jobID, job, interval).Error(0)
+}
+
+func (m *MockSchedulerModule) DailyAt(jobID string, job any, localTime time.Time) error {
+	return m.Called(jobID, job, localTime).Error(0)
+}
+
+func (m *MockSchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
+	return m.Called(jobID, job, dayOfWeek, localTime).Error(0)
+}
+
+func (m *MockSchedulerModule) HourlyAt(jobID string, job any, minute int) error {
+	return m.Called(jobID, job, minute).Error(0)
+}
+
+func (m *MockSchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
+	return m.Called(jobID, job, dayOfMonth, localTime).Error(0)
+}
+
+var _ Module = (*MockSchedulerModule)(nil)
+var _ JobRegistrar = (*MockSchedulerModule)(nil)
+
+// MockJobProviderModule implements Module + JobProvider for testing job registration
+type MockJobProviderModule struct {
+	mock.Mock
+	name string
+}
+
+func (m *MockJobProviderModule) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return m.Called().String(0)
+}
+
+func (m *MockJobProviderModule) Init(deps *ModuleDeps) error {
+	return m.Called(deps).Error(0)
+}
+
+func (m *MockJobProviderModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	m.Called(hr, r)
+}
+
+func (m *MockJobProviderModule) DeclareMessaging(decls *messaging.Declarations) {
+	m.Called(decls)
+}
+
+func (m *MockJobProviderModule) Shutdown() error {
+	return m.Called().Error(0)
+}
+
+// JobProvider interface implementation
+func (m *MockJobProviderModule) RegisterJobs(registrar JobRegistrar) error {
+	return m.Called(registrar).Error(0)
+}
+
+var _ Module = (*MockJobProviderModule)(nil)
+var _ JobProvider = (*MockJobProviderModule)(nil)
+
 type testAppFixture struct {
 	t         *testing.T
 	app       *App

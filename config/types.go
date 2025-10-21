@@ -20,6 +20,7 @@ type Config struct {
 	Multitenant MultitenantConfig `koanf:"multitenant" json:"multitenant" yaml:"multitenant" toml:"multitenant" mapstructure:"multitenant"`
 	Debug       DebugConfig       `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
 	Source      SourceConfig      `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
+	Scheduler   SchedulerConfig   `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -276,4 +277,35 @@ const (
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {
 	Type string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // SourceTypeStatic for YAML config, SourceTypeDynamic for external stores
+}
+
+// SchedulerConfig holds job scheduler settings.
+type SchedulerConfig struct {
+	Security SchedulerSecurityConfig `koanf:"security" json:"security" yaml:"security" toml:"security" mapstructure:"security"`
+	Timeout  SchedulerTimeoutConfig  `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
+}
+
+// SchedulerSecurityConfig holds security settings for scheduler system APIs.
+type SchedulerSecurityConfig struct {
+	// CIDRAllowlist holds CIDR ranges allowed to access /_sys/job* endpoints.
+	// Empty list = localhost-only access (127.0.0.1, ::1).
+	// Non-empty list = restrict to matching IP ranges only.
+	CIDRAllowlist []string `koanf:"cidrallowlist" json:"cidrallowlist" yaml:"cidrallowlist" toml:"cidrallowlist" mapstructure:"cidrallowlist"`
+
+	// TrustedProxies holds CIDR ranges of trusted reverse proxies.
+	// X-Forwarded-For and X-Real-IP headers are ONLY honored if the immediate peer
+	// matches one of these CIDR ranges. Empty list = do not trust any proxy headers.
+	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
+}
+
+// SchedulerTimeoutConfig holds timeout and threshold settings for scheduler operations.
+type SchedulerTimeoutConfig struct {
+	// Shutdown is the graceful shutdown timeout for in-flight jobs.
+	// Default: 30s.
+	Shutdown time.Duration `koanf:"shutdown" json:"shutdown" yaml:"shutdown" toml:"shutdown" mapstructure:"shutdown"`
+
+	// SlowJob is the execution duration threshold for marking jobs as slow.
+	// Jobs exceeding this duration are logged with result_code="WARN" even if successful.
+	// Zero or negative = disabled. Default: 30s.
+	SlowJob time.Duration `koanf:"slowjob" json:"slowjob" yaml:"slowjob" toml:"slowjob" mapstructure:"slowjob"`
 }
