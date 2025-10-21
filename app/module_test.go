@@ -289,3 +289,168 @@ func TestMetadataRegistryOperations(t *testing.T) {
 	registry.Clear()
 	assert.Equal(t, 0, registry.Count())
 }
+
+// TestModuleRegistryRegisterSchedulerModule verifies JobRegistrar wiring
+func TestModuleRegistryRegisterSchedulerModule(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register a module that implements JobRegistrar
+	scheduler := &MockSchedulerModule{name: "scheduler"}
+	scheduler.On("Init", deps).Return(nil)
+
+	err := registry.Register(scheduler)
+	assert.NoError(t, err)
+
+	// Verify scheduler was wired into deps
+	assert.NotNil(t, deps.Scheduler, "Scheduler should be wired into deps")
+	assert.Equal(t, scheduler, deps.Scheduler, "Scheduler should be the registered module")
+
+	scheduler.AssertExpectations(t)
+}
+
+// TestModuleRegistryRegisterNonSchedulerModule verifies non-scheduler modules don't affect deps.Scheduler
+func TestModuleRegistryRegisterNonSchedulerModule(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register a normal module (not JobRegistrar)
+	module := &MockModule{name: "normal-module"}
+	module.On("Init", deps).Return(nil)
+
+	err := registry.Register(module)
+	assert.NoError(t, err)
+
+	// Verify deps.Scheduler is still nil
+	assert.Nil(t, deps.Scheduler, "Scheduler should remain nil for non-scheduler modules")
+
+	module.AssertExpectations(t)
+}
+
+// TestRegisterJobsNoScheduler verifies RegisterJobs skips when no scheduler is registered
+func TestRegisterJobsNoScheduler(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger:    log,
+		Config:    &config.Config{},
+		Scheduler: nil, // No scheduler
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register a module with JobProvider
+	jobProvider := &MockJobProviderModule{name: "job-provider"}
+	jobProvider.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(jobProvider))
+
+	// Call RegisterJobs - should skip silently
+	err := registry.RegisterJobs()
+	assert.NoError(t, err)
+
+	// Verify RegisterJobs was NOT called on the provider
+	jobProvider.AssertNotCalled(t, "RegisterJobs")
+}
+
+// TestRegisterJobsNoJobProviders verifies RegisterJobs when no modules implement JobProvider
+func TestRegisterJobsNoJobProviders(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register scheduler
+	scheduler := &MockSchedulerModule{name: "scheduler"}
+	scheduler.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(scheduler))
+
+	// Register normal module (no JobProvider)
+	module := &MockModule{name: "normal-module"}
+	module.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(module))
+
+	// Call RegisterJobs
+	err := registry.RegisterJobs()
+	assert.NoError(t, err)
+
+	// No jobs should be registered
+	scheduler.AssertExpectations(t)
+	module.AssertExpectations(t)
+}
+
+// TestRegisterJobsSuccess verifies successful job registration from multiple providers
+func TestRegisterJobsSuccess(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register scheduler
+	scheduler := &MockSchedulerModule{name: "scheduler"}
+	scheduler.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(scheduler))
+
+	// Register two JobProvider modules
+	provider1 := &MockJobProviderModule{name: "provider-1"}
+	provider1.On("Init", deps).Return(nil)
+	provider1.On("RegisterJobs", scheduler).Return(nil)
+	require.NoError(t, registry.Register(provider1))
+
+	provider2 := &MockJobProviderModule{name: "provider-2"}
+	provider2.On("Init", deps).Return(nil)
+	provider2.On("RegisterJobs", scheduler).Return(nil)
+	require.NoError(t, registry.Register(provider2))
+
+	// Call RegisterJobs
+	err := registry.RegisterJobs()
+	assert.NoError(t, err)
+
+	// Verify both providers were called
+	provider1.AssertExpectations(t)
+	provider2.AssertExpectations(t)
+}
+
+// TestRegisterJobsWithError verifies error handling during job registration
+func TestRegisterJobsWithError(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register scheduler
+	scheduler := &MockSchedulerModule{name: "scheduler"}
+	scheduler.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(scheduler))
+
+	// Register JobProvider that returns error
+	provider := &MockJobProviderModule{name: "failing-provider"}
+	provider.On("Init", deps).Return(nil)
+	provider.On("RegisterJobs", scheduler).Return(errors.New("registration failed"))
+	require.NoError(t, registry.Register(provider))
+
+	// Call RegisterJobs - should return error
+	err := registry.RegisterJobs()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failing-provider")
+	assert.Contains(t, err.Error(), "registration failed")
+
+	provider.AssertExpectations(t)
+}

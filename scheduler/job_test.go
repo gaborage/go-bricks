@@ -230,6 +230,46 @@ func TestJobContextContextBehavior(t *testing.T) {
 	})
 }
 
+// TestJobContextDBGetterError verifies DB getter error handling
+func TestJobContextDBGetterError(t *testing.T) {
+	ctx := newJobContext(
+		context.Background(),
+		"test-job",
+		"manual",
+		logger.New("info", false),
+		func() types.Interface {
+			// Simulate DB getter error by returning nil
+			return nil
+		},
+		nilMessagingResolver,
+		nil,
+	)
+
+	// DB() should return nil when getter fails
+	db := ctx.DB()
+	assert.Nil(t, db, "DB should be nil when getter returns nil")
+}
+
+// TestJobContextMessagingGetterError verifies messaging getter error handling
+func TestJobContextMessagingGetterError(t *testing.T) {
+	ctx := newJobContext(
+		context.Background(),
+		"test-job",
+		"manual",
+		logger.New("info", false),
+		nilDBResolver,
+		func() messaging.Client {
+			// Simulate messaging getter error by returning nil
+			return nil
+		},
+		nil,
+	)
+
+	// Messaging() should return nil when getter fails
+	msg := ctx.Messaging()
+	assert.Nil(t, msg, "Messaging should be nil when getter returns nil")
+}
+
 // testJob is a simple test implementation of Job interface
 type testJob struct {
 	executed bool
