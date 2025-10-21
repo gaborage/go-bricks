@@ -114,4 +114,5 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 
 	// Verify RegisterJobs was called on the provider
 	jobProvider.AssertExpectations(t)
+	scheduler.AssertExpectations(t)
 }
