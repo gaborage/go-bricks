@@ -318,17 +318,24 @@ func formatStatusForMessage(status int) string {
 }
 
 // extractRequestMetadata extracts HTTP request metadata from Echo context.
-// Handles nil response safely by falling back to request headers.
+// Handles nil response and empty headers safely by falling back to request headers.
 func extractRequestMetadata(c echo.Context) requestMetadata {
 	var requestID, traceparent string
 
-	// SAFETY: Response may be nil after timeout, safely extract headers
+	// SAFETY: Try response headers first (may be transformed by middleware),
+	// fall back to request headers if response is nil or headers empty.
+	// This handles middleware ordering and timeout scenarios.
 	if resp := c.Response(); resp != nil {
 		requestID = resp.Header().Get(echo.HeaderXRequestID)
 		traceparent = resp.Header().Get(gobrickshttp.HeaderTraceParent)
-	} else {
-		// Fallback to request header if response is unavailable
+	}
+
+	// Fallback to request headers (always available, source of truth)
+	if requestID == "" {
 		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+	}
+	if traceparent == "" {
+		traceparent = c.Request().Header.Get(gobrickshttp.HeaderTraceParent)
 	}
 
 	return requestMetadata{
