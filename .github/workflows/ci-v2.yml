@@ -16,7 +16,9 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
+      # yamllint: valid GitHub Actions context expression
       framework: ${{ steps.filter.outputs.framework }}
+      # yamllint: valid GitHub Actions context expression
       tool: ${{ steps.filter.outputs.tool }}
     steps:
       - uses: actions/checkout@v5

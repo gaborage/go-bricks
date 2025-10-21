@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	goerrors "errors"
 	"strconv"
 	"time"
 
@@ -25,6 +27,121 @@ type LoggerConfig struct {
 	SlowRequestThreshold time.Duration
 }
 
+// requestMetadata bundles HTTP request metadata for logging.
+// This reduces parameter passing and improves code clarity.
+type requestMetadata struct {
+	Method      string
+	URI         string
+	Route       string
+	RequestID   string
+	TraceID     string
+	Traceparent string
+	ClientAddr  string
+	UserAgent   string
+}
+
+// operationalMetrics bundles operational counters for logging.
+// This provides a clear aggregation of AMQP and database metrics.
+type operationalMetrics struct {
+	AMQPPublished int64
+	AMQPElapsed   int64
+	DBQueries     int64
+	DBElapsed     int64
+}
+
+// logEventParams bundles parameters needed to construct a log event.
+// This reduces parameter count and improves code organization.
+type logEventParams struct {
+	logLevel   string
+	metadata   *requestMetadata
+	metrics    operationalMetrics
+	tenantID   string
+	status     int
+	latency    time.Duration
+	resultCode string
+	err        error
+}
+
+// requestLogger encapsulates logging middleware logic with configuration.
+// This struct-based approach reduces nesting and improves testability.
+type requestLogger struct {
+	logger logger.Logger
+	config LoggerConfig
+}
+
+// newRequestLogger creates a new request logger with the specified configuration.
+func newRequestLogger(log logger.Logger, cfg LoggerConfig) *requestLogger {
+	return &requestLogger{
+		logger: log,
+		config: cfg,
+	}
+}
+
+// Handle returns the middleware handler function for request logging.
+// This method replaces the nested closure pattern with a struct-based approach.
+func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Initialize request logging context
+		reqCtx := newRequestLogContext()
+		c.Set(RequestLogContextKey, reqCtx)
+
+		// Attach severity hook to request context so WARN+ logs suppress action summaries
+		ctxWithHook := logger.WithSeverityHook(c.Request().Context(), reqCtx.escalateSeverity)
+		c.SetRequest(c.Request().WithContext(ctxWithHook))
+
+		// Skip probe endpoints from logs
+		if rl.shouldSkipPath(c) {
+			return next(c)
+		}
+
+		// Execute request
+		err := next(c)
+
+		// Calculate request latency (thread-safe read)
+		latency := time.Since(reqCtx.getStartTime())
+
+		// Extract status code from error or response
+		status := rl.extractStatus(c, err)
+
+		// Update peak severity based on final HTTP status
+		updateSeverityFromStatus(reqCtx, status, err)
+
+		// Emit action log summary if no explicit WARN+ logs occurred
+		shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
+		if shouldLogActionSummary {
+			logActionSummary(c, rl.logger, rl.config, latency, status, err)
+		}
+
+		return err
+	}
+}
+
+// shouldSkipPath checks if the request path should be excluded from logging.
+// Returns true for health and readiness probe endpoints.
+func (rl *requestLogger) shouldSkipPath(c echo.Context) bool {
+	path := c.Path()
+	if path == "" {
+		path = c.Request().URL.Path
+	}
+	return path == rl.config.HealthPath || path == rl.config.ReadyPath
+}
+
+// extractStatus extracts HTTP status code from error or response.
+// Prioritizes error status (for unmatched routes) over response status.
+func (rl *requestLogger) extractStatus(c echo.Context, err error) int {
+	// Try error first (handles Echo's default 404 for unmatched routes)
+	if status := extractStatusFromError(err); status != 0 {
+		return status
+	}
+
+	// Fallback to response status (handles explicit c.JSON(status, ...))
+	if resp := c.Response(); resp != nil {
+		return resp.Status
+	}
+
+	return 0
+}
+
 // Logger returns a request logging middleware using the default configuration.
 // It logs HTTP requests with OpenTelemetry semantic conventions and dual-mode logging support.
 //
@@ -46,55 +163,8 @@ func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc
 // lifecycle reaches WARN+, the request is logged as a trace log. Otherwise, a synthesized
 // action log summary is emitted at request completion.
 func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Initialize request logging context
-			reqCtx := newRequestLogContext()
-			c.Set(RequestLogContextKey, reqCtx)
-
-			// Attach severity hook to request context so WARN+ logs suppress action summaries
-			ctxWithHook := logger.WithSeverityHook(c.Request().Context(), reqCtx.escalateSeverity)
-			c.SetRequest(c.Request().WithContext(ctxWithHook))
-
-			// Skip probe endpoints from logs
-			path := c.Path()
-			if path == "" {
-				path = c.Request().URL.Path
-			}
-			if path == cfg.HealthPath || path == cfg.ReadyPath {
-				return next(c)
-			}
-
-			// Execute request
-			err := next(c)
-
-			// Calculate request latency (thread-safe read)
-			latency := time.Since(reqCtx.getStartTime())
-
-			// SAFETY: Response may be nil in edge cases (panics, future refactoring)
-			status := 0
-			if resp := c.Response(); resp != nil {
-				status = resp.Status
-			}
-
-			// Update peak severity based on final HTTP status
-			updateSeverityFromStatus(reqCtx, status, err)
-
-			// Emit action log summary if:
-			// 1. No explicit WARN+ logs were emitted during request execution, OR
-			// 2. The final status resulted in a WARN/ERROR (4xx/5xx) even if no explicit logs occurred
-			//
-			// This ensures that error responses always produce a final log entry, either as:
-			// - An action log with WARN/ERROR severity (if no explicit logs during execution)
-			// - Trace logs already emitted during request lifecycle (if explicit WARN+ logs occurred)
-			shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
-			if shouldLogActionSummary {
-				logActionSummary(c, log, cfg, latency, status, err)
-			}
-
-			return err
-		}
-	}
+	rl := newRequestLogger(log, cfg)
+	return rl.Handle
 }
 
 // updateSeverityFromStatus escalates severity based on HTTP status code and error.
@@ -118,73 +188,64 @@ func logActionSummary(
 	err error,
 ) {
 	ctx := c.Request().Context()
-	contextLog := log.WithContext(ctx)
 
-	// Determine log severity and result_code based on status + latency
+	// Extract all data using helper functions
+	metadata := extractRequestMetadata(c)
+	metrics := extractOperationalMetrics(ctx)
+	tenantID := extractTenantID(ctx)
+
+	// Determine log severity and result_code
 	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err)
 
+	// Build and emit log event
+	event := buildLogEvent(log.WithContext(ctx), &logEventParams{
+		logLevel:   logLevel,
+		metadata:   &metadata,
+		metrics:    metrics,
+		tenantID:   tenantID,
+		status:     status,
+		latency:    latency,
+		resultCode: resultCode,
+		err:        err,
+	})
+
+	event.Msg(createActionMessage(metadata.Method, metadata.URI, latency, status))
+}
+
+// buildLogEvent constructs a log event with all OpenTelemetry fields populated.
+// This function is pure - it takes extracted data and produces a configured log event.
+func buildLogEvent(log logger.Logger, params *logEventParams) logger.LogEvent {
 	// Create log event with appropriate severity
-	event := createLogEvent(contextLog, logLevel)
+	event := createLogEvent(log, params.logLevel)
 
 	// Add error if present
-	if err != nil {
-		event = event.Err(err)
+	if params.err != nil {
+		event = event.Err(params.err)
 	}
 
-	// Tenant context
-	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
-		event = event.Str("tenant", tenantID)
+	// Add tenant context if present
+	if params.tenantID != "" {
+		event = event.Str("tenant", params.tenantID)
 	}
-
-	// Get operational counters from request context
-	amqpCount := logger.GetAMQPCounter(ctx)
-	dbCount := logger.GetDBCounter(ctx)
-	amqpElapsed := logger.GetAMQPElapsed(ctx)
-	dbElapsed := logger.GetDBElapsed(ctx)
-
-	// Resolve trace ID for correlation
-	traceID := getTraceID(c)
-
-	// SAFETY: Response may be nil after timeout, safely extract traceparent
-	traceparent := ""
-	if resp := c.Response(); resp != nil {
-		traceparent = resp.Header().Get(gobrickshttp.HeaderTraceParent)
-	}
-
-	// Get request details
-	method := c.Request().Method
-	uri := c.Request().URL.Path
-
-	// SAFETY: Response may be nil after timeout, safely extract request ID
-	requestID := ""
-	if resp := c.Response(); resp != nil {
-		requestID = resp.Header().Get(echo.HeaderXRequestID)
-	} else {
-		// Fallback to request header if response is unavailable
-		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
-	}
-
-	route := c.Path() // Echo route pattern (e.g., /api/users/:id)
 
 	// Emit action log with OpenTelemetry HTTP semantic conventions
-	event.
+	return event.
 		Str("log.type", "action"). // Mark as action log for dual-mode routing
-		Str("request_id", requestID).
-		Str("correlation_id", traceID).
-		Str("http.request.method", method).
-		Int("http.response.status_code", status).
-		Int64("http.server.request.duration", latency.Nanoseconds()). // OTel uses nanoseconds
-		Str("url.path", uri).
-		Str("http.route", route).
-		Str("client.address", c.RealIP()).
-		Str("user_agent.original", c.Request().UserAgent()).
-		Str("result_code", resultCode).
-		Int64("amqp_published", amqpCount).
-		Int64("amqp_elapsed", amqpElapsed).
-		Int64("db_queries", dbCount).
-		Int64("db_elapsed", dbElapsed).
-		Str("traceparent", traceparent).
-		Msg(createActionMessage(method, uri, latency, status))
+		Str("request_id", params.metadata.RequestID).
+		Str("correlation_id", params.metadata.TraceID).
+		Str("http.request.method", params.metadata.Method).
+		Int("http.response.status_code", params.status).
+		Int64("http.server.request.duration", params.latency.Nanoseconds()). // OTel uses nanoseconds
+		Str("url.path", params.metadata.URI).
+		Str("http.route", params.metadata.Route).
+		Str("client.address", params.metadata.ClientAddr).
+		Str("user_agent.original", params.metadata.UserAgent).
+		Str("result_code", params.resultCode).
+		Int64("amqp_published", params.metrics.AMQPPublished).
+		Int64("amqp_elapsed", params.metrics.AMQPElapsed).
+		Int64("db_queries", params.metrics.DBQueries).
+		Int64("db_elapsed", params.metrics.DBElapsed).
+		Str("traceparent", params.metadata.Traceparent)
 }
 
 // determineSeverity calculates log severity and result_code based on HTTP status, latency, and errors.
@@ -254,4 +315,68 @@ func formatStatusForMessage(status int) string {
 		return strconv.Itoa(status/100) + "xx"
 	}
 	return strconv.Itoa(status)
+}
+
+// extractRequestMetadata extracts HTTP request metadata from Echo context.
+// Handles nil response safely by falling back to request headers.
+func extractRequestMetadata(c echo.Context) requestMetadata {
+	var requestID, traceparent string
+
+	// SAFETY: Response may be nil after timeout, safely extract headers
+	if resp := c.Response(); resp != nil {
+		requestID = resp.Header().Get(echo.HeaderXRequestID)
+		traceparent = resp.Header().Get(gobrickshttp.HeaderTraceParent)
+	} else {
+		// Fallback to request header if response is unavailable
+		requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+	}
+
+	return requestMetadata{
+		Method:      c.Request().Method,
+		URI:         c.Request().URL.Path,
+		Route:       c.Path(), // Echo route pattern (e.g., /api/users/:id)
+		RequestID:   requestID,
+		TraceID:     getTraceID(c),
+		Traceparent: traceparent,
+		ClientAddr:  c.RealIP(),
+		UserAgent:   c.Request().UserAgent(),
+	}
+}
+
+// extractOperationalMetrics extracts operational counters from request context.
+// Returns zero values if counters are not present.
+func extractOperationalMetrics(ctx context.Context) operationalMetrics {
+	return operationalMetrics{
+		AMQPPublished: logger.GetAMQPCounter(ctx),
+		AMQPElapsed:   logger.GetAMQPElapsed(ctx),
+		DBQueries:     logger.GetDBCounter(ctx),
+		DBElapsed:     logger.GetDBElapsed(ctx),
+	}
+}
+
+// extractTenantID extracts tenant ID from request context.
+// Returns empty string if tenant is not present.
+func extractTenantID(ctx context.Context) string {
+	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
+		return tenantID
+	}
+	return ""
+}
+
+// extractStatusFromError extracts HTTP status code from echo.HTTPError.
+// Returns 0 if err is nil or not an echo.HTTPError.
+//
+// This is necessary because Echo's error handler runs AFTER middleware completes,
+// so c.Response().Status may not be set yet when logger middleware reads it.
+// By extracting the status from the error directly, we can log the correct status
+// even before the error handler updates the response.
+func extractStatusFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	var he *echo.HTTPError
+	if goerrors.As(err, &he) {
+		return he.Code
+	}
+	return 0
 }
