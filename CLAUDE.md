@@ -234,6 +234,104 @@ AMQP-based messaging with **validate-once, replay-many** pattern:
 - Automatic reconnection with exponential backoff
 - Context propagation for tenant IDs and tracing
 
+#### Helper Functions for Simplified Declarations
+
+GoBricks provides helper functions to reduce boilerplate when declaring messaging infrastructure:
+
+**Before (verbose with repetitive defaults):**
+```go
+exchange := &messaging.ExchangeDeclaration{
+    Name:       "issuance.events",
+    Type:       "topic",
+    Durable:    true,
+    AutoDelete: false,
+    Internal:   false,
+    NoWait:     false,
+}
+decls.RegisterExchange(exchange)
+
+queue := &messaging.QueueDeclaration{
+    Name:       "issuance.events.queue",
+    Durable:    true,
+    AutoDelete: false,
+    Exclusive:  false,
+    NoWait:     false,
+}
+decls.RegisterQueue(queue)
+
+binding := &messaging.BindingDeclaration{
+    Queue:      queue.Name,
+    Exchange:   exchange.Name,
+    RoutingKey: "issuance.*",
+    NoWait:     false,
+}
+decls.RegisterBinding(binding)
+
+publisher := &messaging.PublisherDeclaration{
+    Exchange:    exchange.Name,
+    RoutingKey:  "issuance.created",
+    EventType:   "CreateBatchIssuanceRequest",
+    Description: "Requests batch card issuance",
+    Mandatory:   false,
+    Immediate:   false,
+    Headers:     map[string]any{"source": "issuance-service"},
+}
+decls.RegisterPublisher(publisher)
+
+decls.RegisterConsumer(&messaging.ConsumerDeclaration{
+    Queue:       queue.Name,
+    Consumer:    "issuance-service-consumer",
+    AutoAck:     false,
+    Exclusive:   false,
+    NoLocal:     false,
+    NoWait:      false,
+    EventType:   "CreateBatchIssuanceRequest",
+    Description: "Consumes issuance events for processing",
+    Handler:     amqp.NewCreateBatchIssuanceMessageHandler(m.logger),
+})
+```
+
+**After (concise with production-safe defaults):**
+```go
+exchange := decls.DeclareTopicExchange("issuance.events")
+queue := decls.DeclareQueue("issuance.events.queue")
+decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
+
+decls.DeclarePublisher(&messaging.PublisherOptions{
+    Exchange:    exchange.Name,
+    RoutingKey:  "issuance.created",
+    EventType:   "CreateBatchIssuanceRequest",
+    Description: "Requests batch card issuance",
+    Headers:     map[string]any{"source": "issuance-service"},
+}, nil)
+
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:       queue.Name,
+    Consumer:    "issuance-service-consumer",
+    EventType:   "CreateBatchIssuanceRequest",
+    Description: "Consumes issuance events for processing",
+    Handler:     amqp.NewCreateBatchIssuanceMessageHandler(m.logger),
+}, nil)
+```
+
+**Production-Safe Defaults:**
+- Exchanges: `Durable: true`, `AutoDelete: false`, `Type: "topic"`
+- Queues: `Durable: true`, `AutoDelete: false`, `Exclusive: false`
+- Publishers: `Mandatory: false`, `Immediate: false`
+- Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
+
+**Available Helpers:**
+- `NewTopicExchange(name)` - Topic exchange with production defaults
+- `NewQueue(name)` - Durable queue with production defaults
+- `NewBinding(queue, exchange, routingKey)` - Binding declaration
+- `NewPublisher(opts *PublisherOptions)` - Publisher from options struct pointer
+- `NewConsumer(opts *ConsumerOptions)` - Consumer from options struct pointer
+- `DeclareTopicExchange(name)` - Create and register exchange in one step
+- `DeclareQueue(name)` - Create and register queue in one step
+- `DeclareBinding(...)` - Create and register binding in one step
+- `DeclarePublisher(opts *PublisherOptions, exchange)` - Create and register publisher (optionally auto-register exchange)
+- `DeclareConsumer(opts *ConsumerOptions, queue)` - Create and register consumer (optionally auto-register queue)
+
 ### Observability
 
 **Key Features:**
