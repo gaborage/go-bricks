@@ -228,6 +228,264 @@ query := qb.Select("id", "number").From("accounts").WhereEq("number", value)
 
 **Escape Hatch:** `WhereRaw(condition, args...)` - user must manually quote Oracle reserved words
 
+#### Table Aliases
+
+The query builder supports table aliases using a structured API for type safety and explicitness:
+
+```go
+qb := builder.NewQueryBuilder(dbtypes.Oracle)
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+// Table aliases with Table().As() syntax
+query := qb.Select("u.id", "u.name", "p.bio").
+    From(Table("users").As("u")).
+    LeftJoinOn(Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id")).
+    Where(f.Eq("u.status", "active"))
+
+// Backward compatible: string table names still work
+query := qb.Select("*").From("users")
+
+// Mixed usage
+query := qb.Select("*").From("users", Table("profiles").As("p"))
+
+// Multiple JOINs with aliases and Raw conditions
+query := qb.Select("*").
+    From(Table("orders").As("o")).
+    JoinOn(Table("customers").As("c"), jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
+    JoinOn(Table("products").As("p"), jf.And(
+        jf.Raw("p.sku = o.product_sku"),
+        jf.Raw("p.status = ?", "active"),
+    )).
+    Where(f.Eq("o.id", 123))
+```
+
+**Benefits:**
+- **Explicit**: No hidden parsing of alias syntax
+- **Type-safe**: Fail fast with panic on empty table/alias names
+- **Composable**: Same pattern for FROM and all JOIN types (JoinOn, LeftJoinOn, RightJoinOn, InnerJoinOn, CrossJoinOn)
+- **Oracle-safe**: Reserved word tables automatically quoted (`FROM "LEVEL" lvl`)
+- **Backward compatible**: String table names still work alongside TableRef
+
+**Mixed JOIN Conditions:**
+Use `JoinFilter.Raw()` for complex conditions mixing column comparisons with value filters or functions (see example above).
+
+#### Subquery Support
+
+The query builder supports subqueries in WHERE clauses using `EXISTS`, `NOT EXISTS`, and `IN` patterns:
+
+```go
+qb := builder.NewQueryBuilder(dbtypes.Oracle)
+f := qb.Filter()
+
+// EXISTS: Check for related records
+subquery := qb.Select("id").
+    From("categories").
+    Where(f.Eq("status", "active"))
+
+query := qb.Select("*").
+    From("products").
+    Where(f.Exists(subquery))
+
+// SQL: SELECT * FROM products WHERE EXISTS (SELECT id FROM categories WHERE status = :1)
+
+// NOT EXISTS: Check for absence of related records
+subquery := qb.Select("1").
+    From("orders").
+    Where(f.Eq("orders.status", "pending"))
+
+query := qb.Select("*").
+    From("customers").
+    Where(f.NotExists(subquery))
+
+// IN with subquery: Filter by subquery results
+subquery := qb.Select("category_id").
+    From("featured_categories").
+    Where(f.Eq("active", true))
+
+query := qb.Select("*").
+    From("products").
+    Where(f.InSubquery("category_id", subquery))
+
+// SQL: SELECT * FROM products WHERE category_id IN (SELECT category_id FROM featured_categories WHERE active = :1)
+
+// Correlated subquery: Reference outer query columns
+subquery := qb.Select("1").
+    From("reviews").
+    Where(jf.And(
+        jf.EqColumn("reviews.product_id", "p.id"),
+        f.Eq("reviews.rating", 5),
+    ))
+
+query := qb.Select("p.name").
+    From(Table("products").As("p")).
+    Where(f.Exists(subquery))
+
+// SQL: SELECT p.name FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews.product_id = p.id AND reviews.rating = :1)
+
+// Nested subqueries: Subquery containing another subquery
+innerSubquery := qb.Select("category_id").
+    From("trending").
+    Where(f.Gte("score", 100))
+
+outerSubquery := qb.Select("product_id").
+    From("catalog").
+    Where(f.InSubquery("category_id", innerSubquery))
+
+query := qb.Select("*").
+    From("inventory").
+    Where(f.InSubquery("product_id", outerSubquery))
+
+// SQL: SELECT * FROM inventory WHERE product_id IN (SELECT product_id FROM catalog WHERE category_id IN (SELECT category_id FROM trending WHERE score >= :1))
+```
+
+**Key Features:**
+- **Type-safe**: Accepts `SelectQueryBuilder` interface directly
+- **Correlated subqueries**: Reference outer query table aliases using `JoinFilter.EqColumn()`
+- **Automatic placeholder numbering**: Vendor-specific (`:1, :2` for Oracle, `$1, $2` for PostgreSQL)
+- **Nested subqueries**: Unlimited nesting depth supported
+- **Fail-fast validation**: Panics on nil or invalid subqueries at construction time
+- **Composable**: Combine with other filters using `And()`, `Or()`, `Not()`
+
+**Method Reference:**
+- `f.Exists(subquery)` - EXISTS clause
+- `f.NotExists(subquery)` - NOT EXISTS clause
+- `f.InSubquery(column, subquery)` - IN with subquery (separate method from `In()` to maintain explicit API design)
+
+#### SELECT Expressions (v2.1+)
+
+The query builder supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY clauses for aggregations, functions, calculations, and other advanced SQL patterns:
+
+```go
+qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
+f := qb.Filter()
+
+// Simple aggregations with aliases
+query := qb.Select(
+    "category",
+    qb.Expr("COUNT(*)", "product_count"),
+    qb.Expr("AVG(price)", "avg_price"),
+).
+    From("products").
+    GroupBy("category").
+    OrderBy(qb.Expr("COUNT(*) DESC"))
+
+// SQL: SELECT category, COUNT(*) AS product_count, AVG(price) AS avg_price
+//      FROM products
+//      GROUP BY category
+//      ORDER BY COUNT(*) DESC
+
+// Mixed column names and expressions
+query := qb.Select(
+    "id",
+    "name",
+    qb.Expr("price * quantity", "line_total"),
+    qb.Expr("UPPER(category)", "upper_category"),
+).
+    From("products").
+    Where(f.Gt("stock", 0)).
+    OrderBy("name", qb.Expr("price * quantity DESC"))
+
+// SQL: SELECT id, name, price * quantity AS line_total, UPPER(category) AS upper_category
+//      FROM products
+//      WHERE stock > $1
+//      ORDER BY name, price * quantity DESC
+
+// Date aggregation with GROUP BY expression
+query := qb.Select(
+    qb.Expr("DATE(created_at)", "order_date"),
+    qb.Expr("COUNT(*)", "order_count"),
+    qb.Expr("SUM(total_amount)", "daily_revenue"),
+).
+    From("orders").
+    Where(f.Gte("created_at", "2024-01-01")).
+    GroupBy(qb.Expr("DATE(created_at)")).
+    Having("SUM(total_amount) > ?", 1000).
+    OrderBy(qb.Expr("DATE(created_at) DESC"))
+
+// SQL: SELECT DATE(created_at) AS order_date, COUNT(*) AS order_count, SUM(total_amount) AS daily_revenue
+//      FROM orders
+//      WHERE created_at >= $1
+//      GROUP BY DATE(created_at)
+//      HAVING SUM(total_amount) > $2
+//      ORDER BY DATE(created_at) DESC
+
+// Window functions
+query := qb.Select(
+    "product_id",
+    "category",
+    "price",
+    qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
+).From("products")
+
+// SQL: SELECT product_id, category, price,
+//      ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rank
+//      FROM products
+
+// Function expressions without aliases
+query := qb.Select(
+    "id",
+    qb.Expr("COALESCE(email, phone, 'N/A')"),
+    qb.Expr("UPPER(name)"),
+).From("users")
+
+// SQL: SELECT id, COALESCE(email, phone, 'N/A'), UPPER(name) FROM users
+```
+
+**SECURITY WARNING - Read This Carefully:**
+
+⚠️ **Raw SQL expressions are NOT escaped or sanitized by the framework.** You are responsible for SQL correctness and security.
+
+✅ **Safe Usage** (static SQL only):
+```go
+// Static expressions - SAFE
+qb.Select(qb.Expr("COUNT(*)", "total"))
+qb.Select(qb.Expr("UPPER(name)"))
+qb.Select(qb.Expr("price * 1.1", "price_with_tax"))
+qb.GroupBy(qb.Expr("DATE(created_at)"))
+qb.OrderBy(qb.Expr("COUNT(*) DESC"))
+```
+
+❌ **Unsafe Usage** (NEVER interpolate user input):
+```go
+// NEVER DO THIS - SQL injection vulnerability!
+userInput := req.Query("column")
+qb.Select(qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))) // DANGER!
+
+// NEVER DO THIS - SQL injection in alias!
+userAlias := req.Query("alias")
+qb.Select(qb.Expr("COUNT(*)", userAlias)) // DANGER!
+```
+
+✅ **Safe Alternative** (use WHERE with placeholders for dynamic values):
+```go
+// For dynamic conditions, use type-safe WHERE filters
+userColumn := "status" // From validated enum/whitelist
+userValue := req.Query("value") // User input
+qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))
+```
+
+**Key Features:**
+- **Backward compatible**: String column names still work exactly as before
+- **Type-safe API**: Separate `Expr()` method makes intent explicit
+- **Fail-fast validation**: Panics on empty SQL or dangerous alias characters (`;`, `'`, `"`, `--`, `/*`, `*/`)
+- **Vendor-agnostic**: Expressions passed directly to underlying SQL builder
+- **Flexible aliases**: Optional alias parameter for SELECT expressions (ignored in GROUP BY/ORDER BY)
+
+**Method Reference:**
+- `qb.Expr(sql string, alias ...string)` - Create raw SQL expression with optional alias (max 1 alias)
+- `qb.Select(columns ...any)` - Accepts `string` column names or `RawExpression` instances
+- `.GroupBy(groupBys ...any)` - Accepts `string` column names or `RawExpression` instances
+- `.OrderBy(orderBys ...any)` - Accepts `string` column names or `RawExpression` instances
+
+**Common Use Cases:**
+- **Aggregations**: `COUNT(*)`, `SUM(amount)`, `AVG(price)`, `MIN(date)`, `MAX(value)`
+- **String functions**: `UPPER(column)`, `LOWER(column)`, `CONCAT(col1, ' ', col2)`, `COALESCE(email, phone)`
+- **Date functions**: `DATE(timestamp)`, `YEAR(date)`, `MONTH(date)`, `DATE_TRUNC('day', timestamp)`
+- **Math calculations**: `price * quantity`, `(subtotal + tax) * 1.1`, `ROUND(amount, 2)`
+- **Window functions**: `ROW_NUMBER() OVER (...)`, `RANK() OVER (...)`, `LAG(column) OVER (...)`
+- **Conditional expressions**: `CASE WHEN ... THEN ... ELSE ... END`
+
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
 - Declarations validated upfront, replayed per-tenant for isolation

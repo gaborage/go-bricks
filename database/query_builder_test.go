@@ -109,7 +109,13 @@ func TestQueryBuilderSelect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
-			query := qb.Select(tt.columns...)
+
+			// Convert []string to []any
+			columnsAny := make([]any, len(tt.columns))
+			for i, v := range tt.columns {
+				columnsAny[i] = v
+			}
+			query := qb.Select(columnsAny...)
 
 			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
