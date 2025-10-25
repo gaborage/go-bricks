@@ -228,6 +228,48 @@ query := qb.Select("id", "number").From("accounts").WhereEq("number", value)
 
 **Escape Hatch:** `WhereRaw(condition, args...)` - user must manually quote Oracle reserved words
 
+#### Table Aliases
+
+The query builder supports table aliases using a structured API for type safety and explicitness:
+
+```go
+qb := builder.NewQueryBuilder(dbtypes.Oracle)
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+// Table aliases with Table().As() syntax
+query := qb.Select("u.id", "u.name", "p.bio").
+    From(Table("users").As("u")).
+    LeftJoinOn(Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id")).
+    Where(f.Eq("u.status", "active"))
+
+// Backward compatible: string table names still work
+query := qb.Select("*").From("users")
+
+// Mixed usage
+query := qb.Select("*").From("users", Table("profiles").As("p"))
+
+// Multiple JOINs with aliases and Raw conditions
+query := qb.Select("*").
+    From(Table("orders").As("o")).
+    JoinOn(Table("customers").As("c"), jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
+    JoinOn(Table("products").As("p"), jf.And(
+        jf.Raw("p.sku = o.product_sku"),
+        jf.Raw("p.status = ?", "active"),
+    )).
+    Where(f.Eq("o.id", 123))
+```
+
+**Benefits:**
+- **Explicit**: No hidden parsing of alias syntax
+- **Type-safe**: Fail fast with panic on empty table/alias names
+- **Composable**: Same pattern for FROM and all JOIN types (JoinOn, LeftJoinOn, RightJoinOn, InnerJoinOn, CrossJoinOn)
+- **Oracle-safe**: Reserved word tables automatically quoted (`FROM "LEVEL" lvl`)
+- **Backward compatible**: String table names still work alongside TableRef
+
+**Mixed JOIN Conditions:**
+Use `JoinFilter.Raw()` for complex conditions mixing column comparisons with value filters or functions (see example above).
+
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
 - Declarations validated upfront, replayed per-tenant for isolation

@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	joinFilterErrorMsg = "mock join filter error"
+	joinFilterErrorMsg  = "mock join filter error"
+	testJoinColumn      = "users.id"
+	testFromClause      = "FROM users"
+	testFromAliasClause = "FROM users u"
 )
 
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
@@ -430,7 +433,7 @@ func TestJoinMethods(t *testing.T) {
 				jf := qb.JoinFilter()
 				sql, _, _ := qb.Select("*").From("users").
 					JoinOn("profiles", jf.And(
-						jf.EqColumn("users.id", "profiles.user_id"),
+						jf.EqColumn(testJoinColumn, "profiles.user_id"),
 						jf.GtColumn("profiles.created_at", "users.created_at"),
 					)).
 					ToSQL()
@@ -588,8 +591,8 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 		query := qb.Select("*").
 			From("users").
 			JoinOn("profiles", errorFilter).
-			LeftJoinOn("orders", jf.EqColumn("users.id", "orders.user_id")). // Valid join after error
-			Where(qb.Filter().Eq("status", "active"))                        // Valid where
+			LeftJoinOn("orders", jf.EqColumn(testJoinColumn, "orders.user_id")). // Valid join after error
+			Where(qb.Filter().Eq("status", "active"))                            // Valid where
 
 		sql, args, err := query.ToSQL()
 
@@ -616,4 +619,214 @@ func TestJoinFilterNoErrorInjection(t *testing.T) {
 	assert.Empty(t, sql)
 	assert.NotContains(t, sql, "ERROR:")
 	assert.NotContains(t, sql, "WHERE ERROR:")
+}
+
+// ========== Table Alias Tests ==========
+
+func TestTableAliasFrom(t *testing.T) {
+	t.Run("String table name backward compatibility", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").From("users")
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromClause)
+	})
+
+	t.Run("TableRef without alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").From(dbtypes.Table("users"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromClause)
+	})
+
+	t.Run("TableRef with alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").From(dbtypes.Table("users").As("u"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromAliasClause)
+	})
+
+	t.Run("Oracle table with alias and reserved word", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		query := qb.Select("*").From(dbtypes.Table("LEVEL").As("lvl"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, `FROM "LEVEL" lvl`)
+	})
+
+	t.Run("Mixed string and TableRef in From", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").From("users", dbtypes.Table("profiles").As("p"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "FROM users, profiles p")
+	})
+
+	t.Run("Multiple TableRef with aliases", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").From(dbtypes.Table("users").As("u"), dbtypes.Table("profiles").As("p"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "FROM users u, profiles p")
+	})
+}
+
+func TestTableAliasJoin(t *testing.T) {
+	t.Run("JoinOn with table alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		jf := qb.JoinFilter()
+		query := qb.Select("*").
+			From(dbtypes.Table("users").As("u")).
+			JoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, "JOIN profiles p ON")
+		assert.Contains(t, sql, "u.id = p.user_id")
+	})
+
+	t.Run("LeftJoinOn with table alias Oracle", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		jf := qb.JoinFilter()
+		query := qb.Select("*").
+			From(dbtypes.Table("customers").As("c")).
+			LeftJoinOn(dbtypes.Table("orders").As("o"), jf.EqColumn("c.id", "o.customer_id"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "FROM customers c")
+		assert.Contains(t, sql, "LEFT JOIN orders o ON")
+	})
+
+	t.Run("RightJoinOn with string table name", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		jf := qb.JoinFilter()
+		query := qb.Select("*").
+			From("users").
+			RightJoinOn("profiles", jf.EqColumn(testJoinColumn, "profiles.user_id"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, "RIGHT JOIN profiles ON")
+	})
+
+	t.Run("InnerJoinOn with mixed string and TableRef", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		jf := qb.JoinFilter()
+		query := qb.Select("*").
+			From("users").
+			InnerJoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn(testJoinColumn, "p.user_id"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, "INNER JOIN profiles p ON")
+	})
+
+	t.Run("CrossJoinOn with table alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Select("*").
+			From(dbtypes.Table("users").As("u")).
+			CrossJoinOn(dbtypes.Table("roles").As("r"))
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, "CROSS JOIN roles r")
+	})
+}
+
+func TestTableAliasMultipleJoins(t *testing.T) {
+	t.Run("Multiple JOINs with aliases and Raw conditions", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		jf := qb.JoinFilter()
+		f := qb.Filter()
+
+		query := qb.Select("*").
+			From(dbtypes.Table("orders").As("o")).
+			JoinOn(dbtypes.Table("customers").As("c"),
+				jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
+			JoinOn(dbtypes.Table("products").As("p"), jf.And(
+				jf.Raw("p.sku = o.product_sku"),
+				jf.Raw("p.status = ?", "active"),
+			)).
+			Where(f.Eq("o.id", 123))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "FROM orders o")
+		assert.Contains(t, sql, "JOIN customers c ON")
+		assert.Contains(t, sql, "JOIN products p ON")
+		assert.Len(t, args, 2) // "active" and 123
+		assert.Equal(t, "active", args[0])
+		assert.Equal(t, 123, args[1])
+	})
+
+	t.Run("Complex query with aliases, WHERE, GROUP BY, ORDER BY", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		jf := qb.JoinFilter()
+		f := qb.Filter()
+
+		query := qb.Select("u.id", "u.name", "COUNT(o.id) AS order_count").
+			From(dbtypes.Table("users").As("u")).
+			LeftJoinOn(dbtypes.Table("orders").As("o"), jf.EqColumn("u.id", "o.user_id")).
+			Where(f.Eq("u.status", "active")).
+			GroupBy("u.id", "u.name").
+			OrderBy("order_count DESC").
+			Limit(10)
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, "LEFT JOIN orders o ON")
+		assert.Contains(t, sql, "WHERE")
+		assert.Contains(t, sql, "GROUP BY")
+		assert.Contains(t, sql, "ORDER BY")
+		assert.Contains(t, sql, "LIMIT 10")
+		assert.Len(t, args, 1)
+		assert.Equal(t, "active", args[0])
+	})
+}
+
+func TestTableAliasOracleReservedWords(t *testing.T) {
+	t.Run("Oracle reserved word table with alias in complex query", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		jf := qb.JoinFilter()
+		f := qb.Filter()
+
+		query := qb.Select("l.id", "n.value").
+			From(dbtypes.Table("LEVEL").As("l")).
+			JoinOn(dbtypes.Table("NUMBER").As("n"), jf.EqColumn("l.id", "n.level_id")).
+			Where(f.Eq("l.status", "active"))
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		// Reserved words should be quoted
+		assert.Contains(t, sql, `FROM "LEVEL" l`)
+		assert.Contains(t, sql, `JOIN "NUMBER" n ON`)
+	})
+}
+
+func TestTableAliasInvalidTypes(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	t.Run("Invalid type in From returns empty and squirrel errors", func(t *testing.T) {
+		// This tests the fail-fast behavior - invalid type returns empty string
+		query := qb.Select("*").From(123) // Invalid: int instead of string or TableRef
+		sql, _, err := query.ToSQL()
+		// Squirrel may error or produce invalid SQL - either is acceptable
+		if err == nil {
+			// If no error, SQL should not contain the integer
+			assert.NotContains(t, sql, "123")
+		}
+	})
+
+	t.Run("Invalid type in JoinOn returns empty and squirrel errors", func(t *testing.T) {
+		jf := qb.JoinFilter()
+		query := qb.Select("*").From("users").JoinOn(123, jf.EqColumn("a", "b"))
+		sql, _, err := query.ToSQL()
+		// Should either error or produce invalid SQL
+		if err == nil {
+			assert.NotContains(t, sql, "123")
+		}
+	})
 }

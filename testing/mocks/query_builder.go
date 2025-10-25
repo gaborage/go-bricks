@@ -178,41 +178,37 @@ func (m *MockQueryBuilder) ExpectEscapeIdentifier(input, output string) *mock.Ca
 }
 
 // JoinOn implements types.SelectQueryBuilder
-func (m *MockQueryBuilder) JoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) JoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("JoinOn", table, filter)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 // LeftJoinOn implements types.SelectQueryBuilder
-func (m *MockQueryBuilder) LeftJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) LeftJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("LeftJoinOn", table, filter)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 // RightJoinOn implements types.SelectQueryBuilder
-func (m *MockQueryBuilder) RightJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) RightJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("RightJoinOn", table, filter)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 // InnerJoinOn implements types.SelectQueryBuilder
-func (m *MockQueryBuilder) InnerJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) InnerJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("InnerJoinOn", table, filter)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
 // CrossJoinOn implements types.SelectQueryBuilder
-func (m *MockQueryBuilder) CrossJoinOn(table string) types.SelectQueryBuilder {
+func (m *MockQueryBuilder) CrossJoinOn(table any) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("CrossJoinOn", table)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) From(from ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(from))
-	for i, table := range from {
-		callArgs[i] = table
-	}
-	arguments := m.MethodCalled("From", callArgs...)
+func (m *MockQueryBuilder) From(from ...any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("From", from...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 

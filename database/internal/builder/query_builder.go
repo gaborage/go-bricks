@@ -299,6 +299,27 @@ func (qb *QueryBuilder) quoteTableForQuery(table string) string {
 	}
 }
 
+// quoteTableReference handles vendor-specific table quoting for both string names and TableRef instances.
+// Returns quoted table name with optional alias (e.g., "customers" c for PostgreSQL, "LEVEL" lvl for Oracle).
+// Accepts either string or *TableRef. Returns empty string for invalid types (let Squirrel validation catch it).
+func (qb *QueryBuilder) quoteTableReference(table any) string {
+	switch t := table.(type) {
+	case string:
+		// Backward compatibility: plain string table name
+		return qb.quoteTableForQuery(t)
+	case *dbtypes.TableRef:
+		quotedName := qb.quoteTableForQuery(t.Name())
+		if t.HasAlias() {
+			// Quote table name, preserve alias case (no quotes on alias for standard SQL)
+			return quotedName + " " + t.Alias()
+		}
+		return quotedName
+	default:
+		// Invalid type - return empty string to let Squirrel's validation catch it
+		return ""
+	}
+}
+
 // quoteIdentifierForClause handles vendor-specific identifier quoting for ORDER BY and GROUP BY clauses
 // It parses expressions to identify column references vs SQL functions and direction keywords
 func (qb *QueryBuilder) quoteIdentifierForClause(identifier string) string {
@@ -348,13 +369,30 @@ func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
 
 // ========== SelectQueryBuilder Methods ==========
 
-// From specifies the table(s) to select from
+// From specifies the table(s) to select from.
+// Accepts either string table names or *TableRef instances with optional aliases.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
-func (sqb *SelectQueryBuilder) From(from ...string) dbtypes.SelectQueryBuilder {
-	for _, table := range from {
-		quotedTable := sqb.qb.quoteTableForQuery(table)
-		sqb.selectBuilder = sqb.selectBuilder.From(quotedTable)
+//
+// Examples:
+//
+//	From("users")                                // Simple table
+//	From("users", "profiles")                    // Multiple tables (cross join)
+//	From(Table("customers").As("c"))            // Table with alias
+//	From("users", Table("profiles").As("p"))     // Mixed
+func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
+	if len(from) == 0 {
+		return sqb
 	}
+
+	// Quote all tables and join with commas for multi-table FROM clause
+	quotedTables := make([]string, len(from))
+	for i, table := range from {
+		quotedTables[i] = sqb.qb.quoteTableReference(table)
+	}
+
+	// Join with commas and pass as single FROM clause
+	fromClause := strings.Join(quotedTables, ", ")
+	sqb.selectBuilder = sqb.selectBuilder.From(fromClause)
 	return sqb
 }
 
@@ -414,14 +452,15 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 }
 
 // JoinOn adds a type-safe JOIN clause to the query using JoinFilter for column comparisons.
+// Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 //
 // Example:
 //
 //	jf := qb.JoinFilter()
-//	query.JoinOn("profiles", jf.EqColumn("users.id", "profiles.user_id"))
-func (sqb *SelectQueryBuilder) JoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableForQuery(table)
+//	query.JoinOn(Table("profiles").As("p"), jf.EqColumn("users.id", "p.user_id"))
+func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableReference(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -435,9 +474,10 @@ func (sqb *SelectQueryBuilder) JoinOn(table string, filter dbtypes.JoinFilter) d
 }
 
 // LeftJoinOn adds a type-safe LEFT JOIN clause to the query using JoinFilter.
+// Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
-func (sqb *SelectQueryBuilder) LeftJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableForQuery(table)
+func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableReference(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -451,9 +491,10 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table string, filter dbtypes.JoinFilte
 }
 
 // RightJoinOn adds a type-safe RIGHT JOIN clause to the query using JoinFilter.
+// Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
-func (sqb *SelectQueryBuilder) RightJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableForQuery(table)
+func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableReference(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -467,9 +508,10 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table string, filter dbtypes.JoinFilt
 }
 
 // InnerJoinOn adds a type-safe INNER JOIN clause to the query using JoinFilter.
+// Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
-func (sqb *SelectQueryBuilder) InnerJoinOn(table string, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableForQuery(table)
+func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableReference(table)
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -483,10 +525,11 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table string, filter dbtypes.JoinFilt
 }
 
 // CrossJoinOn adds a CROSS JOIN clause to the query.
+// Accepts either a string table name or *TableRef instance with optional alias.
 // Cross joins do not have ON conditions, so no JoinFilter is needed.
 // The table name is automatically quoted according to vendor rules.
-func (sqb *SelectQueryBuilder) CrossJoinOn(table string) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableForQuery(table)
+func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder {
+	quotedTable := sqb.qb.quoteTableReference(table)
 	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(quotedTable)
 	return sqb
 }

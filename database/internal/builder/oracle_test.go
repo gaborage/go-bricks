@@ -910,7 +910,12 @@ func TestOracleFromClauseQuoting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query := qb.Select("*").From(tt.tables...)
+			// Convert []string to []any for From() call
+			tables := make([]any, len(tt.tables))
+			for i, t := range tt.tables {
+				tables[i] = t
+			}
+			query := qb.Select("*").From(tables...)
 			sql, _, err := query.ToSQL()
 			assert.NoError(t, err)
 			assert.Contains(t, sql, tt.expectedSQL, "SQL should contain expected FROM clause")

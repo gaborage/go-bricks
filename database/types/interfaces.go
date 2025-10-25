@@ -100,14 +100,16 @@ type JoinFilterFactory interface {
 // for composable filters, JOIN operations, and vendor-specific query features.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
-	From(from ...string) SelectQueryBuilder
+	// From accepts either string table names or *TableRef instances with optional aliases
+	From(from ...any) SelectQueryBuilder
 
 	// Type-safe JOIN methods with JoinFilter (v2.0+)
-	JoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	LeftJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	RightJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	InnerJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	CrossJoinOn(table string) SelectQueryBuilder
+	// Each accepts either string table name or *TableRef instance with optional alias
+	JoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	LeftJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	RightJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	InnerJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	CrossJoinOn(table any) SelectQueryBuilder
 
 	GroupBy(groupBys ...string) SelectQueryBuilder
 	Having(pred any, rest ...any) SelectQueryBuilder

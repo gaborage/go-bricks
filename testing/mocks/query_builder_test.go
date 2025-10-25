@@ -213,36 +213,32 @@ func (m *MockDeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 
 var _ types.DeleteQueryBuilder = (*MockDeleteQueryBuilder)(nil)
 
-func (m *MockSelectQueryBuilder) From(from ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(from))
-	for i, table := range from {
-		callArgs[i] = table
-	}
-	args := m.MethodCalled("From", callArgs...)
+func (m *MockSelectQueryBuilder) From(from ...any) types.SelectQueryBuilder {
+	args := m.MethodCalled("From", from...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) JoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockSelectQueryBuilder) JoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	args := m.MethodCalled("JoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) LeftJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockSelectQueryBuilder) LeftJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	args := m.MethodCalled("LeftJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) RightJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockSelectQueryBuilder) RightJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	args := m.MethodCalled("RightJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) InnerJoinOn(table string, filter types.JoinFilter) types.SelectQueryBuilder {
+func (m *MockSelectQueryBuilder) InnerJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	args := m.MethodCalled("InnerJoinOn", table, filter)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) CrossJoinOn(table string) types.SelectQueryBuilder {
+func (m *MockSelectQueryBuilder) CrossJoinOn(table any) types.SelectQueryBuilder {
 	args := m.MethodCalled("CrossJoinOn", table)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
