@@ -115,6 +115,21 @@ func (m *MockFilterFactory) Raw(condition string, args ...any) types.Filter {
 	return mockArgs.Get(0).(types.Filter)
 }
 
+func (m *MockFilterFactory) Exists(subquery types.SelectQueryBuilder) types.Filter {
+	args := m.MethodCalled("Exists", subquery)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotExists(subquery types.SelectQueryBuilder) types.Filter {
+	args := m.MethodCalled("NotExists", subquery)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) InSubquery(column string, subquery types.SelectQueryBuilder) types.Filter {
+	args := m.MethodCalled("InSubquery", column, subquery)
+	return args.Get(0).(types.Filter)
+}
+
 var _ types.FilterFactory = (*MockFilterFactory)(nil)
 
 // MockFilter provides a mock implementation of types.Filter for testing
@@ -248,12 +263,8 @@ func (m *MockSelectQueryBuilder) Where(filter types.Filter) types.SelectQueryBui
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(groupBys))
-	for i, col := range groupBys {
-		callArgs[i] = col
-	}
-	args := m.MethodCalled("GroupBy", callArgs...)
+func (m *MockSelectQueryBuilder) GroupBy(groupBys ...any) types.SelectQueryBuilder {
+	args := m.MethodCalled("GroupBy", groupBys...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -263,12 +274,8 @@ func (m *MockSelectQueryBuilder) Having(pred any, rest ...any) types.SelectQuery
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockSelectQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(orderBys))
-	for i, col := range orderBys {
-		callArgs[i] = col
-	}
-	args := m.MethodCalled("OrderBy", callArgs...)
+func (m *MockSelectQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuilder {
+	args := m.MethodCalled("OrderBy", orderBys...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 

@@ -7,6 +7,10 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+const (
+	errorLabel = "ERROR: "
+)
+
 // Filter represents a composable WHERE clause filter that can be combined with AND/OR/NOT operators.
 // Filters are created through FilterFactory methods and maintain vendor-specific quoting rules.
 //
@@ -279,4 +283,153 @@ func (ff *FilterFactory) Not(filter dbtypes.Filter) dbtypes.Filter {
 //	f.Raw(`ST_Distance(location, ?) < ?`, point, radius) // Spatial queries
 func (ff *FilterFactory) Raw(condition string, args ...any) dbtypes.Filter {
 	return Filter{sqlizer: squirrel.Expr(condition, args...)}
+}
+
+// ========== Subquery Support ==========
+
+// existsFilter implements Filter for EXISTS(subquery) and NOT EXISTS(subquery).
+// It wraps the underlying squirrel.Sqlizer to integrate properly with placeholder numbering.
+type existsFilter struct {
+	sqlizer squirrel.Sqlizer
+}
+
+// ToSql generates the SQL fragment and arguments for EXISTS/NOT EXISTS.
+// Implements squirrel.Sqlizer interface (lowercase 's').
+//
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (f *existsFilter) ToSql() (sql string, args []any, err error) {
+	return f.sqlizer.ToSql()
+}
+
+// ToSQL is a convenience method with idiomatic Go naming (uppercase SQL).
+func (f *existsFilter) ToSQL() (sql string, args []any, err error) {
+	return f.ToSql()
+}
+
+// inSubqueryFilter implements Filter for column IN (subquery).
+// It wraps the underlying squirrel.Sqlizer to integrate properly with placeholder numbering.
+type inSubqueryFilter struct {
+	sqlizer squirrel.Sqlizer
+}
+
+// ToSql generates the SQL fragment and arguments for IN with subquery.
+// Implements squirrel.Sqlizer interface (lowercase 's').
+//
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (f *inSubqueryFilter) ToSql() (sql string, args []any, err error) {
+	return f.sqlizer.ToSql()
+}
+
+// ToSQL is a convenience method with idiomatic Go naming (uppercase SQL).
+func (f *inSubqueryFilter) ToSQL() (sql string, args []any, err error) {
+	return f.ToSql()
+}
+
+// Exists creates an EXISTS filter for checking if a subquery returns any rows.
+// The subquery should be a complete SELECT query.
+//
+// Example:
+//
+//	subquery := qb.Select("id").From("categories").Where(f.Eq("status", "active"))
+//	query := qb.Select("*").From("products").Where(f.Exists(subquery))
+//	// SQL: SELECT * FROM products WHERE EXISTS (SELECT id FROM categories WHERE status = :1)
+//
+// For correlated subqueries (referencing outer query columns), use JoinFilter methods:
+//
+//	subquery := qb.Select("1").From("reviews").Where(jf.And(
+//	    jf.EqColumn("reviews.product_id", "p.id"),
+//	    f.Eq("reviews.rating", 5),
+//	))
+//	query := qb.Select("p.name").From(Table("products").As("p")).Where(f.Exists(subquery))
+//
+//nolint:dupl // Similar pattern to NotExists but intentional duplication
+func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
+	dbtypes.ValidateSubquery(subquery)
+
+	// Extract the underlying squirrel.SelectBuilder using type assertion
+	// This avoids calling ToSQL() prematurely, allowing proper placeholder numbering
+	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
+		return Filter{sqlizer: &existsFilter{
+			sqlizer: squirrel.Expr("EXISTS (?)", sqb.buildSelectBuilder()),
+		}}
+	}
+
+	// Fallback for other implementations (e.g., mocks)
+	// This path calls ToSQL() which may have suboptimal placeholder handling
+	sql, args, err := subquery.ToSQL()
+	if err != nil {
+		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+	}
+	return Filter{sqlizer: &existsFilter{
+		sqlizer: squirrel.Expr("EXISTS ("+sql+")", args...),
+	}}
+}
+
+// NotExists creates a NOT EXISTS filter for checking if a subquery returns no rows.
+// The subquery should be a complete SELECT query.
+//
+// Example:
+//
+//	subquery := qb.Select("1").From("orders").Where(f.Eq("orders.status", "pending"))
+//	query := qb.Select("*").From("customers").Where(f.NotExists(subquery))
+//	// SQL: SELECT * FROM customers WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.status = :1)
+//
+//nolint:dupl // Similar pattern to Exists but intentional duplication
+func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
+	dbtypes.ValidateSubquery(subquery)
+
+	// Extract the underlying squirrel.SelectBuilder using type assertion
+	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
+		return Filter{sqlizer: &existsFilter{
+			sqlizer: squirrel.Expr("NOT EXISTS (?)", sqb.buildSelectBuilder()),
+		}}
+	}
+
+	// Fallback for other implementations
+	sql, args, err := subquery.ToSQL()
+	if err != nil {
+		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+	}
+	return Filter{sqlizer: &existsFilter{
+		sqlizer: squirrel.Expr("NOT EXISTS ("+sql+")", args...),
+	}}
+}
+
+// InSubquery creates an IN filter where the values come from a subquery.
+// The subquery should return a single column that matches the specified column's type.
+//
+// This is a separate method from In() to maintain type safety and explicit API design
+// (following the "Explicit > Implicit" principle from the developer manifesto).
+//
+// Example:
+//
+//	subquery := qb.Select("category_id").From("featured_categories").Where(f.Eq("active", true))
+//	query := qb.Select("*").From("products").Where(f.InSubquery("category_id", subquery))
+//	// SQL: SELECT * FROM products WHERE category_id IN (SELECT category_id FROM featured_categories WHERE active = :1)
+//
+// For correlated subqueries:
+//
+//	subquery := qb.Select("max_price").From("price_history").Where(jf.EqColumn("price_history.product_id", "p.id"))
+//	query := qb.Select("*").From(Table("products").As("p")).Where(f.InSubquery("p.current_price", subquery))
+func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
+	dbtypes.ValidateSubquery(subquery)
+
+	// Quote column name for vendor-specific rules (e.g., Oracle reserved words)
+	quotedColumn := ff.qb.quoteColumnForQuery(column)
+
+	// Extract the underlying squirrel.SelectBuilder using type assertion
+	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
+		return Filter{sqlizer: &inSubqueryFilter{
+			sqlizer: squirrel.Expr(quotedColumn+" IN (?)", sqb.buildSelectBuilder()),
+		}}
+	}
+
+	// Fallback for other implementations
+	sql, args, err := subquery.ToSQL()
+	if err != nil {
+		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+	}
+	return Filter{sqlizer: &inSubqueryFilter{
+		sqlizer: squirrel.Expr(quotedColumn+" IN ("+sql+")", args...),
+	}}
 }

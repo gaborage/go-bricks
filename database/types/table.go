@@ -1,3 +1,4 @@
+//revive:disable-next-line:var-naming // Package name "types" avoids circular imports.
 package types
 
 // TableRef represents a table reference with optional alias for SQL queries.

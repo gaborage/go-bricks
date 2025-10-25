@@ -600,3 +600,371 @@ func TestFilterNilDoesNotPanic(t *testing.T) {
 		_, _, _ = filter.ToSQL()
 	})
 }
+
+// ========== Subquery Support Tests ==========
+
+func TestFilterExists(t *testing.T) {
+	t.Run("Simple EXISTS with basic subquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("id").
+			From("categories").
+			Where(f.Eq("status", "active"))
+
+		query := qb.Select("*").
+			From("products").
+			Where(f.Exists(subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "WHERE EXISTS (SELECT id FROM categories WHERE status = :1)")
+		assert.Equal(t, []any{"active"}, args)
+	})
+
+	t.Run("EXISTS with correlated subquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+		jf := qb.JoinFilter()
+
+		subquery := qb.Select("id"). // Use regular column instead of literal "1"
+						From("reviews").
+						Where(jf.And(
+				jf.EqColumn("reviews.product_id", "p.id"),
+				f.Eq("reviews.rating", 5),
+			))
+
+		query := qb.Select("p.name").
+			From(dbtypes.Table("products").As("p")).
+			Where(f.Exists(subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "EXISTS (SELECT id FROM reviews WHERE")
+		assert.Contains(t, sql, "reviews.product_id = p.id")
+		assert.Contains(t, sql, "reviews.rating = :1")
+		assert.Equal(t, []any{5}, args)
+	})
+
+	t.Run("PostgreSQL placeholder numbering", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		subquery := qb.Select("category_id").
+			From("featured").
+			Where(f.Eq("status", "active"))
+
+		query := qb.Select("*").
+			From("products").
+			Where(f.And(
+				f.Exists(subquery),
+				f.Eq("in_stock", "yes"),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		// PostgreSQL uses $1, $2, etc placeholders
+		assert.Contains(t, sql, "EXISTS")
+		assert.Contains(t, sql, "SELECT category_id FROM featured WHERE status =")
+		assert.Contains(t, sql, "in_stock =")
+		// Args should contain both values
+		assert.ElementsMatch(t, []any{"active", "yes"}, args)
+	})
+
+	t.Run("Oracle placeholder numbering", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("category_id").
+			From("featured").
+			Where(f.Eq("status", "active"))
+
+		query := qb.Select("*").
+			From("products").
+			Where(f.And(
+				f.Exists(subquery),
+				f.Eq("in_stock", "yes"),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		// Oracle uses :1, :2, etc placeholders
+		assert.Contains(t, sql, "EXISTS")
+		assert.Contains(t, sql, "SELECT category_id FROM featured WHERE status =")
+		assert.Contains(t, sql, "in_stock =")
+		// Args should contain both values
+		assert.ElementsMatch(t, []any{"active", "yes"}, args)
+	})
+}
+
+func TestFilterNotExists(t *testing.T) {
+	t.Run("Simple NOT EXISTS", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		subquery := qb.Select("1").
+			From("orders").
+			Where(f.Eq("orders.status", "pending"))
+
+		query := qb.Select("*").
+			From("customers").
+			Where(f.NotExists(subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.status = $1)")
+		assert.Equal(t, []any{"pending"}, args)
+	})
+
+	t.Run("NOT EXISTS with complex WHERE clause", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("id").
+			From("transactions").
+			Where(f.And(
+				f.Eq("status", "failed"),
+				f.Gt("amount", 1000),
+			))
+
+		query := qb.Select("*").
+			From("accounts").
+			Where(f.NotExists(subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "NOT EXISTS")
+		assert.Contains(t, sql, "status = :1")
+		assert.Contains(t, sql, "amount > :2")
+		assert.Equal(t, []any{"failed", 1000}, args)
+	})
+}
+
+func TestFilterInSubquery(t *testing.T) {
+	t.Run("Simple IN with subquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		subquery := qb.Select("category_id").
+			From("featured_categories").
+			Where(f.Eq("active", true))
+
+		query := qb.Select("*").
+			From("products").
+			Where(f.InSubquery("category_id", subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "WHERE category_id IN (SELECT category_id FROM featured_categories WHERE active = $1)")
+		assert.Equal(t, []any{true}, args)
+	})
+
+	t.Run("IN with correlated subquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+		jf := qb.JoinFilter()
+
+		subquery := qb.Select("max_price").
+			From("price_history").
+			Where(jf.EqColumn("price_history.product_id", "p.id"))
+
+		query := qb.Select("*").
+			From(dbtypes.Table("products").As("p")).
+			Where(f.InSubquery("p.current_price", subquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "p.current_price IN (SELECT max_price FROM price_history WHERE price_history.product_id = p.id)")
+		assert.Empty(t, args) // Correlated subquery has no args
+	})
+
+	t.Run("IN with subquery and additional WHERE filters", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		subquery := qb.Select("supplier_id").
+			From("verified_suppliers").
+			Where(f.Eq("region", "EU"))
+
+		query := qb.Select("*").
+			From("inventory").
+			Where(f.And(
+				f.InSubquery("supplier_id", subquery),
+				f.Gt("quantity", 0),
+				f.Eq("status", "available"),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "supplier_id IN (SELECT supplier_id FROM verified_suppliers WHERE region = $1)")
+		assert.Contains(t, sql, "quantity >")
+		assert.Contains(t, sql, "status =")
+		// Squirrel may optimize placeholders, so just verify args content
+		assert.ElementsMatch(t, []any{"EU", 0, "available"}, args)
+	})
+
+	t.Run("PostgreSQL vs Oracle placeholder handling", func(t *testing.T) {
+		// PostgreSQL
+		qbPG := NewQueryBuilder(dbtypes.PostgreSQL)
+		fPG := qbPG.Filter()
+		subqueryPG := qbPG.Select("id").From("active_users").Where(fPG.Eq("status", "verified"))
+		queryPG := qbPG.Select("*").From("orders").Where(fPG.InSubquery("user_id", subqueryPG))
+		sqlPG, argsPG, errPG := queryPG.ToSQL()
+		require.NoError(t, errPG)
+		assert.Contains(t, sqlPG, "$1")
+
+		// Oracle
+		qbOracle := NewQueryBuilder(dbtypes.Oracle)
+		fOracle := qbOracle.Filter()
+		subqueryOracle := qbOracle.Select("id").From("active_users").Where(fOracle.Eq("status", "verified"))
+		queryOracle := qbOracle.Select("*").From("orders").Where(fOracle.InSubquery("user_id", subqueryOracle))
+		sqlOracle, argsOracle, errOracle := queryOracle.ToSQL()
+		require.NoError(t, errOracle)
+		assert.Contains(t, sqlOracle, ":1")
+
+		// Both should have same args
+		assert.Equal(t, argsPG, argsOracle)
+	})
+}
+
+func TestFilterNestedSubqueries(t *testing.T) {
+	t.Run("Subquery containing another subquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		// Inner subquery: featured categories
+		innerSubquery := qb.Select("category_id").
+			From("trending").
+			Where(f.Gte("score", 100))
+
+		// Outer subquery: products in featured categories
+		outerSubquery := qb.Select("product_id").
+			From("catalog").
+			Where(f.InSubquery("category_id", innerSubquery))
+
+		// Main query: inventory for featured products
+		query := qb.Select("*").
+			From("inventory").
+			Where(f.InSubquery("product_id", outerSubquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "product_id IN (SELECT product_id FROM catalog WHERE category_id IN (SELECT category_id FROM trending WHERE score >= :1))")
+		assert.Equal(t, []any{100}, args)
+	})
+
+	t.Run("Multiple levels of nesting with EXISTS", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		// Inner EXISTS: check for reviews
+		reviewSubquery := qb.Select("1").
+			From("reviews").
+			Where(f.And(
+				f.Raw("reviews.order_id = o.id"), // Column comparison in WHERE clause
+				f.Eq("reviews.rating", 5),
+			))
+
+		// Middle EXISTS: check for orders with reviews
+		orderSubquery := qb.Select("1").
+			From(dbtypes.Table("orders").As("o")).
+			Where(f.And(
+				f.Raw("o.customer_id = c.id"), // Column comparison in WHERE clause
+				f.Exists(reviewSubquery),
+			))
+
+		// Main query: customers with orders that have 5-star reviews
+		query := qb.Select("c.name").
+			From(dbtypes.Table("customers").As("c")).
+			Where(f.Exists(orderSubquery))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "EXISTS (SELECT 1 FROM orders o WHERE")
+		assert.Contains(t, sql, "EXISTS (SELECT 1 FROM reviews WHERE")
+		assert.Contains(t, sql, "reviews.rating = $1")
+		assert.Equal(t, []any{5}, args)
+	})
+}
+
+func TestFilterSubqueryErrorCases(t *testing.T) {
+	t.Run("Nil subquery panics on Exists", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		assert.Panics(t, func() {
+			filter := f.Exists(nil)
+			_, _, _ = filter.ToSQL()
+		})
+	})
+
+	t.Run("Nil subquery panics on NotExists", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		assert.Panics(t, func() {
+			filter := f.NotExists(nil)
+			_, _, _ = filter.ToSQL()
+		})
+	})
+
+	t.Run("Nil subquery panics on InSubquery", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		assert.Panics(t, func() {
+			filter := f.InSubquery("user_id", nil)
+			_, _, _ = filter.ToSQL()
+		})
+	})
+}
+
+func TestFilterSubqueryCombinedWithOtherFilters(t *testing.T) {
+	t.Run("EXISTS combined with AND", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("1").
+			From("premium_users").
+			Where(f.Eq("tier", "gold"))
+
+		query := qb.Select("*").
+			From("orders").
+			Where(f.And(
+				f.Exists(subquery),
+				f.Gt("total", 500),
+				f.Eq("status", "completed"),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "EXISTS")
+		assert.Contains(t, sql, "total >")
+		assert.Contains(t, sql, "status =")
+		// Squirrel may optimize placeholders, so just verify args content
+		assert.ElementsMatch(t, []any{"gold", 500, "completed"}, args)
+	})
+
+	t.Run("NOT EXISTS combined with OR", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		subquery := qb.Select("id").
+			From("blacklist").
+			Where(f.Eq("active", true))
+
+		query := qb.Select("*").
+			From("applicants").
+			Where(f.Or(
+				f.NotExists(subquery),
+				f.Eq("override", false), // Use different value to avoid placeholder reuse
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "NOT EXISTS")
+		assert.Contains(t, sql, "OR")
+		assert.Contains(t, sql, "override =")
+		assert.Equal(t, []any{true, false}, args)
+	})
+}

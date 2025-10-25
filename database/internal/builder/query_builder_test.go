@@ -11,10 +11,14 @@ import (
 )
 
 const (
-	joinFilterErrorMsg  = "mock join filter error"
-	testJoinColumn      = "users.id"
-	testFromClause      = "FROM users"
-	testFromAliasClause = "FROM users u"
+	joinFilterErrorMsg = "mock join filter error"
+	joinColumn         = "users.id"
+	fromUsersClause    = "FROM users"
+	fromAliasClause    = "FROM users u"
+	testDate           = "2024-01-01"
+	fromProductsClause = "FROM products"
+	testExpr           = "DATE(created_at)"
+	groupByClause      = "GROUP BY DATE(created_at)"
 )
 
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
@@ -253,14 +257,14 @@ func TestDelete(t *testing.T) {
 		sql, args, err := builder.
 			Where(f.And(
 				f.Eq("status", "deleted"),
-				f.Lt("deleted_at", "2024-01-01"),
+				f.Lt("deleted_at", testDate),
 			)).
 			ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "DELETE FROM users WHERE")
 		assert.Contains(t, sql, "status = ")
 		assert.Contains(t, sql, "deleted_at < ")
-		assert.Equal(t, []any{"deleted", "2024-01-01"}, args)
+		assert.Equal(t, []any{"deleted", testDate}, args)
 	})
 }
 
@@ -433,7 +437,7 @@ func TestJoinMethods(t *testing.T) {
 				jf := qb.JoinFilter()
 				sql, _, _ := qb.Select("*").From("users").
 					JoinOn("profiles", jf.And(
-						jf.EqColumn(testJoinColumn, "profiles.user_id"),
+						jf.EqColumn(joinColumn, "profiles.user_id"),
 						jf.GtColumn("profiles.created_at", "users.created_at"),
 					)).
 					ToSQL()
@@ -470,7 +474,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "GroupBy",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", "COUNT(*)").From("users").GroupBy("department").ToSQL()
+				sql, _, _ := qb.Select("department", countClause).From("users").GroupBy("department").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department`,
@@ -478,7 +482,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Having",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", "COUNT(*)").From("users").GroupBy("department").Having("COUNT(*) > ?", 5).ToSQL()
+				sql, _, _ := qb.Select("department", countClause).From("users").GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > $1`,
@@ -591,8 +595,8 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 		query := qb.Select("*").
 			From("users").
 			JoinOn("profiles", errorFilter).
-			LeftJoinOn("orders", jf.EqColumn(testJoinColumn, "orders.user_id")). // Valid join after error
-			Where(qb.Filter().Eq("status", "active"))                            // Valid where
+			LeftJoinOn("orders", jf.EqColumn(joinColumn, "orders.user_id")). // Valid join after error
+			Where(qb.Filter().Eq("status", "active"))                        // Valid where
 
 		sql, args, err := query.ToSQL()
 
@@ -629,7 +633,7 @@ func TestTableAliasFrom(t *testing.T) {
 		query := qb.Select("*").From("users")
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, fromUsersClause)
 	})
 
 	t.Run("TableRef without alias", func(t *testing.T) {
@@ -637,7 +641,7 @@ func TestTableAliasFrom(t *testing.T) {
 		query := qb.Select("*").From(dbtypes.Table("users"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, fromUsersClause)
 	})
 
 	t.Run("TableRef with alias", func(t *testing.T) {
@@ -645,7 +649,7 @@ func TestTableAliasFrom(t *testing.T) {
 		query := qb.Select("*").From(dbtypes.Table("users").As("u"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, fromAliasClause)
 	})
 
 	t.Run("Oracle table with alias and reserved word", func(t *testing.T) {
@@ -682,7 +686,7 @@ func TestTableAliasJoin(t *testing.T) {
 			JoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, fromAliasClause)
 		assert.Contains(t, sql, "JOIN profiles p ON")
 		assert.Contains(t, sql, "u.id = p.user_id")
 	})
@@ -704,10 +708,10 @@ func TestTableAliasJoin(t *testing.T) {
 		jf := qb.JoinFilter()
 		query := qb.Select("*").
 			From("users").
-			RightJoinOn("profiles", jf.EqColumn(testJoinColumn, "profiles.user_id"))
+			RightJoinOn("profiles", jf.EqColumn(joinColumn, "profiles.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, fromUsersClause)
 		assert.Contains(t, sql, "RIGHT JOIN profiles ON")
 	})
 
@@ -716,10 +720,10 @@ func TestTableAliasJoin(t *testing.T) {
 		jf := qb.JoinFilter()
 		query := qb.Select("*").
 			From("users").
-			InnerJoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn(testJoinColumn, "p.user_id"))
+			InnerJoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn(joinColumn, "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromClause)
+		assert.Contains(t, sql, fromUsersClause)
 		assert.Contains(t, sql, "INNER JOIN profiles p ON")
 	})
 
@@ -730,7 +734,7 @@ func TestTableAliasJoin(t *testing.T) {
 			CrossJoinOn(dbtypes.Table("roles").As("r"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, fromAliasClause)
 		assert.Contains(t, sql, "CROSS JOIN roles r")
 	})
 }
@@ -776,7 +780,7 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
-		assert.Contains(t, sql, testFromAliasClause)
+		assert.Contains(t, sql, fromAliasClause)
 		assert.Contains(t, sql, "LEFT JOIN orders o ON")
 		assert.Contains(t, sql, "WHERE")
 		assert.Contains(t, sql, "GROUP BY")
@@ -828,5 +832,357 @@ func TestTableAliasInvalidTypes(t *testing.T) {
 		if err == nil {
 			assert.NotContains(t, sql, "123")
 		}
+	})
+}
+func TestSelectExpressions(t *testing.T) {
+	t.Run("Simple expression without alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		query := qb.Select("id", qb.Expr(countClause)).From("products")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT id, COUNT(*) FROM products")
+		assert.Empty(t, args)
+	})
+
+	t.Run("Expression with alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select("category", qb.Expr("SUM(amount)", "total_sales")).From("orders")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT category, SUM(amount) AS total_sales FROM orders")
+		assert.Empty(t, args)
+	})
+
+	t.Run("Multiple expressions with aliases", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select(
+			"category",
+			qb.Expr(countClause, "product_count"),
+			qb.Expr("AVG(price)", "avg_price"),
+			qb.Expr("SUM(stock)", "total_stock"),
+		).From("products")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT category, COUNT(*) AS product_count, AVG(price) AS avg_price, SUM(stock) AS total_stock")
+		assert.Contains(t, sql, fromProductsClause)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Mixed strings and expressions", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		query := qb.Select(
+			"id",
+			"name",
+			qb.Expr("UPPER(category)", "upper_category"),
+			"status",
+		).From("products")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT id, name, UPPER(category) AS upper_category, status")
+		assert.Contains(t, sql, fromProductsClause)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Expression with complex SQL", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select(
+			"user_id",
+			qb.Expr("COALESCE(email, phone, 'N/A')", "contact"),
+		).From("users")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT user_id, COALESCE(email, phone, 'N/A') AS contact FROM users")
+		assert.Empty(t, args)
+	})
+
+	t.Run("Window function expression", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select(
+			"product_id",
+			"category",
+			"price",
+			qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
+		).From("products")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT product_id, category, price, ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rank")
+		assert.Contains(t, sql, fromProductsClause)
+		assert.Empty(t, args)
+	})
+
+	t.Run("Oracle reserved word column with expression", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		query := qb.Select(
+			"level",
+			qb.Expr(countClause, "total"),
+		).From("categories")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "\"level\"") // Oracle quotes reserved word (lowercase)
+		assert.Contains(t, sql, "COUNT(*) AS total")
+		assert.Empty(t, args)
+	})
+}
+
+func TestGroupByExpressions(t *testing.T) {
+	t.Run("GROUP BY with raw expression", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		query := qb.Select(
+			qb.Expr(testExpr, "date"),
+			qb.Expr(countClause, "count"),
+		).
+			From("orders").
+			GroupBy(qb.Expr(testExpr)).
+			Where(f.Eq("status", "completed"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT DATE(created_at) AS date, COUNT(*) AS count FROM orders")
+		assert.Contains(t, sql, "WHERE status = $1")
+		assert.Contains(t, sql, groupByClause)
+		assert.Equal(t, []any{"completed"}, args)
+	})
+
+	t.Run("Mixed column names and expressions in GROUP BY", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		query := qb.Select(
+			"category",
+			qb.Expr("YEAR(order_date)", "year"),
+			qb.Expr("SUM(amount)", "total"),
+		).
+			From("orders").
+			GroupBy("category", qb.Expr("YEAR(order_date)"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "GROUP BY category, YEAR(order_date)")
+		assert.Empty(t, args)
+	})
+
+	t.Run("GROUP BY with expression and HAVING", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select(
+			qb.Expr(testExpr, "date"),
+			qb.Expr(countClause, "order_count"),
+		).
+			From("orders").
+			GroupBy(qb.Expr(testExpr)).
+			Having("COUNT(*) > ?", 10)
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, groupByClause)
+		assert.Contains(t, sql, "HAVING COUNT(*) > $1")
+		assert.Equal(t, []any{10}, args)
+	})
+}
+
+func TestOrderByExpressions(t *testing.T) {
+	t.Run("ORDER BY with raw expression", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select("*").
+			From("products").
+			OrderBy(qb.Expr("COUNT(*) DESC"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT * FROM products ORDER BY COUNT(*) DESC")
+		assert.Empty(t, args)
+	})
+
+	t.Run("Mixed column names and expressions in ORDER BY", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		query := qb.Select("id", "name", "price").
+			From("products").
+			OrderBy("name", qb.Expr("UPPER(category) ASC"), "price DESC")
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "ORDER BY name, UPPER(category) ASC, price DESC")
+		assert.Empty(t, args)
+	})
+
+	t.Run("ORDER BY with expression using function", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		query := qb.Select("id", "created_at").
+			From("orders").
+			OrderBy(qb.Expr("DATE(created_at) DESC"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "ORDER BY DATE(created_at) DESC")
+		assert.Empty(t, args)
+	})
+}
+
+func TestExpressionErrorCases(t *testing.T) {
+	t.Run("Unsupported column type in Select panics", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.PanicsWithValue(t, "unsupported column type in Select: int (must be string or RawExpression)", func() {
+			qb.Select("id", 123, "name").From("users")
+		})
+	})
+
+	t.Run("Unsupported type in GroupBy panics", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.PanicsWithValue(t, "unsupported groupBy type: int (must be string or RawExpression)", func() {
+			qb.Select("*").From("users").GroupBy("id", 123)
+		})
+	})
+
+	t.Run("Unsupported type in OrderBy panics", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.PanicsWithValue(t, "unsupported orderBy type: float64 (must be string or RawExpression)", func() {
+			qb.Select("*").From("users").OrderBy("id", 3.14)
+		})
+	})
+
+	t.Run("Empty expression SQL panics", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.PanicsWithValue(t, "expression SQL cannot be empty", func() {
+			qb.Select(qb.Expr("")).From("users")
+		})
+	})
+
+	t.Run("Multiple aliases panic", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.PanicsWithValue(t, "Expr accepts maximum 1 alias, got 2", func() {
+			qb.Select(qb.Expr(countClause, "total", "count")).From("users")
+		})
+	})
+
+	t.Run("Dangerous alias characters panic", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		assert.Panics(t, func() {
+			qb.Select(qb.Expr(countClause, "total;DROP TABLE users")).From("users")
+		})
+	})
+}
+
+func TestComplexExpressionQueries(t *testing.T) {
+	t.Run("Aggregation query with GROUP BY and HAVING", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		query := qb.Select(
+			"category",
+			qb.Expr(countClause, "product_count"),
+			qb.Expr("AVG(price)", "avg_price"),
+			qb.Expr("MIN(price)", "min_price"),
+			qb.Expr("MAX(price)", "max_price"),
+		).
+			From("products").
+			Where(f.Eq("status", "active")).
+			GroupBy("category").
+			Having("COUNT(*) > ?", 5).
+			OrderBy(qb.Expr("COUNT(*) DESC"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+
+		// Verify SELECT clause
+		assert.Contains(t, sql, "SELECT category, COUNT(*) AS product_count, AVG(price) AS avg_price")
+		assert.Contains(t, sql, "MIN(price) AS min_price, MAX(price) AS max_price")
+
+		// Verify WHERE, GROUP BY, HAVING, ORDER BY
+		assert.Contains(t, sql, "WHERE status = $1")
+		assert.Contains(t, sql, "GROUP BY category")
+		assert.Contains(t, sql, "HAVING COUNT(*) > $2")
+		assert.Contains(t, sql, "ORDER BY COUNT(*) DESC")
+
+		assert.Equal(t, []any{"active", 5}, args)
+	})
+
+	t.Run("Complex query with subqueries and expressions", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("category_id").
+			From("featured_categories").
+			Where(f.Eq("active", true))
+
+		query := qb.Select(
+			"id",
+			"name",
+			qb.Expr("price * 1.1", "price_with_tax"),
+			qb.Expr("UPPER(category)", "upper_category"),
+		).
+			From("products").
+			Where(f.And(
+				f.InSubquery("category_id", subquery),
+				f.Gt("stock", 0),
+			)).
+			OrderBy(qb.Expr("price * 1.1 DESC"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+
+		// Verify SELECT with expressions
+		assert.Contains(t, sql, "price * 1.1 AS price_with_tax")
+		assert.Contains(t, sql, "UPPER(category) AS upper_category")
+
+		// Verify WHERE with subquery
+		assert.Contains(t, sql, "category_id IN")
+		assert.Contains(t, sql, "SELECT category_id FROM featured_categories")
+
+		// Verify ORDER BY with expression
+		assert.Contains(t, sql, "ORDER BY price * 1.1 DESC")
+
+		// Verify args (true from subquery, 0 from stock check)
+		assert.ElementsMatch(t, []any{true, 0}, args)
+	})
+
+	t.Run("Date aggregation with expressions", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		f := qb.Filter()
+
+		query := qb.Select(
+			qb.Expr(testExpr, "order_date"),
+			qb.Expr(countClause, "order_count"),
+			qb.Expr("SUM(total_amount)", "daily_revenue"),
+		).
+			From("orders").
+			Where(f.Gte("created_at", testDate)).
+			GroupBy(qb.Expr(testExpr)).
+			Having("SUM(total_amount) > ?", 1000).
+			OrderBy(qb.Expr("DATE(created_at) DESC"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+
+		assert.Contains(t, sql, "SELECT DATE(created_at) AS order_date")
+		assert.Contains(t, sql, "COUNT(*) AS order_count")
+		assert.Contains(t, sql, "SUM(total_amount) AS daily_revenue")
+		assert.Contains(t, sql, groupByClause)
+		assert.Contains(t, sql, "HAVING SUM(total_amount) > $2")
+		assert.Contains(t, sql, "ORDER BY DATE(created_at) DESC")
+		assert.Equal(t, []any{testDate, 1000}, args)
 	})
 }

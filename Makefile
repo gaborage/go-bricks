@@ -52,6 +52,7 @@ docker-check: ## Check if Docker is available
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker is not running. Integration tests require Docker Desktop or Docker daemon." && echo "Install Docker: https://www.docker.com/products/docker-desktop" && exit 1)
 
 lint: ## Run golangci-lint
+	golangci-lint cache clean
 	golangci-lint run
 
 fmt: ## Format Go code

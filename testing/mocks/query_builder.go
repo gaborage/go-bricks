@@ -42,13 +42,20 @@ func (m *MockQueryBuilder) JoinFilter() types.JoinFilterFactory {
 	return args.Get(0).(types.JoinFilterFactory)
 }
 
-// Select implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(columns))
-	for i, col := range columns {
-		callArgs[i] = col
+// Expr implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) Expr(sql string, alias ...string) types.RawExpression {
+	callArgs := make([]any, len(alias)+1)
+	callArgs[0] = sql
+	for i, a := range alias {
+		callArgs[i+1] = a
 	}
-	args := m.MethodCalled("Select", callArgs...)
+	args := m.MethodCalled("Expr", callArgs...)
+	return args.Get(0).(types.RawExpression)
+}
+
+// Select implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
+	args := m.MethodCalled("Select", columns...)
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -212,12 +219,8 @@ func (m *MockQueryBuilder) From(from ...any) types.SelectQueryBuilder {
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) GroupBy(groupBys ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(groupBys))
-	for i, col := range groupBys {
-		callArgs[i] = col
-	}
-	arguments := m.MethodCalled("GroupBy", callArgs...)
+func (m *MockQueryBuilder) GroupBy(groupBys ...any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("GroupBy", groupBys...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
@@ -227,12 +230,8 @@ func (m *MockQueryBuilder) Having(pred any, args ...any) types.SelectQueryBuilde
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 
-func (m *MockQueryBuilder) OrderBy(orderBys ...string) types.SelectQueryBuilder {
-	callArgs := make([]any, len(orderBys))
-	for i, col := range orderBys {
-		callArgs[i] = col
-	}
-	arguments := m.MethodCalled("OrderBy", callArgs...)
+func (m *MockQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuilder {
+	arguments := m.MethodCalled("OrderBy", orderBys...)
 	return arguments.Get(0).(types.SelectQueryBuilder)
 }
 

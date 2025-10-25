@@ -118,10 +118,58 @@ func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
 	return newJoinFilterFactory(qb)
 }
 
+// Expr creates a raw SQL expression for use in SELECT, GROUP BY, and ORDER BY clauses.
+// See dbtypes.Expr() for full documentation and security warnings.
+func (qb *QueryBuilder) Expr(sql string, alias ...string) dbtypes.RawExpression {
+	return dbtypes.Expr(sql, alias...)
+}
+
+func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {
+	switch v := col.(type) {
+	case nil:
+		panic("nil column in Select")
+	case string:
+		*processed = append(*processed, qb.quoteColumnsForSelect(v)...)
+	case dbtypes.RawExpression:
+		if v.Alias != "" {
+			*processed = append(*processed, fmt.Sprintf("%s AS %s", v.SQL, v.Alias))
+		} else {
+			*processed = append(*processed, v.SQL)
+		}
+	case []string:
+		for _, item := range v {
+			qb.appendSelectColumn(processed, item)
+		}
+	case []dbtypes.RawExpression:
+		for _, item := range v {
+			qb.appendSelectColumn(processed, item)
+		}
+	case []any:
+		for _, item := range v {
+			qb.appendSelectColumn(processed, item)
+		}
+	default:
+		panic(fmt.Sprintf("unsupported column type in Select: %T (must be string or RawExpression)", col))
+	}
+}
+
 // Select creates a SELECT query builder with vendor-specific column quoting.
 // For Oracle, it applies identifier quoting to handle reserved words appropriately.
-func (qb *QueryBuilder) Select(columns ...string) *SelectQueryBuilder {
-	selectBuilder := qb.statementBuilder.Select(qb.quoteColumnsForSelect(columns...)...)
+// Accepts both string column names and RawExpression instances (v2.1+).
+//
+// Examples:
+//
+//	qb.Select("id", "name")                           // String columns
+//	qb.Select("id", qb.Expr("COUNT(*)", "total"))     // Mixed: column + expression
+//	qb.Select(qb.Expr("SUM(amount)", "revenue"))      // Expression only
+func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
+	processedColumns := make([]string, 0, len(columns))
+
+	for _, col := range columns {
+		qb.appendSelectColumn(&processedColumns, col)
+	}
+
+	selectBuilder := qb.statementBuilder.Select(processedColumns...)
 	return &SelectQueryBuilder{
 		qb:            qb,
 		selectBuilder: selectBuilder,
@@ -534,28 +582,70 @@ func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder
 	return sqb
 }
 
-// OrderBy adds an ORDER BY clause to the query
-// Column names are automatically quoted according to database vendor rules to handle reserved words.
-// SQL expressions and functions (like COUNT(*)) are preserved without quoting.
-func (sqb *SelectQueryBuilder) OrderBy(orderBys ...string) dbtypes.SelectQueryBuilder {
-	quotedOrderBys := make([]string, len(orderBys))
-	for i, orderBy := range orderBys {
-		quotedOrderBys[i] = sqb.qb.quoteIdentifierForClause(orderBy)
+// OrderBy adds an ORDER BY clause to the query.
+// Column names are automatically quoted according to database vendor rules.
+// Accepts both string column names (with optional ASC/DESC) and RawExpression instances (v2.1+).
+//
+// Examples:
+//
+//	.OrderBy("created_at DESC")                          // String with direction
+//	.OrderBy("name", "id DESC")                          // Multiple strings
+//	.OrderBy(qb.Expr("COUNT(*) DESC"))                   // Expression with direction
+//	.OrderBy("id", qb.Expr("UPPER(name) ASC"))           // Mixed
+func (sqb *SelectQueryBuilder) OrderBy(orderBys ...any) dbtypes.SelectQueryBuilder {
+	processedOrderBys := make([]string, 0, len(orderBys))
+
+	for _, orderBy := range orderBys {
+		sqb.appendClauseValue(&processedOrderBys, orderBy, "orderBy", sqb.qb.quoteIdentifierForClause)
 	}
-	sqb.selectBuilder = sqb.selectBuilder.OrderBy(quotedOrderBys...)
+
+	sqb.selectBuilder = sqb.selectBuilder.OrderBy(processedOrderBys...)
 	return sqb
 }
 
-// GroupBy adds a GROUP BY clause to the query
-// Column names are automatically quoted according to database vendor rules to handle reserved words.
-// SQL expressions and functions (like COUNT(*)) are preserved without quoting.
-func (sqb *SelectQueryBuilder) GroupBy(groupBys ...string) dbtypes.SelectQueryBuilder {
-	quotedGroupBys := make([]string, len(groupBys))
-	for i, groupBy := range groupBys {
-		quotedGroupBys[i] = sqb.qb.quoteIdentifierForClause(groupBy)
+// GroupBy adds a GROUP BY clause to the query.
+// Column names are automatically quoted according to database vendor rules.
+// Accepts both string column names and RawExpression instances (v2.1+).
+//
+// Examples:
+//
+//	.GroupBy("category_id", "status")                    // String columns
+//	.GroupBy("id", qb.Expr("DATE(created_at)"))          // Mixed: column + expression
+//	.GroupBy(qb.Expr("YEAR(order_date)"))                // Expression only
+func (sqb *SelectQueryBuilder) GroupBy(groupBys ...any) dbtypes.SelectQueryBuilder {
+	processedGroupBys := make([]string, 0, len(groupBys))
+
+	for _, groupBy := range groupBys {
+		sqb.appendClauseValue(&processedGroupBys, groupBy, "groupBy", sqb.qb.quoteIdentifierForClause)
 	}
-	sqb.selectBuilder = sqb.selectBuilder.GroupBy(quotedGroupBys...)
+
+	sqb.selectBuilder = sqb.selectBuilder.GroupBy(processedGroupBys...)
 	return sqb
+}
+
+func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any, clauseName string, stringFormatter func(string) string) {
+	switch v := value.(type) {
+	case nil:
+		panic(fmt.Sprintf("nil %s in %s", clauseName, clauseName))
+	case string:
+		*processed = append(*processed, stringFormatter(v))
+	case dbtypes.RawExpression:
+		*processed = append(*processed, v.SQL)
+	case []string:
+		for _, item := range v {
+			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
+		}
+	case []dbtypes.RawExpression:
+		for _, item := range v {
+			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
+		}
+	case []any:
+		for _, item := range v {
+			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
+		}
+	default:
+		panic(fmt.Sprintf("unsupported %s type: %T (must be string or RawExpression)", clauseName, value))
+	}
 }
 
 // Having adds a HAVING clause to the query
@@ -573,23 +663,25 @@ func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) dbtypes.SelectQuer
 	return sqb
 }
 
-// ToSQL generates the final SQL query string and arguments.
-// For Oracle, pagination uses OFFSET...FETCH syntax; for others, uses LIMIT/OFFSET.
-func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
-	// Return any captured filter errors first
-	if sqb.err != nil {
-		return "", nil, sqb.err
+// ValidateForSubquery provides lightweight validation without forcing SQL rendering.
+func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
+	if sqb == nil {
+		return fmt.Errorf("subquery cannot be nil")
 	}
 
+	return sqb.err
+}
+
+// buildSelectBuilder returns the underlying squirrel.SelectBuilder with pagination applied.
+func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
 	builder := sqb.selectBuilder
 
 	// Apply pagination based on vendor
 	if sqb.limit > 0 || sqb.offset > 0 {
 		if sqb.qb.vendor == dbtypes.Oracle {
 			// Oracle 12c+ uses OFFSET...FETCH syntax
-			paginationClause := buildOraclePaginationClause(int(sqb.limit), int(sqb.offset))
-			if paginationClause != "" {
-				builder = builder.Suffix(paginationClause)
+			if clause := buildOraclePaginationClause(int(sqb.limit), int(sqb.offset)); clause != "" {
+				builder = builder.Suffix(clause)
 			}
 		} else {
 			// Standard SQL LIMIT/OFFSET for PostgreSQL and others
@@ -602,6 +694,18 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 		}
 	}
 
+	return builder
+}
+
+// ToSQL generates the final SQL query string and arguments.
+// For Oracle, pagination uses OFFSET...FETCH syntax; for others, uses LIMIT/OFFSET.
+func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	// Return any captured filter errors first
+	if sqb.err != nil {
+		return "", nil, sqb.err
+	}
+
+	builder := sqb.buildSelectBuilder()
 	return builder.ToSql()
 }
 

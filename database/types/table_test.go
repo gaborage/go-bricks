@@ -1,3 +1,4 @@
+//revive:disable-next-line:var-naming // Package name "types" avoids circular imports.
 package types
 
 import (
