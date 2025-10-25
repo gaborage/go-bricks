@@ -130,7 +130,7 @@ jobs:
 
       - name: Upload unit test coverage artifact (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-unit
           path: coverage.out
@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload integration test coverage artifact
         if: matrix.go-version == '1.25'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-integration
           path: coverage-integration.out
@@ -207,14 +207,14 @@ jobs:
 
       - name: Download unit test coverage
         if: needs.changes.outputs.framework == 'true'
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: coverage-unit
           path: .
 
       - name: Download integration test coverage
         if: needs.changes.outputs.framework == 'true'
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: coverage-integration
           path: .
@@ -222,7 +222,7 @@ jobs:
       - name: Download tool coverage
         if: needs.changes.outputs.tool == 'true'
         continue-on-error: true
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: openapi-tool-coverage-report
           path: tools/openapi
@@ -352,7 +352,7 @@ jobs:
           echo "✓ Coverage merge complete - ready for SonarCloud"
 
       - name: Upload merged coverage for SonarCloud
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: coverage.out
@@ -527,7 +527,7 @@ jobs:
 
       - name: Upload coverage artifact for SonarCloud (Ubuntu only)
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: openapi-tool-coverage-report
           path: tools/openapi/coverage.out
@@ -716,7 +716,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Download coverage artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: coverage-report
           path: .
