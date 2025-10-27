@@ -33,7 +33,7 @@ test-coverage-integration: docker-check ## Run integration tests with coverage (
 
 test-coverage-combined: docker-check ## Run combined unit and integration tests with coverage
 	@echo "Running all tests (unit + integration) with coverage..."
-	@go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage.out ./...
+	@go test -v -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 	@echo ""
 	@echo "=== Combined Coverage Summary ==="
 	@go tool cover -func=coverage.out | tail -1
@@ -52,6 +52,7 @@ docker-check: ## Check if Docker is available
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker is not running. Integration tests require Docker Desktop or Docker daemon." && echo "Install Docker: https://www.docker.com/products/docker-desktop" && exit 1)
 
 lint: ## Run golangci-lint
+	golangci-lint cache clean
 	golangci-lint run
 
 fmt: ## Format Go code

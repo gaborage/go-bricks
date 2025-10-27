@@ -22,7 +22,7 @@ func NewQueryBuilder(vendor string) *QueryBuilder {
 
 // Select creates a SELECT query builder that returns the interface type.
 // This method overrides the embedded builder to provide the correct interface.
-func (qb *QueryBuilder) Select(columns ...string) types.SelectQueryBuilder {
+func (qb *QueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
 	return qb.QueryBuilder.Select(columns...)
 }
 

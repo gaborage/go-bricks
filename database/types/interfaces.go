@@ -2,7 +2,7 @@
 // These interfaces are separate from the main database package to avoid import cycles
 // and to make them easily accessible for mocking and testing.
 //
-//nolint:revive // Package name "types" is intentionally generic to avoid circular
+//revive:disable-next-line:var-naming // Package name "types" avoids circular imports.
 package types
 
 import (
@@ -53,6 +53,11 @@ type FilterFactory interface {
 
 	// Raw escape hatch
 	Raw(condition string, args ...any) Filter
+
+	// Subquery support (v2.1+)
+	Exists(subquery SelectQueryBuilder) Filter
+	NotExists(subquery SelectQueryBuilder) Filter
+	InSubquery(column string, subquery SelectQueryBuilder) Filter
 }
 
 // JoinFilter represents a filter specifically for JOIN ON conditions where columns are compared
@@ -100,18 +105,20 @@ type JoinFilterFactory interface {
 // for composable filters, JOIN operations, and vendor-specific query features.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
-	From(from ...string) SelectQueryBuilder
+	// From accepts either string table names or *TableRef instances with optional aliases
+	From(from ...any) SelectQueryBuilder
 
 	// Type-safe JOIN methods with JoinFilter (v2.0+)
-	JoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	LeftJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	RightJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	InnerJoinOn(table string, filter JoinFilter) SelectQueryBuilder
-	CrossJoinOn(table string) SelectQueryBuilder
+	// Each accepts either string table name or *TableRef instance with optional alias
+	JoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	LeftJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	RightJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	InnerJoinOn(table any, filter JoinFilter) SelectQueryBuilder
+	CrossJoinOn(table any) SelectQueryBuilder
 
-	GroupBy(groupBys ...string) SelectQueryBuilder
+	GroupBy(groupBys ...any) SelectQueryBuilder
 	Having(pred any, rest ...any) SelectQueryBuilder
-	OrderBy(orderBys ...string) SelectQueryBuilder
+	OrderBy(orderBys ...any) SelectQueryBuilder
 	Limit(limit uint64) SelectQueryBuilder
 	Offset(offset uint64) SelectQueryBuilder
 	Paginate(limit, offset uint64) SelectQueryBuilder
@@ -262,8 +269,11 @@ type QueryBuilderInterface interface {
 	Filter() FilterFactory
 	JoinFilter() JoinFilterFactory
 
+	// Expression builder (v2.1+)
+	Expr(sql string, alias ...string) RawExpression
+
 	// Query builders
-	Select(columns ...string) SelectQueryBuilder
+	Select(columns ...any) SelectQueryBuilder
 	Insert(table string) squirrel.InsertBuilder
 	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
 	Update(table string) UpdateQueryBuilder
