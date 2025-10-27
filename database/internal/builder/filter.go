@@ -7,10 +7,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-const (
-	errorLabel = "ERROR: "
-)
-
 // Filter represents a composable WHERE clause filter that can be combined with AND/OR/NOT operators.
 // Filters are created through FilterFactory methods and maintain vendor-specific quoting rules.
 //
@@ -19,6 +15,21 @@ const (
 // across multiple WHERE clauses.
 type Filter struct {
 	sqlizer squirrel.Sqlizer
+}
+
+// errorSqlizer propagates errors through the Sqlizer interface instead of generating invalid SQL.
+// When a subquery conversion fails, this type ensures the error surfaces when ToSql() is called
+// on the parent query, following the fail-fast principle.
+type errorSqlizer struct {
+	err error
+}
+
+// ToSql returns the wrapped error, allowing it to propagate up the call chain.
+// This implements squirrel.Sqlizer interface (lowercase 's').
+//
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (e errorSqlizer) ToSql() (sql string, args []any, err error) {
+	return "", nil, e.err
 }
 
 // ToSql generates the SQL fragment and arguments for this filter.
@@ -128,6 +139,10 @@ func normalizeToSlice(value any) any {
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	quotedColumn := ff.qb.quoteColumnForQuery(column)
 	normalized := normalizeToSlice(values)
+	// Empty slice special case: generate "1=0" to ensure no matches
+	if s, ok := normalized.([]any); ok && len(s) == 0 {
+		return Filter{sqlizer: squirrel.Expr("(1=0)")} // Empty IN list - always false
+	}
 	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
 }
 
@@ -142,6 +157,9 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	quotedColumn := ff.qb.quoteColumnForQuery(column)
 	normalized := normalizeToSlice(values)
+	if s, ok := normalized.([]any); ok && len(s) == 0 {
+		return Filter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
+	}
 	return Filter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
 }
 
@@ -341,8 +359,6 @@ func (f *inSubqueryFilter) ToSQL() (sql string, args []any, err error) {
 //	    f.Eq("reviews.rating", 5),
 //	))
 //	query := qb.Select("p.name").From(Table("products").As("p")).Where(f.Exists(subquery))
-//
-//nolint:dupl // Similar pattern to NotExists but intentional duplication
 func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
 	dbtypes.ValidateSubquery(subquery)
 
@@ -358,7 +374,7 @@ func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Fil
 	// This path calls ToSQL() which may have suboptimal placeholder handling
 	sql, args, err := subquery.ToSQL()
 	if err != nil {
-		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 	return Filter{sqlizer: &existsFilter{
 		sqlizer: squirrel.Expr("EXISTS ("+sql+")", args...),
@@ -373,8 +389,6 @@ func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Fil
 //	subquery := qb.Select("1").From("orders").Where(f.Eq("orders.status", "pending"))
 //	query := qb.Select("*").From("customers").Where(f.NotExists(subquery))
 //	// SQL: SELECT * FROM customers WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.status = :1)
-//
-//nolint:dupl // Similar pattern to Exists but intentional duplication
 func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
 	dbtypes.ValidateSubquery(subquery)
 
@@ -388,7 +402,7 @@ func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.
 	// Fallback for other implementations
 	sql, args, err := subquery.ToSQL()
 	if err != nil {
-		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 	return Filter{sqlizer: &existsFilter{
 		sqlizer: squirrel.Expr("NOT EXISTS ("+sql+")", args...),
@@ -427,7 +441,7 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 	// Fallback for other implementations
 	sql, args, err := subquery.ToSQL()
 	if err != nil {
-		return Filter{sqlizer: squirrel.Expr(errorLabel + err.Error())}
+		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 	return Filter{sqlizer: &inSubqueryFilter{
 		sqlizer: squirrel.Expr(quotedColumn+" IN ("+sql+")", args...),

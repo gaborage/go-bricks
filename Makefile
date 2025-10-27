@@ -33,7 +33,7 @@ test-coverage-integration: docker-check ## Run integration tests with coverage (
 
 test-coverage-combined: docker-check ## Run combined unit and integration tests with coverage
 	@echo "Running all tests (unit + integration) with coverage..."
-	@go test -v -race -tags=integration -covermode=atomic -coverprofile=coverage.out ./...
+	@go test -v -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 	@echo ""
 	@echo "=== Combined Coverage Summary ==="
 	@go tool cover -func=coverage.out | tail -1

@@ -349,7 +349,7 @@ func (qb *QueryBuilder) quoteTableForQuery(table string) string {
 
 // quoteTableReference handles vendor-specific table quoting for both string names and TableRef instances.
 // Returns quoted table name with optional alias (e.g., "customers" c for PostgreSQL, "LEVEL" lvl for Oracle).
-// Accepts either string or *TableRef. Returns empty string for invalid types (let Squirrel validation catch it).
+// Accepts either string or *TableRef. Panics for invalid types (fail-fast validation).
 func (qb *QueryBuilder) quoteTableReference(table any) string {
 	switch t := table.(type) {
 	case string:
@@ -363,8 +363,7 @@ func (qb *QueryBuilder) quoteTableReference(table any) string {
 		}
 		return quotedName
 	default:
-		// Invalid type - return empty string to let Squirrel's validation catch it
-		return ""
+		panic(fmt.Sprintf("unsupported table reference type: %T (must be string or *TableRef)", table))
 	}
 }
 

@@ -813,25 +813,18 @@ func TestTableAliasOracleReservedWords(t *testing.T) {
 func TestTableAliasInvalidTypes(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	t.Run("Invalid type in From returns empty and squirrel errors", func(t *testing.T) {
-		// This tests the fail-fast behavior - invalid type returns empty string
-		query := qb.Select("*").From(123) // Invalid: int instead of string or TableRef
-		sql, _, err := query.ToSQL()
-		// Squirrel may error or produce invalid SQL - either is acceptable
-		if err == nil {
-			// If no error, SQL should not contain the integer
-			assert.NotContains(t, sql, "123")
-		}
+	t.Run("Invalid type in From panics with clear diagnostic", func(t *testing.T) {
+		// This tests the fail-fast behavior - invalid type panics immediately
+		assert.PanicsWithValue(t, "unsupported table reference type: int (must be string or *TableRef)", func() {
+			qb.Select("*").From(123) // Invalid: int instead of string or TableRef
+		})
 	})
 
-	t.Run("Invalid type in JoinOn returns empty and squirrel errors", func(t *testing.T) {
+	t.Run("Invalid type in JoinOn panics with clear diagnostic", func(t *testing.T) {
 		jf := qb.JoinFilter()
-		query := qb.Select("*").From("users").JoinOn(123, jf.EqColumn("a", "b"))
-		sql, _, err := query.ToSQL()
-		// Should either error or produce invalid SQL
-		if err == nil {
-			assert.NotContains(t, sql, "123")
-		}
+		assert.PanicsWithValue(t, "unsupported table reference type: int (must be string or *TableRef)", func() {
+			qb.Select("*").From("users").JoinOn(123, jf.EqColumn("a", "b"))
+		})
 	})
 }
 func TestSelectExpressions(t *testing.T) {
