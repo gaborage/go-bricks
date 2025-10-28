@@ -46,7 +46,7 @@ logger:
   pretty: true
 ```
 
-`env vars > config.<env>.yaml > config.yaml > struct defaults`.
+`Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
 Add observability settings as needed (see Observability & Logging).
 
 ## Core Concepts
@@ -98,7 +98,8 @@ type User struct {
 }
 
 func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	user, err := h.svc.Create(ctx.Request().Context(), req)
+	reqCtx := ctx.Request().Context()
+	user, err := h.svc.Create(reqCtx, req)
 	if err != nil {
 		return server.Result[User]{}, server.InternalServerError(err)
 	}
@@ -125,17 +126,18 @@ sql, args := qb.Select("id", "email").
 	Where(f.And(f.Eq("status", "active"), f.Like("email", "%@example.com"))).
 	ToSQL()
 
+ctx := context.Background() // or propagate incoming request context
 rows, err := m.db.Query(ctx, sql, args...)
 ```
 
 | Need                | Builder call / API usage                                               |
 |---------------------|------------------------------------------------------------------------|
 | Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`                           |
-| Sorting / grouping  | `query.OrderBy(qb.Expr("created_at DESC"))`, `GroupBy("tenant_id")`    |
+| Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.Expr("created_at DESC")).GroupBy("tenant_id")` |
 | Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
-| Transactions        | `tx, _ := db.Begin(ctx)` → `tx.Exec` / `tx.Query` → `tx.Commit()`       |
+| Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work */; if err := tx.Commit(ctx); err != nil { return err }` |
 
 Access to vendor quirks (Oracle quoting, Mongo builders) routes through the same interface; switching drivers requires config only.
 
@@ -191,7 +193,7 @@ multitenant:
 observability:
   enabled: true
   service_name: my-service
-  trace: { enabled: true, endpoint: "http://otel-collector:4318", protocol: grpc }
+  trace: { enabled: true, endpoint: "http://otel-collector:4318", protocol: http }
   metrics: { enabled: true }
   logs:
     enabled: true
