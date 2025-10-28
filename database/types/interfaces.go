@@ -82,15 +82,37 @@ type JoinFilter interface {
 }
 
 // JoinFilterFactory provides methods for creating type-safe JOIN ON filters.
-// JoinFilters compare columns to other columns (not values) and maintain vendor-specific quoting.
+// JoinFilters support both column-to-column comparisons and column-to-value comparisons,
+// enabling mixed JOIN conditions without requiring Raw() for common cases.
+//
+// Column-to-value methods accept RawExpression for complex SQL expressions:
+//
+//	jf.Eq("amount", qb.Expr("TO_NUMBER(?)"), 100)  // Expression support
+//	jf.Eq("status", "active")                      // Simple value with placeholder
 type JoinFilterFactory interface {
-	// Column comparison operators
+	// Column-to-column comparison operators
 	EqColumn(leftColumn, rightColumn string) JoinFilter
 	NotEqColumn(leftColumn, rightColumn string) JoinFilter
 	LtColumn(leftColumn, rightColumn string) JoinFilter
 	LteColumn(leftColumn, rightColumn string) JoinFilter
 	GtColumn(leftColumn, rightColumn string) JoinFilter
 	GteColumn(leftColumn, rightColumn string) JoinFilter
+
+	// Column-to-value comparison operators (v2.2+)
+	// These methods accept any value type, including RawExpression for complex SQL.
+	// Regular values generate placeholders; RawExpression values are inserted verbatim.
+	Eq(column string, value any) JoinFilter
+	NotEq(column string, value any) JoinFilter
+	Lt(column string, value any) JoinFilter
+	Lte(column string, value any) JoinFilter
+	Gt(column string, value any) JoinFilter
+	Gte(column string, value any) JoinFilter
+	In(column string, values any) JoinFilter
+	NotIn(column string, values any) JoinFilter
+	Like(column, pattern string) JoinFilter
+	Null(column string) JoinFilter
+	NotNull(column string) JoinFilter
+	Between(column string, lowerBound, upperBound any) JoinFilter
 
 	// Logical operators for complex JOIN conditions
 	And(filters ...JoinFilter) JoinFilter

@@ -267,8 +267,51 @@ query := qb.Select("*").
 - **Oracle-safe**: Reserved word tables automatically quoted (`FROM "LEVEL" lvl`)
 - **Backward compatible**: String table names still work alongside TableRef
 
-**Mixed JOIN Conditions:**
-Use `JoinFilter.Raw()` for complex conditions mixing column comparisons with value filters or functions (see example above).
+**Mixed JOIN Conditions (v2.2+):**
+
+JoinFilter supports both column-to-column comparisons and column-to-value filters, eliminating the need for `Raw()` in common cases:
+
+```go
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+// Type-safe mixed conditions (replaces Raw() for common patterns)
+query := qb.Select("*").
+    From(dbtypes.Table("orders").As("o")).
+    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
+        jf.EqColumn("c.id", "o.customer_id"),       // Column-to-column
+        jf.Eq("c.status", "active"),                 // Column-to-value with placeholder
+        jf.In("c.tier", []string{"gold", "platinum"}), // IN clause
+    )).
+    JoinOn(dbtypes.Table("products").As("p"), jf.And(
+        jf.EqColumn("p.id", "o.product_id"),
+        jf.Eq("p.price", qb.Expr("TO_NUMBER(o.max_price)")), // Expression support
+    )).
+    Where(f.Eq("o.status", "pending"))
+
+// SQL (Oracle):
+// SELECT * FROM orders o
+// JOIN customers c ON (c.id = o.customer_id AND c.status = :1 AND c.tier IN (:2,:3))
+// JOIN products p ON (p.id = o.product_id AND p.price = TO_NUMBER(o.max_price))
+// WHERE o.status = :4
+```
+
+**Available Column-to-Value Methods:**
+- **Comparison:** `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`
+- **Collections:** `In`, `NotIn`, `Between`
+- **String/Null:** `Like`, `Null`, `NotNull`
+
+**Expression Support:**
+All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders:
+
+```go
+jf.Eq("emp.col1", qb.Expr("TO_NUMBER(o.field1)"))   // emp.col1 = TO_NUMBER(o.field1)
+jf.Eq("seb.id", qb.Expr("LPAD(emp.col2, 10, '0')")) // seb.id = LPAD(emp.col2, 10, '0')
+jf.Between("age", qb.Expr("18"), qb.Expr("65"))     // age >= 18 AND age <= 65
+```
+
+**Raw() Escape Hatch:**
+Use `jf.Raw()` only for conditions that type-safe methods cannot express (e.g., spatial functions, exotic operators).
 
 #### Subquery Support
 
