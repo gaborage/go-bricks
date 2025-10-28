@@ -79,7 +79,6 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 
 func TestConnectionHealth(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	err := conn.Health(ctx)
 	assert.NoError(t, err, "Health check should succeed")
@@ -91,7 +90,6 @@ func TestConnectionHealth(t *testing.T) {
 
 func TestConnectionStats(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	stats, err := conn.Stats()
 	assert.NoError(t, err, "Stats retrieval should succeed")
@@ -112,7 +110,6 @@ func TestConnectionStats(t *testing.T) {
 
 func TestConnectionDatabaseType(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	dbType := conn.DatabaseType()
 	assert.Equal(t, "postgresql", dbType, "Database type should be postgresql")
@@ -140,7 +137,6 @@ func TestConnectionClose(t *testing.T) {
 
 func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create migration table
 	err := conn.CreateMigrationTable(ctx)
@@ -184,7 +180,6 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 
 func TestConnectionQueryOperations(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_query (id SERIAL PRIMARY KEY, name TEXT, value INT)")
@@ -230,7 +225,6 @@ func TestConnectionQueryOperations(t *testing.T) {
 
 func TestConnectionPrepareStatement(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_prepare (id SERIAL PRIMARY KEY, name TEXT)")
@@ -265,7 +259,6 @@ func TestConnectionPrepareStatement(t *testing.T) {
 
 func TestConnectionTransactionCommit(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_commit (id SERIAL PRIMARY KEY, value INT)")
@@ -292,7 +285,6 @@ func TestConnectionTransactionCommit(t *testing.T) {
 
 func TestConnectionTransactionRollback(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_rollback (id SERIAL PRIMARY KEY, value INT)")
@@ -319,7 +311,6 @@ func TestConnectionTransactionRollback(t *testing.T) {
 
 func TestConnectionTransactionIsolation(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table with initial data
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_isolation (id SERIAL PRIMARY KEY, value INT)")

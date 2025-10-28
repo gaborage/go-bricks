@@ -41,7 +41,6 @@ func TestConnectionStats(t *testing.T) {
 
 func TestConnectionDatabaseType(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	dbType := conn.DatabaseType()
 	assert.Equal(t, "mongodb", dbType, "Database type should be mongodb")
