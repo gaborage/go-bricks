@@ -41,7 +41,6 @@ func TestConnectionStats(t *testing.T) {
 
 func TestConnectionDatabaseType(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	dbType := conn.DatabaseType()
 	assert.Equal(t, "mongodb", dbType, "Database type should be mongodb")
@@ -69,7 +68,7 @@ func TestConnectionClose(t *testing.T) {
 
 func TestConnectionCreateCollection(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	collName := "test_create_collection"
+	collName := uniqueCollectionName(t, "test_create_collection")
 	defer cleanupTestCollection(t, conn, ctx, collName)
 
 	tests := []struct {

@@ -25,7 +25,14 @@ const (
 func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	// Oracle requires longer timeout due to slower startup (120s container wait)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+
+	// Register cleanup to cancel context and close connection
+	t.Cleanup(func() {
+		cancel()
+	})
 
 	// Start Oracle container with default configuration (takes ~30-60s)
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
@@ -62,6 +69,13 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "Failed to create Oracle connection")
 
+	// Register cleanup to close connection before container terminates
+	t.Cleanup(func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	})
+
 	// Verify connection works
 	err = conn.Health(ctx)
 	require.NoError(t, err, "Failed to ping Oracle")
@@ -75,7 +89,6 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 
 func TestConnectionHealth(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	err := conn.Health(ctx)
 	assert.NoError(t, err, "Health check should succeed")
@@ -87,7 +100,6 @@ func TestConnectionHealth(t *testing.T) {
 
 func TestConnectionStats(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	stats, err := conn.Stats()
 	assert.NoError(t, err, "Stats retrieval should succeed")
@@ -108,7 +120,6 @@ func TestConnectionStats(t *testing.T) {
 
 func TestConnectionDatabaseType(t *testing.T) {
 	conn, _ := setupTestContainer(t)
-	defer conn.Close()
 
 	dbType := conn.DatabaseType()
 	assert.Equal(t, "oracle", dbType, "Database type should be oracle")
@@ -135,7 +146,10 @@ func TestConnectionClose(t *testing.T) {
 // =============================================================================
 
 func TestConnectionWithServiceName(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -166,7 +180,10 @@ func TestConnectionWithServiceName(t *testing.T) {
 // for direct connections. Testing SID would require a traditional Oracle installation or Oracle XE.
 
 func TestConnectionWithDatabaseFallback(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -189,7 +206,10 @@ func TestConnectionWithDatabaseFallback(t *testing.T) {
 }
 
 func TestConnectionWithConnectionString(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -213,7 +233,6 @@ func TestConnectionWithConnectionString(t *testing.T) {
 
 func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create migration table (executes 2 PL/SQL blocks)
 	err := conn.CreateMigrationTable(ctx)
@@ -240,7 +259,6 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 
 func TestConnectionOraclePlaceholders(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_placeholders (id NUMBER PRIMARY KEY, name VARCHAR2(100), value NUMBER)")
@@ -270,7 +288,6 @@ func TestConnectionOraclePlaceholders(t *testing.T) {
 
 func TestConnectionQueryOperations(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_query (id NUMBER PRIMARY KEY, name VARCHAR2(100), value NUMBER)")
@@ -317,7 +334,6 @@ func TestConnectionQueryOperations(t *testing.T) {
 
 func TestConnectionPrepareStatement(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_prepare (id NUMBER PRIMARY KEY, name VARCHAR2(100))")
@@ -351,7 +367,6 @@ func TestConnectionPrepareStatement(t *testing.T) {
 
 func TestConnectionTransactionCommit(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_commit (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -378,7 +393,6 @@ func TestConnectionTransactionCommit(t *testing.T) {
 
 func TestConnectionTransactionRollback(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_rollback (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -405,7 +419,6 @@ func TestConnectionTransactionRollback(t *testing.T) {
 
 func TestConnectionTransactionIsolation(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	defer conn.Close()
 
 	// Create test table with initial data
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_isolation (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -444,7 +457,9 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 // =============================================================================
 
 func TestConnectionPoolConfiguration(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
 
 	// Start container
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)

@@ -4,6 +4,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,11 +15,29 @@ import (
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
+const (
+	clientReadyMsg = "Client should connect and become ready within 10s"
+)
+
+// uniqueName generates a unique resource name for tests to prevent cross-test pollution
+func uniqueName(t *testing.T, prefix string) string {
+	t.Helper()
+	// Use test name and unix nano timestamp for uniqueness
+	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+}
+
 // setupTestBroker starts a RabbitMQ testcontainer and returns the broker URL
 func setupTestBroker(t *testing.T) string {
 	t.Helper()
 
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+
+	// Register cleanup to cancel context
+	t.Cleanup(func() {
+		cancel()
+	})
+
 	rmqContainer := containers.MustStartRabbitMQContainer(ctx, t, nil).WithCleanup(t)
 	return rmqContainer.BrokerURL()
 }
@@ -34,9 +53,10 @@ func TestAMQPClientConnection(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond, "Client should become ready")
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 }
 
 func TestAMQPClientPublishConsumeSimple(t *testing.T) {
@@ -46,12 +66,13 @@ func TestAMQPClientPublishConsumeSimple(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond, "Client should become ready")
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	ctx := context.Background()
-	queueName := "test-simple-queue"
+	queueName := uniqueName(t, "test-simple-queue")
 
 	// Declare queue
 	err := client.DeclareQueue(queueName, false, true, false, false)
@@ -87,9 +108,10 @@ func TestAMQPClientDeclareQueueVariants(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	tests := []struct {
 		name       string
@@ -99,9 +121,9 @@ func TestAMQPClientDeclareQueueVariants(t *testing.T) {
 		exclusive  bool
 		noWait     bool
 	}{
-		{"simple", "q-simple", false, true, false, false},
-		{"durable", "q-durable", true, false, false, false},
-		{"exclusive", "q-exclusive", false, true, true, false},
+		{"simple", uniqueName(t, "q-simple"), false, true, false, false},
+		{"durable", uniqueName(t, "q-durable"), true, false, false, false},
+		{"exclusive", uniqueName(t, "q-exclusive"), false, true, true, false},
 	}
 
 	for _, tt := range tests {
@@ -119,18 +141,19 @@ func TestAMQPClientDeclareExchange(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	tests := []struct {
 		name         string
 		exchangeName string
 		kind         string
 	}{
-		{"direct", "ex-direct", "direct"},
-		{"fanout", "ex-fanout", "fanout"},
-		{"topic", "ex-topic", "topic"},
+		{"direct", uniqueName(t, "ex-direct"), "direct"},
+		{"fanout", uniqueName(t, "ex-fanout"), "fanout"},
+		{"topic", uniqueName(t, "ex-topic"), "topic"},
 	}
 
 	for _, tt := range tests {
@@ -148,12 +171,13 @@ func TestAMQPClientBindQueue(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
-	exchangeName := "bind-test-exchange"
-	queueName := "bind-test-queue"
+	exchangeName := uniqueName(t, "bind-test-exchange")
+	queueName := uniqueName(t, "bind-test-queue")
 
 	// Declare exchange and queue
 	err := client.DeclareExchange(exchangeName, "direct", false, true, false, false)
@@ -178,13 +202,14 @@ func TestAMQPClientPublishToExchange(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	ctx := context.Background()
-	exchangeName := "pub-test-exchange"
-	queueName := "pub-test-queue"
+	exchangeName := uniqueName(t, "pub-test-exchange")
+	queueName := uniqueName(t, "pub-test-queue")
 	routingKey := "test-route"
 
 	// Setup exchange, queue, and binding
@@ -226,12 +251,13 @@ func TestAMQPClientPublisherConfirms(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	ctx := context.Background()
-	queueName := "confirms-test-queue"
+	queueName := uniqueName(t, "confirms-test-queue")
 
 	err := client.DeclareQueue(queueName, false, true, false, false)
 	require.NoError(t, err)
@@ -254,12 +280,13 @@ func TestAMQPClientConsumeWithOptions(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	ctx := context.Background()
-	queueName := "consume-opts-queue"
+	queueName := uniqueName(t, "consume-opts-queue")
 
 	err := client.DeclareQueue(queueName, false, true, false, false)
 	require.NoError(t, err)
@@ -291,12 +318,13 @@ func TestAMQPClientConsumeManualAck(t *testing.T) {
 	client := NewAMQPClient(brokerURL, log)
 	defer client.Close()
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	ctx := context.Background()
-	queueName := "manual-ack-queue"
+	queueName := uniqueName(t, "manual-ack-queue")
 
 	err := client.DeclareQueue(queueName, false, true, false, false)
 	require.NoError(t, err)
@@ -333,9 +361,10 @@ func TestAMQPClientClose(t *testing.T) {
 
 	client := NewAMQPClient(brokerURL, log)
 
+	// Wait for client to become ready with extended timeout for slow CI environments
 	require.Eventually(t, func() bool {
 		return client.IsReady()
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 
 	// Close client (tests Close function at 94.1% coverage)
 	err := client.Close()
