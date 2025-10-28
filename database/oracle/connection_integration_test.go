@@ -25,7 +25,14 @@ const (
 func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	// Oracle requires longer timeout due to slower startup (120s container wait)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+
+	// Register cleanup to cancel context and close connection
+	t.Cleanup(func() {
+		cancel()
+	})
 
 	// Start Oracle container with default configuration (takes ~30-60s)
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
@@ -61,6 +68,13 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	// Create Oracle connection
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "Failed to create Oracle connection")
+
+	// Register cleanup to close connection before container terminates
+	t.Cleanup(func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	})
 
 	// Verify connection works
 	err = conn.Health(ctx)
@@ -135,7 +149,10 @@ func TestConnectionClose(t *testing.T) {
 // =============================================================================
 
 func TestConnectionWithServiceName(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -166,7 +183,10 @@ func TestConnectionWithServiceName(t *testing.T) {
 // for direct connections. Testing SID would require a traditional Oracle installation or Oracle XE.
 
 func TestConnectionWithDatabaseFallback(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -189,7 +209,10 @@ func TestConnectionWithDatabaseFallback(t *testing.T) {
 }
 
 func TestConnectionWithConnectionString(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 	log := logger.New("disabled", true)
 
@@ -444,7 +467,9 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 // =============================================================================
 
 func TestConnectionPoolConfiguration(t *testing.T) {
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
 
 	// Start container
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)

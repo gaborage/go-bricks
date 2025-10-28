@@ -69,7 +69,7 @@ func TestConnectionClose(t *testing.T) {
 
 func TestConnectionCreateCollection(t *testing.T) {
 	conn, ctx := setupTestContainer(t)
-	collName := "test_create_collection"
+	collName := uniqueCollectionName(t, "test_create_collection")
 	defer cleanupTestCollection(t, conn, ctx, collName)
 
 	tests := []struct {

@@ -4,7 +4,9 @@ package mongodb
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/database"
@@ -14,12 +16,25 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// uniqueCollectionName generates a unique collection name for tests to prevent cross-test pollution
+func uniqueCollectionName(t *testing.T, prefix string) string {
+	t.Helper()
+	// Use test name and unix nano timestamp for uniqueness
+	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+}
+
 // setupTestContainer starts a MongoDB testcontainer and returns the connection
 // The container is automatically cleaned up when the test finishes
 func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
-	ctx := context.Background()
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+
+	// Register cleanup to cancel context and close connection
+	t.Cleanup(func() {
+		cancel()
+	})
 
 	// Start MongoDB container with default configuration
 	mongoContainer := containers.MustStartMongoDBContainer(ctx, t, nil).WithCleanup(t)
@@ -36,6 +51,13 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	// Create MongoDB connection
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "Failed to create MongoDB connection")
+
+	// Register cleanup to close connection before container terminates
+	t.Cleanup(func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	})
 
 	// Verify connection works
 	err = conn.Health(ctx)
