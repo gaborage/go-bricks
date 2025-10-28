@@ -548,6 +548,7 @@ sql, args := query.ToSQL()
 ```go
 qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
 f := qb.Filter()
+jf := qb.JoinFilter()
 
 subquery := qb.Select("1").
     From("orders").
