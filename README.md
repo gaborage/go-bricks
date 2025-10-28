@@ -15,19 +15,20 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 
 ## Table of Contents
 1. [Why GoBricks?](#why-gobricks)
-2. [Feature Overview](#feature-overview)
-3. [Quick Start](#quick-start)
-4. [Configuration](#configuration)
-5. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
-6. [Modules and Application Structure](#modules-and-application-structure)
-7. [HTTP Server](#http-server)
-8. [Messaging](#messaging)
-9. [Database](#database)
-10. [Multi-Tenant Implementation](#multi-tenant-implementation)
-11. [Observability and Operations](#observability-and-operations)
-12. [Examples](#examples)
-13. [Contributing](#contributing)
-14. [License](#license)
+2. [Developer Resources](#developer-resources)
+3. [Feature Overview](#feature-overview)
+4. [Quick Start](#quick-start)
+5. [Configuration](#configuration)
+6. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
+7. [Modules and Application Structure](#modules-and-application-structure)
+8. [HTTP Server](#http-server)
+9. [Messaging](#messaging)
+10. [Database](#database)
+11. [Multi-Tenant Implementation](#multi-tenant-implementation)
+12. [Observability and Operations](#observability-and-operations)
+13. [Examples](#examples)
+14. [Contributing](#contributing)
+15. [License](#license)
 
 ---
 
@@ -37,6 +38,27 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 - **Mission-critical integrations** (PostgreSQL, Oracle, RabbitMQ, Flyway) with unified ergonomics.
 - **Modern Go practices** with type safety, performance optimizations, and Go 1.18+ features.
 - **Extensible design** that works with modern Go idioms and the wider ecosystem.
+
+---
+
+## Developer Resources
+
+**For Contributors & Framework Developers:**
+- **[CLAUDE.md](CLAUDE.md)** - Comprehensive development guide with architecture, commands, testing, and workflows
+- **[llms.txt](llms.txt)** - Quick code examples optimized for LLMs and copy-paste development
+- **[.specify/memory/constitution.md](.specify/memory/constitution.md)** - Project governance and non-negotiable principles
+
+**For Application Developers:**
+- **[go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project)** - Complete working examples and patterns
+- **[MULTI_TENANT.md](MULTI_TENANT.md)** - Multi-tenant architecture and implementation guide
+- **[Go Reference](https://pkg.go.dev/github.com/gaborage/go-bricks)** - Complete API documentation
+
+**Quick Commands:**
+```bash
+make check              # Pre-commit: fmt + lint + test
+make test-integration   # Integration tests (requires Docker)
+go test -run TestName   # Run specific test
+```
 
 ---
 
@@ -56,8 +78,9 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 ## Quick Start
 
 ### Requirements
-- **Go 1.25+** (required for modern type aliases, generics, and slices package)
+- **Go 1.24 or 1.25** (CI tests both versions)
 - Modern Go toolchain with module support
+- Docker Desktop or Docker Engine (integration tests only)
 
 ### Install
 ```bash
@@ -443,6 +466,8 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
 ---
 
 ## Examples
+
+### Complete Working Examples
 Explore the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) repository:
 - `http/handlers` – typed HTTP handler module
 - `http/client` – fluent HTTP client with retries and interceptors
@@ -452,10 +477,33 @@ Explore the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-
 - `openapi-demo` – OpenAPI specification generation
 - `multitenant-aws` – multi-tenant app with AWS Secrets Manager
 
+### Quick Code Reference
+See **[llms.txt](llms.txt)** for copy-paste-ready code snippets covering:
+- Module system patterns
+- HTTP handlers (POST, GET, PUT, DELETE)
+- Database queries (SELECT, UPDATE, DELETE, JOINs, subqueries)
+- Messaging (AMQP declarations, publishers, consumers)
+- Multi-tenant configuration
+- Observability setup
+- Configuration injection
+
 ---
 
 ## Contributing
-Issues and pull requests are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, tooling, and workflow.
+
+Issues and pull requests are welcome!
+
+**Getting Started:**
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Coding standards, tooling, and workflow
+- **[CLAUDE.md](CLAUDE.md)** - Comprehensive development guide with architecture details, commands, and testing guidelines
+- **[.specify/memory/constitution.md](.specify/memory/constitution.md)** - Project governance and non-negotiable principles (80% test coverage, security-first, etc.)
+
+**Quick Setup:**
+```bash
+go test ./...              # Run unit tests
+make check                 # Pre-commit checks (fmt, lint, test)
+make test-integration      # Integration tests (Docker required)
+```
 
 ---
 

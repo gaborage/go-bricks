@@ -10,7 +10,30 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 - **Go 1.24 or 1.25** (CI tests both versions)
 - Docker Desktop or Docker Engine (integration tests only)
 
+## Quick Reference
+
+**Most Common Commands:**
+```bash
+make check              # Pre-commit: fmt + lint + test
+make test               # Unit tests with race detection
+make test-integration   # Integration tests (Docker required)
+go test -run TestName   # Run specific test
+```
+
+**Key Files:**
+- [CLAUDE.md](CLAUDE.md) - This development guide
+- [.specify/memory/constitution.md](.specify/memory/constitution.md) - Project governance
+- [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
+- [llms.txt](llms.txt) - Quick code examples for LLMs
+- [.golangci.yml](.golangci.yml) - Linting configuration
+
+**External Resources:**
+- [Demo Project](https://github.com/gaborage/go-bricks-demo-project) - Complete examples
+- [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) - Code quality metrics
+
 ## Developer Manifesto (MANDATORY)
+
+> **Note:** The full governance framework is defined in [.specify/memory/constitution.md](.specify/memory/constitution.md). This section provides an overview of core principles that guide all development.
 
 ### Framework Philosophy
 GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
@@ -752,6 +775,8 @@ Comprehensive examples: [go-bricks-demo-project](https://github.com/gaborage/go-
 ### Documentation
 - **Architecture Decisions:** `wiki/architecture_decisions.md`
 - **Task Planning:** `.claude/tasks/archive/`
+- **Quick Examples:** `llms.txt` (LLM-optimized code snippets)
+- **Governance:** `.specify/memory/constitution.md`
 
 ## Database-Specific Notes
 
@@ -827,14 +852,53 @@ The unified CI workflow (`ci-v2.yml`) intelligently runs only necessary jobs:
 - Intelligent retry logic for Windows-specific patterns
 - Race detection enabled
 
+## SpecKit Workflow (Feature Development)
+
+GoBricks uses SpecKit for structured feature development with built-in slash commands:
+
+### Available Commands
+- `/speckit.specify` - Create feature specification from natural language description
+- `/speckit.plan` - Generate implementation plan with design artifacts
+- `/speckit.tasks` - Generate actionable, dependency-ordered task list
+- `/speckit.implement` - Execute implementation plan by processing tasks
+- `/speckit.clarify` - Identify underspecified areas and ask clarification questions
+- `/speckit.checklist` - Generate custom checklist for current feature
+- `/speckit.analyze` - Cross-artifact consistency and quality analysis
+- `/speckit.constitution` - Update project constitution and sync templates
+
+### Typical Workflow
+1. `/speckit.specify` - Start with feature requirements
+2. `/speckit.clarify` - Resolve ambiguities (if needed)
+3. `/speckit.plan` - Generate detailed implementation plan
+4. `/speckit.tasks` - Break down into actionable tasks
+5. `/speckit.implement` - Execute tasks with tracking
+6. `/speckit.analyze` - Verify consistency across artifacts
+
+### Constitution Reference
+The project constitution (`.specify/memory/constitution.md`) defines non-negotiable governance:
+- Explicit > Implicit (no magic configuration)
+- Type Safety > Dynamic Hacks (breaking changes acceptable for safety)
+- Test-First Development (80% coverage enforced)
+- Security First (mandatory input validation)
+- Observability as First-Class Citizen (OpenTelemetry standards)
+- Performance Standards (minimal framework overhead)
+- User Experience Consistency (predictable APIs)
+
+See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full governance framework.
+
 ## File Organization
 - **internal/** - Private packages
 - **tools/** - Development tooling (OpenAPI generator)
 - **wiki/** - Architecture documentation (see ADR-006 for dual-mode logging)
 - **.claude/tasks/** - Development task planning
+- **.specify/** - SpecKit feature development workflow
+  - **memory/constitution.md** - Project governance framework
+  - **templates/** - Spec, plan, task, and checklist templates
+  - **scripts/bash/** - Automation scripts for SpecKit commands
 - **observability/testing/** - Test utilities for spans, metrics, and logs
 - **observability/dual_processor.go** - Dual-mode log routing implementation
 - **server/logger_context.go** - Request log context tracking
+- **llms.txt** - Quick reference examples for LLM code generation
 - Tests alongside source files (`*_test.go`)
 
 ## Key Interfaces
