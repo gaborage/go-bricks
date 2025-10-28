@@ -1,1203 +1,213 @@
 # GoBricks Framework
 
-Enterprise Go framework for building microservices. Requires Go 1.24/1.25. Multi-database (PostgreSQL/Oracle/MongoDB), type-safe handlers, multi-tenant, AMQP messaging, OpenTelemetry observability.
-
----
+Enterprise Go microservice toolkit (Go 1.24+). Provides multi-database access, typed HTTP handlers, AMQP messaging, tenant isolation, and built-in OpenTelemetry.
 
 ## Quick Start
-
-### Install GoBricks
-
-```bash
-go get github.com/gaborage/go-bricks
-```
-
----
-
-### Minimal Application Bootstrap
+- `go get github.com/gaborage/go-bricks`
+- Scaffold:
 
 ```go
 package main
 
 import (
-    "log"
-    "github.com/gaborage/go-bricks/app"
-    "github.com/gaborage/go-bricks/config"
+	"log"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 )
 
 func main() {
-    cfg, err := config.Load()
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    framework, err := app.NewWithConfig(cfg, nil)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Register modules here
-
-    if err := framework.Run(); err != nil {
-        log.Fatal(err)
-    }
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fw, err := app.NewWithConfig(cfg, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fw.RegisterModules(/* modules */)
+	log.Fatal(fw.Run())
 }
 ```
 
----
-
-### Basic Configuration File
+## Config Snapshot
 
 ```yaml
-# config.yaml
 app:
-  name: "my-service"
-  environment: "development"
-
+  name: my-service
+  environment: development
 server:
   enabled: true
   port: 8080
-
 database:
-  type: "postgres"
-  host: "localhost"
-  port: 5432
-  username: "user"
-  password: "pass"
-  database: "mydb"
-
+  type: postgres # postgres | oracle | mongo
 logger:
-  level: "info"
+  level: info
   pretty: true
 ```
 
----
+`Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
+Add observability settings as needed (see Observability & Logging).
 
-## Module System
+## Core Concepts
+- Framework injects dependencies via `*app.ModuleDeps`; avoid constructing raw `*sql.DB`.
+- Declarative messaging defines exchanges, queues, bindings, publishers, and consumers once; the framework replays per tenant.
+- Observability hooks (traces, metrics, structured logs) activate when `observability.enabled=true`.
+- Multi-tenant mode resolves tenants (header/host/custom store) and hands each module tenant-specific resources.
 
-### Module Interface Implementation
+## Module Skeleton
 
 ```go
-package mymodule
-
-import (
-    "github.com/gaborage/go-bricks/app"
-    "github.com/gaborage/go-bricks/database/types"
-    "github.com/gaborage/go-bricks/logger"
-    "github.com/gaborage/go-bricks/messaging"
-    "github.com/gaborage/go-bricks/server"
-    "github.com/labstack/echo/v4"
-)
-
 type Module struct {
-    db     types.Interface
-    logger logger.Logger
-    svc    *Service
+	db     database.Interface
+	logger logger.Logger
 }
 
-func New() *Module {
-    return &Module{}
-}
-
-func (m *Module) Name() string {
-    return "mymodule"
-}
+func (m *Module) Name() string { return "mymodule" }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.db = deps.DB
-    m.logger = deps.Logger
-    m.svc = NewService(m.db, m.logger)
-    return nil
+	m.db = deps.DB
+	m.logger = deps.Logger.WithFields(map[string]any{"module": m.Name()})
+	return nil
 }
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
-    handler := NewHandler(m.svc)
-    server.POST(hr, e, "/users", handler.CreateUser)
-    server.GET(hr, e, "/users/:id", handler.GetUser)
+	handler := NewHandler(m.db, m.logger)
+	server.POST(hr, e, "/users", handler.Create)
 }
 
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    // Register AMQP declarations
+	// optional
 }
 
-func (m *Module) Shutdown() error {
-    return nil
-}
+func (m *Module) Shutdown() error { return nil }
 ```
 
----
-
-### Register Module with Framework
+## Typed HTTP Handlers
 
 ```go
-func main() {
-    cfg, _ := config.Load()
-    framework, _ := app.NewWithConfig(cfg, nil)
-
-    framework.RegisterModules(
-        mymodule.New(),
-        anothermodule.New(),
-    )
-
-    framework.Run()
-}
-```
-
----
-
-### Access Dependencies in Init
-
-```go
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    // Database access
-    m.db = deps.DB
-
-    // Logger
-    m.logger = deps.Logger.WithFields(map[string]any{
-        "module": m.Name(),
-    })
-
-    // Messaging client
-    m.messaging = deps.Messaging
-
-    // Configuration
-    var cfg ServiceConfig
-    if err := deps.Config.InjectInto(&cfg); err != nil {
-        return err
-    }
-
-    m.svc = NewService(m.db, m.logger, cfg)
-    return nil
-}
-```
-
----
-
-### Graceful Shutdown Hook
-
-```go
-func (m *Module) Shutdown() error {
-    m.logger.Info("Shutting down module")
-
-    if err := m.svc.Close(); err != nil {
-        return err
-    }
-
-    return nil
-}
-```
-
----
-
-## HTTP Server - Typed Handlers
-
-### POST Handler with Validation
-
-```go
-package handler
-
-import (
-    "github.com/gaborage/go-bricks/server"
-)
-
 type CreateUserReq struct {
-    Name  string `json:"name" validate:"required"`
-    Email string `json:"email" validate:"required,email"`
-    Age   int    `json:"age" validate:"gte=18,lte=120"`
+	Name  string `json:"name" validate:"required"`
+	Email string `json:"email" validate:"required,email"`
 }
 
 type User struct {
-    ID    int    `json:"id"`
-    Name  string `json:"name"`
-    Email string `json:"email"`
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
-func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    user, err := h.svc.Create(req)
-    if err != nil {
-        return server.Result[User]{}, server.InternalServerError(err)
-    }
-    return server.Created(user), nil
-}
-```
-
----
-
-### GET Handler with Path Params
-
-```go
-func (h *Handler) GetUser(req server.NoBody, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    idStr := ctx.Param("id")
-    id, err := strconv.Atoi(idStr)
-    if err != nil {
-        return server.Result[User]{}, server.BadRequest("invalid id")
-    }
-
-    user, err := h.svc.GetByID(ctx.Request().Context(), id)
-    if err != nil {
-        return server.Result[User]{}, server.NotFound("user not found")
-    }
-
-    return server.OK(user), nil
+func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	reqCtx := ctx.Request().Context()
+	user, err := h.svc.Create(reqCtx, req)
+	if err != nil {
+		return server.Result[User]{}, server.InternalServerError(err)
+	}
+	return server.Created(user), nil
 }
 ```
 
----
+| Pattern          | Request binding              | Success helper          | Notes                          |
+|------------------|------------------------------|-------------------------|--------------------------------|
+| POST create      | JSON struct w/ validators    | `server.Created(data)`  | 422 auto-emitted on validation |
+| GET lookup       | `server.NoBody` + `ctx.Param`| `server.OK(data)`       | Return domain errors as API    |
+| LIST with query  | `query:"..."` struct tags    | `server.OK(list)`       | Query params auto-bound        |
+| DELETE           | `server.NoBody`              | `server.NoContent()`    | Return typed API errors        |
+| ASYNC acceptance | Request struct               | `server.Accepted(meta)` | For enqueue-style workflows    |
 
-### PUT Handler with Update
-
-```go
-type UpdateUserReq struct {
-    Name  string `json:"name" validate:"required"`
-    Email string `json:"email" validate:"email"`
-}
-
-func (h *Handler) UpdateUser(req UpdateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    id, _ := strconv.Atoi(ctx.Param("id"))
-
-    user, err := h.svc.Update(ctx.Request().Context(), id, req)
-    if err != nil {
-        return server.Result[User]{}, server.InternalServerError(err)
-    }
-
-    return server.OK(user), nil
-}
-```
-
----
-
-### DELETE Handler Returning NoContent
+## Database Builder & Operations
 
 ```go
-func (h *Handler) DeleteUser(req server.NoBody, ctx server.HandlerContext) (server.Result[server.Empty], server.IAPIError) {
-    id, _ := strconv.Atoi(ctx.Param("id"))
-
-    if err := h.svc.Delete(ctx.Request().Context(), id); err != nil {
-        return server.Result[server.Empty]{}, server.InternalServerError(err)
-    }
-
-    return server.NoContent(), nil
-}
-```
-
----
-
-### Handler with Query Parameters
-
-```go
-type ListUsersReq struct {
-    Status string `query:"status"`
-    Page   int    `query:"page" validate:"gte=1"`
-    Limit  int    `query:"limit" validate:"gte=1,lte=100"`
-}
-
-func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server.Result[[]User], server.IAPIError) {
-    users, err := h.svc.List(ctx.Request().Context(), req)
-    if err != nil {
-        return server.Result[[]User]{}, server.InternalServerError(err)
-    }
-
-    return server.OK(users), nil
-}
-```
-
----
-
-### Route Registration
-
-```go
-func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
-    handler := NewHandler(m.svc)
-
-    server.POST(hr, e, "/users", handler.CreateUser)
-    server.GET(hr, e, "/users", handler.ListUsers)
-    server.GET(hr, e, "/users/:id", handler.GetUser)
-    server.PUT(hr, e, "/users/:id", handler.UpdateUser)
-    server.DELETE(hr, e, "/users/:id", handler.DeleteUser)
-}
-```
-
----
-
-### Custom Error Responses
-
-```go
-func (h *Handler) GetUser(req server.NoBody, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    id, _ := strconv.Atoi(ctx.Param("id"))
-
-    user, err := h.svc.GetByID(ctx.Request().Context(), id)
-    if err == ErrNotFound {
-        return server.Result[User]{}, server.NotFound("user not found")
-    }
-    if err == ErrUnauthorized {
-        return server.Result[User]{}, server.Unauthorized("access denied")
-    }
-    if err != nil {
-        return server.Result[User]{}, server.InternalServerError(err)
-    }
-
-    return server.OK(user), nil
-}
-```
-
----
-
-### Accepted Response for Async Operations
-
-```go
-type JobResponse struct {
-    JobID string `json:"job_id"`
-}
-
-func (h *Handler) ProcessBatch(req BatchReq, ctx server.HandlerContext) (server.Result[JobResponse], server.IAPIError) {
-    jobID, err := h.svc.EnqueueBatch(ctx.Request().Context(), req)
-    if err != nil {
-        return server.Result[JobResponse]{}, server.InternalServerError(err)
-    }
-
-    return server.Accepted(JobResponse{JobID: jobID}), nil
-}
-```
-
----
-
-## Database Query Builder
-
-### Create QueryBuilder Instance
-
-```go
-import (
-    "github.com/gaborage/go-bricks/database/builder"
-    dbtypes "github.com/gaborage/go-bricks/database/types"
-)
-
-// PostgreSQL
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-
-// Oracle
-qb := builder.NewQueryBuilder(dbtypes.Oracle)
-```
-
----
-
-### SELECT with WHERE Equals
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
+qb := builder.NewQueryBuilder(m.db.DatabaseType())
 f := qb.Filter()
 
-query := qb.Select("id", "name", "email").
-    From("users").
-    Where(f.Eq("status", "active"))
+sql, args := qb.Select("id", "email").
+	From("users").
+	Where(f.And(f.Eq("status", "active"), f.Like("email", "%@example.com"))).
+	ToSQL()
 
-sql, args := query.ToSQL()
-// SELECT id, name, email FROM users WHERE status = $1
-// args: ["active"]
-
-rows, err := db.Query(ctx, sql, args...)
+ctx := context.Background() // or propagate incoming request context
+rows, err := m.db.Query(ctx, sql, args...)
 ```
 
----
-
-### SELECT with Multiple Filters
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Select("*").
-    From("products").
-    Where(f.And(
-        f.Eq("category", "electronics"),
-        f.Gte("price", 100),
-        f.In("brand", []string{"Apple", "Samsung"}),
-    ))
-
-sql, args := query.ToSQL()
-// SELECT * FROM products WHERE (category = $1 AND price >= $2 AND brand IN ($3,$4))
-```
-
----
-
-### SELECT with OR Conditions
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Select("*").
-    From("orders").
-    Where(f.Or(
-        f.Eq("status", "pending"),
-        f.Eq("status", "processing"),
-    ))
-
-sql, args := query.ToSQL()
-// SELECT * FROM orders WHERE (status = $1 OR status = $2)
-```
-
----
-
-### SELECT with LIKE Pattern
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Select("*").
-    From("users").
-    Where(f.Like("email", "%@gmail.com"))
-
-sql, args := query.ToSQL()
-// SELECT * FROM users WHERE email LIKE $1
-```
-
----
-
-### SELECT with BETWEEN
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Select("*").
-    From("orders").
-    Where(f.Between("created_at", "2024-01-01", "2024-12-31"))
-
-sql, args := query.ToSQL()
-// SELECT * FROM orders WHERE created_at >= $1 AND created_at <= $2
-```
-
----
-
-### UPDATE with Filter
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Update("users").
-    Set("status", "inactive").
-    Set("updated_at", time.Now()).
-    Where(f.Lt("last_login", cutoffDate))
-
-sql, args := query.ToSQL()
-// UPDATE users SET status = $1, updated_at = $2 WHERE last_login < $3
-```
-
----
-
-### DELETE with Filter
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Delete("sessions").
-    Where(f.And(
-        f.Eq("user_id", userID),
-        f.Lt("expires_at", time.Now()),
-    ))
-
-sql, args := query.ToSQL()
-// DELETE FROM sessions WHERE (user_id = $1 AND expires_at < $2)
-```
-
----
-
-### JOIN with Table Aliases
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-jf := qb.JoinFilter()
-
-query := qb.Select("u.id", "u.name", "p.bio").
-    From(dbtypes.Table("users").As("u")).
-    LeftJoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id")).
-    Where(f.Eq("u.status", "active"))
-
-sql, args := query.ToSQL()
-// SELECT u.id, u.name, p.bio FROM users u LEFT JOIN profiles p ON u.id = p.user_id WHERE u.status = $1
-```
-
----
-
-### Mixed JOIN Conditions
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-jf := qb.JoinFilter()
-f := qb.Filter()
-
-query := qb.Select("*").
-    From(dbtypes.Table("orders").As("o")).
-    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
-        jf.EqColumn("c.id", "o.customer_id"),
-        jf.Eq("c.status", "active"),
-        jf.In("c.tier", []string{"gold", "platinum"}),
-    ))
-
-sql, args := query.ToSQL()
-// SELECT * FROM orders o JOIN customers c ON (c.id = o.customer_id AND c.status = $1 AND c.tier IN ($2,$3))
-```
-
----
-
-### Subquery with EXISTS
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-jf := qb.JoinFilter()
-
-subquery := qb.Select("1").
-    From("orders").
-    Where(f.And(
-        jf.EqColumn("orders.user_id", "u.id"),
-        f.Eq("orders.status", "pending"),
-    ))
-
-query := qb.Select("*").
-    From(dbtypes.Table("users").As("u")).
-    Where(f.Exists(subquery))
-
-sql, args := query.ToSQL()
-// SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = u.id AND orders.status = $1)
-```
-
----
-
-### Subquery with IN
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-subquery := qb.Select("category_id").
-    From("featured_categories").
-    Where(f.Eq("active", true))
-
-query := qb.Select("*").
-    From("products").
-    Where(f.InSubquery("category_id", subquery))
-
-sql, args := query.ToSQL()
-// SELECT * FROM products WHERE category_id IN (SELECT category_id FROM featured_categories WHERE active = $1)
-```
-
----
-
-### Expressions for Aggregations
-
-```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-query := qb.Select(
-    "category",
-    qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price"),
-).
-    From("products").
-    GroupBy("category").
-    OrderBy(qb.Expr("COUNT(*) DESC"))
-
-sql, args := query.ToSQL()
-// SELECT category, COUNT(*) AS product_count, AVG(price) AS avg_price FROM products GROUP BY category ORDER BY COUNT(*) DESC
-```
-
----
-
-### Oracle Reserved Word Handling
-
-```go
-// Oracle auto-quotes reserved words like "number", "level", "user"
-qb := builder.NewQueryBuilder(dbtypes.Oracle)
-f := qb.Filter()
-
-query := qb.Select("id", "number").
-    From("accounts").
-    Where(f.Eq("number", accountNum))
-
-sql, args := query.ToSQL()
-// SELECT id, "number" FROM accounts WHERE "number" = :1
-// Automatic quoting prevents Oracle syntax errors
-```
-
----
-
-## Database Operations
-
-### Query Multiple Rows
-
-```go
-import (
-    "context"
-    "github.com/gaborage/go-bricks/database/types"
-)
-
-func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
-    qb := builder.NewQueryBuilder(s.db.DatabaseType())
-    sql, args := qb.Select("*").From("users").ToSQL()
-
-    rows, err := s.db.Query(ctx, sql, args...)
-    if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
-
-    var users []User
-    for rows.Next() {
-        var u User
-        if err := rows.Scan(&u.ID, &u.Name, &u.Email); err != nil {
-            return nil, err
-        }
-        users = append(users, u)
-    }
-
-    return users, rows.Err()
-}
-```
-
----
-
-### Query Single Row
-
-```go
-func (s *Service) GetUser(ctx context.Context, id int) (*User, error) {
-    qb := builder.NewQueryBuilder(s.db.DatabaseType())
-    f := qb.Filter()
-
-    sql, args := qb.Select("*").From("users").Where(f.Eq("id", id)).ToSQL()
-
-    row := s.db.QueryRow(ctx, sql, args...)
-
-    var u User
-    if err := row.Scan(&u.ID, &u.Name, &u.Email); err != nil {
-        return nil, err
-    }
-
-    return &u, nil
-}
-```
-
----
-
-### Execute INSERT/UPDATE/DELETE
-
-```go
-func (s *Service) Create(ctx context.Context, name, email string) (int, error) {
-    sql := "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id"
-
-    row := s.db.QueryRow(ctx, sql, name, email)
-
-    var id int
-    if err := row.Scan(&id); err != nil {
-        return 0, err
-    }
-
-    return id, nil
-}
-
-func (s *Service) Delete(ctx context.Context, id int) error {
-    qb := builder.NewQueryBuilder(s.db.DatabaseType())
-    f := qb.Filter()
-
-    sql, args := qb.Delete("users").Where(f.Eq("id", id)).ToSQL()
-
-    _, err := s.db.Exec(ctx, sql, args...)
-    return err
-}
-```
-
----
-
-### Transactions
-
-```go
-func (s *Service) Transfer(ctx context.Context, fromID, toID int, amount float64) error {
-    tx, err := s.db.Begin(ctx)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback()
-
-    // Debit from account
-    _, err = tx.Exec(ctx, "UPDATE accounts SET balance = balance - $1 WHERE id = $2", amount, fromID)
-    if err != nil {
-        return err
-    }
-
-    // Credit to account
-    _, err = tx.Exec(ctx, "UPDATE accounts SET balance = balance + $1 WHERE id = $2", amount, toID)
-    if err != nil {
-        return err
-    }
-
-    return tx.Commit()
-}
-```
-
----
-
-## Messaging - AMQP
-
-### Declare Exchange, Queue, Binding with Helpers
+| Need                | Builder call / API usage                                               |
+|---------------------|------------------------------------------------------------------------|
+| Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`                           |
+| Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.Expr("created_at DESC")).GroupBy("tenant_id")` |
+| Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
+| Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
+| Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
+| Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work */; if err := tx.Commit(ctx); err != nil { return err }` |
+
+Access to vendor quirks (Oracle quoting, Mongo builders) routes through the same interface; switching drivers requires config only.
+
+## Messaging Snapshot
 
 ```go
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    exchange := decls.DeclareTopicExchange("issuance.events")
-    queue := decls.DeclareQueue("issuance.events.queue")
-    decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
+	exchange := decls.DeclareTopicExchange("orders.events")
+	queue := decls.DeclareQueue("orders.processing")
+	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
+
+	decls.DeclarePublisher(&messaging.PublisherOptions{
+		Exchange:   exchange.Name,
+		RoutingKey: "order.created",
+		EventType:  "OrderCreated",
+	}, nil)
+
+	decls.DeclareConsumer(&messaging.ConsumerOptions{
+		Queue:     queue.Name,
+		Consumer:  "order-processor",
+		EventType: "OrderCreated",
+		Handler:   NewOrderHandler(m.svc, m.logger),
+	}, nil)
 }
 ```
 
----
+| Concern            | Built-in support                                  |
+|--------------------|---------------------------------------------------|
+| Idempotent setup   | Declarations validated once, replayed per tenant  |
+| Retry / DLQ        | Queue options: `DeadLetterExchange`, `TTL`, etc.  |
+| Publishers         | Typed options ensure routing key + event type     |
+| Consumers          | Handler receives `context.Context`, `amqp.Delivery`|
+| Metrics & tracing  | Automatic OTEL spans + structured logs            |
 
-### Declare Publisher with Helper
+Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
 
-```go
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    exchange := decls.DeclareTopicExchange("issuance.events")
-
-    decls.DeclarePublisher(&messaging.PublisherOptions{
-        Exchange:    exchange.Name,
-        RoutingKey:  "issuance.created",
-        EventType:   "CreateBatchIssuanceRequest",
-        Description: "Requests batch card issuance",
-        Headers:     map[string]any{"source": "issuance-service"},
-    }, nil)
-}
-```
-
----
-
-### Declare Consumer with Handler
-
-```go
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    queue := decls.DeclareQueue("issuance.events.queue")
-
-    decls.DeclareConsumer(&messaging.ConsumerOptions{
-        Queue:       queue.Name,
-        Consumer:    "issuance-service-consumer",
-        EventType:   "CreateBatchIssuanceRequest",
-        Description: "Consumes issuance events",
-        Handler:     NewBatchIssuanceHandler(m.svc, m.logger),
-    }, nil)
-}
-```
-
----
-
-### Publish Message
-
-```go
-import (
-    "context"
-    "encoding/json"
-    "github.com/gaborage/go-bricks/messaging"
-)
-
-func (s *Service) PublishEvent(ctx context.Context, event IssuanceEvent) error {
-    data, err := json.Marshal(event)
-    if err != nil {
-        return err
-    }
-
-    return s.messaging.Publish(ctx, "issuance.created", data)
-}
-```
-
----
-
-### Message Handler Implementation
-
-```go
-type BatchIssuanceHandler struct {
-    svc    *Service
-    logger logger.Logger
-}
-
-func NewBatchIssuanceHandler(svc *Service, logger logger.Logger) messaging.MessageHandler {
-    return &BatchIssuanceHandler{svc: svc, logger: logger}
-}
-
-func (h *BatchIssuanceHandler) Handle(ctx context.Context, delivery amqp.Delivery) error {
-    var req CreateBatchIssuanceRequest
-    if err := json.Unmarshal(delivery.Body, &req); err != nil {
-        h.logger.Error("failed to unmarshal message", map[string]any{"error": err})
-        return delivery.Nack(false, false) // Don't requeue malformed messages
-    }
-
-    if err := h.svc.ProcessBatch(ctx, req); err != nil {
-        h.logger.Error("failed to process batch", map[string]any{"error": err})
-        return delivery.Nack(false, true) // Requeue for retry
-    }
-
-    return delivery.Ack(false)
-}
-```
-
----
-
-### Full Declaration Example
-
-```go
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    // Exchange
-    exchange := decls.DeclareTopicExchange("orders.events")
-
-    // Queue
-    queue := decls.DeclareQueue("orders.processing")
-
-    // Binding
-    decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
-
-    // Publisher
-    decls.DeclarePublisher(&messaging.PublisherOptions{
-        Exchange:    exchange.Name,
-        RoutingKey:  "order.created",
-        EventType:   "OrderCreated",
-        Description: "Published when order is created",
-    }, nil)
-
-    // Consumer
-    decls.DeclareConsumer(&messaging.ConsumerOptions{
-        Queue:       queue.Name,
-        Consumer:    "order-processor",
-        EventType:   "OrderCreated",
-        Description: "Processes new orders",
-        Handler:     NewOrderHandler(m.svc, m.logger),
-    }, nil)
-}
-```
-
----
-
-## Multi-Tenant Architecture
-
-### Tenant Resolution Configuration
-
-```yaml
-# config.yaml
-multitenant:
-  enabled: true
-  tenant_resolution:
-    strategy: "header" # or "subdomain"
-    header_name: "X-Tenant-ID"
-  resources:
-    - type: "database"
-      tenants:
-        tenant1:
-          database:
-            host: "tenant1-db.example.com"
-            database: "tenant1_db"
-        tenant2:
-          database:
-            host: "tenant2-db.example.com"
-            database: "tenant2_db"
-```
-
----
-
-### Access Tenant from Context
-
-```go
-import (
-    "github.com/gaborage/go-bricks/multitenant"
-)
-
-func (h *Handler) GetUser(req server.NoBody, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    tenant := multitenant.GetTenantFromContext(ctx.Request().Context())
-    if tenant == "" {
-        return server.Result[User]{}, server.BadRequest("tenant required")
-    }
-
-    user, err := h.svc.GetByID(ctx.Request().Context(), tenant, userID)
-    if err != nil {
-        return server.Result[User]{}, server.InternalServerError(err)
-    }
-
-    return server.OK(user), nil
-}
-```
-
----
-
-### Tenant-Specific Database Access
-
-```go
-func (s *Service) GetUser(ctx context.Context, tenantID string, userID int) (*User, error) {
-    // Get tenant-specific database connection
-    db := s.tenantStore.GetDatabase(tenantID)
-    if db == nil {
-        return nil, ErrTenantNotFound
-    }
-
-    qb := builder.NewQueryBuilder(db.DatabaseType())
-    f := qb.Filter()
-
-    sql, args := qb.Select("*").From("users").Where(f.Eq("id", userID)).ToSQL()
-
-    row := db.QueryRow(ctx, sql, args...)
-
-    var u User
-    if err := row.Scan(&u.ID, &u.Name, &u.Email); err != nil {
-        return nil, err
-    }
-
-    return &u, nil
-}
-```
-
----
-
-### Custom Tenant Store Implementation
-
-```go
-import (
-    "github.com/gaborage/go-bricks/multitenant"
-    "github.com/gaborage/go-bricks/database/types"
-)
-
-type CustomTenantStore struct {
-    databases map[string]types.Interface
-}
-
-func (s *CustomTenantStore) GetDatabase(tenantID string) types.Interface {
-    return s.databases[tenantID]
-}
-
-func (s *CustomTenantStore) GetMessaging(tenantID string) messaging.Client {
-    // Return tenant-specific messaging client
-    return nil
-}
-
-func (s *CustomTenantStore) ListTenants() []string {
-    tenants := make([]string, 0, len(s.databases))
-    for k := range s.databases {
-        tenants = append(tenants, k)
-    }
-    return tenants
-}
-```
-
----
-
-### Header-Based Tenant Resolution
+## Multi-Tenancy
+- Enable with `multitenant.enabled=true`.
+- Resolution strategies: `header`, `host`, or custom store implementing `multitenant.Store`.
+- Each tenant gets isolated DB connections, messaging clients, and module lifecycle events.
 
 ```yaml
 multitenant:
   enabled: true
   tenant_resolution:
-    strategy: "header"
-    header_name: "X-Tenant-ID"
+    strategy: header
+    header_name: X-Tenant-ID
 ```
 
-```bash
-curl -H "X-Tenant-ID: tenant1" http://localhost:8080/users
-```
-
----
-
-## Observability
-
-### OpenTelemetry Configuration
+## Observability & Logging
 
 ```yaml
-# config.yaml
 observability:
   enabled: true
-  service_name: "my-service"
-  environment: "production"
-
-  trace:
-    enabled: true
-    endpoint: "http://jaeger:4318"
-    protocol: "grpc"
-
-  metrics:
-    enabled: true
-    endpoint: "http://otel-collector:4318"
-
+  service_name: my-service
+  trace: { enabled: true, endpoint: "http://otel-collector:4318", protocol: http }
+  metrics: { enabled: true }
   logs:
     enabled: true
-    endpoint: "http://otel-collector:4318"
-    slow_request_threshold: "750ms"
-```
-
----
-
-### Dual-Mode Logging Setup
-
-```yaml
-observability:
-  logs:
-    enabled: true
-    endpoint: "http://otel-collector:4318"
-    slow_request_threshold: "750ms"
+    slow_request_threshold: 750ms
 
 logger:
-  pretty: false # Required for OTLP export
-  level: "info"
+  pretty: false # set false when exporting to OTLP
+  level: info
 ```
 
-Action logs (100% sampled): request summaries, all severities
-Trace logs (filtered): application logs, WARN+ only
-
----
-
-### Health Endpoints
-
-```yaml
-server:
-  enabled: true
-  port: 8080
-  health_enabled: true
-```
-
-```bash
-# Liveness probe
-curl http://localhost:8080/health
-
-# Readiness probe (checks database, messaging)
-curl http://localhost:8080/ready
-```
-
----
-
-### Debug Observability
-
-```bash
-# Enable internal observability debug logs
-GOBRICKS_DEBUG=true go run main.go
-
-# Shows [OBSERVABILITY] logs for provider initialization, span lifecycle
-```
-
----
-
-## Configuration Injection
-
-### Struct Tags for Module Config
-
-```go
-type ServiceConfig struct {
-    APIKey   string        `config:"custom.api.key" required:"true"`
-    Timeout  time.Duration `config:"custom.api.timeout" default:"30s"`
-    Retries  int           `config:"custom.api.retries" default:"3"`
-    Enabled  bool          `config:"custom.api.enabled" default:"true"`
-}
-
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    var cfg ServiceConfig
-    if err := deps.Config.InjectInto(&cfg); err != nil {
-        return err
-    }
-
-    m.svc = NewService(cfg)
-    return nil
-}
-```
-
----
-
-### Configuration File Structure
-
-```yaml
-# config.yaml
-custom:
-  api:
-    key: "${API_KEY}" # From environment variable
-    timeout: "45s"
-    retries: 5
-    enabled: true
-```
-
----
-
-### Environment Variable Override
-
-```bash
-# Environment variables take precedence
-export API_KEY="secret-key-123"
-export CUSTOM_API_TIMEOUT="60s"
-
-go run main.go
-```
-
----
+Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
 
 ## Common Patterns
-
-### Error Handling Pattern
-
-```go
-func (s *Service) GetUser(ctx context.Context, id int) (*User, error) {
-    qb := builder.NewQueryBuilder(s.db.DatabaseType())
-    f := qb.Filter()
-
-    sql, args := qb.Select("*").From("users").Where(f.Eq("id", id)).ToSQL()
-
-    row := s.db.QueryRow(ctx, sql, args...)
-
-    var u User
-    if err := row.Scan(&u.ID, &u.Name, &u.Email); err != nil {
-        if err == sql.ErrNoRows {
-            return nil, ErrNotFound
-        }
-        return nil, fmt.Errorf("failed to get user: %w", err)
-    }
-
-    return &u, nil
-}
-```
-
----
-
-### Graceful Shutdown
-
-```go
-func (m *Module) Shutdown() error {
-    m.logger.Info("shutting down module")
-
-    // Close service connections
-    if err := m.svc.Close(); err != nil {
-        m.logger.Error("error closing service", map[string]any{"error": err})
-        return err
-    }
-
-    // Cleanup resources
-    m.cleanup()
-
-    return nil
-}
-```
-
----
-
-### Testing with Observability Utilities
-
-```go
-import (
-    obtest "github.com/gaborage/go-bricks/observability/testing"
-    "testing"
-)
-
-func TestUserCreation(t *testing.T) {
-    tp := obtest.NewTestTraceProvider()
-    defer tp.Shutdown(context.Background())
-
-    // Your test code here
-
-    spans := tp.Exporter.GetSpans()
-    obtest.AssertSpanName(t, &spans[0], "CreateUser")
-    obtest.AssertSpanAttribute(t, &spans[0], "user.id", "123")
-
-    // Check action logs
-    obtest.AssertLogTypeExists(t, tp.LogExporter, "action")
-}
-```
-
----
+- **Error handling**: wrap service errors with `server.InternalServerError`; map domain errors to `server.NotFound`, `server.Unauthorized`, etc.
+- **Graceful shutdown**: close external resources in `Module.Shutdown`; the framework waits on outstanding requests.
+- **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
+- **Testing**: `obtest.NewTestTraceProvider()` captures spans/logs; mock `database.Interface` and `messaging.Client` directly.
