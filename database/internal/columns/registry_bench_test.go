@@ -3,6 +3,7 @@ package columns
 import (
 	"testing"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -48,7 +49,7 @@ type BenchLargeStruct struct {
 // Performance Target: <5µs per struct type
 func BenchmarkColumnRegistryFirstUse(b *testing.B) {
 	b.Run(smallStructTest, func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			registry := &ColumnRegistry{
 				vendorCaches: make(map[string]*vendorCache),
 			}
@@ -57,7 +58,7 @@ func BenchmarkColumnRegistryFirstUse(b *testing.B) {
 	})
 
 	b.Run(largeStructTest, func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			registry := &ColumnRegistry{
 				vendorCaches: make(map[string]*vendorCache),
 			}
@@ -66,7 +67,7 @@ func BenchmarkColumnRegistryFirstUse(b *testing.B) {
 	})
 
 	b.Run("Oracle Vendor (with quoting)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			registry := &ColumnRegistry{
 				vendorCaches: make(map[string]*vendorCache),
 			}
@@ -88,7 +89,7 @@ func BenchmarkColumnRegistryCachedAccess(b *testing.B) {
 
 	b.ResetTimer()
 	b.Run("Cached Get", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = registry.Get(dbtypes.PostgreSQL, &BenchUser{})
 		}
 	})
@@ -105,13 +106,13 @@ func BenchmarkColumnMetadataGet(b *testing.B) {
 
 	b.ResetTimer()
 	b.Run("Get Single Field", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.Get("ID")
 		}
 	})
 
 	b.Run("Get Multiple Fields", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.Get("ID")
 			_ = metadata.Get("Name")
 			_ = metadata.Get("Email")
@@ -128,13 +129,13 @@ func BenchmarkColumnMetadataFields(b *testing.B) {
 
 	b.ResetTimer()
 	b.Run("Fields (3 columns)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.Fields("ID", "Name", "Email")
 		}
 	})
 
 	b.Run("Fields (5 columns)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.Fields("ID", "Name", "Email", "Status", "CreatedAt")
 		}
 	})
@@ -149,7 +150,7 @@ func BenchmarkColumnMetadataAll(b *testing.B) {
 	b.Run(smallStructTest, func(b *testing.B) {
 		metadata := registry.Get(dbtypes.PostgreSQL, &BenchUser{})
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.All()
 		}
 	})
@@ -157,7 +158,7 @@ func BenchmarkColumnMetadataAll(b *testing.B) {
 	b.Run(largeStructTest, func(b *testing.B) {
 		metadata := registry.Get(dbtypes.PostgreSQL, &BenchLargeStruct{})
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = metadata.All()
 		}
 	})
@@ -173,7 +174,7 @@ func BenchmarkRegisterColumns(b *testing.B) {
 
 	b.ResetTimer()
 	b.Run("Global RegisterColumns (cached)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = RegisterColumns(dbtypes.PostgreSQL, &BenchUser{})
 		}
 	})
@@ -193,7 +194,7 @@ func BenchmarkVendorComparison(b *testing.B) {
 		}
 		_ = registry.Get(dbtypes.Oracle, &ReservedWordStruct{})
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = registry.Get(dbtypes.Oracle, &ReservedWordStruct{})
 		}
 	})
@@ -204,7 +205,7 @@ func BenchmarkVendorComparison(b *testing.B) {
 		}
 		_ = registry.Get(dbtypes.PostgreSQL, &ReservedWordStruct{})
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = registry.Get(dbtypes.PostgreSQL, &ReservedWordStruct{})
 		}
 	})
@@ -215,7 +216,7 @@ func BenchmarkVendorComparison(b *testing.B) {
 		}
 		_ = registry.Get(dbtypes.MongoDB, &ReservedWordStruct{})
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = registry.Get(dbtypes.MongoDB, &ReservedWordStruct{})
 		}
 	})
@@ -241,13 +242,13 @@ func BenchmarkConcurrentAccess(b *testing.B) {
 // BenchmarkParseStructDirect benchmarks the parser function directly
 func BenchmarkParseStructDirect(b *testing.B) {
 	b.Run(smallStructTest, func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_, _ = parseStruct(dbtypes.PostgreSQL, &BenchUser{})
 		}
 	})
 
 	b.Run(largeStructTest, func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_, _ = parseStruct(dbtypes.PostgreSQL, &BenchLargeStruct{})
 		}
 	})
@@ -256,35 +257,35 @@ func BenchmarkParseStructDirect(b *testing.B) {
 // BenchmarkOracleQuoting benchmarks Oracle identifier quoting logic
 func BenchmarkOracleQuoting(b *testing.B) {
 	b.Run("Simple column (no quoting)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = oracleQuoteIdentifier("user_id")
 		}
 	})
 
 	b.Run("Reserved word (quoting required)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = oracleQuoteIdentifier("number")
 		}
 	})
 
 	b.Run("Already quoted (no-op)", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = oracleQuoteIdentifier(`"NUMBER"`)
 		}
 	})
 }
 
-// BenchmarkIsOracleReservedWord benchmarks reserved word lookup
+// BenchmarkIsOracleReservedWord benchmarks reserved word lookup from sqllex package
 func BenchmarkIsOracleReservedWord(b *testing.B) {
 	b.Run("Reserved word", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = isOracleReservedWord("number")
+		for b.Loop() {
+			_ = sqllex.IsOracleReservedWord("number")
 		}
 	})
 
 	b.Run("Not reserved", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_ = isOracleReservedWord("user_id")
+		for b.Loop() {
+			_ = sqllex.IsOracleReservedWord("user_id")
 		}
 	})
 }

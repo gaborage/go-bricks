@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,7 @@ import (
 
 const (
 	dangerousSQLCharsErrMsg = "dangerous SQL characters"
+	invalidIdentifierErrMsg = "invalid identifier characters"
 )
 
 // Test structs for parser tests
@@ -83,6 +85,17 @@ func TestParseStructValidStruct(t *testing.T) {
 	assert.NotNil(t, metadata.columnsByField["ID"])
 	assert.NotNil(t, metadata.columnsByField["Name"])
 	assert.NotNil(t, metadata.columnsByField["Email"])
+}
+
+// TestParseStructNilPointer tests parsing with a nil pointer value
+func TestParseStructNilPointer(t *testing.T) {
+	var user *ValidUser
+
+	metadata, err := parseStruct(dbtypes.PostgreSQL, user)
+
+	require.NoError(t, err)
+	require.NotNil(t, metadata)
+	assert.Equal(t, "ValidUser", metadata.TypeName)
 }
 
 // TestParseStructOracleReservedWords tests Oracle-specific quoting
@@ -218,6 +231,19 @@ func TestParseStructDangerousTags(t *testing.T) {
 	assert.Contains(t, err.Error(), dangerousSQLCharsErrMsg)
 }
 
+// TestParseStructInvalidIdentifier tests validation for invalid identifier characters
+func TestParseStructInvalidIdentifier(t *testing.T) {
+	type InvalidIdentifier struct {
+		ID string `db:"id || 1=1"`
+	}
+
+	metadata, err := parseStruct(dbtypes.PostgreSQL, &InvalidIdentifier{})
+
+	require.Error(t, err)
+	assert.Nil(t, metadata)
+	assert.Contains(t, err.Error(), invalidIdentifierErrMsg)
+}
+
 // TestParseStructQuotedTags tests that pre-quoted tags are rejected
 func TestParseStructQuotedTags(t *testing.T) {
 	// Test double quotes
@@ -311,7 +337,7 @@ func TestValidateDBTag(t *testing.T) {
 	}
 }
 
-// TestIsOracleReservedWord tests the Oracle reserved word detection
+// TestIsOracleReservedWord tests the Oracle reserved word detection from sqllex package
 func TestIsOracleReservedWord(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -329,7 +355,7 @@ func TestIsOracleReservedWord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isOracleReservedWord(tt.identifier)
+			got := sqllex.IsOracleReservedWord(tt.identifier)
 			assert.Equal(t, tt.want, got)
 		})
 	}

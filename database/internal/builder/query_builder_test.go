@@ -22,7 +22,7 @@ const (
 	groupByClause      = "GROUP BY DATE(created_at)"
 	testEmail          = "john@example.com"
 	testWhereClause    = "WHERE status = $1"
-	testAccountId      = "ACC-001"
+	testAccountID      = "ACC-001"
 )
 
 // Test structs for columns feature
@@ -1370,7 +1370,7 @@ func TestColumnsInsert(t *testing.T) {
 		cols := qb.Columns(&IntegrationAccount{})
 
 		query := qb.InsertWithColumns("accounts", toStrings(cols.Fields("Number", "Level", "Size"))...).
-			Values(testAccountId, 3, "large")
+			Values(testAccountID, 3, "large")
 
 		sql, args, err := query.ToSql()
 		require.NoError(t, err)
@@ -1378,7 +1378,7 @@ func TestColumnsInsert(t *testing.T) {
 		assert.Contains(t, sql, `"number"`)
 		assert.Contains(t, sql, `"level"`)
 		assert.Contains(t, sql, `"size"`)
-		assert.Equal(t, []any{testAccountId, 3, "large"}, args)
+		assert.Equal(t, []any{testAccountID, 3, "large"}, args)
 	})
 
 	t.Run("INSERT with All() helper", func(t *testing.T) {
@@ -1430,13 +1430,13 @@ func TestColumnsUpdate(t *testing.T) {
 
 		query := qb.Update("accounts").
 			Set(cols.Get("Level"), 5).
-			Where(f.Eq(cols.Get("Number"), testAccountId))
+			Where(f.Eq(cols.Get("Number"), testAccountID))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, `UPDATE accounts SET "level" = :1`)
 		assert.Contains(t, sql, `WHERE "number" = :2`)
-		assert.Equal(t, []any{5, testAccountId}, args)
+		assert.Equal(t, []any{5, testAccountID}, args)
 	})
 }
 

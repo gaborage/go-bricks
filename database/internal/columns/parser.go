@@ -3,38 +3,17 @@ package columns
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// oracleReservedWords contains Oracle SQL reserved words that must be quoted when used as identifiers.
-// This list is replicated from database/internal/builder/oracle.go to avoid circular dependencies.
-// Keep in sync with the builder package's reserved word list.
-var oracleReservedWords = map[string]struct{}{
-	"ACCESS": {}, "ADD": {}, "ALL": {}, "ALTER": {}, "AND": {}, "ANY": {}, "AS": {}, "ASC": {},
-	"BEGIN": {}, "BETWEEN": {}, "BY": {}, "CASE": {}, "CHECK": {}, "COLUMN": {}, "COMMENT": {},
-	"CONNECT": {}, "CREATE": {}, "CURRENT": {}, "DELETE": {}, "DESC": {}, "DISTINCT": {},
-	"DROP": {}, "ELSE": {}, "EXCLUDE": {}, "EXISTS": {}, "FOR": {}, "FROM": {}, "GRANT": {},
-	"GROUP": {}, "HAVING": {}, "IN": {}, "INDEX": {}, "INSERT": {}, "INTERSECT": {}, "INTO": {},
-	"IS": {}, "LEVEL": {}, "LIKE": {}, "LOCK": {}, "MINUS": {}, "MODE": {}, "NOCOMPRESS": {},
-	"NOT": {}, "NULL": {}, "NUMBER": {}, "OF": {}, "ON": {}, "OPTION": {}, "OR": {}, "ORDER": {},
-	"ROW": {}, "ROWNUM": {}, "SELECT": {}, "SET": {}, "SHARE": {}, "SIZE": {}, "START": {},
-	"TABLE": {}, "THEN": {}, "TO": {}, "TRIGGER": {}, "UNION": {}, "UNIQUE": {}, "UPDATE": {},
-	"VALUES": {}, "VIEW": {}, "WHEN": {}, "WHERE": {}, "WITH": {},
-}
-
-// isOracleReservedWord checks if an identifier is an Oracle reserved word.
-func isOracleReservedWord(identifier string) bool {
-	if identifier == "" {
-		return false
-	}
-	_, ok := oracleReservedWords[strings.ToUpper(identifier)]
-	return ok
-}
+var validDBTagPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$#]*$`)
 
 // oracleQuoteIdentifier applies Oracle-specific quoting rules to an identifier.
-// Reserved words are quoted with double quotes.
+// Reserved words are quoted with double quotes using the canonical list from sqllex package.
 func oracleQuoteIdentifier(column string) string {
 	trimmed := strings.TrimSpace(column)
 	if trimmed == "" {
@@ -47,7 +26,7 @@ func oracleQuoteIdentifier(column string) string {
 	}
 
 	// Quote Oracle reserved words
-	if isOracleReservedWord(trimmed) {
+	if sqllex.IsOracleReservedWord(trimmed) {
 		return `"` + trimmed + `"`
 	}
 
@@ -67,20 +46,22 @@ func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 		return nil, fmt.Errorf("parseStruct expects a pointer to struct, got %T", structPtr)
 	}
 
-	rt := rv.Elem().Type()
-	if rt.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("parseStruct expects a pointer to struct, got pointer to %s", rt.Kind())
+	ptrType := rv.Type()
+	structType := ptrType.Elem()
+
+	if structType.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("parseStruct expects a pointer to struct, got pointer to %s", structType.Kind())
 	}
 
 	metadata := &ColumnMetadata{
-		TypeName:       rt.Name(),
-		Columns:        make([]Column, 0, rt.NumField()),
+		TypeName:       structType.Name(),
+		Columns:        make([]Column, 0, structType.NumField()),
 		columnsByField: make(map[string]*Column),
 	}
 
 	// Iterate through struct fields and extract db tags
-	for i := 0; i < rt.NumField(); i++ {
-		field := rt.Field(i)
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
 
 		// Skip unexported fields
 		if !field.IsExported() {
@@ -88,7 +69,7 @@ func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 		}
 
 		// Extract db tag
-		dbTag := field.Tag.Get("db")
+		dbTag := strings.TrimSpace(field.Tag.Get("db"))
 
 		// Skip fields without db tag or with db:"-" (explicit ignore)
 		if dbTag == "" || dbTag == "-" {
@@ -96,7 +77,7 @@ func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 		}
 
 		// SECURITY: Validate tag format to prevent SQL injection
-		if err := validateDBTag(dbTag, rt.Name(), field.Name); err != nil {
+		if err := validateDBTag(dbTag, structType.Name(), field.Name); err != nil {
 			return nil, err
 		}
 
@@ -112,12 +93,16 @@ func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 		col.QuotedColumn = applyVendorQuoting(vendor, dbTag)
 
 		metadata.Columns = append(metadata.Columns, col)
-		metadata.columnsByField[field.Name] = &metadata.Columns[len(metadata.Columns)-1]
+	}
+
+	for idx := range metadata.Columns {
+		col := &metadata.Columns[idx]
+		metadata.columnsByField[col.FieldName] = col
 	}
 
 	// Fail-fast if no db-tagged fields found
 	if len(metadata.Columns) == 0 {
-		return nil, fmt.Errorf("no fields with `db` tags found in struct %s", rt.Name())
+		return nil, fmt.Errorf("no fields with `db` tags found in struct %s", structType.Name())
 	}
 
 	return metadata, nil
@@ -140,6 +125,13 @@ func validateDBTag(tag, structName, fieldName string) error {
 	if strings.Contains(tag, `"`) || strings.Contains(tag, "'") {
 		return fmt.Errorf(
 			"invalid db tag %q in field %s.%s: contains quotes (vendor-specific quoting is applied automatically)",
+			tag, structName, fieldName,
+		)
+	}
+
+	if !validDBTagPattern.MatchString(tag) {
+		return fmt.Errorf(
+			"invalid db tag %q in field %s.%s: contains invalid identifier characters (allowed: letters, numbers, '_', '$', '#', must start with letter or underscore)",
 			tag, structName, fieldName,
 		)
 	}
