@@ -1,6 +1,7 @@
 package sqllex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,11 +80,7 @@ func TestOracleReservedWordsMapNotEmpty(t *testing.T) {
 // TestOracleReservedWordsUpperCase verifies all keys are uppercase
 func TestOracleReservedWordsUpperCase(t *testing.T) {
 	for word := range OracleReservedWords {
-		assert.Equal(t, word, word, "All keys in OracleReservedWords should be uppercase: found %q", word)
-		// Verify no lowercase characters
-		for _, char := range word {
-			assert.False(t, char >= 'a' && char <= 'z', "Key %q contains lowercase character %c", word, char)
-		}
+		assert.Equal(t, strings.ToUpper(word), word, "All keys in OracleReservedWords should be uppercase: found %q", word)
 	}
 }
 
