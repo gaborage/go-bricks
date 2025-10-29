@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/gaborage/go-bricks/database/internal/columns"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,32 @@ const (
 	fromProductsClause = "FROM products"
 	testExpr           = "DATE(created_at)"
 	groupByClause      = "GROUP BY DATE(created_at)"
+	testEmail          = "john@example.com"
+	testWhereClause    = "WHERE status = $1"
+	testAccountId      = "ACC-001"
 )
+
+// Test structs for columns feature
+type IntegrationUser struct {
+	ID        int64  `db:"id"`
+	Name      string `db:"name"`
+	Email     string `db:"email"`
+	Status    string `db:"status"`
+	CreatedAt string `db:"created_at"`
+}
+
+type IntegrationAccount struct {
+	ID     int64  `db:"id"`
+	Number string `db:"number"` // Oracle reserved word
+	Level  int    `db:"level"`  // Oracle reserved word
+	Size   string `db:"size"`   // Oracle reserved word
+}
+
+type IntegrationProduct struct {
+	ID    int64  `db:"id"`
+	Name  string `db:"name"`
+	Price string `db:"price"`
+}
 
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
@@ -91,6 +117,15 @@ func toSQL(t *testing.T, sqlizer squirrel.Sqlizer) (sql string, args []any) {
 	require.NoError(t, err)
 
 	return sql, args
+}
+
+// toStrings converts []any to []string for INSERT operations
+func toStrings(vals []any) []string {
+	result := make([]string, len(vals))
+	for i, v := range vals {
+		result[i] = v.(string)
+	}
+	return result
 }
 
 func TestBuildCurrentTimestampByVendor(t *testing.T) {
@@ -185,7 +220,7 @@ func TestVendor(t *testing.T) {
 func TestInsertWithColumns(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	builder := qb.InsertWithColumns("users", "name", "email").Values("John", "john@example.com")
+	builder := qb.InsertWithColumns("users", "name", "email").Values("John", testEmail)
 	sql, _, err := builder.ToSql()
 	require.NoError(t, err)
 	assert.Contains(t, sql, `INSERT INTO users (name,email)`)
@@ -947,7 +982,7 @@ func TestGroupByExpressions(t *testing.T) {
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "SELECT DATE(created_at) AS date, COUNT(*) AS count FROM orders")
-		assert.Contains(t, sql, "WHERE status = $1")
+		assert.Contains(t, sql, testWhereClause)
 		assert.Contains(t, sql, groupByClause)
 		assert.Equal(t, []any{"completed"}, args)
 	})
@@ -1105,7 +1140,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 		assert.Contains(t, sql, "MIN(price) AS min_price, MAX(price) AS max_price")
 
 		// Verify WHERE, GROUP BY, HAVING, ORDER BY
-		assert.Contains(t, sql, "WHERE status = $1")
+		assert.Contains(t, sql, testWhereClause)
 		assert.Contains(t, sql, "GROUP BY category")
 		assert.Contains(t, sql, "HAVING COUNT(*) > $2")
 		assert.Contains(t, sql, "ORDER BY COUNT(*) DESC")
@@ -1178,4 +1213,370 @@ func TestComplexExpressionQueries(t *testing.T) {
 		assert.Contains(t, sql, "ORDER BY DATE(created_at) DESC")
 		assert.Equal(t, []any{testDate, 1000}, args)
 	})
+}
+
+// ========== Struct-Based Column Extraction Tests (v2.3+) ==========
+
+// TestColumnsSelect tests struct-based columns with SELECT queries
+func TestColumnsSelect(t *testing.T) {
+	t.Run("PostgreSQL - Simple SELECT", func(t *testing.T) {
+		// Clear global registry before test
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+
+		query := qb.Select(cols.Get("ID"), cols.Get("Name"), cols.Get("Email")).
+			From("users")
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "SELECT id, name, email FROM users", sql)
+	})
+
+	t.Run("Oracle - SELECT with reserved words", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		cols := qb.Columns(&IntegrationAccount{})
+
+		query := qb.Select(cols.Get("ID"), cols.Get("Number"), cols.Get("Level")).
+			From("accounts")
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		// Oracle should quote reserved words
+		assert.Contains(t, sql, `"number"`)
+		assert.Contains(t, sql, `"level"`)
+	})
+
+	t.Run("SELECT with Fields() helper", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+
+		query := qb.Select(cols.Fields("ID", "Name", "Email")...).
+			From("users")
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "SELECT id, name, email FROM users", sql)
+	})
+
+	t.Run("SELECT with All() helper", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+
+		query := qb.Select(cols.All()...).
+			From("users")
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Equal(t, "SELECT id, name, email, status, created_at FROM users", sql)
+	})
+}
+
+// TestColumnsWhere tests struct-based columns with WHERE clauses
+func TestColumnsWhere(t *testing.T) {
+	t.Run("PostgreSQL - WHERE with struct columns", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+		f := qb.Filter()
+
+		query := qb.Select(cols.All()...).
+			From("users").
+			Where(f.Eq(cols.Get("Status"), "active"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, testWhereClause)
+		assert.Equal(t, []any{"active"}, args)
+	})
+
+	t.Run("Oracle - WHERE with reserved word", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		cols := qb.Columns(&IntegrationAccount{})
+		f := qb.Filter()
+
+		query := qb.Select("*").
+			From("accounts").
+			Where(f.Eq(cols.Get("Level"), 5))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, `WHERE "level" = :1`)
+		assert.Equal(t, []any{5}, args)
+	})
+
+	t.Run("Complex WHERE with multiple struct fields", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+		f := qb.Filter()
+
+		query := qb.Select(cols.Fields("ID", "Name")...).
+			From("users").
+			Where(f.And(
+				f.Eq(cols.Get("Status"), "active"),
+				f.NotNull(cols.Get("Email")),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "status = $1")
+		assert.Contains(t, sql, "email IS NOT NULL")
+		assert.Equal(t, []any{"active"}, args)
+	})
+}
+
+// TestColumnsInsert tests struct-based columns with INSERT queries
+func TestColumnsInsert(t *testing.T) {
+	t.Run("PostgreSQL - INSERT with struct columns", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+
+		query := qb.InsertWithColumns("users", toStrings(cols.Fields("Name", "Email", "Status"))...).
+			Values("John Doe", testEmail, "active")
+
+		sql, args, err := query.ToSql()
+		require.NoError(t, err)
+		assert.Equal(t, "INSERT INTO users (name,email,status) VALUES ($1,$2,$3)", sql)
+		assert.Equal(t, []any{"John Doe", testEmail, "active"}, args)
+	})
+
+	t.Run("Oracle - INSERT with reserved words", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		cols := qb.Columns(&IntegrationAccount{})
+
+		query := qb.InsertWithColumns("accounts", toStrings(cols.Fields("Number", "Level", "Size"))...).
+			Values(testAccountId, 3, "large")
+
+		sql, args, err := query.ToSql()
+		require.NoError(t, err)
+		// Oracle should quote reserved words in column list
+		assert.Contains(t, sql, `"number"`)
+		assert.Contains(t, sql, `"level"`)
+		assert.Contains(t, sql, `"size"`)
+		assert.Equal(t, []any{testAccountId, 3, "large"}, args)
+	})
+
+	t.Run("INSERT with All() helper", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationProduct{})
+
+		query := qb.InsertWithColumns("products", toStrings(cols.All())...).
+			Values(1, "Widget", "9.99")
+
+		sql, args, err := query.ToSql()
+		require.NoError(t, err)
+		assert.Equal(t, "INSERT INTO products (id,name,price) VALUES ($1,$2,$3)", sql)
+		assert.Equal(t, []any{1, "Widget", "9.99"}, args)
+	})
+}
+
+// TestColumnsUpdate tests struct-based columns with UPDATE queries
+func TestColumnsUpdate(t *testing.T) {
+	t.Run("PostgreSQL - UPDATE with struct columns", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+		f := qb.Filter()
+
+		query := qb.Update("users").
+			Set(cols.Get("Name"), "Jane Doe").
+			Set(cols.Get("Status"), "inactive").
+			Where(f.Eq(cols.Get("ID"), 123))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "UPDATE users SET name = $1, status = $2")
+		assert.Contains(t, sql, "WHERE id = $3")
+		assert.Equal(t, []any{"Jane Doe", "inactive", 123}, args)
+	})
+
+	t.Run("Oracle - UPDATE with reserved words", func(t *testing.T) {
+		columns.ClearGlobalRegistry()
+		defer columns.ClearGlobalRegistry()
+
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		cols := qb.Columns(&IntegrationAccount{})
+		f := qb.Filter()
+
+		query := qb.Update("accounts").
+			Set(cols.Get("Level"), 5).
+			Where(f.Eq(cols.Get("Number"), testAccountId))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, `UPDATE accounts SET "level" = :1`)
+		assert.Contains(t, sql, `WHERE "number" = :2`)
+		assert.Equal(t, []any{5, testAccountId}, args)
+	})
+}
+
+// TestColumnsCaching tests that metadata is cached across queries
+func TestColumnsCaching(t *testing.T) {
+	columns.ClearGlobalRegistry()
+	defer columns.ClearGlobalRegistry()
+
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	// First access: should parse struct
+	cols1 := qb.Columns(&IntegrationUser{})
+	require.NotNil(t, cols1)
+
+	// Second access: should return cached instance
+	cols2 := qb.Columns(&IntegrationUser{})
+	require.NotNil(t, cols2)
+
+	// Should be the same instance
+	assert.Same(t, cols1, cols2, "Cached column metadata should return same instance")
+}
+
+// TestColumnsVendorIsolation tests that different vendors have separate caches
+func TestColumnsVendorIsolation(t *testing.T) {
+	columns.ClearGlobalRegistry()
+	defer columns.ClearGlobalRegistry()
+
+	oracleQb := NewQueryBuilder(dbtypes.Oracle)
+	pgQb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	// Same struct, different vendors
+	oracleCols := oracleQb.Columns(&IntegrationAccount{})
+	pgCols := pgQb.Columns(&IntegrationAccount{})
+
+	// Oracle should quote reserved word "number"
+	assert.Contains(t, oracleCols.Get("Number"), `"`)
+
+	// PostgreSQL should not quote "number"
+	assert.NotContains(t, pgCols.Get("Number"), `"`)
+
+	// Different instances due to different vendors
+	assert.NotSame(t, oracleCols, pgCols)
+}
+
+// TestColumnsPanic tests panic behavior for invalid usage
+func TestColumnsPanic(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	t.Run("Panic on invalid field name", func(t *testing.T) {
+		cols := qb.Columns(&IntegrationUser{})
+
+		assert.Panics(t, func() {
+			cols.Get("NonExistentField")
+		}, "Should panic on non-existent field name")
+	})
+
+	t.Run("Panic on struct with no db tags", func(t *testing.T) {
+		type NoTags struct {
+			ID   int64
+			Name string
+		}
+
+		assert.Panics(t, func() {
+			qb.Columns(&NoTags{})
+		}, "Should panic on struct with no db tags")
+	})
+}
+
+// TestColumnsComplexQuery tests realistic complex query patterns
+func TestColumnsComplexQuery(t *testing.T) {
+	columns.ClearGlobalRegistry()
+	defer columns.ClearGlobalRegistry()
+
+	t.Run("Complex query with JOINs and struct columns", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		userCols := qb.Columns(&IntegrationUser{})
+		acctCols := qb.Columns(&IntegrationAccount{})
+		jf := qb.JoinFilter()
+		f := qb.Filter()
+
+		query := qb.Select(
+			"u."+userCols.Get("ID"),
+			"u."+userCols.Get("Name"),
+			"a."+acctCols.Get("Number"),
+		).
+			From(dbtypes.Table("users").As("u")).
+			JoinOn(dbtypes.Table("accounts").As("a"), jf.EqColumn(
+				"u."+userCols.Get("ID"),
+				"a."+acctCols.Get("ID"),
+			)).
+			Where(f.Eq("u."+userCols.Get("Status"), "active"))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT u.id, u.name, a")
+		assert.Contains(t, sql, `a."number"`) // Oracle quotes reserved word
+		assert.Contains(t, sql, "JOIN accounts a ON u.id = a.id")
+		assert.Contains(t, sql, "WHERE u.status = :1")
+		assert.Equal(t, []any{"active"}, args)
+	})
+
+	t.Run("Query with ORDER BY and GROUP BY using struct columns", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		cols := qb.Columns(&IntegrationUser{})
+
+		query := qb.Select(cols.Get("Status"), qb.Expr("COUNT(*)", "user_count")).
+			From("users").
+			GroupBy(cols.Get("Status")).
+			OrderBy(cols.Get("Status"))
+
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "SELECT status, COUNT(*) AS user_count")
+		assert.Contains(t, sql, "FROM users")
+		assert.Contains(t, sql, "GROUP BY status")
+		assert.Contains(t, sql, "ORDER BY status")
+	})
+}
+
+// TestColumnsMultipleTypes tests using multiple struct types in same query
+func TestColumnsMultipleTypes(t *testing.T) {
+	columns.ClearGlobalRegistry()
+	defer columns.ClearGlobalRegistry()
+
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	// Register multiple types
+	userCols := qb.Columns(&IntegrationUser{})
+	productCols := qb.Columns(&IntegrationProduct{})
+
+	// Both should be cached and independently accessible
+	assert.NotNil(t, userCols)
+	assert.NotNil(t, productCols)
+
+	// Verify correct columns from each type
+	assert.Equal(t, "id", userCols.Get("ID"))
+	assert.Equal(t, "name", userCols.Get("Name"))
+	assert.Equal(t, "email", userCols.Get("Email"))
+
+	assert.Equal(t, "id", productCols.Get("ID"))
+	assert.Equal(t, "name", productCols.Get("Name"))
+	assert.Equal(t, "price", productCols.Get("Price"))
 }

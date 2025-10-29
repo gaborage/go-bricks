@@ -279,6 +279,35 @@ type Interface interface {
 	CreateMigrationTable(ctx context.Context) error
 }
 
+// ColumnMetadata represents cached metadata for a struct type with `db:"column_name"` tags.
+// It provides methods to retrieve vendor-quoted column names for use in query building.
+//
+// This interface is implemented by the internal columns package and returned by
+// QueryBuilder.Columns(). The metadata is lazily parsed on first use and cached forever.
+type ColumnMetadata interface {
+	// Get retrieves the vendor-quoted column name for the given struct field name.
+	// Panics if the field name is not found (fail-fast for development-time typos).
+	//
+	// Example:
+	//   cols.Get("ID")    // Returns: "id" (PostgreSQL) or `"ID"` (Oracle)
+	//   cols.Get("Level") // Returns: "level" (PostgreSQL) or `"LEVEL"` (Oracle, quoted)
+	Get(fieldName string) string
+
+	// Fields retrieves vendor-quoted column names for multiple struct field names.
+	// Panics if any field name is not found.
+	//
+	// Example:
+	//   qb.Select(cols.Fields("ID", "Name", "Email")...).From("users")
+	Fields(fieldNames ...string) []any
+
+	// All returns vendor-quoted column names for all columns in the struct,
+	// in the order they were declared in the struct definition.
+	//
+	// Example:
+	//   qb.Select(cols.All()...).From("users") // SELECT all columns
+	All() []any
+}
+
 // QueryBuilderInterface defines the interface for vendor-specific SQL query building.
 // This interface allows for dependency injection and mocking of query builders,
 // enabling unit testing of business logic that constructs queries without
@@ -293,6 +322,22 @@ type QueryBuilderInterface interface {
 
 	// Expression builder (v2.1+)
 	Expr(sql string, alias ...string) RawExpression
+
+	// Column metadata extraction (v2.3+)
+	// Extracts column metadata from structs with `db:"column_name"` tags.
+	// Lazily parses struct on first use, caches forever.
+	// Returns vendor-specific quoted column names (e.g., Oracle reserved words).
+	//
+	// Example:
+	//   type User struct {
+	//       ID    int64  `db:"id"`
+	//       Level string `db:"level"` // Oracle reserved word
+	//   }
+	//   cols := qb.Columns(&User{})
+	//   qb.Select(cols.Get("ID"), cols.Get("Level")).From("users")
+	//
+	// Panics if structPtr is not a pointer to a struct with db tags.
+	Columns(structPtr any) ColumnMetadata
 
 	// Query builders
 	Select(columns ...any) SelectQueryBuilder

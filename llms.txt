@@ -141,6 +141,31 @@ rows, err := m.db.Query(ctx, sql, args...)
 
 Access to vendor quirks (Oracle quoting, Mongo builders) routes through the same interface; switching drivers requires config only.
 
+**Struct-Based Columns (v2.3+):**
+
+```go
+// Define entity once with db tags
+type User struct {
+    ID    int64  `db:"id"`
+    Name  string `db:"name"`
+    Level int    `db:"level"` // Oracle reserved word - auto-quoted
+}
+
+// Extract columns (cached per vendor)
+cols := qb.Columns(&User{})
+
+// SELECT with type-safe field references
+query := qb.Select(cols.Fields("ID", "Name")...).
+    From("users").
+    Where(f.Eq(cols.Get("Level"), 5))
+// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// PostgreSQL: SELECT id, name FROM users WHERE level = $1
+
+// All columns: cols.All()
+// Single column: cols.Get("FieldName")
+// Performance: ~0.6µs first parse, ~26ns cached access
+```
+
 ## Messaging Snapshot
 
 ```go

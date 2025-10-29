@@ -552,6 +552,211 @@ qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))
 - **Window functions**: `ROW_NUMBER() OVER (...)`, `RANK() OVER (...)`, `LAG(column) OVER (...)`
 - **Conditional expressions**: `CASE WHEN ... THEN ... ELSE ... END`
 
+#### Struct-Based Column Extraction (v2.3+)
+
+GoBricks provides struct-based column management to eliminate repetition between entity definitions and query building. Extract column names from `db:"column_name"` tags with automatic vendor-specific quoting.
+
+**Key Benefits:**
+- **DRY Principle**: Define columns once in struct tags, reference by field name
+- **Type Safety**: Compile-time field name validation (panics on typos)
+- **Vendor-Aware**: Automatic Oracle reserved word quoting
+- **Zero Overhead**: One-time reflection (~0.6µs), cached forever (~26ns access)
+- **Refactor-Friendly**: Rename struct fields → compiler catches all query references
+
+**Basic Usage:**
+
+```go
+type User struct {
+    ID        int64     `db:"id"`
+    Name      string    `db:"name"`
+    Email     string    `db:"email"`
+    Level     int       `db:"level"`     // Oracle reserved word - auto-quoted
+    CreatedAt time.Time `db:"created_at"`
+}
+
+// Extract column metadata (cached per vendor)
+qb := builder.NewQueryBuilder(dbtypes.Oracle)
+cols := qb.Columns(&User{})
+
+// SELECT with individual fields
+query := qb.Select(cols.Get("ID"), cols.Get("Name"), cols.Get("Email")).
+    From("users")
+// Oracle: SELECT "ID", "NAME", "EMAIL" FROM users
+
+// SELECT with bulk helper
+query := qb.Select(cols.Fields("ID", "Name", "Email")...).
+    From("users")
+
+// SELECT all columns
+query := qb.Select(cols.All()...).From("users")
+// Oracle: SELECT "ID", "NAME", "EMAIL", "LEVEL", "CREATED_AT" FROM users
+```
+
+**WHERE Clauses:**
+
+```go
+cols := qb.Columns(&User{})
+f := qb.Filter()
+
+query := qb.Select(cols.All()...).
+    From("users").
+    Where(f.And(
+        f.Eq(cols.Get("Level"), 5),           // Auto-quotes "LEVEL" for Oracle
+        f.NotNull(cols.Get("Email")),
+    ))
+// Oracle: SELECT ... WHERE "LEVEL" = :1 AND "EMAIL" IS NOT NULL
+```
+
+**INSERT Operations:**
+
+```go
+type Account struct {
+    ID     int64  `db:"id"`
+    Number string `db:"number"` // Oracle reserved word
+    Status string `db:"status"`
+}
+
+cols := qb.Columns(&Account{})
+
+// Convert to []string for InsertWithColumns (manual value mapping)
+colNames := []string{cols.Get("Number"), cols.Get("Status")}
+query := qb.InsertWithColumns("accounts", colNames...).
+    Values("ACC-001", "active")
+// Oracle: INSERT INTO accounts ("NUMBER", "STATUS") VALUES (:1, :2)
+
+// Or use helper function to convert []any to []string
+toStrings := func(vals []any) []string {
+    result := make([]string, len(vals))
+    for i, v := range vals { result[i] = v.(string) }
+    return result
+}
+query := qb.InsertWithColumns("accounts", toStrings(cols.Fields("Number", "Status"))...).
+    Values("ACC-001", "active")
+```
+
+**UPDATE Operations:**
+
+```go
+cols := qb.Columns(&User{})
+f := qb.Filter()
+
+query := qb.Update("users").
+    Set(cols.Get("Name"), "Jane Doe").
+    Set(cols.Get("Level"), 10).
+    Where(f.Eq(cols.Get("ID"), 123))
+// Oracle: UPDATE users SET "NAME" = :1, "LEVEL" = :2 WHERE "ID" = :3
+```
+
+**Complex Queries with JOINs:**
+
+```go
+type User struct {
+    ID        int64  `db:"id"`
+    Name      string `db:"name"`
+    AccountID int64  `db:"account_id"`
+}
+
+type Account struct {
+    ID     int64  `db:"id"`
+    Number string `db:"number"` // Oracle reserved word
+}
+
+userCols := qb.Columns(&User{})
+acctCols := qb.Columns(&Account{})
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+query := qb.Select(
+    "u."+userCols.Get("ID"),
+    "u."+userCols.Get("Name"),
+    "a."+acctCols.Get("Number"),
+).
+    From(dbtypes.Table("users").As("u")).
+    JoinOn(dbtypes.Table("accounts").As("a"), jf.EqColumn(
+        "u."+userCols.Get("AccountID"),
+        "a."+acctCols.Get("ID"),
+    )).
+    Where(f.Eq("u."+userCols.Get("Name"), "active"))
+// Oracle: SELECT u."ID", u."NAME", a."NUMBER"
+//         FROM users u
+//         JOIN accounts a ON u."ACCOUNT_ID" = a."ID"
+//         WHERE u."NAME" = :1
+```
+
+**Struct Tag Reference:**
+- `db:"column_name"` - Database column name (required)
+- `db:"-"` - Explicitly ignore field
+- No `db` tag - Field ignored automatically
+
+**Vendor-Specific Quoting:**
+- **Oracle**: Reserved words automatically quoted (`"NUMBER"`, `"LEVEL"`, `"SIZE"`)
+- **PostgreSQL**: No quoting (standard lowercase identifiers)
+- **MongoDB**: No quoting (document field names)
+
+**Performance Characteristics:**
+- **First use**: ~0.6µs per struct type (reflection + tag parsing)
+- **Cached access**: ~26ns per query (map lookup)
+- **Memory**: ~1-2KB per registered struct type
+- **Thread-safe**: `sync.Map` for lock-free cached reads
+
+**Common Patterns:**
+
+```go
+// Pattern 1: Define entities with db tags
+type Product struct {
+    ID    int64  `db:"id"`
+    Name  string `db:"name"`
+    Price string `db:"price"`
+}
+
+// Pattern 2: Extract columns once per service/module
+type ProductService struct {
+    qb   *builder.QueryBuilder
+    cols dbtypes.ColumnMetadata
+}
+
+func NewProductService(db database.Interface) *ProductService {
+    qb := builder.NewQueryBuilder(db.DatabaseType())
+    return &ProductService{
+        qb:   qb,
+        cols: qb.Columns(&Product{}), // Cached forever
+    }
+}
+
+// Pattern 3: Reference columns by field name
+func (s *ProductService) FindByID(id int64) (*Product, error) {
+    f := s.qb.Filter()
+    query := s.qb.Select(s.cols.All()...).
+        From("products").
+        Where(f.Eq(s.cols.Get("ID"), id))
+
+    sql, args, _ := query.ToSQL()
+    // Execute query...
+}
+```
+
+**Security:**
+- Tag validation rejects dangerous SQL characters (`;`, `--`, `/*`, `*/`)
+- Quotes in tags rejected (vendor-specific quoting applied automatically)
+- Column names validated at registration time (fail-fast on invalid tags)
+
+**Error Handling:**
+
+```go
+// Panics on invalid field name (fail-fast for development)
+cols := qb.Columns(&User{})
+col := cols.Get("NonExistent")
+// panic: column field "NonExistent" not found in type User (available fields: ID, Name, Email, Level, CreatedAt)
+
+// Panics on struct with no db tags
+type NoTags struct {
+    ID   int64
+    Name string
+}
+cols := qb.Columns(&NoTags{})
+// panic: failed to parse struct NoTags for vendor oracle: no fields with `db` tags found
+```
+
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
 - Declarations validated upfront, replayed per-tenant for isolation

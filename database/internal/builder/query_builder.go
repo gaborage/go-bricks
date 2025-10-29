@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+	colreg "github.com/gaborage/go-bricks/database/internal/columns"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -122,6 +123,44 @@ func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
 // See dbtypes.Expr() for full documentation and security warnings.
 func (qb *QueryBuilder) Expr(sql string, alias ...string) dbtypes.RawExpression {
 	return dbtypes.Expr(sql, alias...)
+}
+
+// Columns extracts column metadata from a struct with `db:"column_name"` tags.
+// It lazily parses the struct on first use and caches the metadata forever,
+// providing vendor-specific column quoting (e.g., Oracle reserved words).
+//
+// This method delegates to the global column registry, which maintains per-vendor
+// caches using sync.Map for lock-free cached reads.
+//
+// Parameters:
+//   - structPtr: Pointer to a struct with `db:"column_name"` tags
+//
+// Returns:
+//   - dbtypes.ColumnMetadata: Interface providing Get(), Fields(), and All() methods
+//
+// Panics if:
+//   - structPtr is not a pointer to a struct
+//   - No fields with `db` tags are found
+//   - Any db tag contains dangerous SQL characters
+//
+// Performance:
+//   - First use: ~2µs (reflection + tag parsing)
+//   - Cached access: ~50ns (sync.Map read + method call)
+//
+// Example:
+//
+//	type User struct {
+//	    ID    int64  `db:"id"`
+//	    Name  string `db:"name"`
+//	    Level string `db:"level"` // Oracle reserved word
+//	}
+//
+//	cols := qb.Columns(&User{})
+//	query := qb.Select(cols.Fields("ID", "Name")...).From("users")
+//	// Oracle: SELECT "ID", "NAME" FROM users
+//	// PostgreSQL: SELECT id, name FROM users
+func (qb *QueryBuilder) Columns(structPtr any) dbtypes.ColumnMetadata {
+	return colreg.RegisterColumns(qb.vendor, structPtr)
 }
 
 func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {

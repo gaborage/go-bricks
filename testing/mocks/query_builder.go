@@ -53,6 +53,12 @@ func (m *MockQueryBuilder) Expr(sql string, alias ...string) types.RawExpression
 	return args.Get(0).(types.RawExpression)
 }
 
+// Columns implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) Columns(structPtr any) types.ColumnMetadata {
+	args := m.MethodCalled("Columns", structPtr)
+	return args.Get(0).(types.ColumnMetadata)
+}
+
 // Select implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
 	args := m.MethodCalled("Select", columns...)
