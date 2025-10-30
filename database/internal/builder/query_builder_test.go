@@ -1760,6 +1760,109 @@ func TestInsertStructWithNonZeroID(t *testing.T) {
 	assert.Contains(t, args, int64(123))
 }
 
+// TestIsZeroValueIDField_ExactMatching verifies that only columns exactly named "id"
+// are treated as ID columns, not columns containing "id" as a substring.
+func TestIsZeroValueIDField_ExactMatching(t *testing.T) {
+	tests := []struct {
+		name        string
+		column      string
+		value       any
+		shouldBeID  bool
+		description string
+	}{
+		// Exact "id" matching (should be treated as ID)
+		{"exact id lowercase", "id", int64(0), true, "Plain 'id' column"},
+		{"exact id uppercase", "ID", int64(0), true, "Uppercase 'ID' column"},
+		{"exact id mixed case", "Id", int64(0), true, "Mixed case 'Id' column"},
+		{"exact id double quoted", `"id"`, int64(0), true, "Double-quoted 'id' column"},
+		{"exact id backticks", "`id`", int64(0), true, "Backtick-quoted 'id' column"},
+		{"exact id square brackets", "[id]", int64(0), true, "Square bracket-quoted 'id' column"},
+		{"qualified id simple", "users.id", int64(0), true, "Qualified 'users.id' column"},
+		{"qualified id quoted", `"users"."id"`, int64(0), true, "Quoted qualified column"},
+		{"qualified id schema", `"schema"."table"."id"`, int64(0), true, "Fully qualified with schema"},
+
+		// Columns containing "id" substring (should NOT be treated as ID)
+		{"substring paid", "paid", int64(0), false, "Column 'paid' (payment status)"},
+		{"substring video", "video", string(""), false, "Column 'video' (media URL)"},
+		{"substring provider", "provider", string(""), false, "Column 'provider' (service name)"},
+		{"substring validate", "validate", int64(0), false, "Column 'validate' (validation flag)"},
+		{"substring liquidate", "liquidate", int64(0), false, "Column 'liquidate' (action)"},
+		{"substring holiday", "holiday", string(""), false, "Column 'holiday' (date)"},
+		{"substring confidence", "confidence", int64(0), false, "Column 'confidence' (score)"},
+		{"substring identifier", "identifier", string(""), false, "Column 'identifier' (some ID)"},
+
+		// Foreign keys (should NOT be treated as ID per exact-match requirement)
+		{"foreign key user_id", "user_id", int64(0), false, "Foreign key 'user_id'"},
+		{"foreign key order_id", "order_id", int64(0), false, "Foreign key 'order_id'"},
+		{"foreign key product_id", "product_id", int64(0), false, "Foreign key 'product_id'"},
+
+		// Non-zero values (should NOT trigger zero-value skip)
+		{"non-zero id", "id", int64(123), false, "Non-zero ID should be included"},
+		{"non-zero paid", "paid", int64(1), false, "Non-zero paid status"},
+
+		// Non-matching types (should return false)
+		{"wrong type float", "id", float64(0.0), false, "Float type not supported"},
+		{"wrong type bool", "id", false, false, "Bool type not supported"},
+		{"wrong type struct", "id", struct{}{}, false, "Struct type not supported"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+			result := qb.isZeroValueIDField(tt.column, tt.value)
+
+			if tt.shouldBeID {
+				assert.True(t, result, "Expected %s to be treated as zero-value ID field: %s", tt.column, tt.description)
+			} else {
+				assert.False(t, result, "Expected %s NOT to be treated as zero-value ID field: %s", tt.column, tt.description)
+			}
+		})
+	}
+}
+
+// TestInsertStruct_ColumnsWithIDSubstring verifies that columns containing "id"
+// as a substring (like "paid", "video") are correctly included in INSERT statements.
+func TestInsertStruct_ColumnsWithIDSubstring(t *testing.T) {
+	// Define a test struct with columns containing "id" substring
+	type Payment struct {
+		ID       int64  `db:"id"`
+		Amount   int    `db:"amount"`
+		Paid     int    `db:"paid"`     // Contains "id" substring
+		Video    string `db:"video"`    // Contains "id" substring
+		Provider string `db:"provider"` // Contains "id" substring
+	}
+
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	payment := Payment{
+		ID:       0, // Zero - should be excluded (auto-increment)
+		Amount:   100,
+		Paid:     0,  // Zero but NOT an ID - should be included
+		Video:    "", // Empty but NOT an ID - should be included
+		Provider: "", // Empty but NOT an ID - should be included
+	}
+
+	query := qb.InsertStruct("payments", &payment)
+	sql, args, err := query.ToSql()
+
+	require.NoError(t, err)
+	assert.Contains(t, sql, "INSERT INTO payments")
+
+	// All columns except "id" should be included
+	assert.Contains(t, sql, "amount", "amount column should be included")
+	assert.Contains(t, sql, "paid", "paid column should be included (not treated as ID)")
+	assert.Contains(t, sql, "video", "video column should be included (not treated as ID)")
+	assert.Contains(t, sql, "provider", "provider column should be included (not treated as ID)")
+
+	// Only the actual "id" column should be excluded
+	assert.NotContains(t, sql, "\"id\"", "id column should be excluded (zero auto-increment)")
+
+	// Verify all values are present in args
+	assert.Contains(t, args, 100, "amount value should be in args")
+	assert.Contains(t, args, 0, "paid value (0) should be in args")
+	assert.Contains(t, args, "", "video value (empty string) should be in args")
+}
+
 func TestInsertFieldsSelectiveFields(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 

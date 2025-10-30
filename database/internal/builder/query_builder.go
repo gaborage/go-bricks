@@ -298,12 +298,30 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 		Values(values...)
 }
 
+// extractTerminalIdentifier extracts the final identifier from a column name,
+// handling quoted identifiers and qualified names (e.g., "schema"."table"."id" -> "id").
+// Trims backticks, double quotes, and square brackets, then splits on dots.
+func extractTerminalIdentifier(column string) string {
+	// Trim leading/trailing whitespace
+	column = strings.TrimSpace(column)
+
+	// Split on dots to handle qualified names (schema.table.column)
+	parts := strings.Split(column, ".")
+	lastPart := parts[len(parts)-1]
+
+	// Trim common quoting characters from the terminal identifier
+	lastPart = strings.Trim(lastPart, "`\"[] ")
+
+	return lastPart
+}
+
 // isZeroValueIDField checks if a column is an ID field with a zero value.
 // This is used to skip auto-increment primary keys in INSERT operations.
+// Only columns whose terminal identifier is exactly "id" (case-insensitive) are treated as ID columns.
 func (qb *QueryBuilder) isZeroValueIDField(column string, value any) bool {
-	// Check if column name contains "id" (case-insensitive, handles "id", "ID", "\"ID\"", etc.)
-	columnLower := strings.ToLower(column)
-	isIDColumn := strings.Contains(columnLower, "id")
+	// Extract terminal identifier and check if it's exactly "id" (case-insensitive)
+	terminalID := extractTerminalIdentifier(column)
+	isIDColumn := strings.EqualFold(terminalID, "id")
 
 	if !isIDColumn {
 		return false
