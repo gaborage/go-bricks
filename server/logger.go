@@ -142,18 +142,6 @@ func (rl *requestLogger) extractStatus(c echo.Context, err error) int {
 	return 0
 }
 
-// Logger returns a request logging middleware using the default configuration.
-// It logs HTTP requests with OpenTelemetry semantic conventions and dual-mode logging support.
-//
-// Deprecated: Use LoggerWithConfig for more control over logging behavior.
-func Logger(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc {
-	return LoggerWithConfig(log, LoggerConfig{
-		HealthPath:           healthPath,
-		ReadyPath:            readyPath,
-		SlowRequestThreshold: 1 * time.Second, // Default threshold
-	})
-}
-
 // LoggerWithConfig returns a request logging middleware with custom configuration.
 // It implements dual-mode logging:
 //   - Action logs (log.type="action"): Request summaries for INFO-level requests

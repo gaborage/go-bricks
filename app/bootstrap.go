@@ -116,11 +116,6 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		traceSampleRateStr = strconv.FormatFloat(*obsCfg.Trace.Sample.Rate, 'f', 2, 64)
 	}
 
-	logsSampleRateStr := "nil"
-	if obsCfg.Logs.Sample.Rate != nil {
-		logsSampleRateStr = strconv.FormatFloat(*obsCfg.Logs.Sample.Rate, 'f', 2, 64)
-	}
-
 	b.log.Debug().
 		Str("trace_enabled", strconv.FormatBool(traceEnabled)).
 		Str("trace_endpoint", obsCfg.Trace.Endpoint).
@@ -133,7 +128,6 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		Str("logs_enabled", strconv.FormatBool(logsEnabled)).
 		Str("logs_endpoint", obsCfg.Logs.Endpoint).
 		Str("logs_protocol", obsCfg.Logs.Protocol).
-		Str("logs_sample_rate", logsSampleRateStr).
 		Str("logs_disable_stdout", strconv.FormatBool(obsCfg.Logs.DisableStdout)).
 		Msg("Observability config after applying defaults")
 

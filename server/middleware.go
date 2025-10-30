@@ -3,6 +3,7 @@ package server
 import (
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -67,7 +68,11 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	}
 
 	// Logger middleware with zerolog
-	e.Use(Logger(log, healthPath, readyPath))
+	e.Use(LoggerWithConfig(log, LoggerConfig{
+		HealthPath:           healthPath,
+		ReadyPath:            readyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Recovery
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{

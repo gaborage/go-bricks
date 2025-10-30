@@ -94,7 +94,11 @@ func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Simple handler that emits a success envelope (adds meta with traceId)
 	e.GET("/t", func(c echo.Context) error {
@@ -124,7 +128,11 @@ func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Handler emits success envelope which sets/propagates traceparent on response
 	e.GET("/tp", func(c echo.Context) error {
@@ -147,7 +155,11 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	e.GET(testHealthPath, func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -196,7 +208,11 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Handler returns 404 without emitting any explicit logs
 	e.GET("/notfound", func(c echo.Context) error {
@@ -249,7 +265,11 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Handler explicitly logs a warning, then returns 200
 	e.GET("/explicit-warn", func(c echo.Context) error {
@@ -277,7 +297,11 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(Logger(recLog, testHealthPath, testReadyPath))
+	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+		HealthPath:           testHealthPath,
+		ReadyPath:            testReadyPath,
+		SlowRequestThreshold: 1 * time.Second,
+	}))
 
 	// Don't register any route - let Echo return its default 404 error
 	// This simulates a request to an unmatched route like /metrics

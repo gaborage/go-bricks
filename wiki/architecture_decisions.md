@@ -759,21 +759,20 @@ The GoBricks framework provided comprehensive OpenTelemetry integration for dist
 **1. Configuration Layer** (`observability/config.go`)
 ```go
 type LogsConfig struct {
-    Enabled          *bool                  // nil=default true when observability enabled
-    Endpoint         string                 // OTLP endpoint (inherits from trace)
-    Protocol         string                 // "http" or "grpc" (inherits from trace)
-    DisableStdout    bool                   // false=both stdout+OTLP, true=OTLP-only
-    Sample           LogSampleConfig        // Sampling configuration
-    Batch            BatchConfig            // Reused from traces
-    Export           ExportConfig           // Reused from traces
-    Max              MaxConfig              // Reused from traces
-}
-
-type LogSampleConfig struct {
-    Rate             *float64  // 0.0-1.0, nil=default 1.0 (100%)
-    AlwaysSampleHigh *bool     // true=WARN/ERROR/FATAL always exported
+    Enabled               *bool          // nil=default true when observability enabled
+    Endpoint              string         // OTLP endpoint (inherits from trace)
+    Protocol              string         // "http" or "grpc" (inherits from trace)
+    DisableStdout         bool           // false=both stdout+OTLP, true=OTLP-only
+    SlowRequestThreshold  time.Duration  // Latency threshold for slow request warnings
+    Batch                 BatchConfig    // Reused from traces
+    Export                ExportConfig   // Reused from traces
+    Max                   MaxConfig      // Reused from traces
 }
 ```
+
+**Note:** Sampling configuration was removed in favor of dual-mode logging (see `DualModeLogProcessor`).
+- Action logs (`log.type="action"`): Always sampled at 100% for request summaries
+- Trace logs (`log.type="trace"`): Filtered to WARN+ severity only
 
 **2. OTel Bridge** (`logger/otel_bridge.go`)
 ```go
