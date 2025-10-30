@@ -177,6 +177,16 @@ func (m *MockUpdateQueryBuilder) SetMap(clauses map[string]any) types.UpdateQuer
 	return args.Get(0).(types.UpdateQueryBuilder)
 }
 
+func (m *MockUpdateQueryBuilder) SetStruct(instance any, fields ...string) types.UpdateQueryBuilder {
+	callArgs := make([]any, len(fields)+1)
+	callArgs[0] = instance
+	for i, field := range fields {
+		callArgs[i+1] = field
+	}
+	args := m.MethodCalled("SetStruct", callArgs...)
+	return args.Get(0).(types.UpdateQueryBuilder)
+}
+
 func (m *MockUpdateQueryBuilder) Where(filter types.Filter) types.UpdateQueryBuilder {
 	args := m.MethodCalled("Where", filter)
 	return args.Get(0).(types.UpdateQueryBuilder)

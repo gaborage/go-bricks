@@ -107,15 +107,15 @@ func BenchmarkColumnMetadataGet(b *testing.B) {
 	b.ResetTimer()
 	b.Run("Get Single Field", func(b *testing.B) {
 		for b.Loop() {
-			_ = metadata.Get("ID")
+			_ = metadata.Col("ID")
 		}
 	})
 
 	b.Run("Get Multiple Fields", func(b *testing.B) {
 		for b.Loop() {
-			_ = metadata.Get("ID")
-			_ = metadata.Get("Name")
-			_ = metadata.Get("Email")
+			_ = metadata.Col("ID")
+			_ = metadata.Col("Name")
+			_ = metadata.Col("Email")
 		}
 	})
 }
@@ -130,13 +130,13 @@ func BenchmarkColumnMetadataFields(b *testing.B) {
 	b.ResetTimer()
 	b.Run("Fields (3 columns)", func(b *testing.B) {
 		for b.Loop() {
-			_ = metadata.Fields("ID", "Name", "Email")
+			_ = metadata.Cols("ID", "Name", "Email")
 		}
 	})
 
 	b.Run("Fields (5 columns)", func(b *testing.B) {
 		for b.Loop() {
-			_ = metadata.Fields("ID", "Name", "Email", "Status", "CreatedAt")
+			_ = metadata.Cols("ID", "Name", "Email", "Status", "CreatedAt")
 		}
 	})
 }

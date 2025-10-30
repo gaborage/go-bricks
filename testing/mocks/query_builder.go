@@ -54,9 +54,9 @@ func (m *MockQueryBuilder) Expr(sql string, alias ...string) types.RawExpression
 }
 
 // Columns implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Columns(structPtr any) types.ColumnMetadata {
+func (m *MockQueryBuilder) Columns(structPtr any) types.Columns {
 	args := m.MethodCalled("Columns", structPtr)
-	return args.Get(0).(types.ColumnMetadata)
+	return args.Get(0).(types.Columns)
 }
 
 // Select implements types.QueryBuilderInterface
@@ -79,6 +79,24 @@ func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) sq
 		callArgs[i+1] = col
 	}
 	args := m.MethodCalled("InsertWithColumns", callArgs...)
+	return args.Get(0).(squirrel.InsertBuilder)
+}
+
+// InsertStruct implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) InsertStruct(table string, instance any) squirrel.InsertBuilder {
+	args := m.MethodCalled("InsertStruct", table, instance)
+	return args.Get(0).(squirrel.InsertBuilder)
+}
+
+// InsertFields implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder {
+	callArgs := make([]any, len(fields)+2)
+	callArgs[0] = table
+	callArgs[1] = instance
+	for i, field := range fields {
+		callArgs[i+2] = field
+	}
+	args := m.MethodCalled("InsertFields", callArgs...)
 	return args.Get(0).(squirrel.InsertBuilder)
 }
 

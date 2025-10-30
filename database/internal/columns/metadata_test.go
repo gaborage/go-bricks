@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestColumnMetadataGet tests the Get method for successful retrieval
-func TestColumnMetadataGet(t *testing.T) {
+// TestColumnMetadataCol tests the Col method for successful retrieval
+func TestColumnMetadataCol(t *testing.T) {
 	metadata := &ColumnMetadata{
 		TypeName: "TestStruct",
 		Columns: []Column{
@@ -49,14 +49,14 @@ func TestColumnMetadataGet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := metadata.Get(tt.fieldName)
+			got := metadata.Col(tt.fieldName)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestColumnMetadataGetPanic tests that Get panics on invalid field names
-func TestColumnMetadataGetPanic(t *testing.T) {
+// TestColumnMetadataColPanic tests that Col panics on invalid field names
+func TestColumnMetadataColPanic(t *testing.T) {
 	metadata := &ColumnMetadata{
 		TypeName: "TestStruct",
 		Columns: []Column{
@@ -68,12 +68,12 @@ func TestColumnMetadataGetPanic(t *testing.T) {
 	}
 
 	assert.Panics(t, func() {
-		metadata.Get("NonExistent")
-	}, "Get should panic on non-existent field name")
+		metadata.Col("NonExistent")
+	}, "Col should panic on non-existent field name")
 }
 
-// TestColumnMetadataFields tests the Fields method for bulk retrieval
-func TestColumnMetadataFields(t *testing.T) {
+// TestColumnMetadataCols tests the Cols method for bulk retrieval
+func TestColumnMetadataCols(t *testing.T) {
 	metadata := &ColumnMetadata{
 		TypeName: "User",
 		Columns: []Column{
@@ -93,35 +93,35 @@ func TestColumnMetadataFields(t *testing.T) {
 	tests := []struct {
 		name       string
 		fieldNames []string
-		want       []any
+		want       []string
 	}{
 		{
 			name:       "get multiple fields",
 			fieldNames: []string{"ID", "Name", "Email"},
-			want:       []any{`"ID"`, "name", "email"},
+			want:       []string{`"ID"`, "name", "email"},
 		},
 		{
 			name:       "get single field",
 			fieldNames: []string{"Level"},
-			want:       []any{`"LEVEL"`},
+			want:       []string{`"LEVEL"`},
 		},
 		{
 			name:       "get all fields in custom order",
 			fieldNames: []string{"Email", "ID", "Level"},
-			want:       []any{"email", `"ID"`, `"LEVEL"`},
+			want:       []string{"email", `"ID"`, `"LEVEL"`},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := metadata.Fields(tt.fieldNames...)
+			got := metadata.Cols(tt.fieldNames...)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestColumnMetadataFieldsPanic tests that Fields panics if any field is invalid
-func TestColumnMetadataFieldsPanic(t *testing.T) {
+// TestColumnMetadataColsPanic tests that Cols panics if any field is invalid
+func TestColumnMetadataColsPanic(t *testing.T) {
 	metadata := &ColumnMetadata{
 		TypeName: "User",
 		Columns: []Column{
@@ -133,8 +133,8 @@ func TestColumnMetadataFieldsPanic(t *testing.T) {
 	}
 
 	assert.Panics(t, func() {
-		metadata.Fields("ID", "NonExistent", "AnotherBad")
-	}, "Fields should panic if any field name is invalid")
+		metadata.Cols("ID", "NonExistent", "AnotherBad")
+	}, "Cols should panic if any field name is invalid")
 }
 
 // TestColumnMetadataAll tests the All method
@@ -155,7 +155,7 @@ func TestColumnMetadataAll(t *testing.T) {
 	}
 
 	got := metadata.All()
-	want := []any{`"ID"`, `"NUMBER"`, "status"}
+	want := []string{`"ID"`, `"NUMBER"`, "status"}
 
 	assert.Equal(t, want, got, "All should return all columns in declaration order")
 }
@@ -207,8 +207,8 @@ func TestColumnMetadataAvailableFieldsForError(t *testing.T) {
 	assert.Contains(t, got, "Email")
 }
 
-// TestColumnMetadataGetPanicMessageQuality tests panic message contains helpful information
-func TestColumnMetadataGetPanicMessageQuality(t *testing.T) {
+// TestColumnMetadataColPanicMessageQuality tests panic message contains helpful information
+func TestColumnMetadataColPanicMessageQuality(t *testing.T) {
 	metadata := &ColumnMetadata{
 		TypeName: "User",
 		Columns: []Column{
@@ -225,7 +225,7 @@ func TestColumnMetadataGetPanicMessageQuality(t *testing.T) {
 
 	defer func() {
 		r := recover()
-		require.NotNil(t, r, "Get should panic")
+		require.NotNil(t, r, "Col should panic")
 
 		msg := r.(string)
 		assert.Contains(t, msg, "BadField", "Panic message should contain the invalid field name")
@@ -234,5 +234,5 @@ func TestColumnMetadataGetPanicMessageQuality(t *testing.T) {
 		assert.Contains(t, msg, "Name", "Panic message should list available fields")
 	}()
 
-	metadata.Get("BadField")
+	metadata.Col("BadField")
 }

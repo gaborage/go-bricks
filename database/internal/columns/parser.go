@@ -57,6 +57,8 @@ func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 		TypeName:       structType.Name(),
 		Columns:        make([]Column, 0, structType.NumField()),
 		columnsByField: make(map[string]*Column),
+		structType:     structType, // Store for FieldMap/AllFields value extraction
+		alias:          "",         // Initialize as unaliased
 	}
 
 	// Iterate through struct fields and extract db tags

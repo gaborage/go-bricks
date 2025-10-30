@@ -327,9 +327,9 @@ func TestColumnRegistryIntegrationRealWorldUsage(t *testing.T) {
 	acctCols := RegisterColumns(dbtypes.Oracle, &RegistryAccount{})
 
 	// Verify Oracle-specific quoting
-	assert.Equal(t, "id", userCols.Get("ID"))
-	assert.Equal(t, "name", userCols.Get("Name"))
-	assert.Equal(t, `"number"`, acctCols.Get("Number")) // Oracle reserved word
+	assert.Equal(t, "id", userCols.Col("ID"))
+	assert.Equal(t, "name", userCols.Col("Name"))
+	assert.Equal(t, `"number"`, acctCols.Col("Number")) // Oracle reserved word
 
 	// Scenario: Later in the application, re-request the same metadata
 	userCols2 := RegisterColumns(dbtypes.Oracle, &RegistryUser{})
@@ -337,6 +337,6 @@ func TestColumnRegistryIntegrationRealWorldUsage(t *testing.T) {
 
 	// Scenario: Different vendor for same struct
 	acctColsPg := RegisterColumns(dbtypes.PostgreSQL, &RegistryAccount{})
-	assert.Equal(t, "number", acctColsPg.Get("Number")) // PostgreSQL: no quoting
+	assert.Equal(t, "number", acctColsPg.Col("Number")) // PostgreSQL: no quoting
 	assert.NotSame(t, acctCols, acctColsPg, "Different vendor should have different instance")
 }
