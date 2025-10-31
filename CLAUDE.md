@@ -31,6 +31,46 @@ go test -run TestName   # Run specific test
 - [Demo Project](https://github.com/gaborage/go-bricks-demo-project) - Complete examples
 - [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) - Code quality metrics
 
+## Table of Contents
+
+**Getting Started:**
+- [Quick Reference](#quick-reference) - Commands, files, resources
+- [Documentation Hierarchy](#documentation-hierarchy) - How to navigate the docs
+- [Developer Manifesto](#developer-manifesto-mandatory) - Core principles
+- [Development Commands](#development-commands) - Build, test, lint
+
+**Architecture:**
+- [Core Components](#core-components) - Module system, configuration
+- [Database Architecture](#database-architecture) - Query builder, vendors
+- [Messaging Architecture](#messaging-architecture) - AMQP patterns
+- [Observability](#observability) - Tracing, metrics, logging
+
+**Development:**
+- [Testing Guidelines](#testing-guidelines) - Unit, integration, coverage
+- [Development Workflow](#development-workflow) - Pre-commit, CI/CD
+- [Troubleshooting](#troubleshooting) - Common issues and solutions
+
+**Reference:**
+- [Key Interfaces](#key-interfaces) - Database, messaging, observability
+- [File Organization](#file-organization) - Project structure
+- [Dependencies](#dependencies) - External packages
+
+## Documentation Hierarchy
+
+**For Quick Tasks** (Code-first developers):
+1. [llms.txt](llms.txt) - Copy-paste code snippets (30-second answers)
+2. This file (CLAUDE.md) - Architecture and commands (5-minute orientation)
+
+**For Deep Understanding** (Architecture exploration):
+1. [.specify/memory/constitution.md](.specify/memory/constitution.md) - Non-negotiable principles
+2. [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
+3. [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Working examples
+
+**For End Users** (Application developers):
+1. [README.md](README.md) - Public-facing overview and quick start
+2. [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant patterns
+3. [Go Reference](https://pkg.go.dev/github.com/gaborage/go-bricks) - API documentation
+
 ## Developer Manifesto (MANDATORY)
 
 > **Note:** The full governance framework is defined in [.specify/memory/constitution.md](.specify/memory/constitution.md). This section provides an overview of core principles that guide all development.
@@ -338,44 +378,11 @@ Use `jf.Raw()` only for conditions that type-safe methods cannot express (e.g., 
 
 #### Subquery Support
 
-The query builder supports subqueries in WHERE clauses using `EXISTS`, `NOT EXISTS`, and `IN` patterns:
+The query builder supports subqueries in WHERE clauses using `EXISTS`, `NOT EXISTS`, and `IN` patterns with full vendor-specific placeholder handling.
 
+**Quick Example:**
 ```go
-qb := builder.NewQueryBuilder(dbtypes.Oracle)
-f := qb.Filter()
-
-// EXISTS: Check for related records
-subquery := qb.Select("id").
-    From("categories").
-    Where(f.Eq("status", "active"))
-
-query := qb.Select("*").
-    From("products").
-    Where(f.Exists(subquery))
-
-// SQL: SELECT * FROM products WHERE EXISTS (SELECT id FROM categories WHERE status = :1)
-
-// NOT EXISTS: Check for absence of related records
-subquery := qb.Select("1").
-    From("orders").
-    Where(f.Eq("orders.status", "pending"))
-
-query := qb.Select("*").
-    From("customers").
-    Where(f.NotExists(subquery))
-
-// IN with subquery: Filter by subquery results
-subquery := qb.Select("category_id").
-    From("featured_categories").
-    Where(f.Eq("active", true))
-
-query := qb.Select("*").
-    From("products").
-    Where(f.InSubquery("category_id", subquery))
-
-// SQL: SELECT * FROM products WHERE category_id IN (SELECT category_id FROM featured_categories WHERE active = :1)
-
-// Correlated subquery: Reference outer query columns
+// EXISTS with correlated subquery
 subquery := qb.Select("1").
     From("reviews").
     Where(jf.And(
@@ -386,171 +393,123 @@ subquery := qb.Select("1").
 query := qb.Select("p.name").
     From(Table("products").As("p")).
     Where(f.Exists(subquery))
-
-// SQL: SELECT p.name FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews.product_id = p.id AND reviews.rating = :1)
-
-// Nested subqueries: Subquery containing another subquery
-innerSubquery := qb.Select("category_id").
-    From("trending").
-    Where(f.Gte("score", 100))
-
-outerSubquery := qb.Select("product_id").
-    From("catalog").
-    Where(f.InSubquery("category_id", innerSubquery))
-
-query := qb.Select("*").
-    From("inventory").
-    Where(f.InSubquery("product_id", outerSubquery))
-
-// SQL: SELECT * FROM inventory WHERE product_id IN (SELECT product_id FROM catalog WHERE category_id IN (SELECT category_id FROM trending WHERE score >= :1))
+// Oracle: SELECT p.name FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews.product_id = p.id AND reviews.rating = :1)
 ```
 
 **Key Features:**
-- **Type-safe**: Accepts `SelectQueryBuilder` interface directly
-- **Correlated subqueries**: Reference outer query table aliases using `JoinFilter.EqColumn()`
-- **Automatic placeholder numbering**: Vendor-specific (`:1, :2` for Oracle, `$1, $2` for PostgreSQL)
-- **Nested subqueries**: Unlimited nesting depth supported
-- **Fail-fast validation**: Panics on nil or invalid subqueries at construction time
-- **Composable**: Combine with other filters using `And()`, `Or()`, `Not()`
+- Type-safe: Accepts `SelectQueryBuilder` interface directly
+- Correlated subqueries: Reference outer query aliases using `JoinFilter.EqColumn()`
+- Automatic placeholder numbering: Vendor-specific (`:1, :2` for Oracle, `$1, $2` for PostgreSQL)
+- Nested subqueries: Unlimited depth supported
 
-**Method Reference:**
-- `f.Exists(subquery)` - EXISTS clause
-- `f.NotExists(subquery)` - NOT EXISTS clause
-- `f.InSubquery(column, subquery)` - IN with subquery (separate method from `In()` to maintain explicit API design)
+**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`
+
+**For comprehensive examples**, see [database/internal/builder/query_builder_test.go](database/internal/builder/query_builder_test.go)
 
 #### SELECT Expressions (v2.1+)
 
-The query builder supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY clauses for aggregations, functions, calculations, and other advanced SQL patterns:
+The query builder supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY clauses for aggregations, functions, and calculations.
 
+**Quick Example:**
 ```go
-qb := builder.NewQueryBuilder(dbtypes.PostgreSQL)
-f := qb.Filter()
-
-// Simple aggregations with aliases
+// Aggregations with aliases
 query := qb.Select(
     "category",
     qb.Expr("COUNT(*)", "product_count"),
     qb.Expr("AVG(price)", "avg_price"),
-).
-    From("products").
-    GroupBy("category").
-    OrderBy(qb.Expr("COUNT(*) DESC"))
-
-// SQL: SELECT category, COUNT(*) AS product_count, AVG(price) AS avg_price
-//      FROM products
-//      GROUP BY category
-//      ORDER BY COUNT(*) DESC
-
-// Mixed column names and expressions
-query := qb.Select(
-    "id",
-    "name",
-    qb.Expr("price * quantity", "line_total"),
-    qb.Expr("UPPER(category)", "upper_category"),
-).
-    From("products").
-    Where(f.Gt("stock", 0)).
-    OrderBy("name", qb.Expr("price * quantity DESC"))
-
-// SQL: SELECT id, name, price * quantity AS line_total, UPPER(category) AS upper_category
-//      FROM products
-//      WHERE stock > $1
-//      ORDER BY name, price * quantity DESC
-
-// Date aggregation with GROUP BY expression
-query := qb.Select(
-    qb.Expr("DATE(created_at)", "order_date"),
-    qb.Expr("COUNT(*)", "order_count"),
-    qb.Expr("SUM(total_amount)", "daily_revenue"),
-).
-    From("orders").
-    Where(f.Gte("created_at", "2024-01-01")).
-    GroupBy(qb.Expr("DATE(created_at)")).
-    Having("SUM(total_amount) > ?", 1000).
-    OrderBy(qb.Expr("DATE(created_at) DESC"))
-
-// SQL: SELECT DATE(created_at) AS order_date, COUNT(*) AS order_count, SUM(total_amount) AS daily_revenue
-//      FROM orders
-//      WHERE created_at >= $1
-//      GROUP BY DATE(created_at)
-//      HAVING SUM(total_amount) > $2
-//      ORDER BY DATE(created_at) DESC
+).From("products").GroupBy("category")
 
 // Window functions
-query := qb.Select(
-    "product_id",
-    "category",
-    "price",
+qb.Select(
+    "product_id", "price",
     qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
 ).From("products")
-
-// SQL: SELECT product_id, category, price,
-//      ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rank
-//      FROM products
-
-// Function expressions without aliases
-query := qb.Select(
-    "id",
-    qb.Expr("COALESCE(email, phone, 'N/A')"),
-    qb.Expr("UPPER(name)"),
-).From("users")
-
-// SQL: SELECT id, COALESCE(email, phone, 'N/A'), UPPER(name) FROM users
 ```
 
-**SECURITY WARNING - Read This Carefully:**
+**⚠️ SECURITY WARNING:**
 
-⚠️ **Raw SQL expressions are NOT escaped or sanitized by the framework.** You are responsible for SQL correctness and security.
+Raw SQL expressions are NOT escaped or sanitized. Never interpolate user input:
 
-✅ **Safe Usage** (static SQL only):
 ```go
-// Static expressions - SAFE
-qb.Select(qb.Expr("COUNT(*)", "total"))
-qb.Select(qb.Expr("UPPER(name)"))
-qb.Select(qb.Expr("price * 1.1", "price_with_tax"))
-qb.GroupBy(qb.Expr("DATE(created_at)"))
-qb.OrderBy(qb.Expr("COUNT(*) DESC"))
+// ✅ SAFE - Static SQL only
+qb.Expr("COUNT(*)", "total")
+qb.Expr("UPPER(name)")
+
+// ❌ DANGER - SQL injection!
+qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // NEVER DO THIS
 ```
 
-❌ **Unsafe Usage** (NEVER interpolate user input):
+**Use WHERE with placeholders for dynamic values:**
 ```go
-// NEVER DO THIS - SQL injection vulnerability!
-userInput := req.Query("column")
-qb.Select(qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))) // DANGER!
-
-// NEVER DO THIS - SQL injection in alias!
-userAlias := req.Query("alias")
-qb.Select(qb.Expr("COUNT(*)", userAlias)) // DANGER!
+qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))  // Safe
 ```
 
-✅ **Safe Alternative** (use WHERE with placeholders for dynamic values):
+**Common Use Cases:** Aggregations (`COUNT`, `SUM`, `AVG`), string functions (`UPPER`, `COALESCE`), date functions (`DATE`, `YEAR`), window functions (`ROW_NUMBER`, `RANK`)
+
+**Methods:** `qb.Expr(sql, alias...)`, `qb.Select(columns...)`, `.GroupBy(...)`, `.OrderBy(...)`
+
+**For security guidelines**, see ADR-005 in [wiki/architecture_decisions.md](wiki/architecture_decisions.md)
+
+#### Struct-Based Column Extraction (v2.3+)
+
+GoBricks eliminates column repetition through struct-based column management using `db:"column_name"` tags.
+
+**Key Benefits:**
+- **DRY Principle**: Define columns once in struct tags, reference by field name
+- **Type Safety**: Compile-time field name validation (panics on typos)
+- **Vendor-Aware**: Automatic Oracle reserved word quoting
+- **Zero Overhead**: One-time reflection (~0.6µs), cached forever (~26ns access)
+- **Refactor-Friendly**: Rename struct fields → compiler catches all query references
+
+**Quick Example:**
+
 ```go
-// For dynamic conditions, use type-safe WHERE filters
-userColumn := "status" // From validated enum/whitelist
-userValue := req.Query("value") // User input
-qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))
+type User struct {
+    ID    int64  `db:"id"`
+    Name  string `db:"name"`
+    Level int    `db:"level"`  // Oracle reserved word - auto-quoted
+}
+
+// Extract column metadata (cached per vendor)
+cols := qb.Columns(&User{})
+
+// SELECT operations
+query := qb.Select(cols.All()...).From("users")
+query := qb.Select(cols.Fields("ID", "Name")...).From("users")
+
+// WHERE with auto-quoting
+query := qb.Select(cols.All()...).
+    From("users").
+    Where(f.Eq(cols.Get("Level"), 5))
+// Oracle: SELECT "ID", "NAME", "LEVEL" FROM users WHERE "LEVEL" = :1
+
+// UPDATE operations
+qb.Update("users").
+    Set(cols.Get("Name"), "Jane").
+    Where(f.Eq(cols.Get("ID"), 123))
 ```
 
-**Key Features:**
-- **Backward compatible**: String column names still work exactly as before
-- **Type-safe API**: Separate `Expr()` method makes intent explicit
-- **Fail-fast validation**: Panics on empty SQL or dangerous alias characters (`;`, `'`, `"`, `--`, `/*`, `*/`)
-- **Vendor-agnostic**: Expressions passed directly to underlying SQL builder
-- **Flexible aliases**: Optional alias parameter for SELECT expressions (ignored in GROUP BY/ORDER BY)
+**Common Pattern (Service-Level Caching):**
+```go
+type ProductService struct {
+    qb   *builder.QueryBuilder
+    cols dbtypes.ColumnMetadata
+}
 
-**Method Reference:**
-- `qb.Expr(sql string, alias ...string)` - Create raw SQL expression with optional alias (max 1 alias)
-- `qb.Select(columns ...any)` - Accepts `string` column names or `RawExpression` instances
-- `.GroupBy(groupBys ...any)` - Accepts `string` column names or `RawExpression` instances
-- `.OrderBy(orderBys ...any)` - Accepts `string` column names or `RawExpression` instances
+func NewProductService(db database.Interface) *ProductService {
+    qb := builder.NewQueryBuilder(db.DatabaseType())
+    return &ProductService{
+        qb:   qb,
+        cols: qb.Columns(&Product{}), // Cached forever
+    }
+}
+```
 
-**Common Use Cases:**
-- **Aggregations**: `COUNT(*)`, `SUM(amount)`, `AVG(price)`, `MIN(date)`, `MAX(value)`
-- **String functions**: `UPPER(column)`, `LOWER(column)`, `CONCAT(col1, ' ', col2)`, `COALESCE(email, phone)`
-- **Date functions**: `DATE(timestamp)`, `YEAR(date)`, `MONTH(date)`, `DATE_TRUNC('day', timestamp)`
-- **Math calculations**: `price * quantity`, `(subtotal + tax) * 1.1`, `ROUND(amount, 2)`
-- **Window functions**: `ROW_NUMBER() OVER (...)`, `RANK() OVER (...)`, `LAG(column) OVER (...)`
-- **Conditional expressions**: `CASE WHEN ... THEN ... ELSE ... END`
+**Performance:** First use ~0.6µs (reflection), cached access ~26ns (map lookup), thread-safe via `sync.Map`
+
+**Vendor Quoting:** Oracle auto-quotes reserved words (`"NUMBER"`, `"LEVEL"`), PostgreSQL/MongoDB no quoting
+
+**For detailed examples** (INSERT, JOINs, complex queries), see [llms.txt](llms.txt) and ADR-007 in [wiki/architecture_decisions.md](wiki/architecture_decisions.md)
 
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
@@ -560,81 +519,22 @@ AMQP-based messaging with **validate-once, replay-many** pattern:
 
 #### Helper Functions for Simplified Declarations
 
-GoBricks provides helper functions to reduce boilerplate when declaring messaging infrastructure:
+GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):
 
-**Before (verbose with repetitive defaults):**
-```go
-exchange := &messaging.ExchangeDeclaration{
-    Name:       "issuance.events",
-    Type:       "topic",
-    Durable:    true,
-    AutoDelete: false,
-    Internal:   false,
-    NoWait:     false,
-}
-decls.RegisterExchange(exchange)
-
-queue := &messaging.QueueDeclaration{
-    Name:       "issuance.events.queue",
-    Durable:    true,
-    AutoDelete: false,
-    Exclusive:  false,
-    NoWait:     false,
-}
-decls.RegisterQueue(queue)
-
-binding := &messaging.BindingDeclaration{
-    Queue:      queue.Name,
-    Exchange:   exchange.Name,
-    RoutingKey: "issuance.*",
-    NoWait:     false,
-}
-decls.RegisterBinding(binding)
-
-publisher := &messaging.PublisherDeclaration{
-    Exchange:    exchange.Name,
-    RoutingKey:  "issuance.created",
-    EventType:   "CreateBatchIssuanceRequest",
-    Description: "Requests batch card issuance",
-    Mandatory:   false,
-    Immediate:   false,
-    Headers:     map[string]any{"source": "issuance-service"},
-}
-decls.RegisterPublisher(publisher)
-
-decls.RegisterConsumer(&messaging.ConsumerDeclaration{
-    Queue:       queue.Name,
-    Consumer:    "issuance-service-consumer",
-    AutoAck:     false,
-    Exclusive:   false,
-    NoLocal:     false,
-    NoWait:      false,
-    EventType:   "CreateBatchIssuanceRequest",
-    Description: "Consumes issuance events for processing",
-    Handler:     amqp.NewCreateBatchIssuanceMessageHandler(m.logger),
-})
-```
-
-**After (concise with production-safe defaults):**
+**Concise Declaration Pattern:**
 ```go
 exchange := decls.DeclareTopicExchange("issuance.events")
 queue := decls.DeclareQueue("issuance.events.queue")
 decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
 
 decls.DeclarePublisher(&messaging.PublisherOptions{
-    Exchange:    exchange.Name,
-    RoutingKey:  "issuance.created",
-    EventType:   "CreateBatchIssuanceRequest",
-    Description: "Requests batch card issuance",
-    Headers:     map[string]any{"source": "issuance-service"},
+    Exchange: exchange.Name, RoutingKey: "issuance.created",
+    EventType: "CreateBatchIssuanceRequest",
 }, nil)
 
 decls.DeclareConsumer(&messaging.ConsumerOptions{
-    Queue:       queue.Name,
-    Consumer:    "issuance-service-consumer",
-    EventType:   "CreateBatchIssuanceRequest",
-    Description: "Consumes issuance events for processing",
-    Handler:     amqp.NewCreateBatchIssuanceMessageHandler(m.logger),
+    Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
+    Handler: amqp.NewHandler(m.logger),
 }, nil)
 ```
 
@@ -644,17 +544,9 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 - Publishers: `Mandatory: false`, `Immediate: false`
 - Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
 
-**Available Helpers:**
-- `NewTopicExchange(name)` - Topic exchange with production defaults
-- `NewQueue(name)` - Durable queue with production defaults
-- `NewBinding(queue, exchange, routingKey)` - Binding declaration
-- `NewPublisher(opts *PublisherOptions)` - Publisher from options struct pointer
-- `NewConsumer(opts *ConsumerOptions)` - Consumer from options struct pointer
-- `DeclareTopicExchange(name)` - Create and register exchange in one step
-- `DeclareQueue(name)` - Create and register queue in one step
-- `DeclareBinding(...)` - Create and register binding in one step
-- `DeclarePublisher(opts *PublisherOptions, exchange)` - Create and register publisher (optionally auto-register exchange)
-- `DeclareConsumer(opts *ConsumerOptions, queue)` - Create and register consumer (optionally auto-register queue)
+**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclarePublisher()`, `DeclareConsumer()`
+
+**For verbose before/after comparison**, see [messaging/declarations.go](messaging/declarations.go)
 
 ### Observability
 
@@ -852,6 +744,105 @@ The unified CI workflow (`ci-v2.yml`) intelligently runs only necessary jobs:
 - Intelligent retry logic for Windows-specific patterns
 - Race detection enabled
 
+## Troubleshooting
+
+### Common Issues
+
+**Build/Test Failures:**
+
+```bash
+# "cannot find package" errors
+go mod tidy && go mod download
+
+# "Docker not running" during integration tests
+make docker-check  # Check Docker status
+docker info        # Verify Docker daemon
+
+# Race condition failures
+go test -race -run TestSpecificFailing ./package
+
+# Linting errors
+golangci-lint cache clean
+golangci-lint run
+```
+
+**Database Issues:**
+
+```bash
+# Oracle: ORA-00936 "missing expression"
+# → Use type-safe WHERE methods instead of WhereRaw()
+.WhereEq("number", value)  # ✅ Auto-quotes reserved words
+.WhereRaw("number = ?", value)  # ❌ Manual quoting required
+
+# PostgreSQL: "syntax error at or near $1"
+# → Check placeholder numbering (PostgreSQL uses $1, $2; Oracle uses :1, :2)
+
+# "database not configured" errors
+# → Explicitly set database.type, database.host OR database.connection_string
+# See ADR-003: Database by Intent configuration
+```
+
+**Observability Issues:**
+
+```bash
+# "cannot use OTLP logs with pretty=true"
+# → Set logger.pretty: false when observability.logs.enabled: true
+
+# Spans not appearing in collector
+# → Check observability.enabled: true
+# → Wait for batch timeout (500ms dev, 5s prod)
+# → Set trace.endpoint: stdout for local debugging
+
+# Missing trace_id in logs
+# → Ensure logger.WithContext(ctx).Info() (not logger.Info())
+# → Verify observability provider initialized before logger enhancement
+
+# Noisy [OBSERVABILITY] debug logs
+# → Ensure GOBRICKS_DEBUG is not set (default: disabled)
+```
+
+**CI/CD Issues:**
+
+```bash
+# Tool tests failing after framework changes
+make check-all  # Run comprehensive validation (framework + tool)
+
+# Windows-specific path failures
+# → Check for /tmp vs D:\temp in test assertions
+# → See: observability/provider_test.go for retry patterns
+
+# Coverage below 80%
+# → Run: make test-coverage
+# → Check SonarCloud quality gate requirements
+```
+
+**Multi-Tenant Issues:**
+
+```bash
+# "tenant ID not found in context"
+# → Use deps.GetDB(ctx), not deps.DB (function-based access)
+# → Ensure tenant resolver configured in multitenant.resolver
+
+# Messaging registry initialization errors
+# → Check logs for "messaging not configured" warnings
+# → Verify messaging.broker.url set for each tenant
+# → See ADR-004 for lazy registry creation details
+```
+
+**Module Registration Issues:**
+
+```bash
+# "module X failed to initialize"
+# → Check Init() error logs for specific dependency failures
+# → Verify all required config keys present (Config.InjectInto validation)
+# → Ensure database/messaging configured if module requires them
+
+# Handler registration panics
+# → Verify HandlerRegistry passed to RegisterRoutes()
+# → Check for duplicate route paths (Echo will panic)
+# → Ensure request struct has proper validation tags
+```
+
 ## SpecKit Workflow (Feature Development)
 
 GoBricks uses SpecKit for structured feature development with built-in slash commands:
@@ -885,6 +876,43 @@ The project constitution (`.specify/memory/constitution.md`) defines non-negotia
 - User Experience Consistency (predictable APIs)
 
 See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full governance framework.
+
+### When to Use Each Tool
+
+**Use `make check`** when:
+- Daily development (fast feedback loop)
+- Working on framework code only
+- Pre-commit sanity checks
+- Quick validation before pushing changes
+
+**Use `make check-all`** when:
+- Modifying public interfaces (server, database, config, observability)
+- Before creating PRs with framework API changes
+- Changing struct tags or validation logic
+- Refactoring shared types or error handling
+
+**Use `make test-integration`** when:
+- Testing database vendor differences (Oracle/PostgreSQL/MongoDB)
+- Validating messaging patterns with real AMQP brokers
+- New contracts or contract changes requiring testcontainers
+- Verifying multi-platform compatibility
+
+**Use SpecKit commands** when:
+- Planning multi-step features (>3 tasks)
+- Need structured task breakdown with dependencies
+- Working with complex feature specifications
+- Want consistent documentation artifacts (spec.md, plan.md, tasks.md)
+
+**Use `go test -run TestName`** when:
+- Debugging a specific failing test
+- Iterating on a single test case
+- Want fast feedback on one unit test
+
+**Use SonarCloud** when:
+- Checking coverage metrics (80% target)
+- Reviewing code quality trends over time
+- Identifying code smells or technical debt
+- Preparing for release (quality gate validation)
 
 ## File Organization
 - **internal/** - Private packages

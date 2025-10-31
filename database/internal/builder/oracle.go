@@ -5,31 +5,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // quoteOracleColumn handles Oracle-specific column name quoting.
 // It identifies Oracle reserved words and applies appropriate quoting.
-var oracleReservedWords = map[string]struct{}{
-	"ACCESS": {}, "ADD": {}, "ALL": {}, "ALTER": {}, "AND": {}, "ANY": {}, "AS": {}, "ASC": {},
-	"BEGIN": {}, "BETWEEN": {}, "BY": {}, "CASE": {}, "CHECK": {}, "COLUMN": {}, "COMMENT": {},
-	"CONNECT": {}, "CREATE": {}, "CURRENT": {}, "DELETE": {}, "DESC": {}, "DISTINCT": {},
-	"DROP": {}, "ELSE": {}, "EXCLUDE": {}, "EXISTS": {}, "FOR": {}, "FROM": {}, "GRANT": {},
-	"GROUP": {}, "HAVING": {}, "IN": {}, "INDEX": {}, "INSERT": {}, "INTERSECT": {}, "INTO": {},
-	"IS": {}, "LEVEL": {}, "LIKE": {}, "LOCK": {}, "MINUS": {}, "MODE": {}, "NOCOMPRESS": {},
-	"NOT": {}, "NULL": {}, "NUMBER": {}, "OF": {}, "ON": {}, "OPTION": {}, "OR": {}, "ORDER": {},
-	"ROW": {}, "ROWNUM": {}, "SELECT": {}, "SET": {}, "SHARE": {}, "SIZE": {}, "START": {},
-	"TABLE": {}, "THEN": {}, "TO": {}, "TRIGGER": {}, "UNION": {}, "UNIQUE": {}, "UPDATE": {},
-	"VALUES": {}, "VIEW": {}, "WHEN": {}, "WHERE": {}, "WITH": {},
-}
-
-func isOracleReservedWord(identifier string) bool {
-	if identifier == "" {
-		return false
-	}
-	_, ok := oracleReservedWords[strings.ToUpper(identifier)]
-	return ok
-}
+// Reserved words are managed in the sqllex package to prevent duplication.
 
 func oracleNeedsQuoting(identifier string) bool {
 	if identifier == "" {
@@ -299,7 +281,7 @@ func oracleQuoteIdentifier(column string) string {
 		return trimmed
 	}
 
-	if isOracleReservedWord(trimmed) {
+	if sqllex.IsOracleReservedWord(trimmed) {
 		return `"` + trimmed + `"`
 	}
 

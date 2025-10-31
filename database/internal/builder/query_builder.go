@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+	colreg "github.com/gaborage/go-bricks/database/internal/columns"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -124,6 +125,44 @@ func (qb *QueryBuilder) Expr(sql string, alias ...string) dbtypes.RawExpression 
 	return dbtypes.Expr(sql, alias...)
 }
 
+// Columns extracts column metadata from a struct with `db:"column_name"` tags.
+// It lazily parses the struct on first use and caches the metadata forever,
+// providing vendor-specific column quoting (e.g., Oracle reserved words).
+//
+// This method delegates to the global column registry, which maintains per-vendor
+// caches using sync.Map for lock-free cached reads.
+//
+// Parameters:
+//   - structPtr: Pointer to a struct with `db:"column_name"` tags
+//
+// Returns:
+//   - dbtypes.ColumnMetadata: Interface providing Get(), Fields(), and All() methods
+//
+// Panics if:
+//   - structPtr is not a pointer to a struct
+//   - No fields with `db` tags are found
+//   - Any db tag contains dangerous SQL characters
+//
+// Performance:
+//   - First use: ~2µs (reflection + tag parsing)
+//   - Cached access: ~50ns (sync.Map read + method call)
+//
+// Example:
+//
+//	type User struct {
+//	    ID    int64  `db:"id"`
+//	    Name  string `db:"name"`
+//	    Level string `db:"level"` // Oracle reserved word
+//	}
+//
+//	cols := qb.Columns(&User{})
+//	query := qb.Select(cols.Cols("ID", "Name")...).From("users")
+//	// Oracle: SELECT "ID", "NAME" FROM users
+//	// PostgreSQL: SELECT id, name FROM users
+func (qb *QueryBuilder) Columns(structPtr any) dbtypes.Columns {
+	return colreg.RegisterColumns(qb.vendor, structPtr)
+}
+
 func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {
 	switch v := col.(type) {
 	case nil:
@@ -185,6 +224,122 @@ func (qb *QueryBuilder) Insert(table string) squirrel.InsertBuilder {
 // It applies vendor-specific column quoting to the provided column list.
 func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
 	return qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...)
+}
+
+// InsertStruct creates an INSERT query by extracting all fields from a struct instance.
+// Zero-value ID fields (int64 or string type with field name "ID") are automatically excluded
+// to support auto-increment primary keys.
+//
+// Example:
+//
+//	type User struct {
+//	    ID    int64  `db:"id"`    // Excluded if zero
+//	    Name  string `db:"name"`
+//	    Email string `db:"email"`
+//	}
+//
+//	user := User{Name: "Alice", Email: "alice@example.com"}
+//	query := qb.InsertStruct("users", &user)
+//	// INSERT INTO users (name, email) VALUES (?, ?)
+//
+// Panics if instance is not a struct or pointer to struct with db tags.
+func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.InsertBuilder {
+	cols := qb.Columns(instance)
+	fieldMap := cols.FieldMap(instance)
+
+	// Filter out zero-value ID field for auto-increment support
+	columns := make([]string, 0, len(fieldMap))
+	values := make([]any, 0, len(fieldMap))
+
+	for col, val := range fieldMap {
+		// Skip zero-value ID fields (common pattern for auto-increment PKs)
+		if qb.isZeroValueIDField(col, val) {
+			continue
+		}
+		columns = append(columns, col)
+		values = append(values, val)
+	}
+
+	return qb.statementBuilder.Insert(table).
+		Columns(qb.quoteColumnsForDML(columns...)...).
+		Values(values...)
+}
+
+// InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
+// This is useful for partial inserts or when you need explicit control over which fields to include.
+//
+// Example:
+//
+//	user := User{ID: 123, Name: "Alice", Email: "alice@example.com", Status: "active"}
+//	query := qb.InsertFields("users", &user, "Name", "Email")
+//	// INSERT INTO users (name, email) VALUES (?, ?)
+//
+// Panics if instance is not a struct or any field name is invalid.
+func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder {
+	cols := qb.Columns(instance)
+	fieldMap := cols.FieldMap(instance)
+
+	// Extract only requested fields
+	columns := make([]string, 0, len(fields))
+	values := make([]any, 0, len(fields))
+
+	for _, fieldName := range fields {
+		col := cols.Col(fieldName)
+		if val, ok := fieldMap[col]; ok {
+			columns = append(columns, col)
+			values = append(values, val)
+		} else {
+			panic(fmt.Sprintf("field %q not found in struct", fieldName))
+		}
+	}
+
+	return qb.statementBuilder.Insert(table).
+		Columns(qb.quoteColumnsForDML(columns...)...).
+		Values(values...)
+}
+
+// extractTerminalIdentifier extracts the final identifier from a column name,
+// handling quoted identifiers and qualified names (e.g., "schema"."table"."id" -> "id").
+// Trims backticks, double quotes, and square brackets, then splits on dots.
+func extractTerminalIdentifier(column string) string {
+	// Trim leading/trailing whitespace
+	column = strings.TrimSpace(column)
+
+	// Split on dots to handle qualified names (schema.table.column)
+	parts := strings.Split(column, ".")
+	lastPart := parts[len(parts)-1]
+
+	// Trim common quoting characters from the terminal identifier
+	lastPart = strings.Trim(lastPart, "`\"[] ")
+
+	return lastPart
+}
+
+// isZeroValueIDField checks if a column is an ID field with a zero value.
+// This is used to skip auto-increment primary keys in INSERT operations.
+// Only columns whose terminal identifier is exactly "id" (case-insensitive) are treated as ID columns.
+func (qb *QueryBuilder) isZeroValueIDField(column string, value any) bool {
+	// Extract terminal identifier and check if it's exactly "id" (case-insensitive)
+	terminalID := extractTerminalIdentifier(column)
+	isIDColumn := strings.EqualFold(terminalID, "id")
+
+	if !isIDColumn {
+		return false
+	}
+
+	// Check for zero values
+	switch v := value.(type) {
+	case int64:
+		return v == 0
+	case string:
+		return v == ""
+	case int:
+		return v == 0
+	case int32:
+		return v == 0
+	default:
+		return false
+	}
 }
 
 // Update creates an UPDATE query builder for the specified table with Filter API support.
@@ -726,6 +881,50 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 		quotedClauses[uqb.qb.quoteColumnForQuery(k)] = v
 	}
 	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
+	return uqb
+}
+
+// SetStruct sets multiple columns from a struct instance in the UPDATE statement.
+// If no fields are specified, all struct fields are included.
+// If fields are provided, only those fields are updated.
+// Column names are automatically quoted according to database vendor rules.
+//
+// Example (all fields):
+//
+//	user := User{Name: "Alice", Email: "alice@example.com", Status: "active"}
+//	query := qb.Update("users").SetStruct(&user).Where(f.Eq("id", 123))
+//	// UPDATE users SET name = ?, email = ?, status = ? WHERE id = ?
+//
+// Example (selective fields):
+//
+//	user := User{Name: "Bob", Email: "bob@example.com", Status: "inactive"}
+//	query := qb.Update("users").SetStruct(&user, "Name", "Status").Where(f.Eq("id", 456))
+//	// UPDATE users SET name = ?, status = ? WHERE id = ?
+//
+// Panics if instance is not a struct or any field name is invalid.
+func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes.UpdateQueryBuilder {
+	cols := uqb.qb.Columns(instance)
+	fieldMap := cols.FieldMap(instance)
+
+	// If specific fields requested, use only those
+	if len(fields) > 0 {
+		for _, fieldName := range fields {
+			col := cols.Col(fieldName)
+			if val, ok := fieldMap[col]; ok {
+				quotedCol := uqb.qb.quoteColumnForQuery(col)
+				uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
+			} else {
+				panic(fmt.Sprintf("field %q not found in struct", fieldName))
+			}
+		}
+	} else {
+		// Use all fields
+		for col, val := range fieldMap {
+			quotedCol := uqb.qb.quoteColumnForQuery(col)
+			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
+		}
+	}
+
 	return uqb
 }
 

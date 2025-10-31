@@ -159,6 +159,12 @@ type UpdateQueryBuilder interface {
 	Set(column string, value any) UpdateQueryBuilder
 	SetMap(clauses map[string]any) UpdateQueryBuilder
 
+	// Struct-based UPDATE (v2.4+)
+	// SetStruct extracts field values from a struct instance for UPDATE.
+	// If fields are specified, only those fields are updated.
+	// If no fields specified, all struct fields are updated.
+	SetStruct(instance any, fields ...string) UpdateQueryBuilder
+
 	// Filtering
 	Where(filter Filter) UpdateQueryBuilder
 
@@ -279,6 +285,98 @@ type Interface interface {
 	CreateMigrationTable(ctx context.Context) error
 }
 
+// Columns represents cached metadata for a struct type with `db:"column_name"` tags.
+// It provides methods to retrieve vendor-quoted column names with optional table aliasing.
+//
+// This interface is implemented by the internal columns package and returned by
+// QueryBuilder.Columns(). The metadata is lazily parsed on first use and cached forever.
+//
+// v2.4 Breaking Changes:
+//   - Renamed Get() → Col() for consistency with database terminology
+//   - Renamed Fields() → Cols() with []string return type (was []any)
+//   - All() now returns []string instead of []any
+//   - Added As() for immutable aliasing: cols.As("u").Col("ID") → "u.id"
+//   - Added FieldMap() and AllFields() for struct-to-query conversion
+type Columns interface {
+	// Col retrieves the vendor-quoted column name for the given struct field name.
+	// If aliased via As(), returns qualified column (e.g., "u.id").
+	// Panics if the field name is not found (fail-fast for development-time typos).
+	//
+	// Example (unaliased):
+	//   cols.Col("ID")    // Returns: "id" (PostgreSQL) or "ID" (Oracle)
+	//   cols.Col("Level") // Returns: "level" (PostgreSQL) or "LEVEL" (Oracle, quoted)
+	//
+	// Example (aliased):
+	//   u := cols.As("u")
+	//   u.Col("ID")       // Returns: "u.id" (PostgreSQL) or "u.\"ID\"" (Oracle)
+	Col(fieldName string) string
+
+	// As returns a new Columns instance bound to the specified table alias.
+	// The returned instance shares the underlying column metadata (zero-copy).
+	// This method is immutable - the original Columns instance remains unchanged.
+	//
+	// Example:
+	//   cols := qb.Columns(&User{})
+	//   u := cols.As("u")
+	//   p := cols.As("p")
+	//   u.Col("ID")  // "u.id"
+	//   p.Col("ID")  // "p.id"
+	//   cols.Col("ID") // "id" (original unaffected)
+	As(alias string) Columns
+
+	// Alias returns the current table alias, or empty string if unaliased.
+	//
+	// Example:
+	//   cols.Alias()        // ""
+	//   cols.As("u").Alias() // "u"
+	Alias() string
+
+	// Cols retrieves vendor-quoted column names for multiple struct field names.
+	// If aliased, returns qualified columns.
+	// Panics if any field name is not found.
+	//
+	// Example:
+	//   cols.Cols("ID", "Name", "Email") // ["id", "name", "email"]
+	//   cols.As("u").Cols("ID", "Name")  // ["u.id", "u.name"]
+	Cols(fieldNames ...string) []string
+
+	// All returns vendor-quoted column names for all columns in the struct,
+	// in the order they were declared in the struct definition.
+	//
+	// Example:
+	//   cols.All()        // ["id", "name", "email"] (unaliased)
+	//   cols.As("u").All() // ["u.id", "u.name", "u.email"] (aliased)
+	All() []string
+
+	// FieldMap extracts field values from a struct instance into a map.
+	// The map keys are vendor-quoted column names (respecting alias if set).
+	// Only fields with `db` tags are included. Zero values are included.
+	//
+	// Example:
+	//   user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
+	//   cols.FieldMap(&user)
+	//   // Returns: {"id": 123, "name": "Alice", "email": "alice@example.com"}
+	//
+	//   cols.As("u").FieldMap(&user)
+	//   // Returns: {"u.id": 123, "u.name": "Alice", "u.email": "alice@example.com"}
+	//
+	// Panics if instance is not a struct or pointer to struct.
+	FieldMap(instance any) map[string]any
+
+	// AllFields extracts all field values from a struct instance as separate slices.
+	// Returns (columns, values) suitable for bulk INSERT/UPDATE operations.
+	// Only fields with `db` tags are included. Zero values are included.
+	//
+	// Example:
+	//   user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
+	//   cols, vals := cols.AllFields(&user)
+	//   // cols: ["id", "name", "email"]
+	//   // vals: [123, "Alice", "alice@example.com"]
+	//
+	// Panics if instance is not a struct or pointer to struct.
+	AllFields(instance any) ([]string, []any)
+}
+
 // QueryBuilderInterface defines the interface for vendor-specific SQL query building.
 // This interface allows for dependency injection and mocking of query builders,
 // enabling unit testing of business logic that constructs queries without
@@ -294,10 +392,40 @@ type QueryBuilderInterface interface {
 	// Expression builder (v2.1+)
 	Expr(sql string, alias ...string) RawExpression
 
+	// Column metadata extraction (v2.4+)
+	// Extracts column metadata from structs with `db:"column_name"` tags.
+	// Lazily parses struct on first use, caches forever.
+	// Returns vendor-specific quoted column names (e.g., Oracle reserved words).
+	//
+	// Example:
+	//   type User struct {
+	//       ID    int64  `db:"id"`
+	//       Level string `db:"level"` // Oracle reserved word
+	//   }
+	//   cols := qb.Columns(&User{})
+	//   qb.Select(cols.Col("ID"), cols.Col("Level")).From("users")
+	//
+	//   // With aliasing:
+	//   u := cols.As("u")
+	//   qb.Select(u.Col("ID"), u.Col("Level")).From(Table("users").As("u"))
+	//
+	// Panics if structPtr is not a pointer to a struct with db tags.
+	Columns(structPtr any) Columns
+
 	// Query builders
 	Select(columns ...any) SelectQueryBuilder
 	Insert(table string) squirrel.InsertBuilder
 	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
+
+	// Struct-based INSERT (v2.4+)
+	// InsertStruct extracts all fields from a struct instance and creates an INSERT query.
+	// Zero-value ID fields (int64/string) are automatically excluded to support auto-increment.
+	InsertStruct(table string, instance any) squirrel.InsertBuilder
+
+	// InsertFields extracts only specified fields from a struct instance for INSERT.
+	// Useful for partial inserts or when you need explicit control over included fields.
+	InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder
+
 	Update(table string) UpdateQueryBuilder
 	Delete(table string) DeleteQueryBuilder
 

@@ -211,20 +211,6 @@ func (c *Config) applyLogsDefaults() {
 		c.Logs.Headers = cloneHeaderMap(c.Trace.Headers)
 	}
 
-	// Deprecated: Sample rate configuration (dual-mode logging uses different approach)
-	if c.Logs.Sample.Rate == nil {
-		c.Logs.Sample.Rate = Float64Ptr(1.0)
-	} else if *c.Logs.Sample.Rate != 1.0 {
-		debugLogger.Println("Deprecated: logs.sample.rate is ignored in dual-mode logging. Action logs are always sampled (100%), trace logs filter by severity (WARN+).")
-	}
-
-	// Deprecated: AlwaysSampleHigh configuration (replaced by dual-mode routing)
-	if c.Logs.Sample.AlwaysSampleHigh == nil {
-		c.Logs.Sample.AlwaysSampleHigh = BoolPtr(true)
-	} else if !*c.Logs.Sample.AlwaysSampleHigh {
-		debugLogger.Println("Deprecated: logs.sample.always_sample_high is ignored in dual-mode logging. Trace logs are always WARN+ only.")
-	}
-
 	// Slow request threshold default (used by action log severity calculation)
 	if c.Logs.SlowRequestThreshold == 0 {
 		c.Logs.SlowRequestThreshold = 1 * time.Second
@@ -429,11 +415,6 @@ type LogsConfig struct {
 	// If nil or empty, logs inherit trace headers.
 	Headers map[string]string `mapstructure:"headers"`
 
-	// Sample contains sampling configuration for logs.
-	// Deprecated: Sampling logic replaced by dual-mode logging in v2.1.
-	// Action logs are always sampled (100%), trace logs filter by severity (WARN+ only).
-	Sample LogSampleConfig `mapstructure:"sample"`
-
 	// Batch contains batch processing configuration (reused from TraceConfig pattern).
 	Batch BatchConfig `mapstructure:"batch"`
 
@@ -448,21 +429,6 @@ type LogsConfig struct {
 	// This is a system-wide threshold (no per-route overrides).
 	// Default: 1 second.
 	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"`
-}
-
-// LogSampleConfig defines sampling configuration for logs.
-// Allows reducing log volume in production while preserving critical logs.
-type LogSampleConfig struct {
-	// Rate controls what fraction of INFO/DEBUG logs to export (0.0 to 1.0).
-	// 1.0 means export all logs, 0.1 means export 10%, 0.0 means export nothing.
-	// nil = apply default (1.0).
-	Rate *float64 `mapstructure:"rate"`
-
-	// AlwaysSampleHigh controls whether WARN/ERROR/FATAL logs are always exported.
-	// When true (default), severity-based filtering ensures critical logs are never sampled out.
-	// When false, sample rate applies to all log levels.
-	// Nil means "use default".
-	AlwaysSampleHigh *bool `mapstructure:"always_sample_high"`
 }
 
 // Validate checks the configuration for common errors.
@@ -546,14 +512,6 @@ func (c *Config) validateLogsConfig() error {
 	// Treat nil as false, only validate if explicitly enabled
 	if c.Logs.Enabled == nil || !*c.Logs.Enabled {
 		return nil
-	}
-
-	// Validate sample rate if explicitly set
-	if c.Logs.Sample.Rate != nil {
-		rate := *c.Logs.Sample.Rate
-		if rate < 0.0 || rate > 1.0 {
-			return ErrInvalidSampleRate
-		}
 	}
 
 	// Stdout endpoint doesn't require protocol validation
