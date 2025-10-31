@@ -1854,8 +1854,10 @@ func TestInsertStruct_ColumnsWithIDSubstring(t *testing.T) {
 	assert.Contains(t, sql, "video", "video column should be included (not treated as ID)")
 	assert.Contains(t, sql, "provider", "provider column should be included (not treated as ID)")
 
-	// Only the actual "id" column should be excluded
-	assert.NotContains(t, sql, "\"id\"", "id column should be excluded (zero auto-increment)")
+	// Only the actual "id" column should be excluded (check all possible positions)
+	assert.NotContains(t, sql, "(id,", "id column should be excluded at start")
+	assert.NotContains(t, sql, ",id,", "id column should be excluded in middle")
+	assert.NotContains(t, sql, ",id)", "id column should be excluded at end")
 
 	// Verify all values are present in args
 	assert.Contains(t, args, 100, "amount value should be in args")
