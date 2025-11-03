@@ -28,10 +28,44 @@ import (
 )
 
 const (
+	// Application identifiers
 	appName       = "test-app"
 	moduleName    = "test-module"
 	appVersion    = "v1.0.0"
 	readyEndpoint = "/ready"
+
+	// Environment and logging
+	envDebug       = "debug"
+	envProduction  = "production"
+	envVarLogLevel = "LOG_LEVEL"
+	envVarAppEnv   = "APP_ENV"
+
+	// Status strings
+	statusHealthy = "healthy"
+	statusReady   = "ready"
+	statusText    = "status"
+
+	// Infrastructure
+	dbTypePostgres = "postgresql"
+	dbHostKey      = "db-host"
+	localHost      = "localhost"
+	amqpBrokerURL  = "amqp://broker"
+
+	// Component names
+	componentDatabase  = "database"
+	componentMessaging = "messaging"
+	messagingStatsKey  = "messaging_stats"
+
+	// Error scenarios
+	errorDBDown      = "db down"
+	errorCloseFailed = "close failed"
+	failingResource  = "failing-resource"
+	testCloser       = "test-closer"
+	testName         = "test"
+
+	// Lifecycle methods
+	methodHealth = "Health"
+	methodClose  = "Close"
 )
 
 type MockSignalHandler struct {
@@ -351,7 +385,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	t.Helper()
 
 	cfg := defaultTestConfig()
-	log := logger.New("debug", true)
+	log := logger.New(envDebug, true)
 
 	db := &testmocks.MockDatabase{}
 	msg := testmocks.NewMockAMQPClient()
@@ -450,19 +484,19 @@ func defaultTestConfig() *config.Config {
 	return &config.Config{
 		App: config.AppConfig{
 			Name:    appName,
-			Env:     "test",
+			Env:     testName,
 			Version: appVersion,
 		},
-		Server: config.ServerConfig{Host: "localhost", Port: 8080},
+		Server: config.ServerConfig{Host: localHost, Port: 8080},
 		Database: config.DatabaseConfig{
-			Type: "postgresql",
-			Host: "localhost",
+			Type: dbTypePostgres,
+			Host: localHost,
 			Port: 5432,
 		},
 		Messaging: config.MessagingConfig{
 			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
 		},
-		Log: config.LogConfig{Level: "debug"},
+		Log: config.LogConfig{Level: envDebug},
 	}
 }
 
@@ -504,6 +538,49 @@ func TestRegisterModuleInitError(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
+func TestRegisterModuleDuplicate(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	module1 := &MockModule{name: moduleName}
+	module1.On("Init", mock.Anything).Return(nil)
+
+	module2 := &MockModule{name: moduleName}
+	// module2.Init should NOT be called because duplicate check happens first
+
+	// First registration succeeds
+	err := fixture.app.RegisterModule(module1)
+	require.NoError(t, err)
+	assert.Len(t, fixture.app.registry.modules, 1)
+	module1.AssertExpectations(t)
+
+	// Second registration with same name returns error
+	err = fixture.app.RegisterModule(module2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate module")
+	assert.Contains(t, err.Error(), moduleName)
+	assert.Len(t, fixture.app.registry.modules, 1) // Still only one module
+	// module2.Init was never called, so no need to assert expectations
+}
+
+func TestRegisterModuleDifferentNames(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	module1 := &MockModule{name: "module1"}
+	module1.On("Init", mock.Anything).Return(nil)
+
+	module2 := &MockModule{name: "module2"}
+	module2.On("Init", mock.Anything).Return(nil)
+
+	// Both modules with different names succeed
+	err := fixture.app.RegisterModule(module1)
+	require.NoError(t, err)
+
+	err = fixture.app.RegisterModule(module2)
+	require.NoError(t, err)
+
+	assert.Len(t, fixture.app.registry.modules, 2)
+	module1.AssertExpectations(t)
+	module2.AssertExpectations(t)
+}
+
 type stubTenantResource struct {
 	dbCalls  int
 	msgCalls int
@@ -511,7 +588,7 @@ type stubTenantResource struct {
 
 func (s *stubTenantResource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
 	s.dbCalls++
-	return &config.DatabaseConfig{Type: "postgresql"}, nil
+	return &config.DatabaseConfig{Type: dbTypePostgres}, nil
 }
 
 func (s *stubTenantResource) BrokerURL(context.Context, string) (string, error) {
@@ -557,20 +634,20 @@ func TestReadyCheckScenarios(t *testing.T) {
 		assertBody     func(t *testing.T, body map[string]any)
 	}{
 		{
-			name: "healthy",
+			name: statusHealthy,
 			prepare: func(f *testAppFixture) {
-				f.db.On("Health", mock.Anything).Return(nil)
+				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "ready", body["status"])
-				assert.Equal(t, "healthy", body["database"])
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, statusHealthy, body[componentDatabase])
 				stats, ok := body["db_stats"].(map[string]any)
 				assert.True(t, ok)
 				assert.Contains(t, stats, "active_connections")
-				assert.Equal(t, "healthy", body["messaging"])
-				msgStats, ok := body["messaging_stats"].(map[string]any)
+				assert.Equal(t, statusHealthy, body[componentMessaging])
+				msgStats, ok := body[messagingStatsKey].(map[string]any)
 				assert.True(t, ok)
 				assert.Contains(t, msgStats, "active_publishers")
 			},
@@ -578,29 +655,29 @@ func TestReadyCheckScenarios(t *testing.T) {
 		{
 			name: "database unhealthy",
 			prepare: func(f *testAppFixture) {
-				f.db.On("Health", mock.Anything).Return(errors.New("db down"))
+				f.db.On(methodHealth, mock.Anything).Return(errors.New(errorDBDown))
 			},
 			expectedStatus: http.StatusServiceUnavailable,
 			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "not ready", body["status"])
-				assert.Equal(t, "unhealthy", body["database"])
-				assert.Equal(t, "db down", body["error"])
+				assert.Equal(t, "not ready", body[statusText])
+				assert.Equal(t, "unhealthy", body[componentDatabase])
+				assert.Equal(t, errorDBDown, body["error"])
 			},
 		},
 		{
 			name: "messaging disabled",
 			prepare: func(f *testAppFixture) {
-				f.db.On("Health", mock.Anything).Return(nil)
+				f.db.On(methodHealth, mock.Anything).Return(nil)
 				// Set messaging manager to nil to simulate disabled messaging
 				f.app.messagingManager = nil
 				f.rebuildClosersAndHealth()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
-				assert.Equal(t, "ready", body["status"])
-				assert.Equal(t, "healthy", body["database"])
-				assert.Equal(t, "disabled", body["messaging"])
-				msgStats, ok := body["messaging_stats"].(map[string]any)
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, statusHealthy, body[componentDatabase])
+				assert.Equal(t, "disabled", body[componentMessaging])
+				msgStats, ok := body[messagingStatsKey].(map[string]any)
 				assert.True(t, ok)
 				assert.Len(t, msgStats, 0)
 			},
@@ -633,7 +710,7 @@ func TestRunGracefulShutdown(t *testing.T) {
 
 	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
 	fixture.messaging.ExpectClose(nil)
-	fixture.db.On("Close").Return(nil)
+	fixture.db.On(methodClose).Return(nil)
 
 	// Don't set up mock expectations - use the no-expectation path that stores signalChan
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -675,7 +752,7 @@ func TestRunPropagatesServerError(t *testing.T) {
 	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
 
 	fixture.messaging.ExpectClose(nil)
-	fixture.db.On("Close").Return(nil)
+	fixture.db.On(methodClose).Return(nil)
 
 	// Only expect Notify to be called - WaitForSignal won't be called if server fails to start
 	signalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
@@ -720,8 +797,8 @@ func TestShutdownAggregatesErrors(t *testing.T) {
 
 func TestNewWithConfigUsesConnectors(t *testing.T) {
 	cfg := defaultTestConfig()
-	cfg.Database.Host = "db-host"
-	cfg.Messaging.Broker.URL = "amqp://broker"
+	cfg.Database.Host = dbHostKey
+	cfg.Messaging.Broker.URL = amqpBrokerURL
 
 	dbMock := &testmocks.MockDatabase{}
 	msgMock := testmocks.NewMockAMQPClient()
@@ -731,12 +808,12 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	opts := &Options{
 		DatabaseConnector: func(dbCfg *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
 			dbCalled = true
-			assert.Equal(t, "db-host", dbCfg.Host)
+			assert.Equal(t, dbHostKey, dbCfg.Host)
 			return dbMock, nil
 		},
 		MessagingClientFactory: func(url string, _ logger.Logger) messaging.AMQPClient {
 			messagingCalled = true
-			assert.Equal(t, "amqp://broker", url)
+			assert.Equal(t, amqpBrokerURL, url)
 			return msgMock
 		},
 	}
@@ -873,26 +950,26 @@ func TestGetMessagingDeclarations(t *testing.T) {
 
 func TestCreateBootstrapLogger(t *testing.T) {
 	// Store original env vars
-	originalEnv := os.Getenv("APP_ENV")
-	originalLogLevel := os.Getenv("LOG_LEVEL")
+	originalEnv := os.Getenv(envVarAppEnv)
+	originalLogLevel := os.Getenv(envVarLogLevel)
 
 	defer func() {
 		// Restore original env vars
 		if originalEnv != "" {
-			os.Setenv("APP_ENV", originalEnv)
+			os.Setenv(envVarAppEnv, originalEnv)
 		} else {
-			os.Unsetenv("APP_ENV")
+			os.Unsetenv(envVarAppEnv)
 		}
 		if originalLogLevel != "" {
-			os.Setenv("LOG_LEVEL", originalLogLevel)
+			os.Setenv(envVarLogLevel, originalLogLevel)
 		} else {
-			os.Unsetenv("LOG_LEVEL")
+			os.Unsetenv(envVarLogLevel)
 		}
 	}()
 
 	t.Run("development environment settings", func(t *testing.T) {
-		os.Setenv("APP_ENV", "development")
-		os.Unsetenv("LOG_LEVEL")
+		os.Setenv(envVarAppEnv, "development")
+		os.Unsetenv(envVarLogLevel)
 
 		log := createBootstrapLogger()
 		assert.NotNil(t, log)
@@ -902,8 +979,8 @@ func TestCreateBootstrapLogger(t *testing.T) {
 	})
 
 	t.Run("production environment settings", func(t *testing.T) {
-		os.Setenv("APP_ENV", "production")
-		os.Unsetenv("LOG_LEVEL")
+		os.Setenv(envVarAppEnv, envProduction)
+		os.Unsetenv(envVarLogLevel)
 
 		log := createBootstrapLogger()
 		assert.NotNil(t, log)
@@ -913,8 +990,8 @@ func TestCreateBootstrapLogger(t *testing.T) {
 	})
 
 	t.Run("custom log level override", func(t *testing.T) {
-		os.Setenv("APP_ENV", "production")
-		os.Setenv("LOG_LEVEL", "debug")
+		os.Setenv(envVarAppEnv, envProduction)
+		os.Setenv(envVarLogLevel, envDebug)
 
 		log := createBootstrapLogger()
 		assert.NotNil(t, log)
@@ -924,8 +1001,8 @@ func TestCreateBootstrapLogger(t *testing.T) {
 	})
 
 	t.Run("empty environment defaults", func(t *testing.T) {
-		os.Unsetenv("APP_ENV")
-		os.Unsetenv("LOG_LEVEL")
+		os.Unsetenv(envVarAppEnv)
+		os.Unsetenv(envVarLogLevel)
 
 		log := createBootstrapLogger()
 		assert.NotNil(t, log)
@@ -937,7 +1014,7 @@ func TestCreateBootstrapLogger(t *testing.T) {
 
 func TestResolveServer(t *testing.T) {
 	cfg := defaultTestConfig()
-	log := logger.New("debug", true)
+	log := logger.New(envDebug, true)
 
 	t.Run("uses provided server from options", func(t *testing.T) {
 		mockServer := &stubServerRunner{}
@@ -967,10 +1044,10 @@ func TestRegisterCloser(t *testing.T) {
 
 	t.Run("registers valid closer", func(t *testing.T) {
 		closer := &stubCloser{}
-		app.registerCloser("test-closer", closer)
+		app.registerCloser(testCloser, closer)
 
 		assert.Len(t, app.closers, 1)
-		assert.Equal(t, "test-closer", app.closers[0].name)
+		assert.Equal(t, testCloser, app.closers[0].name)
 		assert.Equal(t, closer, app.closers[0].closer)
 	})
 
@@ -1005,16 +1082,16 @@ func TestNewWithConfigErrors(t *testing.T) {
 	t.Run("invalid database config causes dependency resolution error", func(t *testing.T) {
 		cfg := &config.Config{
 			App: config.AppConfig{
-				Name:    "test-app",
-				Env:     "test",
-				Version: "1.0.0",
+				Name:    appName,
+				Env:     testName,
+				Version: appVersion,
 			},
 			Log: config.LogConfig{
 				Level:  "info",
 				Pretty: false,
 			},
 			Database: config.DatabaseConfig{
-				Type:     "postgresql",
+				Type:     dbTypePostgres,
 				Host:     "", // Invalid empty host
 				Port:     0,  // Invalid port
 				Database: "",
@@ -1078,7 +1155,7 @@ func TestBuildMessagingDeclarations(t *testing.T) {
 
 func TestShutdownResource(t *testing.T) {
 	t.Run("successful closure with name", func(t *testing.T) {
-		log := logger.New("debug", true)
+		log := logger.New(envDebug, true)
 		app := &App{logger: log}
 
 		// Create a mock closer that succeeds
@@ -1095,7 +1172,7 @@ func TestShutdownResource(t *testing.T) {
 	})
 
 	t.Run("successful closure with empty name", func(t *testing.T) {
-		log := logger.New("debug", true)
+		log := logger.New(envDebug, true)
 		app := &App{logger: log}
 
 		mockCloser := &stubCloser{}
@@ -1111,13 +1188,13 @@ func TestShutdownResource(t *testing.T) {
 	})
 
 	t.Run("failed closure appends error", func(t *testing.T) {
-		log := logger.New("debug", true)
+		log := logger.New(envDebug, true)
 		app := &App{logger: log}
 
 		// Create a mock closer that fails
 		mockCloser := &failingCloser{}
 		closer := namedCloser{
-			name:   "failing-resource",
+			name:   failingResource,
 			closer: mockCloser,
 		}
 
@@ -1125,8 +1202,8 @@ func TestShutdownResource(t *testing.T) {
 		app.shutdownResource(closer, &errs)
 
 		assert.Len(t, errs, 1)
-		assert.Contains(t, errs[0].Error(), "failing-resource")
-		assert.Contains(t, errs[0].Error(), "close failed")
+		assert.Contains(t, errs[0].Error(), failingResource)
+		assert.Contains(t, errs[0].Error(), errorCloseFailed)
 	})
 }
 
@@ -1226,7 +1303,7 @@ func (c *stubCloser) Close() error { return nil }
 
 type failingCloser struct{}
 
-func (c *failingCloser) Close() error { return fmt.Errorf("close failed") }
+func (c *failingCloser) Close() error { return errors.New(errorCloseFailed) }
 
 type describerModule struct{}
 

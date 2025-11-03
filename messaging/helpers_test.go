@@ -7,12 +7,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// Test constants to avoid duplication
-const (
-	testValue1 = "value1"
-	testValue2 = "value2"
-)
-
 // Test constructor functions
 
 func TestNewTopicExchange(t *testing.T) {
@@ -20,7 +14,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("test.exchange")
 
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, "topic", exchange.Type)
+		assert.Equal(t, exchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 		assert.False(t, exchange.AutoDelete)
 		assert.False(t, exchange.Internal)
@@ -33,7 +27,7 @@ func TestNewTopicExchange(t *testing.T) {
 		exchange := NewTopicExchange("")
 
 		assert.Equal(t, "", exchange.Name)
-		assert.Equal(t, "topic", exchange.Type)
+		assert.Equal(t, exchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 	})
 
@@ -41,11 +35,11 @@ func TestNewTopicExchange(t *testing.T) {
 		ex1 := NewTopicExchange("exchange1")
 		ex2 := NewTopicExchange("exchange2")
 
-		ex1.Args["key"] = testValue1
-		ex2.Args["key"] = testValue2
+		ex1.Args[testKey] = testValue1
+		ex2.Args[testKey] = testValue2
 
-		assert.Equal(t, testValue1, ex1.Args["key"])
-		assert.Equal(t, testValue2, ex2.Args["key"])
+		assert.Equal(t, testValue1, ex1.Args[testKey])
+		assert.Equal(t, testValue2, ex2.Args[testKey])
 	})
 }
 
@@ -73,11 +67,11 @@ func TestNewQueue(t *testing.T) {
 		q1 := NewQueue("queue1")
 		q2 := NewQueue("queue2")
 
-		q1.Args["ttl"] = 3600
-		q2.Args["ttl"] = 7200
+		q1.Args[mapKeyTTL] = ttlValue3600
+		q2.Args[mapKeyTTL] = ttlValue7200
 
-		assert.Equal(t, 3600, q1.Args["ttl"])
-		assert.Equal(t, 7200, q2.Args["ttl"])
+		assert.Equal(t, ttlValue3600, q1.Args[mapKeyTTL])
+		assert.Equal(t, ttlValue7200, q2.Args[mapKeyTTL])
 	})
 }
 
@@ -118,9 +112,9 @@ func TestNewPublisher(t *testing.T) {
 		opts := &PublisherOptions{
 			Exchange:    "test.exchange",
 			RoutingKey:  "test.key",
-			EventType:   "TestEvent",
+			EventType:   eventTestEvent,
 			Description: "Test event publisher",
-			Headers:     map[string]any{"version": "1.0", "source": "test"},
+			Headers:     map[string]any{mapKeyVersion: version10, "source": "test"},
 			Mandatory:   true,
 			Immediate:   true,
 		}
@@ -129,11 +123,11 @@ func TestNewPublisher(t *testing.T) {
 
 		assert.Equal(t, "test.exchange", publisher.Exchange)
 		assert.Equal(t, "test.key", publisher.RoutingKey)
-		assert.Equal(t, "TestEvent", publisher.EventType)
+		assert.Equal(t, eventTestEvent, publisher.EventType)
 		assert.Equal(t, "Test event publisher", publisher.Description)
 		assert.True(t, publisher.Mandatory)
 		assert.True(t, publisher.Immediate)
-		assert.Equal(t, "1.0", publisher.Headers["version"])
+		assert.Equal(t, version10, publisher.Headers[mapKeyVersion])
 		assert.Equal(t, "test", publisher.Headers["source"])
 	})
 
@@ -169,7 +163,7 @@ func TestNewPublisher(t *testing.T) {
 	})
 
 	t.Run("preserves provided headers map", func(t *testing.T) {
-		headers := map[string]any{"key": "value"}
+		headers := map[string]any{testKey: testValue}
 		opts := &PublisherOptions{
 			Exchange:   "test.exchange",
 			RoutingKey: "test.key",
@@ -179,7 +173,7 @@ func TestNewPublisher(t *testing.T) {
 		publisher := NewPublisher(opts)
 
 		assert.Equal(t, headers, publisher.Headers)
-		assert.Equal(t, "value", publisher.Headers["key"])
+		assert.Equal(t, testValue, publisher.Headers[testKey])
 	})
 }
 
@@ -189,8 +183,8 @@ func TestNewConsumer(t *testing.T) {
 	t.Run("creates consumer with all options", func(t *testing.T) {
 		opts := &ConsumerOptions{
 			Queue:       "test.queue",
-			Consumer:    "test-consumer",
-			EventType:   "TestEvent",
+			Consumer:    testConsumer,
+			EventType:   eventTestEvent,
 			Description: "Test event consumer",
 			Handler:     mockHandler,
 			AutoAck:     true,
@@ -201,8 +195,8 @@ func TestNewConsumer(t *testing.T) {
 		consumer := NewConsumer(opts)
 
 		assert.Equal(t, "test.queue", consumer.Queue)
-		assert.Equal(t, "test-consumer", consumer.Consumer)
-		assert.Equal(t, "TestEvent", consumer.EventType)
+		assert.Equal(t, testConsumer, consumer.Consumer)
+		assert.Equal(t, eventTestEvent, consumer.EventType)
 		assert.Equal(t, "Test event consumer", consumer.Description)
 		assert.Equal(t, mockHandler, consumer.Handler)
 		assert.True(t, consumer.AutoAck)
@@ -214,13 +208,13 @@ func TestNewConsumer(t *testing.T) {
 	t.Run("creates consumer with minimal options", func(t *testing.T) {
 		opts := &ConsumerOptions{
 			Queue:    "minimal.queue",
-			Consumer: "minimal-consumer",
+			Consumer: testConsumer,
 		}
 
 		consumer := NewConsumer(opts)
 
 		assert.Equal(t, "minimal.queue", consumer.Queue)
-		assert.Equal(t, "minimal-consumer", consumer.Consumer)
+		assert.Equal(t, testConsumer, consumer.Consumer)
 		assert.Equal(t, "", consumer.EventType)
 		assert.Equal(t, "", consumer.Description)
 		assert.Nil(t, consumer.Handler)
@@ -233,7 +227,7 @@ func TestNewConsumer(t *testing.T) {
 	t.Run("handles nil handler", func(t *testing.T) {
 		opts := &ConsumerOptions{
 			Queue:    "test.queue",
-			Consumer: "test-consumer",
+			Consumer: testConsumer,
 			Handler:  nil,
 		}
 
@@ -253,7 +247,7 @@ func TestDeclarationsTopicExchange(t *testing.T) {
 
 		assert.NotNil(t, exchange)
 		assert.Equal(t, "test.exchange", exchange.Name)
-		assert.Equal(t, "topic", exchange.Type)
+		assert.Equal(t, exchangeTypeTopic, exchange.Type)
 		assert.True(t, exchange.Durable)
 
 		// Verify it's registered
@@ -475,8 +469,8 @@ func TestDeclarationsConsumer(t *testing.T) {
 
 		opts := &ConsumerOptions{
 			Queue:       "test.queue",
-			Consumer:    "test-consumer",
-			EventType:   "TestEvent",
+			Consumer:    testConsumer,
+			EventType:   eventTestEvent,
 			Description: "Test consumer",
 			Handler:     mockHandler,
 		}
@@ -485,11 +479,12 @@ func TestDeclarationsConsumer(t *testing.T) {
 
 		assert.NotNil(t, consumer)
 		assert.Equal(t, "test.queue", consumer.Queue)
-		assert.Equal(t, "TestEvent", consumer.EventType)
+		assert.Equal(t, eventTestEvent, consumer.EventType)
 
 		// Verify consumer registered
-		assert.Len(t, decls.Consumers, 1)
-		assert.Equal(t, "test.queue", decls.Consumers[0].Queue)
+		consumers := decls.GetConsumers()
+		assert.Len(t, consumers, 1)
+		assert.Equal(t, "test.queue", consumers[0].Queue)
 
 		// Verify queue NOT auto-registered
 		assert.Len(t, decls.Queues, 0)
@@ -511,7 +506,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.NotNil(t, consumer)
 
 		// Verify both consumer and queue registered
-		assert.Len(t, decls.Consumers, 1)
+		assert.Len(t, decls.GetConsumers(), 1)
 		assert.Len(t, decls.Queues, 1)
 		assert.Equal(t, "auto.queue", decls.Queues["auto.queue"].Name)
 	})
@@ -527,7 +522,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 		newQueue := NewQueue("existing.queue")
 		opts := &ConsumerOptions{
 			Queue:    "existing.queue",
-			Consumer: "test-consumer",
+			Consumer: testConsumer,
 			Handler:  mockHandler,
 		}
 
@@ -552,7 +547,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 
 		assert.NotNil(t, c1)
 		assert.NotNil(t, c2)
-		assert.Len(t, decls.Consumers, 2)
+		assert.Len(t, decls.GetConsumers(), 2)
 	})
 }
 
@@ -573,13 +568,13 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 			RoutingKey:  "order.created",
 			EventType:   "OrderCreated",
 			Description: "New order events",
-			Headers:     map[string]any{"version": "1.0"},
+			Headers:     map[string]any{mapKeyVersion: version10},
 		}, nil)
 
 		// Declare consumer (queue already registered, pass nil)
 		consumer := decls.DeclareConsumer(&ConsumerOptions{
 			Queue:       queue.Name,
-			Consumer:    "order-processor",
+			Consumer:    testConsumer,
 			EventType:   "OrderCreated",
 			Description: "Process new orders",
 			Handler:     &mockHandler{},
@@ -620,7 +615,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 
 		decls.DeclareConsumer(&ConsumerOptions{
 			Queue:    queue.Name,
-			Consumer: "notification-handler",
+			Consumer: testConsumer,
 		}, queue)
 
 		// Binding still needs explicit declaration
@@ -631,7 +626,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		assert.Len(t, decls.Queues, 1)
 		assert.Len(t, decls.Bindings, 1)
 		assert.Len(t, decls.Publishers, 1)
-		assert.Len(t, decls.Consumers, 1)
+		assert.Len(t, decls.GetConsumers(), 1)
 
 		err := decls.Validate()
 		assert.NoError(t, err)
@@ -651,7 +646,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		}, nil)
 		decls.DeclareConsumer(&ConsumerOptions{
 			Queue:    "test.queue",
-			Consumer: "test-consumer",
+			Consumer: testConsumer,
 		}, nil)
 
 		// Set up mock expectations
@@ -676,7 +671,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		decls.Exchanges["clone.exchange"].Args["custom"] = "original"
 
 		decls.DeclareQueue("clone.queue")
-		decls.Queues["clone.queue"].Args["ttl"] = 3600
+		decls.Queues["clone.queue"].Args[mapKeyTTL] = ttlValue3600
 
 		// Clone
 		clone := decls.Clone()
@@ -690,7 +685,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		assert.Equal(t, "original", clonedExchange.Args["custom"])
 
 		// Modify original registered copy
-		decls.Exchanges["clone.exchange"].Args["custom"] = "modified"
+		decls.Exchanges["clone.exchange"].Args["custom"] = modifiedValue
 
 		// Clone should be unaffected
 		assert.Equal(t, "original", clonedExchange.Args["custom"])

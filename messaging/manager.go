@@ -41,8 +41,9 @@ type Manager struct {
 	idleTTL    time.Duration
 
 	// Consumers (long-lived)
-	consMu    sync.RWMutex
-	consumers map[string]*consumerEntry
+	consMu        sync.RWMutex
+	consumers     map[string]*consumerEntry
+	replayedHashs map[string]uint64 // Tracks declaration hashes to prevent duplicate replay
 
 	// Cleanup management
 	cleanupMu sync.Mutex
@@ -99,6 +100,7 @@ func NewMessagingManager(resourceSource TenantMessagingResourceSource, log logge
 		maxPubs:        opts.MaxPublishers,
 		idleTTL:        opts.IdleTTL,
 		consumers:      make(map[string]*consumerEntry),
+		replayedHashs:  make(map[string]uint64),
 	}
 }
 
@@ -118,9 +120,31 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
 
+	// Compute hash of incoming declarations for idempotency check
+	declHash := decls.Hash()
+
+	// Check if we've already replayed these exact declarations
+	if existingHash, exists := m.replayedHashs[key]; exists {
+		if existingHash == declHash {
+			// Idempotency: same declarations already replayed, skip
+			m.logger.Debug().
+				Str("key", key).
+				Uint64("hash", declHash).
+				Msg("Declarations already replayed for key - skipping (idempotent)")
+			return nil
+		}
+		// Different declarations for same key - this is an error
+		return fmt.Errorf(
+			"messaging: attempt to replay different declarations for key %s (existing hash=%d, new hash=%d)",
+			key, existingHash, declHash,
+		)
+	}
+
 	// Check if consumers already exist and are started
 	if entry, exists := m.consumers[key]; exists {
 		if entry.started {
+			// Record hash for future idempotency checks
+			m.replayedHashs[key] = declHash
 			return nil // Already set up
 		}
 	}
@@ -159,9 +183,13 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		key:      key,
 	}
 
+	// Record hash for future idempotency checks
+	m.replayedHashs[key] = declHash
+
 	m.logger.Info().
 		Str("key", key).
-		Int("consumers", len(decls.Consumers)).
+		Int("consumers", len(decls.GetConsumers())).
+		Uint64("declaration_hash", declHash).
 		Msg("Consumers started for key")
 
 	return nil

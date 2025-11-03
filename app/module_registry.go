@@ -11,27 +11,40 @@ import (
 // ModuleRegistry manages the registration and lifecycle of application modules.
 // It handles module initialization, route registration, messaging setup, and shutdown.
 type ModuleRegistry struct {
-	modules []Module
-	deps    *ModuleDeps
-	logger  logger.Logger
+	modules         []Module
+	deps            *ModuleDeps
+	logger          logger.Logger
+	registeredNames map[string]Module // Tracks registered modules to prevent duplicates
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
 // It initializes an empty registry ready to accept module registrations.
 func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 	return &ModuleRegistry{
-		modules: make([]Module, 0),
-		deps:    deps,
-		logger:  deps.Logger,
+		modules:         make([]Module, 0),
+		deps:            deps,
+		logger:          deps.Logger,
+		registeredNames: make(map[string]Module),
 	}
 }
 
 // Register adds a module to the registry and initializes it.
 // It calls the module's Init method with the injected dependencies.
+// Returns an error if a module with the same name is already registered.
 // Special handling: If the module implements app.JobRegistrar, it is automatically
 // wired into ModuleDeps.Scheduler for other modules to use.
+//
+// IMPORTANT: Duplicate module errors are unrecoverable and must be handled with log.Fatal().
 func (r *ModuleRegistry) Register(module Module) error {
 	moduleName := module.Name()
+
+	// Deduplication: check if module already registered
+	if existing, ok := r.registeredNames[moduleName]; ok {
+		return fmt.Errorf(
+			"module registry: duplicate module '%s' detected (already registered %T)",
+			moduleName, existing,
+		)
+	}
 
 	r.logger.Info().
 		Str("module", moduleName).
@@ -50,11 +63,18 @@ func (r *ModuleRegistry) Register(module Module) error {
 			Msg("Scheduler module registered - available to other modules via deps.Scheduler")
 	}
 
+	// Add to deduplication map BEFORE appending to modules slice
+	r.registeredNames[moduleName] = module
+
 	// Add to lifecycle registry
 	r.modules = append(r.modules, module)
 
 	// Register with metadata registry for introspection
 	DefaultModuleRegistry.RegisterModule(moduleName, module, getModulePackage(module))
+
+	r.logger.Info().
+		Str("module", moduleName).
+		Msg("Registered module")
 
 	return nil
 }

@@ -8,14 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const (
-	testExchange = "test-exchange"
-	testRoute    = "test.route"
-	testQueue    = "test-queue"
-	testConsumer = "test-consumer"
-	testMessage  = "test message"
-)
-
 // MockClient implements the Client interface for testing
 type MockClient struct {
 	isReady bool

@@ -13,26 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test constants for commonly used string literals
-const (
-	testExchangeName  = "test-exchange"
-	testQueueName     = "test-queue"
-	testKeyValue      = "test.key"
-	testEventType     = "test-event"
-	testExchange1Name = "test-exchange-1"
-	testExchange2Name = "test-exchange-2"
-	testQueue1Name    = "test-queue-1"
-	testQueue2Name    = "test-queue-2"
-	lateExchangeName  = "late-exchange"
-	lateQueueName     = "late-queue"
-	testKeyName       = "test-key"
-	testValueContent  = "test-value"
-	newKeyName        = "new-key"
-	testMessageID     = "test-message-id"
-	testRoutingKey    = "test.routing.key"
-	testMessageBody   = "test message body"
-)
-
 // ===== Registry Infrastructure Management Tests =====
 
 // mockAMQPClient implements AMQPClient for testing registry functionality
@@ -195,7 +175,8 @@ func TestNewRegistrySimple(t *testing.T) {
 	assert.NotNil(t, registry.queues)
 	assert.NotNil(t, registry.bindings)
 	assert.NotNil(t, registry.publishers)
-	assert.NotNil(t, registry.consumers)
+	assert.NotNil(t, registry.consumerIndex)
+	assert.NotNil(t, registry.consumerOrder)
 	assert.False(t, registry.declared)
 	assert.False(t, registry.consumersActive)
 }

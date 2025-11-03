@@ -1,29 +1,44 @@
 package messaging
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"maps"
+	"math"
+	"slices"
 )
+
+// consumerKey uniquely identifies a consumer declaration.
+// The combination of Queue + Consumer tag + EventType must be unique across all registrations.
+type consumerKey struct {
+	Queue     string
+	Consumer  string
+	EventType string
+}
 
 // Declarations stores messaging infrastructure declarations made by modules at startup.
 // This is a pure data structure (no client dependencies) that can be validated once
 // and replayed to multiple per-tenant registries.
 type Declarations struct {
-	Exchanges  map[string]*ExchangeDeclaration
-	Queues     map[string]*QueueDeclaration
-	Bindings   []*BindingDeclaration
-	Publishers []*PublisherDeclaration
-	Consumers  []*ConsumerDeclaration
+	Exchanges     map[string]*ExchangeDeclaration
+	Queues        map[string]*QueueDeclaration
+	Bindings      []*BindingDeclaration
+	Publishers    []*PublisherDeclaration
+	consumerIndex map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
+	consumerOrder []consumerKey                        // Deterministic iteration order
 }
 
 // NewDeclarations creates a new empty declarations store.
 func NewDeclarations() *Declarations {
 	return &Declarations{
-		Exchanges:  make(map[string]*ExchangeDeclaration),
-		Queues:     make(map[string]*QueueDeclaration),
-		Bindings:   make([]*BindingDeclaration, 0),
-		Publishers: make([]*PublisherDeclaration, 0),
-		Consumers:  make([]*ConsumerDeclaration, 0),
+		Exchanges:     make(map[string]*ExchangeDeclaration),
+		Queues:        make(map[string]*QueueDeclaration),
+		Bindings:      make([]*BindingDeclaration, 0),
+		Publishers:    make([]*PublisherDeclaration, 0),
+		consumerIndex: make(map[consumerKey]*ConsumerDeclaration),
+		consumerOrder: make([]consumerKey, 0),
 	}
 }
 
@@ -125,9 +140,30 @@ func (d *Declarations) RegisterPublisher(p *PublisherDeclaration) {
 }
 
 // RegisterConsumer adds a consumer declaration to the store.
+// Panics if a consumer with the same queue+consumer+event_type already exists.
 func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 	if c == nil {
 		return
+	}
+
+	key := consumerKey{
+		Queue:     c.Queue,
+		Consumer:  c.Consumer,
+		EventType: c.EventType,
+	}
+
+	// Deduplication: panic if duplicate registration detected
+	if d.consumerIndex == nil {
+		d.consumerIndex = make(map[consumerKey]*ConsumerDeclaration)
+	}
+
+	if _, exists := d.consumerIndex[key]; exists {
+		panic(fmt.Sprintf(
+			"messaging: duplicate consumer declaration detected\n"+
+				"  queue=%s consumer=%s event_type=%s\n"+
+				"  Ensure each DeclareConsumer call is unique within DeclareMessaging",
+			c.Queue, c.Consumer, c.EventType,
+		))
 	}
 
 	// Deep copy to prevent shared mutable state
@@ -143,7 +179,18 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 		Handler:     c.Handler, // Handlers are typically stateless, so no deep copy needed
 	}
 
-	d.Consumers = append(d.Consumers, decl)
+	d.consumerIndex[key] = decl
+	d.consumerOrder = append(d.consumerOrder, key)
+}
+
+// GetConsumers returns all consumer declarations in registration order.
+// Used internally by ReplayToRegistry and for observability/metrics.
+func (d *Declarations) GetConsumers() []*ConsumerDeclaration {
+	result := make([]*ConsumerDeclaration, 0, len(d.consumerOrder))
+	for _, key := range d.consumerOrder {
+		result = append(result, d.consumerIndex[key])
+	}
+	return result
 }
 
 // Validate checks the integrity of all declarations.
@@ -160,7 +207,7 @@ func (d *Declarations) Validate() error {
 	}
 
 	// Check that all consumer queues exist
-	for _, consumer := range d.Consumers {
+	for _, consumer := range d.GetConsumers() {
 		if _, exists := d.Queues[consumer.Queue]; !exists {
 			return fmt.Errorf("consumer references non-existent queue: %s", consumer.Queue)
 		}
@@ -204,7 +251,7 @@ func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
 	}
 
 	// Register consumers (depend on queues)
-	for _, consumer := range d.Consumers {
+	for _, consumer := range d.GetConsumers() {
 		reg.RegisterConsumer(consumer)
 	}
 
@@ -227,7 +274,7 @@ func (d *Declarations) Stats() DeclarationStats {
 		Queues:     len(d.Queues),
 		Bindings:   len(d.Bindings),
 		Publishers: len(d.Publishers),
-		Consumers:  len(d.Consumers),
+		Consumers:  len(d.consumerIndex),
 	}
 }
 
@@ -299,8 +346,9 @@ func (d *Declarations) Clone() *Declarations {
 		clone.Publishers = append(clone.Publishers, clonePublisher)
 	}
 
-	// Clone consumers
-	for _, consumer := range d.Consumers {
+	// Clone consumers (preserve registration order)
+	for _, key := range d.consumerOrder {
+		consumer := d.consumerIndex[key]
 		cloneConsumer := &ConsumerDeclaration{
 			Queue:       consumer.Queue,
 			Consumer:    consumer.Consumer,
@@ -312,8 +360,134 @@ func (d *Declarations) Clone() *Declarations {
 			Description: consumer.Description,
 			Handler:     consumer.Handler, // Handlers are stateless, so shallow copy is fine
 		}
-		clone.Consumers = append(clone.Consumers, cloneConsumer)
+		cloneKey := consumerKey{
+			Queue:     consumer.Queue,
+			Consumer:  consumer.Consumer,
+			EventType: consumer.EventType,
+		}
+		clone.consumerIndex[cloneKey] = cloneConsumer
+		clone.consumerOrder = append(clone.consumerOrder, cloneKey)
 	}
 
 	return clone
+}
+
+// Hash generates a deterministic hash of all declarations.
+// This is used by Manager to detect duplicate replay attempts (idempotency).
+// The hash is stable across multiple calls and does not include handler functions.
+func (d *Declarations) Hash() uint64 {
+	h := fnv.New64a()
+
+	// Hash exchanges (deterministic via sorted keys)
+	exchangeKeys := slices.Sorted(maps.Keys(d.Exchanges))
+	for _, name := range exchangeKeys {
+		ex := d.Exchanges[name]
+		h.Write([]byte(ex.Name))
+		h.Write([]byte(ex.Type))
+		writeBool(h, ex.Durable)
+		writeBool(h, ex.AutoDelete)
+		writeBool(h, ex.Internal)
+		writeBool(h, ex.NoWait)
+		writeMapArgs(h, ex.Args)
+	}
+
+	// Hash queues (deterministic via sorted keys)
+	queueKeys := slices.Sorted(maps.Keys(d.Queues))
+	for _, name := range queueKeys {
+		q := d.Queues[name]
+		h.Write([]byte(q.Name))
+		writeBool(h, q.Durable)
+		writeBool(h, q.AutoDelete)
+		writeBool(h, q.Exclusive)
+		writeBool(h, q.NoWait)
+		writeMapArgs(h, q.Args)
+	}
+
+	// Hash bindings (already in insertion order)
+	for _, b := range d.Bindings {
+		h.Write([]byte(b.Queue))
+		h.Write([]byte(b.Exchange))
+		h.Write([]byte(b.RoutingKey))
+		writeBool(h, b.NoWait)
+		writeMapArgs(h, b.Args)
+	}
+
+	// Hash publishers (already in insertion order)
+	for _, p := range d.Publishers {
+		h.Write([]byte(p.Exchange))
+		h.Write([]byte(p.RoutingKey))
+		h.Write([]byte(p.EventType))
+		h.Write([]byte(p.Description))
+		writeBool(h, p.Mandatory)
+		writeBool(h, p.Immediate)
+		writeMapArgs(h, p.Headers)
+	}
+
+	// Hash consumers (use consumerOrder for deterministic iteration)
+	for _, key := range d.consumerOrder {
+		c := d.consumerIndex[key]
+		h.Write([]byte(c.Queue))
+		h.Write([]byte(c.Consumer))
+		h.Write([]byte(c.EventType))
+		h.Write([]byte(c.Description))
+		writeBool(h, c.AutoAck)
+		writeBool(h, c.Exclusive)
+		writeBool(h, c.NoLocal)
+		writeBool(h, c.NoWait)
+		// NOTE: Handler functions are NOT hashable (intentional)
+	}
+
+	return h.Sum64()
+}
+
+// writeBool writes a boolean value to the hash as a single byte
+func writeBool(h hash.Hash, value bool) {
+	var b byte
+	if value {
+		b = 1
+	}
+	h.Write([]byte{b})
+}
+
+// writeMapArgs writes a map[string]any to the hash in deterministic order
+func writeMapArgs(h hash.Hash, args map[string]any) {
+	if len(args) == 0 {
+		return
+	}
+
+	// Sort keys for deterministic hashing
+	keys := slices.Sorted(maps.Keys(args))
+	for _, key := range keys {
+		h.Write([]byte(key))
+		// Hash the value based on its type
+		switch v := args[key].(type) {
+		case string:
+			h.Write([]byte(v))
+		case int:
+			writeInt64(h, int64(v))
+		case int64:
+			writeInt64(h, v)
+		case bool:
+			writeBool(h, v)
+		case float64:
+			writeFloat64(h, v)
+		default:
+			// For other types, use fmt.Fprintf (not perfect but stable)
+			fmt.Fprintf(h, "%v", v)
+		}
+	}
+}
+
+// writeInt64 writes an int64 to the hash
+func writeInt64(h hash.Hash, value int64) {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(value)) //nolint:gosec // G115: Intentional int64->uint64 for hashing
+	h.Write(buf)
+}
+
+// writeFloat64 writes a float64 to the hash
+func writeFloat64(h hash.Hash, value float64) {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, math.Float64bits(value))
+	h.Write(buf)
 }
