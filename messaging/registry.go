@@ -44,14 +44,18 @@ type RegistryInterface interface {
 // It ensures queues, exchanges, and bindings are properly declared before use.
 // It also manages consumer lifecycle and handles message routing to handlers.
 type Registry struct {
-	client          AMQPClient
-	logger          logger.Logger
-	exchanges       map[string]*ExchangeDeclaration
-	queues          map[string]*QueueDeclaration
-	bindings        []*BindingDeclaration
-	publishers      []*PublisherDeclaration
-	consumers       []*ConsumerDeclaration
+	client     AMQPClient
+	logger     logger.Logger
+	exchanges  map[string]*ExchangeDeclaration
+	queues     map[string]*QueueDeclaration
+	bindings   []*BindingDeclaration
+	publishers []*PublisherDeclaration
+	// Mutex protects: consumerIndex, consumerOrder, consumersActive, declared
+	// NOTE: GoBricks startup is single-threaded, but multi-tenant scenarios
+	// may have concurrent registry access during tenant initialization.
 	mu              sync.RWMutex
+	consumerIndex   map[consumerKey]*ConsumerDeclaration // Defense-in-depth deduplication
+	consumerOrder   []consumerKey                        // Deterministic iteration order
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
@@ -114,13 +118,14 @@ type ConsumerDeclaration struct {
 // NewRegistry creates a new messaging registry
 func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 	return &Registry{
-		client:     client,
-		logger:     log,
-		exchanges:  make(map[string]*ExchangeDeclaration),
-		queues:     make(map[string]*QueueDeclaration),
-		bindings:   make([]*BindingDeclaration, 0),
-		publishers: make([]*PublisherDeclaration, 0),
-		consumers:  make([]*ConsumerDeclaration, 0),
+		client:        client,
+		logger:        log,
+		exchanges:     make(map[string]*ExchangeDeclaration),
+		queues:        make(map[string]*QueueDeclaration),
+		bindings:      make([]*BindingDeclaration, 0),
+		publishers:    make([]*PublisherDeclaration, 0),
+		consumerIndex: make(map[consumerKey]*ConsumerDeclaration),
+		consumerOrder: make([]consumerKey, 0),
 	}
 }
 
@@ -200,9 +205,32 @@ func (r *Registry) RegisterConsumer(declaration *ConsumerDeclaration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.consumers = append(r.consumers, declaration)
+	if r.consumerIndex == nil {
+		r.consumerIndex = make(map[consumerKey]*ConsumerDeclaration)
+	}
+
+	key := consumerKey{
+		Queue:     declaration.Queue,
+		Consumer:  declaration.Consumer,
+		EventType: declaration.EventType,
+	}
+
+	// Defense-in-depth: warn and skip if duplicate detected during replay
+	if _, exists := r.consumerIndex[key]; exists {
+		r.logger.Warn().
+			Str("queue", key.Queue).
+			Str("consumer", key.Consumer).
+			Str("event_type", key.EventType).
+			Msg("duplicate consumer encountered during registry replay - skipping second registration")
+		return
+	}
+
+	r.consumerIndex[key] = declaration
+	r.consumerOrder = append(r.consumerOrder, key)
+
 	r.logger.Debug().
 		Str("queue", declaration.Queue).
+		Str("consumer", declaration.Consumer).
 		Str("event_type", declaration.EventType).
 		Msg("Registered consumer")
 }
@@ -323,23 +351,39 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 
 	// Count consumers with handlers
 	consumersWithHandlers := 0
-	for _, consumer := range r.consumers {
+	for _, key := range r.consumerOrder {
+		consumer := r.consumerIndex[key]
 		if consumer.Handler != nil {
 			consumersWithHandlers++
 		}
 	}
 
 	r.logger.Info().
-		Int("total_consumers", len(r.consumers)).
+		Int("total_consumers", len(r.consumerIndex)).
 		Int("consumers_with_handlers", consumersWithHandlers).
 		Msg("Starting message consumers")
+
+	// Diagnostic: Detect duplicate queue consumers (warning only, not blocking)
+	queueCounts := make(map[string]int)
+	for _, key := range r.consumerOrder {
+		queueCounts[key.Queue]++
+	}
+	for queue, count := range queueCounts {
+		if count > 1 {
+			r.logger.Warn().
+				Str("queue", queue).
+				Int("consumer_count", count).
+				Msg("Multiple consumers registered for same queue - may indicate duplicate declarations")
+		}
+	}
 
 	// Create cancellation context for all consumers
 	consumerCtx, cancel := context.WithCancel(ctx)
 	r.cancelConsumers = cancel
 
 	// Start each consumer with a handler
-	for _, consumer := range r.consumers {
+	for _, key := range r.consumerOrder {
+		consumer := r.consumerIndex[key]
 		if consumer.Handler == nil {
 			r.logger.Debug().
 				Str("queue", consumer.Queue).
@@ -526,8 +570,10 @@ func (r *Registry) GetConsumers() []*ConsumerDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	consumers := make([]*ConsumerDeclaration, len(r.consumers))
-	copy(consumers, r.consumers)
+	consumers := make([]*ConsumerDeclaration, 0, len(r.consumerOrder))
+	for _, key := range r.consumerOrder {
+		consumers = append(consumers, r.consumerIndex[key])
+	}
 	return consumers
 }
 
@@ -549,7 +595,8 @@ func (r *Registry) ValidateConsumer(queue string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, cons := range r.consumers {
+	for _, key := range r.consumerOrder {
+		cons := r.consumerIndex[key]
 		if cons.Queue == queue {
 			return true
 		}

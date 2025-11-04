@@ -38,6 +38,38 @@ const (
 	statusActive   = "active"
 	statusInactive = "inactive"
 	statusPending  = "pending"
+	statusPaid     = "paid"
+	statusDeleted  = "deleted"
+
+	// Table names (heavily duplicated across tests)
+	tableUsers    = "users"
+	tableProfiles = "profiles"
+	tableProducts = "products"
+	tableOrders   = "orders"
+	tableAccounts = "accounts"
+
+	// Column names (commonly used)
+	colID       = "id"
+	colName     = "name"
+	colEmail    = "email"
+	colStatus   = "status"
+	colLevel    = "level"
+	colPrice    = "price"
+	colCategory = "category"
+
+	// Struct field names (for Columns tests)
+	fieldID     = "ID"
+	fieldName   = "Name"
+	fieldEmail  = "Email"
+	fieldStatus = "Status"
+	fieldNumber = "Number"
+	fieldLevel  = "Level"
+
+	// Test values
+	testJohn   = "John"
+	testVideo  = "video"
+	testSQLite = "sqlite"
+	selectAll  = "*"
 )
 
 // Test structs for columns feature
@@ -65,7 +97,7 @@ type IntegrationProduct struct {
 func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike("name", "john"))
+	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike(colName, "john"))
 
 	assert.Equal(t, "name ILIKE ?", sql)
 	require.Len(t, args, 1)
@@ -75,7 +107,7 @@ func TestBuildCaseInsensitiveLikePostgreSQL(t *testing.T) {
 func TestBuildCaseInsensitiveLikeOracle(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike("name", "john"))
+	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike(colName, "john"))
 
 	assert.Equal(t, "UPPER(name) LIKE ?", sql)
 	require.Len(t, args, 1)
@@ -85,7 +117,7 @@ func TestBuildCaseInsensitiveLikeOracle(t *testing.T) {
 func TestBuildCaseInsensitiveLikeDefault(t *testing.T) {
 	qb := NewQueryBuilder("mysql")
 
-	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike("name", "john"))
+	sql, args := toSQL(t, qb.BuildCaseInsensitiveLike(colName, "john"))
 
 	assert.Equal(t, "name LIKE ?", sql)
 	require.Len(t, args, 1)
@@ -95,7 +127,7 @@ func TestBuildCaseInsensitiveLikeDefault(t *testing.T) {
 func TestPaginateSkipsZeroValues(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	query := qb.Select("*").From("users").Paginate(0, 0)
+	query := qb.Select(selectAll).From(tableUsers).Paginate(0, 0)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -106,7 +138,7 @@ func TestPaginateSkipsZeroValues(t *testing.T) {
 func TestPaginateAppliesPositiveValues(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	query := qb.Select("*").From("users").Paginate(5, 10)
+	query := qb.Select(selectAll).From(tableUsers).Paginate(5, 10)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -117,7 +149,7 @@ func TestPaginateAppliesPositiveValues(t *testing.T) {
 func TestPaginateOracleUsesSuffix(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	query := qb.Select("*").From("users").Paginate(5, 0)
+	query := qb.Select(selectAll).From(tableUsers).Paginate(5, 0)
 
 	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
@@ -143,7 +175,7 @@ func TestBuildCurrentTimestampByVendor(t *testing.T) {
 	}{
 		{vendor: dbtypes.PostgreSQL, expected: "NOW()"},
 		{vendor: dbtypes.Oracle, expected: "SYSDATE"},
-		{vendor: "sqlite", expected: "NOW()"},
+		{vendor: testSQLite, expected: "NOW()"},
 	}
 
 	for _, tt := range cases {
@@ -181,7 +213,7 @@ func TestBuildBooleanValueByVendor(t *testing.T) {
 		{vendor: dbtypes.PostgreSQL, input: true, expect: true},
 		{vendor: dbtypes.Oracle, input: true, expect: 1},
 		{vendor: dbtypes.Oracle, input: false, expect: 0},
-		{vendor: "sqlite", input: false, expect: false},
+		{vendor: testSQLite, input: false, expect: false},
 	}
 
 	for _, tt := range cases {
@@ -200,7 +232,7 @@ func TestEscapeIdentifierByVendor(t *testing.T) {
 	}{
 		{vendor: dbtypes.PostgreSQL, name: "foo", expected: `"foo"`},
 		{vendor: dbtypes.Oracle, name: "bar", expected: `"bar"`},
-		{vendor: "sqlite", name: "baz", expected: `"baz"`},
+		{vendor: testSQLite, name: "baz", expected: `"baz"`},
 	}
 
 	for _, tt := range cases {
@@ -216,7 +248,7 @@ func TestVendor(t *testing.T) {
 		dbtypes.PostgreSQL,
 		dbtypes.Oracle,
 		"mysql",
-		"sqlite",
+		testSQLite,
 	}
 
 	for _, vendor := range cases {
@@ -228,7 +260,7 @@ func TestVendor(t *testing.T) {
 func TestInsertWithColumns(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	builder := qb.InsertWithColumns("users", "name", "email").Values("John", testEmail)
+	builder := qb.InsertWithColumns(tableUsers, colName, colEmail).Values(testJohn, testEmail)
 	sql, _, err := builder.ToSql()
 	require.NoError(t, err)
 	assert.Contains(t, sql, `INSERT INTO users (name,email)`)
@@ -240,31 +272,31 @@ func TestUpdate(t *testing.T) {
 	f := qb.Filter()
 
 	t.Run("Simple UPDATE with Set", func(t *testing.T) {
-		builder := qb.Update("users")
-		sql, args, err := builder.Set("name", "John").ToSQL()
+		builder := qb.Update(tableUsers)
+		sql, args, err := builder.Set(colName, testJohn).ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "UPDATE users SET name = $1")
-		assert.Equal(t, []any{"John"}, args)
+		assert.Equal(t, []any{testJohn}, args)
 	})
 
 	t.Run("UPDATE with WHERE filter", func(t *testing.T) {
-		builder := qb.Update("users")
+		builder := qb.Update(tableUsers)
 		sql, args, err := builder.
-			Set("name", "John").
-			Where(f.Eq("id", 123)).
+			Set(colName, testJohn).
+			Where(f.Eq(colID, 123)).
 			ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "UPDATE users SET name = $1")
 		assert.Contains(t, sql, "WHERE id = $2")
-		assert.Equal(t, []any{"John", 123}, args)
+		assert.Equal(t, []any{testJohn, 123}, args)
 	})
 
 	t.Run("UPDATE with SetMap", func(t *testing.T) {
-		builder := qb.Update("users")
+		builder := qb.Update(tableUsers)
 		sql, _, err := builder.
 			SetMap(map[string]any{
-				"name":   "John",
-				"status": "active",
+				colName:   testJohn,
+				colStatus: statusActive,
 			}).
 			ToSQL()
 		require.NoError(t, err)
@@ -279,27 +311,27 @@ func TestDelete(t *testing.T) {
 	f := qb.Filter()
 
 	t.Run("Simple DELETE", func(t *testing.T) {
-		builder := qb.Delete("users")
+		builder := qb.Delete(tableUsers)
 		sql, _, err := builder.ToSQL()
 		require.NoError(t, err)
 		assert.Equal(t, "DELETE FROM users", sql)
 	})
 
 	t.Run("DELETE with WHERE filter", func(t *testing.T) {
-		builder := qb.Delete("users")
+		builder := qb.Delete(tableUsers)
 		sql, args, err := builder.
-			Where(f.Eq("status", "deleted")).
+			Where(f.Eq(colStatus, statusDeleted)).
 			ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "DELETE FROM users WHERE status = $1")
-		assert.Equal(t, []any{"deleted"}, args)
+		assert.Equal(t, []any{statusDeleted}, args)
 	})
 
 	t.Run("DELETE with complex filter", func(t *testing.T) {
-		builder := qb.Delete("users")
+		builder := qb.Delete(tableUsers)
 		sql, args, err := builder.
 			Where(f.And(
-				f.Eq("status", "deleted"),
+				f.Eq(colStatus, statusDeleted),
 				f.Lt("deleted_at", testDate),
 			)).
 			ToSQL()
@@ -307,7 +339,7 @@ func TestDelete(t *testing.T) {
 		assert.Contains(t, sql, "DELETE FROM users WHERE")
 		assert.Contains(t, sql, "status = ")
 		assert.Contains(t, sql, "deleted_at < ")
-		assert.Equal(t, []any{"deleted", testDate}, args)
+		assert.Equal(t, []any{statusDeleted, testDate}, args)
 	})
 }
 
@@ -323,7 +355,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereLte",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.Lte("age", 30)).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.Lte("age", 30)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE age <= $1`,
@@ -332,7 +364,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereGte",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.Gte("age", 18)).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.Gte("age", 18)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE age >= $1`,
@@ -341,7 +373,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereNotIn",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.NotIn("status", []string{"banned", "deleted"})).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.NotIn(colStatus, []string{"banned", statusDeleted})).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE status NOT IN ($1,$2)`,
@@ -350,7 +382,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereNull",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.Null("deleted_at")).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.Null("deleted_at")).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE deleted_at IS NULL`,
@@ -359,7 +391,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereNotNull",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.NotNull("email")).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.NotNull(colEmail)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE email IS NOT NULL`,
@@ -368,7 +400,7 @@ func TestWhereClauseMethods(t *testing.T) {
 			name: "WhereBetween",
 			setupQuery: func(qb *QueryBuilder) string {
 				f := qb.Filter()
-				sql, _, _ := qb.Select("*").From("users").Where(f.Between("age", 18, 65)).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Where(f.Between("age", 18, 65)).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users WHERE (age >= $1 AND age <= $2)`,
@@ -407,7 +439,7 @@ func TestWhereLike(t *testing.T) {
 		t.Run(tt.vendor, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			f := qb.Filter()
-			sql, args, err := qb.Select("*").From("users").Where(f.Like("name", "john")).ToSQL()
+			sql, args, err := qb.Select(selectAll).From(tableUsers).Where(f.Like(colName, testJohn)).ToSQL()
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedSQL, sql)
 			assert.Len(t, args, 1)
@@ -426,8 +458,8 @@ func TestJoinMethods(t *testing.T) {
 			name: "JoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
 				jf := qb.JoinFilter()
-				sql, _, _ := qb.Select("*").From("users").
-					JoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).
+					JoinOn(tableProfiles, jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
 					ToSQL()
 				return sql
 			},
@@ -437,8 +469,8 @@ func TestJoinMethods(t *testing.T) {
 			name: "LeftJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
 				jf := qb.JoinFilter()
-				sql, _, _ := qb.Select("*").From("users").
-					LeftJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).
+					LeftJoinOn(tableProfiles, jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
 					ToSQL()
 				return sql
 			},
@@ -448,8 +480,8 @@ func TestJoinMethods(t *testing.T) {
 			name: "RightJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
 				jf := qb.JoinFilter()
-				sql, _, _ := qb.Select("*").From("users").
-					RightJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).
+					RightJoinOn(tableProfiles, jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
 					ToSQL()
 				return sql
 			},
@@ -459,8 +491,8 @@ func TestJoinMethods(t *testing.T) {
 			name: "InnerJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
 				jf := qb.JoinFilter()
-				sql, _, _ := qb.Select("*").From("users").
-					InnerJoinOn("profiles", jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).
+					InnerJoinOn(tableProfiles, jf.EqColumn(testLeftJoinColumn, testRightJoinColumn)).
 					ToSQL()
 				return sql
 			},
@@ -469,7 +501,7 @@ func TestJoinMethods(t *testing.T) {
 		{
 			name: "CrossJoinOn",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").CrossJoinOn("roles").ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).CrossJoinOn("roles").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users CROSS JOIN roles`,
@@ -478,8 +510,8 @@ func TestJoinMethods(t *testing.T) {
 			name: "JoinOn with complex condition",
 			setupQuery: func(qb *QueryBuilder) string {
 				jf := qb.JoinFilter()
-				sql, _, _ := qb.Select("*").From("users").
-					JoinOn("profiles", jf.And(
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).
+					JoinOn(tableProfiles, jf.And(
 						jf.EqColumn(joinColumn, "profiles.user_id"),
 						jf.GtColumn("profiles.created_at", "users.created_at"),
 					)).
@@ -509,7 +541,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "OrderBy",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").OrderBy("name", "age DESC").ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).OrderBy(colName, "age DESC").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users ORDER BY name, age DESC`,
@@ -517,7 +549,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "GroupBy",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", countClause).From("users").GroupBy("department").ToSQL()
+				sql, _, _ := qb.Select("department", countClause).From(tableUsers).GroupBy("department").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department`,
@@ -525,7 +557,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Having",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", countClause).From("users").GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
+				sql, _, _ := qb.Select("department", countClause).From(tableUsers).GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > $1`,
@@ -533,7 +565,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Paginate with limit only",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").Paginate(10, 0).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Paginate(10, 0).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users LIMIT 10`,
@@ -541,7 +573,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Paginate with offset only",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("*").From("users").Paginate(0, 20).ToSQL()
+				sql, _, _ := qb.Select(selectAll).From(tableUsers).Paginate(0, 20).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT * FROM users OFFSET 20`,
@@ -576,9 +608,9 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 	errorFilter := mockErrorJoinFilter{}
 
 	t.Run("JoinOn propagates error", func(t *testing.T) {
-		query := qb.Select("*").
-			From("users").
-			JoinOn("profiles", errorFilter)
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			JoinOn(tableProfiles, errorFilter)
 
 		sql, args, err := query.ToSQL()
 
@@ -591,9 +623,9 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 	})
 
 	t.Run("LeftJoinOn propagates error", func(t *testing.T) {
-		query := qb.Select("*").
-			From("users").
-			LeftJoinOn("profiles", errorFilter)
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			LeftJoinOn(tableProfiles, errorFilter)
 
 		sql, args, err := query.ToSQL()
 
@@ -605,9 +637,9 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 	})
 
 	t.Run("RightJoinOn propagates error", func(t *testing.T) {
-		query := qb.Select("*").
-			From("users").
-			RightJoinOn("profiles", errorFilter)
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			RightJoinOn(tableProfiles, errorFilter)
 
 		sql, args, err := query.ToSQL()
 
@@ -619,9 +651,9 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 	})
 
 	t.Run("InnerJoinOn propagates error", func(t *testing.T) {
-		query := qb.Select("*").
-			From("users").
-			InnerJoinOn("profiles", errorFilter)
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			InnerJoinOn(tableProfiles, errorFilter)
 
 		sql, args, err := query.ToSQL()
 
@@ -635,11 +667,11 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 	t.Run("Error from first join prevents SQL generation", func(t *testing.T) {
 		// Even with subsequent valid operations, the error should be preserved
 		jf := qb.JoinFilter()
-		query := qb.Select("*").
-			From("users").
-			JoinOn("profiles", errorFilter).
-			LeftJoinOn("orders", jf.EqColumn(joinColumn, "orders.user_id")). // Valid join after error
-			Where(qb.Filter().Eq("status", statusActive))                    // Valid where
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			JoinOn(tableProfiles, errorFilter).
+			LeftJoinOn(tableOrders, jf.EqColumn(joinColumn, "orders.user_id")). // Valid join after error
+			Where(qb.Filter().Eq(colStatus, statusActive))                      // Valid where
 
 		sql, args, err := query.ToSQL()
 
@@ -656,9 +688,9 @@ func TestJoinFilterNoErrorInjection(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	errorFilter := mockErrorJoinFilter{}
 
-	query := qb.Select("*").
-		From("users").
-		JoinOn("profiles", errorFilter)
+	query := qb.Select(selectAll).
+		From(tableUsers).
+		JoinOn(tableProfiles, errorFilter)
 
 	sql, _, _ := query.ToSQL()
 
@@ -673,7 +705,7 @@ func TestJoinFilterNoErrorInjection(t *testing.T) {
 func TestTableAliasFrom(t *testing.T) {
 	t.Run("String table name backward compatibility", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").From("users")
+		query := qb.Select(selectAll).From(tableUsers)
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -681,7 +713,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("TableRef without alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").From(dbtypes.Table("users"))
+		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -689,7 +721,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("TableRef with alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").From(dbtypes.Table("users").As(aliasU))
+		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers).As(aliasU))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromAliasClause)
@@ -697,7 +729,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Oracle table with alias and reserved word", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
-		query := qb.Select("*").From(dbtypes.Table("LEVEL").As("lvl"))
+		query := qb.Select(selectAll).From(dbtypes.Table("LEVEL").As("lvl"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, `FROM "LEVEL" lvl`)
@@ -705,7 +737,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Mixed string and TableRef in From", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").From("users", dbtypes.Table("profiles").As("p"))
+		query := qb.Select(selectAll).From(tableUsers, dbtypes.Table(tableProfiles).As("p"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM users, profiles p")
@@ -713,7 +745,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Multiple TableRef with aliases", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").From(dbtypes.Table("users").As(aliasU), dbtypes.Table("profiles").As("p"))
+		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers).As(aliasU), dbtypes.Table(tableProfiles).As("p"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM users u, profiles p")
@@ -724,9 +756,9 @@ func TestTableAliasJoin(t *testing.T) {
 	t.Run("JoinOn with table alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		jf := qb.JoinFilter()
-		query := qb.Select("*").
-			From(dbtypes.Table("users").As(aliasU)).
-			JoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn(colUserID, "p.user_id"))
+		query := qb.Select(selectAll).
+			From(dbtypes.Table(tableUsers).As(aliasU)).
+			JoinOn(dbtypes.Table(tableProfiles).As("p"), jf.EqColumn(colUserID, "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromAliasClause)
@@ -737,9 +769,9 @@ func TestTableAliasJoin(t *testing.T) {
 	t.Run("LeftJoinOn with table alias Oracle", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
-		query := qb.Select("*").
+		query := qb.Select(selectAll).
 			From(dbtypes.Table("customers").As("c")).
-			LeftJoinOn(dbtypes.Table("orders").As("o"), jf.EqColumn("c.id", "o.customer_id"))
+			LeftJoinOn(dbtypes.Table(tableOrders).As("o"), jf.EqColumn("c.id", "o.customer_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM customers c")
@@ -749,9 +781,9 @@ func TestTableAliasJoin(t *testing.T) {
 	t.Run("RightJoinOn with string table name", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		jf := qb.JoinFilter()
-		query := qb.Select("*").
-			From("users").
-			RightJoinOn("profiles", jf.EqColumn(joinColumn, "profiles.user_id"))
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			RightJoinOn(tableProfiles, jf.EqColumn(joinColumn, "profiles.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -761,9 +793,9 @@ func TestTableAliasJoin(t *testing.T) {
 	t.Run("InnerJoinOn with mixed string and TableRef", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		jf := qb.JoinFilter()
-		query := qb.Select("*").
-			From("users").
-			InnerJoinOn(dbtypes.Table("profiles").As("p"), jf.EqColumn(joinColumn, "p.user_id"))
+		query := qb.Select(selectAll).
+			From(tableUsers).
+			InnerJoinOn(dbtypes.Table(tableProfiles).As("p"), jf.EqColumn(joinColumn, "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -772,8 +804,8 @@ func TestTableAliasJoin(t *testing.T) {
 
 	t.Run("CrossJoinOn with table alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select("*").
-			From(dbtypes.Table("users").As(aliasU)).
+		query := qb.Select(selectAll).
+			From(dbtypes.Table(tableUsers).As(aliasU)).
 			CrossJoinOn(dbtypes.Table("roles").As("r"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -788,11 +820,11 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		jf := qb.JoinFilter()
 		f := qb.Filter()
 
-		query := qb.Select("*").
-			From(dbtypes.Table("orders").As("o")).
+		query := qb.Select(selectAll).
+			From(dbtypes.Table(tableOrders).As("o")).
 			JoinOn(dbtypes.Table("customers").As("c"),
 				jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
-			JoinOn(dbtypes.Table("products").As("p"), jf.And(
+			JoinOn(dbtypes.Table(tableProducts).As("p"), jf.And(
 				jf.Raw("p.sku = o.product_sku"),
 				jf.Raw("p.status = ?", statusActive),
 			)).
@@ -814,8 +846,8 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(colUserID, colUserName, "COUNT(o.id) AS order_count").
-			From(dbtypes.Table("users").As(aliasU)).
-			LeftJoinOn(dbtypes.Table("orders").As("o"), jf.EqColumn(colUserID, "o.user_id")).
+			From(dbtypes.Table(tableUsers).As(aliasU)).
+			LeftJoinOn(dbtypes.Table(tableOrders).As("o"), jf.EqColumn(colUserID, "o.user_id")).
 			Where(f.Eq(colUserStatus, statusActive)).
 			GroupBy(colUserID, colUserName).
 			OrderBy("order_count DESC").
@@ -874,7 +906,7 @@ func TestSelectExpressions(t *testing.T) {
 	t.Run("Simple expression without alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
-		query := qb.Select("id", qb.Expr(countClause)).From("products")
+		query := qb.Select(colID, qb.Expr(countClause)).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -885,7 +917,7 @@ func TestSelectExpressions(t *testing.T) {
 	t.Run("Expression with alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		query := qb.Select("category", qb.Expr("SUM(amount)", "total_sales")).From("orders")
+		query := qb.Select(colCategory, qb.Expr("SUM(amount)", "total_sales")).From(tableOrders)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -897,11 +929,11 @@ func TestSelectExpressions(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		query := qb.Select(
-			"category",
+			colCategory,
 			qb.Expr(countClause, "product_count"),
 			qb.Expr("AVG(price)", "avg_price"),
 			qb.Expr("SUM(stock)", "total_stock"),
-		).From("products")
+		).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -914,11 +946,11 @@ func TestSelectExpressions(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
 		query := qb.Select(
-			"id",
-			"name",
+			colID,
+			colName,
 			qb.Expr("UPPER(category)", "upper_category"),
-			"status",
-		).From("products")
+			colStatus,
+		).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -933,7 +965,7 @@ func TestSelectExpressions(t *testing.T) {
 		query := qb.Select(
 			"user_id",
 			qb.Expr("COALESCE(email, phone, 'N/A')", "contact"),
-		).From("users")
+		).From(tableUsers)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -946,10 +978,10 @@ func TestSelectExpressions(t *testing.T) {
 
 		query := qb.Select(
 			"product_id",
-			"category",
-			"price",
+			colCategory,
+			colPrice,
 			qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
-		).From("products")
+		).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -962,7 +994,7 @@ func TestSelectExpressions(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
 		query := qb.Select(
-			"level",
+			colLevel,
 			qb.Expr(countClause, "total"),
 		).From("categories")
 
@@ -983,9 +1015,9 @@ func TestGroupByExpressions(t *testing.T) {
 			qb.Expr(testExpr, "date"),
 			qb.Expr(countClause, "count"),
 		).
-			From("orders").
+			From(tableOrders).
 			GroupBy(qb.Expr(testExpr)).
-			Where(f.Eq("status", "completed"))
+			Where(f.Eq(colStatus, "completed"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -999,12 +1031,12 @@ func TestGroupByExpressions(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
 		query := qb.Select(
-			"category",
+			colCategory,
 			qb.Expr("YEAR(order_date)", "year"),
 			qb.Expr("SUM(amount)", "total"),
 		).
-			From("orders").
-			GroupBy("category", qb.Expr("YEAR(order_date)"))
+			From(tableOrders).
+			GroupBy(colCategory, qb.Expr("YEAR(order_date)"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1019,7 +1051,7 @@ func TestGroupByExpressions(t *testing.T) {
 			qb.Expr(testExpr, "date"),
 			qb.Expr(countClause, "order_count"),
 		).
-			From("orders").
+			From(tableOrders).
 			GroupBy(qb.Expr(testExpr)).
 			Having("COUNT(*) > ?", 10)
 
@@ -1035,8 +1067,8 @@ func TestOrderByExpressions(t *testing.T) {
 	t.Run("ORDER BY with raw expression", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		query := qb.Select("*").
-			From("products").
+		query := qb.Select(selectAll).
+			From(tableProducts).
 			OrderBy(qb.Expr("COUNT(*) DESC"))
 
 		sql, args, err := query.ToSQL()
@@ -1048,9 +1080,9 @@ func TestOrderByExpressions(t *testing.T) {
 	t.Run("Mixed column names and expressions in ORDER BY", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
-		query := qb.Select("id", "name", "price").
-			From("products").
-			OrderBy("name", qb.Expr("UPPER(category) ASC"), "price DESC")
+		query := qb.Select(colID, colName, colPrice).
+			From(tableProducts).
+			OrderBy(colName, qb.Expr("UPPER(category) ASC"), "price DESC")
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1061,8 +1093,8 @@ func TestOrderByExpressions(t *testing.T) {
 	t.Run("ORDER BY with expression using function", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		query := qb.Select("id", "created_at").
-			From("orders").
+		query := qb.Select(colID, "created_at").
+			From(tableOrders).
 			OrderBy(qb.Expr("DATE(created_at) DESC"))
 
 		sql, args, err := query.ToSQL()
@@ -1077,7 +1109,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.PanicsWithValue(t, "unsupported column type in Select: int (must be string or RawExpression)", func() {
-			qb.Select("id", 123, "name").From("users")
+			qb.Select(colID, 123, colName).From(tableUsers)
 		})
 	})
 
@@ -1085,7 +1117,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.PanicsWithValue(t, "unsupported groupBy type: int (must be string or RawExpression)", func() {
-			qb.Select("*").From("users").GroupBy("id", 123)
+			qb.Select(selectAll).From(tableUsers).GroupBy(colID, 123)
 		})
 	})
 
@@ -1093,7 +1125,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.PanicsWithValue(t, "unsupported orderBy type: float64 (must be string or RawExpression)", func() {
-			qb.Select("*").From("users").OrderBy("id", 3.14)
+			qb.Select(selectAll).From(tableUsers).OrderBy(colID, 3.14)
 		})
 	})
 
@@ -1101,7 +1133,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.PanicsWithValue(t, "expression SQL cannot be empty", func() {
-			qb.Select(qb.Expr("")).From("users")
+			qb.Select(qb.Expr("")).From(tableUsers)
 		})
 	})
 
@@ -1109,7 +1141,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.PanicsWithValue(t, "Expr accepts maximum 1 alias, got 2", func() {
-			qb.Select(qb.Expr(countClause, "total", "count")).From("users")
+			qb.Select(qb.Expr(countClause, "total", "count")).From(tableUsers)
 		})
 	})
 
@@ -1117,7 +1149,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.Panics(t, func() {
-			qb.Select(qb.Expr(countClause, "total;DROP TABLE users")).From("users")
+			qb.Select(qb.Expr(countClause, "total;DROP TABLE users")).From(tableUsers)
 		})
 	})
 }
@@ -1128,15 +1160,15 @@ func TestComplexExpressionQueries(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(
-			"category",
+			colCategory,
 			qb.Expr(countClause, "product_count"),
 			qb.Expr("AVG(price)", "avg_price"),
 			qb.Expr("MIN(price)", "min_price"),
 			qb.Expr("MAX(price)", "max_price"),
 		).
-			From("products").
-			Where(f.Eq("status", statusActive)).
-			GroupBy("category").
+			From(tableProducts).
+			Where(f.Eq(colStatus, statusActive)).
+			GroupBy(colCategory).
 			Having("COUNT(*) > ?", 5).
 			OrderBy(qb.Expr("COUNT(*) DESC"))
 
@@ -1153,7 +1185,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 		assert.Contains(t, sql, "HAVING COUNT(*) > $2")
 		assert.Contains(t, sql, "ORDER BY COUNT(*) DESC")
 
-		assert.Equal(t, []any{"active", 5}, args)
+		assert.Equal(t, []any{statusActive, 5}, args)
 	})
 
 	t.Run("Complex query with subqueries and expressions", func(t *testing.T) {
@@ -1162,15 +1194,15 @@ func TestComplexExpressionQueries(t *testing.T) {
 
 		subquery := qb.Select("category_id").
 			From("featured_categories").
-			Where(f.Eq("active", true))
+			Where(f.Eq(statusActive, true))
 
 		query := qb.Select(
-			"id",
-			"name",
+			colID,
+			colName,
 			qb.Expr("price * 1.1", "price_with_tax"),
 			qb.Expr("UPPER(category)", "upper_category"),
 		).
-			From("products").
+			From(tableProducts).
 			Where(f.And(
 				f.InSubquery("category_id", subquery),
 				f.Gt("stock", 0),
@@ -1204,7 +1236,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 			qb.Expr(countClause, "order_count"),
 			qb.Expr("SUM(total_amount)", "daily_revenue"),
 		).
-			From("orders").
+			From(tableOrders).
 			Where(f.Gte("created_at", testDate)).
 			GroupBy(qb.Expr(testExpr)).
 			Having("SUM(total_amount) > ?", 1000).
@@ -1235,8 +1267,8 @@ func TestColumnsSelect(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationUser{})
 
-		query := qb.Select(cols.Col("ID"), cols.Col("Name"), cols.Col("Email")).
-			From("users")
+		query := qb.Select(cols.Col(fieldID), cols.Col(fieldName), cols.Col(fieldEmail)).
+			From(tableUsers)
 
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1250,8 +1282,8 @@ func TestColumnsSelect(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		cols := qb.Columns(&IntegrationAccount{})
 
-		query := qb.Select(cols.Col("ID"), cols.Col("Number"), cols.Col("Level")).
-			From("accounts")
+		query := qb.Select(cols.Col(fieldID), cols.Col(fieldNumber), cols.Col(fieldLevel)).
+			From(tableAccounts)
 
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1267,8 +1299,8 @@ func TestColumnsSelect(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationUser{})
 
-		query := qb.Select(toAny(cols.Cols("ID", "Name", "Email"))...).
-			From("users")
+		query := qb.Select(toAny(cols.Cols(fieldID, fieldName, fieldEmail))...).
+			From(tableUsers)
 
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1283,7 +1315,7 @@ func TestColumnsSelect(t *testing.T) {
 		cols := qb.Columns(&IntegrationUser{})
 
 		query := qb.Select(toAny(cols.All())...).
-			From("users")
+			From(tableUsers)
 
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1302,8 +1334,8 @@ func TestColumnsWhere(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(toAny(cols.All())...).
-			From("users").
-			Where(f.Eq(cols.Col("Status"), statusActive))
+			From(tableUsers).
+			Where(f.Eq(cols.Col(fieldStatus), statusActive))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1319,9 +1351,9 @@ func TestColumnsWhere(t *testing.T) {
 		cols := qb.Columns(&IntegrationAccount{})
 		f := qb.Filter()
 
-		query := qb.Select("*").
-			From("accounts").
-			Where(f.Eq(cols.Col("Level"), 5))
+		query := qb.Select(selectAll).
+			From(tableAccounts).
+			Where(f.Eq(cols.Col(fieldLevel), 5))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1337,11 +1369,11 @@ func TestColumnsWhere(t *testing.T) {
 		cols := qb.Columns(&IntegrationUser{})
 		f := qb.Filter()
 
-		query := qb.Select(toAny(cols.Cols("ID", "Name"))...).
-			From("users").
+		query := qb.Select(toAny(cols.Cols(fieldID, fieldName))...).
+			From(tableUsers).
 			Where(f.And(
-				f.Eq(cols.Col("Status"), statusActive),
-				f.NotNull(cols.Col("Email")),
+				f.Eq(cols.Col(fieldStatus), statusActive),
+				f.NotNull(cols.Col(fieldEmail)),
 			))
 
 		sql, args, err := query.ToSQL()
@@ -1361,7 +1393,7 @@ func TestColumnsInsert(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationUser{})
 
-		query := qb.InsertWithColumns("users", cols.Cols("Name", "Email", "Status")...).
+		query := qb.InsertWithColumns(tableUsers, cols.Cols(fieldName, fieldEmail, fieldStatus)...).
 			Values("John Doe", testEmail, statusActive)
 
 		sql, args, err := query.ToSql()
@@ -1377,7 +1409,7 @@ func TestColumnsInsert(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		cols := qb.Columns(&IntegrationAccount{})
 
-		query := qb.InsertWithColumns("accounts", cols.Cols("Number", "Level", "Size")...).
+		query := qb.InsertWithColumns(tableAccounts, cols.Cols(fieldNumber, fieldLevel, "Size")...).
 			Values(testAccountID, 3, "large")
 
 		sql, args, err := query.ToSql()
@@ -1396,7 +1428,7 @@ func TestColumnsInsert(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationProduct{})
 
-		query := qb.InsertWithColumns("products", cols.All()...).
+		query := qb.InsertWithColumns(tableProducts, cols.All()...).
 			Values(1, "Widget", "9.99")
 
 		sql, args, err := query.ToSql()
@@ -1416,10 +1448,10 @@ func TestColumnsUpdate(t *testing.T) {
 		cols := qb.Columns(&IntegrationUser{})
 		f := qb.Filter()
 
-		query := qb.Update("users").
-			Set(cols.Col("Name"), "Jane Doe").
-			Set(cols.Col("Status"), statusInactive).
-			Where(f.Eq(cols.Col("ID"), 123))
+		query := qb.Update(tableUsers).
+			Set(cols.Col(fieldName), "Jane Doe").
+			Set(cols.Col(fieldStatus), statusInactive).
+			Where(f.Eq(cols.Col(fieldID), 123))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1436,9 +1468,9 @@ func TestColumnsUpdate(t *testing.T) {
 		cols := qb.Columns(&IntegrationAccount{})
 		f := qb.Filter()
 
-		query := qb.Update("accounts").
-			Set(cols.Col("Level"), 5).
-			Where(f.Eq(cols.Col("Number"), testAccountID))
+		query := qb.Update(tableAccounts).
+			Set(cols.Col(fieldLevel), 5).
+			Where(f.Eq(cols.Col(fieldNumber), testAccountID))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1526,16 +1558,16 @@ func TestColumnsComplexQuery(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(
-			"u."+userCols.Col("ID"),
-			"u."+userCols.Col("Name"),
-			"a."+acctCols.Col("Number"),
+			"u."+userCols.Col(fieldID),
+			"u."+userCols.Col(fieldName),
+			"a."+acctCols.Col(fieldNumber),
 		).
-			From(dbtypes.Table("users").As(aliasU)).
-			JoinOn(dbtypes.Table("accounts").As(aliasA), jf.EqColumn(
-				"u."+userCols.Col("ID"),
-				"a."+acctCols.Col("ID"),
+			From(dbtypes.Table(tableUsers).As(aliasU)).
+			JoinOn(dbtypes.Table(tableAccounts).As(aliasA), jf.EqColumn(
+				"u."+userCols.Col(fieldID),
+				"a."+acctCols.Col(fieldID),
 			)).
-			Where(f.Eq("u."+userCols.Col("Status"), statusActive))
+			Where(f.Eq("u."+userCols.Col(fieldStatus), statusActive))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1550,10 +1582,10 @@ func TestColumnsComplexQuery(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationUser{})
 
-		query := qb.Select(cols.Col("Status"), qb.Expr("COUNT(*)", "user_count")).
-			From("users").
-			GroupBy(cols.Col("Status")).
-			OrderBy(cols.Col("Status"))
+		query := qb.Select(cols.Col(fieldStatus), qb.Expr("COUNT(*)", "user_count")).
+			From(tableUsers).
+			GroupBy(cols.Col(fieldStatus)).
+			OrderBy(cols.Col(fieldStatus))
 
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1580,13 +1612,13 @@ func TestColumnsMultipleTypes(t *testing.T) {
 	assert.NotNil(t, productCols)
 
 	// Verify correct columns from each type
-	assert.Equal(t, "id", userCols.Col("ID"))
-	assert.Equal(t, "name", userCols.Col("Name"))
-	assert.Equal(t, "email", userCols.Col("Email"))
+	assert.Equal(t, colID, userCols.Col(fieldID))
+	assert.Equal(t, colName, userCols.Col(fieldName))
+	assert.Equal(t, colEmail, userCols.Col(fieldEmail))
 
-	assert.Equal(t, "id", productCols.Col("ID"))
-	assert.Equal(t, "name", productCols.Col("Name"))
-	assert.Equal(t, "price", productCols.Col("Price"))
+	assert.Equal(t, colID, productCols.Col(fieldID))
+	assert.Equal(t, colName, productCols.Col(fieldName))
+	assert.Equal(t, colPrice, productCols.Col("Price"))
 }
 
 // toAny converts []string to []any for SELECT operations with spread operator
@@ -1605,20 +1637,20 @@ func TestColumnAliasingUnaliased(t *testing.T) {
 	cols := qb.Columns(&IntegrationUser{})
 
 	// Unaliased columns should return bare column names
-	assert.Equal(t, "id", cols.Col("ID"))
-	assert.Equal(t, "name", cols.Col("Name"))
-	assert.Equal(t, "email", cols.Col("Email"))
+	assert.Equal(t, colID, cols.Col(fieldID))
+	assert.Equal(t, colName, cols.Col(fieldName))
+	assert.Equal(t, colEmail, cols.Col(fieldEmail))
 	assert.Equal(t, "", cols.Alias())
 
 	// Cols should return bare column names
-	result := cols.Cols("ID", "Name")
-	assert.Equal(t, []string{"id", "name"}, result)
+	result := cols.Cols(fieldID, fieldName)
+	assert.Equal(t, []string{colID, colName}, result)
 
 	// All should return all bare column names
 	allCols := cols.All()
-	assert.Contains(t, allCols, "id")
-	assert.Contains(t, allCols, "name")
-	assert.Contains(t, allCols, "email")
+	assert.Contains(t, allCols, colID)
+	assert.Contains(t, allCols, colName)
+	assert.Contains(t, allCols, colEmail)
 }
 
 func TestColumnAliasingWithAlias(t *testing.T) {
@@ -1629,13 +1661,13 @@ func TestColumnAliasingWithAlias(t *testing.T) {
 	u := cols.As(aliasU)
 
 	// Aliased columns should return qualified names
-	assert.Equal(t, colUserID, u.Col("ID"))
-	assert.Equal(t, colUserName, u.Col("Name"))
-	assert.Equal(t, colUserEmail, u.Col("Email"))
+	assert.Equal(t, colUserID, u.Col(fieldID))
+	assert.Equal(t, colUserName, u.Col(fieldName))
+	assert.Equal(t, colUserEmail, u.Col(fieldEmail))
 	assert.Equal(t, aliasU, u.Alias())
 
 	// Cols should return qualified names
-	result := u.Cols("ID", "Name")
+	result := u.Cols(fieldID, fieldName)
 	assert.Equal(t, []string{colUserID, colUserName}, result)
 
 	// All should return all qualified names
@@ -1645,7 +1677,7 @@ func TestColumnAliasingWithAlias(t *testing.T) {
 	assert.Contains(t, allCols, colUserEmail)
 
 	// Original should remain unaliased
-	assert.Equal(t, "id", cols.Col("ID"))
+	assert.Equal(t, colID, cols.Col(fieldID))
 	assert.Equal(t, "", cols.Alias())
 }
 
@@ -1654,14 +1686,14 @@ func TestColumnAliasingOracleReservedWords(t *testing.T) {
 	cols := qb.Columns(&IntegrationAccount{})
 
 	// Oracle reserved words should be quoted
-	assert.Contains(t, cols.Col("Number"), `"`) // "NUMBER"
-	assert.Contains(t, cols.Col("Level"), `"`)  // "LEVEL"
-	assert.NotContains(t, cols.Col("ID"), `"`)  // ID not reserved
+	assert.Contains(t, cols.Col(fieldNumber), `"`) // "NUMBER"
+	assert.Contains(t, cols.Col(fieldLevel), `"`)  // "LEVEL"
+	assert.NotContains(t, cols.Col(fieldID), `"`)  // ID not reserved
 
 	// With alias, qualified and quoted
 	a := cols.As(aliasA)
-	assert.Contains(t, a.Col("Number"), "a.")
-	assert.Contains(t, a.Col("Number"), `"`) // a."NUMBER"
+	assert.Contains(t, a.Col(fieldNumber), "a.")
+	assert.Contains(t, a.Col(fieldNumber), `"`) // a."NUMBER"
 	assert.Equal(t, aliasA, a.Alias())
 }
 
@@ -1675,12 +1707,12 @@ func TestColumnAliasingMultipleAliases(t *testing.T) {
 	u3 := u.As("u3") // Alias from already-aliased instance
 
 	// Each should have independent alias
-	assert.Equal(t, colUserID, u.Col("ID"))
-	assert.Equal(t, "u2.id", u2.Col("ID"))
-	assert.Equal(t, "u3.id", u3.Col("ID"))
+	assert.Equal(t, colUserID, u.Col(fieldID))
+	assert.Equal(t, "u2.id", u2.Col(fieldID))
+	assert.Equal(t, "u3.id", u3.Col(fieldID))
 
 	// Original remains unchanged
-	assert.Equal(t, "id", cols.Col("ID"))
+	assert.Equal(t, colID, cols.Col(fieldID))
 }
 
 func TestColumnAliasingInSelectQuery(t *testing.T) {
@@ -1695,16 +1727,16 @@ func TestColumnAliasingInSelectQuery(t *testing.T) {
 	f := qb.Filter()
 
 	query := qb.Select(
-		u.Col("ID"),
-		u.Col("Name"),
-		a.Col("Number"),
+		u.Col(fieldID),
+		u.Col(fieldName),
+		a.Col(fieldNumber),
 	).
-		From(dbtypes.Table("users").As(aliasU)).
-		JoinOn(dbtypes.Table("accounts").As(aliasA), jf.EqColumn(
-			u.Col("ID"),
-			a.Col("ID"),
+		From(dbtypes.Table(tableUsers).As(aliasU)).
+		JoinOn(dbtypes.Table(tableAccounts).As(aliasA), jf.EqColumn(
+			u.Col(fieldID),
+			a.Col(fieldID),
 		)).
-		Where(f.Eq(u.Col("Status"), statusActive))
+		Where(f.Eq(u.Col(fieldStatus), statusActive))
 
 	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
@@ -1728,15 +1760,15 @@ func TestInsertStructAllFields(t *testing.T) {
 		Status: statusActive,
 	}
 
-	query := qb.InsertStruct("users", &user)
+	query := qb.InsertStruct(tableUsers, &user)
 	sql, args, err := query.ToSql()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "INSERT INTO users")
-	assert.Contains(t, sql, "name")
-	assert.Contains(t, sql, "email")
-	assert.Contains(t, sql, "status")
-	assert.NotContains(t, sql, "id") // Zero ID excluded
+	assert.Contains(t, sql, colName)
+	assert.Contains(t, sql, colEmail)
+	assert.Contains(t, sql, colStatus)
+	assert.NotContains(t, sql, colID) // Zero ID excluded
 	assert.Contains(t, args, "Alice")
 	assert.Contains(t, args, testEmail)
 	assert.Contains(t, args, statusActive)
@@ -1752,17 +1784,17 @@ func TestInsertStructWithNonZeroID(t *testing.T) {
 		Status: statusInactive,
 	}
 
-	query := qb.InsertStruct("users", &user)
+	query := qb.InsertStruct(tableUsers, &user)
 	sql, args, err := query.ToSql()
 
 	require.NoError(t, err)
-	assert.Contains(t, sql, "id") // Non-zero ID included
+	assert.Contains(t, sql, colID) // Non-zero ID included
 	assert.Contains(t, args, int64(123))
 }
 
-// TestIsZeroValueIDField_ExactMatching verifies that only columns exactly named "id"
+// TestIsZeroValueIDFieldExactMatching verifies that only columns exactly named "id"
 // are treated as ID columns, not columns containing "id" as a substring.
-func TestIsZeroValueIDField_ExactMatching(t *testing.T) {
+func TestIsZeroValueIDFieldExactMatching(t *testing.T) {
 	tests := []struct {
 		name        string
 		column      string
@@ -1782,8 +1814,8 @@ func TestIsZeroValueIDField_ExactMatching(t *testing.T) {
 		{"qualified id schema", `"schema"."table"."id"`, int64(0), true, "Fully qualified with schema"},
 
 		// Columns containing "id" substring (should NOT be treated as ID)
-		{"substring paid", "paid", int64(0), false, "Column 'paid' (payment status)"},
-		{"substring video", "video", string(""), false, "Column 'video' (media URL)"},
+		{"substring paid", statusPaid, int64(0), false, "Column 'paid' (payment status)"},
+		{"substring video", testVideo, string(""), false, "Column 'video' (media URL)"},
 		{"substring provider", "provider", string(""), false, "Column 'provider' (service name)"},
 		{"substring validate", "validate", int64(0), false, "Column 'validate' (validation flag)"},
 		{"substring liquidate", "liquidate", int64(0), false, "Column 'liquidate' (action)"},
@@ -1797,8 +1829,8 @@ func TestIsZeroValueIDField_ExactMatching(t *testing.T) {
 		{"foreign key product_id", "product_id", int64(0), false, "Foreign key 'product_id'"},
 
 		// Non-zero values (should NOT trigger zero-value skip)
-		{"non-zero id", "id", int64(123), false, "Non-zero ID should be included"},
-		{"non-zero paid", "paid", int64(1), false, "Non-zero paid status"},
+		{"non-zero id", colID, int64(123), false, "Non-zero ID should be included"},
+		{"non-zero paid", statusPaid, int64(1), false, "Non-zero paid status"},
 
 		// Non-matching types (should return false)
 		{"wrong type float", "id", float64(0.0), false, "Float type not supported"},
@@ -1820,9 +1852,9 @@ func TestIsZeroValueIDField_ExactMatching(t *testing.T) {
 	}
 }
 
-// TestInsertStruct_ColumnsWithIDSubstring verifies that columns containing "id"
+// TestInsertStructColumnsWithIDSubstring verifies that columns containing "id"
 // as a substring (like "paid", "video") are correctly included in INSERT statements.
-func TestInsertStruct_ColumnsWithIDSubstring(t *testing.T) {
+func TestInsertStructColumnsWithIDSubstring(t *testing.T) {
 	// Define a test struct with columns containing "id" substring
 	type Payment struct {
 		ID       int64  `db:"id"`
@@ -1850,8 +1882,8 @@ func TestInsertStruct_ColumnsWithIDSubstring(t *testing.T) {
 
 	// All columns except "id" should be included
 	assert.Contains(t, sql, "amount", "amount column should be included")
-	assert.Contains(t, sql, "paid", "paid column should be included (not treated as ID)")
-	assert.Contains(t, sql, "video", "video column should be included (not treated as ID)")
+	assert.Contains(t, sql, statusPaid, "paid column should be included (not treated as ID)")
+	assert.Contains(t, sql, testVideo, "video column should be included (not treated as ID)")
 	assert.Contains(t, sql, "provider", "provider column should be included (not treated as ID)")
 
 	// Only the actual "id" column should be excluded (check all possible positions)
@@ -1876,15 +1908,15 @@ func TestInsertFieldsSelectiveFields(t *testing.T) {
 	}
 
 	// Insert only Name and Email
-	query := qb.InsertFields("users", &user, "Name", "Email")
+	query := qb.InsertFields(tableUsers, &user, fieldName, fieldEmail)
 	sql, args, err := query.ToSql()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "INSERT INTO users")
-	assert.Contains(t, sql, "name")
-	assert.Contains(t, sql, "email")
-	assert.NotContains(t, sql, "status") // Not requested
-	assert.NotContains(t, sql, "id")     // Not requested
+	assert.Contains(t, sql, colName)
+	assert.Contains(t, sql, colEmail)
+	assert.NotContains(t, sql, colStatus) // Not requested
+	assert.NotContains(t, sql, colID)     // Not requested
 	assert.Equal(t, []any{"Charlie", testEmail}, args)
 }
 
@@ -1907,7 +1939,7 @@ func TestInsertStructOracleReservedWords(t *testing.T) {
 		Size:   "large",
 	}
 
-	query := qb.InsertStruct("accounts", &account)
+	query := qb.InsertStruct(tableAccounts, &account)
 	sql, args, err := query.ToSql()
 
 	require.NoError(t, err)
@@ -1931,17 +1963,17 @@ func TestSetStructAllFields(t *testing.T) {
 		Status: statusInactive,
 	}
 
-	query := qb.Update("users").
+	query := qb.Update(tableUsers).
 		SetStruct(&user).
-		Where(f.Eq("id", 123))
+		Where(f.Eq(colID, 123))
 
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "UPDATE users")
-	assert.Contains(t, sql, "name =")
-	assert.Contains(t, sql, "email =")
-	assert.Contains(t, sql, "status =")
+	assert.Contains(t, sql, colName+" =")
+	assert.Contains(t, sql, colEmail+" =")
+	assert.Contains(t, sql, colStatus+" =")
 	assert.Contains(t, args, "Updated Name")
 	assert.Contains(t, args, "updated@example.com")
 	assert.Contains(t, args, statusInactive)
@@ -1959,16 +1991,16 @@ func TestSetStructSelectiveFields(t *testing.T) {
 	}
 
 	// Update only Name and Status
-	query := qb.Update("users").
-		SetStruct(&user, "Name", "Status").
-		Where(f.Eq("id", 456))
+	query := qb.Update(tableUsers).
+		SetStruct(&user, fieldName, fieldStatus).
+		Where(f.Eq(colID, 456))
 
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
-	assert.Contains(t, sql, "name =")
-	assert.Contains(t, sql, "status =")
-	assert.NotContains(t, sql, "email") // Not requested
+	assert.Contains(t, sql, colName+" =")
+	assert.Contains(t, sql, colStatus+" =")
+	assert.NotContains(t, sql, colEmail) // Not requested
 	assert.Contains(t, args, "Selective Update")
 	assert.Contains(t, args, statusPending)
 	assert.NotContains(t, args, "selective@example.com")
@@ -1994,9 +2026,9 @@ func TestSetStructOracleReservedWords(t *testing.T) {
 		Size:   "xlarge",
 	}
 
-	query := qb.Update("accounts").
+	query := qb.Update(tableAccounts).
 		SetStruct(&account).
-		Where(f.Eq("id", 789))
+		Where(f.Eq(colID, 789))
 
 	sql, args, err := query.ToSQL()
 
@@ -2023,9 +2055,9 @@ func TestFieldMapWithAlias(t *testing.T) {
 
 	// Unaliased FieldMap
 	fieldMap := cols.FieldMap(&user)
-	assert.Equal(t, int64(123), fieldMap["id"])
-	assert.Equal(t, testUser, fieldMap["name"])
-	assert.Equal(t, testEmail, fieldMap["email"])
+	assert.Equal(t, int64(123), fieldMap[colID])
+	assert.Equal(t, testUser, fieldMap[colName])
+	assert.Equal(t, testEmail, fieldMap[colEmail])
 
 	// Aliased FieldMap
 	u := cols.As(aliasU)
@@ -2048,8 +2080,8 @@ func TestAllFieldsWithAlias(t *testing.T) {
 
 	// Unaliased AllFields
 	colNames, values := cols.AllFields(&user)
-	assert.Contains(t, colNames, "id")
-	assert.Contains(t, colNames, "name")
+	assert.Contains(t, colNames, colID)
+	assert.Contains(t, colNames, colName)
 	assert.Contains(t, values, int64(456))
 	assert.Contains(t, values, allFieldsTest)
 

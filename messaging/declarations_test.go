@@ -9,10 +9,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-const (
-	modifiedValue = "modified"
-)
-
 // Mock message handler for testing
 type mockHandler struct {
 	mock.Mock
@@ -122,13 +118,13 @@ func TestNewDeclarations(t *testing.T) {
 		assert.NotNil(t, decls.Queues)
 		assert.NotNil(t, decls.Bindings)
 		assert.NotNil(t, decls.Publishers)
-		assert.NotNil(t, decls.Consumers)
+		assert.NotNil(t, decls.GetConsumers())
 
 		assert.Empty(t, decls.Exchanges)
 		assert.Empty(t, decls.Queues)
 		assert.Empty(t, decls.Bindings)
 		assert.Empty(t, decls.Publishers)
-		assert.Empty(t, decls.Consumers)
+		assert.Empty(t, decls.GetConsumers())
 	})
 }
 
@@ -137,12 +133,12 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		decls := NewDeclarations()
 		exchange := &ExchangeDeclaration{
 			Name:       testExchange,
-			Type:       "topic",
+			Type:       exchangeTypeTopic,
 			Durable:    true,
 			AutoDelete: false,
 			Internal:   false,
 			NoWait:     false,
-			Args:       map[string]any{"key": "value"},
+			Args:       map[string]any{testKey: testValue},
 		}
 
 		decls.RegisterExchange(exchange)
@@ -153,13 +149,13 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		assert.Equal(t, exchange.Name, registered.Name)
 		assert.Equal(t, exchange.Type, registered.Type)
 		assert.Equal(t, exchange.Durable, registered.Durable)
-		assert.Equal(t, "value", registered.Args["key"])
+		assert.Equal(t, testValue, registered.Args[testKey])
 
 		// Verify it's a deep copy by modifying original
 		exchange.Name = modifiedValue
-		exchange.Args["key"] = modifiedValue
+		exchange.Args[testKey] = modifiedValue
 		assert.Equal(t, testExchange, registered.Name)
-		assert.Equal(t, "value", registered.Args["key"])
+		assert.Equal(t, testValue, registered.Args[testKey])
 	})
 
 	t.Run("handles nil exchange", func(t *testing.T) {
@@ -174,7 +170,7 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 		decls := NewDeclarations()
 		exchange := &ExchangeDeclaration{
 			Name: testExchange,
-			Type: "direct",
+			Type: exchangeTypeDirect,
 			Args: nil,
 		}
 
@@ -187,14 +183,14 @@ func TestDeclarationsRegisterExchange(t *testing.T) {
 
 	t.Run("overwrites existing exchange", func(t *testing.T) {
 		decls := NewDeclarations()
-		exchange1 := &ExchangeDeclaration{Name: "test", Type: "direct"}
-		exchange2 := &ExchangeDeclaration{Name: "test", Type: "topic"}
+		exchange1 := &ExchangeDeclaration{Name: testName, Type: exchangeTypeDirect}
+		exchange2 := &ExchangeDeclaration{Name: testName, Type: exchangeTypeTopic}
 
 		decls.RegisterExchange(exchange1)
 		decls.RegisterExchange(exchange2)
 
 		assert.Len(t, decls.Exchanges, 1)
-		assert.Equal(t, "topic", decls.Exchanges["test"].Type)
+		assert.Equal(t, exchangeTypeTopic, decls.Exchanges[testName].Type)
 	})
 }
 
@@ -207,7 +203,7 @@ func TestDeclarationsRegisterQueue(t *testing.T) {
 			AutoDelete: false,
 			Exclusive:  false,
 			NoWait:     false,
-			Args:       map[string]any{"ttl": 3600},
+			Args:       map[string]any{mapKeyTTL: ttlValue3600},
 		}
 
 		decls.RegisterQueue(queue)
@@ -217,13 +213,13 @@ func TestDeclarationsRegisterQueue(t *testing.T) {
 		assert.NotNil(t, registered)
 		assert.Equal(t, queue.Name, registered.Name)
 		assert.Equal(t, queue.Durable, registered.Durable)
-		assert.Equal(t, 3600, registered.Args["ttl"])
+		assert.Equal(t, ttlValue3600, registered.Args[mapKeyTTL])
 
 		// Verify deep copy
 		queue.Name = modifiedValue
-		queue.Args["ttl"] = 7200
+		queue.Args[mapKeyTTL] = ttlValue7200
 		assert.Equal(t, testQueue, registered.Name)
-		assert.Equal(t, 3600, registered.Args["ttl"])
+		assert.Equal(t, ttlValue3600, registered.Args[mapKeyTTL])
 	})
 
 	t.Run("handles nil queue", func(t *testing.T) {
@@ -252,9 +248,9 @@ func TestDeclarationsRegisterBinding(t *testing.T) {
 		binding := &BindingDeclaration{
 			Queue:      testQueue,
 			Exchange:   testExchange,
-			RoutingKey: "test.key",
+			RoutingKey: testRoutingKey,
 			NoWait:     false,
-			Args:       map[string]any{"binding": "arg"},
+			Args:       map[string]any{mapKeyBinding: testArg},
 		}
 
 		decls.RegisterBinding(binding)
@@ -264,13 +260,13 @@ func TestDeclarationsRegisterBinding(t *testing.T) {
 		assert.Equal(t, binding.Queue, registered.Queue)
 		assert.Equal(t, binding.Exchange, registered.Exchange)
 		assert.Equal(t, binding.RoutingKey, registered.RoutingKey)
-		assert.Equal(t, "arg", registered.Args["binding"])
+		assert.Equal(t, testArg, registered.Args[mapKeyBinding])
 
 		// Verify deep copy
 		binding.Queue = modifiedValue
-		binding.Args["binding"] = modifiedValue
+		binding.Args[mapKeyBinding] = modifiedValue
 		assert.Equal(t, testQueue, registered.Queue)
-		assert.Equal(t, "arg", registered.Args["binding"])
+		assert.Equal(t, testArg, registered.Args[mapKeyBinding])
 	})
 
 	t.Run("handles nil binding", func(t *testing.T) {
@@ -283,15 +279,15 @@ func TestDeclarationsRegisterBinding(t *testing.T) {
 
 	t.Run("appends multiple bindings", func(t *testing.T) {
 		decls := NewDeclarations()
-		binding1 := &BindingDeclaration{Queue: "queue1", Exchange: "exchange1"}
-		binding2 := &BindingDeclaration{Queue: "queue2", Exchange: "exchange2"}
+		binding1 := &BindingDeclaration{Queue: testQueue1, Exchange: testExchange1}
+		binding2 := &BindingDeclaration{Queue: testQueue2, Exchange: testExchange2}
 
 		decls.RegisterBinding(binding1)
 		decls.RegisterBinding(binding2)
 
 		assert.Len(t, decls.Bindings, 2)
-		assert.Equal(t, "queue1", decls.Bindings[0].Queue)
-		assert.Equal(t, "queue2", decls.Bindings[1].Queue)
+		assert.Equal(t, testQueue1, decls.Bindings[0].Queue)
+		assert.Equal(t, testQueue2, decls.Bindings[1].Queue)
 	})
 }
 
@@ -300,12 +296,12 @@ func TestDeclarationsRegisterPublisher(t *testing.T) {
 		decls := NewDeclarations()
 		publisher := &PublisherDeclaration{
 			Exchange:    testExchange,
-			RoutingKey:  "test.key",
+			RoutingKey:  testRoutingKey,
 			EventType:   testEventType,
-			Description: "User creation event",
+			Description: descUserCreation,
 			Mandatory:   true,
 			Immediate:   false,
-			Headers:     map[string]any{"version": "1.0"},
+			Headers:     map[string]any{mapKeyVersion: version10},
 		}
 
 		decls.RegisterPublisher(publisher)
@@ -314,13 +310,13 @@ func TestDeclarationsRegisterPublisher(t *testing.T) {
 		registered := decls.Publishers[0]
 		assert.Equal(t, publisher.Exchange, registered.Exchange)
 		assert.Equal(t, publisher.EventType, registered.EventType)
-		assert.Equal(t, "1.0", registered.Headers["version"])
+		assert.Equal(t, version10, registered.Headers[mapKeyVersion])
 
 		// Verify deep copy
 		publisher.EventType = modifiedValue
-		publisher.Headers["version"] = "2.0"
+		publisher.Headers[mapKeyVersion] = version20
 		assert.Equal(t, testEventType, registered.EventType)
-		assert.Equal(t, "1.0", registered.Headers["version"])
+		assert.Equal(t, version10, registered.Headers[mapKeyVersion])
 	})
 
 	t.Run("handles nil publisher", func(t *testing.T) {
@@ -333,7 +329,7 @@ func TestDeclarationsRegisterPublisher(t *testing.T) {
 
 	t.Run("handles nil headers", func(t *testing.T) {
 		decls := NewDeclarations()
-		publisher := &PublisherDeclaration{Exchange: "test", Headers: nil}
+		publisher := &PublisherDeclaration{Exchange: testName, Headers: nil}
 
 		decls.RegisterPublisher(publisher)
 
@@ -349,20 +345,21 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 		handler := &mockHandler{}
 		consumer := &ConsumerDeclaration{
 			Queue:       testQueue,
-			Consumer:    "test-consumer",
+			Consumer:    testConsumer,
 			AutoAck:     false,
 			Exclusive:   true,
 			NoLocal:     false,
 			NoWait:      false,
 			EventType:   testEventType,
-			Description: "Process user creation",
+			Description: descProcessUser,
 			Handler:     handler,
 		}
 
 		decls.RegisterConsumer(consumer)
 
-		assert.Len(t, decls.Consumers, 1)
-		registered := decls.Consumers[0]
+		consumers := decls.GetConsumers()
+		assert.Len(t, consumers, 1)
+		registered := consumers[0]
 		assert.Equal(t, consumer.Queue, registered.Queue)
 		assert.Equal(t, consumer.EventType, registered.EventType)
 		assert.Equal(t, handler, registered.Handler)
@@ -373,14 +370,124 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 
 		decls.RegisterConsumer(nil)
 
-		assert.Empty(t, decls.Consumers)
+		assert.Empty(t, decls.GetConsumers())
+	})
+
+	t.Run("panics on duplicate consumer registration", func(t *testing.T) {
+		decls := NewDeclarations()
+		handler := &mockHandler{}
+		consumer := &ConsumerDeclaration{
+			Queue:     testQueue,
+			Consumer:  testConsumer,
+			EventType: testEventType,
+			Handler:   handler,
+		}
+
+		// First registration succeeds
+		decls.RegisterConsumer(consumer)
+
+		// Verify registered
+		consumers := decls.GetConsumers()
+		assert.Len(t, consumers, 1)
+		assert.Equal(t, testQueue, consumers[0].Queue)
+
+		// Second registration with same queue+consumer+event_type panics
+		assert.Panics(t, func() {
+			decls.RegisterConsumer(consumer)
+		})
+	})
+
+	t.Run("allows different queue with same consumer tag", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		// Different queues with same consumer tag and event type are allowed
+		assert.NotPanics(t, func() {
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue1,
+				Consumer:  genericConsumer,
+				EventType: testEventType,
+			})
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue2,
+				Consumer:  genericConsumer,
+				EventType: testEventType,
+			})
+		})
+
+		assert.Len(t, decls.GetConsumers(), 2)
+	})
+
+	t.Run("allows same queue with different consumer tag", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		// Same queue with different consumer tags are allowed
+		assert.NotPanics(t, func() {
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue,
+				Consumer:  testConsumer1,
+				EventType: testEventType,
+			})
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue,
+				Consumer:  testConsumer2,
+				EventType: testEventType,
+			})
+		})
+
+		assert.Len(t, decls.GetConsumers(), 2)
+	})
+
+	t.Run("allows same queue+consumer with different event type", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		// Same queue+consumer with different event types are allowed
+		assert.NotPanics(t, func() {
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue,
+				Consumer:  genericConsumer,
+				EventType: testEvent1,
+			})
+			decls.RegisterConsumer(&ConsumerDeclaration{
+				Queue:     testQueue,
+				Consumer:  genericConsumer,
+				EventType: testEvent2,
+			})
+		})
+
+		assert.Len(t, decls.GetConsumers(), 2)
+	})
+
+	t.Run("GetConsumers returns consumers in registration order", func(t *testing.T) {
+		decls := NewDeclarations()
+
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue1,
+			Consumer:  testConsumer1,
+			EventType: testEvent1,
+		})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue2,
+			Consumer:  testConsumer2,
+			EventType: testEvent2,
+		})
+		decls.RegisterConsumer(&ConsumerDeclaration{
+			Queue:     testQueue3,
+			Consumer:  testConsumer3,
+			EventType: testEvent3,
+		})
+
+		consumers := decls.GetConsumers()
+		assert.Len(t, consumers, 3)
+		assert.Equal(t, testQueue1, consumers[0].Queue)
+		assert.Equal(t, testQueue2, consumers[1].Queue)
+		assert.Equal(t, testQueue3, consumers[2].Queue)
 	})
 }
 
 func TestDeclarationsValidate(t *testing.T) {
 	t.Run("valid declarations", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: "topic"})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
 		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 		decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange})
 		decls.RegisterPublisher(&PublisherDeclaration{Exchange: testExchange})
@@ -393,8 +500,8 @@ func TestDeclarationsValidate(t *testing.T) {
 
 	t.Run("binding references non-existent queue", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: "topic"})
-		decls.RegisterBinding(&BindingDeclaration{Queue: "missing-queue", Exchange: testExchange})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+		decls.RegisterBinding(&BindingDeclaration{Queue: missingQueue, Exchange: testExchange})
 
 		err := decls.Validate()
 
@@ -405,7 +512,7 @@ func TestDeclarationsValidate(t *testing.T) {
 	t.Run("binding references non-existent exchange", func(t *testing.T) {
 		decls := NewDeclarations()
 		decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
-		decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: "missing-exchange"})
+		decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: missingExchange})
 
 		err := decls.Validate()
 
@@ -415,7 +522,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 	t.Run("consumer references non-existent queue", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterConsumer(&ConsumerDeclaration{Queue: "missing-queue"})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: missingQueue})
 
 		err := decls.Validate()
 
@@ -425,7 +532,7 @@ func TestDeclarationsValidate(t *testing.T) {
 
 	t.Run("publisher references non-existent exchange", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "missing-exchange"})
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: missingExchange})
 
 		err := decls.Validate()
 
@@ -448,7 +555,7 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 		mockReg := &mockRegistry{}
 
 		// Set up declarations
-		exchange := &ExchangeDeclaration{Name: testExchange, Type: "topic"}
+		exchange := &ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic}
 		queue := &QueueDeclaration{Name: testQueue}
 		binding := &BindingDeclaration{Queue: testQueue, Exchange: testExchange}
 		publisher := &PublisherDeclaration{Exchange: testExchange}
@@ -507,14 +614,14 @@ func TestDeclarationsReplayToRegistry(t *testing.T) {
 func TestDeclarationsStats(t *testing.T) {
 	t.Run("returns correct counts", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: "ex1", Type: "topic"})
-		decls.RegisterExchange(&ExchangeDeclaration{Name: "ex2", Type: "direct"})
-		decls.RegisterQueue(&QueueDeclaration{Name: "q1"})
-		decls.RegisterBinding(&BindingDeclaration{Queue: "q1", Exchange: "ex1"})
-		decls.RegisterBinding(&BindingDeclaration{Queue: "q1", Exchange: "ex2"})
-		decls.RegisterBinding(&BindingDeclaration{Queue: "q1", Exchange: "ex1", RoutingKey: "different"})
-		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "ex1"})
-		decls.RegisterConsumer(&ConsumerDeclaration{Queue: "q1"})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange1, Type: exchangeTypeTopic})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: shortExchange2, Type: exchangeTypeDirect})
+		decls.RegisterQueue(&QueueDeclaration{Name: shortQueue1})
+		decls.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange1})
+		decls.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange2})
+		decls.RegisterBinding(&BindingDeclaration{Queue: shortQueue1, Exchange: shortExchange1, RoutingKey: "different"})
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: shortExchange1})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: shortQueue1})
 
 		stats := decls.Stats()
 
@@ -545,21 +652,21 @@ func TestDeclarationsClone(t *testing.T) {
 
 		decls.RegisterExchange(&ExchangeDeclaration{
 			Name: testExchange,
-			Type: "topic",
-			Args: map[string]any{"key": "value"},
+			Type: exchangeTypeTopic,
+			Args: map[string]any{testKey: testValue},
 		})
 		decls.RegisterQueue(&QueueDeclaration{
 			Name: testQueue,
-			Args: map[string]any{"ttl": 3600},
+			Args: map[string]any{mapKeyTTL: ttlValue3600},
 		})
 		decls.RegisterBinding(&BindingDeclaration{
 			Queue:    testQueue,
 			Exchange: testExchange,
-			Args:     map[string]any{"binding": "arg"},
+			Args:     map[string]any{mapKeyBinding: testArg},
 		})
 		decls.RegisterPublisher(&PublisherDeclaration{
 			Exchange: testExchange,
-			Headers:  map[string]any{"version": "1.0"},
+			Headers:  map[string]any{mapKeyVersion: version10},
 		})
 		decls.RegisterConsumer(&ConsumerDeclaration{
 			Queue:   testQueue,
@@ -573,35 +680,35 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Equal(t, len(decls.Queues), len(clone.Queues))
 		assert.Equal(t, len(decls.Bindings), len(clone.Bindings))
 		assert.Equal(t, len(decls.Publishers), len(clone.Publishers))
-		assert.Equal(t, len(decls.Consumers), len(clone.Consumers))
+		assert.Equal(t, len(decls.GetConsumers()), len(clone.GetConsumers()))
 
 		// Verify deep copy of exchanges
 		originalExchange := decls.Exchanges[testExchange]
 		clonedExchange := clone.Exchanges[testExchange]
 		assert.Equal(t, originalExchange.Name, clonedExchange.Name)
-		assert.Equal(t, originalExchange.Args["key"], clonedExchange.Args["key"])
+		assert.Equal(t, originalExchange.Args[testKey], clonedExchange.Args[testKey])
 
 		// Modify original and verify clone is unaffected
 		originalExchange.Name = modifiedValue
-		originalExchange.Args["key"] = modifiedValue
+		originalExchange.Args[testKey] = modifiedValue
 		assert.Equal(t, testExchange, clonedExchange.Name)
-		assert.Equal(t, "value", clonedExchange.Args["key"])
+		assert.Equal(t, testValue, clonedExchange.Args[testKey])
 
 		// Verify handlers are shared (shallow copy)
-		assert.Equal(t, handler, clone.Consumers[0].Handler)
+		assert.Equal(t, handler, clone.GetConsumers()[0].Handler)
 	})
 
 	t.Run("handles nil args in clone", func(t *testing.T) {
 		decls := NewDeclarations()
-		decls.RegisterExchange(&ExchangeDeclaration{Name: "test", Args: nil})
-		decls.RegisterQueue(&QueueDeclaration{Name: "test", Args: nil})
-		decls.RegisterBinding(&BindingDeclaration{Queue: "test", Exchange: "test", Args: nil})
-		decls.RegisterPublisher(&PublisherDeclaration{Exchange: "test", Headers: nil})
+		decls.RegisterExchange(&ExchangeDeclaration{Name: testName, Args: nil})
+		decls.RegisterQueue(&QueueDeclaration{Name: testName, Args: nil})
+		decls.RegisterBinding(&BindingDeclaration{Queue: testName, Exchange: testName, Args: nil})
+		decls.RegisterPublisher(&PublisherDeclaration{Exchange: testName, Headers: nil})
 
 		clone := decls.Clone()
 
-		assert.NotNil(t, clone.Exchanges["test"].Args)
-		assert.NotNil(t, clone.Queues["test"].Args)
+		assert.NotNil(t, clone.Exchanges[testName].Args)
+		assert.NotNil(t, clone.Queues[testName].Args)
 		assert.NotNil(t, clone.Bindings[0].Args)
 		assert.NotNil(t, clone.Publishers[0].Headers)
 	})
@@ -616,6 +723,6 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Empty(t, clone.Queues)
 		assert.Empty(t, clone.Bindings)
 		assert.Empty(t, clone.Publishers)
-		assert.Empty(t, clone.Consumers)
+		assert.Empty(t, clone.GetConsumers())
 	})
 }

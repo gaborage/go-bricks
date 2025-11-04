@@ -92,12 +92,12 @@ func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 		return &stubAMQPClient{}
 	}
 
-	source := &stubMessagingSource{urls: map[string]string{"tenant": amqpHost}}
+	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
-	first, err := manager.GetPublisher(ctx, "tenant")
+	first, err := manager.GetPublisher(ctx, tenantID)
 	require.NoError(t, err)
-	second, err := manager.GetPublisher(ctx, "tenant")
+	second, err := manager.GetPublisher(ctx, tenantID)
 	require.NoError(t, err)
 	assert.Same(t, first, second)
 
@@ -112,15 +112,15 @@ func TestMessagingManagerInjectsTenantHeader(t *testing.T) {
 
 	client := &stubAMQPClient{}
 	factory := func(string, logger.Logger) AMQPClient { return client }
-	source := &stubMessagingSource{urls: map[string]string{"tenant": amqpHost}}
+	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
-	pub, err := manager.GetPublisher(ctx, "tenant")
+	pub, err := manager.GetPublisher(ctx, tenantID)
 	require.NoError(t, err)
 
-	err = pub.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("payload"))
+	err = pub.PublishToExchange(ctx, PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload"))
 	assert.NoError(t, err)
-	assert.Equal(t, "tenant", client.lastPublish.Headers[tenantHeader])
+	assert.Equal(t, tenantID, client.lastPublish.Headers[tenantHeader])
 }
 
 func TestMessagingManagerSingleflightPublishers(t *testing.T) {
@@ -136,14 +136,14 @@ func TestMessagingManagerSingleflightPublishers(t *testing.T) {
 		return &stubAMQPClient{}
 	}
 
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"tenant": amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := manager.GetPublisher(ctx, "tenant")
+			_, err := manager.GetPublisher(ctx, tenantID)
 			require.NoError(t, err)
 		}()
 	}
@@ -162,7 +162,7 @@ func TestMessagingManagerCleanupEvictsIdlePublishers(t *testing.T) {
 		return &stubAMQPClient{closeCallback: func() { closed++ }}
 	}
 
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": "amqp://idle/"}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
 	_, err := manager.GetPublisher(ctx, "idle")
 	require.NoError(t, err)
 
@@ -186,9 +186,9 @@ func TestMessagingManagerEvictsLRU(t *testing.T) {
 	}
 
 	source := &stubMessagingSource{urls: map[string]string{
-		"a": "amqp://a/",
-		"b": "amqp://b/",
-		"c": "amqp://c/",
+		"a": amqpURLA,
+		"b": amqpURLB,
+		"c": amqpURLC,
 	}}
 
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
@@ -201,7 +201,7 @@ func TestMessagingManagerEvictsLRU(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Contains(t, evicted, "amqp://a/")
+	assert.Contains(t, evicted, amqpURLA)
 }
 
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
@@ -210,14 +210,14 @@ func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 
 	client := &stubAMQPClient{}
 	factory := func(string, logger.Logger) AMQPClient { return client }
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"tenant": amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
 	decls := NewDeclarations()
-	decls.RegisterQueue(&QueueDeclaration{Name: "queue"})
-	decls.RegisterConsumer(&ConsumerDeclaration{Queue: "queue", Consumer: "consumer", Handler: &mockMessageHandler{}})
+	decls.RegisterQueue(&QueueDeclaration{Name: genericQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, Handler: &mockMessageHandler{}})
 
 	for i := 0; i < 2; i++ {
-		err := manager.EnsureConsumers(ctx, "tenant", decls)
+		err := manager.EnsureConsumers(ctx, tenantID, decls)
 		assert.NoError(t, err)
 	}
 
@@ -227,7 +227,7 @@ func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 type mockMessageHandler struct{}
 
 func (m *mockMessageHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
-func (m *mockMessageHandler) EventType() string                            { return "event" }
+func (m *mockMessageHandler) EventType() string                            { return genericError }
 
 type tenantCapturingHandler struct {
 	capturedCtx context.Context
@@ -240,7 +240,7 @@ func (h *tenantCapturingHandler) Handle(ctx context.Context, _ *amqp.Delivery) e
 	return nil
 }
 
-func (h *tenantCapturingHandler) EventType() string { return "test-event" }
+func (h *tenantCapturingHandler) EventType() string { return testEventType }
 
 func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	ctx := context.Background()
@@ -249,13 +249,13 @@ func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	handler := &tenantCapturingHandler{}
 	client := &stubAMQPClient{}
 	factory := func(string, logger.Logger) AMQPClient { return client }
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"test-tenant": amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
 	decls := NewDeclarations()
-	decls.RegisterQueue(&QueueDeclaration{Name: "test-queue"})
-	decls.RegisterConsumer(&ConsumerDeclaration{Queue: "test-queue", Consumer: "test-consumer", Handler: handler})
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: handler})
 
-	err := manager.EnsureConsumers(ctx, "test-tenant", decls)
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
 	require.NoError(t, err)
 
 	// Verify that consumer was started
@@ -265,4 +265,171 @@ func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	// importing multitenant package and checking the context in the handler
 	// For this test, we verify that EnsureConsumers completed successfully
 	// which means it called StartConsumers with the tenant-injected context
+}
+
+func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
+	t.Run("same declarations replay multiple times - idempotent", func(t *testing.T) {
+		ctx := context.Background()
+		log := logger.New("error", false)
+
+		clientCallCount := 0
+		factory := func(string, logger.Logger) AMQPClient {
+			clientCallCount++
+			return &stubAMQPClient{}
+		}
+		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+		decls := NewDeclarations()
+		decls.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: true})
+		decls.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
+
+		// First call - should create client and registry
+		err := manager.EnsureConsumers(ctx, tenantID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "First call should create client")
+
+		// Second call with identical declarations - should be idempotent
+		err = manager.EnsureConsumers(ctx, tenantID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "Second call should reuse existing setup")
+
+		// Third call - still idempotent
+		err = manager.EnsureConsumers(ctx, tenantID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount, "Third call should still be idempotent")
+	})
+
+	t.Run("different declarations for same key - error", func(t *testing.T) {
+		ctx := context.Background()
+		log := logger.New("error", false)
+
+		factory := func(string, logger.Logger) AMQPClient {
+			return &stubAMQPClient{}
+		}
+		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+		// First set of declarations
+		decls1 := NewDeclarations()
+		decls1.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: true})
+		decls1.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls1.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
+
+		err := manager.EnsureConsumers(ctx, tenantID, decls1)
+		assert.NoError(t, err)
+
+		// Second set of declarations - different structure
+		decls2 := NewDeclarations()
+		decls2.RegisterExchange(&ExchangeDeclaration{Name: genericEx, Type: exchangeTypeTopic, Durable: false}) // Different Durable flag
+		decls2.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls2.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventA, Handler: &mockMessageHandler{}})
+
+		err = manager.EnsureConsumers(ctx, tenantID, decls2)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "attempt to replay different declarations")
+	})
+
+	t.Run("concurrent calls with same declarations - singleflight", func(t *testing.T) {
+		ctx := context.Background()
+		log := logger.New("error", false)
+
+		var mu sync.Mutex
+		clientCallCount := 0
+		factory := func(string, logger.Logger) AMQPClient {
+			mu.Lock()
+			clientCallCount++
+			mu.Unlock()
+			time.Sleep(10 * time.Millisecond) // Simulate slow setup
+			return &stubAMQPClient{}
+		}
+		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
+
+		// Launch multiple concurrent calls
+		var wg sync.WaitGroup
+		errChan := make(chan error, 10)
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := manager.EnsureConsumers(ctx, tenantID, decls)
+				errChan <- err
+			}()
+		}
+		wg.Wait()
+		close(errChan)
+
+		// Check all calls succeeded
+		for err := range errChan {
+			assert.NoError(t, err)
+		}
+
+		// Singleflight should ensure only one client was created
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, 1, clientCallCount, "Singleflight should prevent concurrent setup")
+	})
+
+	t.Run("different keys with same declarations - independent", func(t *testing.T) {
+		ctx := context.Background()
+		log := logger.New("error", false)
+
+		clientCallCount := 0
+		factory := func(string, logger.Logger) AMQPClient {
+			clientCallCount++
+			return &stubAMQPClient{}
+		}
+		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{
+			tenant1ID: amqpURLTenant1,
+			tenant2ID: amqpURLTenant2,
+		}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
+
+		// Setup for tenant1
+		err := manager.EnsureConsumers(ctx, tenant1ID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, clientCallCount)
+
+		// Setup for tenant2 with same declarations - should create new client
+		err = manager.EnsureConsumers(ctx, tenant2ID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, clientCallCount, "Different keys should have independent setups")
+
+		// Replay to tenant1 - should be idempotent
+		err = manager.EnsureConsumers(ctx, tenant1ID, decls)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, clientCallCount, "Replay to tenant1 should be idempotent")
+	})
+
+	t.Run("hash recorded after successful setup", func(t *testing.T) {
+		ctx := context.Background()
+		log := logger.New("error", false)
+
+		factory := func(string, logger.Logger) AMQPClient {
+			return &stubAMQPClient{}
+		}
+		manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+		decls := NewDeclarations()
+		decls.RegisterQueue(&QueueDeclaration{Name: genericQueue, Durable: true})
+		decls.RegisterConsumer(&ConsumerDeclaration{Queue: genericQueue, Consumer: genericConsumer, EventType: eventTestEvent, Handler: &mockMessageHandler{}})
+
+		err := manager.EnsureConsumers(ctx, tenantID, decls)
+		assert.NoError(t, err)
+
+		// Check that hash was recorded
+		manager.consMu.RLock()
+		hash, exists := manager.replayedHashs[tenantID]
+		manager.consMu.RUnlock()
+
+		assert.True(t, exists, "Hash should be recorded after setup")
+		assert.NotZero(t, hash, "Hash should not be zero")
+		assert.Equal(t, decls.Hash(), hash, "Recorded hash should match declarations hash")
+	})
 }

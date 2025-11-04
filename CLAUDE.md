@@ -548,6 +548,98 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 **For verbose before/after comparison**, see [messaging/declarations.go](messaging/declarations.go)
 
+#### Consumer Registration Best Practices
+
+**CRITICAL: Deduplication Rules**
+
+GoBricks enforces **strict deduplication** to prevent message duplication bugs. Each unique `queue + consumer_tag + event_type` combination must be registered exactly once:
+
+```go
+// ✅ CORRECT: Each consumer registered once
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    decls.DeclareConsumer(&messaging.ConsumerOptions{
+        Queue:     "events.queue",
+        Consumer:  "discover-pending",
+        EventType: "discover-pending-events",
+        Handler:   m.discoverHandler.Handle,
+    }, nil)
+
+    decls.DeclareConsumer(&messaging.ConsumerOptions{
+        Queue:     "events.queue",
+        Consumer:  "process-batch",  // Different consumer tag
+        EventType: "process-batch-events",
+        Handler:   m.processHandler.Handle,
+    }, nil)
+}
+
+// ❌ WRONG: Loop creates duplicates (panics on 2nd iteration)
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    for i := 0; i < 10; i++ {
+        decls.DeclareConsumer(opts, nil)  // PANIC: duplicate consumer
+    }
+}
+
+// ❌ WRONG: Conditional creates duplicates
+if config.EnableFeature {
+    decls.DeclareConsumer(opts, nil)
+}
+decls.DeclareConsumer(opts, nil)  // PANIC if feature enabled
+```
+
+**Module Registration Error Handling**
+
+Module registration errors are **unrecoverable** and MUST be handled with `log.Fatal()`:
+
+```go
+// ✅ CORRECT: FATAL error handling (required)
+func main() {
+    app := app.New(config)
+
+    if err := app.RegisterModule(issuanceModule); err != nil {
+        log.Fatal(err)  // REQUIRED - duplicate module is unrecoverable
+    }
+
+    app.Run()
+}
+
+// ❌ WRONG: Ignoring errors (silent failure)
+app.RegisterModule(issuanceModule)  // DO NOT DO THIS
+
+// ❌ WRONG: Duplicate registration
+app.RegisterModule(issuanceModule)
+app.RegisterModule(issuanceModule)  // Returns error (MUST use log.Fatal)
+```
+
+**Troubleshooting Duplicate Errors**
+
+If you see this panic:
+```
+panic: messaging: duplicate consumer declaration detected
+  queue=events.queue consumer=discover-pending event_type=discover-pending-events
+  Ensure each DeclareConsumer call is unique within DeclareMessaging
+```
+
+**Fix:** Review your module's `DeclareMessaging()` for loops, conditional logic, or accidental duplicate calls.
+
+If you see this error:
+```
+module registry: duplicate module 'issuance' detected (already registered *issuance.Module)
+```
+
+**Fix:** Ensure `app.RegisterModule(...)` called exactly once per module in `main.go`. MUST use `log.Fatal(err)` to handle this error.
+
+**Diagnostic Commands:**
+```bash
+# Check consumer startup logs
+grep "Starting AMQP consumers" logs/app.log
+
+# Check for duplicate warnings
+grep "Multiple consumers registered for same queue" logs/app.log
+
+# Verify module registration count
+grep "Registered module" logs/app.log
+```
+
 ### Observability
 
 **Key Features:**
@@ -827,6 +919,33 @@ make check-all  # Run comprehensive validation (framework + tool)
 # → Check logs for "messaging not configured" warnings
 # → Verify messaging.broker.url set for each tenant
 # → See ADR-004 for lazy registry creation details
+```
+
+**Messaging Issues:**
+
+```bash
+# "duplicate consumer declaration detected"
+# → Review module's DeclareMessaging() for loops or conditional duplicates
+# → Each queue+consumer+event_type must be registered exactly once
+# Example error:
+#   panic: messaging: duplicate consumer declaration detected
+#     queue=events.queue consumer=discover-pending event_type=discover-pending-events
+#     Ensure each DeclareConsumer call is unique within DeclareMessaging
+
+# "duplicate module 'X' detected"
+# → Ensure app.RegisterModule() called exactly once per module in main.go
+# → MUST use log.Fatal(err) to handle module registration errors
+# Example error:
+#   module registry: duplicate module 'issuance' detected (already registered *issuance.Module)
+
+# "attempt to replay different declarations for key"
+# → Manager detected conflicting messaging declarations for same tenant
+# → Declaration hash mismatch indicates configuration drift
+# → Review DeclareMessaging() for conditional logic or environment-specific declarations
+
+# Diagnostic: Check consumer counts
+grep "Starting AMQP consumers" logs/app.log
+grep "Multiple consumers registered for same queue" logs/app.log  # Warning indicator
 ```
 
 **Module Registration Issues:**
