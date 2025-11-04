@@ -192,12 +192,14 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 | Concern            | Built-in support                                  |
 |--------------------|---------------------------------------------------|
 | Idempotent setup   | Declarations validated once, replayed per tenant  |
-| Retry / DLQ        | Queue options: `DeadLetterExchange`, `TTL`, etc.  |
+| Error handling     | **No automatic retry** - all errors drop message (prevents infinite loops). Rich ERROR logs + metrics for failed messages. DLQ support planned. |
 | Publishers         | Typed options ensure routing key + event type     |
-| Consumers          | Handler receives `context.Context`, `amqp.Delivery`|
+| Consumers          | Handler receives `context.Context`, `amqp.Delivery`; return error drops message |
 | Metrics & tracing  | Automatic OTEL spans + structured logs            |
 
 Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
+
+**IMPORTANT:** Handler errors do NOT trigger retry. Failed messages are logged (ERROR level) with full context and dropped. Set up monitoring and alerts for failed message tracking.
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.

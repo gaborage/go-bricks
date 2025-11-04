@@ -950,10 +950,12 @@ func (h *countingTestHandler) GetCallCount() int {
 
 // mockAcknowledger for testing message acknowledgment
 type mockAcknowledger struct {
-	ackCalled  bool
-	nackCalled bool
-	ackErr     error
-	nackErr    error
+	ackCalled    bool
+	nackCalled   bool
+	ackErr       error
+	nackErr      error
+	nackMultiple bool
+	nackRequeue  bool
 }
 
 func (m *mockAcknowledger) Ack(_ uint64, _ bool) error {
@@ -961,8 +963,10 @@ func (m *mockAcknowledger) Ack(_ uint64, _ bool) error {
 	return m.ackErr
 }
 
-func (m *mockAcknowledger) Nack(_ uint64, _, _ bool) error {
+func (m *mockAcknowledger) Nack(_ uint64, multiple, requeue bool) error {
 	m.nackCalled = true
+	m.nackMultiple = multiple
+	m.nackRequeue = requeue
 	return m.nackErr
 }
 
@@ -1039,9 +1043,11 @@ func TestRegistryProcessMessageHandlerError(t *testing.T) {
 	// Verify handler was called
 	assert.Equal(t, 1, handler.GetCallCount())
 
-	// Verify message was negatively acknowledged (nacked)
+	// Verify message was negatively acknowledged WITHOUT requeue (prevents infinite retry loops)
 	assert.False(t, acker.ackCalled)
 	assert.True(t, acker.nackCalled)
+	assert.False(t, acker.nackMultiple, "Should nack single message only")
+	assert.False(t, acker.nackRequeue, "Should NOT requeue failed messages (prevents infinite loops)")
 }
 
 func TestRegistryProcessMessageAutoAck(t *testing.T) {
