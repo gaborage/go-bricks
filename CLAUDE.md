@@ -640,6 +640,51 @@ grep "Multiple consumers registered for same queue" logs/app.log
 grep "Registered module" logs/app.log
 ```
 
+#### Message Error Handling
+
+**IMPORTANT:** GoBricks uses a **no-retry policy** for failed messages to prevent infinite retry loops.
+
+**Behavior:**
+- **All handler errors** → Message nacked WITHOUT requeue (message dropped)
+- **No automatic retry** → Prevents poison messages from blocking the queue forever
+- **Rich observability** → ERROR logs + OpenTelemetry metrics track all failures
+
+**Error Handling Pattern:**
+```go
+func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+    var order Order
+
+    // Validation errors → message dropped (no retry)
+    if err := json.Unmarshal(delivery.Body, &order); err != nil {
+        return fmt.Errorf("invalid message format: %w", err)
+    }
+
+    // Business logic errors → message dropped (no retry)
+    if err := h.orderService.Process(ctx, order); err != nil {
+        return fmt.Errorf("processing failed: %w", err)
+    }
+
+    return nil // Success → message ACKed
+}
+```
+
+**Observability for Failed Messages:**
+- **ERROR logs** with structured fields: `message_id`, `queue`, `event_type`, `correlation_id`, `error`
+- **OpenTelemetry metrics:**
+  - `messaging.client.operation.duration` (with `error.type` attribute)
+  - `messaging.client.consumed.messages` counter NOT incremented (success only)
+
+**Best Practices:**
+1. **Thorough handler testing** → Prevent message loss due to bugs
+2. **Monitor ERROR logs** → Set up alerts for failed messages
+3. **Manual replay** → Use logs/trace IDs to identify and replay failed messages manually
+4. **Future DLQ support** → Dead-letter queue support planned for automatic retry with limits
+
+**Migration Notes (Breaking Change in v2.X):**
+- **Previous behavior:** All errors triggered automatic requeue (infinite retry risk)
+- **New behavior:** All errors nack without requeue (message dropped with rich logging)
+- **Action required:** Review handler error handling and set up monitoring for failed messages
+
 ### Observability
 
 **Key Features:**

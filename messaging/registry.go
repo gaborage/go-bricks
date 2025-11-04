@@ -10,6 +10,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -504,15 +505,26 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	processingTime := time.Since(startTime)
 
 	if err != nil {
+		// Enhanced structured logging for failed messages
 		tlog.Error().
 			Err(err).
 			Str("message_id", delivery.MessageId).
+			Str("queue", consumer.Queue).
+			Str("event_type", consumer.EventType).
+			Str("correlation_id", delivery.CorrelationId).
+			Str("consumer_tag", delivery.ConsumerTag).
+			Str("routing_key", delivery.RoutingKey).
+			Str("exchange", delivery.Exchange).
 			Dur("processing_time", processingTime).
-			Msg("Message processing failed")
+			Msg("Message processing failed - discarding without requeue")
 
-		// Negative acknowledgment - requeue the message (only when AutoAck is false)
+		// Record failed message metrics (duration with error.type attribute)
+		r.recordFailedMessage(msgCtx, consumer, delivery, processingTime, err)
+
+		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
+		// Failed messages are dropped (logged above) until DLQ support is implemented
 		if !consumer.AutoAck {
-			if nackErr := delivery.Nack(false, true); nackErr != nil {
+			if nackErr := delivery.Nack(false, false); nackErr != nil {
 				tlog.Error().
 					Err(nackErr).
 					Uint64("delivery_tag", delivery.DeliveryTag).
@@ -536,6 +548,16 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 				Msg("Failed to ack message")
 		}
 	}
+}
+
+// recordFailedMessage records OpenTelemetry metrics for failed message processing.
+// This follows OTel semantic conventions for messaging, recording duration with error.type attribute.
+// The consumed.messages counter is NOT incremented (only incremented on success).
+func (r *Registry) recordFailedMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, duration time.Duration, err error) {
+	// Record metrics using existing tracking infrastructure
+	// This will record messaging.client.operation.duration with error.type attribute
+	// but will NOT increment messaging.client.consumed.messages counter (success only)
+	tracking.RecordAMQPConsumeMetrics(ctx, delivery, consumer.Queue, duration, err)
 }
 
 // amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)
