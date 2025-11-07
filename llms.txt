@@ -166,6 +166,44 @@ query := qb.Select(cols.Fields("ID", "Name")...).
 // Performance: ~0.6µs first parse, ~26ns cached access
 ```
 
+**Advanced JOIN Patterns:**
+
+```go
+// Mixed JOIN conditions: column-to-column + column-to-value with expressions
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+query := qb.Select("*").
+    From(dbtypes.Table("orders").As("o")).
+    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
+        jf.EqColumn("c.id", "o.customer_id"),       // Column-to-column
+        jf.Eq("c.status", "active"),                 // Column-to-value
+        jf.In("c.tier", []string{"gold", "platinum"}),
+    )).
+    JoinOn(dbtypes.Table("products").As("p"), jf.And(
+        jf.EqColumn("p.id", "o.product_id"),
+        jf.Eq("p.price", qb.Expr("TO_NUMBER(o.max_price)")), // Expression support
+    )).
+    Where(f.Eq("o.status", "pending"))
+```
+
+**Window Functions & Aggregations:**
+
+```go
+// Window function with PARTITION BY
+query := qb.Select(
+    "product_id", "price",
+    qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
+).From("products")
+
+// Aggregations with GROUP BY
+query := qb.Select(
+    "category",
+    qb.Expr("COUNT(*)", "product_count"),
+    qb.Expr("AVG(price)", "avg_price"),
+).From("products").GroupBy("category")
+```
+
 ## Messaging Snapshot
 
 ```go

@@ -106,24 +106,13 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **YAGNI** → Don't build what isn't needed *today*.
 
 #### YAGNI Exceptions
-- Abstractions for **vendor differences** (databases, cloud providers) are justified
-- Test utilities justified **only if actively used** (measure utility function calls)
-- Breaking changes acceptable when justified for safety/correctness (see ADRs)
+Abstractions for vendor differences (databases, cloud providers) are justified. Test utilities only if actively used. Breaking changes acceptable for safety/correctness (see ADRs).
 
 ### Framework vs. Application Development
 
-**GoBricks Framework (this codebase):**
-- **Coverage Target:** 80% (SonarCloud enforced)
-- **Testing Rigor:** Race detection, multi-platform CI (Ubuntu/Windows × Go 1.24/1.25), comprehensive linting
-- **Quality Bar:** Production-grade stability—users depend on framework reliability
-- **Breaking Changes:** Acceptable when justified for safety/correctness (documented in ADRs)
+**GoBricks Framework (this codebase):** 80% coverage (SonarCloud enforced), race detection, multi-platform CI, production-grade stability. Breaking changes acceptable when justified (documented in ADRs).
 
-**Applications Built with GoBricks:**
-- **Coverage Target:** 60-70% on core business logic
-- **Testing Focus:** Happy paths + critical error scenarios
-- **Always Test:** Database queries, HTTP handlers, messaging consumers
-- **Defer:** Exotic configuration combinations, rare edge cases
-- **Iterate:** Expect some code to be throwaway/refactored as requirements evolve
+**Applications Built with GoBricks:** 60-70% coverage on core business logic, focus on happy paths + critical errors, always test database/HTTP/messaging, defer exotic edge cases, iterate on requirements
 
 ### Engineering Principles (Go & Architecture Mindset)
 - **Observability:** OpenTelemetry standards, W3C traceparent propagation across HTTP/messaging
@@ -137,44 +126,32 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 
 ## Development Commands
 
-### Essential Commands
 ```bash
 # Build and test
-go build ./...
-go test ./...
-go test -run TestSpecificFunction ./package
+go build ./...                  # Build all packages
+go test ./...                   # Run all tests
+go test -run TestName ./package # Run specific test
 
 # Pre-commit checks
 make check                      # Fast: framework only (fmt + lint + test)
 make check-all                  # Comprehensive: framework + tool (catches breaking changes)
 
-# Coverage
-make test-coverage              # Unit tests
-make test-integration           # Integration tests (requires Docker)
-make test-all                   # All tests
+# Testing
+make test                       # Unit tests with race detection
+make test-integration           # Integration tests (Docker required)
+make test-all                   # Unit + integration tests
+make test-coverage              # Coverage report
 
 # OpenAPI tool
 make build-tool                 # Build CLI binary
 make check-tool                 # Full tool validation
-cd tools/openapi && make check  # Alternative: run from tool directory
+make test-tool                  # Tool tests only
+make clean-tool                 # Clean artifacts
+
+# Other
+make build                      # Build project
+make lint                       # Run golangci-lint
 ```
-
-### Make Targets
-
-**Framework Targets:**
-- `make build` - Build project
-- `make test` - Unit tests with race detection
-- `make test-integration` - Integration tests (Docker required)
-- `make test-all` - Unit + integration tests
-- `make lint` - Run golangci-lint
-- `make check` - Pre-commit checks (fmt, lint, test)
-
-**Tool Integration Targets:**
-- `make build-tool` - Build OpenAPI CLI binary
-- `make test-tool` - Run tool tests only
-- `make check-tool` - Full tool validation (fmt, lint, test, validate-cli)
-- `make clean-tool` - Clean tool build artifacts
-- `make check-all` - Run all checks (framework + tool)
 
 ### Code Quality
 - Linting: `.golangci.yml` with staticcheck, gosec, gocritic
@@ -306,13 +283,7 @@ query := qb.Select("u.id", "u.name", "p.bio").
     LeftJoinOn(Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id")).
     Where(f.Eq("u.status", "active"))
 
-// Backward compatible: string table names still work
-query := qb.Select("*").From("users")
-
-// Mixed usage
-query := qb.Select("*").From("users", Table("profiles").As("p"))
-
-// Multiple JOINs with aliases and Raw conditions
+// Multiple JOINs with aliases
 query := qb.Select("*").
     From(Table("orders").As("o")).
     JoinOn(Table("customers").As("c"), jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
@@ -323,12 +294,7 @@ query := qb.Select("*").
     Where(f.Eq("o.id", 123))
 ```
 
-**Benefits:**
-- **Explicit**: No hidden parsing of alias syntax
-- **Type-safe**: Fail fast with panic on empty table/alias names
-- **Composable**: Same pattern for FROM and all JOIN types (JoinOn, LeftJoinOn, RightJoinOn, InnerJoinOn, CrossJoinOn)
-- **Oracle-safe**: Reserved word tables automatically quoted (`FROM "LEVEL" lvl`)
-- **Backward compatible**: String table names still work alongside TableRef
+**Benefits:** Explicit (no hidden parsing), type-safe (panics on empty names), composable (same pattern for all JOIN types), Oracle-safe (auto-quotes reserved words), backward compatible (string table names still work)
 
 **Mixed JOIN Conditions (v2.2+):**
 
@@ -359,10 +325,7 @@ query := qb.Select("*").
 // WHERE o.status = :4
 ```
 
-**Available Column-to-Value Methods:**
-- **Comparison:** `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`
-- **Collections:** `In`, `NotIn`, `Between`
-- **String/Null:** `Like`, `Null`, `NotNull`
+**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. See [llms.txt](llms.txt) for examples.
 
 **Expression Support:**
 All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders:
@@ -378,77 +341,39 @@ Use `jf.Raw()` only for conditions that type-safe methods cannot express (e.g., 
 
 #### Subquery Support
 
-The query builder supports subqueries in WHERE clauses using `EXISTS`, `NOT EXISTS`, and `IN` patterns with full vendor-specific placeholder handling.
+Supports subqueries in WHERE clauses with `EXISTS`, `NOT EXISTS`, and `IN` patterns. Type-safe with vendor-specific placeholder handling.
 
-**Quick Example:**
+**Example:**
 ```go
-// EXISTS with correlated subquery
-subquery := qb.Select("1").
-    From("reviews").
-    Where(jf.And(
-        jf.EqColumn("reviews.product_id", "p.id"),
-        f.Eq("reviews.rating", 5),
-    ))
+subquery := qb.Select("1").From("reviews").
+    Where(jf.And(jf.EqColumn("reviews.product_id", "p.id"), f.Eq("reviews.rating", 5)))
 
-query := qb.Select("p.name").
-    From(Table("products").As("p")).
-    Where(f.Exists(subquery))
+query := qb.Select("p.name").From(Table("products").As("p")).Where(f.Exists(subquery))
 // Oracle: SELECT p.name FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews.product_id = p.id AND reviews.rating = :1)
 ```
 
-**Key Features:**
-- Type-safe: Accepts `SelectQueryBuilder` interface directly
-- Correlated subqueries: Reference outer query aliases using `JoinFilter.EqColumn()`
-- Automatic placeholder numbering: Vendor-specific (`:1, :2` for Oracle, `$1, $2` for PostgreSQL)
-- Nested subqueries: Unlimited depth supported
-
-**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`
+**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`. Supports correlated subqueries and nested subqueries.
 
 **For comprehensive examples**, see [database/internal/builder/query_builder_test.go](database/internal/builder/query_builder_test.go)
 
 #### SELECT Expressions (v2.1+)
 
-The query builder supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY clauses for aggregations, functions, and calculations.
+Supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY for aggregations, functions, and calculations.
 
-**Quick Example:**
+**Example:**
 ```go
-// Aggregations with aliases
-query := qb.Select(
-    "category",
-    qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price"),
-).From("products").GroupBy("category")
-
-// Window functions
-qb.Select(
-    "product_id", "price",
-    qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
-).From("products")
+query := qb.Select("category", qb.Expr("COUNT(*)", "product_count"),
+    qb.Expr("AVG(price)", "avg_price")).From("products").GroupBy("category")
 ```
 
-**⚠️ SECURITY WARNING:**
-
-Raw SQL expressions are NOT escaped or sanitized. Never interpolate user input:
-
+**⚠️ SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
 ```go
-// ✅ SAFE - Static SQL only
-qb.Expr("COUNT(*)", "total")
-qb.Expr("UPPER(name)")
-
-// ❌ DANGER - SQL injection!
-qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // NEVER DO THIS
+qb.Expr("COUNT(*)", "total")  // ✅ SAFE
+qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // ❌ SQL INJECTION!
 ```
+Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`
 
-**Use WHERE with placeholders for dynamic values:**
-```go
-qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))  // Safe
-```
-
-**Common Use Cases:** Aggregations (`COUNT`, `SUM`, `AVG`), string functions (`UPPER`, `COALESCE`), date functions (`DATE`, `YEAR`), window functions (`ROW_NUMBER`, `RANK`)
-
-**Methods:** `qb.Expr(sql, alias...)`, `qb.Select(columns...)`, `.GroupBy(...)`, `.OrderBy(...)`
-
-**For security guidelines**, see ADR-005 in [wiki/architecture_decisions.md](wiki/architecture_decisions.md)
+**Common Use Cases:** Aggregations, string/date functions, window functions. See [llms.txt](llms.txt) for more examples and ADR-005 for security guidelines
 
 #### Struct-Based Column Extraction (v2.3+)
 
@@ -555,7 +480,6 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 GoBricks enforces **strict deduplication** to prevent message duplication bugs. Each unique `queue + consumer_tag + event_type` combination must be registered exactly once:
 
 ```go
-// ✅ CORRECT: Each consumer registered once
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
     decls.DeclareConsumer(&messaging.ConsumerOptions{
         Queue:     "events.queue",
@@ -566,88 +490,25 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
     decls.DeclareConsumer(&messaging.ConsumerOptions{
         Queue:     "events.queue",
-        Consumer:  "process-batch",  // Different consumer tag
+        Consumer:  "process-batch",  // Different consumer tag - OK
         EventType: "process-batch-events",
         Handler:   m.processHandler.Handle,
     }, nil)
 }
-
-// ❌ WRONG: Loop creates duplicates (panics on 2nd iteration)
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    for i := 0; i < 10; i++ {
-        decls.DeclareConsumer(opts, nil)  // PANIC: duplicate consumer
-    }
-}
-
-// ❌ WRONG: Conditional creates duplicates
-if config.EnableFeature {
-    decls.DeclareConsumer(opts, nil)
-}
-decls.DeclareConsumer(opts, nil)  // PANIC if feature enabled
 ```
 
-**Module Registration Error Handling**
+**Common Mistakes:**
+- Registering consumers in loops or conditional blocks (creates duplicates)
+- Calling `app.RegisterModule()` multiple times for the same module
+- Module registration errors are unrecoverable - MUST use `log.Fatal(err)` to handle
 
-Module registration errors are **unrecoverable** and MUST be handled with `log.Fatal()`:
-
-```go
-// ✅ CORRECT: FATAL error handling (required)
-func main() {
-    app := app.New(config)
-
-    if err := app.RegisterModule(issuanceModule); err != nil {
-        log.Fatal(err)  // REQUIRED - duplicate module is unrecoverable
-    }
-
-    app.Run()
-}
-
-// ❌ WRONG: Ignoring errors (silent failure)
-app.RegisterModule(issuanceModule)  // DO NOT DO THIS
-
-// ❌ WRONG: Duplicate registration
-app.RegisterModule(issuanceModule)
-app.RegisterModule(issuanceModule)  // Returns error (MUST use log.Fatal)
-```
-
-**Troubleshooting Duplicate Errors**
-
-If you see this panic:
-```
-panic: messaging: duplicate consumer declaration detected
-  queue=events.queue consumer=discover-pending event_type=discover-pending-events
-  Ensure each DeclareConsumer call is unique within DeclareMessaging
-```
-
-**Fix:** Review your module's `DeclareMessaging()` for loops, conditional logic, or accidental duplicate calls.
-
-If you see this error:
-```
-module registry: duplicate module 'issuance' detected (already registered *issuance.Module)
-```
-
-**Fix:** Ensure `app.RegisterModule(...)` called exactly once per module in `main.go`. MUST use `log.Fatal(err)` to handle this error.
-
-**Diagnostic Commands:**
-```bash
-# Check consumer startup logs
-grep "Starting AMQP consumers" logs/app.log
-
-# Check for duplicate warnings
-grep "Multiple consumers registered for same queue" logs/app.log
-
-# Verify module registration count
-grep "Registered module" logs/app.log
-```
+See [Troubleshooting](#troubleshooting) section for diagnosing duplicate consumer/module errors
 
 #### Message Error Handling
 
 **IMPORTANT:** GoBricks uses a **no-retry policy** for failed messages to prevent infinite retry loops.
 
-**Behavior:**
-- **All handler errors** → Message nacked WITHOUT requeue (message dropped)
-- **No automatic retry** → Prevents poison messages from blocking the queue forever
-- **Rich observability** → ERROR logs + OpenTelemetry metrics track all failures
+**Behavior:** All handler errors → Message nacked WITHOUT requeue (message dropped). Prevents poison messages from blocking queues. Rich ERROR logs + OpenTelemetry metrics track all failures.
 
 **Error Handling Pattern:**
 ```go
@@ -668,90 +529,33 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 }
 ```
 
-**Observability for Failed Messages:**
-- **ERROR logs** with structured fields: `message_id`, `queue`, `event_type`, `correlation_id`, `error`
-- **OpenTelemetry metrics:**
-  - `messaging.client.operation.duration` (with `error.type` attribute)
-  - `messaging.client.consumed.messages` counter NOT incremented (success only)
+**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `correlation_id`, `error`. OpenTelemetry metrics track operation duration with `error.type` attribute.
 
-**Best Practices:**
-1. **Thorough handler testing** → Prevent message loss due to bugs
-2. **Monitor ERROR logs** → Set up alerts for failed messages
-3. **Manual replay** → Use logs/trace IDs to identify and replay failed messages manually
-4. **Future DLQ support** → Dead-letter queue support planned for automatic retry with limits
+**Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay. Dead-letter queue support planned for future releases.
 
-**Migration Notes (Breaking Change in v2.X):**
-- **Previous behavior:** All errors triggered automatic requeue (infinite retry risk)
-- **New behavior:** All errors nack without requeue (message dropped with rich logging)
-- **Action required:** Review handler error handling and set up monitoring for failed messages
+**Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring
 
 ### Observability
 
-**Key Features:**
-- W3C traceparent propagation across HTTP/messaging
-- OpenTelemetry metrics: database operations, HTTP requests, AMQP, **Go runtime metrics**
-- Health endpoints: `/health` (liveness), `/ready` (readiness)
-- Dual-mode logging: action logs (100% sampling) + trace logs (WARN+ only)
-- Environment-aware batching: 500ms (dev), 5s (prod)
+**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging (action logs 100% sampling, trace logs WARN+ only), environment-aware batching (500ms dev, 5s prod)
 
-**Go Runtime Metrics (Automatic):**
-When observability is enabled, GoBricks automatically exports Go runtime metrics via OTLP:
-- **Memory:** `go.memory.used`, `go.memory.limit`, `go.memory.allocated`, `go.memory.allocations`, `go.memory.gc.goal`
-- **Goroutines:** `go.goroutine.count` (live goroutines)
-- **CPU:** `go.processor.limit` (GOMAXPROCS)
-- **Scheduler:** `go.schedule.duration` (goroutine scheduler latency histogram)
-- **Configuration:** `go.config.gogc` (GOGC setting)
+**Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
-These metrics follow [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/) and are collected using the official `go.opentelemetry.io/contrib/instrumentation/runtime` package. No additional configuration required—metrics automatically export when `observability.enabled: true`.
+**Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type` - action logs (100% sampling) vs trace logs (WARN+ only, ~95% reduction)
 
-**Dual-Mode Logging Architecture:**
-The framework uses `DualModeLogProcessor` to route logs based on `log.type` attribute:
-- **Action logs** (`log.type="action"`): Request summaries with 100% sampling, all severities
-- **Trace logs** (`log.type="trace"`): Application debug logs filtered to WARN+ only (~95% volume reduction)
+**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `server.EscalateSeverity(c, zerolog.WarnLevel)`. Configure `observability.logs.slow_request_threshold` for slow request detection.
 
-**Request Logging Lifecycle:**
-Each HTTP request tracks severity escalation via `requestLogContext` in Echo's context:
-```go
-// Automatic escalation from HTTP status (4xx→WARN, 5xx→ERROR)
-// Explicit escalation in application code:
-if rateLimiter.Exceeded() {
-    server.EscalateSeverity(c, zerolog.WarnLevel)
-}
-```
-
-**Slow Request Detection:**
-Configure `observability.logs.slow_request_threshold` (e.g., "750ms") to automatically escalate slow requests to WARN level, ensuring they appear in action logs.
-
-**Testing Observability:**
-Use `observability/testing` package for span/metric/log assertions:
-
+**Testing:** Use `observability/testing` package:
 ```go
 tp := obtest.NewTestTraceProvider()
-defer tp.Shutdown(context.Background())
-
-// Test spans
 spans := tp.Exporter.GetSpans()
 obtest.AssertSpanName(t, &spans[0], "operation")
-obtest.AssertSpanAttribute(t, &spans[0], "key", "value")
-
-// Test dual-mode logging
 obtest.AssertLogTypeExists(t, tp.LogExporter, "action")
-obtest.AssertLogMinSeverity(t, tp.LogExporter, "trace", log.SeverityWarn)
 ```
 
-**Debug Logging:**
-Enable internal observability debug logs by setting `GOBRICKS_DEBUG=true` or `GOBRICKS_DEBUG=1`:
-```bash
-GOBRICKS_DEBUG=true go run main.go
-```
-This shows detailed `[OBSERVABILITY]` logs for provider initialization, exporter setup, and span lifecycle tracking. Useful for troubleshooting observability configuration issues.
+**Debug Mode:** Set `GOBRICKS_DEBUG=true` for `[OBSERVABILITY]` logs (provider init, exporter setup, span lifecycle)
 
-**Common Issues:**
-- *Spans not appearing:* Check `observability.enabled: true`, wait for batch timeout (500ms dev, 5s prod)
-- *Logs not exported:* Verify `observability.logs.enabled: true` and logger uses JSON mode (`logger.pretty: false`)
-- *Pretty mode conflict:* Cannot use OTLP logs with `logger.pretty: true` (fails fast at startup)
-- *Debug spans:* Use `environment: development` and `trace.endpoint: stdout`
-- *Noisy debug logs:* If seeing `[OBSERVABILITY]` logs, ensure `GOBRICKS_DEBUG` is not set (default: disabled)
+**Common Issues:** Spans not appearing (check `observability.enabled`, wait for batch timeout), logs not exported (verify `observability.logs.enabled`, set `logger.pretty: false`), pretty mode conflict (fails fast at startup). See [Troubleshooting](#troubleshooting) for details
 
 ## Testing Guidelines
 
@@ -793,34 +597,19 @@ func TestFeature(t *testing.T) {
 
 ## Examples and Resources
 
-### Demo Project
-Comprehensive examples: [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project)
-- **config-injection/** - Configuration patterns
-- **openapi-demo/** - OpenAPI generation
-- **trace-propagation/** - W3C tracing
-- **oracle/** - Oracle database patterns
-- **multitenant-aws/** - Multi-tenant with AWS Secrets Manager
+**Demo Project:** [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Comprehensive examples for config injection, OpenAPI, tracing, Oracle, multi-tenant AWS
 
-### Documentation
-- **Architecture Decisions:** `wiki/architecture_decisions.md`
-- **Task Planning:** `.claude/tasks/archive/`
-- **Quick Examples:** `llms.txt` (LLM-optimized code snippets)
-- **Governance:** `.specify/memory/constitution.md`
+**Documentation:**
+- Architecture Decisions: `wiki/architecture_decisions.md`, Quick Examples: `llms.txt`
+- Governance: `.specify/memory/constitution.md`, Task Planning: `.claude/tasks/archive/`
 
 ## Database-Specific Notes
 
-### Oracle
-- Uses `:1`, `:2` placeholders (not `$1`, `$2`)
-- Automatic identifier quoting for reserved words
-- Service name vs SID connection options
-
-### PostgreSQL
-- Standard `$1`, `$2` placeholders
-- Optimized connection pooling with pgx driver
-
-### MongoDB
-- Document-based operations with SQL-like interface
-- Aggregation pipeline support
+| Database | Placeholders | Key Features |
+|----------|--------------|--------------|
+| **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options |
+| **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
+| **MongoDB** | N/A | Document-based with SQL-like interface, aggregation pipeline |
 
 ## OpenAPI Tool
 
@@ -907,16 +696,13 @@ golangci-lint run
 
 ```bash
 # Oracle: ORA-00936 "missing expression"
-# → Use type-safe WHERE methods instead of WhereRaw()
-.WhereEq("number", value)  # ✅ Auto-quotes reserved words
-.WhereRaw("number = ?", value)  # ❌ Manual quoting required
+# → Use type-safe WHERE methods (.WhereEq) instead of .WhereRaw() for auto-quoting
 
 # PostgreSQL: "syntax error at or near $1"
-# → Check placeholder numbering (PostgreSQL uses $1, $2; Oracle uses :1, :2)
+# → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
 
 # "database not configured" errors
-# → Explicitly set database.type, database.host OR database.connection_string
-# See ADR-003: Database by Intent configuration
+# → Set database.type, database.host OR database.connection_string (see ADR-003)
 ```
 
 **Observability Issues:**
@@ -926,16 +712,13 @@ golangci-lint run
 # → Set logger.pretty: false when observability.logs.enabled: true
 
 # Spans not appearing in collector
-# → Check observability.enabled: true
-# → Wait for batch timeout (500ms dev, 5s prod)
-# → Set trace.endpoint: stdout for local debugging
+# → Check observability.enabled: true, wait for batch timeout (500ms dev, 5s prod), or set trace.endpoint: stdout
 
 # Missing trace_id in logs
-# → Ensure logger.WithContext(ctx).Info() (not logger.Info())
-# → Verify observability provider initialized before logger enhancement
+# → Use logger.WithContext(ctx).Info(), verify provider initialized before logger enhancement
 
 # Noisy [OBSERVABILITY] debug logs
-# → Ensure GOBRICKS_DEBUG is not set (default: disabled)
+# → Unset GOBRICKS_DEBUG environment variable
 ```
 
 **CI/CD Issues:**
@@ -972,25 +755,18 @@ make check-all  # Run comprehensive validation (framework + tool)
 # "duplicate consumer declaration detected"
 # → Review module's DeclareMessaging() for loops or conditional duplicates
 # → Each queue+consumer+event_type must be registered exactly once
-# Example error:
-#   panic: messaging: duplicate consumer declaration detected
-#     queue=events.queue consumer=discover-pending event_type=discover-pending-events
-#     Ensure each DeclareConsumer call is unique within DeclareMessaging
 
 # "duplicate module 'X' detected"
 # → Ensure app.RegisterModule() called exactly once per module in main.go
 # → MUST use log.Fatal(err) to handle module registration errors
-# Example error:
-#   module registry: duplicate module 'issuance' detected (already registered *issuance.Module)
 
 # "attempt to replay different declarations for key"
-# → Manager detected conflicting messaging declarations for same tenant
 # → Declaration hash mismatch indicates configuration drift
 # → Review DeclareMessaging() for conditional logic or environment-specific declarations
 
-# Diagnostic: Check consumer counts
+# Diagnostic commands
 grep "Starting AMQP consumers" logs/app.log
-grep "Multiple consumers registered for same queue" logs/app.log  # Warning indicator
+grep "Multiple consumers registered for same queue" logs/app.log
 ```
 
 **Module Registration Issues:**
@@ -1043,40 +819,14 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 
 ### When to Use Each Tool
 
-**Use `make check`** when:
-- Daily development (fast feedback loop)
-- Working on framework code only
-- Pre-commit sanity checks
-- Quick validation before pushing changes
-
-**Use `make check-all`** when:
-- Modifying public interfaces (server, database, config, observability)
-- Before creating PRs with framework API changes
-- Changing struct tags or validation logic
-- Refactoring shared types or error handling
-
-**Use `make test-integration`** when:
-- Testing database vendor differences (Oracle/PostgreSQL/MongoDB)
-- Validating messaging patterns with real AMQP brokers
-- New contracts or contract changes requiring testcontainers
-- Verifying multi-platform compatibility
-
-**Use SpecKit commands** when:
-- Planning multi-step features (>3 tasks)
-- Need structured task breakdown with dependencies
-- Working with complex feature specifications
-- Want consistent documentation artifacts (spec.md, plan.md, tasks.md)
-
-**Use `go test -run TestName`** when:
-- Debugging a specific failing test
-- Iterating on a single test case
-- Want fast feedback on one unit test
-
-**Use SonarCloud** when:
-- Checking coverage metrics (80% target)
-- Reviewing code quality trends over time
-- Identifying code smells or technical debt
-- Preparing for release (quality gate validation)
+| Tool | Primary Use Case |
+|------|------------------|
+| `make check` | Daily development, pre-commit checks (fast feedback on framework code) |
+| `make check-all` | Before PRs that modify public interfaces (server, database, config, observability) |
+| `make test-integration` | Testing database/messaging vendor differences (requires Docker) |
+| SpecKit commands | Planning multi-step features (>3 tasks) with structured task breakdown |
+| `go test -run TestName` | Debugging specific failing tests, fast iteration on single test cases |
+| SonarCloud | Coverage metrics (80% target), quality gate validation before releases |
 
 ## File Organization
 - **internal/** - Private packages
