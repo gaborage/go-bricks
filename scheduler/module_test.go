@@ -130,14 +130,19 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	// Wait until the job executes (<=1s)
 	waitFor(t, job.wasExecuted)
 
-	// Collect metrics
+	// Wait until metrics show the panic increment to avoid races with asynchronous instrumentation
+	require.Eventually(t, func() bool {
+		rm := mp.Collect(t)
+		return obtest.FindMetric(rm, "job.panic.total") != nil &&
+			obtest.FindMetric(rm, "job.execution.total") != nil
+	}, time.Second, 10*time.Millisecond, "Panic counter metric should be recorded")
+
+	// Collect metrics once more for assertions
 	rm := mp.Collect(t)
 
-	// Verify panic counter was incremented
 	panicMetric := obtest.FindMetric(rm, "job.panic.total")
 	require.NotNil(t, panicMetric, "Panic counter metric should be recorded")
 
-	// Verify execution counter also recorded the panic
 	execMetric := obtest.FindMetric(rm, "job.execution.total")
 	require.NotNil(t, execMetric, "Execution counter metric should be recorded")
 }
@@ -213,9 +218,10 @@ func TestJobExecutionWithDBGetterError(t *testing.T) {
 	err = module.FixedRate("db-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait until the job executes (<=1s)
-	waitFor(t, job.wasExecuted)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&job.dbWasNil), "DB should be nil when getter fails")
+	// Wait until the job asserts the expected state (<=1s)
+	require.Eventually(t, func() bool {
+		return job.wasExecuted() && atomic.LoadInt32(&job.dbWasNil) == 1
+	}, time.Second, 10*time.Millisecond, "DB should be nil when getter fails")
 }
 
 // TestJobExecutionWithMessagingGetterError verifies error handling when messaging getter fails
@@ -249,9 +255,10 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 	err = module.FixedRate("msg-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
-	// Wait until the job executes (<=1s)
-	waitFor(t, job.wasExecuted)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&job.messagingWasNil), "Messaging should be nil when getter fails")
+	// Wait until the job asserts the expected state (<=1s)
+	require.Eventually(t, func() bool {
+		return job.wasExecuted() && atomic.LoadInt32(&job.messagingWasNil) == 1
+	}, time.Second, 10*time.Millisecond, "Messaging should be nil when getter fails")
 }
 
 // TestSlowJobThresholdWarning verifies slow job detection and WARN severity
