@@ -427,7 +427,7 @@ qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // ❌ SQL INJECTION!
 ```
 Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`
 
-**Common Use Cases:** Aggregations, string/date functions, window functions. See [llms.txt](llms.txt) for more examples and ADR-005 for security guidelines
+**Common Use Cases:** Aggregations, string/date functions, window functions. See [llms.txt](llms.txt) for more examples and [ADR-005](wiki/adr-005-type-safe-where-clauses.md) for security guidelines
 
 #### Struct-Based Column Extraction (v0.15.0+)
 
@@ -488,7 +488,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Vendor Quoting:** Oracle auto-quotes reserved words (`"NUMBER"`, `"LEVEL"`), PostgreSQL/MongoDB no quoting
 
-**For detailed examples** (INSERT, JOINs, complex queries), see [llms.txt](llms.txt) and ADR-007 in [wiki/architecture_decisions.md](wiki/architecture_decisions.md)
+**For detailed examples** (INSERT, JOINs, complex queries), see [llms.txt](llms.txt) and [ADR-007](wiki/adr-007-struct-based-columns.md)
 
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
@@ -756,7 +756,7 @@ golangci-lint run
 # → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
 
 # "database not configured" errors
-# → Set database.type, database.host OR database.connection_string (see ADR-003)
+# → Set database.type, database.host OR database.connection_string (see [ADR-003](wiki/adr-003-database-by-intent.md))
 ```
 
 **Observability Issues:**
@@ -800,7 +800,7 @@ make check-all  # Run comprehensive validation (framework + tool)
 # Messaging registry initialization errors
 # → Check logs for "messaging not configured" warnings
 # → Verify messaging.broker.url set for each tenant
-# → See ADR-004 for lazy registry creation details
+# → See [ADR-004](wiki/adr-004-lazy-messaging-registry.md) for lazy registry creation details
 ```
 
 **Messaging Issues:**
@@ -885,7 +885,7 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 ## File Organization
 - **internal/** - Private packages
 - **tools/** - Development tooling (OpenAPI generator)
-- **wiki/** - Architecture documentation (see ADR-006 for dual-mode logging)
+- **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
 - **.claude/tasks/** - Development task planning
 - **.specify/** - SpecKit feature development workflow
   - **memory/constitution.md** - Project governance framework
