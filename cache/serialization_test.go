@@ -1,9 +1,6 @@
 package cache
 
 import (
-	"bytes"
-	"encoding/gob"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +36,8 @@ type NestedStruct struct {
 	Settings map[string]SimpleStruct
 }
 
-func TestMarshalUnmarshal_Basic(t *testing.T) {
+// TestMarshalUnmarshalBasic tests basic marshal/unmarshal functionality.
+func TestMarshalUnmarshalBasic(t *testing.T) {
 	t.Run("SimpleStruct", func(t *testing.T) {
 		original := SimpleStruct{ID: 123, Name: "Alice"}
 
@@ -95,7 +93,8 @@ func TestMarshalUnmarshal_Basic(t *testing.T) {
 	})
 }
 
-func TestMarshalUnmarshal_EdgeCases(t *testing.T) {
+// TestMarshalUnmarshalEdgeCases tests edge cases for marshal/unmarshal.
+func TestMarshalUnmarshalEdgeCases(t *testing.T) {
 	t.Run("EmptyStruct", func(t *testing.T) {
 		original := SimpleStruct{}
 
@@ -197,7 +196,8 @@ func TestMarshalUnmarshal_EdgeCases(t *testing.T) {
 	})
 }
 
-func TestMarshalUnmarshal_NestedStructures(t *testing.T) {
+// TestMarshalUnmarshalNestedStructures tests nested structures.
+func TestMarshalUnmarshalNestedStructures(t *testing.T) {
 	t.Run("NestedStruct", func(t *testing.T) {
 		original := NestedStruct{
 			ID:   1,
@@ -219,7 +219,8 @@ func TestMarshalUnmarshal_NestedStructures(t *testing.T) {
 	})
 }
 
-func TestMarshalUnmarshal_PointerTypes(t *testing.T) {
+// TestMarshalUnmarshalPointerTypes tests marshal/unmarshal of pointer types.
+func TestMarshalUnmarshalPointerTypes(t *testing.T) {
 	t.Run("PointerStruct", func(t *testing.T) {
 		original := &SimpleStruct{ID: 123, Name: "Alice"}
 
@@ -245,7 +246,8 @@ func TestMarshalUnmarshal_PointerTypes(t *testing.T) {
 	})
 }
 
-func TestMarshalUnmarshal_PrimitiveTypes(t *testing.T) {
+// TestMarshalUnmarshalPrimitiveTypes tests marshal/unmarshal of primitive types.
+func TestMarshalUnmarshalPrimitiveTypes(t *testing.T) {
 	tests := []struct {
 		name  string
 		value any
@@ -377,170 +379,4 @@ func TestInvalidData(t *testing.T) {
 		_, err := Unmarshal[SimpleStruct](emptyData)
 		assert.Error(t, err)
 	})
-}
-
-// Benchmarks comparing CBOR vs JSON vs gob
-
-func BenchmarkMarshal_CBOR_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Marshal(data)
-	}
-}
-
-func BenchmarkMarshal_JSON_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = json.Marshal(data)
-	}
-}
-
-func BenchmarkMarshal_Gob_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var buf bytes.Buffer
-		enc := gob.NewEncoder(&buf)
-		_ = enc.Encode(data)
-	}
-}
-
-func BenchmarkUnmarshal_CBOR_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	encoded, _ := Marshal(data)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Unmarshal[SimpleStruct](encoded)
-	}
-}
-
-func BenchmarkUnmarshal_JSON_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	encoded, _ := json.Marshal(data)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var result SimpleStruct
-		_ = json.Unmarshal(encoded, &result)
-	}
-}
-
-func BenchmarkUnmarshal_Gob_Simple(b *testing.B) {
-	data := SimpleStruct{ID: 123, Name: "Alice"}
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	_ = enc.Encode(data)
-	encoded := buf.Bytes()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var result SimpleStruct
-		dec := gob.NewDecoder(bytes.NewReader(encoded))
-		_ = dec.Decode(&result)
-	}
-}
-
-func BenchmarkMarshal_CBOR_Complex(b *testing.B) {
-	data := ComplexStruct{
-		ID:   789,
-		Name: "Charlie",
-		Tags: []string{"admin", "user", "moderator"},
-		Metadata: map[string]any{
-			"role":  "admin",
-			"level": 5,
-			"score": 98.5,
-		},
-		CreatedAt: time.Now(),
-		IsActive:  true,
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Marshal(data)
-	}
-}
-
-func BenchmarkMarshal_JSON_Complex(b *testing.B) {
-	data := ComplexStruct{
-		ID:   789,
-		Name: "Charlie",
-		Tags: []string{"admin", "user", "moderator"},
-		Metadata: map[string]any{
-			"role":  "admin",
-			"level": 5,
-			"score": 98.5,
-		},
-		CreatedAt: time.Now(),
-		IsActive:  true,
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = json.Marshal(data)
-	}
-}
-
-func BenchmarkUnmarshal_CBOR_Complex(b *testing.B) {
-	data := ComplexStruct{
-		ID:   789,
-		Name: "Charlie",
-		Tags: []string{"admin", "user", "moderator"},
-		Metadata: map[string]any{
-			"role":  "admin",
-			"level": 5,
-			"score": 98.5,
-		},
-		CreatedAt: time.Now(),
-		IsActive:  true,
-	}
-	encoded, _ := Marshal(data)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Unmarshal[ComplexStruct](encoded)
-	}
-}
-
-func BenchmarkUnmarshal_JSON_Complex(b *testing.B) {
-	data := ComplexStruct{
-		ID:   789,
-		Name: "Charlie",
-		Tags: []string{"admin", "user", "moderator"},
-		Metadata: map[string]any{
-			"role":  "admin",
-			"level": 5,
-			"score": 98.5,
-		},
-		CreatedAt: time.Now(),
-		IsActive:  true,
-	}
-	encoded, _ := json.Marshal(data)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var result ComplexStruct
-		_ = json.Unmarshal(encoded, &result)
-	}
-}
-
-func BenchmarkMarshal_CBOR_Optimized(b *testing.B) {
-	data := OptimizedStruct{
-		ID:    456,
-		Name:  "Bob",
-		Email: "bob@example.com",
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Marshal(data)
-	}
-}
-
-func BenchmarkUnmarshal_CBOR_Optimized(b *testing.B) {
-	data := OptimizedStruct{
-		ID:    456,
-		Name:  "Bob",
-		Email: "bob@example.com",
-	}
-	encoded, _ := Marshal(data)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = Unmarshal[OptimizedStruct](encoded)
-	}
 }
