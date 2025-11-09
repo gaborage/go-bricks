@@ -250,51 +250,71 @@ Unified `database.Interface` supporting PostgreSQL, Oracle, MongoDB with:
 - `database/internal/tracking/` - Performance metrics
 - `database/internal/builder/` - Query builder implementations
 
-#### Breaking Change: Type-Safe WHERE Clauses (v2.0)
+#### Breaking Change: Struct-Based Column Extraction (v0.15.0+)
 
-**Problem:** Raw string WHERE clauses bypass Oracle identifier quoting:
+**Problem:** Raw string column names bypass Oracle identifier quoting and lack type safety:
 ```go
-// ❌ OLD - fails with Oracle reserved words
+// ❌ OLD (pre-v0.15.0) - raw strings, no auto-quoting, no refactor safety
 query := qb.Select("id", "number").From("accounts").Where("number = ?", value)
 ```
 
-**Solution:** Use type-safe methods:
+**Solution:** Use struct-based column extraction with type-safe methods:
 ```go
-// ✅ NEW - automatic quoting
-query := qb.Select("id", "number").From("accounts").WhereEq("number", value)
+// ✅ NEW (v0.15.0+) - struct-based with auto-quoting and compile-time safety
+type Account struct {
+    ID     int64  `db:"id"`
+    Number string `db:"number"`  // Oracle reserved word - auto-quoted
+}
+
+cols := qb.Columns(&Account{})
+f := qb.Filter()
+
+query := qb.Select(cols.Fields("ID", "Number")...).
+    From("accounts").
+    Where(f.Eq(cols.Col("Number"), value))
+// Oracle: SELECT "ID", "NUMBER" FROM accounts WHERE "NUMBER" = :1
 ```
 
-**Type-Safe Methods:** `WhereEq`, `WhereNotEq`, `WhereLt/Lte/Gt/Gte`, `WhereIn/NotIn`, `WhereLike`, `WhereNull/NotNull`, `WhereBetween`
+**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Null/NotNull`, `f.Between`
 
 **Escape Hatch:** `WhereRaw(condition, args...)` - user must manually quote Oracle reserved words
 
 #### Table Aliases
 
-The query builder supports table aliases using a structured API for type safety and explicitness:
+The query builder supports table aliases with struct-based columns using the `As()` method for type safety and auto-quoting:
 
 ```go
+type User struct {
+    ID     int64  `db:"id"`
+    Name   string `db:"name"`
+    Status string `db:"status"`
+}
+
+type Profile struct {
+    UserID int64  `db:"user_id"`
+    Bio    string `db:"bio"`
+}
+
 qb := builder.NewQueryBuilder(dbtypes.Oracle)
 jf := qb.JoinFilter()
 f := qb.Filter()
 
-// Table aliases with Table().As() syntax
-query := qb.Select("u.id", "u.name", "p.bio").
-    From(Table("users").As("u")).
-    LeftJoinOn(Table("profiles").As("p"), jf.EqColumn("u.id", "p.user_id")).
-    Where(f.Eq("u.status", "active"))
+userCols := qb.Columns(&User{})
+profileCols := qb.Columns(&Profile{})
 
-// Multiple JOINs with aliases
-query := qb.Select("*").
-    From(Table("orders").As("o")).
-    JoinOn(Table("customers").As("c"), jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
-    JoinOn(Table("products").As("p"), jf.And(
-        jf.Raw("p.sku = o.product_sku"),
-        jf.Raw("p.status = ?", "active"),
-    )).
-    Where(f.Eq("o.id", 123))
+// Create aliased instances using As()
+u := userCols.As("u")
+p := profileCols.As("p")
+
+query := qb.Select(u.Col("ID"), u.Col("Name"), p.Col("Bio")).
+    From(dbtypes.Table("users").As("u")).
+    LeftJoinOn(dbtypes.Table("profiles").As("p"),
+        jf.EqColumn(u.Col("ID"), p.Col("UserID"))).
+    Where(f.Eq(u.Col("Status"), "active"))
+// Oracle: SELECT u."ID", u."NAME", p."BIO" FROM users u LEFT JOIN profiles p ON u."ID" = p."USER_ID" WHERE u."STATUS" = :1
 ```
 
-**Benefits:** Explicit (no hidden parsing), type-safe (panics on empty names), composable (same pattern for all JOIN types), Oracle-safe (auto-quotes reserved words), backward compatible (string table names still work)
+**Benefits:** Struct-based (DRY principle), type-safe (compile-time field validation), auto-quoting (Oracle reserved words), refactor-friendly (rename struct fields → compiler catches all references), immutable (As() returns new instance)
 
 **Mixed JOIN Conditions (v2.2+):**
 
@@ -345,11 +365,34 @@ Supports subqueries in WHERE clauses with `EXISTS`, `NOT EXISTS`, and `IN` patte
 
 **Example:**
 ```go
-subquery := qb.Select("1").From("reviews").
-    Where(jf.And(jf.EqColumn("reviews.product_id", "p.id"), f.Eq("reviews.rating", 5)))
+type Review struct {
+    ProductID int64 `db:"product_id"`
+    Rating    int   `db:"rating"`
+}
 
-query := qb.Select("p.name").From(Table("products").As("p")).Where(f.Exists(subquery))
-// Oracle: SELECT p.name FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews.product_id = p.id AND reviews.rating = :1)
+type Product struct {
+    ID   int64  `db:"id"`
+    Name string `db:"name"`
+}
+
+reviewCols := qb.Columns(&Review{})
+productCols := qb.Columns(&Product{})
+
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+p := productCols.As("p")
+
+subquery := qb.Select("1").From("reviews").
+    Where(jf.And(
+        jf.EqColumn("reviews."+reviewCols.Col("ProductID"), p.Col("ID")),
+        f.Eq(reviewCols.Col("Rating"), 5),
+    ))
+
+query := qb.Select(p.Col("Name")).
+    From(dbtypes.Table("products").As("p")).
+    Where(f.Exists(subquery))
+// Oracle: SELECT p."NAME" FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews."PRODUCT_ID" = p."ID" AND "RATING" = :1)
 ```
 
 **Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`. Supports correlated subqueries and nested subqueries.
@@ -362,8 +405,19 @@ Supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY for aggregations,
 
 **Example:**
 ```go
-query := qb.Select("category", qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price")).From("products").GroupBy("category")
+type Product struct {
+    Category string  `db:"category"`
+    Price    float64 `db:"price"`
+}
+
+cols := qb.Columns(&Product{})
+
+query := qb.Select(
+    cols.Col("Category"),
+    qb.Expr("COUNT(*)", "product_count"),
+    qb.Expr("AVG(price)", "avg_price"),
+).From("products").GroupBy(cols.Col("Category"))
+// Oracle: SELECT "CATEGORY", COUNT(*) AS product_count, AVG(price) AS avg_price FROM products GROUP BY "CATEGORY"
 ```
 
 **⚠️ SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
@@ -375,7 +429,7 @@ Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Wh
 
 **Common Use Cases:** Aggregations, string/date functions, window functions. See [llms.txt](llms.txt) for more examples and ADR-005 for security guidelines
 
-#### Struct-Based Column Extraction (v2.3+)
+#### Struct-Based Column Extraction (v0.15.0+)
 
 GoBricks eliminates column repetition through struct-based column management using `db:"column_name"` tags.
 
@@ -405,13 +459,13 @@ query := qb.Select(cols.Fields("ID", "Name")...).From("users")
 // WHERE with auto-quoting
 query := qb.Select(cols.All()...).
     From("users").
-    Where(f.Eq(cols.Get("Level"), 5))
+    Where(f.Eq(cols.Col("Level"), 5))
 // Oracle: SELECT "ID", "NAME", "LEVEL" FROM users WHERE "LEVEL" = :1
 
 // UPDATE operations
 qb.Update("users").
-    Set(cols.Get("Name"), "Jane").
-    Where(f.Eq(cols.Get("ID"), 123))
+    Set(cols.Col("Name"), "Jane").
+    Where(f.Eq(cols.Col("ID"), 123))
 ```
 
 **Common Pattern (Service-Level Caching):**
