@@ -118,12 +118,23 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 ## Database Builder & Operations
 
 ```go
+// Define entity with db tags
+type User struct {
+    ID     int64  `db:"id"`
+    Email  string `db:"email"`
+    Status string `db:"status"`
+}
+
 qb := builder.NewQueryBuilder(m.db.DatabaseType())
 f := qb.Filter()
+cols := qb.Columns(&User{})
 
-sql, args := qb.Select("id", "email").
+sql, args := qb.Select(cols.Fields("ID", "Email")...).
 	From("users").
-	Where(f.And(f.Eq("status", "active"), f.Like("email", "%@example.com"))).
+	Where(f.And(
+		f.Eq(cols.Col("Status"), "active"),
+		f.Like(cols.Col("Email"), "%@example.com"),
+	)).
 	ToSQL()
 
 ctx := context.Background() // or propagate incoming request context
@@ -139,9 +150,34 @@ rows, err := m.db.Query(ctx, sql, args...)
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
 | Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work */; if err := tx.Commit(ctx); err != nil { return err }` |
 
+**Mutation Examples (INSERT/UPDATE/DELETE):**
+
+```go
+// INSERT
+sql, args := qb.Insert("users").
+    Columns(cols.Col("Name"), cols.Col("Email")).
+    Values("Alice", "alice@example.com").
+    ToSQL()
+result, err := m.db.Exec(ctx, sql, args...)
+
+// UPDATE
+sql, args := qb.Update("users").
+    Set(cols.Col("Name"), "Bob").
+    Set(cols.Col("Email"), "bob@example.com").
+    Where(f.Eq(cols.Col("ID"), 123)).
+    ToSQL()
+result, err := m.db.Exec(ctx, sql, args...)
+
+// DELETE
+sql, args := qb.Delete("users").
+    Where(f.Eq(cols.Col("ID"), 123)).
+    ToSQL()
+result, err := m.db.Exec(ctx, sql, args...)
+```
+
 Access to vendor quirks (Oracle quoting, Mongo builders) routes through the same interface; switching drivers requires config only.
 
-**Struct-Based Columns (v2.3+):**
+**Struct-Based Columns (v0.15.0+):**
 
 ```go
 // Define entity once with db tags
@@ -157,13 +193,50 @@ cols := qb.Columns(&User{})
 // SELECT with type-safe field references
 query := qb.Select(cols.Fields("ID", "Name")...).
     From("users").
-    Where(f.Eq(cols.Get("Level"), 5))
+    Where(f.Eq(cols.Col("Level"), 5))
 // Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
 // PostgreSQL: SELECT id, name FROM users WHERE level = $1
 
 // All columns: cols.All()
-// Single column: cols.Get("FieldName")
+// Single column: cols.Col("FieldName")
+// Multiple columns: cols.Fields("ID", "Name", "Email")
 // Performance: ~0.6µs first parse, ~26ns cached access
+```
+
+**Table Aliases with Struct-Based Columns:**
+
+```go
+type User struct {
+    ID     int64  `db:"id"`
+    Name   string `db:"name"`
+    Status string `db:"status"`
+}
+
+type Account struct {
+    ID     int64  `db:"id"`
+    Number string `db:"number"` // Oracle reserved word - auto-quoted
+}
+
+userCols := qb.Columns(&User{})
+acctCols := qb.Columns(&Account{})
+
+// Create aliased instances using As()
+u := userCols.As("u")
+a := acctCols.As("a")
+
+jf := qb.JoinFilter()
+f := qb.Filter()
+
+query := qb.Select(
+    u.Col("ID"),      // "u.id" or "u.\"ID\"" for Oracle
+    u.Col("Name"),    // "u.name" or "u.\"NAME\"" for Oracle
+    a.Col("Number"),  // "a.\"NUMBER\"" for Oracle (reserved word)
+).
+    From(dbtypes.Table("users").As("u")).
+    JoinOn(dbtypes.Table("accounts").As("a"),
+        jf.EqColumn(u.Col("ID"), a.Col("ID"))).
+    Where(f.Eq(u.Col("Status"), "active"))
+// Oracle: SELECT u."ID", u."NAME", a."NUMBER" FROM users u JOIN accounts a ON u."ID" = a."ID" WHERE u."STATUS" = :1
 ```
 
 **Advanced JOIN Patterns:**
@@ -190,18 +263,26 @@ query := qb.Select("*").
 **Window Functions & Aggregations:**
 
 ```go
+type Product struct {
+    ProductID int64   `db:"product_id"`
+    Price     float64 `db:"price"`
+    Category  string  `db:"category"`
+}
+cols := qb.Columns(&Product{})
+
 // Window function with PARTITION BY
 query := qb.Select(
-    "product_id", "price",
+    cols.Col("ProductID"),
+    cols.Col("Price"),
     qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
 ).From("products")
 
 // Aggregations with GROUP BY
 query := qb.Select(
-    "category",
+    cols.Col("Category"),
     qb.Expr("COUNT(*)", "product_count"),
     qb.Expr("AVG(price)", "avg_price"),
-).From("products").GroupBy("category")
+).From("products").GroupBy(cols.Col("Category"))
 ```
 
 ## Messaging Snapshot
