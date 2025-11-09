@@ -64,7 +64,10 @@ type ConnectionError struct {
 
 // Error implements the error interface.
 func (e *ConnectionError) Error() string {
-	return fmt.Sprintf("cache connection error: %s failed for %s: %v", e.Op, e.Address, e.Err)
+	if e.Err != nil {
+		return fmt.Sprintf("cache connection error: %s failed for %s: %v", e.Op, e.Address, e.Err)
+	}
+	return fmt.Sprintf("cache connection error: %s failed for %s", e.Op, e.Address)
 }
 
 // Unwrap returns the underlying error for errors.Is/As support.
@@ -91,7 +94,10 @@ type OperationError struct {
 
 // Error implements the error interface.
 func (e *OperationError) Error() string {
-	return fmt.Sprintf("cache operation error: %s failed for key %q: %v", e.Op, e.Key, e.Err)
+	if e.Err != nil {
+		return fmt.Sprintf("cache operation error: %s failed for key %q: %v", e.Op, e.Key, e.Err)
+	}
+	return fmt.Sprintf("cache operation error: %s failed for key %q", e.Op, e.Key)
 }
 
 // Unwrap returns the underlying error for errors.Is/As support.
