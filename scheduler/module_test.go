@@ -130,14 +130,19 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	// Wait until the job executes (<=1s)
 	waitFor(t, job.wasExecuted)
 
-	// Collect metrics
+	// Wait until metrics show the panic increment to avoid races with asynchronous instrumentation
+	require.Eventually(t, func() bool {
+		rm := mp.Collect(t)
+		return obtest.FindMetric(rm, "job.panic.total") != nil &&
+			obtest.FindMetric(rm, "job.execution.total") != nil
+	}, time.Second, 10*time.Millisecond, "Panic counter metric should be recorded")
+
+	// Collect metrics once more for assertions
 	rm := mp.Collect(t)
 
-	// Verify panic counter was incremented
 	panicMetric := obtest.FindMetric(rm, "job.panic.total")
 	require.NotNil(t, panicMetric, "Panic counter metric should be recorded")
 
-	// Verify execution counter also recorded the panic
 	execMetric := obtest.FindMetric(rm, "job.execution.total")
 	require.NotNil(t, execMetric, "Execution counter metric should be recorded")
 }
