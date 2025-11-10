@@ -1,0 +1,546 @@
+package redis
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/cache"
+)
+
+const (
+	testKey1 = "test:key:1"
+	testKey2 = "test:key:2"
+)
+
+// setupTestRedis creates a miniredis server and client for testing.
+func setupTestRedis(t *testing.T) (*Client, *miniredis.Miniredis) {
+	t.Helper()
+
+	mr := miniredis.RunT(t)
+
+	cfg := &Config{
+		Host:     mr.Host(),
+		Port:     mr.Server().Addr().Port,
+		Database: 0,
+		PoolSize: 10,
+	}
+
+	client, err := NewClient(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	return client, mr
+}
+
+func TestNewClient(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		assert.NotNil(t, client)
+		assert.NotNil(t, client.client)
+		assert.False(t, client.closed)
+	})
+
+	t.Run("InvalidConfig", func(t *testing.T) {
+		cfg := &Config{
+			Host: "", // Missing host
+			Port: 6379,
+		}
+
+		client, err := NewClient(cfg)
+		assert.Error(t, err)
+		assert.Nil(t, client)
+
+		var configErr *cache.ConfigError
+		assert.True(t, errors.As(err, &configErr))
+	})
+
+	t.Run("ConnectionFailed", func(t *testing.T) {
+		cfg := &Config{
+			Host:        "localhost",
+			Port:        99999, // Invalid port
+			Database:    0,
+			DialTimeout: 100 * time.Millisecond,
+		}
+
+		client, err := NewClient(cfg)
+		assert.Error(t, err)
+		assert.Nil(t, client)
+	})
+}
+
+func TestClient_Get(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "test-value")
+
+		ctx := context.Background()
+		result, err := client.Get(ctx, testKey1)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("test-value"), result)
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		result, err := client.Get(ctx, "nonexistent")
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.True(t, errors.Is(err, cache.ErrNotFound))
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		result, err := client.Get(ctx, testKey1)
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_Set(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		err := client.Set(ctx, testKey1, []byte("value"), 5*time.Minute)
+		require.NoError(t, err)
+
+		// Verify with miniredis
+		assert.True(t, mr.Exists(testKey1))
+		value, _ := mr.Get(testKey1)
+		assert.Equal(t, "value", value)
+	})
+
+	t.Run("InvalidTTL", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		err := client.Set(ctx, testKey1, []byte("value"), 0)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+	})
+
+	t.Run("NegativeTTL", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		err := client.Set(ctx, testKey1, []byte("value"), -1*time.Second)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		err := client.Set(ctx, testKey1, []byte("value"), 5*time.Minute)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_Delete(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "value")
+
+		ctx := context.Background()
+		err := client.Delete(ctx, testKey1)
+		require.NoError(t, err)
+
+		// Verify deletion
+		assert.False(t, mr.Exists(testKey1))
+	})
+
+	t.Run("NonexistentKey", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		err := client.Delete(ctx, "nonexistent")
+		assert.NoError(t, err) // Delete of nonexistent key is not an error
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		err := client.Delete(ctx, testKey1)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_GetOrSet(t *testing.T) {
+	t.Run("NewKey_SetSuccess", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("new-value"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.True(t, wasSet)
+		assert.Equal(t, []byte("new-value"), value)
+
+		// Verify in Redis
+		assert.True(t, mr.Exists(testKey1))
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "new-value", stored)
+	})
+
+	t.Run("ExistingKey_GetSuccess", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "existing-value")
+
+		ctx := context.Background()
+		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("new-value"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.False(t, wasSet)
+		assert.Equal(t, []byte("existing-value"), value)
+
+		// Verify original value unchanged
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "existing-value", stored)
+	})
+
+	t.Run("InvalidTTL", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("value"), 0)
+		assert.Error(t, err)
+		assert.False(t, wasSet)
+		assert.Nil(t, value)
+		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("value"), 5*time.Minute)
+		assert.Error(t, err)
+		assert.False(t, wasSet)
+		assert.Nil(t, value)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_CompareAndSet(t *testing.T) {
+	t.Run("AcquireLock_Success", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("worker-1"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.True(t, success)
+
+		// Verify in Redis
+		assert.True(t, mr.Exists(testKey1))
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "worker-1", stored)
+	})
+
+	t.Run("AcquireLock_AlreadyHeld", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "worker-1")
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("worker-2"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.False(t, success)
+
+		// Verify original value unchanged
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "worker-1", stored)
+	})
+
+	t.Run("UpdateValue_Success", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "old-value")
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, []byte("old-value"), []byte("new-value"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.True(t, success)
+
+		// Verify updated value
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "new-value", stored)
+	})
+
+	t.Run("UpdateValue_Mismatch", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		defer client.Close()
+
+		mr.Set(testKey1, "current-value")
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, []byte("wrong-value"), []byte("new-value"), 5*time.Minute)
+		require.NoError(t, err)
+		assert.False(t, success)
+
+		// Verify original value unchanged
+		stored, _ := mr.Get(testKey1)
+		assert.Equal(t, "current-value", stored)
+	})
+
+	t.Run("InvalidTTL", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("value"), 0)
+		assert.Error(t, err)
+		assert.False(t, success)
+		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("value"), 5*time.Minute)
+		assert.Error(t, err)
+		assert.False(t, success)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_Health(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		ctx := context.Background()
+		err := client.Health(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		ctx := context.Background()
+		err := client.Health(ctx)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_Stats(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		defer client.Close()
+
+		stats, err := client.Stats()
+		require.NoError(t, err)
+		assert.NotNil(t, stats)
+
+		// Verify expected fields
+		assert.Contains(t, stats, "redis_info")
+		assert.Contains(t, stats, "pool_hits")
+		assert.Contains(t, stats, "pool_misses")
+		assert.Contains(t, stats, "pool_timeouts")
+		assert.Contains(t, stats, "pool_total_conns")
+		assert.Contains(t, stats, "pool_idle_conns")
+		assert.Contains(t, stats, "pool_stale_conns")
+	})
+
+	t.Run("Closed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		stats, err := client.Stats()
+		assert.Error(t, err)
+		assert.Nil(t, stats)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestClient_Close(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+
+		err := client.Close()
+		assert.NoError(t, err)
+		assert.True(t, client.closed)
+
+		// Verify operations fail after close
+		ctx := context.Background()
+		_, err = client.Get(ctx, testKey1)
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+
+	t.Run("AlreadyClosed", func(t *testing.T) {
+		client, _ := setupTestRedis(t)
+		client.Close()
+
+		err := client.Close()
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, cache.ErrClosed))
+	})
+}
+
+func TestConfig_Validate(t *testing.T) {
+	t.Run("ValidConfig", func(t *testing.T) {
+		cfg := &Config{
+			Host:     "localhost",
+			Port:     6379,
+			Database: 0,
+			PoolSize: 10,
+		}
+
+		err := cfg.Validate()
+		assert.NoError(t, err)
+	})
+
+	t.Run("MissingHost", func(t *testing.T) {
+		cfg := &Config{
+			Host: "",
+			Port: 6379,
+		}
+
+		err := cfg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "host is required")
+	})
+
+	t.Run("InvalidPort", func(t *testing.T) {
+		tests := []struct {
+			name string
+			port int
+		}{
+			{"ZeroPort", 0},
+			{"NegativePort", -1},
+			{"PortTooHigh", 70000},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := &Config{
+					Host: "localhost",
+					Port: tt.port,
+				}
+
+				err := cfg.Validate()
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid port")
+			})
+		}
+	})
+
+	t.Run("InvalidDatabase", func(t *testing.T) {
+		tests := []struct {
+			name string
+			db   int
+		}{
+			{"NegativeDB", -1},
+			{"DBTooHigh", 16},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := &Config{
+					Host:     "localhost",
+					Port:     6379,
+					Database: tt.db,
+				}
+
+				err := cfg.Validate()
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid database number")
+			})
+		}
+	})
+
+	t.Run("InvalidPoolSize", func(t *testing.T) {
+		cfg := &Config{
+			Host:     "localhost",
+			Port:     6379,
+			PoolSize: 0,
+		}
+
+		err := cfg.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid pool size")
+	})
+}
+
+func TestConfig_Address(t *testing.T) {
+	cfg := &Config{
+		Host: "redis.example.com",
+		Port: 6379,
+	}
+
+	assert.Equal(t, "redis.example.com:6379", cfg.Address())
+}
+
+// TestDistributedLock_RaceCondition tests lock acquisition under concurrent load.
+func TestDistributedLock_RaceCondition(t *testing.T) {
+	client, _ := setupTestRedis(t)
+	defer client.Close()
+
+	const (
+		workers   = 10
+		lockKey   = "test:lock"
+		lockValue = "acquired"
+	)
+
+	ctx := context.Background()
+	successCount := 0
+	done := make(chan bool, workers)
+
+	// Simulate concurrent workers trying to acquire the same lock
+	for i := 0; i < workers; i++ {
+		go func() {
+			success, err := client.CompareAndSet(ctx, lockKey, nil, []byte(lockValue), 1*time.Minute)
+			require.NoError(t, err)
+			if success {
+				successCount++
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all workers
+	for i := 0; i < workers; i++ {
+		<-done
+	}
+
+	// Only ONE worker should have successfully acquired the lock
+	assert.Equal(t, 1, successCount, "expected exactly one worker to acquire lock")
+}
