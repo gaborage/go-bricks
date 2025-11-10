@@ -41,6 +41,12 @@ server:
   port: 8080
 database:
   type: postgres # postgres | oracle | mongo
+cache:
+  enabled: true
+  type: redis
+  redis:
+    host: localhost
+    port: 6379
 logger:
   level: info
   pretty: true
@@ -283,6 +289,178 @@ query := qb.Select(
     qb.Expr("COUNT(*)", "product_count"),
     qb.Expr("AVG(price)", "avg_price"),
 ).From("products").GroupBy(cols.Col("Category"))
+```
+
+## Cache Operations (Redis)
+
+**Configuration:**
+
+```yaml
+cache:
+  enabled: true
+  type: redis
+  redis:
+    host: localhost
+    port: 6379
+    password: ${CACHE_REDIS_PASSWORD} # from env
+    database: 0
+    pool_size: 10
+```
+
+**Basic Cache Operations:**
+
+```go
+import (
+    "github.com/gaborage/go-bricks/cache"
+    "github.com/gaborage/go-bricks/cache/redis"
+)
+
+// Module setup
+type Module struct {
+    cache cache.Cache
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    // Get tenant-specific cache instance
+    c, err := deps.GetCache(ctx)
+    if err != nil {
+        return err
+    }
+    m.cache = c
+    return nil
+}
+
+// Basic operations
+ctx := context.Background()
+
+// Set with TTL
+err := m.cache.Set(ctx, "user:123", []byte("data"), 5*time.Minute)
+
+// Get
+data, err := m.cache.Get(ctx, "user:123")
+if errors.Is(err, cache.ErrNotFound) {
+    // Key doesn't exist - fetch from database
+}
+
+// Delete
+err := m.cache.Delete(ctx, "user:123")
+```
+
+**Type-Safe Serialization:**
+
+```go
+import "github.com/gaborage/go-bricks/cache"
+
+type User struct {
+    ID    int64  `cbor:"1,keyasint"` // Optimized: integer keys
+    Name  string `cbor:"2,keyasint"`
+    Email string `cbor:"3,keyasint"`
+}
+
+// Serialize and cache
+user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
+data, err := cache.Marshal(user)
+if err != nil {
+    return err
+}
+err = m.cache.Set(ctx, "user:123", data, 5*time.Minute)
+
+// Retrieve and deserialize
+data, err := m.cache.Get(ctx, "user:123")
+if err != nil {
+    return err
+}
+user, err := cache.Unmarshal[User](data)
+```
+
+**Query Result Caching Pattern:**
+
+```go
+func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
+    cacheKey := fmt.Sprintf("user:%d", id)
+
+    // Try cache first
+    data, err := s.cache.Get(ctx, cacheKey)
+    if err == nil {
+        return cache.Unmarshal[User](data)
+    }
+
+    // Cache miss - query database
+    user, err := s.queryDatabase(ctx, id)
+    if err != nil {
+        return nil, err
+    }
+
+    // Store in cache for future requests
+    data, _ = cache.Marshal(user)
+    s.cache.Set(ctx, cacheKey, data, 5*time.Minute)
+
+    return user, nil
+}
+```
+
+**Deduplication with GetOrSet:**
+
+```go
+// Atomic deduplication for idempotency keys
+idempotencyKey := "process:batch:abc-123"
+taskData := []byte("task-payload")
+
+storedValue, wasSet, err := m.cache.GetOrSet(ctx, idempotencyKey, taskData, 10*time.Minute)
+if err != nil {
+    return err
+}
+
+if wasSet {
+    // First time processing - execute task
+    return processBatch(ctx, taskData)
+}
+
+// Duplicate request detected - return cached result
+return getCachedResult(storedValue)
+```
+
+**Distributed Locking with CompareAndSet:**
+
+```go
+// Acquire distributed lock
+lockKey := "lock:job:456"
+workerID := []byte("worker-1")
+
+success, err := m.cache.CompareAndSet(ctx, lockKey, nil, workerID, 30*time.Second)
+if err != nil {
+    return err
+}
+
+if !success {
+    return errors.New("lock already held by another worker")
+}
+
+// Lock acquired - perform work
+defer m.cache.Delete(ctx, lockKey) // Release lock
+
+return processJob(ctx)
+```
+
+| Operation       | Use Case                          | Atomicity      |
+|-----------------|-----------------------------------|----------------|
+| Get/Set/Delete  | Basic caching                     | Single-key     |
+| GetOrSet        | Idempotency, deduplication        | Atomic SET NX  |
+| CompareAndSet   | Distributed locks, optimistic CAS | Lua script     |
+| Marshal/Unmarshal | Type-safe serialization         | CBOR encoding  |
+
+**Error Handling:**
+
+```go
+data, err := m.cache.Get(ctx, key)
+if errors.Is(err, cache.ErrNotFound) {
+    // Key doesn't exist
+} else if errors.Is(err, cache.ErrClosed) {
+    // Cache connection closed
+} else if opErr, ok := err.(*cache.OperationError); ok {
+    // Cache operation failed - includes operation, key, underlying error
+    log.Error(opErr.Op, opErr.Key, opErr.Err)
+}
 ```
 
 ## Messaging Snapshot
