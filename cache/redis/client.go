@@ -154,7 +154,7 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 	// Returns old value if key already existed
 	result, err := c.client.SetArgs(ctx, key, value, redis.SetArgs{
 		Mode: "NX", // Only set if key doesn't exist
-		Get:  true,  // Return old value if key existed
+		Get:  true, // Return old value if key existed
 		TTL:  ttl,
 	}).Result()
 
