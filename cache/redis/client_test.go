@@ -534,24 +534,30 @@ func TestDistributedLockRaceCondition(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	successCount := 0
-	done := make(chan bool, workers)
+
+	// Channel to collect results from goroutines
+	type result struct {
+		success bool
+		err     error
+	}
+	results := make(chan result, workers)
 
 	// Simulate concurrent workers trying to acquire the same lock
 	for i := 0; i < workers; i++ {
 		go func() {
 			success, err := client.CompareAndSet(ctx, lockKey, nil, []byte(lockValue), 1*time.Minute)
-			require.NoError(t, err)
-			if success {
-				successCount++
-			}
-			done <- true
+			results <- result{success: success, err: err}
 		}()
 	}
 
-	// Wait for all workers
+	// Collect results in main goroutine (avoid race on successCount and invalid require from goroutines)
+	successCount := 0
 	for i := 0; i < workers; i++ {
-		<-done
+		res := <-results
+		require.NoError(t, res.err)
+		if res.success {
+			successCount++
+		}
 	}
 
 	// Only ONE worker should have successfully acquired the lock
