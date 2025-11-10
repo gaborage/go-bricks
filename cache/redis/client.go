@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -42,7 +43,7 @@ return 0
 type Client struct {
 	client *redis.Client
 	config *Config
-	closed bool
+	closed atomic.Bool
 }
 
 // NewClient creates a new Redis cache client.
@@ -79,14 +80,14 @@ func NewClient(cfg *Config) (*Client, error) {
 	return &Client{
 		client: client,
 		config: cfg,
-		closed: false,
+		// closed defaults to false (atomic.Bool zero value)
 	}, nil
 }
 
 // Get retrieves a value from the cache.
 // Returns cache.ErrNotFound if the key doesn't exist.
 func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
-	if c.closed {
+	if c.closed.Load() {
 		return nil, cache.ErrClosed
 	}
 
@@ -104,7 +105,7 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
 // Set stores a value in the cache with the specified TTL.
 // Returns cache.ErrInvalidTTL if TTL is negative or zero.
 func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	if c.closed {
+	if c.closed.Load() {
 		return cache.ErrClosed
 	}
 
@@ -122,7 +123,7 @@ func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Dur
 // Delete removes a key from the cache.
 // Does not return error if key doesn't exist.
 func (c *Client) Delete(ctx context.Context, key string) error {
-	if c.closed {
+	if c.closed.Load() {
 		return cache.ErrClosed
 	}
 
@@ -141,7 +142,7 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 //
 // Uses Redis SET NX GET for atomicity.
 func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) (storedValue []byte, wasSet bool, err error) {
-	if c.closed {
+	if c.closed.Load() {
 		return nil, false, cache.ErrClosed
 	}
 
@@ -178,7 +179,7 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 // Special case: expectedValue=nil means "set only if key doesn't exist" (acquire lock).
 // Uses Lua script for atomicity.
 func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (bool, error) {
-	if c.closed {
+	if c.closed.Load() {
 		return false, cache.ErrClosed
 	}
 
@@ -204,7 +205,7 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 // Health checks if the Redis connection is healthy.
 // Uses PING command to verify connectivity.
 func (c *Client) Health(ctx context.Context) error {
-	if c.closed {
+	if c.closed.Load() {
 		return cache.ErrClosed
 	}
 
@@ -218,7 +219,7 @@ func (c *Client) Health(ctx context.Context) error {
 // Stats returns Redis server statistics.
 // Includes metrics from Redis INFO command.
 func (c *Client) Stats() (map[string]any, error) {
-	if c.closed {
+	if c.closed.Load() {
 		return nil, cache.ErrClosed
 	}
 
@@ -245,11 +246,14 @@ func (c *Client) Stats() (map[string]any, error) {
 
 // Close closes the Redis client and releases resources.
 // After calling Close, the client should not be used.
+// Close is idempotent - calling it multiple times is safe.
 func (c *Client) Close() error {
-	if c.closed {
+	// Use CompareAndSwap for idempotent close (only close once)
+	if !c.closed.CompareAndSwap(false, true) {
+		// Already closed
 		return cache.ErrClosed
 	}
 
-	c.closed = true
+	// First close - perform cleanup
 	return c.client.Close()
 }

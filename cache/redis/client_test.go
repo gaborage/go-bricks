@@ -48,7 +48,7 @@ func TestNewClient(t *testing.T) {
 
 		assert.NotNil(t, client)
 		assert.NotNil(t, client.client)
-		assert.False(t, client.closed)
+		assert.False(t, client.closed.Load())
 	})
 
 	t.Run("InvalidConfig", func(t *testing.T) {
@@ -407,7 +407,7 @@ func TestClientClose(t *testing.T) {
 
 		err := client.Close()
 		assert.NoError(t, err)
-		assert.True(t, client.closed)
+		assert.True(t, client.closed.Load())
 
 		// Verify operations fail after close
 		ctx := context.Background()
