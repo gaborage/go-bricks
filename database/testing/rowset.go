@@ -365,6 +365,9 @@ func extractStructValues(structPtr any, columns []string) []any {
 		if !ok {
 			panic(fmt.Sprintf("extractStructValues: column %q not found in struct %T (check db tags)", col, structPtr))
 		}
+		if !field.CanInterface() {
+			panic(fmt.Sprintf("extractStructValues: column %q maps to unexported field in struct %T (field must be exported)", col, structPtr))
+		}
 		values[i] = field.Interface()
 	}
 
