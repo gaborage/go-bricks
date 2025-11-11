@@ -257,18 +257,25 @@ type Tx interface {
 // Interface defines the common database operations supported by the framework.
 // This is the main interface that applications and modules should depend on
 // for database operations, allowing for easy mocking and testing.
+//
+// Interface is composed of focused sub-interfaces following the Single Responsibility Principle:
+//   - Querier: Core query execution (Query, QueryRow, Exec, DatabaseType)
+//   - Transactor: Transaction management (Begin, BeginTx)
+//
+// For easier testing, consider using the smaller interfaces (Querier or Transactor)
+// when your code doesn't need all Interface capabilities. The database/testing package
+// provides utilities for mocking these interfaces with minimal boilerplate.
+//
+// Backward compatibility: All existing code using Interface continues to work unchanged.
 type Interface interface {
-	// Query execution
-	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) Row
-	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+	// Querier provides core query execution operations
+	Querier
+
+	// Transactor provides transaction management operations
+	Transactor
 
 	// Prepared statements
 	Prepare(ctx context.Context, query string) (Statement, error)
-
-	// Transaction support
-	Begin(ctx context.Context) (Tx, error)
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (Tx, error)
 
 	// Health and diagnostics
 	Health(ctx context.Context) error
@@ -276,9 +283,6 @@ type Interface interface {
 
 	// Connection management
 	Close() error
-
-	// Database-specific features
-	DatabaseType() string
 
 	// Migration support
 	GetMigrationTable() string

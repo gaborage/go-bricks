@@ -291,6 +291,162 @@ query := qb.Select(
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
+## Database Testing
+
+> **⚠️ IMPORTANT RESOURCE MANAGEMENT:**
+> When using `Query()` or `TestTx.Query()`, **ALWAYS call `defer rows.Close()`** immediately after obtaining rows.
+> The returned `*sql.Rows` is backed by a temporary `*sql.DB` that must be explicitly closed to prevent resource leaks.
+> A finalizer provides a safety net, but **explicit cleanup via `defer` is mandatory** for deterministic resource management.
+
+**Simple Query Test:**
+
+```go
+import dbtest "github.com/gaborage/go-bricks/database/testing"
+
+func TestProductService_FindActive(t *testing.T) {
+    // Setup (8 lines vs 30+ with sqlmock)
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db.ExpectQuery("SELECT").
+        WillReturnRows(
+            dbtest.NewRowSet("id", "name").
+                AddRow(int64(1), "Widget").
+                AddRow(int64(2), "Gadget"),
+        )
+
+    deps := &app.ModuleDeps{
+        GetDB: func(ctx context.Context) (database.Interface, error) {
+            return db, nil
+        },
+    }
+
+    svc := NewProductService(deps)
+    products, err := svc.FindActive(ctx)
+
+    assert.NoError(t, err)
+    assert.Len(t, products, 2)
+dbtest.AssertQueryExecuted(t, db, "SELECT")
+}
+```
+
+**Iterating Rows with `Query`:**
+
+```go
+func TestProductRepository_List(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db.ExpectQuery("SELECT").
+        WillReturnRows(
+            dbtest.NewRowSet("id", "name").
+                AddRow(int64(1), "Widget").
+                AddRow(int64(2), "Gadget"),
+        )
+
+    rows, err := db.Query(context.Background(), "SELECT id, name FROM products")
+    require.NoError(t, err)
+    defer rows.Close()
+
+    var got []Product
+    for rows.Next() {
+        var p Product
+        require.NoError(t, rows.Scan(&p.ID, &p.Name))
+        got = append(got, p)
+    }
+
+    require.NoError(t, rows.Err())
+    assert.Len(t, got, 2)
+}
+```
+
+**Transaction Test:**
+
+```go
+func TestOrderService_CreateWithItems(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    tx := db.ExpectTransaction().
+        ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
+        ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
+
+    deps := &app.ModuleDeps{
+        GetDB: func(ctx context.Context) (database.Interface, error) {
+            return db, nil
+        },
+    }
+
+    svc := NewOrderService(deps)
+    err := svc.CreateWithItems(ctx, order, items)
+
+    assert.NoError(t, err)
+    dbtest.AssertCommitted(t, tx)
+}
+```
+
+**Multi-Tenant Test:**
+
+```go
+func TestMultiTenantService(t *testing.T) {
+    tenants := dbtest.NewTenantDBMap()
+
+    // Setup tenant-specific expectations
+    tenants.ForTenant("acme").
+        ExpectQuery("SELECT").WillReturnRows(
+            dbtest.NewRowSet("id").AddRow(int64(1)),
+        )
+    tenants.ForTenant("globex").
+        ExpectQuery("SELECT").WillReturnRows(
+            dbtest.NewRowSet("id").AddRow(int64(2)),
+        )
+
+    deps := &app.ModuleDeps{
+        GetDB: tenants.AsGetDBFunc(),  // Resolves tenant from ctx
+    }
+
+    // Test with tenant context
+    ctx := multitenant.SetTenant(context.Background(), "acme")
+    result, err := svc.Process(ctx)
+
+    assert.NoError(t, err)
+    dbtest.AssertQueryExecuted(t, tenants.GetTenantDB("acme"), "SELECT")
+}
+```
+
+**RowSet Builders:**
+
+```go
+// From structs with db tags
+type User struct {
+    ID   int64  `db:"id"`
+    Name string `db:"name"`
+}
+
+rows := dbtest.NewRowSet("id", "name").
+    AddRowsFromStructs(
+        &User{ID: 1, Name: "Alice"},
+        &User{ID: 2, Name: "Bob"},
+    )
+
+// With generator function
+rows := dbtest.NewRowSet("id", "name").
+    AddRows(100, func(i int) []any {
+        return []any{int64(i+1), fmt.Sprintf("User%d", i+1)}
+    })
+
+// RowSet powers both Query() and QueryRow() expectations. It now materializes
+// real *sql.Rows under the hood, so you can iterate using database/sql's
+// standard pattern. Supported value types include integers, floats, bools,
+// strings, []byte, time.Time, fmt.Stringer, and nil.
+```
+
+**Assertion Helpers:**
+
+```go
+dbtest.AssertQueryExecuted(t, db, "SELECT")
+dbtest.AssertQueryCount(t, db, "SELECT", 2)
+dbtest.AssertExecExecuted(t, db, "INSERT")
+dbtest.AssertTransactionCommitted(t, db)
+dbtest.AssertTransactionRolledBack(t, db)
+```
+
+See [database/testing](database/testing/) package for full API documentation.
+
 ## Cache Operations (Redis)
 
 **Configuration:**

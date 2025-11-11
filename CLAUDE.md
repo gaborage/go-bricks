@@ -614,10 +614,79 @@ obtest.AssertLogTypeExists(t, tp.LogExporter, "action")
 ## Testing Guidelines
 
 ### Testing Strategy
-- **Unit tests:** testify, sqlmock (database), httptest (server), fake adapters (messaging)
+- **Unit tests:** testify, database/testing (database), httptest (server), fake adapters (messaging)
 - **Integration tests:** testcontainers (MongoDB), `-tags=integration` flag
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
+
+### Database Testing
+
+GoBricks provides `database/testing` package for easy database mocking without sqlmock complexity (**73% less boilerplate**).
+
+**Simple Query Test:**
+```go
+import dbtest "github.com/gaborage/go-bricks/database/testing"
+
+func TestProductService_FindActive(t *testing.T) {
+    // Setup (8 lines vs 30+ with sqlmock)
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    db.ExpectQuery("SELECT").
+        WillReturnRows(
+            dbtest.NewRowSet("id", "name").
+                AddRow(int64(1), "Widget").
+                AddRow(int64(2), "Gadget"),
+        )
+
+    deps := &app.ModuleDeps{
+        GetDB: func(ctx context.Context) (database.Interface, error) {
+            return db, nil
+        },
+    }
+
+    svc := NewProductService(deps)
+    products, err := svc.FindActive(ctx)
+
+    assert.NoError(t, err)
+    assert.Len(t, products, 2)
+    dbtest.AssertQueryExecuted(t, db, "SELECT")
+}
+```
+
+**Transaction Testing:**
+```go
+db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+tx := db.ExpectTransaction().
+    ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
+    ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
+
+// Test code that uses transactions
+svc.CreateWithItems(ctx, order, items)
+
+dbtest.AssertCommitted(t, tx)
+```
+
+**Multi-Tenant Testing:**
+```go
+tenants := dbtest.NewTenantDBMap()
+tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
+tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
+
+deps := &app.ModuleDeps{
+    GetDB: tenants.AsGetDBFunc(),  // Resolves tenant from context
+}
+
+ctx := multitenant.SetTenant(context.Background(), "acme")
+result, err := svc.Process(ctx)  // Uses acme's TestDB
+```
+
+**Key Features:**
+- Fluent expectation API (ExpectQuery/ExpectExec)
+- Multi-tenant support via TenantDBMap
+- Transaction tracking (commit/rollback assertions)
+- Vendor-agnostic RowSet builder
+- Partial SQL matching by default (or strict with StrictSQLMatching())
+
+See [database/testing](database/testing/) package and [llms.txt:294](llms.txt:294) for full examples.
 
 ### Integration Testing with Testcontainers
 
