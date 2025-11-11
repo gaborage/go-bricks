@@ -873,71 +873,87 @@ func assignUint8Ptr(dest **uint8, src any) error {
 	return nil
 }
 
-// setDestNil sets the destination to its zero value for nil source values.
+// setDestNil handles NULL source values for scan destinations.
+// Matches database/sql behavior: scalar pointers (*int, *string, etc.) reject NULL with an error,
+// while pointer-to-pointer types (**int, **string) accept NULL by setting to nil.
+//
+// This ensures test fakes accurately simulate production database/sql behavior, preventing tests
+// from passing when production code would fail on NULL values.
 //
 //nolint:gocyclo // Nil handling requires exhaustive case coverage for all supported types
 func setDestNil(dest any) error {
 	switch d := dest.(type) {
-	case *string:
-		*d = ""
+	// Pointer-to-pointer types: set to nil (nullable columns)
 	case **string:
 		*d = nil
+	case **int:
+		*d = nil
+	case **int64:
+		*d = nil
+	case **int32:
+		*d = nil
+	case **bool:
+		*d = nil
+	case **float64:
+		*d = nil
+	case **time.Time:
+		*d = nil
+	case **uint:
+		*d = nil
+	case **uint64:
+		*d = nil
+	case **uint32:
+		*d = nil
+	case **uint16:
+		*d = nil
+	case **uint8:
+		*d = nil
+
+	// Special cases: []byte and any interface can accept nil
 	case *[]byte:
 		*d = nil
 	case **[]byte:
 		*d = nil
-	case *int:
-		*d = 0
-	case **int:
-		*d = nil
-	case *int64:
-		*d = 0
-	case **int64:
-		*d = nil
-	case *int32:
-		*d = 0
-	case **int32:
-		*d = nil
-	case *bool:
-		*d = false
-	case **bool:
-		*d = nil
-	case *float64:
-		*d = 0
-	case **float64:
-		*d = nil
-	case *time.Time:
-		*d = time.Time{}
-	case **time.Time:
-		*d = nil
-	case *uint:
-		*d = 0
-	case **uint:
-		*d = nil
-	case *uint64:
-		*d = 0
-	case **uint64:
-		*d = nil
-	case *uint32:
-		*d = 0
-	case **uint32:
-		*d = nil
-	case *uint16:
-		*d = 0
-	case **uint16:
-		*d = nil
-	case *uint8:
-		*d = 0
-	case **uint8:
-		*d = nil
 	case *any:
 		*d = nil
+
+	// Scalar pointer types (*int, *string, *bool, etc.) intentionally omitted
+	// They fall through to default case and return an error, matching database/sql behavior
 	default:
 		// For sql.Scanner types, let them handle nil
 		if scanner, ok := dest.(sql.Scanner); ok {
 			return scanner.Scan(nil)
 		}
-		return fmt.Errorf("unsupported nil destination type %T", dest)
+
+		// Match database/sql error format for scalar types
+		switch dest.(type) {
+		case *string:
+			return fmt.Errorf("sql: converting NULL to string is unsupported")
+		case *int:
+			return fmt.Errorf("sql: converting NULL to int is unsupported")
+		case *int64:
+			return fmt.Errorf("sql: converting NULL to int64 is unsupported")
+		case *int32:
+			return fmt.Errorf("sql: converting NULL to int32 is unsupported")
+		case *bool:
+			return fmt.Errorf("sql: converting NULL to bool is unsupported")
+		case *float64:
+			return fmt.Errorf("sql: converting NULL to float64 is unsupported")
+		case *time.Time:
+			return fmt.Errorf("sql: converting NULL to time.Time is unsupported")
+		case *uint:
+			return fmt.Errorf("sql: converting NULL to uint is unsupported")
+		case *uint64:
+			return fmt.Errorf("sql: converting NULL to uint64 is unsupported")
+		case *uint32:
+			return fmt.Errorf("sql: converting NULL to uint32 is unsupported")
+		case *uint16:
+			return fmt.Errorf("sql: converting NULL to uint16 is unsupported")
+		case *uint8:
+			return fmt.Errorf("sql: converting NULL to uint8 is unsupported")
+		default:
+			return fmt.Errorf("unsupported scan destination type %T", dest)
+		}
 	}
 	return nil
 }

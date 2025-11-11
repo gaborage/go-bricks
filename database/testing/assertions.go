@@ -237,12 +237,20 @@ func AssertNoTransaction(t *testing.T, db *TestDB) {
 	db.mu.RUnlock()
 
 	if len(startedTxs) > 0 {
-		for _, txExp := range startedTxs {
-			if txExp.tx != nil && (txExp.tx.IsCommitted() || txExp.tx.IsRolledBack()) {
-				t.Error("unexpected transaction was started and completed")
-				return
+		var details strings.Builder
+		details.WriteString(fmt.Sprintf("unexpected transaction(s) started: %d total\n", len(startedTxs)))
+		for i, txExp := range startedTxs {
+			status := "pending"
+			if txExp.tx != nil {
+				if txExp.tx.IsCommitted() {
+					status = "committed"
+				} else if txExp.tx.IsRolledBack() {
+					status = "rolled back"
+				}
 			}
+			details.WriteString(fmt.Sprintf("  %d. Transaction [status: %s]\n", i+1, status))
 		}
+		t.Errorf("%s", details.String())
 	}
 }
 
