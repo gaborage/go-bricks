@@ -110,6 +110,22 @@ func (tx *TestTx) WillReturnRowsAffected(n int64) *TestTx {
 
 // Query implements dbtypes.Tx.Query.
 //
+// IMPORTANT: Callers MUST call defer rows.Close() immediately after Query() to prevent
+// resource leaks. The returned *sql.Rows is backed by a temporary *sql.DB that requires
+// explicit cleanup.
+//
+// Correct usage:
+//
+//	rows, err := tx.Query(ctx, "SELECT * FROM users")
+//	if err != nil {
+//	    return err
+//	}
+//	defer rows.Close()  // REQUIRED
+//
+//	for rows.Next() {
+//	    // ... scan rows
+//	}
+//
 //nolint:dupl // Intentional duplication with TestDB.Query - different contexts require separate implementations
 func (tx *TestTx) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
 	tx.mu.Lock()

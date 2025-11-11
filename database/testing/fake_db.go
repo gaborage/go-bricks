@@ -6,6 +6,24 @@
 // with expectation-based mocking. Use TestDB for unit tests where you want to verify
 // SQL queries and execution without needing a real database.
 //
+// # Resource Management
+//
+// IMPORTANT: When using Query() or TestTx.Query(), callers MUST call defer rows.Close()
+// immediately after obtaining rows to prevent resource leaks. The returned *sql.Rows is
+// backed by a temporary *sql.DB that requires explicit cleanup.
+//
+// Correct pattern:
+//
+//	rows, err := db.Query(ctx, "SELECT ...")
+//	if err != nil {
+//	    return err
+//	}
+//	defer rows.Close()  // REQUIRED - prevents resource leaks
+//
+// A runtime.SetFinalizer provides a safety net for garbage collection, but this is
+// non-deterministic and should NOT be relied upon. Always use defer rows.Close() for
+// deterministic resource management.
+//
 // For integration tests requiring actual database behavior, see the container helpers
 // which wrap testcontainers for PostgreSQL and Oracle.
 package testing
@@ -227,6 +245,22 @@ func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 }
 
 // Query implements database.Querier.Query.
+//
+// IMPORTANT: Callers MUST call defer rows.Close() immediately after Query() to prevent
+// resource leaks. The returned *sql.Rows is backed by a temporary *sql.DB that requires
+// explicit cleanup.
+//
+// Correct usage:
+//
+//	rows, err := db.Query(ctx, "SELECT * FROM users")
+//	if err != nil {
+//	    return err
+//	}
+//	defer rows.Close()  // REQUIRED
+//
+//	for rows.Next() {
+//	    // ... scan rows
+//	}
 //
 //nolint:dupl // Intentional duplication with TestTx.Query - different contexts require separate implementations
 func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {

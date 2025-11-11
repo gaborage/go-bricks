@@ -293,6 +293,11 @@ query := qb.Select(
 
 ## Database Testing
 
+> **⚠️ IMPORTANT RESOURCE MANAGEMENT:**
+> When using `Query()` or `TestTx.Query()`, **ALWAYS call `defer rows.Close()`** immediately after obtaining rows.
+> The returned `*sql.Rows` is backed by a temporary `*sql.DB` that must be explicitly closed to prevent resource leaks.
+> A finalizer provides a safety net, but **explicit cleanup via `defer` is mandatory** for deterministic resource management.
+
 **Simple Query Test:**
 
 ```go

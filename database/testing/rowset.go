@@ -135,7 +135,27 @@ func (rs *RowSet) normalizeRow(rowIdx int) ([]any, error) {
 }
 
 // toSQLRows converts the RowSet to a *sql.Rows for use with Query().
-// This is an internal method used by TestDB.
+// This is an internal method used by TestDB and TestTx.
+//
+// IMPORTANT RESOURCE MANAGEMENT:
+// The returned *sql.Rows is backed by a temporary *sql.DB that must be closed
+// to prevent resource leaks. Callers MUST call rows.Close() to ensure proper cleanup.
+//
+// A runtime.SetFinalizer provides a safety net for garbage collection, but this is
+// non-deterministic and should NOT be relied upon as the primary cleanup mechanism.
+// Long-running tests or tests that forget to call Close() may accumulate leaked
+// file handles until garbage collection runs.
+//
+// Correct usage pattern:
+//
+//	rows, err := db.Query(ctx, "SELECT ...")
+//	if err != nil {
+//	    return err
+//	}
+//	defer rows.Close()  // REQUIRED - closes both rows and underlying DB
+//
+// The finalizer will eventually clean up forgotten resources, but explicit cleanup
+// via defer is mandatory for deterministic resource management.
 func (rs *RowSet) toSQLRows() (*sql.Rows, error) {
 	connector := newRowSetConnector(rs)
 	db := sql.OpenDB(connector)
@@ -145,7 +165,9 @@ func (rs *RowSet) toSQLRows() (*sql.Rows, error) {
 		return nil, err
 	}
 
-	// Ensure we close the temporary *sql.DB when these rows are GC'd or closed.
+	// Finalizer provides safety net for garbage collection cleanup.
+	// This is NOT a substitute for explicit rows.Close() - it's a last resort
+	// for forgotten resources. Always prefer defer rows.Close() in calling code.
 	runtime.SetFinalizer(rows, func(r *sql.Rows) {
 		_ = r.Close()
 		_ = db.Close()
