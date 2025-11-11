@@ -199,7 +199,7 @@ func (c *rowSetConn) QueryContext(context.Context, string, []driver.NamedValue) 
 	}, nil
 }
 
-func (c *rowSetConn) Query(query string, args []driver.Value) (driver.Rows, error) {
+func (c *rowSetConn) Query(query string, _ []driver.Value) (driver.Rows, error) {
 	return c.QueryContext(context.Background(), query, nil)
 }
 
@@ -252,6 +252,9 @@ func cloneRowValues(rows [][]any) [][]any {
 	return copyRows
 }
 
+// normalizeDriverValue converts Go types to driver.Value for database compatibility.
+//
+//nolint:gocyclo // Type normalization requires exhaustive case coverage for SQL compatibility
 func normalizeDriverValue(v any) (driver.Value, error) {
 	switch val := v.(type) {
 	case nil:
@@ -267,6 +270,10 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 	case int8:
 		return int64(val), nil
 	case uint:
+		if uint64(val) > ^uint64(0)>>1 {
+			return nil, fmt.Errorf("uint value %d overflows int64", val)
+		}
+		//nolint:gosec // G115: Overflow checked above - safe conversion after validation
 		return int64(val), nil
 	case uint64:
 		if val > ^uint64(0)>>1 {
