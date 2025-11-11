@@ -317,8 +317,6 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 		return append([]byte(nil), val...), nil
 	case time.Time:
 		return val, nil
-	case fmt.Stringer:
-		return val.String(), nil
 	default:
 		// Handle pointer types by dereferencing
 		rv := reflect.ValueOf(v)
@@ -328,6 +326,10 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 			}
 			// Dereference and recursively normalize
 			return normalizeDriverValue(rv.Elem().Interface())
+		}
+		// Handle fmt.Stringer after pointer check to avoid panics on nil pointers
+		if stringer, ok := v.(fmt.Stringer); ok {
+			return stringer.String(), nil
 		}
 		return nil, fmt.Errorf("unsupported RowSet value type %T", v)
 	}
