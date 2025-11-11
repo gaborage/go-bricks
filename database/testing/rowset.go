@@ -115,6 +115,25 @@ func (rs *RowSet) Columns() []string {
 	return append([]string{}, rs.columns...)
 }
 
+// normalizeRow converts all values in a row to driver-compatible types.
+// Used internally by QueryRow to ensure pointer values are properly dereferenced.
+func (rs *RowSet) normalizeRow(rowIdx int) ([]any, error) {
+	if rowIdx >= len(rs.rows) {
+		return nil, fmt.Errorf("row index %d out of bounds", rowIdx)
+	}
+
+	row := rs.rows[rowIdx]
+	normalized := make([]any, len(row))
+	for i, val := range row {
+		normVal, err := normalizeDriverValue(val)
+		if err != nil {
+			return nil, fmt.Errorf("column %d (%s): %w", i, rs.columns[i], err)
+		}
+		normalized[i] = normVal
+	}
+	return normalized, nil
+}
+
 // toSQLRows converts the RowSet to a *sql.Rows for use with Query().
 // This is an internal method used by TestDB.
 func (rs *RowSet) toSQLRows() (*sql.Rows, error) {
@@ -301,6 +320,15 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 	case fmt.Stringer:
 		return val.String(), nil
 	default:
+		// Handle pointer types by dereferencing
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return nil, nil
+			}
+			// Dereference and recursively normalize
+			return normalizeDriverValue(rv.Elem().Interface())
+		}
 		return nil, fmt.Errorf("unsupported RowSet value type %T", v)
 	}
 }

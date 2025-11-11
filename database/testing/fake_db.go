@@ -44,8 +44,10 @@ import (
 // For assertion helpers, see the AssertQueryExecuted, AssertExecExecuted functions.
 type TestDB struct {
 	vendor         string
-	queries        map[string]*QueryExpectation
-	execs          map[string]*ExecExpectation
+	queries        []*QueryExpectation
+	execs          []*ExecExpectation
+	lastQuery      *QueryExpectation
+	lastExec       *ExecExpectation
 	queryLog       []QueryCall
 	execLog        []ExecCall
 	strictMatch    bool
@@ -93,9 +95,7 @@ type TxExpectation struct {
 // database.Interface (for full compatibility with framework code).
 func NewTestDB(vendor string) *TestDB {
 	return &TestDB{
-		vendor:  vendor,
-		queries: make(map[string]*QueryExpectation),
-		execs:   make(map[string]*ExecExpectation),
+		vendor: vendor,
 	}
 }
 
@@ -129,7 +129,8 @@ func (db *TestDB) ExpectQuery(sqlPattern string) *QueryExpectation {
 	exp := &QueryExpectation{sql: sqlPattern}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.queries[sqlPattern] = exp
+	db.queries = append(db.queries, exp)
+	db.lastQuery = exp
 	return exp
 }
 
@@ -146,7 +147,8 @@ func (db *TestDB) ExpectExec(sqlPattern string) *ExecExpectation {
 	exp := &ExecExpectation{sql: sqlPattern}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.execs[sqlPattern] = exp
+	db.execs = append(db.execs, exp)
+	db.lastExec = exp
 	return exp
 }
 
@@ -195,13 +197,14 @@ func (db *TestDB) matchSQL(expected, actual string) bool {
 }
 
 // findQueryExpectation searches for a matching query expectation.
+// Returns the first matching expectation in insertion order (first-match wins).
 // Returns nil if no match found.
 func (db *TestDB) findQueryExpectation(actualSQL string) *QueryExpectation {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	for pattern, exp := range db.queries {
-		if db.matchSQL(pattern, actualSQL) {
+	for _, exp := range db.queries {
+		if db.matchSQL(exp.sql, actualSQL) {
 			return exp
 		}
 	}
@@ -209,13 +212,14 @@ func (db *TestDB) findQueryExpectation(actualSQL string) *QueryExpectation {
 }
 
 // findExecExpectation searches for a matching exec expectation.
+// Returns the first matching expectation in insertion order (first-match wins).
 // Returns nil if no match found.
 func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	for pattern, exp := range db.execs {
-		if db.matchSQL(pattern, actualSQL) {
+	for _, exp := range db.execs {
+		if db.matchSQL(exp.sql, actualSQL) {
 			return exp
 		}
 	}
@@ -270,7 +274,13 @@ func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes
 		return &testRow{err: sql.ErrNoRows}
 	}
 
-	return &testRow{values: exp.rows.rows[0]}
+	// Normalize pointer values before returning
+	normalized, err := exp.rows.normalizeRow(0)
+	if err != nil {
+		return &testRow{err: fmt.Errorf("failed to normalize row: %w", err)}
+	}
+
+	return &testRow{values: normalized}
 }
 
 // Exec implements database.Querier.Exec.
@@ -398,33 +408,263 @@ func (r *testRow) Scan(dest ...any) error {
 	if len(dest) != len(r.values) {
 		return fmt.Errorf("scan expects %d values, got %d", len(dest), len(r.values))
 	}
+
+	// Use sql.ConvertAssign for database/sql compatibility
 	for i, v := range r.values {
-		// Simple type assertion - real implementation would handle type conversion
-		switch d := dest[i].(type) {
-		case *int64:
-			switch val := v.(type) {
-			case int64:
-				*d = val
-			case int:
-				*d = int64(val)
-			}
-		case *string:
-			if val, ok := v.(string); ok {
-				*d = val
-			}
-		case *bool:
-			if val, ok := v.(bool); ok {
-				*d = val
-			}
-			// Add more type conversions as needed
+		if err := convertAssign(dest[i], v); err != nil {
+			return fmt.Errorf("column %d: %w", i, err)
 		}
 	}
+
 	r.scanned = true
 	return nil
 }
 
 func (r *testRow) Err() error {
 	return r.err
+}
+
+// convertAssign mimics sql.ConvertAssign for database/sql compatibility.
+// It handles type conversions from source values to destination pointers,
+// supporting sql.Scanner interface and common Go types.
+//
+//nolint:gocyclo // Type conversion requires exhaustive case coverage for database/sql compatibility
+func convertAssign(dest, src any) error {
+	if src == nil {
+		return setDestNil(dest)
+	}
+
+	if scanner, ok := dest.(sql.Scanner); ok {
+		return scanner.Scan(src)
+	}
+
+	switch d := dest.(type) {
+	case *string:
+		return assignString(d, src)
+	case **string:
+		return assignStringPtr(d, src)
+	case *[]byte:
+		return assignBytes(d, src)
+	case **[]byte:
+		return assignBytesPtr(d, src)
+	case *int:
+		return assignInt(d, src)
+	case **int:
+		return assignIntPtr(d, src)
+	case *int64:
+		return assignInt64(d, src)
+	case **int64:
+		return assignInt64Ptr(d, src)
+	case *int32:
+		return assignInt32(d, src)
+	case **int32:
+		return assignInt32Ptr(d, src)
+	case *bool:
+		return assignBool(d, src)
+	case **bool:
+		return assignBoolPtr(d, src)
+	case *float64:
+		return assignFloat64(d, src)
+	case **float64:
+		return assignFloat64Ptr(d, src)
+	case *any:
+		*d = src
+		return nil
+	default:
+		return fmt.Errorf("unsupported scan destination type %T", dest)
+	}
+}
+
+func assignString(dest *string, src any) error {
+	switch s := src.(type) {
+	case string:
+		*dest = s
+	case []byte:
+		*dest = string(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *string", src)
+	}
+	return nil
+}
+
+func assignBytes(dest *[]byte, src any) error {
+	switch s := src.(type) {
+	case []byte:
+		*dest = s
+	case string:
+		*dest = []byte(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *[]byte", src)
+	}
+	return nil
+}
+
+func assignInt(dest *int, src any) error {
+	switch s := src.(type) {
+	case int64:
+		*dest = int(s)
+	case int:
+		*dest = s
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *int", src)
+	}
+	return nil
+}
+
+func assignInt64(dest *int64, src any) error {
+	switch s := src.(type) {
+	case int64:
+		*dest = s
+	case int:
+		*dest = int64(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *int64", src)
+	}
+	return nil
+}
+
+func assignInt32(dest *int32, src any) error {
+	switch s := src.(type) {
+	case int64:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in int32
+		*dest = int32(s)
+	case int:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in int32
+		*dest = int32(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *int32", src)
+	}
+	return nil
+}
+
+func assignBool(dest *bool, src any) error {
+	b, ok := src.(bool)
+	if !ok {
+		return fmt.Errorf("unsupported conversion from %T to *bool", src)
+	}
+	*dest = b
+	return nil
+}
+
+func assignFloat64(dest *float64, src any) error {
+	switch s := src.(type) {
+	case float64:
+		*dest = s
+	case float32:
+		*dest = float64(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *float64", src)
+	}
+	return nil
+}
+
+// Pointer-to-pointer assignment functions for nullable columns
+func assignStringPtr(dest **string, src any) error {
+	var temp string
+	if err := assignString(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignBytesPtr(dest **[]byte, src any) error {
+	var temp []byte
+	if err := assignBytes(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignIntPtr(dest **int, src any) error {
+	var temp int
+	if err := assignInt(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignInt64Ptr(dest **int64, src any) error {
+	var temp int64
+	if err := assignInt64(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignInt32Ptr(dest **int32, src any) error {
+	var temp int32
+	if err := assignInt32(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignBoolPtr(dest **bool, src any) error {
+	var temp bool
+	if err := assignBool(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignFloat64Ptr(dest **float64, src any) error {
+	var temp float64
+	if err := assignFloat64(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+// setDestNil sets the destination to its zero value for nil source values.
+//
+//nolint:gocyclo // Nil handling requires exhaustive case coverage for all supported types
+func setDestNil(dest any) error {
+	switch d := dest.(type) {
+	case *string:
+		*d = ""
+	case **string:
+		*d = nil
+	case *[]byte:
+		*d = nil
+	case **[]byte:
+		*d = nil
+	case *int:
+		*d = 0
+	case **int:
+		*d = nil
+	case *int64:
+		*d = 0
+	case **int64:
+		*d = nil
+	case *int32:
+		*d = 0
+	case **int32:
+		*d = nil
+	case *bool:
+		*d = false
+	case **bool:
+		*d = nil
+	case *float64:
+		*d = 0
+	case **float64:
+		*d = nil
+	case *any:
+		*d = nil
+	default:
+		// For sql.Scanner types, let them handle nil
+		if scanner, ok := dest.(sql.Scanner); ok {
+			return scanner.Scan(nil)
+		}
+		return fmt.Errorf("unsupported nil destination type %T", dest)
+	}
+	return nil
 }
 
 // testResult implements sql.Result for Exec results.

@@ -169,9 +169,15 @@ func TestTestTxExpectationOrdering(t *testing.T) {
 	assert.NoError(t, row.Scan(&second))
 	assert.Equal(t, int64(2), second)
 
-	result, err := txConn.Exec(context.Background(), "INSERT SECOND")
+	result, err := txConn.Exec(context.Background(), "INSERT FIRST")
 	assert.NoError(t, err)
 	rowsAffected, err := result.RowsAffected()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), rowsAffected)
+
+	result, err = txConn.Exec(context.Background(), "INSERT SECOND")
+	assert.NoError(t, err)
+	rowsAffected, err = result.RowsAffected()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), rowsAffected)
 }
@@ -219,5 +225,90 @@ func TestRowSet(t *testing.T) {
 			})
 
 		assert.Equal(t, 3, rs.RowCount())
+	})
+
+	t.Run("handles pointer values", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Test with mix of nil pointers and non-nil pointers
+		name := "Alice"
+		var nilName *string
+		age := int64(30)
+
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("name", "age", "email").
+				AddRow(&name, &age, nilName))
+
+		row := db.QueryRow(context.Background(), "SELECT * FROM users")
+
+		var scannedName string
+		var scannedAge int64
+		var scannedEmail *string
+
+		err := row.Scan(&scannedName, &scannedAge, &scannedEmail)
+		assert.NoError(t, err)
+		assert.Equal(t, "Alice", scannedName)
+		assert.Equal(t, int64(30), scannedAge)
+		assert.Nil(t, scannedEmail)
+	})
+}
+
+// TestDeterministicExpectationMatching verifies that expectations are matched
+// in insertion order (first-match wins) when multiple patterns could match.
+func TestDeterministicExpectationMatching(t *testing.T) {
+	t.Run("first query expectation wins with overlapping patterns", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Add overlapping expectations - both match testQuery
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("id").AddRow(int64(1)))
+		db.ExpectQuery("SELECT * FROM").
+			WillReturnRows(NewRowSet("id").AddRow(int64(2)))
+
+		// First expectation should match
+		row := db.QueryRow(context.Background(), testQuery)
+		var id int64
+		err := row.Scan(&id)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), id, "first expectation should match")
+	})
+
+	t.Run("first exec expectation wins with overlapping patterns", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Add overlapping expectations - both match "INSERT INTO users"
+		db.ExpectExec("INSERT").
+			WillReturnRowsAffected(10)
+		db.ExpectExec("INSERT INTO").
+			WillReturnRowsAffected(20)
+
+		// First expectation should match
+		result, err := db.Exec(context.Background(), "INSERT INTO users VALUES (1, 'Alice')")
+		assert.NoError(t, err)
+		affected, _ := result.RowsAffected()
+		assert.Equal(t, int64(10), affected, "first expectation should match")
+	})
+
+	t.Run("allows duplicate patterns with deterministic order", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Add duplicate patterns - first one should always match
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("id").AddRow(int64(100)))
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("id").AddRow(int64(200)))
+
+		// First expectation should always match
+		row := db.QueryRow(context.Background(), testQuery)
+		var id int64
+		err := row.Scan(&id)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(100), id, "first duplicate expectation should match")
+
+		// Subsequent queries also match the first expectation
+		row = db.QueryRow(context.Background(), "SELECT * FROM orders")
+		err = row.Scan(&id)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(100), id, "first expectation matches subsequent queries")
 	})
 }

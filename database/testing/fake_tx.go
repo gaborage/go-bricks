@@ -156,7 +156,13 @@ func (tx *TestTx) QueryRow(_ context.Context, query string, args ...any) dbtypes
 		return &testRow{err: sql.ErrNoRows}
 	}
 
-	return &testRow{values: exp.rows.rows[0]}
+	// Normalize pointer values before returning
+	normalized, err := exp.rows.normalizeRow(0)
+	if err != nil {
+		return &testRow{err: fmt.Errorf("failed to normalize row: %w", err)}
+	}
+
+	return &testRow{values: normalized}
 }
 
 // Exec implements dbtypes.Tx.Exec.
