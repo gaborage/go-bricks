@@ -1,0 +1,442 @@
+// Package testing provides utilities for testing database logic in go-bricks applications.
+// This package follows the design patterns from observability/testing, providing fluent APIs
+// and in-memory fakes that eliminate the complexity of sqlmock and testify mocks.
+//
+// The primary type is TestDB, which implements database.Querier and database.Interface
+// with expectation-based mocking. Use TestDB for unit tests where you want to verify
+// SQL queries and execution without needing a real database.
+//
+// For integration tests requiring actual database behavior, see the container helpers
+// which wrap testcontainers for PostgreSQL and Oracle.
+package testing
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"sync"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
+)
+
+// TestDB is an in-memory fake database that implements both database.Querier and database.Interface.
+// It provides a fluent API for setting up query expectations and tracking calls for assertions.
+//
+// TestDB supports two SQL matching modes:
+//   - Partial matching (default): Matches if expected SQL is a substring of actual SQL
+//   - Strict matching: Requires exact SQL match (enable with StrictSQLMatching())
+//
+// Usage example:
+//
+//	db := NewTestDB(dbtypes.PostgreSQL).
+//	    ExpectQuery("SELECT * FROM users").
+//	        WillReturnRows(NewRowSet("id", "name").AddRow(1, "Alice")).
+//	    ExpectExec("INSERT INTO users").
+//	        WillReturnRowsAffected(1)
+//
+//	deps := &app.ModuleDeps{
+//	    GetDB: func(ctx context.Context) (database.Interface, error) {
+//	        return db, nil
+//	    },
+//	}
+//
+// For assertion helpers, see the AssertQueryExecuted, AssertExecExecuted functions.
+type TestDB struct {
+	vendor         string
+	queries        map[string]*QueryExpectation
+	execs          map[string]*ExecExpectation
+	queryLog       []QueryCall
+	execLog        []ExecCall
+	strictMatch    bool
+	txExpectations *TxExpectation
+	mu             sync.RWMutex
+}
+
+// QueryCall represents a single Query or QueryRow invocation.
+type QueryCall struct {
+	SQL  string
+	Args []any
+}
+
+// ExecCall represents a single Exec invocation.
+type ExecCall struct {
+	SQL  string
+	Args []any
+}
+
+// QueryExpectation defines what should happen when a query is executed.
+type QueryExpectation struct {
+	sql  string
+	rows *RowSet
+	err  error
+}
+
+// ExecExpectation defines what should happen when Exec is executed.
+type ExecExpectation struct {
+	sql          string
+	rowsAffected int64
+	err          error
+}
+
+// TxExpectation tracks expected transaction behavior.
+type TxExpectation struct {
+	parent    *TestDB
+	tx        *TestTx
+	shouldErr error
+}
+
+// NewTestDB creates a new in-memory fake database for the specified vendor.
+// The vendor parameter should be one of: dbtypes.PostgreSQL, dbtypes.Oracle, dbtypes.MongoDB.
+//
+// The returned TestDB implements both database.Querier (for simple mocking) and
+// database.Interface (for full compatibility with framework code).
+func NewTestDB(vendor string) *TestDB {
+	return &TestDB{
+		vendor:  vendor,
+		queries: make(map[string]*QueryExpectation),
+		execs:   make(map[string]*ExecExpectation),
+	}
+}
+
+// StrictSQLMatching enables exact SQL matching instead of partial substring matching.
+// Returns the TestDB for method chaining.
+//
+// Default behavior (partial matching):
+//
+//	db.ExpectQuery("SELECT")  // Matches "SELECT * FROM users WHERE id = $1"
+//
+// With strict matching:
+//
+//	db.StrictSQLMatching().ExpectQuery("SELECT * FROM users WHERE id = $1")  // Exact match only
+func (db *TestDB) StrictSQLMatching() *TestDB {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.strictMatch = true
+	return db
+}
+
+// ExpectQuery sets up an expectation for Query or QueryRow calls.
+// The sqlPattern parameter is matched against actual queries (partial match by default, exact with StrictSQLMatching).
+//
+// Returns a QueryExpectation builder for configuring the response.
+//
+// Example:
+//
+//	db.ExpectQuery("SELECT * FROM users WHERE id = $1").
+//	    WillReturnRows(NewRowSet("id", "name").AddRow(1, "Alice"))
+func (db *TestDB) ExpectQuery(sqlPattern string) *QueryExpectation {
+	exp := &QueryExpectation{sql: sqlPattern}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.queries[sqlPattern] = exp
+	return exp
+}
+
+// ExpectExec sets up an expectation for Exec calls.
+// The sqlPattern parameter is matched against actual executions (partial match by default, exact with StrictSQLMatching).
+//
+// Returns an ExecExpectation builder for configuring the response.
+//
+// Example:
+//
+//	db.ExpectExec("INSERT INTO users").
+//	    WillReturnRowsAffected(1)
+func (db *TestDB) ExpectExec(sqlPattern string) *ExecExpectation {
+	exp := &ExecExpectation{sql: sqlPattern}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.execs[sqlPattern] = exp
+	return exp
+}
+
+// ExpectTransaction sets up an expectation for Begin() calls.
+// Returns a TestTx that can be configured with query/exec expectations.
+//
+// Example:
+//
+//	tx := db.ExpectTransaction().
+//	    ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
+//	    ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
+func (db *TestDB) ExpectTransaction() *TestTx {
+	tx := &TestTx{parent: db}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.txExpectations = &TxExpectation{
+		parent: db,
+		tx:     tx,
+	}
+	return tx
+}
+
+// GetQueryLog returns all Query/QueryRow calls made to this TestDB.
+// Useful for custom assertions beyond the provided helpers.
+func (db *TestDB) GetQueryLog() []QueryCall {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return append([]QueryCall{}, db.queryLog...)
+}
+
+// GetExecLog returns all Exec calls made to this TestDB.
+// Useful for custom assertions beyond the provided helpers.
+func (db *TestDB) GetExecLog() []ExecCall {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return append([]ExecCall{}, db.execLog...)
+}
+
+// matchSQL returns true if the actual SQL matches the expected SQL pattern.
+// Uses partial matching by default, exact matching if StrictSQLMatching() was called.
+func (db *TestDB) matchSQL(expected, actual string) bool {
+	if db.strictMatch {
+		return strings.TrimSpace(expected) == strings.TrimSpace(actual)
+	}
+	return strings.Contains(actual, expected)
+}
+
+// findQueryExpectation searches for a matching query expectation.
+// Returns nil if no match found.
+func (db *TestDB) findQueryExpectation(actualSQL string) *QueryExpectation {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	for pattern, exp := range db.queries {
+		if db.matchSQL(pattern, actualSQL) {
+			return exp
+		}
+	}
+	return nil
+}
+
+// findExecExpectation searches for a matching exec expectation.
+// Returns nil if no match found.
+func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	for pattern, exp := range db.execs {
+		if db.matchSQL(pattern, actualSQL) {
+			return exp
+		}
+	}
+	return nil
+}
+
+// Query implements database.Querier.Query.
+//
+//nolint:dupl // Intentional duplication with TestTx.Query - different contexts require separate implementations
+func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
+	db.mu.Lock()
+	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
+	db.mu.Unlock()
+
+	exp := db.findQueryExpectation(query)
+	if exp == nil {
+		return nil, fmt.Errorf("unexpected query: %s (no matching expectation)", query)
+	}
+
+	if exp.err != nil {
+		return nil, exp.err
+	}
+
+	if exp.rows == nil {
+		return nil, fmt.Errorf("query expectation for %q has no rows configured (use WillReturnRows)", query)
+	}
+
+	return exp.rows.toSQLRows()
+}
+
+// QueryRow implements database.Querier.QueryRow.
+func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes.Row {
+	db.mu.Lock()
+	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
+	db.mu.Unlock()
+
+	exp := db.findQueryExpectation(query)
+	if exp == nil {
+		return &testRow{err: fmt.Errorf("unexpected query: %s (no matching expectation)", query)}
+	}
+
+	if exp.err != nil {
+		return &testRow{err: exp.err}
+	}
+
+	if exp.rows == nil {
+		return &testRow{err: fmt.Errorf("query expectation for %q has no rows configured (use WillReturnRows)", query)}
+	}
+
+	// Return first row for QueryRow
+	if len(exp.rows.rows) == 0 {
+		return &testRow{err: sql.ErrNoRows}
+	}
+
+	return &testRow{values: exp.rows.rows[0]}
+}
+
+// Exec implements database.Querier.Exec.
+func (db *TestDB) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
+	db.mu.Lock()
+	db.execLog = append(db.execLog, ExecCall{SQL: query, Args: args})
+	db.mu.Unlock()
+
+	exp := db.findExecExpectation(query)
+	if exp == nil {
+		return nil, fmt.Errorf("unexpected exec: %s (no matching expectation)", query)
+	}
+
+	if exp.err != nil {
+		return nil, exp.err
+	}
+
+	return &testResult{rowsAffected: exp.rowsAffected}, nil
+}
+
+// DatabaseType implements database.Querier.DatabaseType.
+func (db *TestDB) DatabaseType() string {
+	return db.vendor
+}
+
+// Begin implements database.Transactor.Begin.
+func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
+	db.mu.RLock()
+	txExp := db.txExpectations
+	db.mu.RUnlock()
+
+	if txExp == nil {
+		return nil, fmt.Errorf("unexpected Begin() call (use ExpectTransaction)")
+	}
+
+	if txExp.shouldErr != nil {
+		return nil, txExp.shouldErr
+	}
+
+	return txExp.tx, nil
+}
+
+// BeginTx implements database.Transactor.BeginTx.
+func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
+	// For test purposes, delegate to Begin (ignore opts)
+	return db.Begin(ctx)
+}
+
+// Prepare implements database.Interface.Prepare (rarely used in tests).
+func (db *TestDB) Prepare(_ context.Context, _ string) (dbtypes.Statement, error) {
+	return nil, fmt.Errorf("Prepare() not implemented in TestDB (prepared statements rarely needed in tests)")
+}
+
+// Health implements database.Interface.Health.
+func (db *TestDB) Health(_ context.Context) error {
+	return nil // Always healthy in tests
+}
+
+// Stats implements database.Interface.Stats.
+func (db *TestDB) Stats() (map[string]any, error) {
+	return map[string]any{
+		"vendor":      db.vendor,
+		"query_count": len(db.queryLog),
+		"exec_count":  len(db.execLog),
+	}, nil
+}
+
+// Close implements database.Interface.Close.
+func (db *TestDB) Close() error {
+	return nil // No-op in tests
+}
+
+// GetMigrationTable implements database.Interface.GetMigrationTable.
+func (db *TestDB) GetMigrationTable() string {
+	return "flyway_schema_history" // Default value
+}
+
+// CreateMigrationTable implements database.Interface.CreateMigrationTable.
+func (db *TestDB) CreateMigrationTable(_ context.Context) error {
+	return nil // No-op in tests
+}
+
+// WillReturnRows configures the QueryExpectation to return the specified rows.
+// Returns the expectation for method chaining.
+func (qe *QueryExpectation) WillReturnRows(rows *RowSet) *QueryExpectation {
+	qe.rows = rows
+	return qe
+}
+
+// WillReturnError configures the QueryExpectation to return an error.
+// Returns the expectation for method chaining.
+func (qe *QueryExpectation) WillReturnError(err error) *QueryExpectation {
+	qe.err = err
+	return qe
+}
+
+// WillReturnRowsAffected configures the ExecExpectation to return the specified rows affected count.
+// Returns the expectation for method chaining.
+func (ee *ExecExpectation) WillReturnRowsAffected(n int64) *ExecExpectation {
+	ee.rowsAffected = n
+	return ee
+}
+
+// WillReturnError configures the ExecExpectation to return an error.
+// Returns the expectation for method chaining.
+func (ee *ExecExpectation) WillReturnError(err error) *ExecExpectation {
+	ee.err = err
+	return ee
+}
+
+// testRow implements dbtypes.Row for QueryRow results.
+type testRow struct {
+	values  []any
+	err     error
+	scanned bool
+}
+
+func (r *testRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.scanned {
+		return fmt.Errorf("row already scanned")
+	}
+	if len(dest) != len(r.values) {
+		return fmt.Errorf("scan expects %d values, got %d", len(dest), len(r.values))
+	}
+	for i, v := range r.values {
+		// Simple type assertion - real implementation would handle type conversion
+		switch d := dest[i].(type) {
+		case *int64:
+			switch val := v.(type) {
+			case int64:
+				*d = val
+			case int:
+				*d = int64(val)
+			}
+		case *string:
+			if val, ok := v.(string); ok {
+				*d = val
+			}
+		case *bool:
+			if val, ok := v.(bool); ok {
+				*d = val
+			}
+			// Add more type conversions as needed
+		}
+	}
+	r.scanned = true
+	return nil
+}
+
+func (r *testRow) Err() error {
+	return r.err
+}
+
+// testResult implements sql.Result for Exec results.
+type testResult struct {
+	rowsAffected int64
+	lastInsertID int64
+}
+
+func (r *testResult) LastInsertId() (int64, error) {
+	return r.lastInsertID, nil
+}
+
+func (r *testResult) RowsAffected() (int64, error) {
+	return r.rowsAffected, nil
+}
