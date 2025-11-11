@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -501,6 +502,13 @@ func convertAssign(dest, src any) error {
 		return assignFloat64(d, src)
 	case **float64:
 		return assignFloat64Ptr(d, src)
+	case *time.Time:
+		t, ok := src.(time.Time)
+		if !ok {
+			return fmt.Errorf("unsupported conversion from %T to *time.Time", src)
+		}
+		*d = t
+		return nil
 	case *any:
 		*d = src
 		return nil
