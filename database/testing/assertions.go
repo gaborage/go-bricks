@@ -175,14 +175,16 @@ func AssertRolledBack(t *testing.T, tx *TestTx) {
 func AssertTransactionCommitted(t *testing.T, db *TestDB) {
 	t.Helper()
 	db.mu.RLock()
-	txExp := db.txExpectations
+	startedTxs := db.startedTransactions
 	db.mu.RUnlock()
 
-	if txExp == nil {
-		t.Error("no transaction was expected (use db.ExpectTransaction())")
+	if len(startedTxs) == 0 {
+		t.Error("no transaction was started (use db.ExpectTransaction() and Begin())")
 		return
 	}
 
+	// Check the last started transaction
+	txExp := startedTxs[len(startedTxs)-1]
 	if txExp.tx == nil {
 		t.Error("transaction expectation has no tx (internal error)")
 		return
@@ -203,14 +205,16 @@ func AssertTransactionCommitted(t *testing.T, db *TestDB) {
 func AssertTransactionRolledBack(t *testing.T, db *TestDB) {
 	t.Helper()
 	db.mu.RLock()
-	txExp := db.txExpectations
+	startedTxs := db.startedTransactions
 	db.mu.RUnlock()
 
-	if txExp == nil {
-		t.Error("no transaction was expected (use db.ExpectTransaction())")
+	if len(startedTxs) == 0 {
+		t.Error("no transaction was started (use db.ExpectTransaction() and Begin())")
 		return
 	}
 
+	// Check the last started transaction
+	txExp := startedTxs[len(startedTxs)-1]
 	if txExp.tx == nil {
 		t.Error("transaction expectation has no tx (internal error)")
 		return
@@ -229,12 +233,15 @@ func AssertTransactionRolledBack(t *testing.T, db *TestDB) {
 func AssertNoTransaction(t *testing.T, db *TestDB) {
 	t.Helper()
 	db.mu.RLock()
-	txExp := db.txExpectations
+	startedTxs := db.startedTransactions
 	db.mu.RUnlock()
 
-	if txExp != nil && txExp.tx != nil {
-		if txExp.tx.IsCommitted() || txExp.tx.IsRolledBack() {
-			t.Error("unexpected transaction was started and completed")
+	if len(startedTxs) > 0 {
+		for _, txExp := range startedTxs {
+			if txExp.tx != nil && (txExp.tx.IsCommitted() || txExp.tx.IsRolledBack()) {
+				t.Error("unexpected transaction was started and completed")
+				return
+			}
 		}
 	}
 }

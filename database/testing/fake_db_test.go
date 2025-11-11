@@ -3,14 +3,26 @@ package testing
 import (
 	"context"
 	"testing"
+	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
-	testQuery = "SELECT * FROM users"
+	testQuery         = "SELECT * FROM users"
+	testUnsignedQuery = "SELECT * FROM unsigned_test"
 )
+
+// mustParseTime parses a time string in RFC3339 format or fails the test.
+func mustParseTime(t *testing.T, timeStr string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		t.Fatalf("failed to parse time %q: %v", timeStr, err)
+	}
+	return parsed
+}
 
 // TestTestDBQueryRow tests the QueryRow method of TestDB.
 func TestTestDBQueryRow(t *testing.T) {
@@ -182,6 +194,101 @@ func TestTestTxExpectationOrdering(t *testing.T) {
 	assert.Equal(t, int64(5), rowsAffected)
 }
 
+// TestMultipleTransactionExpectations tests that multiple transaction expectations
+// can be queued and consumed in order.
+func TestMultipleTransactionExpectations(t *testing.T) {
+	t.Run("queues and consumes multiple transactions in order", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Set up three transaction expectations
+		tx1 := db.ExpectTransaction().
+			ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
+		tx2 := db.ExpectTransaction().
+			ExpectExec("INSERT INTO products").WillReturnRowsAffected(2)
+		tx3 := db.ExpectTransaction().
+			ExpectExec("INSERT INTO users").WillReturnRowsAffected(3)
+
+		// First transaction
+		txConn1, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		result1, err := txConn1.Exec(context.Background(), "INSERT INTO orders VALUES (1)")
+		assert.NoError(t, err)
+		rowsAffected1, _ := result1.RowsAffected()
+		assert.Equal(t, int64(1), rowsAffected1)
+		err = txConn1.Commit()
+		assert.NoError(t, err)
+		assert.True(t, tx1.IsCommitted())
+
+		// Second transaction
+		txConn2, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		result2, err := txConn2.Exec(context.Background(), "INSERT INTO products VALUES (1)")
+		assert.NoError(t, err)
+		rowsAffected2, _ := result2.RowsAffected()
+		assert.Equal(t, int64(2), rowsAffected2)
+		err = txConn2.Commit()
+		assert.NoError(t, err)
+		assert.True(t, tx2.IsCommitted())
+
+		// Third transaction
+		txConn3, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		result3, err := txConn3.Exec(context.Background(), "INSERT INTO users VALUES (1)")
+		assert.NoError(t, err)
+		rowsAffected3, _ := result3.RowsAffected()
+		assert.Equal(t, int64(3), rowsAffected3)
+		err = txConn3.Commit()
+		assert.NoError(t, err)
+		assert.True(t, tx3.IsCommitted())
+	})
+
+	t.Run("errors when Begin called without expectations", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Try to begin without setting up expectations
+		_, err := db.Begin(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected Begin() call")
+	})
+
+	t.Run("errors when Begin called after all expectations consumed", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Set up one transaction expectation
+		db.ExpectTransaction()
+
+		// First Begin succeeds
+		_, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+
+		// Second Begin fails (no more expectations)
+		_, err = db.Begin(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected Begin() call")
+	})
+
+	t.Run("AssertTransactionCommitted checks last started transaction", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+
+		// Set up two transactions
+		tx1 := db.ExpectTransaction()
+		tx2 := db.ExpectTransaction()
+
+		// Start both transactions
+		txConn1, _ := db.Begin(context.Background())
+		txConn2, _ := db.Begin(context.Background())
+
+		// Commit first, rollback second
+		txConn1.Commit()
+		txConn2.Commit()
+
+		// AssertTransactionCommitted should check the last one (tx2)
+		AssertTransactionCommitted(t, db)
+		assert.True(t, tx1.IsCommitted())
+		assert.True(t, tx2.IsCommitted())
+	})
+}
+
 // TestAssertions tests the assertion helper functions.
 func TestAssertions(t *testing.T) {
 	t.Run("AssertQueryExecuted passes when query executed", func(t *testing.T) {
@@ -310,5 +417,152 @@ func TestDeterministicExpectationMatching(t *testing.T) {
 		err = row.Scan(&id)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(100), id, "first expectation matches subsequent queries")
+	})
+}
+
+// TestConvertAssignUnsignedTypes tests the support for unsigned integer types.
+func TestConvertAssignUnsignedTypes(t *testing.T) {
+	t.Run("scans unsigned integer types", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet(
+				"u8", "u16", "u32", "u64", "u",
+			).AddRow(
+				uint64(255), uint64(65535), uint64(4294967295), uint64(9223372036854775807), uint64(12345),
+			))
+
+		row := db.QueryRow(context.Background(), testUnsignedQuery)
+
+		var u8 uint8
+		var u16 uint16
+		var u32 uint32
+		var u64 uint64
+		var u uint
+		err := row.Scan(&u8, &u16, &u32, &u64, &u)
+
+		assert.NoError(t, err)
+		assert.Equal(t, uint8(255), u8)
+		assert.Equal(t, uint16(65535), u16)
+		assert.Equal(t, uint32(4294967295), u32)
+		assert.Equal(t, uint64(9223372036854775807), u64) // max int64 value
+		assert.Equal(t, uint(12345), u)
+	})
+
+	t.Run("scans unsigned integer pointer types", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet(
+				"u8", "u16", "u32", "u64", "u",
+			).AddRow(
+				uint64(100), uint64(1000), uint64(100000), uint64(1000000), uint64(999),
+			))
+
+		row := db.QueryRow(context.Background(), testUnsignedQuery)
+
+		var u8 *uint8
+		var u16 *uint16
+		var u32 *uint32
+		var u64 *uint64
+		var u *uint
+		err := row.Scan(&u8, &u16, &u32, &u64, &u)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, u8)
+		assert.Equal(t, uint8(100), *u8)
+		assert.NotNil(t, u16)
+		assert.Equal(t, uint16(1000), *u16)
+		assert.NotNil(t, u32)
+		assert.Equal(t, uint32(100000), *u32)
+		assert.NotNil(t, u64)
+		assert.Equal(t, uint64(1000000), *u64)
+		assert.NotNil(t, u)
+		assert.Equal(t, uint(999), *u)
+	})
+
+	t.Run("handles nil unsigned integer values", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet(
+				"u8", "u16", "u32", "u64", "u",
+			).AddRow(
+				nil, nil, nil, nil, nil,
+			))
+
+		row := db.QueryRow(context.Background(), testUnsignedQuery)
+
+		var u8 *uint8
+		var u16 *uint16
+		var u32 *uint32
+		var u64 *uint64
+		var u *uint
+		err := row.Scan(&u8, &u16, &u32, &u64, &u)
+
+		assert.NoError(t, err)
+		assert.Nil(t, u8)
+		assert.Nil(t, u16)
+		assert.Nil(t, u32)
+		assert.Nil(t, u64)
+		assert.Nil(t, u)
+	})
+
+	t.Run("converts signed to unsigned integers", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("u64").AddRow(int64(42)))
+
+		row := db.QueryRow(context.Background(), "SELECT * FROM test")
+
+		var u64 uint64
+		err := row.Scan(&u64)
+
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(42), u64)
+	})
+
+	t.Run("rejects negative values for unsigned integers", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("u64").AddRow(int64(-1)))
+
+		row := db.QueryRow(context.Background(), "SELECT * FROM test")
+
+		var u64 uint64
+		err := row.Scan(&u64)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot convert negative value")
+	})
+}
+
+// TestConvertAssignTimePointer tests the support for **time.Time.
+func TestConvertAssignTimePointer(t *testing.T) {
+	t.Run("scans time.Time pointer pointer", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		testTime := mustParseTime(t, "2025-01-15T10:30:00Z")
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("created_at").AddRow(testTime))
+
+		row := db.QueryRow(context.Background(), "SELECT created_at FROM events")
+
+		var createdAt *time.Time
+		err := row.Scan(&createdAt)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, createdAt)
+		assert.Equal(t, testTime, *createdAt)
+	})
+
+	t.Run("handles nil time.Time pointer pointer", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectQuery("SELECT").
+			WillReturnRows(NewRowSet("deleted_at").AddRow(nil))
+
+		row := db.QueryRow(context.Background(), "SELECT deleted_at FROM events")
+
+		var deletedAt *time.Time
+		err := row.Scan(&deletedAt)
+
+		assert.NoError(t, err)
+		assert.Nil(t, deletedAt)
 	})
 }

@@ -62,16 +62,17 @@ import (
 //
 // For assertion helpers, see the AssertQueryExecuted, AssertExecExecuted functions.
 type TestDB struct {
-	vendor         string
-	queries        []*QueryExpectation
-	execs          []*ExecExpectation
-	lastQuery      *QueryExpectation
-	lastExec       *ExecExpectation
-	queryLog       []QueryCall
-	execLog        []ExecCall
-	strictMatch    bool
-	txExpectations *TxExpectation
-	mu             sync.RWMutex
+	vendor              string
+	queries             []*QueryExpectation
+	execs               []*ExecExpectation
+	lastQuery           *QueryExpectation
+	lastExec            *ExecExpectation
+	queryLog            []QueryCall
+	execLog             []ExecCall
+	strictMatch         bool
+	txExpectations      []*TxExpectation
+	startedTransactions []*TxExpectation
+	mu                  sync.RWMutex
 }
 
 // QueryCall represents a single Query or QueryRow invocation.
@@ -183,10 +184,11 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	tx := &TestTx{parent: db}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.txExpectations = &TxExpectation{
+	txExp := &TxExpectation{
 		parent: db,
 		tx:     tx,
 	}
+	db.txExpectations = append(db.txExpectations, txExp)
 	return tx
 }
 
@@ -343,13 +345,20 @@ func (db *TestDB) DatabaseType() string {
 
 // Begin implements database.Transactor.Begin.
 func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
-	db.mu.RLock()
-	txExp := db.txExpectations
-	db.mu.RUnlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	if txExp == nil {
+	// Check if there are any expectations queued
+	if len(db.txExpectations) == 0 {
 		return nil, fmt.Errorf("unexpected Begin() call (use ExpectTransaction)")
 	}
+
+	// Pop the first expectation from the queue
+	txExp := db.txExpectations[0]
+	db.txExpectations = db.txExpectations[1:]
+
+	// Track this transaction as started
+	db.startedTransactions = append(db.startedTransactions, txExp)
 
 	if txExp.shouldErr != nil {
 		return nil, txExp.shouldErr
@@ -509,6 +518,28 @@ func convertAssign(dest, src any) error {
 		}
 		*d = t
 		return nil
+	case **time.Time:
+		return assignTimePtr(d, src)
+	case *uint:
+		return assignUint(d, src)
+	case **uint:
+		return assignUintPtr(d, src)
+	case *uint64:
+		return assignUint64(d, src)
+	case **uint64:
+		return assignUint64Ptr(d, src)
+	case *uint32:
+		return assignUint32(d, src)
+	case **uint32:
+		return assignUint32Ptr(d, src)
+	case *uint16:
+		return assignUint16(d, src)
+	case **uint16:
+		return assignUint16Ptr(d, src)
+	case *uint8:
+		return assignUint8(d, src)
+	case **uint8:
+		return assignUint8Ptr(d, src)
 	case *any:
 		*d = src
 		return nil
@@ -664,6 +695,184 @@ func assignFloat64Ptr(dest **float64, src any) error {
 	return nil
 }
 
+func assignTimePtr(dest **time.Time, src any) error {
+	t, ok := src.(time.Time)
+	if !ok {
+		return fmt.Errorf("unsupported conversion from %T to **time.Time", src)
+	}
+	*dest = &t
+	return nil
+}
+
+// Unsigned integer assignment functions
+func assignUint(dest *uint, src any) error {
+	switch s := src.(type) {
+	case uint64:
+		*dest = uint(s)
+	case uint:
+		*dest = s
+	case int64:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint", s)
+		}
+		*dest = uint(s)
+	case int:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint", s)
+		}
+		*dest = uint(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *uint", src)
+	}
+	return nil
+}
+
+func assignUint64(dest *uint64, src any) error {
+	switch s := src.(type) {
+	case uint64:
+		*dest = s
+	case uint:
+		*dest = uint64(s)
+	case int64:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint64", s)
+		}
+		*dest = uint64(s)
+	case int:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint64", s)
+		}
+		*dest = uint64(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *uint64", src)
+	}
+	return nil
+}
+
+func assignUint32(dest *uint32, src any) error {
+	switch s := src.(type) {
+	case uint64:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
+		*dest = uint32(s)
+	case uint:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
+		*dest = uint32(s)
+	case int64:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint32", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
+		*dest = uint32(s)
+	case int:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint32", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
+		*dest = uint32(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *uint32", src)
+	}
+	return nil
+}
+
+func assignUint16(dest *uint16, src any) error {
+	switch s := src.(type) {
+	case uint64:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
+		*dest = uint16(s)
+	case uint:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
+		*dest = uint16(s)
+	case int64:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint16", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
+		*dest = uint16(s)
+	case int:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint16", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
+		*dest = uint16(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *uint16", src)
+	}
+	return nil
+}
+
+func assignUint8(dest *uint8, src any) error {
+	switch s := src.(type) {
+	case uint64:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
+		*dest = uint8(s)
+	case uint:
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
+		*dest = uint8(s)
+	case int64:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint8", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
+		*dest = uint8(s)
+	case int:
+		if s < 0 {
+			return fmt.Errorf("cannot convert negative value %d to uint8", s)
+		}
+		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
+		*dest = uint8(s)
+	default:
+		return fmt.Errorf("unsupported conversion from %T to *uint8", src)
+	}
+	return nil
+}
+
+// Pointer-to-pointer assignment functions for unsigned integers
+func assignUintPtr(dest **uint, src any) error {
+	var temp uint
+	if err := assignUint(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignUint64Ptr(dest **uint64, src any) error {
+	var temp uint64
+	if err := assignUint64(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignUint32Ptr(dest **uint32, src any) error {
+	var temp uint32
+	if err := assignUint32(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignUint16Ptr(dest **uint16, src any) error {
+	var temp uint16
+	if err := assignUint16(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
+func assignUint8Ptr(dest **uint8, src any) error {
+	var temp uint8
+	if err := assignUint8(&temp, src); err != nil {
+		return err
+	}
+	*dest = &temp
+	return nil
+}
+
 // setDestNil sets the destination to its zero value for nil source values.
 //
 //nolint:gocyclo // Nil handling requires exhaustive case coverage for all supported types
@@ -696,6 +905,30 @@ func setDestNil(dest any) error {
 	case *float64:
 		*d = 0
 	case **float64:
+		*d = nil
+	case *time.Time:
+		*d = time.Time{}
+	case **time.Time:
+		*d = nil
+	case *uint:
+		*d = 0
+	case **uint:
+		*d = nil
+	case *uint64:
+		*d = 0
+	case **uint64:
+		*d = nil
+	case *uint32:
+		*d = 0
+	case **uint32:
+		*d = nil
+	case *uint16:
+		*d = 0
+	case **uint16:
+		*d = nil
+	case *uint8:
+		*d = 0
+	case **uint8:
 		*d = nil
 	case *any:
 		*d = nil
