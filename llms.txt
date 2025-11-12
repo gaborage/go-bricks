@@ -121,6 +121,79 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 | DELETE           | `server.NoBody`              | `server.NoContent()`    | Return typed API errors        |
 | ASYNC acceptance | Request struct               | `server.Accepted(meta)` | For enqueue-style workflows    |
 
+### Pointer Types for Large Payloads
+
+Use **pointer types** for requests/responses >1KB to eliminate copy overhead. Fully backward compatible.
+
+```go
+// Large request - file upload (pointer avoids copying MB of data)
+type FileUploadRequest struct {
+	Data     []byte `json:"data" validate:"required"` // Base64-encoded file
+	Filename string `json:"filename" validate:"required"`
+	MimeType string `json:"mime_type"`
+}
+
+func (h *Handler) UploadFile(req *FileUploadRequest, ctx server.HandlerContext) (server.Result[UploadResponse], server.IAPIError) {
+	reqCtx := ctx.Echo.Request().Context()
+	fileID, err := h.storageService.Store(reqCtx, req.Data, req.Filename, req.MimeType)
+	if err != nil {
+		return server.Result[UploadResponse]{}, server.InternalServerError(err)
+	}
+	return server.Created(UploadResponse{FileID: fileID, Size: len(req.Data)}), nil
+}
+
+// Large response - bulk export (pointer avoids copying thousands of records)
+type BulkExportResponse struct {
+	Records []Record `json:"records"`
+	Total   int      `json:"total"`
+	Page    int      `json:"page"`
+}
+
+func (h *Handler) ExportRecords(req ExportRequest, ctx server.HandlerContext) (*BulkExportResponse, server.IAPIError) {
+	reqCtx := ctx.Echo.Request().Context()
+	records, err := h.recordService.GetAll(reqCtx, req.Filter)
+	if err != nil {
+		return nil, server.InternalServerError(err)
+	}
+	return &BulkExportResponse{
+		Records: records,
+		Total:   len(records),
+		Page:    req.Page,
+	}, nil
+}
+
+// Both pointer types - bulk import handler
+type BulkImportRequest struct {
+	Records []ImportRecord `json:"records" validate:"required,min=1,max=10000"`
+	DryRun  bool           `json:"dry_run"`
+}
+
+type BulkImportResponse struct {
+	Imported int      `json:"imported"`
+	Failed   int      `json:"failed"`
+	Errors   []string `json:"errors,omitempty"`
+}
+
+func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) (*BulkImportResponse, server.IAPIError) {
+	reqCtx := ctx.Echo.Request().Context()
+	result, err := h.importService.ProcessBulk(reqCtx, req.Records, req.DryRun)
+	if err != nil {
+		return nil, server.InternalServerError(err)
+	}
+	return &BulkImportResponse{
+		Imported: result.Imported,
+		Failed:   result.Failed,
+		Errors:   result.Errors,
+	}, nil
+}
+```
+
+**Performance guidelines:**
+- **<1KB**: Use value types (default, idiomatic Go)
+- **1KB-10KB**: Consider pointers for high-traffic endpoints
+- **>10KB**: Always use pointers (file uploads, bulk operations)
+- Pointer fields (`*string`, `*int`) work correctly with validation (`omitempty`, `min=`)
+
 ## Database Builder & Operations
 
 ```go
