@@ -218,6 +218,55 @@ func TestTimeoutDuringValidation(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
+// TestContextCancellationDuringHandlerExecution verifies that context cancellation
+// during handler execution returns a structured 503 ServiceUnavailable response
+// instead of a raw context error.
+func TestContextCancellationDuringHandlerExecution(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Env: config.EnvDevelopment,
+		},
+	}
+
+	hr := NewHandlerRegistry(cfg)
+	registrar := newRouteGroup(e.Group(""), "")
+
+	// Handler that simulates work and allows context cancellation
+	handler := func(_ EmptyRequest, _ HandlerContext) (Response, IAPIError) {
+		// Simulate some work
+		time.Sleep(50 * time.Millisecond)
+		return Response{Message: "success"}, nil
+	}
+
+	GET(hr, registrar, "/test", handler)
+
+	// Create request with short timeout that expires during handler execution
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	// Execute
+	e.ServeHTTP(rec, req)
+
+	// Assert structured 503 response
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"error"`)
+	assert.Contains(t, rec.Body.String(), `"meta"`)
+	assert.Contains(t, rec.Body.String(), "timeout")
+
+	// Verify it's valid JSON with proper structure
+	var response map[string]any
+	err := json.Unmarshal(rec.Body.Bytes(), &response)
+	assert.NoError(t, err, "Response should be valid JSON")
+	assert.NotNil(t, response["error"], "Response should have error field")
+	assert.NotNil(t, response["meta"], "Response should have meta field")
+}
+
 // TestTimeoutWithLoggerMiddleware tests the specific scenario that caused production panics:
 // timeout + logger middleware attempting to log response status after deadline exceeded.
 // This test ensures the custom Timeout middleware prevents response invalidation.

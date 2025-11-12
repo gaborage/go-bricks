@@ -248,7 +248,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		// Check context after handler execution
 		ctx := c.Request().Context()
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
 		}
 
 		// Handle response
