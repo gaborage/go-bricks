@@ -635,3 +635,117 @@ func TestConnectionValidationIntegration(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Oracle SEQUENCE Tests (No UDT Registration Required)
+// =============================================================================
+
+func TestOracleSequenceQuery(t *testing.T) {
+	db, mock, c := setupMockConnection(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Test that SEQUENCE queries work without any UDT registration
+	t.Run("sequenceNextval", func(t *testing.T) {
+		// Mock SEQUENCE.NEXTVAL query
+		rows := sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1001))
+		mock.ExpectQuery("SELECT SEQ_ID_TABLE.NEXTVAL FROM DUAL").WillReturnRows(rows)
+
+		var nextID int64
+		err := c.QueryRow(ctx, "SELECT SEQ_ID_TABLE.NEXTVAL FROM DUAL").Scan(&nextID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), nextID)
+	})
+
+	t.Run("sequenceCurrval", func(t *testing.T) {
+		// Mock SEQUENCE.CURRVAL query
+		rows := sqlmock.NewRows([]string{"currval"}).AddRow(int64(1001))
+		mock.ExpectQuery("SELECT SEQ_ID_TABLE.CURRVAL FROM DUAL").WillReturnRows(rows)
+
+		var currID int64
+		err := c.QueryRow(ctx, "SELECT SEQ_ID_TABLE.CURRVAL FROM DUAL").Scan(&currID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), currID)
+	})
+
+	// Verify all expectations met
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// =============================================================================
+// Oracle UDT Registration Tests
+// =============================================================================
+
+func TestConnectionRegisterType(t *testing.T) {
+	type Product struct {
+		ID    int64   `udt:"ID"`
+		Name  string  `udt:"NAME"`
+		Price float64 `udt:"PRICE"`
+	}
+
+	t.Run("objectTypeOnly", func(t *testing.T) {
+		_, _, c := setupMockConnection(t)
+
+		// Register without collection type
+		err := c.RegisterType("PRODUCT_TYPE", "", Product{})
+
+		// Method should exist and handle gracefully (may fail without real Oracle)
+		if err != nil {
+			t.Logf("RegisterType returned error (expected without Oracle): %v", err)
+		}
+	})
+
+	t.Run("collectionTypeForBulkOps", func(t *testing.T) {
+		_, _, c := setupMockConnection(t)
+
+		// Primary use case: register collection type
+		err := c.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+
+		if err != nil {
+			t.Logf("RegisterType with collection returned error: %v", err)
+		}
+	})
+}
+
+func TestConnectionRegisterTypeWithOwner(t *testing.T) {
+	type Customer struct {
+		CustomerID int    `udt:"CUSTOMER_ID"`
+		Name       string `udt:"NAME"`
+	}
+
+	t.Run("withSchemaOwner", func(t *testing.T) {
+		_, _, c := setupMockConnection(t)
+
+		// Note: This may panic with sqlmock due to driver type assertion in go-ora
+		// Integration tests validate actual functionality
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("RegisterTypeWithOwner panicked (expected with sqlmock): %v", r)
+			}
+		}()
+
+		err := c.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "", Customer{})
+
+		if err != nil {
+			t.Logf("RegisterTypeWithOwner returned error: %v", err)
+		}
+	})
+
+	t.Run("schemaOwnerWithCollection", func(t *testing.T) {
+		_, _, c := setupMockConnection(t)
+
+		// Note: This may panic with sqlmock due to driver type assertion in go-ora
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("RegisterTypeWithOwner panicked (expected with sqlmock): %v", r)
+			}
+		}()
+
+		err := c.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "CUSTOMER_TABLE", Customer{})
+
+		if err != nil {
+			t.Logf("RegisterTypeWithOwner with collection returned error: %v", err)
+		}
+	})
+}

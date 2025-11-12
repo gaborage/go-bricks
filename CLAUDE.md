@@ -811,9 +811,56 @@ func TestFeature(t *testing.T) {
 
 | Database | Placeholders | Key Features |
 |----------|--------------|--------------|
-| **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options |
+| **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options, **SEQUENCE support (built-in), UDT registration for custom types** |
 | **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
 | **MongoDB** | N/A | Document-based with SQL-like interface, aggregation pipeline |
+
+### Oracle SEQUENCE Objects (No Configuration Required)
+
+Oracle SEQUENCE objects for ID generation work immediately with standard queries:
+
+```go
+// Get next sequence value
+var id int64
+err := conn.QueryRow(ctx, "SELECT user_seq.NEXTVAL FROM DUAL").Scan(&id)
+
+// Use in INSERT
+_, err = conn.Exec(ctx, "INSERT INTO users VALUES (user_seq.NEXTVAL, :1)", name)
+```
+
+**No UDT registration needed** - SEQUENCE returns standard NUMBER type.
+
+### Oracle User-Defined Types (Require Registration)
+
+For custom object/collection types created with `CREATE TYPE`, use UDT registration:
+
+**When UDT Registration Required:**
+- Bulk insert/update with TABLE OF collections
+- Stored procedures with custom object parameters
+- Functions returning complex types
+
+**Quick Example:**
+```go
+type Product struct {
+    ID    int64  `udt:"ID"`
+    Name  string `udt:"NAME"`
+    Price float64 `udt:"PRICE"`
+}
+
+oracleConn := conn.(*oracle.Connection)
+
+// Register collection type
+err := oracleConn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+
+// Bulk insert
+products := []Product{{ID: 1, Name: "Widget", Price: 19.99}, ...}
+_, err = conn.Exec(ctx, "BEGIN bulk_insert_products(:1); END;", products)
+```
+
+**For comprehensive examples**, see [llms.txt](llms.txt) Oracle SEQUENCE vs UDT section.
+
+**Common Error:** `"call register type before use user defined type"`
+**Solution:** Call `RegisterType()` during initialization (does NOT affect SEQUENCE queries).
 
 ## OpenAPI Tool
 
