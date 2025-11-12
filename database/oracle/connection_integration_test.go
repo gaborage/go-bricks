@@ -523,10 +523,26 @@ func TestOracleSequenceIntegration(t *testing.T) {
 	})
 
 	t.Run("currvalQuery", func(t *testing.T) {
-		var currID int64
-		err := conn.QueryRow(ctx, "SELECT test_seq.CURRVAL FROM DUAL").Scan(&currID)
+		// CURRVAL requires NEXTVAL to be called in the same session first
+		// Start transaction to ensure same session is used
+		tx, err := conn.Begin(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, int64(1000), currID)
+		defer tx.Rollback()
+
+		// Prime the sequence with NEXTVAL (gets next value: 1001)
+		var nextID int64
+		err = tx.QueryRow(ctx, "SELECT test_seq.NEXTVAL FROM DUAL").Scan(&nextID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), nextID)
+
+		// Now CURRVAL should return the same value from the same session
+		var currID int64
+		err = tx.QueryRow(ctx, "SELECT test_seq.CURRVAL FROM DUAL").Scan(&currID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), currID) // Same as NEXTVAL
+
+		err = tx.Commit()
+		require.NoError(t, err)
 	})
 
 	t.Run("sequenceInInsert", func(t *testing.T) {
@@ -541,7 +557,7 @@ func TestOracleSequenceIntegration(t *testing.T) {
 		var name string
 		err = conn.QueryRow(ctx, "SELECT id, name FROM test_seq_table").Scan(&id, &name)
 		require.NoError(t, err)
-		assert.Equal(t, int64(1001), id)
+		assert.Equal(t, int64(1002), id) // Sequence now at 1002 (1000 → nextvalQuery, 1001 → currvalQuery)
 		assert.Equal(t, "test", name)
 	})
 }
