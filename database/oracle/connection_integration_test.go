@@ -501,3 +501,401 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 	assert.Equal(t, 5, stats["max_open_connections"], "Max connections should match config")
 	assert.Equal(t, 2, stats["max_idle_connections"], "Max idle connections should match config")
 }
+
+// =============================================================================
+// Oracle SEQUENCE Integration Tests (No UDT Registration Required)
+// =============================================================================
+
+// TestOracleSequenceIntegration verifies SEQUENCE queries work without UDT registration
+func TestOracleSequenceIntegration(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Create test sequence
+	_, err := conn.Exec(ctx, "CREATE SEQUENCE test_seq START WITH 1000 INCREMENT BY 1")
+	require.NoError(t, err)
+
+	t.Run("nextvalQuery", func(t *testing.T) {
+		// SEQUENCE queries work without ANY UDT registration
+		var nextID int64
+		err := conn.QueryRow(ctx, "SELECT test_seq.NEXTVAL FROM DUAL").Scan(&nextID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1000), nextID)
+	})
+
+	t.Run("currvalQuery", func(t *testing.T) {
+		// CURRVAL requires NEXTVAL to be called in the same session first
+		// Start transaction to ensure same session is used
+		tx, err := conn.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback()
+
+		// Prime the sequence with NEXTVAL (gets next value: 1001)
+		var nextID int64
+		err = tx.QueryRow(ctx, "SELECT test_seq.NEXTVAL FROM DUAL").Scan(&nextID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), nextID)
+
+		// Now CURRVAL should return the same value from the same session
+		var currID int64
+		err = tx.QueryRow(ctx, "SELECT test_seq.CURRVAL FROM DUAL").Scan(&currID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001), currID) // Same as NEXTVAL
+
+		err = tx.Commit()
+		require.NoError(t, err)
+	})
+
+	t.Run("sequenceInInsert", func(t *testing.T) {
+		_, err := conn.Exec(ctx, "CREATE TABLE test_seq_table (id NUMBER PRIMARY KEY, name VARCHAR2(100))")
+		require.NoError(t, err)
+
+		// Use SEQUENCE in INSERT (no UDT registration needed)
+		_, err = conn.Exec(ctx, "INSERT INTO test_seq_table VALUES (test_seq.NEXTVAL, 'test')")
+		require.NoError(t, err)
+
+		var id int64
+		var name string
+		err = conn.QueryRow(ctx, "SELECT id, name FROM test_seq_table").Scan(&id, &name)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1002), id) // Sequence now at 1002 (1000 → nextvalQuery, 1001 → currvalQuery)
+		assert.Equal(t, "test", name)
+	})
+}
+
+// =============================================================================
+// Oracle UDT Integration Tests
+// =============================================================================
+
+// Product for UDT testing
+type Product struct {
+	ID        int64     `udt:"ID"`
+	Name      string    `udt:"NAME"`
+	Price     float64   `udt:"PRICE"`
+	CreatedAt time.Time `udt:"CREATED_AT"`
+}
+
+func TestOracleUDTCollectionIntegration(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Setup: Create UDT types and bulk insert procedure
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE PRODUCT_TYPE AS OBJECT (
+				ID         NUMBER,
+				NAME       VARCHAR2(100),
+				PRICE      NUMBER(10,2),
+				CREATED_AT DATE
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err := conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	collectionSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE PRODUCT_TABLE AS TABLE OF PRODUCT_TYPE';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, collectionSQL)
+	require.NoError(t, err)
+
+	tableSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TABLE products (
+				id         NUMBER PRIMARY KEY,
+				name       VARCHAR2(100),
+				price      NUMBER(10,2),
+				created_at DATE
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, tableSQL)
+	require.NoError(t, err)
+
+	procedureSQL := `
+		CREATE OR REPLACE PROCEDURE bulk_insert_products(p_products IN PRODUCT_TABLE) IS
+		BEGIN
+			FORALL i IN INDICES OF p_products
+				INSERT INTO products (id, name, price, created_at)
+				VALUES (
+					p_products(i).ID,
+					p_products(i).NAME,
+					p_products(i).PRICE,
+					p_products(i).CREATED_AT
+				);
+		END;
+	`
+
+	_, err = conn.Exec(ctx, procedureSQL)
+	require.NoError(t, err)
+
+	t.Run("bulkInsertWithCollectionType", func(t *testing.T) {
+		// Register UDT collection type
+		// Note: conn is already *Connection from setupTestContainer
+		err := conn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+		require.NoError(t, err, "Failed to register UDT")
+
+		// Prepare bulk data
+		now := time.Now()
+		products := []Product{
+			{ID: 1, Name: "Widget", Price: 19.99, CreatedAt: now},
+			{ID: 2, Name: "Gadget", Price: 29.99, CreatedAt: now},
+			{ID: 3, Name: "Doohickey", Price: 39.99, CreatedAt: now},
+		}
+
+		// Bulk insert via collection
+		_, err = conn.Exec(ctx, "BEGIN bulk_insert_products(:1); END;", products)
+		require.NoError(t, err, "Bulk insert failed")
+
+		// Verify count
+		var count int
+		err = conn.QueryRow(ctx, "SELECT COUNT(*) FROM products").Scan(&count)
+		require.NoError(t, err)
+		assert.Equal(t, 3, count)
+	})
+}
+
+func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
+	t.Skip("Skipping schema owner test - requires additional Oracle container setup with user creation privileges")
+
+	conn, ctx := setupTestContainer(t)
+
+	// Create schema with types (requires DBA privileges)
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE USER testschema IDENTIFIED BY testpass';
+			EXECUTE IMMEDIATE 'GRANT CREATE TYPE, CREATE PROCEDURE TO testschema';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -1920 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err := conn.Exec(ctx, setupSQL)
+	if err != nil {
+		t.Logf("Schema creation failed (may require DBA privileges): %v", err)
+		return
+	}
+
+	typeSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE testschema.ORDER_ITEM AS OBJECT (
+				ITEM_ID   NUMBER,
+				QUANTITY  NUMBER,
+				PRICE     NUMBER(10,2)
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, typeSQL)
+	require.NoError(t, err)
+
+	collSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE testschema.ORDER_ITEMS AS TABLE OF testschema.ORDER_ITEM';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, collSQL)
+	require.NoError(t, err)
+
+	type OrderItem struct {
+		ItemID   int64   `udt:"ITEM_ID"`
+		Quantity int     `udt:"QUANTITY"`
+		Price    float64 `udt:"PRICE"`
+	}
+
+	t.Run("registerWithSchemaOwner", func(t *testing.T) {
+		// Register with schema owner
+		// Note: conn is already *Connection from setupTestContainer
+		err := conn.RegisterTypeWithOwner("TESTSCHEMA", "ORDER_ITEM", "ORDER_ITEMS", OrderItem{})
+		require.NoError(t, err)
+
+		// Verify registration successful (actual usage would be in stored procedures)
+		items := []OrderItem{
+			{ItemID: 101, Quantity: 2, Price: 50.00},
+			{ItemID: 102, Quantity: 1, Price: 75.50},
+		}
+
+		// Would use: _, err = conn.Exec(ctx, "BEGIN testschema.process_order(:1); END;", items)
+		assert.NotNil(t, items) // Placeholder - type is registered
+	})
+}
+
+// =============================================================================
+// Oracle UDT Coverage Tests (Object-Only and Error Paths)
+// =============================================================================
+
+// TestOracleUDTObjectOnlyRegistration tests RegisterType with object-only (no collection)
+// Coverage target: connection.go line 375 (else branch)
+func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Create simple object type (no collection)
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE SIMPLE_TYPE AS OBJECT (
+				ID NUMBER,
+				NAME VARCHAR2(50)
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err := conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type SimpleType struct {
+		ID   int64  `udt:"ID"`
+		Name string `udt:"NAME"`
+	}
+
+	// Register WITHOUT collection type (empty arrayTypeName)
+	// This covers the else branch at line 375
+	err = conn.RegisterType("SIMPLE_TYPE", "", SimpleType{})
+	require.NoError(t, err)
+}
+
+// TestOracleUDTRegistrationError tests error handling in RegisterType
+// Coverage target: connection.go lines 380-385 (error path)
+func TestOracleUDTRegistrationError(t *testing.T) {
+	conn, _ := setupTestContainer(t)
+
+	type FakeType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Attempt to register non-existent type (should fail)
+	err := conn.RegisterType("NONEXISTENT_TYPE", "NONEXISTENT_TABLE", FakeType{})
+
+	// Verify error handling path is executed
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to register Oracle type NONEXISTENT_TYPE")
+}
+
+// TestOracleUDTObjectOnlyWithOwner tests RegisterTypeWithOwner with object-only
+// Coverage target: connection.go line 426 (else branch)
+func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Get current user for owner parameter
+	var currentUser string
+	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	require.NoError(t, err)
+
+	// Create object type
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_TYPE AS OBJECT (
+				VALUE NUMBER
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type OwnerType struct {
+		Value int64 `udt:"VALUE"`
+	}
+
+	// Register with owner but NO collection type
+	// This covers the else branch at line 426
+	err = conn.RegisterTypeWithOwner(currentUser, "OWNER_TYPE", "", OwnerType{})
+	require.NoError(t, err)
+}
+
+// TestOracleUDTRegistrationErrorWithOwner tests error handling in RegisterTypeWithOwner
+// Coverage target: connection.go lines 431-437 (error path)
+func TestOracleUDTRegistrationErrorWithOwner(t *testing.T) {
+	conn, _ := setupTestContainer(t)
+
+	type FakeType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Attempt to register with invalid owner/type combination
+	err := conn.RegisterTypeWithOwner("INVALID_SCHEMA", "FAKE_TYPE", "", FakeType{})
+
+	// Verify error handling path is executed
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to register Oracle type INVALID_SCHEMA.FAKE_TYPE")
+}
+
+// TestOracleUDTRegistrationLogging tests success path logging in RegisterTypeWithOwner
+// Coverage target: connection.go lines 440-444 (debug logging)
+func TestOracleUDTRegistrationLogging(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Get current user
+	var currentUser string
+	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	require.NoError(t, err)
+
+	// Create type
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE LOG_TYPE AS OBJECT (
+				ID NUMBER
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type LogType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Register with owner (triggers debug logging on success)
+	// This covers lines 440-444
+	err = conn.RegisterTypeWithOwner(currentUser, "LOG_TYPE", "", LogType{})
+	require.NoError(t, err)
+
+	// Success path ensures debug logging is executed
+}

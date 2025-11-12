@@ -308,3 +308,140 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 	_, err = c.Exec(ctx, indexQuery)
 	return err
 }
+
+// RegisterType registers an Oracle User-Defined Type (UDT) for use with
+// stored procedures, functions, and queries that return custom object types.
+//
+// IMPORTANT: This is for custom types created with CREATE TYPE, NOT for
+// Oracle SEQUENCE objects. Sequences work automatically without registration:
+//
+//	// Oracle SEQUENCE - works without UDT registration
+//	var nextID int64
+//	err := conn.QueryRow(ctx, "SELECT SEQ_ID_TABLE.NEXTVAL FROM DUAL").Scan(&nextID)
+//
+// PRIMARY USE CASE: Collection Types for Bulk Operations
+//
+// Register object and collection types for efficient bulk operations:
+//
+//	type Product struct {
+//	    ID    int64  `udt:"ID"`
+//	    Name  string `udt:"NAME"`
+//	    Price float64 `udt:"PRICE"`
+//	}
+//
+//	// Register collection type
+//	conn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+//
+//	// Use in bulk insert
+//	products := []Product{
+//	    {ID: 1, Name: "Widget", Price: 19.99},
+//	    {ID: 2, Name: "Gadget", Price: 29.99},
+//	}
+//	_, err := conn.Exec(ctx, "BEGIN bulk_insert_products(:1); END;", products)
+//
+// Parameters:
+//   - typeName: Oracle object type name (e.g., "PRODUCT_TYPE")
+//   - arrayTypeName: Oracle collection type name (e.g., "PRODUCT_TABLE" for TABLE OF)
+//     Use empty string "" for single object types only
+//   - typeObj: Go struct instance with udt:"FIELD_NAME" tags matching Oracle type
+//
+// Oracle type definition example:
+//
+//	CREATE TYPE PRODUCT_TYPE AS OBJECT (
+//	    ID    NUMBER,
+//	    NAME  VARCHAR2(100),
+//	    PRICE NUMBER(10,2)
+//	);
+//	CREATE TYPE PRODUCT_TABLE AS TABLE OF PRODUCT_TYPE;
+//
+// The Go struct must use udt tags matching Oracle field names (case-sensitive):
+//
+//	type OrderItem struct {
+//	    ItemID    int64   `udt:"ITEM_ID"`    // Matches Oracle: ITEM_ID
+//	    Quantity  int     `udt:"QUANTITY"`   // Matches Oracle: QUANTITY
+//	    UnitPrice float64 `udt:"UNIT_PRICE"` // Matches Oracle: UNIT_PRICE
+//	}
+//
+// Registration must occur before any queries or procedures use the type.
+// Best practice: register all UDTs during application initialization.
+func (c *Connection) RegisterType(typeName, arrayTypeName string, typeObj interface{}) error {
+	logEvent := c.logger.Info().
+		Str("type_name", typeName).
+		Str("array_type_name", arrayTypeName)
+
+	if arrayTypeName != "" {
+		logEvent.Msg("Registering Oracle UDT with collection type")
+	} else {
+		logEvent.Msg("Registering Oracle UDT (object type only)")
+	}
+
+	err := go_ora.RegisterType(c.db, typeName, arrayTypeName, typeObj)
+	if err != nil {
+		c.logger.Error().
+			Err(err).
+			Str("type_name", typeName).
+			Str("array_type_name", arrayTypeName).
+			Msg("Failed to register Oracle UDT")
+		return fmt.Errorf("failed to register Oracle type %s: %w", typeName, err)
+	}
+
+	c.logger.Debug().
+		Str("type_name", typeName).
+		Str("array_type_name", arrayTypeName).
+		Msg("Successfully registered Oracle UDT")
+
+	return nil
+}
+
+// RegisterTypeWithOwner registers an Oracle User-Defined Type with schema owner.
+//
+// Use this when UDTs are defined in a specific schema (not the current user's schema).
+//
+//	type Customer struct {
+//	    CustomerID int    `udt:"CUSTOMER_ID"`
+//	    Name       string `udt:"NAME"`
+//	}
+//
+//	// Register collection type with schema owner
+//	conn.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "CUSTOMER_TABLE", Customer{})
+//
+//	// Use in bulk operations
+//	customers := []Customer{{CustomerID: 1, Name: "ACME"}, ...}
+//	_, err := conn.Exec(ctx, "BEGIN SHARED_SCHEMA.process_customers(:1); END;", customers)
+//
+// Parameters:
+//   - owner: Schema owner (e.g., "MYSCHEMA", case-sensitive, typically uppercase)
+//   - typeName: Oracle object type name
+//   - arrayTypeName: Oracle collection type name (use "" for single objects)
+//   - typeObj: Go struct instance with udt:"FIELD_NAME" tags
+func (c *Connection) RegisterTypeWithOwner(owner, typeName, arrayTypeName string, typeObj interface{}) error {
+	logEvent := c.logger.Info().
+		Str("owner", owner).
+		Str("type_name", typeName).
+		Str("array_type_name", arrayTypeName)
+
+	if arrayTypeName != "" {
+		logEvent.Msg("Registering Oracle UDT with owner and collection type")
+	} else {
+		logEvent.Msg("Registering Oracle UDT with owner (object type only)")
+	}
+
+	err := go_ora.RegisterTypeWithOwner(c.db, owner, typeName, arrayTypeName, typeObj)
+	if err != nil {
+		c.logger.Error().
+			Err(err).
+			Str("owner", owner).
+			Str("type_name", typeName).
+			Str("array_type_name", arrayTypeName).
+			Msg("Failed to register Oracle UDT with owner")
+		return fmt.Errorf("failed to register Oracle type %s.%s: %w", owner, typeName, err)
+	}
+
+	c.logger.Debug().
+		Str("owner", owner).
+		Str("type_name", typeName).
+		Str("array_type_name", arrayTypeName).
+		Msg("Successfully registered Oracle UDT with owner")
+
+	return nil
+}

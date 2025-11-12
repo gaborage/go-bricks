@@ -364,6 +364,159 @@ query := qb.Select(
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
+## Oracle SEQUENCE vs UDT - Important Distinction
+
+### Oracle SEQUENCE Objects (ID Generation)
+
+**SEQUENCE queries work immediately - NO UDT registration required:**
+
+```go
+// Get next ID from sequence
+var nextID int64
+err := conn.QueryRow(ctx, "SELECT SEQ_ID_TABLE.NEXTVAL FROM DUAL").Scan(&nextID)
+
+// Get current sequence value
+var currID int64
+err := conn.QueryRow(ctx, "SELECT SEQ_ID_TABLE.CURRVAL FROM DUAL").Scan(&currID)
+
+// Use in INSERT statement
+_, err = conn.Exec(ctx, "INSERT INTO users (id, name) VALUES (user_seq.NEXTVAL, :1)", name)
+```
+
+**Creating sequences in Oracle:**
+```sql
+CREATE SEQUENCE user_seq START WITH 1000 INCREMENT BY 1;
+CREATE SEQUENCE order_seq START WITH 10000 INCREMENT BY 10;
+```
+
+### Oracle User-Defined Types (Custom Objects/Collections)
+
+**UDT registration ONLY required for custom types created with CREATE TYPE:**
+
+```go
+import "github.com/gaborage/go-bricks/database/oracle"
+
+// 1. Define struct matching Oracle object type
+type Product struct {
+    ID    int64   `udt:"ID"`       // Must match Oracle field names
+    Name  string  `udt:"NAME"`
+    Price float64 `udt:"PRICE"`
+}
+
+// 2. Type assert to access Oracle-specific methods
+oracleConn := conn.(*oracle.Connection)
+
+// 3. Register collection type for bulk operations
+err := oracleConn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+if err != nil {
+    return fmt.Errorf("UDT registration failed: %w", err)
+}
+
+// 4. Use in bulk insert
+products := []Product{
+    {ID: 1, Name: "Widget", Price: 19.99},
+    {ID: 2, Name: "Gadget", Price: 29.99},
+}
+
+_, err = conn.Exec(ctx, "BEGIN bulk_insert_products(:1); END;", products)
+```
+
+**Oracle type definitions:**
+```sql
+-- Object type
+CREATE TYPE PRODUCT_TYPE AS OBJECT (
+    ID    NUMBER,
+    NAME  VARCHAR2(100),
+    PRICE NUMBER(10,2)
+);
+
+-- Collection type (TABLE OF = unbounded array)
+CREATE TYPE PRODUCT_TABLE AS TABLE OF PRODUCT_TYPE;
+
+-- Stored procedure accepting collection
+CREATE OR REPLACE PROCEDURE bulk_insert_products(p_products IN PRODUCT_TABLE) IS
+BEGIN
+    FORALL i IN INDICES OF p_products
+        INSERT INTO products (id, name, price)
+        VALUES (p_products(i).ID, p_products(i).NAME, p_products(i).PRICE);
+END;
+```
+
+### Schema-Qualified UDTs
+
+```go
+type Customer struct {
+    CustomerID int    `udt:"CUSTOMER_ID"`
+    Name       string `udt:"NAME"`
+}
+
+oracleConn := conn.(*oracle.Connection)
+
+// Register from specific schema
+err := oracleConn.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "CUSTOMER_TABLE", Customer{})
+
+customers := []Customer{{CustomerID: 1, Name: "ACME"}, ...}
+_, err = conn.Exec(ctx, "BEGIN SHARED_SCHEMA.process_customers(:1); END;", customers)
+```
+
+### VARRAY (Bounded Arrays)
+
+For fixed-size arrays:
+
+```sql
+-- Oracle: Create bounded array type
+CREATE TYPE STATUS_CODES AS VARRAY(10) OF VARCHAR2(20);
+```
+
+```go
+type StatusCode struct {
+    Code string `udt:"CODE"`
+}
+
+oracleConn.RegisterType("STATUS_CODE", "STATUS_CODES", StatusCode{})
+
+// Use with bounded array
+codes := []StatusCode{
+    {Code: "PENDING"},
+    {Code: "APPROVED"},
+    {Code: "COMPLETED"},
+}
+```
+
+### Single Object Types (No Collections)
+
+If you only need single object parameters (not arrays):
+
+```go
+type Customer struct {
+    ID   int    `udt:"ID"`
+    Name string `udt:"NAME"`
+}
+
+// Register without collection type (arrayTypeName = "")
+err := oracleConn.RegisterType("CUSTOMER_TYPE", "", Customer{})
+
+// Use single object in procedure
+customer := Customer{ID: 123, Name: "ACME Corp"}
+_, err = conn.Exec(ctx, "BEGIN update_customer(:1); END;", customer)
+```
+
+### Common Errors
+
+**Error:** `"call register type before use user defined type (UDT)"`
+**Cause:** Trying to use custom TYPE in stored procedure without RegisterType()
+**Solution:** Call RegisterType() during initialization before using UDT
+
+**Important:** This error does NOT affect SEQUENCE queries - sequences always work without registration
+
+### Key Takeaways
+
+- **SEQUENCE objects** (auto-increment IDs) → No registration needed, standard SQL queries
+- **UDT collection types** (TABLE OF, VARRAY) → Requires RegisterType() before use
+- **Type assertion required** → Must cast to `*oracle.Connection` to access UDT methods
+- **Registration timing** → Call during application initialization, before any UDT queries
+- **Tag format** → `udt:` tags must EXACTLY match Oracle field names (case-sensitive, usually uppercase)
+
 ## Database Testing
 
 > **⚠️ IMPORTANT RESOURCE MANAGEMENT:**
