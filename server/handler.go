@@ -56,82 +56,222 @@ type RequestBinder struct{}
 // NewRequestBinder creates a new request binder with the given validator.
 func NewRequestBinder() *RequestBinder { return &RequestBinder{} }
 
+// contextChecker handles context cancellation detection at various stages of request processing.
+type contextChecker struct {
+	cfg *config.Config
+}
+
+// newContextChecker creates a new context checker.
+func newContextChecker(cfg *config.Config) *contextChecker {
+	return &contextChecker{cfg: cfg}
+}
+
+// checkCancellation checks if the request context has been cancelled or timed out.
+// Returns an API error if cancelled, nil otherwise.
+func (cc *contextChecker) checkCancellation(c echo.Context, stage string) IAPIError {
+	select {
+	case <-c.Request().Context().Done():
+		msg := fmt.Sprintf("Request timeout %s", stage)
+		return NewServiceUnavailableError(msg)
+	default:
+		return nil
+	}
+}
+
+// requestAllocator handles type detection, memory allocation, and nil validation for request types.
+// It uses reflection once during initialization to determine if T is a pointer type.
+type requestAllocator[T any] struct {
+	isPointer bool
+	elemType  reflect.Type
+}
+
+// newRequestAllocator creates a new request allocator for type T.
+func newRequestAllocator[T any]() *requestAllocator[T] {
+	rt := reflect.TypeOf((*T)(nil)).Elem()
+	return &requestAllocator[T]{
+		isPointer: rt.Kind() == reflect.Ptr,
+		elemType:  rt,
+	}
+}
+
+// allocate creates a new instance of type T and returns both the typed value and a pointer for binding.
+// For pointer types (T = *Request), allocates the underlying type and returns the pointer.
+// For value types (T = Request), returns the zero value and a pointer to it.
+func (ra *requestAllocator[T]) allocate() (request T, requestPtr any) {
+	if ra.isPointer {
+		// T is a pointer type (e.g., *Request)
+		// Allocate the underlying type and get pointer
+		elem := reflect.New(ra.elemType.Elem())
+		requestPtr = elem.Interface()
+		request = elem.Interface().(T)
+	} else {
+		// T is a value type (e.g., Request)
+		// Use zero value and take address
+		requestPtr = &request
+	}
+	return request, requestPtr
+}
+
+// validateNotNil validates that pointer-type requests are not nil.
+// Returns an error for nil pointers, nil for value types or non-nil pointers.
+func (ra *requestAllocator[T]) validateNotNil(request T) error {
+	if ra.isPointer && reflect.ValueOf(request).IsNil() {
+		return fmt.Errorf("request cannot be nil")
+	}
+	return nil
+}
+
+// responseHandler handles response formatting for both success and error cases.
+type responseHandler struct {
+	cfg *config.Config
+}
+
+// newResponseHandler creates a new response handler.
+func newResponseHandler(cfg *config.Config) *responseHandler {
+	return &responseHandler{cfg: cfg}
+}
+
+// handleResponse formats and sends the HTTP response based on the handler result.
+// Handles three cases:
+// 1. API error: formats error response with appropriate status code
+// 2. ResultLike interface: custom status/headers response
+// 3. Default: standard 200 OK response
+func (rh *responseHandler) handleResponse(c echo.Context, response any, apiErr IAPIError) error {
+	if apiErr != nil {
+		return formatErrorResponse(c, apiErr, rh.cfg)
+	}
+
+	if rl, ok := response.(ResultLike); ok {
+		status, headers, data := rl.ResultMeta()
+		return formatSuccessResponseWithStatus(c, data, status, headers)
+	}
+
+	return formatSuccessResponse(c, response)
+}
+
+// requestProcessor orchestrates the complete request processing pipeline:
+// allocation, binding, nil validation, and request validation.
+type requestProcessor[T any] struct {
+	allocator *requestAllocator[T]
+	binder    *RequestBinder
+	cfg       *config.Config
+}
+
+// newRequestProcessor creates a new request processor for type T.
+func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requestProcessor[T] {
+	return &requestProcessor[T]{
+		allocator: newRequestAllocator[T](),
+		binder:    binder,
+		cfg:       cfg,
+	}
+}
+
+// process executes the full request processing pipeline and returns the bound, validated request.
+// Returns an API error if any step fails (allocation, binding, nil check, validation).
+func (rp *requestProcessor[T]) process(c echo.Context) (T, IAPIError) {
+	var empty T
+
+	// Allocate request instance
+	request, requestPtr := rp.allocator.allocate()
+
+	// Bind request data from multiple sources (JSON, query, params, headers)
+	if err := rp.binder.bindRequest(c, requestPtr); err != nil {
+		return empty, NewBadRequestError("Invalid request data").WithDetails("error", err.Error())
+	}
+
+	// For value types, we need to get the bound value back from the pointer
+	if !rp.allocator.isPointer {
+		request = reflect.ValueOf(requestPtr).Elem().Interface().(T)
+	}
+
+	// Validate not nil (for pointer types)
+	if err := rp.allocator.validateNotNil(request); err != nil {
+		return empty, NewBadRequestError(err.Error())
+	}
+
+	// Validate request using Echo's configured validator
+	if err := c.Validate(requestPtr); err != nil {
+		vErr := NewBadRequestError("Request validation failed")
+		var ve *ValidationError
+		if errors.As(err, &ve) {
+			_ = vErr.WithDetails("validationErrors", ve.Errors)
+		} else {
+			_ = vErr.WithDetails("error", err.Error())
+		}
+		return empty, vErr
+	}
+
+	return request, nil
+}
+
+// handlerWrapper composes all request processing components to create an Echo-compatible handler.
+// It orchestrates: context checking, request processing, business logic execution, and response handling.
+type handlerWrapper[T any, R any] struct {
+	processor *requestProcessor[T]
+	responder *responseHandler
+	checker   *contextChecker
+}
+
+// newHandlerWrapper creates a new handler wrapper with all processing components initialized.
+func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config) *handlerWrapper[T, R] {
+	return &handlerWrapper[T, R]{
+		processor: newRequestProcessor[T](binder, cfg),
+		responder: newResponseHandler(cfg),
+		checker:   newContextChecker(cfg),
+	}
+}
+
+// wrap converts a business logic handler into an Echo-compatible handler function.
+// This is the high-level orchestration that delegates to specialized components.
+func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Pre-processing context check
+		if apiErr := hw.checker.checkCancellation(c, "or cancelled"); apiErr != nil {
+			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+		}
+
+		// Process request (allocate, bind, validate)
+		request, apiErr := hw.processor.process(c)
+		if apiErr != nil {
+			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+		}
+
+		// Post-validation context check
+		if apiErr := hw.checker.checkCancellation(c, "during validation"); apiErr != nil {
+			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+		}
+
+		// Execute business logic
+		handlerCtx := HandlerContext{Echo: c, Config: hw.responder.cfg}
+		response, apiErr := handlerFunc(request, handlerCtx)
+
+		// Check context after handler execution
+		ctx := c.Request().Context()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+
+		// Handle response
+		return hw.responder.handleResponse(c, response, apiErr)
+	}
+}
+
 // WrapHandler wraps a business logic handler into an Echo-compatible handler.
 // It handles request binding, validation, response formatting, and error handling.
+// Supports both value and pointer types for requests (T) and responses (R).
+// Pointer types eliminate copy overhead for large payloads (>1KB recommended).
+//
+// This function now delegates to handlerWrapper which composes specialized components:
+// - contextChecker: Detects request cancellation/timeout
+// - requestProcessor: Allocates, binds, and validates requests
+// - responseHandler: Formats success and error responses
 func WrapHandler[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
 	cfg *config.Config,
 ) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		// Check if context is already cancelled/timed out before processing
-		// This prevents race conditions with timeout middleware
-		ctx := c.Request().Context()
-		select {
-		case <-ctx.Done():
-			// Context cancelled or deadline exceeded
-			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout or cancelled"), cfg)
-		default:
-			// Continue processing
-		}
-
-		// Create request instance
-		var request T
-
-		// Bind request data
-		if err := binder.bindRequest(c, &request); err != nil {
-			return formatErrorResponse(c, NewBadRequestError("Invalid request data").WithDetails("error", err.Error()), cfg)
-		}
-
-		// Validate request using Echo's configured validator
-		if err := c.Validate(&request); err != nil {
-			vErr := NewBadRequestError("Request validation failed")
-			var ve *ValidationError
-			if errors.As(err, &ve) {
-				_ = vErr.WithDetails("validationErrors", ve.Errors)
-			} else {
-				_ = vErr.WithDetails("error", err.Error())
-			}
-			return formatErrorResponse(c, vErr, cfg)
-		}
-
-		// Check context again before calling business logic
-		// (binding/validation may have taken time)
-		select {
-		case <-ctx.Done():
-			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout during validation"), cfg)
-		default:
-			// Continue processing
-		}
-
-		// Create handler context
-		handlerCtx := HandlerContext{
-			Echo:   c,
-			Config: cfg,
-		}
-
-		// Call the business logic handler
-		response, apiErr := handlerFunc(request, handlerCtx)
-
-		// Stop if the context was cancelled or the deadline fired while the handler was running.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-
-		// Handle errors
-		if apiErr != nil {
-			return formatErrorResponse(c, apiErr, cfg)
-		}
-
-		// Allow handlers to control status and headers by returning a Result-like value
-		if rl, ok := any(response).(ResultLike); ok {
-			status, headers, data := rl.ResultMeta()
-			return formatSuccessResponseWithStatus(c, data, status, headers)
-		}
-
-		// Default success response
-		return formatSuccessResponse(c, response)
-	}
+	wrapper := newHandlerWrapper[T, R](binder, cfg)
+	return wrapper.wrap(handlerFunc)
 }
 
 // bindRequest binds request data from various sources to the target struct.

@@ -238,6 +238,87 @@ server.POST(handlerRegistry, echo, "/users", h.createUser)
 
 Benefits: automatic binding/validation, standardized response envelopes, type safety
 
+#### Handler Performance: Pointer vs Value Types
+
+The enhanced handler pattern supports both **value** and **pointer** types for requests and responses, allowing you to optimize for performance when handling large payloads.
+
+**When to Use Value Types (Default)**:
+- ✅ Small requests/responses (<1KB, ~10-15 simple fields)
+- ✅ No large embedded arrays or slices
+- ✅ Emphasizes immutability (idiomatic Go)
+- ✅ Examples: login credentials, ID lookups, simple CRUD operations
+
+**When to Use Pointer Types**:
+- ✅ Large requests/responses (>1KB)
+- ✅ File uploads (base64-encoded images, documents)
+- ✅ Bulk imports/exports (hundreds or thousands of records)
+- ✅ Embedded byte arrays or large slices
+- ✅ Performance-critical high-traffic endpoints
+
+**Examples**:
+
+```go
+// Small request - use value type (default)
+type LoginRequest struct {
+    Email    string `json:"email" validate:"email"`
+    Password string `json:"password" validate:"required"`
+}
+
+func (h *Handler) login(req LoginRequest, ctx server.HandlerContext) (Result[Token], server.IAPIError) {
+    token := h.authService.Authenticate(req)
+    return server.OK(token), nil
+}
+
+// Large request - use pointer type for performance
+type FileUploadRequest struct {
+    Data     []byte `json:"data"` // Base64-encoded file (could be MB)
+    Filename string `json:"filename" validate:"required"`
+    MimeType string `json:"mime_type"`
+}
+
+func (h *Handler) uploadFile(req *FileUploadRequest, ctx server.HandlerContext) (Result[UploadResponse], server.IAPIError) {
+    // Pointer avoids copying large byte slice
+    fileID := h.storageService.Store(req.Data, req.Filename)
+    return server.Created(UploadResponse{FileID: fileID}), nil
+}
+
+// Large response - use pointer type
+type BulkExportResponse struct {
+    Records []Record `json:"records"` // Thousands of records
+    Total   int      `json:"total"`
+}
+
+func (h *Handler) exportAll(req ExportRequest, ctx server.HandlerContext) (*BulkExportResponse, server.IAPIError) {
+    records := h.recordService.GetAll(ctx)
+    return &BulkExportResponse{
+        Records: records,
+        Total:   len(records),
+    }, nil
+}
+
+// Mixed: pointer request, value response
+func (h *Handler) processBulk(req *BulkRequest, ctx server.HandlerContext) (Summary, server.IAPIError) {
+    summary := h.processor.Process(req)
+    return summary, nil
+}
+```
+
+**Performance Impact**:
+- **Value types**: Small struct copy overhead (~nanoseconds for <1KB)
+- **Pointer types**: Zero copy overhead, just 8-byte pointer
+- **Rule of thumb**: Use pointers when struct size >1KB or contains large slices/arrays
+
+**Linter Configuration**:
+Configure `govet` to warn on large value copies:
+```yaml
+# .golangci.yml
+linters-settings:
+  govet:
+    enable:
+      - copylocks
+      - composites
+```
+
 ### Database Architecture
 Unified `database.Interface` supporting PostgreSQL, Oracle, MongoDB with:
 - Query builder with vendor-specific SQL generation
