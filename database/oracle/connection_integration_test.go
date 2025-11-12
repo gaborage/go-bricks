@@ -552,10 +552,10 @@ func TestOracleSequenceIntegration(t *testing.T) {
 
 // Product for UDT testing
 type Product struct {
-	ID        int64   `udt:"ID"`
-	Name      string  `udt:"NAME"`
-	Price     float64 `udt:"PRICE"`
-	CreatedAt string  `udt:"CREATED_AT"`
+	ID        int64     `udt:"ID"`
+	Name      string    `udt:"NAME"`
+	Price     float64   `udt:"PRICE"`
+	CreatedAt time.Time `udt:"CREATED_AT"`
 }
 
 func TestOracleUDTCollectionIntegration(t *testing.T) {
@@ -632,19 +632,17 @@ func TestOracleUDTCollectionIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("bulkInsertWithCollectionType", func(t *testing.T) {
-		// Type assert to access UDT methods
-		oracleConn, ok := conn.(*Connection)
-		require.True(t, ok, "Failed to type assert to *oracle.Connection")
-
 		// Register UDT collection type
-		err := oracleConn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
+		// Note: conn is already *Connection from setupTestContainer
+		err := conn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
 		require.NoError(t, err, "Failed to register UDT")
 
 		// Prepare bulk data
+		now := time.Now()
 		products := []Product{
-			{ID: 1, Name: "Widget", Price: 19.99, CreatedAt: time.Now().Format("2006-01-02")},
-			{ID: 2, Name: "Gadget", Price: 29.99, CreatedAt: time.Now().Format("2006-01-02")},
-			{ID: 3, Name: "Doohickey", Price: 39.99, CreatedAt: time.Now().Format("2006-01-02")},
+			{ID: 1, Name: "Widget", Price: 19.99, CreatedAt: now},
+			{ID: 2, Name: "Gadget", Price: 29.99, CreatedAt: now},
+			{ID: 3, Name: "Doohickey", Price: 39.99, CreatedAt: now},
 		}
 
 		// Bulk insert via collection
@@ -722,11 +720,9 @@ func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 	}
 
 	t.Run("registerWithSchemaOwner", func(t *testing.T) {
-		oracleConn, ok := conn.(*Connection)
-		require.True(t, ok)
-
 		// Register with schema owner
-		err := oracleConn.RegisterTypeWithOwner("TESTSCHEMA", "ORDER_ITEM", "ORDER_ITEMS", OrderItem{})
+		// Note: conn is already *Connection from setupTestContainer
+		err := conn.RegisterTypeWithOwner("TESTSCHEMA", "ORDER_ITEM", "ORDER_ITEMS", OrderItem{})
 		require.NoError(t, err)
 
 		// Verify registration successful (actual usage would be in stored procedures)
