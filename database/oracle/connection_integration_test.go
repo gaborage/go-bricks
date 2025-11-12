@@ -735,3 +735,151 @@ func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 		assert.NotNil(t, items) // Placeholder - type is registered
 	})
 }
+
+// =============================================================================
+// Oracle UDT Coverage Tests (Object-Only and Error Paths)
+// =============================================================================
+
+// TestOracleUDTObjectOnlyRegistration tests RegisterType with object-only (no collection)
+// Coverage target: connection.go line 375 (else branch)
+func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Create simple object type (no collection)
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE SIMPLE_TYPE AS OBJECT (
+				ID NUMBER,
+				NAME VARCHAR2(50)
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err := conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type SimpleType struct {
+		ID   int64  `udt:"ID"`
+		Name string `udt:"NAME"`
+	}
+
+	// Register WITHOUT collection type (empty arrayTypeName)
+	// This covers the else branch at line 375
+	err = conn.RegisterType("SIMPLE_TYPE", "", SimpleType{})
+	require.NoError(t, err)
+}
+
+// TestOracleUDTRegistrationError tests error handling in RegisterType
+// Coverage target: connection.go lines 380-385 (error path)
+func TestOracleUDTRegistrationError(t *testing.T) {
+	conn, _ := setupTestContainer(t)
+
+	type FakeType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Attempt to register non-existent type (should fail)
+	err := conn.RegisterType("NONEXISTENT_TYPE", "NONEXISTENT_TABLE", FakeType{})
+
+	// Verify error handling path is executed
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to register Oracle type NONEXISTENT_TYPE")
+}
+
+// TestOracleUDTObjectOnlyWithOwner tests RegisterTypeWithOwner with object-only
+// Coverage target: connection.go line 426 (else branch)
+func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Get current user for owner parameter
+	var currentUser string
+	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	require.NoError(t, err)
+
+	// Create object type
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_TYPE AS OBJECT (
+				VALUE NUMBER
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type OwnerType struct {
+		Value int64 `udt:"VALUE"`
+	}
+
+	// Register with owner but NO collection type
+	// This covers the else branch at line 426
+	err = conn.RegisterTypeWithOwner(currentUser, "OWNER_TYPE", "", OwnerType{})
+	require.NoError(t, err)
+}
+
+// TestOracleUDTRegistrationErrorWithOwner tests error handling in RegisterTypeWithOwner
+// Coverage target: connection.go lines 431-437 (error path)
+func TestOracleUDTRegistrationErrorWithOwner(t *testing.T) {
+	conn, _ := setupTestContainer(t)
+
+	type FakeType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Attempt to register with invalid owner/type combination
+	err := conn.RegisterTypeWithOwner("INVALID_SCHEMA", "FAKE_TYPE", "", FakeType{})
+
+	// Verify error handling path is executed
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to register Oracle type INVALID_SCHEMA.FAKE_TYPE")
+}
+
+// TestOracleUDTRegistrationLogging tests success path logging in RegisterTypeWithOwner
+// Coverage target: connection.go lines 440-444 (debug logging)
+func TestOracleUDTRegistrationLogging(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Get current user
+	var currentUser string
+	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	require.NoError(t, err)
+
+	// Create type
+	setupSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE LOG_TYPE AS OBJECT (
+				ID NUMBER
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+
+	_, err = conn.Exec(ctx, setupSQL)
+	require.NoError(t, err)
+
+	type LogType struct {
+		ID int64 `udt:"ID"`
+	}
+
+	// Register with owner (triggers debug logging on success)
+	// This covers lines 440-444
+	err = conn.RegisterTypeWithOwner(currentUser, "LOG_TYPE", "", LogType{})
+	require.NoError(t, err)
+
+	// Success path ensures debug logging is executed
+}
