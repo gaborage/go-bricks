@@ -9,15 +9,16 @@ const (
 	modifiedValue = "modified"
 
 	// Core test identifiers (used across multiple test files)
-	testExchange    = "test-exchange"
-	testQueue       = "test-queue"
-	testEventType   = "test-event"
-	testRoutingKey  = "test.key"
-	testConsumer    = "test-consumer"
-	testRoute       = "test.route"
-	testMessage     = "test message"
-	testMessageID   = "test-message-id"
-	testMessageBody = "test message body"
+	testExchange      = "test-exchange"
+	testQueue         = "test-queue"
+	testEventType     = "test-event"
+	testRoutingKey    = "test.key"
+	testConsumer      = "test-consumer"
+	testBenchConsumer = "bench-consumer"
+	testRoute         = "test.route"
+	testMessage       = "test message"
+	testMessageID     = "test-message-id"
+	testMessageBody   = "test message body"
 
 	// Common test values
 	testName   = "test"
@@ -37,17 +38,19 @@ const (
 	mapKeyVersion = "version"
 
 	// Multi-entity test identifiers (for tests with multiple queues/exchanges)
-	testQueue1    = "queue1"
-	testQueue2    = "queue2"
-	testQueue3    = "queue3"
-	testExchange1 = "exchange1"
-	testExchange2 = "exchange2"
-	testConsumer1 = "consumer1"
-	testConsumer2 = "consumer2"
-	testConsumer3 = "consumer3"
-	testEvent1    = "event1"
-	testEvent2    = "event2"
-	testEvent3    = "event3"
+	testQueue1     = "queue1"
+	testQueue2     = "queue2"
+	testQueue3     = "queue3"
+	testBenchQueue = "bench-queue"
+	testExchange1  = "exchange1"
+	testExchange2  = "exchange2"
+	testConsumer1  = "consumer1"
+	testConsumer2  = "consumer2"
+	testConsumer3  = "consumer3"
+	testEvent1     = "event1"
+	testEvent2     = "event2"
+	testEvent3     = "event3"
+	testBenchEvent = "bench-event"
 
 	// Short names for compact test scenarios
 	shortExchange1 = "ex1"
@@ -107,4 +110,6 @@ const (
 	// Event types
 	eventTestEvent = "TestEvent"
 	eventA         = "EventA"
+
+	testMessageIDFmt = "msg-%d"
 )

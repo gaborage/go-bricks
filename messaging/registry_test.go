@@ -3,6 +3,8 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1660,4 +1662,336 @@ func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
 
 	consumers := registry.GetConsumers()
 	assert.Len(t, consumers, 1)
+}
+
+// ===== Consumer Concurrency Tests (v0.17+) =====
+
+func TestAutoScaleWorkersDefault(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		// Workers not set - should auto-scale
+	}, nil)
+
+	expectedWorkers := runtime.NumCPU() * 4
+	assert.Equal(t, expectedWorkers, consumer.Workers, "Workers should auto-scale to NumCPU*4")
+
+	expectedPrefetch := min(expectedWorkers*10, 500)
+	assert.Equal(t, expectedPrefetch, consumer.PrefetchCount, "PrefetchCount should be Workers*10 capped at 500")
+}
+
+func TestExplicitWorkersOverride(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Workers:       10, // Explicit override
+		PrefetchCount: 50, // Explicit override
+	}, nil)
+
+	assert.Equal(t, 10, consumer.Workers, "Explicit Workers should not be overridden")
+	assert.Equal(t, 50, consumer.PrefetchCount, "Explicit PrefetchCount should not be overridden")
+}
+
+func TestSequentialProcessing(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:     "sequential-queue",
+		Consumer:  "sequential-consumer",
+		EventType: "sequential-event",
+		Workers:   1, // Explicit sequential processing
+	}, nil)
+
+	assert.Equal(t, 1, consumer.Workers, "Sequential processing should use 1 worker")
+}
+
+func TestWorkerPoolConcurrentProcessing(t *testing.T) {
+	// This is a unit test that verifies the worker pool spawns correctly
+	// Integration test with actual concurrent message processing would go in integration tests
+
+	deliveries := make(chan amqp.Delivery, 10)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:         "concurrent-queue",
+		Consumer:      "concurrent-consumer",
+		EventType:     "concurrent-event",
+		Handler:       handler,
+		Workers:       4, // 4 concurrent workers
+		PrefetchCount: 40,
+		AutoAck:       false,
+	}
+
+	// Send 8 messages
+	for i := 0; i < 8; i++ {
+		acker := &mockAcknowledger{}
+		deliveries <- amqp.Delivery{
+			MessageId:    fmt.Sprintf(testMessageIDFmt, i),
+			DeliveryTag:  uint64(i + 1),
+			Headers:      amqp.Table{},
+			Acknowledger: acker,
+		}
+	}
+	close(deliveries)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// This will process all messages and return when deliveries channel closes
+	registry.handleMessages(ctx, consumer, deliveries)
+
+	// Verify all 8 messages were processed
+	assert.Equal(t, 8, handler.GetCallCount(), "All messages should be processed")
+}
+
+func TestPrefetchAutoScaling(t *testing.T) {
+	tests := []struct {
+		name             string
+		workers          int
+		expectedPrefetch int
+	}{
+		{"Small worker pool", 5, 50},                  // 5*10 = 50
+		{"Medium worker pool", 20, 200},               // 20*10 = 200
+		{"Large worker pool (capped)", 60, 500},       // 60*10 = 600, but capped at 500
+		{"Very large worker pool (capped)", 100, 500}, // 100*10 = 1000, but capped at 500
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			consumer := decls.DeclareConsumer(&ConsumerOptions{
+				Queue:     testQueue,
+				Consumer:  testConsumer,
+				EventType: testEventType,
+				Workers:   tt.workers,
+				// PrefetchCount not set - should auto-scale
+			}, nil)
+
+			assert.Equal(t, tt.expectedPrefetch, consumer.PrefetchCount,
+				"PrefetchCount should be Workers*10 capped at 500")
+		})
+	}
+}
+
+func TestPrefetchCapping(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Workers:       10,
+		PrefetchCount: 1500, // Exceeds cap of 1000
+	}, nil)
+
+	assert.Equal(t, 1000, consumer.PrefetchCount, "PrefetchCount should be capped at 1000")
+}
+
+func TestWorkerPoolGracefulShutdown(t *testing.T) {
+	deliveries := make(chan amqp.Delivery, 5)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:         "shutdown-queue",
+		Consumer:      "shutdown-consumer",
+		EventType:     "shutdown-event",
+		Handler:       handler,
+		Workers:       3,
+		PrefetchCount: 30,
+		AutoAck:       false,
+	}
+
+	// Send 3 messages
+	for i := 0; i < 3; i++ {
+		acker := &mockAcknowledger{}
+		deliveries <- amqp.Delivery{
+			MessageId:    fmt.Sprintf(testMessageIDFmt, i),
+			DeliveryTag:  uint64(i + 1),
+			Headers:      amqp.Table{},
+			Acknowledger: acker,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start processing in background
+	done := make(chan struct{})
+	go func() {
+		registry.handleMessages(ctx, consumer, deliveries)
+		close(done)
+	}()
+
+	// Give workers time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context to trigger shutdown
+	cancel()
+
+	// Wait for graceful shutdown (should complete within 1 second)
+	select {
+	case <-done:
+		// Success - workers stopped gracefully
+	case <-time.After(1 * time.Second):
+		t.Fatal("Workers did not stop gracefully within timeout")
+	}
+
+	// Verify all 3 messages were processed before shutdown
+	assert.Equal(t, 3, handler.GetCallCount(), "All messages should be processed before shutdown")
+}
+
+func TestWorkerResourceCaps(t *testing.T) {
+	tests := []struct {
+		name             string
+		inputWorkers     int
+		inputPrefetch    int
+		expectedWorkers  int
+		expectedPrefetch int
+	}{
+		{"Workers capped at 200", 250, 0, 200, 500},          // Workers capped, prefetch auto-scaled (capped at 500)
+		{"PrefetchCount capped at 1000", 50, 1200, 50, 1000}, // Workers OK, prefetch explicitly capped
+		{"Both within limits", 50, 300, 50, 300},             // No capping needed
+		{"Workers at cap", 200, 0, 200, 500},                 // Workers at cap, prefetch auto-scaled (capped at 500)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			consumer := decls.DeclareConsumer(&ConsumerOptions{
+				Queue:         testQueue,
+				Consumer:      testConsumer,
+				EventType:     testEventType,
+				Workers:       tt.inputWorkers,
+				PrefetchCount: tt.inputPrefetch,
+			}, nil)
+
+			assert.Equal(t, tt.expectedWorkers, consumer.Workers, "Workers should be capped at 200")
+			assert.Equal(t, tt.expectedPrefetch, consumer.PrefetchCount, "PrefetchCount should be capped at 1000")
+		})
+	}
+}
+
+// BenchmarkSequentialVsConcurrent compares sequential vs concurrent message processing
+func BenchmarkSequentialVsConcurrent(b *testing.B) {
+	// Simulate slow handler (10ms processing time)
+	slowHandler := &testHandler{retErr: nil}
+
+	b.Run("Sequential (Workers=1)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       1, // Sequential
+				PrefetchCount: 10,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
+
+	b.Run("Concurrent (Workers=4)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       4, // Concurrent
+				PrefetchCount: 40,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
+
+	b.Run("HighConcurrent (Workers=8)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       8, // High concurrency
+				PrefetchCount: 80,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
 }
