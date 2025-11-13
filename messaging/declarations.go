@@ -168,15 +168,17 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 
 	// Deep copy to prevent shared mutable state
 	decl := &ConsumerDeclaration{
-		Queue:       c.Queue,
-		Consumer:    c.Consumer,
-		AutoAck:     c.AutoAck,
-		Exclusive:   c.Exclusive,
-		NoLocal:     c.NoLocal,
-		NoWait:      c.NoWait,
-		EventType:   c.EventType,
-		Description: c.Description,
-		Handler:     c.Handler, // Handlers are typically stateless, so no deep copy needed
+		Queue:         c.Queue,
+		Consumer:      c.Consumer,
+		AutoAck:       c.AutoAck,
+		Exclusive:     c.Exclusive,
+		NoLocal:       c.NoLocal,
+		NoWait:        c.NoWait,
+		EventType:     c.EventType,
+		Description:   c.Description,
+		Handler:       c.Handler, // Handlers are typically stateless, so no deep copy needed
+		Workers:       c.Workers,
+		PrefetchCount: c.PrefetchCount,
 	}
 
 	d.consumerIndex[key] = decl
@@ -350,15 +352,17 @@ func (d *Declarations) Clone() *Declarations {
 	for _, key := range d.consumerOrder {
 		consumer := d.consumerIndex[key]
 		cloneConsumer := &ConsumerDeclaration{
-			Queue:       consumer.Queue,
-			Consumer:    consumer.Consumer,
-			AutoAck:     consumer.AutoAck,
-			Exclusive:   consumer.Exclusive,
-			NoLocal:     consumer.NoLocal,
-			NoWait:      consumer.NoWait,
-			EventType:   consumer.EventType,
-			Description: consumer.Description,
-			Handler:     consumer.Handler, // Handlers are stateless, so shallow copy is fine
+			Queue:         consumer.Queue,
+			Consumer:      consumer.Consumer,
+			AutoAck:       consumer.AutoAck,
+			Exclusive:     consumer.Exclusive,
+			NoLocal:       consumer.NoLocal,
+			NoWait:        consumer.NoWait,
+			EventType:     consumer.EventType,
+			Description:   consumer.Description,
+			Handler:       consumer.Handler, // Handlers are stateless, so shallow copy is fine
+			Workers:       consumer.Workers,
+			PrefetchCount: consumer.PrefetchCount,
 		}
 		cloneKey := consumerKey{
 			Queue:     consumer.Queue,
