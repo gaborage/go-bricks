@@ -23,19 +23,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load defaults: %w", err)
 	}
 
-	// Load from YAML file (if exists)
-	if err := k.Load(file.Provider("config.yaml"), yaml.Parser()); err != nil {
-		// YAML file is optional, log but don't fail
-		fmt.Printf("Warning: could not load config.yaml: %v\n", err)
-	}
+	// Load from YAML file (if exists) - try both .yaml and .yml extensions
+	tryLoadYAMLFile(k, "config")
 
 	// Load environment-specific YAML (if exists)
 	env := k.String("app.env")
 	if env != "" {
-		envFile := fmt.Sprintf("config.%s.yaml", env)
-		if err := k.Load(file.Provider(envFile), yaml.Parser()); err != nil {
-			fmt.Printf("Warning: could not load %s: %v\n", envFile, err)
-		}
+		envFile := fmt.Sprintf("config.%s", env)
+		tryLoadYAMLFile(k, envFile)
 	}
 
 	// Load environment variables (highest priority)
@@ -64,6 +59,25 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
+// It tries .yaml first, then falls back to .yml if .yaml is not found.
+// Both extensions are optional - no error is returned if neither file exists.
+func tryLoadYAMLFile(k *koanf.Koanf, baseName string) {
+	// Try .yaml extension first
+	yamlFile := baseName + ".yaml"
+	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err == nil {
+		// Successfully loaded .yaml file
+		return
+	}
+
+	// Try .yml extension as fallback
+	ymlFile := baseName + ".yml"
+	if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
+		// Both files failed to load - log a warning
+		fmt.Printf("Warning: could not load %s or %s (files are optional)\n", yamlFile, ymlFile)
+	}
 }
 
 func loadDefaults(k *koanf.Koanf) error {
