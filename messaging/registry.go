@@ -500,8 +500,10 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 					return
 				}
 
+				// Create local copy to avoid pointer capture bug (loop variable reuse)
+				d := delivery
 				// Send to worker pool (blocks if all workers busy)
-				jobs <- &delivery
+				jobs <- &d
 			}
 		}
 	}()
