@@ -19,6 +19,7 @@ const (
 	appName              = "gobricks-service"
 	appVersion           = "v1.0.0"
 	serverHost           = "0.0.0.0"
+	testConfigFile       = "config.yml"
 )
 
 func TestLoadWithDefaults(t *testing.T) {
@@ -557,4 +558,153 @@ func TestLoadBasePathConfig(t *testing.T) {
 	assert.Equal(t, "/api/v1", cfg.Server.Path.Base)
 	assert.Equal(t, "/healthz", cfg.Server.Path.Health)
 	assert.Equal(t, "/readyz", cfg.Server.Path.Ready)
+}
+
+func TestLoadYMLFileExtension(t *testing.T) {
+	// Test that both .yaml and .yml file extensions are supported
+	defer clearEnvironmentVariables()
+
+	t.Run("loads_config.yml_file", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create a temporary config.yml file
+		content := `
+app:
+  name: test-service-yml
+  version: v2.0.0
+server:
+  port: 9000
+`
+		tmpFile := testConfigFile
+		err := os.WriteFile(tmpFile, []byte(content), 0644)
+		require.NoError(t, err)
+		defer os.Remove(tmpFile)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		assert.Equal(t, "test-service-yml", cfg.App.Name)
+		assert.Equal(t, "v2.0.0", cfg.App.Version)
+		assert.Equal(t, 9000, cfg.Server.Port)
+	})
+
+	t.Run("yaml_takes_precedence_over_yml", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create both config.yaml and config.yml files
+		yamlContent := `
+app:
+  name: from-yaml-file
+  version: v1.0.0
+`
+		ymlContent := `
+app:
+  name: from-yml-file
+  version: v2.0.0
+`
+		yamlFile := "config.yaml"
+		ymlFile := testConfigFile
+
+		err := os.WriteFile(yamlFile, []byte(yamlContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(yamlFile)
+
+		err = os.WriteFile(ymlFile, []byte(ymlContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(ymlFile)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// .yaml file should take precedence
+		assert.Equal(t, "from-yaml-file", cfg.App.Name)
+		assert.Equal(t, "v1.0.0", cfg.App.Version)
+	})
+
+	t.Run("loads_environment_specific_yml_file", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create base config.yml file that sets the environment
+		baseContent := `
+app:
+  env: production
+`
+		baseFile := testConfigFile
+		err := os.WriteFile(baseFile, []byte(baseContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(baseFile)
+
+		// Create config.production.yml file with environment-specific overrides
+		envContent := `
+app:
+  name: production-service
+server:
+  port: 8090
+`
+		envFile := "config.production.yml"
+		err = os.WriteFile(envFile, []byte(envContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(envFile)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		assert.Equal(t, "production-service", cfg.App.Name)
+		assert.Equal(t, EnvProduction, cfg.App.Env)
+		assert.Equal(t, 8090, cfg.Server.Port)
+	})
+
+	t.Run("environment_yaml_precedence_over_yml", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create both config.development.yaml and config.development.yml
+		yamlContent := `
+app:
+  name: dev-from-yaml
+server:
+  port: 7000
+`
+		ymlContent := `
+app:
+  name: dev-from-yml
+server:
+  port: 8000
+`
+		yamlFile := "config.development.yaml"
+		ymlFile := "config.development.yml"
+
+		err := os.WriteFile(yamlFile, []byte(yamlContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(yamlFile)
+
+		err = os.WriteFile(ymlFile, []byte(ymlContent), 0644)
+		require.NoError(t, err)
+		defer os.Remove(ymlFile)
+
+		os.Setenv("APP_ENV", EnvDevelopment)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// .yaml should take precedence over .yml
+		assert.Equal(t, "dev-from-yaml", cfg.App.Name)
+		assert.Equal(t, 7000, cfg.Server.Port)
+	})
+
+	t.Run("no_error_when_neither_extension_exists", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Don't create any config files - should use defaults without error
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+
+		// Should use default values
+		assert.Equal(t, appName, cfg.App.Name)
+		assert.Equal(t, 8080, cfg.Server.Port)
+	})
 }
