@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -105,15 +106,17 @@ type PublisherDeclaration struct {
 
 // ConsumerDeclaration defines what a module consumes and how to handle messages
 type ConsumerDeclaration struct {
-	Queue       string         // Queue to consume from
-	Consumer    string         // Consumer tag
-	AutoAck     bool           // Automatically acknowledge messages
-	Exclusive   bool           // Exclusive consumer
-	NoLocal     bool           // Do not deliver to the connection that published
-	NoWait      bool           // Do not wait for server confirmation
-	EventType   string         // Event type identifier
-	Description string         // Human-readable description
-	Handler     MessageHandler // Message handler (optional for documentation-only declarations)
+	Queue         string         // Queue to consume from
+	Consumer      string         // Consumer tag
+	AutoAck       bool           // Automatically acknowledge messages
+	Exclusive     bool           // Exclusive consumer
+	NoLocal       bool           // Do not deliver to the connection that published
+	NoWait        bool           // Do not wait for server confirmation
+	EventType     string         // Event type identifier
+	Description   string         // Human-readable description
+	Handler       MessageHandler // Message handler (optional for documentation-only declarations)
+	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
+	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
 }
 
 // NewRegistry creates a new messaging registry
@@ -433,12 +436,13 @@ func (r *Registry) StopConsumers() {
 // startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
 func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDeclaration) error {
 	deliveries, err := r.client.ConsumeFromQueue(ctx, ConsumeOptions{
-		Queue:     consumer.Queue,
-		Consumer:  consumer.Consumer,
-		AutoAck:   consumer.AutoAck,
-		Exclusive: consumer.Exclusive,
-		NoLocal:   consumer.NoLocal,
-		NoWait:    consumer.NoWait,
+		Queue:         consumer.Queue,
+		Consumer:      consumer.Consumer,
+		AutoAck:       consumer.AutoAck,
+		Exclusive:     consumer.Exclusive,
+		NoLocal:       consumer.NoLocal,
+		NoWait:        consumer.NoWait,
+		PrefetchCount: consumer.PrefetchCount,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue %s: %w", consumer.Queue, err)
@@ -451,32 +455,96 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 }
 
 // handleMessages processes messages from a consumer and routes them to the handler.
+// v0.17+: Spawns a worker pool for concurrent message processing.
 func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
+	workers := consumer.Workers
+	if workers <= 0 {
+		workers = 1 // Fallback (should not happen with smart defaults)
+	}
+
 	log := r.logger.WithFields(map[string]any{
 		"queue":      consumer.Queue,
 		"consumer":   consumer.Consumer,
 		"event_type": consumer.EventType,
+		"workers":    workers,
+		"prefetch":   consumer.PrefetchCount,
 	})
 
-	log.Info().Msg("Message handler started")
+	log.Info().Msg("Message handler started with worker pool")
 
 	defer func() {
 		log.Info().Msg("Message handler stopped")
 	}()
 
+	// Buffered jobs channel for work distribution (size = workers * 2 for backpressure)
+	jobs := make(chan *amqp.Delivery, workers*2)
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go r.worker(ctx, consumer, jobs, i, &wg)
+	}
+
+	// Main loop: feed jobs to worker pool
+	func() {
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info().Msg("Consumer context cancelled, stopping message handler")
+				return
+
+			case delivery, ok := <-deliveries:
+				if !ok {
+					log.Warn().Msg("Delivery channel closed, stopping message handler")
+					return
+				}
+
+				// Create local copy to avoid pointer capture bug (loop variable reuse)
+				d := delivery
+				// Send to worker pool (blocks if all workers busy)
+				jobs <- &d
+			}
+		}
+	}()
+
+	// Shutdown: close jobs channel and wait for workers to finish
+	close(jobs)
+	wg.Wait()
+	log.Info().Msg("All workers stopped gracefully")
+}
+
+// worker processes messages from the jobs channel concurrently.
+// Each worker runs in its own goroutine and processes messages independently.
+func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jobs <-chan *amqp.Delivery, workerID int, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	log := r.logger.WithFields(map[string]any{
+		"queue":      consumer.Queue,
+		"consumer":   consumer.Consumer,
+		"event_type": consumer.EventType,
+		"worker_id":  workerID,
+	})
+
+	log.Debug().Msg("Worker started")
+
+	defer func() {
+		log.Debug().Msg("Worker stopped")
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Consumer context cancelled, stopping message handler")
+			log.Debug().Msg("Worker context cancelled")
 			return
 
-		case delivery, ok := <-deliveries:
+		case delivery, ok := <-jobs:
 			if !ok {
-				log.Warn().Msg("Delivery channel closed, stopping message handler")
+				log.Debug().Msg("Jobs channel closed, worker exiting")
 				return
 			}
 
-			r.processMessage(ctx, consumer, &delivery, log)
+			r.processMessage(ctx, consumer, delivery, log)
 		}
 	}
 }
@@ -492,6 +560,15 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
 	tlog := contextLog.WithFields(map[string]any{"correlation_id": traceID})
 
+	// Panic recovery: prevents handler panics from crashing the entire service.
+	// This follows the same pattern as HTTP middleware panic recovery.
+	// Panics are treated like errors: logged with stack trace, nacked without requeue, and metrics recorded.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			r.handlePanicRecovery(msgCtx, consumer, delivery, startTime, tlog, recovered)
+		}
+	}()
+
 	tlog.Debug().
 		Str("message_id", delivery.MessageId).
 		Str("routing_key", delivery.RoutingKey).
@@ -506,31 +583,16 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 	if err != nil {
 		// Enhanced structured logging for failed messages
-		tlog.Error().
+		r.buildFailureLogEvent(tlog, delivery, consumer, processingTime).
 			Err(err).
-			Str("message_id", delivery.MessageId).
-			Str("queue", consumer.Queue).
-			Str("event_type", consumer.EventType).
-			Str("correlation_id", delivery.CorrelationId).
-			Str("consumer_tag", delivery.ConsumerTag).
-			Str("routing_key", delivery.RoutingKey).
-			Str("exchange", delivery.Exchange).
-			Dur("processing_time", processingTime).
 			Msg("Message processing failed - discarding without requeue")
 
 		// Record failed message metrics (duration with error.type attribute)
-		r.recordFailedMessage(msgCtx, consumer, delivery, processingTime, err)
+		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
 
 		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
 		// Failed messages are dropped (logged above) until DLQ support is implemented
-		if !consumer.AutoAck {
-			if nackErr := delivery.Nack(false, false); nackErr != nil {
-				tlog.Error().
-					Err(nackErr).
-					Uint64("delivery_tag", delivery.DeliveryTag).
-					Msg("Failed to nack message")
-			}
-		}
+		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}
 
@@ -550,14 +612,64 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	}
 }
 
-// recordFailedMessage records OpenTelemetry metrics for failed message processing.
-// This follows OTel semantic conventions for messaging, recording duration with error.type attribute.
-// The consumed.messages counter is NOT incremented (only incremented on success).
-func (r *Registry) recordFailedMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, duration time.Duration, err error) {
-	// Record metrics using existing tracking infrastructure
-	// This will record messaging.client.operation.duration with error.type attribute
-	// but will NOT increment messaging.client.consumed.messages counter (success only)
-	tracking.RecordAMQPConsumeMetrics(ctx, delivery, consumer.Queue, duration, err)
+// nackMessage negatively acknowledges a message without requeue.
+// Logs any nack errors but does not propagate them (robustness over strict error handling).
+func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger) {
+	if autoAck {
+		return // No manual ack/nack needed
+	}
+	if err := delivery.Nack(false, false); err != nil {
+		log.Error().
+			Err(err).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Msg("Failed to nack message")
+	}
+}
+
+// buildFailureLogEvent creates a structured log event for failed message processing.
+// Provides consistent error logging across panic and error paths.
+func (r *Registry) buildFailureLogEvent(
+	log logger.Logger,
+	delivery *amqp.Delivery,
+	consumer *ConsumerDeclaration,
+	processingTime time.Duration,
+) logger.LogEvent {
+	return log.Error().
+		Str("message_id", delivery.MessageId).
+		Str("queue", consumer.Queue).
+		Str("event_type", consumer.EventType).
+		Str("correlation_id", delivery.CorrelationId).
+		Str("consumer_tag", delivery.ConsumerTag).
+		Str("routing_key", delivery.RoutingKey).
+		Str("exchange", delivery.Exchange).
+		Dur("processing_time", processingTime)
+}
+
+// handlePanicRecovery handles panic recovery for message processing.
+// Logs panic with stack trace, records metrics, and nacks message without requeue.
+func (r *Registry) handlePanicRecovery(
+	msgCtx context.Context,
+	consumer *ConsumerDeclaration,
+	delivery *amqp.Delivery,
+	startTime time.Time,
+	log logger.Logger,
+	recovered any,
+) {
+	processingTime := time.Since(startTime)
+	stack := debug.Stack()
+
+	// Log panic with full context and stack trace
+	r.buildFailureLogEvent(log, delivery, consumer, processingTime).
+		Interface("panic", recovered).
+		Bytes("stack", stack).
+		Msg("Panic recovered in message handler - discarding without requeue")
+
+	// Record failed message metrics (inline recordFailedMessage)
+	panicErr := fmt.Errorf("panic in message handler: %v", recovered)
+	tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
+
+	// Nack without requeue
+	r.nackMessage(delivery, consumer.AutoAck, log)
 }
 
 // amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)

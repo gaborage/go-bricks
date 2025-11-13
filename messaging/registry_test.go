@@ -3,6 +3,8 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1161,6 +1163,320 @@ func TestRegistryProcessMessageNackError(t *testing.T) {
 	assert.True(t, acker.nackCalled)
 }
 
+// ===== Panic Recovery Tests =====
+
+// panicTestHandler is a MessageHandler that panics with a configured message
+type panicTestHandler struct {
+	panicMsg  string
+	callCount int
+	mu        sync.Mutex
+}
+
+func (h *panicTestHandler) Handle(_ context.Context, _ *amqp.Delivery) error {
+	h.mu.Lock()
+	h.callCount++
+	h.mu.Unlock()
+	panic(h.panicMsg)
+}
+
+func (h *panicTestHandler) EventType() string { return "panic-test" }
+
+func (h *panicTestHandler) GetCallCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.callCount
+}
+
+func TestRegistryProcessMessageHandlerPanic(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "nil pointer dereference"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	// This should NOT panic - panic should be recovered
+	require.NotPanics(t, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify message was negatively acknowledged WITHOUT requeue (same as errors)
+	assert.False(t, acker.ackCalled)
+	assert.True(t, acker.nackCalled)
+	assert.False(t, acker.nackMultiple, "Should nack single message only")
+	assert.False(t, acker.nackRequeue, "Should NOT requeue panicked messages (prevents infinite loops)")
+}
+
+func TestRegistryProcessMessageHandlerPanicNack(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "test panic"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify panic resulted in nack without requeue (consistent with error handling)
+	assert.False(t, acker.ackCalled, "Should not ack panicked message")
+	assert.True(t, acker.nackCalled, "Should nack panicked message")
+	assert.False(t, acker.nackRequeue, "Should NOT requeue panicked messages")
+}
+
+func TestRegistryProcessMessageHandlerPanicLogging(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "critical error"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "test-correlation-123",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		ConsumerTag:   "test-consumer-tag",
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{},
+		Acknowledger:  acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify panic was logged with appropriate message
+	entries := log.getEntries()
+	require.NotEmpty(t, entries, "Expected at least one log entry")
+
+	// Check for panic recovery log message
+	foundPanicLog := false
+	for _, entry := range entries {
+		if strings.Contains(entry, "Panic recovered in message handler") {
+			foundPanicLog = true
+			break
+		}
+	}
+	assert.True(t, foundPanicLog, "Expected panic recovery log message")
+}
+
+func TestRegistryHandleMessagesContinuesAfterPanic(t *testing.T) {
+	deliveries := make(chan amqp.Delivery, 3)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	// Handler panics on all messages
+	panicHandler := &panicTestHandler{panicMsg: "first message panic"}
+
+	panicConsumer := &ConsumerDeclaration{
+		Queue:     "panic-queue",
+		EventType: "panic-event",
+		Handler:   panicHandler,
+		AutoAck:   false,
+	}
+
+	// Create deliveries
+	acker1 := &mockAcknowledger{}
+	acker2 := &mockAcknowledger{}
+	acker3 := &mockAcknowledger{}
+
+	delivery1 := amqp.Delivery{
+		MessageId:    "msg-1",
+		DeliveryTag:  1,
+		Headers:      amqp.Table{},
+		Acknowledger: acker1,
+	}
+	delivery2 := amqp.Delivery{
+		MessageId:    "msg-2",
+		DeliveryTag:  2,
+		Headers:      amqp.Table{},
+		Acknowledger: acker2,
+	}
+	delivery3 := amqp.Delivery{
+		MessageId:    "msg-3",
+		DeliveryTag:  3,
+		Headers:      amqp.Table{},
+		Acknowledger: acker3,
+	}
+
+	// Send messages
+	deliveries <- delivery1 // Will panic
+	deliveries <- delivery2 // Should still be processed
+	deliveries <- delivery3 // Should still be processed
+	close(deliveries)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Process messages from panic consumer
+	registry.handleMessages(ctx, panicConsumer, deliveries)
+
+	// Verify all messages were processed despite first panic
+	assert.Equal(t, 3, panicHandler.GetCallCount(), "All messages should be processed despite panics")
+	assert.True(t, acker1.nackCalled, "First message (panicked) should be nacked")
+	assert.True(t, acker2.nackCalled, "Second message (panicked) should be nacked")
+	assert.True(t, acker3.nackCalled, "Third message (panicked) should be nacked")
+}
+
+func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
+	deliveries1 := make(chan amqp.Delivery, 1)
+	deliveries2 := make(chan amqp.Delivery, 1)
+
+	mockClient := &simpleMockAMQPClient{isReady: true}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	// Consumer 1 panics, Consumer 2 succeeds
+	panicHandler := &panicTestHandler{panicMsg: "consumer 1 panic"}
+	successHandler := &countingTestHandler{}
+
+	consumer1 := &ConsumerDeclaration{
+		Queue:     "panic-queue",
+		EventType: "panic-event",
+		Handler:   panicHandler,
+		AutoAck:   false,
+	}
+
+	consumer2 := &ConsumerDeclaration{
+		Queue:     "success-queue",
+		EventType: "success-event",
+		Handler:   successHandler,
+		AutoAck:   false,
+	}
+
+	// Create deliveries
+	acker1 := &mockAcknowledger{}
+	acker2 := &mockAcknowledger{}
+
+	delivery1 := amqp.Delivery{
+		MessageId:    "panic-msg",
+		DeliveryTag:  1,
+		Headers:      amqp.Table{},
+		Acknowledger: acker1,
+	}
+	delivery2 := amqp.Delivery{
+		MessageId:    "success-msg",
+		DeliveryTag:  2,
+		Headers:      amqp.Table{},
+		Acknowledger: acker2,
+	}
+
+	deliveries1 <- delivery1
+	deliveries2 <- delivery2
+	close(deliveries1)
+	close(deliveries2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start both consumers
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		registry.handleMessages(ctx, consumer1, deliveries1)
+	}()
+
+	go func() {
+		defer wg.Done()
+		registry.handleMessages(ctx, consumer2, deliveries2)
+	}()
+
+	wg.Wait()
+
+	// Verify consumer 1 panicked and nacked
+	assert.Equal(t, 1, panicHandler.GetCallCount())
+	assert.True(t, acker1.nackCalled, "Panicked message should be nacked")
+	assert.False(t, acker1.nackRequeue, "Panicked message should NOT be requeued")
+
+	// Verify consumer 2 succeeded and acked (unaffected by consumer 1's panic)
+	assert.Equal(t, 1, successHandler.GetCallCount())
+	assert.True(t, acker2.ackCalled, "Success message should be acked")
+	assert.False(t, acker2.nackCalled, "Success message should NOT be nacked")
+}
+
+func TestRegistryProcessMessageHandlerPanicWithAutoAck(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "panic with autoack"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   true, // AutoAck enabled
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	// Should not panic
+	require.NotPanics(t, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+
+	// With AutoAck, no manual ack/nack should happen (even on panic)
+	assert.False(t, acker.ackCalled, "AutoAck mode should not manually ack")
+	assert.False(t, acker.nackCalled, "AutoAck mode should not manually nack")
+}
+
 // ===== Concurrent Operations Tests =====
 
 func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
@@ -1346,4 +1662,336 @@ func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
 
 	consumers := registry.GetConsumers()
 	assert.Len(t, consumers, 1)
+}
+
+// ===== Consumer Concurrency Tests (v0.17+) =====
+
+func TestAutoScaleWorkersDefault(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:     testQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		// Workers not set - should auto-scale
+	}, nil)
+
+	expectedWorkers := runtime.NumCPU() * 4
+	assert.Equal(t, expectedWorkers, consumer.Workers, "Workers should auto-scale to NumCPU*4")
+
+	expectedPrefetch := min(expectedWorkers*10, 500)
+	assert.Equal(t, expectedPrefetch, consumer.PrefetchCount, "PrefetchCount should be Workers*10 capped at 500")
+}
+
+func TestExplicitWorkersOverride(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Workers:       10, // Explicit override
+		PrefetchCount: 50, // Explicit override
+	}, nil)
+
+	assert.Equal(t, 10, consumer.Workers, "Explicit Workers should not be overridden")
+	assert.Equal(t, 50, consumer.PrefetchCount, "Explicit PrefetchCount should not be overridden")
+}
+
+func TestSequentialProcessing(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:     "sequential-queue",
+		Consumer:  "sequential-consumer",
+		EventType: "sequential-event",
+		Workers:   1, // Explicit sequential processing
+	}, nil)
+
+	assert.Equal(t, 1, consumer.Workers, "Sequential processing should use 1 worker")
+}
+
+func TestWorkerPoolConcurrentProcessing(t *testing.T) {
+	// This is a unit test that verifies the worker pool spawns correctly
+	// Integration test with actual concurrent message processing would go in integration tests
+
+	deliveries := make(chan amqp.Delivery, 10)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:         "concurrent-queue",
+		Consumer:      "concurrent-consumer",
+		EventType:     "concurrent-event",
+		Handler:       handler,
+		Workers:       4, // 4 concurrent workers
+		PrefetchCount: 40,
+		AutoAck:       false,
+	}
+
+	// Send 8 messages
+	for i := 0; i < 8; i++ {
+		acker := &mockAcknowledger{}
+		deliveries <- amqp.Delivery{
+			MessageId:    fmt.Sprintf(testMessageIDFmt, i),
+			DeliveryTag:  uint64(i + 1),
+			Headers:      amqp.Table{},
+			Acknowledger: acker,
+		}
+	}
+	close(deliveries)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// This will process all messages and return when deliveries channel closes
+	registry.handleMessages(ctx, consumer, deliveries)
+
+	// Verify all 8 messages were processed
+	assert.Equal(t, 8, handler.GetCallCount(), "All messages should be processed")
+}
+
+func TestPrefetchAutoScaling(t *testing.T) {
+	tests := []struct {
+		name             string
+		workers          int
+		expectedPrefetch int
+	}{
+		{"Small worker pool", 5, 50},                  // 5*10 = 50
+		{"Medium worker pool", 20, 200},               // 20*10 = 200
+		{"Large worker pool (capped)", 60, 500},       // 60*10 = 600, but capped at 500
+		{"Very large worker pool (capped)", 100, 500}, // 100*10 = 1000, but capped at 500
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			consumer := decls.DeclareConsumer(&ConsumerOptions{
+				Queue:     testQueue,
+				Consumer:  testConsumer,
+				EventType: testEventType,
+				Workers:   tt.workers,
+				// PrefetchCount not set - should auto-scale
+			}, nil)
+
+			assert.Equal(t, tt.expectedPrefetch, consumer.PrefetchCount,
+				"PrefetchCount should be Workers*10 capped at 500")
+		})
+	}
+}
+
+func TestPrefetchCapping(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := decls.DeclareConsumer(&ConsumerOptions{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Workers:       10,
+		PrefetchCount: 1500, // Exceeds cap of 1000
+	}, nil)
+
+	assert.Equal(t, 1000, consumer.PrefetchCount, "PrefetchCount should be capped at 1000")
+}
+
+func TestWorkerPoolGracefulShutdown(t *testing.T) {
+	deliveries := make(chan amqp.Delivery, 5)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:         "shutdown-queue",
+		Consumer:      "shutdown-consumer",
+		EventType:     "shutdown-event",
+		Handler:       handler,
+		Workers:       3,
+		PrefetchCount: 30,
+		AutoAck:       false,
+	}
+
+	// Send 3 messages
+	for i := 0; i < 3; i++ {
+		acker := &mockAcknowledger{}
+		deliveries <- amqp.Delivery{
+			MessageId:    fmt.Sprintf(testMessageIDFmt, i),
+			DeliveryTag:  uint64(i + 1),
+			Headers:      amqp.Table{},
+			Acknowledger: acker,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start processing in background
+	done := make(chan struct{})
+	go func() {
+		registry.handleMessages(ctx, consumer, deliveries)
+		close(done)
+	}()
+
+	// Give workers time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context to trigger shutdown
+	cancel()
+
+	// Wait for graceful shutdown (should complete within 1 second)
+	select {
+	case <-done:
+		// Success - workers stopped gracefully
+	case <-time.After(1 * time.Second):
+		t.Fatal("Workers did not stop gracefully within timeout")
+	}
+
+	// Verify all 3 messages were processed before shutdown
+	assert.Equal(t, 3, handler.GetCallCount(), "All messages should be processed before shutdown")
+}
+
+func TestWorkerResourceCaps(t *testing.T) {
+	tests := []struct {
+		name             string
+		inputWorkers     int
+		inputPrefetch    int
+		expectedWorkers  int
+		expectedPrefetch int
+	}{
+		{"Workers capped at 200", 250, 0, 200, 500},          // Workers capped, prefetch auto-scaled (capped at 500)
+		{"PrefetchCount capped at 1000", 50, 1200, 50, 1000}, // Workers OK, prefetch explicitly capped
+		{"Both within limits", 50, 300, 50, 300},             // No capping needed
+		{"Workers at cap", 200, 0, 200, 500},                 // Workers at cap, prefetch auto-scaled (capped at 500)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+
+			consumer := decls.DeclareConsumer(&ConsumerOptions{
+				Queue:         testQueue,
+				Consumer:      testConsumer,
+				EventType:     testEventType,
+				Workers:       tt.inputWorkers,
+				PrefetchCount: tt.inputPrefetch,
+			}, nil)
+
+			assert.Equal(t, tt.expectedWorkers, consumer.Workers, "Workers should be capped at 200")
+			assert.Equal(t, tt.expectedPrefetch, consumer.PrefetchCount, "PrefetchCount should be capped at 1000")
+		})
+	}
+}
+
+// BenchmarkSequentialVsConcurrent compares sequential vs concurrent message processing
+func BenchmarkSequentialVsConcurrent(b *testing.B) {
+	// Simulate slow handler (10ms processing time)
+	slowHandler := &testHandler{retErr: nil}
+
+	b.Run("Sequential (Workers=1)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       1, // Sequential
+				PrefetchCount: 10,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
+
+	b.Run("Concurrent (Workers=4)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       4, // Concurrent
+				PrefetchCount: 40,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
+
+	b.Run("HighConcurrent (Workers=8)", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			deliveries := make(chan amqp.Delivery, 100)
+			mockClient := &simpleMockAMQPClient{
+				deliveryChan: deliveries,
+				isReady:      true,
+			}
+			registry := NewRegistry(mockClient, &stubLogger{})
+
+			consumer := &ConsumerDeclaration{
+				Queue:         testBenchQueue,
+				Consumer:      testBenchConsumer,
+				EventType:     testBenchEvent,
+				Handler:       slowHandler,
+				Workers:       8, // High concurrency
+				PrefetchCount: 80,
+				AutoAck:       true,
+			}
+
+			// Send 10 messages
+			for j := 0; j < 10; j++ {
+				deliveries <- amqp.Delivery{
+					MessageId:   fmt.Sprintf(testMessageIDFmt, j),
+					DeliveryTag: uint64(j + 1),
+					Headers:     amqp.Table{},
+				}
+			}
+			close(deliveries)
+
+			ctx := context.Background()
+			registry.handleMessages(ctx, consumer, deliveries)
+		}
+	})
 }

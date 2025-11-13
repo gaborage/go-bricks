@@ -112,6 +112,10 @@ func (cm *ColumnMetadata) Alias() string {
 func (cm *ColumnMetadata) Col(fieldName string) string {
 	col, ok := cm.columnsByField[fieldName]
 	if !ok {
+		if cm.alias != "" {
+			panic(fmt.Sprintf("column field %q not found in type %s with alias %q (available fields: %s)",
+				fieldName, cm.TypeName, cm.alias, cm.availableFieldsForError()))
+		}
 		panic(fmt.Sprintf("column field %q not found in type %s (available fields: %s)",
 			fieldName, cm.TypeName, cm.availableFieldsForError()))
 	}

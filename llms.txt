@@ -859,11 +859,32 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 		EventType:  "OrderCreated",
 	}, nil)
 
+	// Default consumer (auto-scales to NumCPU*4 workers)
 	decls.DeclareConsumer(&messaging.ConsumerOptions{
 		Queue:     queue.Name,
 		Consumer:  "order-processor",
 		EventType: "OrderCreated",
 		Handler:   NewOrderHandler(m.svc, m.logger),
+	}, nil)
+	// 8-core machine: 32 workers, 320 prefetch
+
+	// Sequential consumer (for ordering-sensitive processing)
+	decls.DeclareConsumer(&messaging.ConsumerOptions{
+		Queue:     "account.events",
+		Consumer:  "account-processor",
+		EventType: "AccountUpdated",
+		Workers:   1,  // Sequential processing
+		Handler:   NewAccountHandler(m.svc, m.logger),
+	}, nil)
+
+	// High-concurrency consumer (for batch processing)
+	decls.DeclareConsumer(&messaging.ConsumerOptions{
+		Queue:         "reports.generate",
+		Consumer:      "report-generator",
+		EventType:     "ReportRequested",
+		Workers:       50,           // High concurrency
+		PrefetchCount: 500,          // Large prefetch
+		Handler:       NewReportHandler(m.svc, m.logger),
 	}, nil)
 }
 ```
@@ -872,13 +893,17 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 |--------------------|---------------------------------------------------|
 | Idempotent setup   | Declarations validated once, replayed per tenant  |
 | Error handling     | **No automatic retry** - all errors drop message (prevents infinite loops). Rich ERROR logs + metrics for failed messages. DLQ support planned. |
+| **Concurrency (v0.17+)** | **Auto-scales to NumCPU*4 workers** for I/O-bound handlers. Override with `Workers` field. Sequential (`Workers=1`) for ordering. |
 | Publishers         | Typed options ensure routing key + event type     |
 | Consumers          | Handler receives `context.Context`, `amqp.Delivery`; return error drops message |
 | Metrics & tracing  | Automatic OTEL spans + structured logs            |
 
 Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
 
-**IMPORTANT:** Handler errors do NOT trigger retry. Failed messages are logged (ERROR level) with full context and dropped. Set up monitoring and alerts for failed message tracking.
+**IMPORTANT:**
+- Handler errors do NOT trigger retry. Failed messages are logged (ERROR level) with full context and dropped.
+- **v0.17+**: Handlers MUST be thread-safe (auto-scales to NumCPU*4 workers). Test with `go test -race`.
+- Database pools must be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.

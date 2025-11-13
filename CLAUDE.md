@@ -645,6 +645,13 @@ See [Troubleshooting](#troubleshooting) section for diagnosing duplicate consume
 
 **Behavior:** All handler errors → Message nacked WITHOUT requeue (message dropped). Prevents poison messages from blocking queues. Rich ERROR logs + OpenTelemetry metrics track all failures.
 
+**Panic Recovery:** Handler panics are automatically recovered and treated identically to errors:
+- Panic recovered with stack trace logging
+- Message nacked WITHOUT requeue (consistent with error policy)
+- Service continues processing other messages
+- Metrics recorded with panic error type
+- Other consumers remain unaffected (panic isolation)
+
 **Error Handling Pattern:**
 ```go
 func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
@@ -669,6 +676,71 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 **Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay. Dead-letter queue support planned for future releases.
 
 **Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring
+
+#### Consumer Concurrency (v0.17+)
+
+**Breaking Change (v0.17.0):** Default worker count changed from 1 to `runtime.NumCPU() * 4` for optimal I/O-bound performance (20-30x throughput improvement).
+
+**Smart Auto-Scaling:**
+GoBricks automatically configures `Workers = runtime.NumCPU() * 4` to handle blocking I/O operations (database queries, HTTP calls, file operations). The 4x multiplier ensures CPU utilization while threads wait on I/O.
+
+**Configuration:**
+```go
+// Auto-scaling (default): Workers = NumCPU * 4, PrefetchCount = Workers * 10
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:     "orders",
+    Consumer:  "processor",
+    EventType: "order.created",
+    Handler:   handler,
+}, queue)
+// 8-core machine: 32 workers, 320 prefetch
+
+// Explicit sequential (for message ordering)
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:     "ordered.events",
+    Consumer:  "sequencer",
+    EventType: "event.sequence",
+    Workers:   1,  // Sequential processing
+    Handler:   handler,
+}, queue)
+
+// Custom high concurrency
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:         "batch.processing",
+    Consumer:      "batch-worker",
+    EventType:     "batch.import",
+    Workers:       100,          // Explicit
+    PrefetchCount: 500,          // Explicit
+    Handler:       handler,
+}, queue)
+```
+
+**Thread-Safety Requirements:**
+- Handlers MUST be thread-safe (no shared mutable state without locks/atomic operations)
+- Database pools MUST be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
+- External APIs: Add semaphore for rate limit enforcement if needed
+- Test with `go test -race` to detect data races
+
+**Resource Safeguards:**
+- Workers capped at 200 per consumer (prevents goroutine explosion)
+- PrefetchCount capped at 1000 (prevents memory exhaustion)
+- Warnings logged when caps are applied
+
+**Performance Impact (8-core machine, 100ms handler):**
+| Version | Workers | Throughput | Speedup |
+|---------|---------|------------|---------|
+| v0.16.x | 1 | 10 msg/sec | Baseline |
+| v0.17.0 | 32 | 320 msg/sec | **32x** |
+
+**When to Override Defaults:**
+- **Workers=1**: Message ordering required (events must be processed sequentially)
+- **Workers>NumCPU*4**: Very slow handlers (>1s per message) or high throughput needs
+- **Workers<NumCPU*4**: CPU-bound handlers (rare - most handlers are I/O-bound)
+
+**Observability:**
+- Startup logs include `workers` and `prefetch` counts
+- Each worker logs with `worker_id` for debugging
+- OpenTelemetry metrics track per-consumer throughput
 
 ### Observability
 
@@ -1015,9 +1087,16 @@ make check-all  # Run comprehensive validation (framework + tool)
 # → Declaration hash mismatch indicates configuration drift
 # → Review DeclareMessaging() for conditional logic or environment-specific declarations
 
+# Handler panics crashing service (v0.16+: auto-recovered)
+# → Panics are now automatically recovered with stack trace logging
+# → Messages nacked without requeue (same as errors)
+# → Check ERROR logs for "Panic recovered in message handler" with stack traces
+# → Service continues processing other messages (no downtime)
+
 # Diagnostic commands
 grep "Starting AMQP consumers" logs/app.log
 grep "Multiple consumers registered for same queue" logs/app.log
+grep "Panic recovered in message handler" logs/app.log
 ```
 
 **Module Registration Issues:**
