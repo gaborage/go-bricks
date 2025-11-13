@@ -1161,6 +1161,320 @@ func TestRegistryProcessMessageNackError(t *testing.T) {
 	assert.True(t, acker.nackCalled)
 }
 
+// ===== Panic Recovery Tests =====
+
+// panicTestHandler is a MessageHandler that panics with a configured message
+type panicTestHandler struct {
+	panicMsg  string
+	callCount int
+	mu        sync.Mutex
+}
+
+func (h *panicTestHandler) Handle(_ context.Context, _ *amqp.Delivery) error {
+	h.mu.Lock()
+	h.callCount++
+	h.mu.Unlock()
+	panic(h.panicMsg)
+}
+
+func (h *panicTestHandler) EventType() string { return "panic-test" }
+
+func (h *panicTestHandler) GetCallCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.callCount
+}
+
+func TestRegistryProcessMessageHandlerPanic(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "nil pointer dereference"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	// This should NOT panic - panic should be recovered
+	require.NotPanics(t, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+
+	// Verify handler was called
+	assert.Equal(t, 1, handler.GetCallCount())
+
+	// Verify message was negatively acknowledged WITHOUT requeue (same as errors)
+	assert.False(t, acker.ackCalled)
+	assert.True(t, acker.nackCalled)
+	assert.False(t, acker.nackMultiple, "Should nack single message only")
+	assert.False(t, acker.nackRequeue, "Should NOT requeue panicked messages (prevents infinite loops)")
+}
+
+func TestRegistryProcessMessageHandlerPanicNack(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "test panic"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify panic resulted in nack without requeue (consistent with error handling)
+	assert.False(t, acker.ackCalled, "Should not ack panicked message")
+	assert.True(t, acker.nackCalled, "Should nack panicked message")
+	assert.False(t, acker.nackRequeue, "Should NOT requeue panicked messages")
+}
+
+func TestRegistryProcessMessageHandlerPanicLogging(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "critical error"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "test-correlation-123",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		ConsumerTag:   "test-consumer-tag",
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{},
+		Acknowledger:  acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	registry.processMessage(ctx, consumer, delivery, log)
+
+	// Verify panic was logged with appropriate message
+	entries := log.getEntries()
+	require.NotEmpty(t, entries, "Expected at least one log entry")
+
+	// Check for panic recovery log message
+	foundPanicLog := false
+	for _, entry := range entries {
+		if strings.Contains(entry, "Panic recovered in message handler") {
+			foundPanicLog = true
+			break
+		}
+	}
+	assert.True(t, foundPanicLog, "Expected panic recovery log message")
+}
+
+func TestRegistryHandleMessagesContinuesAfterPanic(t *testing.T) {
+	deliveries := make(chan amqp.Delivery, 3)
+	mockClient := &simpleMockAMQPClient{
+		deliveryChan: deliveries,
+		isReady:      true,
+	}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	// Handler panics on all messages
+	panicHandler := &panicTestHandler{panicMsg: "first message panic"}
+
+	panicConsumer := &ConsumerDeclaration{
+		Queue:     "panic-queue",
+		EventType: "panic-event",
+		Handler:   panicHandler,
+		AutoAck:   false,
+	}
+
+	// Create deliveries
+	acker1 := &mockAcknowledger{}
+	acker2 := &mockAcknowledger{}
+	acker3 := &mockAcknowledger{}
+
+	delivery1 := amqp.Delivery{
+		MessageId:    "msg-1",
+		DeliveryTag:  1,
+		Headers:      amqp.Table{},
+		Acknowledger: acker1,
+	}
+	delivery2 := amqp.Delivery{
+		MessageId:    "msg-2",
+		DeliveryTag:  2,
+		Headers:      amqp.Table{},
+		Acknowledger: acker2,
+	}
+	delivery3 := amqp.Delivery{
+		MessageId:    "msg-3",
+		DeliveryTag:  3,
+		Headers:      amqp.Table{},
+		Acknowledger: acker3,
+	}
+
+	// Send messages
+	deliveries <- delivery1 // Will panic
+	deliveries <- delivery2 // Should still be processed
+	deliveries <- delivery3 // Should still be processed
+	close(deliveries)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Process messages from panic consumer
+	registry.handleMessages(ctx, panicConsumer, deliveries)
+
+	// Verify all messages were processed despite first panic
+	assert.Equal(t, 3, panicHandler.GetCallCount(), "All messages should be processed despite panics")
+	assert.True(t, acker1.nackCalled, "First message (panicked) should be nacked")
+	assert.True(t, acker2.nackCalled, "Second message (panicked) should be nacked")
+	assert.True(t, acker3.nackCalled, "Third message (panicked) should be nacked")
+}
+
+func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
+	deliveries1 := make(chan amqp.Delivery, 1)
+	deliveries2 := make(chan amqp.Delivery, 1)
+
+	mockClient := &simpleMockAMQPClient{isReady: true}
+	registry := NewRegistry(mockClient, &stubLogger{})
+
+	// Consumer 1 panics, Consumer 2 succeeds
+	panicHandler := &panicTestHandler{panicMsg: "consumer 1 panic"}
+	successHandler := &countingTestHandler{}
+
+	consumer1 := &ConsumerDeclaration{
+		Queue:     "panic-queue",
+		EventType: "panic-event",
+		Handler:   panicHandler,
+		AutoAck:   false,
+	}
+
+	consumer2 := &ConsumerDeclaration{
+		Queue:     "success-queue",
+		EventType: "success-event",
+		Handler:   successHandler,
+		AutoAck:   false,
+	}
+
+	// Create deliveries
+	acker1 := &mockAcknowledger{}
+	acker2 := &mockAcknowledger{}
+
+	delivery1 := amqp.Delivery{
+		MessageId:    "panic-msg",
+		DeliveryTag:  1,
+		Headers:      amqp.Table{},
+		Acknowledger: acker1,
+	}
+	delivery2 := amqp.Delivery{
+		MessageId:    "success-msg",
+		DeliveryTag:  2,
+		Headers:      amqp.Table{},
+		Acknowledger: acker2,
+	}
+
+	deliveries1 <- delivery1
+	deliveries2 <- delivery2
+	close(deliveries1)
+	close(deliveries2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start both consumers
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		registry.handleMessages(ctx, consumer1, deliveries1)
+	}()
+
+	go func() {
+		defer wg.Done()
+		registry.handleMessages(ctx, consumer2, deliveries2)
+	}()
+
+	wg.Wait()
+
+	// Verify consumer 1 panicked and nacked
+	assert.Equal(t, 1, panicHandler.GetCallCount())
+	assert.True(t, acker1.nackCalled, "Panicked message should be nacked")
+	assert.False(t, acker1.nackRequeue, "Panicked message should NOT be requeued")
+
+	// Verify consumer 2 succeeded and acked (unaffected by consumer 1's panic)
+	assert.Equal(t, 1, successHandler.GetCallCount())
+	assert.True(t, acker2.ackCalled, "Success message should be acked")
+	assert.False(t, acker2.nackCalled, "Success message should NOT be nacked")
+}
+
+func TestRegistryProcessMessageHandlerPanicWithAutoAck(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "panic with autoack"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   true, // AutoAck enabled
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	log := &stubLogger{}
+	ctx := context.Background()
+
+	// Should not panic
+	require.NotPanics(t, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+
+	// With AutoAck, no manual ack/nack should happen (even on panic)
+	assert.False(t, acker.ackCalled, "AutoAck mode should not manually ack")
+	assert.False(t, acker.nackCalled, "AutoAck mode should not manually nack")
+}
+
 // ===== Concurrent Operations Tests =====
 
 func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {

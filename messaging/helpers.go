@@ -1,5 +1,7 @@
 package messaging
 
+import "runtime"
+
 // NewTopicExchange creates a topic exchange with production-safe defaults.
 // Topic exchanges route messages based on routing key patterns (e.g., "order.*", "user.#").
 //
@@ -86,28 +88,32 @@ func NewPublisher(opts *PublisherOptions) *PublisherDeclaration {
 
 // ConsumerOptions contains configuration for creating a consumer declaration.
 type ConsumerOptions struct {
-	Queue       string         // Queue name to consume from
-	Consumer    string         // Consumer tag
-	EventType   string         // Event type identifier
-	Description string         // Human-readable description
-	Handler     MessageHandler // Message handler (optional for documentation-only declarations)
-	AutoAck     bool           // Automatically acknowledge messages (default: false)
-	Exclusive   bool           // Exclusive consumer (default: false)
-	NoLocal     bool           // Don't deliver to the connection that published (default: false)
+	Queue         string         // Queue name to consume from
+	Consumer      string         // Consumer tag
+	EventType     string         // Event type identifier
+	Description   string         // Human-readable description
+	Handler       MessageHandler // Message handler (optional for documentation-only declarations)
+	AutoAck       bool           // Automatically acknowledge messages (default: false)
+	Exclusive     bool           // Exclusive consumer (default: false)
+	NoLocal       bool           // Don't deliver to the connection that published (default: false)
+	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
+	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
 }
 
 // NewConsumer creates a consumer declaration from options.
 func NewConsumer(opts *ConsumerOptions) *ConsumerDeclaration {
 	return &ConsumerDeclaration{
-		Queue:       opts.Queue,
-		Consumer:    opts.Consumer,
-		AutoAck:     opts.AutoAck,
-		Exclusive:   opts.Exclusive,
-		NoLocal:     opts.NoLocal,
-		NoWait:      false,
-		EventType:   opts.EventType,
-		Description: opts.Description,
-		Handler:     opts.Handler,
+		Queue:         opts.Queue,
+		Consumer:      opts.Consumer,
+		AutoAck:       opts.AutoAck,
+		Exclusive:     opts.Exclusive,
+		NoLocal:       opts.NoLocal,
+		NoWait:        false,
+		EventType:     opts.EventType,
+		Description:   opts.Description,
+		Handler:       opts.Handler,
+		Workers:       opts.Workers,
+		PrefetchCount: opts.PrefetchCount,
 	}
 }
 
@@ -170,6 +176,27 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclar
 		if _, exists := d.Queues[queue.Name]; !exists {
 			d.RegisterQueue(queue)
 		}
+	}
+
+	// Apply smart defaults for concurrency (v0.17+)
+	// Workers: Default to NumCPU * 4 for I/O-bound workloads (database, HTTP, etc.)
+	if opts.Workers == 0 {
+		opts.Workers = runtime.NumCPU() * 4
+	}
+
+	// Resource safeguard: Cap workers at 200 per consumer
+	if opts.Workers > 200 {
+		opts.Workers = 200
+	}
+
+	// PrefetchCount: Default to Workers * 10 for optimal pipeline, capped at 500
+	if opts.PrefetchCount == 0 {
+		opts.PrefetchCount = min(opts.Workers*10, 500)
+	}
+
+	// Resource safeguard: Cap prefetch at 1000 to prevent memory exhaustion
+	if opts.PrefetchCount > 1000 {
+		opts.PrefetchCount = 1000
 	}
 
 	consumer := NewConsumer(opts)

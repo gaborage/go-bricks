@@ -353,8 +353,12 @@ func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOpti
 	channel := c.channel
 	c.m.RUnlock()
 
-	// Set QoS for fair dispatch
-	if err := channel.Qos(1, 0, false); err != nil {
+	// Set QoS for fair dispatch with configurable prefetch (v0.17+)
+	prefetchCount := options.PrefetchCount
+	if prefetchCount <= 0 {
+		prefetchCount = 1 // Backward compatible default
+	}
+	if err := channel.Qos(prefetchCount, 0, false); err != nil {
 		return nil, err
 	}
 

@@ -41,12 +41,13 @@ type PublishOptions struct {
 
 // ConsumeOptions contains options for consuming messages with AMQP-specific features.
 type ConsumeOptions struct {
-	Queue     string // Queue name to consume from
-	Consumer  string // Consumer tag
-	AutoAck   bool   // Auto-acknowledge messages
-	Exclusive bool   // Exclusive consumer
-	NoLocal   bool   // No-local flag
-	NoWait    bool   // No-wait flag
+	Queue         string // Queue name to consume from
+	Consumer      string // Consumer tag
+	AutoAck       bool   // Auto-acknowledge messages
+	Exclusive     bool   // Exclusive consumer
+	NoLocal       bool   // No-local flag
+	NoWait        bool   // No-wait flag
+	PrefetchCount int    // RabbitMQ prefetch count (0 or negative = default to 1)
 }
 
 // AMQPClient extends the basic Client interface with AMQP-specific functionality.

@@ -645,6 +645,13 @@ See [Troubleshooting](#troubleshooting) section for diagnosing duplicate consume
 
 **Behavior:** All handler errors → Message nacked WITHOUT requeue (message dropped). Prevents poison messages from blocking queues. Rich ERROR logs + OpenTelemetry metrics track all failures.
 
+**Panic Recovery:** Handler panics are automatically recovered and treated identically to errors:
+- Panic recovered with stack trace logging
+- Message nacked WITHOUT requeue (consistent with error policy)
+- Service continues processing other messages
+- Metrics recorded with panic error type
+- Other consumers remain unaffected (panic isolation)
+
 **Error Handling Pattern:**
 ```go
 func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
@@ -1015,9 +1022,16 @@ make check-all  # Run comprehensive validation (framework + tool)
 # → Declaration hash mismatch indicates configuration drift
 # → Review DeclareMessaging() for conditional logic or environment-specific declarations
 
+# Handler panics crashing service (v0.16+: auto-recovered)
+# → Panics are now automatically recovered with stack trace logging
+# → Messages nacked without requeue (same as errors)
+# → Check ERROR logs for "Panic recovered in message handler" with stack traces
+# → Service continues processing other messages (no downtime)
+
 # Diagnostic commands
 grep "Starting AMQP consumers" logs/app.log
 grep "Multiple consumers registered for same queue" logs/app.log
+grep "Panic recovered in message handler" logs/app.log
 ```
 
 **Module Registration Issues:**

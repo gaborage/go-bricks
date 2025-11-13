@@ -236,3 +236,153 @@ func TestColumnMetadataColPanicMessageQuality(t *testing.T) {
 
 	metadata.Col("BadField")
 }
+
+// TestColumnMetadataColPanicWithAlias tests that Col panic includes alias information
+func TestColumnMetadataColPanicWithAlias(t *testing.T) {
+	metadata := &ColumnMetadata{
+		TypeName: "User",
+		Columns: []Column{
+			{FieldName: "ID", DBColumn: "id", QuotedColumn: `"ID"`, FieldIndex: 0},
+			{FieldName: "Name", DBColumn: "name", QuotedColumn: "name", FieldIndex: 1},
+			{FieldName: "Email", DBColumn: "email", QuotedColumn: "email", FieldIndex: 2},
+		},
+		columnsByField: map[string]*Column{},
+	}
+
+	// Populate columnsByField map
+	for i := range metadata.Columns {
+		metadata.columnsByField[metadata.Columns[i].FieldName] = &metadata.Columns[i]
+	}
+
+	// Create aliased instance
+	aliased := metadata.As("u")
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "Col should panic on non-existent field")
+
+		msg := r.(string)
+		assert.Contains(t, msg, "NonExistent", "Panic message should contain the invalid field name")
+		assert.Contains(t, msg, "User", "Panic message should contain the struct type name")
+		assert.Contains(t, msg, `with alias "u"`, "Panic message should mention the alias")
+		assert.Contains(t, msg, "ID", "Panic message should list available fields")
+		assert.Contains(t, msg, "Name", "Panic message should list available fields")
+		assert.Contains(t, msg, "Email", "Panic message should list available fields")
+	}()
+
+	aliased.Col("NonExistent")
+}
+
+// TestColumnMetadataColPanicNoAlias tests that non-aliased Col panic does NOT include alias mention
+func TestColumnMetadataColPanicNoAlias(t *testing.T) {
+	metadata := &ColumnMetadata{
+		TypeName: "Product",
+		Columns: []Column{
+			{FieldName: "ID", DBColumn: "id", QuotedColumn: "id", FieldIndex: 0},
+			{FieldName: "Price", DBColumn: "price", QuotedColumn: "price", FieldIndex: 1},
+		},
+		columnsByField: map[string]*Column{},
+	}
+
+	// Populate columnsByField map
+	for i := range metadata.Columns {
+		metadata.columnsByField[metadata.Columns[i].FieldName] = &metadata.Columns[i]
+	}
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "Col should panic on non-existent field")
+
+		msg := r.(string)
+		assert.Contains(t, msg, "BadField", "Panic message should contain the invalid field name")
+		assert.Contains(t, msg, "Product", "Panic message should contain the struct type name")
+		assert.NotContains(t, msg, "alias", "Panic message should NOT mention alias for non-aliased instance")
+		assert.Contains(t, msg, "ID", "Panic message should list available fields")
+		assert.Contains(t, msg, "Price", "Panic message should list available fields")
+	}()
+
+	metadata.Col("BadField")
+}
+
+// TestColumnMetadataColsPanicWithAlias tests that Cols panic includes alias information
+func TestColumnMetadataColsPanicWithAlias(t *testing.T) {
+	metadata := &ColumnMetadata{
+		TypeName: "Order",
+		Columns: []Column{
+			{FieldName: "ID", DBColumn: "id", QuotedColumn: `"ID"`, FieldIndex: 0},
+			{FieldName: "Total", DBColumn: "total", QuotedColumn: "total", FieldIndex: 1},
+		},
+		columnsByField: map[string]*Column{},
+	}
+
+	// Populate columnsByField map
+	for i := range metadata.Columns {
+		metadata.columnsByField[metadata.Columns[i].FieldName] = &metadata.Columns[i]
+	}
+
+	// Create aliased instance
+	aliased := metadata.As("o")
+
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "Cols should panic when any field is non-existent")
+
+		msg := r.(string)
+		assert.Contains(t, msg, "InvalidField", "Panic message should contain the invalid field name")
+		assert.Contains(t, msg, "Order", "Panic message should contain the struct type name")
+		assert.Contains(t, msg, `with alias "o"`, "Panic message should mention the alias")
+		assert.Contains(t, msg, "ID", "Panic message should list available fields")
+		assert.Contains(t, msg, "Total", "Panic message should list available fields")
+	}()
+
+	aliased.Cols("ID", "InvalidField", "Total")
+}
+
+// TestColumnMetadataMultipleAliasesPanic tests that different aliases show distinct error messages
+func TestColumnMetadataMultipleAliasesPanic(t *testing.T) {
+	metadata := &ColumnMetadata{
+		TypeName: "Employee",
+		Columns: []Column{
+			{FieldName: "ID", DBColumn: "id", QuotedColumn: "id", FieldIndex: 0},
+			{FieldName: "Name", DBColumn: "name", QuotedColumn: "name", FieldIndex: 1},
+		},
+		columnsByField: map[string]*Column{},
+	}
+
+	// Populate columnsByField map
+	for i := range metadata.Columns {
+		metadata.columnsByField[metadata.Columns[i].FieldName] = &metadata.Columns[i]
+	}
+
+	// Create two different aliases
+	emp := metadata.As("emp")
+	mgr := metadata.As("mgr")
+
+	// Test first alias
+	t.Run("emp alias", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "Col should panic")
+
+			msg := r.(string)
+			assert.Contains(t, msg, `with alias "emp"`, "Panic message should mention 'emp' alias")
+			assert.NotContains(t, msg, `with alias "mgr"`, "Panic message should NOT mention 'mgr' alias")
+		}()
+
+		emp.Col("BadField")
+	})
+
+	// Test second alias
+	t.Run("mgr alias", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "Col should panic")
+
+			msg := r.(string)
+			assert.Contains(t, msg, `with alias "mgr"`, "Panic message should mention 'mgr' alias")
+			assert.NotContains(t, msg, `with alias "emp"`, "Panic message should NOT mention 'emp' alias")
+		}()
+
+		mgr.Col("BadField")
+	})
+}
