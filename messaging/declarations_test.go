@@ -726,3 +726,70 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Empty(t, clone.GetConsumers())
 	})
 }
+
+// TestRegisterConsumerPreservesWorkerPoolConfig verifies that Workers and PrefetchCount
+// fields are preserved during consumer registration (regression test for v0.17.0 bug).
+func TestRegisterConsumerPreservesWorkerPoolConfig(t *testing.T) {
+	decls := NewDeclarations()
+
+	consumer := &ConsumerDeclaration{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Handler:       &mockHandler{},
+		Workers:       48,
+		PrefetchCount: 480,
+	}
+
+	decls.RegisterConsumer(consumer)
+
+	consumers := decls.GetConsumers()
+	assert.Len(t, consumers, 1)
+	assert.Equal(t, 48, consumers[0].Workers, "Workers field should be preserved during registration")
+	assert.Equal(t, 480, consumers[0].PrefetchCount, "PrefetchCount field should be preserved during registration")
+}
+
+// TestClonePreservesWorkerPoolConfig verifies that Workers and PrefetchCount
+// fields are preserved during declaration cloning (regression test for v0.17.0 bug).
+func TestClonePreservesWorkerPoolConfig(t *testing.T) {
+	original := NewDeclarations()
+	original.RegisterConsumer(&ConsumerDeclaration{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Handler:       &mockHandler{},
+		Workers:       48,
+		PrefetchCount: 480,
+	})
+
+	clone := original.Clone()
+	consumers := clone.GetConsumers()
+
+	assert.Len(t, consumers, 1)
+	assert.Equal(t, 48, consumers[0].Workers, "Workers field should be preserved during cloning")
+	assert.Equal(t, 480, consumers[0].PrefetchCount, "PrefetchCount field should be preserved during cloning")
+}
+
+// TestReplayToRegistryPreservesWorkerPoolConfig verifies that Workers and PrefetchCount
+// are propagated correctly through the entire declaration pipeline.
+func TestReplayToRegistryPreservesWorkerPoolConfig(t *testing.T) {
+	decls := NewDeclarations()
+	decls.RegisterConsumer(&ConsumerDeclaration{
+		Queue:         testQueue,
+		Consumer:      testConsumer,
+		EventType:     testEventType,
+		Handler:       &mockHandler{},
+		Workers:       48,
+		PrefetchCount: 480,
+	})
+
+	registry := &mockRegistry{}
+	registry.On("RegisterConsumer", mock.Anything).Return()
+
+	err := decls.ReplayToRegistry(registry)
+	assert.NoError(t, err)
+
+	assert.Len(t, registry.consumers, 1)
+	assert.Equal(t, 48, registry.consumers[0].Workers, "Workers should propagate through ReplayToRegistry")
+	assert.Equal(t, 480, registry.consumers[0].PrefetchCount, "PrefetchCount should propagate through ReplayToRegistry")
+}
