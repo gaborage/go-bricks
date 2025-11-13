@@ -565,39 +565,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	// Panics are treated like errors: logged with stack trace, nacked without requeue, and metrics recorded.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			processingTime := time.Since(startTime)
-			stack := debug.Stack()
-
-			// Log panic with full context and stack trace
-			tlog.Error().
-				Interface("panic", recovered).
-				Bytes("stack", stack).
-				Str("message_id", delivery.MessageId).
-				Str("queue", consumer.Queue).
-				Str("event_type", consumer.EventType).
-				Str("correlation_id", delivery.CorrelationId).
-				Str("consumer_tag", delivery.ConsumerTag).
-				Str("routing_key", delivery.RoutingKey).
-				Str("exchange", delivery.Exchange).
-				Dur("processing_time", processingTime).
-				Msg("Panic recovered in message handler - discarding without requeue")
-
-			// Convert panic to error for metrics tracking
-			panicErr := fmt.Errorf("panic in message handler: %v", recovered)
-
-			// Record failed message metrics (duration with error.type attribute)
-			r.recordFailedMessage(msgCtx, consumer, delivery, processingTime, panicErr)
-
-			// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
-			// Failed messages are dropped (logged above) until DLQ support is implemented
-			if !consumer.AutoAck {
-				if nackErr := delivery.Nack(false, false); nackErr != nil {
-					tlog.Error().
-						Err(nackErr).
-						Uint64("delivery_tag", delivery.DeliveryTag).
-						Msg("Failed to nack message after panic")
-				}
-			}
+			r.handlePanicRecovery(msgCtx, consumer, delivery, startTime, tlog, recovered)
 		}
 	}()
 
@@ -615,31 +583,16 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 	if err != nil {
 		// Enhanced structured logging for failed messages
-		tlog.Error().
+		r.buildFailureLogEvent(tlog, delivery, consumer, processingTime).
 			Err(err).
-			Str("message_id", delivery.MessageId).
-			Str("queue", consumer.Queue).
-			Str("event_type", consumer.EventType).
-			Str("correlation_id", delivery.CorrelationId).
-			Str("consumer_tag", delivery.ConsumerTag).
-			Str("routing_key", delivery.RoutingKey).
-			Str("exchange", delivery.Exchange).
-			Dur("processing_time", processingTime).
 			Msg("Message processing failed - discarding without requeue")
 
 		// Record failed message metrics (duration with error.type attribute)
-		r.recordFailedMessage(msgCtx, consumer, delivery, processingTime, err)
+		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
 
 		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
 		// Failed messages are dropped (logged above) until DLQ support is implemented
-		if !consumer.AutoAck {
-			if nackErr := delivery.Nack(false, false); nackErr != nil {
-				tlog.Error().
-					Err(nackErr).
-					Uint64("delivery_tag", delivery.DeliveryTag).
-					Msg("Failed to nack message")
-			}
-		}
+		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}
 
@@ -659,14 +612,64 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	}
 }
 
-// recordFailedMessage records OpenTelemetry metrics for failed message processing.
-// This follows OTel semantic conventions for messaging, recording duration with error.type attribute.
-// The consumed.messages counter is NOT incremented (only incremented on success).
-func (r *Registry) recordFailedMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, duration time.Duration, err error) {
-	// Record metrics using existing tracking infrastructure
-	// This will record messaging.client.operation.duration with error.type attribute
-	// but will NOT increment messaging.client.consumed.messages counter (success only)
-	tracking.RecordAMQPConsumeMetrics(ctx, delivery, consumer.Queue, duration, err)
+// nackMessage negatively acknowledges a message without requeue.
+// Logs any nack errors but does not propagate them (robustness over strict error handling).
+func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger) {
+	if autoAck {
+		return // No manual ack/nack needed
+	}
+	if err := delivery.Nack(false, false); err != nil {
+		log.Error().
+			Err(err).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Msg("Failed to nack message")
+	}
+}
+
+// buildFailureLogEvent creates a structured log event for failed message processing.
+// Provides consistent error logging across panic and error paths.
+func (r *Registry) buildFailureLogEvent(
+	log logger.Logger,
+	delivery *amqp.Delivery,
+	consumer *ConsumerDeclaration,
+	processingTime time.Duration,
+) logger.LogEvent {
+	return log.Error().
+		Str("message_id", delivery.MessageId).
+		Str("queue", consumer.Queue).
+		Str("event_type", consumer.EventType).
+		Str("correlation_id", delivery.CorrelationId).
+		Str("consumer_tag", delivery.ConsumerTag).
+		Str("routing_key", delivery.RoutingKey).
+		Str("exchange", delivery.Exchange).
+		Dur("processing_time", processingTime)
+}
+
+// handlePanicRecovery handles panic recovery for message processing.
+// Logs panic with stack trace, records metrics, and nacks message without requeue.
+func (r *Registry) handlePanicRecovery(
+	msgCtx context.Context,
+	consumer *ConsumerDeclaration,
+	delivery *amqp.Delivery,
+	startTime time.Time,
+	log logger.Logger,
+	recovered any,
+) {
+	processingTime := time.Since(startTime)
+	stack := debug.Stack()
+
+	// Log panic with full context and stack trace
+	r.buildFailureLogEvent(log, delivery, consumer, processingTime).
+		Interface("panic", recovered).
+		Bytes("stack", stack).
+		Msg("Panic recovered in message handler - discarding without requeue")
+
+	// Record failed message metrics (inline recordFailedMessage)
+	panicErr := fmt.Errorf("panic in message handler: %v", recovered)
+	tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
+
+	// Nack without requeue
+	r.nackMessage(delivery, consumer.AutoAck, log)
 }
 
 // amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)
