@@ -12,13 +12,13 @@ import (
 
 // ManagerStats provides metrics about the cache manager's state.
 type ManagerStats struct {
-	ActiveCaches int           // Current number of active cache instances
-	TotalCreated int           // Total caches created since manager start
-	Evictions    int           // Total evictions due to LRU policy
-	IdleCleanups int           // Total cleanups due to idle timeout
-	Errors       int           // Total initialization errors
-	MaxSize      int           // Maximum allowed active caches
-	IdleTTL      time.Duration // Idle timeout duration
+	ActiveCaches int   // Current number of active cache instances
+	TotalCreated int   // Total caches created since manager start
+	Evictions    int   // Total evictions due to LRU policy
+	IdleCleanups int   // Total cleanups due to idle timeout
+	Errors       int   // Total initialization and close errors
+	MaxSize      int   // Maximum allowed active caches
+	IdleTTL      int64 // Idle timeout duration in seconds
 }
 
 // Connector is a function that creates a new cache instance for a given key.
@@ -163,10 +163,8 @@ func (m *CacheManager) createCache(ctx context.Context, key string) (Cache, erro
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Evict LRU cache if at capacity
-	m.evictIfNeeded()
+	// Evict LRU cache if at capacity (returns entry to close outside lock)
+	evicted := m.evictIfNeeded()
 
 	// Add to LRU front (most recently used)
 	entry := &cacheEntry{
@@ -177,53 +175,67 @@ func (m *CacheManager) createCache(ctx context.Context, key string) (Cache, erro
 	entry.element = m.lru.PushFront(entry)
 	m.caches[key] = entry
 	m.totalCreated++
+	m.mu.Unlock()
+
+	// Close evicted cache outside the lock (ignore errors during eviction)
+	if evicted != nil {
+		_ = evicted.cache.Close()
+	}
 
 	return cache, nil
 }
 
 // evictIfNeeded removes the least recently used cache if at capacity.
-// Must be called with mu lock held.
-func (m *CacheManager) evictIfNeeded() {
+// Must be called with mu lock held. Returns the evicted entry (caller must close).
+func (m *CacheManager) evictIfNeeded() *cacheEntry {
 	if m.maxSize <= 0 || len(m.caches) < m.maxSize {
-		return
+		return nil
 	}
 
 	// Remove oldest entry (back of LRU list)
 	oldest := m.lru.Back()
 	if oldest == nil {
-		return
+		return nil
 	}
 
 	entry := oldest.Value.(*cacheEntry)
-	_ = m.removeLocked(entry.key) // Ignore error during eviction
+	evicted := m.removeEntryLocked(entry.key)
 	m.evictions++
+	return evicted
 }
 
 // Remove explicitly removes a cache instance from the manager.
 func (m *CacheManager) Remove(key string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	entry := m.removeEntryLocked(key)
+	m.mu.Unlock()
 
-	return m.removeLocked(key)
-}
-
-// removeLocked removes a cache instance (must be called with mu lock held).
-func (m *CacheManager) removeLocked(key string) error {
-	entry, exists := m.caches[key]
-	if !exists {
+	if entry == nil {
 		return nil // Already removed
 	}
 
-	// Close the cache instance
+	// Close the cache instance outside the lock
 	if err := entry.cache.Close(); err != nil {
 		return fmt.Errorf("failed to close cache %q: %w", key, err)
 	}
 
-	// Remove from tracking structures
+	return nil
+}
+
+// removeEntryLocked removes bookkeeping for a cache (must be called with mu lock held).
+// Returns the removed entry or nil if not found.
+// The caller is responsible for closing the returned entry's cache.
+func (m *CacheManager) removeEntryLocked(key string) *cacheEntry {
+	entry, exists := m.caches[key]
+	if !exists {
+		return nil
+	}
+
+	// Remove from tracking structures (always cleanup, even if close fails later)
 	m.lru.Remove(entry.element)
 	delete(m.caches, key)
 
-	return nil
+	return entry
 }
 
 // cleanupLoop periodically removes idle cache instances.
@@ -247,21 +259,29 @@ func (m *CacheManager) cleanupIdleCaches() {
 		return
 	}
 
+	// Collect idle entries under lock
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	now := time.Now()
-	var toRemove []string
+	var toClose []*cacheEntry
 
 	for key, entry := range m.caches {
 		if now.Sub(entry.lastUsed) > m.idleTTL {
-			toRemove = append(toRemove, key)
+			if removed := m.removeEntryLocked(key); removed != nil {
+				toClose = append(toClose, removed)
+				m.idleCleanups++
+			}
 		}
 	}
+	m.mu.Unlock()
 
-	for _, key := range toRemove {
-		_ = m.removeLocked(key)
-		m.idleCleanups++
+	// Close collected caches outside the lock
+	for _, entry := range toClose {
+		if err := entry.cache.Close(); err != nil {
+			// Increment error counter on close failures
+			m.mu.Lock()
+			m.errors++
+			m.mu.Unlock()
+		}
 	}
 }
 
@@ -273,13 +293,27 @@ func (m *CacheManager) Close() error {
 		// Signal cleanup goroutine to stop
 		close(m.closeCh)
 
+		// Collect all cache entries under lock
 		m.mu.Lock()
-		defer m.mu.Unlock()
-
-		// Close all cache instances
+		var toClose []*cacheEntry
 		for key := range m.caches {
-			if err := m.removeLocked(key); err != nil && closeErr == nil {
-				closeErr = err
+			if entry := m.removeEntryLocked(key); entry != nil {
+				toClose = append(toClose, entry)
+			}
+		}
+		m.mu.Unlock()
+
+		// Close all caches outside the lock
+		for _, entry := range toClose {
+			if err := entry.cache.Close(); err != nil {
+				// Track errors and return first error encountered
+				m.mu.Lock()
+				m.errors++
+				m.mu.Unlock()
+
+				if closeErr == nil {
+					closeErr = err
+				}
 			}
 		}
 	})
@@ -288,17 +322,17 @@ func (m *CacheManager) Close() error {
 }
 
 // Stats returns current manager statistics.
-func (m *CacheManager) Stats() map[string]any {
+func (m *CacheManager) Stats() ManagerStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return map[string]any{
-		"active_caches": len(m.caches),
-		"total_created": m.totalCreated,
-		"evictions":     m.evictions,
-		"idle_cleanups": m.idleCleanups,
-		"errors":        m.errors,
-		"max_size":      m.maxSize,
-		"idle_ttl":      m.idleTTL.String(),
+	return ManagerStats{
+		ActiveCaches: len(m.caches),
+		TotalCreated: m.totalCreated,
+		Evictions:    m.evictions,
+		IdleCleanups: m.idleCleanups,
+		Errors:       m.errors,
+		MaxSize:      m.maxSize,
+		IdleTTL:      int64(m.idleTTL.Seconds()),
 	}
 }

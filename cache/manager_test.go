@@ -120,9 +120,9 @@ func TestNewCacheManager(t *testing.T) {
 		defer mgr.Close()
 
 		stats := mgr.Stats()
-		assert.Equal(t, 0, stats["active_caches"])
-		assert.Equal(t, 100, stats["max_size"])
-		assert.Equal(t, (15 * time.Minute).String(), stats["idle_ttl"])
+		assert.Equal(t, 0, stats.ActiveCaches)
+		assert.Equal(t, 100, stats.MaxSize)
+		assert.Equal(t, int64(900), stats.IdleTTL) // 15 minutes = 900 seconds
 	})
 
 	t.Run("NilConnector", func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestNewCacheManager(t *testing.T) {
 		defer mgr.Close()
 
 		stats := mgr.Stats()
-		assert.Equal(t, 0, stats["max_size"])
+		assert.Equal(t, 0, stats.MaxSize)
 	})
 }
 
@@ -206,8 +206,8 @@ func TestCacheManagerGet(t *testing.T) {
 		assert.Equal(t, int32(1), creationCount.Load()) // No new creation
 
 		stats := mgr.Stats()
-		assert.Equal(t, 1, stats["active_caches"])
-		assert.Equal(t, 1, stats["total_created"])
+		assert.Equal(t, 1, stats.ActiveCaches)
+		assert.Equal(t, 1, stats.TotalCreated)
 	})
 
 	t.Run("MultipleTenants", func(t *testing.T) {
@@ -237,8 +237,8 @@ func TestCacheManagerGet(t *testing.T) {
 		assert.NotSame(t, c1, c3)
 
 		stats := mgr.Stats()
-		assert.Equal(t, 3, stats["active_caches"])
-		assert.Equal(t, 3, stats["total_created"])
+		assert.Equal(t, 3, stats.ActiveCaches)
+		assert.Equal(t, 3, stats.TotalCreated)
 	})
 
 	t.Run("ConnectorError", func(t *testing.T) {
@@ -259,8 +259,8 @@ func TestCacheManagerGet(t *testing.T) {
 		assert.Contains(t, err.Error(), "connection failed")
 
 		stats := mgr.Stats()
-		assert.Equal(t, 0, stats["active_caches"])
-		assert.Equal(t, 1, stats["errors"])
+		assert.Equal(t, 0, stats.ActiveCaches)
+		assert.Equal(t, 1, stats.Errors)
 	})
 }
 
@@ -320,8 +320,8 @@ func TestCacheManagerSingleflight(t *testing.T) {
 	assert.Equal(t, int32(1), creationCount.Load(), "singleflight should prevent duplicate creation")
 
 	stats := mgr.Stats()
-	assert.Equal(t, 1, stats["active_caches"])
-	assert.Equal(t, 1, stats["total_created"])
+	assert.Equal(t, 1, stats.ActiveCaches)
+	assert.Equal(t, 1, stats.TotalCreated)
 }
 
 // TestCacheManagerLRUEviction tests eviction when at capacity.
@@ -349,8 +349,8 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	_, _ = mgr.Get(ctx, tenantThree)
 
 	stats := mgr.Stats()
-	assert.Equal(t, 3, stats["active_caches"])
-	assert.Equal(t, 0, stats["evictions"])
+	assert.Equal(t, 3, stats.ActiveCaches)
+	assert.Equal(t, 0, stats.Evictions)
 
 	// Access tenant-1 and tenant-2 to refresh LRU (tenant-3 becomes oldest)
 	_, _ = mgr.Get(ctx, tenantOne)
@@ -362,8 +362,8 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	require.NotNil(t, c4)
 
 	stats = mgr.Stats()
-	assert.Equal(t, 3, stats["active_caches"])
-	assert.Equal(t, 1, stats["evictions"])
+	assert.Equal(t, 3, stats.ActiveCaches)
+	assert.Equal(t, 1, stats.Evictions)
 
 	// Verify tenant-3 was closed
 	_, closed := closedCaches.Load(tenantThree)
@@ -403,7 +403,7 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	require.NotNil(t, c2)
 
 	stats := mgr.Stats()
-	assert.Equal(t, 2, stats["active_caches"])
+	assert.Equal(t, 2, stats.ActiveCaches)
 
 	// Keep tenant-1 active by accessing it
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -426,8 +426,8 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	close(done)
 
 	stats = mgr.Stats()
-	assert.Equal(t, 1, stats["active_caches"], "only tenant-1 should remain active")
-	assert.Equal(t, 1, stats["idle_cleanups"], "tenant-2 should have been cleaned up")
+	assert.Equal(t, 1, stats.ActiveCaches, "only tenant-1 should remain active")
+	assert.Equal(t, 1, stats.IdleCleanups, "tenant-2 should have been cleaned up")
 
 	// Verify tenant-1 still accessible
 	c1Again, err := mgr.Get(ctx, tenantOne)
@@ -458,14 +458,14 @@ func TestCacheManagerRemove(t *testing.T) {
 	require.NotNil(t, c1)
 
 	stats := mgr.Stats()
-	assert.Equal(t, 1, stats["active_caches"])
+	assert.Equal(t, 1, stats.ActiveCaches)
 
 	// Remove cache
 	err = mgr.Remove(tenantOne)
 	require.NoError(t, err)
 
 	stats = mgr.Stats()
-	assert.Equal(t, 0, stats["active_caches"])
+	assert.Equal(t, 0, stats.ActiveCaches)
 
 	// Verify cache was closed
 	mock := c1.(*mockCache)
@@ -477,8 +477,8 @@ func TestCacheManagerRemove(t *testing.T) {
 	assert.NotSame(t, c1, c2, "should create new cache after removal")
 
 	stats = mgr.Stats()
-	assert.Equal(t, 1, stats["active_caches"])
-	assert.Equal(t, 2, stats["total_created"])
+	assert.Equal(t, 1, stats.ActiveCaches)
+	assert.Equal(t, 2, stats.TotalCreated)
 }
 
 // TestCacheManagerRemoveNonexistent tests removing a cache that doesn't exist.
@@ -494,6 +494,61 @@ func TestCacheManagerRemoveNonexistent(t *testing.T) {
 	// Remove nonexistent cache (should not error)
 	err = mgr.Remove("nonexistent")
 	assert.NoError(t, err)
+}
+
+// failingCloseCache is a mock cache that fails to close.
+type failingCloseCache struct {
+	*mockCache
+	closeErr error
+}
+
+func (f *failingCloseCache) Close() error {
+	f.closed.Store(true) // Mark as closed for tracking
+	return f.closeErr
+}
+
+// TestCacheManagerRemoveWithCloseError tests that entries are removed from
+// bookkeeping even when Close() fails.
+func TestCacheManagerRemoveWithCloseError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &failingCloseCache{
+			mockCache: newMockCache(key),
+			closeErr:  closeErr,
+		}, nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+
+	// Create cache
+	c1, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	stats := mgr.Stats()
+	assert.Equal(t, 1, stats.ActiveCaches)
+
+	// Remove cache (Close() will fail)
+	err = mgr.Remove(tenantOne)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "close failed")
+
+	// CRITICAL: Entry should still be removed from bookkeeping
+	stats = mgr.Stats()
+	assert.Equal(t, 0, stats.ActiveCaches, "entry should be removed from manager despite close error")
+
+	// Get should create a NEW instance (proving old entry was removed)
+	c2, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	assert.NotSame(t, c1, c2, "should create new cache after removal despite close error")
+
+	stats = mgr.Stats()
+	assert.Equal(t, 1, stats.ActiveCaches)
+	assert.Equal(t, 2, stats.TotalCreated)
 }
 
 // TestCacheManagerClose tests manager shutdown.
@@ -517,7 +572,7 @@ func TestCacheManagerClose(t *testing.T) {
 	_, _ = mgr.Get(ctx, tenantThree)
 
 	stats := mgr.Stats()
-	assert.Equal(t, 3, stats["active_caches"])
+	assert.Equal(t, 3, stats.ActiveCaches)
 
 	// Close manager
 	err = mgr.Close()
@@ -533,7 +588,7 @@ func TestCacheManagerClose(t *testing.T) {
 
 	// Stats should reflect empty manager
 	stats = mgr.Stats()
-	assert.Equal(t, 0, stats["active_caches"])
+	assert.Equal(t, 0, stats.ActiveCaches)
 
 	// Close should be idempotent
 	err = mgr.Close()
@@ -557,29 +612,29 @@ func TestCacheManagerStats(t *testing.T) {
 
 	// Initial state
 	stats := mgr.Stats()
-	assert.Equal(t, 0, stats["active_caches"])
-	assert.Equal(t, 0, stats["total_created"])
-	assert.Equal(t, 0, stats["evictions"])
-	assert.Equal(t, 0, stats["idle_cleanups"])
-	assert.Equal(t, 0, stats["errors"])
-	assert.Equal(t, 2, stats["max_size"])
-	assert.Equal(t, (15 * time.Minute).String(), stats["idle_ttl"])
+	assert.Equal(t, 0, stats.ActiveCaches)
+	assert.Equal(t, 0, stats.TotalCreated)
+	assert.Equal(t, 0, stats.Evictions)
+	assert.Equal(t, 0, stats.IdleCleanups)
+	assert.Equal(t, 0, stats.Errors)
+	assert.Equal(t, 2, stats.MaxSize)
+	assert.Equal(t, int64(900), stats.IdleTTL) // 15 minutes = 900 seconds
 
 	// Create caches
 	_, _ = mgr.Get(ctx, tenantOne)
 	_, _ = mgr.Get(ctx, tenantTwo)
 
 	stats = mgr.Stats()
-	assert.Equal(t, 2, stats["active_caches"])
-	assert.Equal(t, 2, stats["total_created"])
+	assert.Equal(t, 2, stats.ActiveCaches)
+	assert.Equal(t, 2, stats.TotalCreated)
 
 	// Trigger eviction
 	_, _ = mgr.Get(ctx, tenantThree)
 
 	stats = mgr.Stats()
-	assert.Equal(t, 2, stats["active_caches"])
-	assert.Equal(t, 3, stats["total_created"])
-	assert.Equal(t, 1, stats["evictions"])
+	assert.Equal(t, 2, stats.ActiveCaches)
+	assert.Equal(t, 3, stats.TotalCreated)
+	assert.Equal(t, 1, stats.Evictions)
 }
 
 // TestCacheManagerThreadSafety tests concurrent access to manager.
@@ -633,11 +688,142 @@ func TestCacheManagerThreadSafety(t *testing.T) {
 
 	// Verify stats are consistent
 	stats := mgr.Stats()
-	totalCreated := stats["total_created"].(int)
-	activeCaches := stats["active_caches"].(int)
-	evictions := stats["evictions"].(int)
-	idleCleanups := stats["idle_cleanups"].(int)
+	totalCreated := stats.TotalCreated
+	activeCaches := stats.ActiveCaches
+	evictions := stats.Evictions
+	idleCleanups := stats.IdleCleanups
 
 	assert.GreaterOrEqual(t, totalCreated, activeCaches)
 	assert.GreaterOrEqual(t, totalCreated, evictions+idleCleanups)
+}
+
+// slowCloseCache is a mock cache with configurable close delay.
+type slowCloseCache struct {
+	*mockCache
+	closeDelay time.Duration
+}
+
+func (s *slowCloseCache) Close() error {
+	time.Sleep(s.closeDelay) // Simulate slow I/O operation
+	return s.mockCache.Close()
+}
+
+// TestCacheManagerConcurrentAccessDuringClose verifies that Get() operations
+// are not blocked while caches are being closed (lock-free close pattern).
+func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &slowCloseCache{
+			mockCache:  newMockCache(key),
+			closeDelay: 200 * time.Millisecond, // Slow close
+		}, nil
+	}
+
+	config := cache.DefaultManagerConfig()
+	config.MaxSize = 2 // Small capacity to trigger evictions
+
+	mgr, err := cache.NewCacheManager(config, connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+
+	// Create caches up to capacity
+	_, _ = mgr.Get(ctx, tenantOne)
+	_, _ = mgr.Get(ctx, tenantTwo)
+
+	// Channel to signal when Get() operations complete
+	getChan := make(chan time.Duration, 1)
+
+	// Start a goroutine that will trigger eviction (slow close)
+	go func() {
+		_, _ = mgr.Get(ctx, tenantThree) // Triggers eviction of tenant-1 (200ms close)
+	}()
+
+	// Give eviction time to start (50ms should be enough to acquire lock and start close)
+	time.Sleep(50 * time.Millisecond)
+
+	// While tenant-1 is being closed (outside lock), verify Get() is NOT blocked
+	start := time.Now()
+	c, err := mgr.Get(ctx, tenantTwo) // Should NOT wait for close to complete
+	elapsed := time.Since(start)
+	getChan <- elapsed
+
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	// CRITICAL ASSERTION: Get() should complete quickly (<50ms), NOT wait for close (200ms)
+	getElapsed := <-getChan
+	assert.Less(t, getElapsed, 100*time.Millisecond,
+		"Get() should not be blocked by slow Close() operation")
+
+	// Wait for eviction to complete
+	time.Sleep(250 * time.Millisecond)
+
+	// Verify eviction completed successfully
+	stats := mgr.Stats()
+	assert.Equal(t, 2, stats.ActiveCaches)
+	assert.Equal(t, 1, stats.Evictions)
+}
+
+// TestCacheManagerConcurrentRemoveDuringGet verifies that Stats() and Get()
+// operations continue to work while Remove() closes caches in background.
+func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &slowCloseCache{
+			mockCache:  newMockCache(key),
+			closeDelay: 150 * time.Millisecond, // Slow close
+		}, nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+
+	// Create multiple caches
+	_, _ = mgr.Get(ctx, tenantOne)
+	_, _ = mgr.Get(ctx, tenantTwo)
+	_, _ = mgr.Get(ctx, tenantThree)
+
+	// Start removing tenant-1 (slow close in background)
+	removeDone := make(chan error, 1)
+	go func() {
+		removeDone <- mgr.Remove(tenantOne)
+	}()
+
+	// Give removal time to start close operation
+	time.Sleep(50 * time.Millisecond)
+
+	// While tenant-1 is closing, verify other operations are NOT blocked
+	operations := 10
+	var wg sync.WaitGroup
+	wg.Add(operations)
+
+	for i := 0; i < operations; i++ {
+		go func(_ int) {
+			defer wg.Done()
+
+			start := time.Now()
+
+			// These should all complete quickly
+			_ = mgr.Stats()
+			_, _ = mgr.Get(ctx, tenantTwo)
+			_, _ = mgr.Get(ctx, tenantThree)
+
+			elapsed := time.Since(start)
+			assert.Less(t, elapsed, 100*time.Millisecond,
+				"operations should not be blocked by slow close")
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Wait for removal to complete
+	err = <-removeDone
+	require.NoError(t, err)
+
+	// Verify final state
+	stats := mgr.Stats()
+	assert.Equal(t, 2, stats.ActiveCaches)
 }
