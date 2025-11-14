@@ -107,6 +107,21 @@ func loadDefaults(k *koanf.Koanf) error {
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured
 
+		// Cache defaults
+		"cache.enabled":                 false,
+		"cache.type":                    "redis",
+		"cache.redis.host":              "localhost",
+		"cache.redis.port":              6379,
+		"cache.redis.password":          "",
+		"cache.redis.database":          0,
+		"cache.redis.poolsize":          10,
+		"cache.redis.dialtimeout":       "5s",
+		"cache.redis.readtimeout":       "3s",
+		"cache.redis.writetimeout":      "3s",
+		"cache.redis.maxretries":        3,
+		"cache.redis.minretrybackoff":   "8ms",
+		"cache.redis.maxretrybackoff":   "512ms",
+
 		"log.level":         "info",
 		"log.pretty":        false,
 		"log.output.format": "json",

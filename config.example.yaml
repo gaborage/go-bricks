@@ -77,6 +77,24 @@ database:
     concern:
       write: majority
 
+# Cache configuration (OPTIONAL - Redis-based caching)
+# If not using cache, set enabled: false or omit this section
+cache:
+  enabled: false                    # Enable/disable cache functionality
+  type: redis                        # Cache backend type (currently only "redis" supported)
+  redis:
+    host: localhost                  # Redis server hostname
+    port: 6379                       # Redis server port
+    password: ""                     # Redis password (use environment variable: CACHE_REDIS_PASSWORD)
+    database: 0                      # Redis database number (0-15)
+    poolsize: 10                     # Maximum number of connections in pool
+    dialtimeout: 5s                  # Timeout for establishing new connections
+    readtimeout: 3s                  # Timeout for read operations (-1 = no timeout)
+    writetimeout: 3s                 # Timeout for write operations (-1 = no timeout)
+    maxretries: 3                    # Maximum number of retries before giving up
+    minretrybackoff: 8ms             # Minimum backoff between retries
+    maxretrybackoff: 512ms           # Maximum backoff between retries
+
 log:
   level: debug
   pretty: true
