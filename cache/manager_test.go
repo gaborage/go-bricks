@@ -51,42 +51,42 @@ func (t *trackableMockCache) Close() error {
 	return err
 }
 
-func (m *mockCache) Get(ctx context.Context, key string) ([]byte, error) {
+func (m *mockCache) Get(_ context.Context, key string) ([]byte, error) {
 	if m.closed.Load() {
 		return nil, cache.ErrClosed
 	}
 	return []byte(fmt.Sprintf("%s:%s", m.id, key)), nil
 }
 
-func (m *mockCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+func (m *mockCache) Set(_ context.Context, _ string, _ []byte, _ time.Duration) error {
 	if m.closed.Load() {
 		return cache.ErrClosed
 	}
 	return nil
 }
 
-func (m *mockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) ([]byte, bool, error) {
+func (m *mockCache) GetOrSet(_ context.Context, _ string, value []byte, _ time.Duration) (storedValue []byte, wasSet bool, err error) {
 	if m.closed.Load() {
 		return nil, false, cache.ErrClosed
 	}
 	return value, true, nil
 }
 
-func (m *mockCache) CompareAndSet(ctx context.Context, key string, expected, new []byte, ttl time.Duration) (bool, error) {
+func (m *mockCache) CompareAndSet(_ context.Context, _ string, _, _ []byte, _ time.Duration) (bool, error) {
 	if m.closed.Load() {
 		return false, cache.ErrClosed
 	}
 	return true, nil
 }
 
-func (m *mockCache) Delete(ctx context.Context, key string) error {
+func (m *mockCache) Delete(_ context.Context, _ string) error {
 	if m.closed.Load() {
 		return cache.ErrClosed
 	}
 	return nil
 }
 
-func (m *mockCache) Health(ctx context.Context) error {
+func (m *mockCache) Health(_ context.Context) error {
 	if m.closed.Load() {
 		return cache.ErrClosed
 	}
@@ -110,7 +110,7 @@ func (m *mockCache) Close() error {
 // TestNewCacheManager tests manager creation with various configs.
 func TestNewCacheManager(t *testing.T) {
 	t.Run("ValidConfig", func(t *testing.T) {
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil
 		}
 
@@ -133,7 +133,7 @@ func TestNewCacheManager(t *testing.T) {
 	})
 
 	t.Run("NegativeMaxSize", func(t *testing.T) {
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil
 		}
 
@@ -147,7 +147,7 @@ func TestNewCacheManager(t *testing.T) {
 	})
 
 	t.Run("NegativeIdleTTL", func(t *testing.T) {
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil
 		}
 
@@ -161,7 +161,7 @@ func TestNewCacheManager(t *testing.T) {
 	})
 
 	t.Run("ZeroMaxSize_Unlimited", func(t *testing.T) {
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil
 		}
 
@@ -182,7 +182,7 @@ func TestNewCacheManager(t *testing.T) {
 func TestCacheManagerGet(t *testing.T) {
 	t.Run("LazyInitialization", func(t *testing.T) {
 		var creationCount atomic.Int32
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			creationCount.Add(1)
 			return newMockCache(key), nil
 		}
@@ -211,7 +211,7 @@ func TestCacheManagerGet(t *testing.T) {
 	})
 
 	t.Run("MultipleTenants", func(t *testing.T) {
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, key string) (cache.Cache, error) {
 			return newMockCache(key), nil
 		}
 
@@ -243,7 +243,7 @@ func TestCacheManagerGet(t *testing.T) {
 
 	t.Run("ConnectorError", func(t *testing.T) {
 		expectedErr := errors.New("connection failed")
-		connector := func(ctx context.Context, key string) (cache.Cache, error) {
+		connector := func(_ context.Context, _ string) (cache.Cache, error) {
 			return nil, expectedErr
 		}
 
@@ -269,7 +269,7 @@ func TestCacheManagerSingleflight(t *testing.T) {
 	var creationCount atomic.Int32
 	var creationInProgress atomic.Bool
 
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		// Detect concurrent calls (should never happen due to singleflight)
 		if !creationInProgress.CompareAndSwap(false, true) {
 			t.Error("concurrent cache creation detected - singleflight failed")
@@ -328,7 +328,7 @@ func TestCacheManagerSingleflight(t *testing.T) {
 func TestCacheManagerLRUEviction(t *testing.T) {
 	var closedCaches sync.Map // Track which caches were closed
 
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newTrackableMockCache(key, func(id string) {
 			closedCaches.Store(id, true)
 		}), nil
@@ -382,7 +382,7 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 
 // TestCacheManagerIdleCleanup tests automatic cleanup of idle caches.
 func TestCacheManagerIdleCleanup(t *testing.T) {
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newMockCache(key), nil
 	}
 
@@ -442,7 +442,7 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 
 // TestCacheManagerRemove tests explicit cache removal.
 func TestCacheManagerRemove(t *testing.T) {
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newMockCache(key), nil
 	}
 
@@ -483,7 +483,7 @@ func TestCacheManagerRemove(t *testing.T) {
 
 // TestCacheManagerRemoveNonexistent tests removing a cache that doesn't exist.
 func TestCacheManagerRemoveNonexistent(t *testing.T) {
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newMockCache(key), nil
 	}
 
@@ -500,7 +500,7 @@ func TestCacheManagerRemoveNonexistent(t *testing.T) {
 func TestCacheManagerClose(t *testing.T) {
 	var closedCaches sync.Map
 
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newTrackableMockCache(key, func(id string) {
 			closedCaches.Store(id, true)
 		}), nil
@@ -542,7 +542,7 @@ func TestCacheManagerClose(t *testing.T) {
 
 // TestCacheManagerStats tests statistics reporting.
 func TestCacheManagerStats(t *testing.T) {
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return newMockCache(key), nil
 	}
 
@@ -584,7 +584,7 @@ func TestCacheManagerStats(t *testing.T) {
 
 // TestCacheManagerThreadSafety tests concurrent access to manager.
 func TestCacheManagerThreadSafety(t *testing.T) {
-	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		time.Sleep(10 * time.Millisecond) // Simulate slow creation
 		return newMockCache(key), nil
 	}

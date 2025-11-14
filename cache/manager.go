@@ -21,9 +21,9 @@ type ManagerStats struct {
 	IdleTTL      time.Duration // Idle timeout duration
 }
 
-// CacheConnector is a function that creates a new cache instance for a given key.
+// Connector is a function that creates a new cache instance for a given key.
 // This abstraction allows dependency injection for testing.
-type CacheConnector func(ctx context.Context, key string) (Cache, error)
+type Connector func(ctx context.Context, key string) (Cache, error)
 
 // cacheEntry represents a cache instance in the manager's LRU.
 type cacheEntry struct {
@@ -33,7 +33,9 @@ type cacheEntry struct {
 	element  *list.Element // Position in LRU list
 }
 
-// CacheManager implements the Manager interface.
+// CacheManager implements the Manager interface for multi-tenant cache instances.
+//
+//nolint:revive // CacheManager is intentional - Manager is the interface name
 type CacheManager struct {
 	mu     sync.RWMutex
 	caches map[string]*cacheEntry
@@ -42,7 +44,7 @@ type CacheManager struct {
 
 	maxSize   int
 	idleTTL   time.Duration
-	connector CacheConnector
+	connector Connector
 
 	// Statistics
 	totalCreated int
@@ -73,7 +75,7 @@ func DefaultManagerConfig() ManagerConfig {
 
 // NewCacheManager creates a new cache manager with the given configuration.
 // The connector function is called to create new cache instances on demand.
-func NewCacheManager(config ManagerConfig, connector CacheConnector) (*CacheManager, error) {
+func NewCacheManager(config ManagerConfig, connector Connector) (*CacheManager, error) {
 	if connector == nil {
 		return nil, fmt.Errorf("connector function is required")
 	}
@@ -193,7 +195,7 @@ func (m *CacheManager) evictIfNeeded() {
 	}
 
 	entry := oldest.Value.(*cacheEntry)
-	m.removeLocked(entry.key)
+	_ = m.removeLocked(entry.key) // Ignore error during eviction
 	m.evictions++
 }
 
