@@ -3,24 +3,32 @@ package app
 import (
 	"context"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// ResourceProvider abstracts database and messaging access with support for
+const (
+	testMessage            = "(optional)"
+	testMessageMultiTenant = "(multi-tenant mode requires per-tenant configuration)"
+)
+
+// ResourceProvider abstracts database, messaging, and cache access with support for
 // both single-tenant and multi-tenant deployment modes.
 type ResourceProvider interface {
 	GetDB(ctx context.Context) (database.Interface, error)
 	GetMessaging(ctx context.Context) (messaging.AMQPClient, error)
+	GetCache(ctx context.Context) (cache.Cache, error)
 }
 
-// SingleTenantResourceProvider provides database and messaging resources
+// SingleTenantResourceProvider provides database, messaging, and cache resources
 // for single-tenant deployments using a fixed empty key.
 type SingleTenantResourceProvider struct {
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	cacheManager     *cache.CacheManager
 	declarations     *messaging.Declarations
 }
 
@@ -28,11 +36,13 @@ type SingleTenantResourceProvider struct {
 func NewSingleTenantResourceProvider(
 	dbManager *database.DbManager,
 	messagingManager *messaging.Manager,
+	cacheManager *cache.CacheManager,
 	declarations *messaging.Declarations,
 ) *SingleTenantResourceProvider {
 	return &SingleTenantResourceProvider{
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
+		cacheManager:     cacheManager,
 		declarations:     declarations,
 	}
 }
@@ -43,7 +53,7 @@ func (p *SingleTenantResourceProvider) GetDB(ctx context.Context) (database.Inte
 		return nil, &config.ConfigError{
 			Category: "not_configured",
 			Field:    "database",
-			Message:  "(optional)",
+			Message:  testMessage,
 			Action:   "to enable: set DATABASE_HOST env var or add database.host to config.yaml",
 		}
 	}
@@ -57,7 +67,7 @@ func (p *SingleTenantResourceProvider) GetMessaging(ctx context.Context) (messag
 		return nil, &config.ConfigError{
 			Category: "not_configured",
 			Field:    "messaging",
-			Message:  "(optional)",
+			Message:  testMessage,
 			Action:   "to enable: set MESSAGING_BROKER_URL env var or add messaging.broker.url to config.yaml",
 		}
 	}
@@ -72,16 +82,30 @@ func (p *SingleTenantResourceProvider) GetMessaging(ctx context.Context) (messag
 	return p.messagingManager.GetPublisher(ctx, "")
 }
 
+// GetCache returns the cache instance for single-tenant mode.
+func (p *SingleTenantResourceProvider) GetCache(ctx context.Context) (cache.Cache, error) {
+	if p.cacheManager == nil {
+		return nil, &config.ConfigError{
+			Category: "not_configured",
+			Field:    "cache",
+			Message:  testMessage,
+			Action:   "to enable: set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
+		}
+	}
+	return p.cacheManager.Get(ctx, "")
+}
+
 // SetDeclarations updates the declaration store used for ensuring consumers.
 func (p *SingleTenantResourceProvider) SetDeclarations(declarations *messaging.Declarations) {
 	p.declarations = declarations
 }
 
-// MultiTenantResourceProvider provides database and messaging resources
+// MultiTenantResourceProvider provides database, messaging, and cache resources
 // for multi-tenant deployments using tenant ID from context.
 type MultiTenantResourceProvider struct {
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	cacheManager     *cache.CacheManager
 	declarations     *messaging.Declarations
 }
 
@@ -89,11 +113,13 @@ type MultiTenantResourceProvider struct {
 func NewMultiTenantResourceProvider(
 	dbManager *database.DbManager,
 	messagingManager *messaging.Manager,
+	cacheManager *cache.CacheManager,
 	declarations *messaging.Declarations,
 ) *MultiTenantResourceProvider {
 	return &MultiTenantResourceProvider{
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
+		cacheManager:     cacheManager,
 		declarations:     declarations,
 	}
 }
@@ -104,7 +130,7 @@ func (p *MultiTenantResourceProvider) GetDB(ctx context.Context) (database.Inter
 		return nil, &config.ConfigError{
 			Category: "not_configured",
 			Field:    "database",
-			Message:  "(multi-tenant mode requires per-tenant configuration)",
+			Message:  testMessageMultiTenant,
 			Action:   "configure multitenant.tenants.<tenant_id>.database sections",
 		}
 	}
@@ -124,7 +150,7 @@ func (p *MultiTenantResourceProvider) GetMessaging(ctx context.Context) (messagi
 		return nil, &config.ConfigError{
 			Category: "not_configured",
 			Field:    "messaging",
-			Message:  "(multi-tenant mode requires per-tenant configuration)",
+			Message:  testMessageMultiTenant,
 			Action:   "configure multitenant.tenants.<tenant_id>.messaging sections",
 		}
 	}
@@ -142,6 +168,25 @@ func (p *MultiTenantResourceProvider) GetMessaging(ctx context.Context) (messagi
 	}
 
 	return p.messagingManager.GetPublisher(ctx, tenantID)
+}
+
+// GetCache returns the cache instance for the tenant specified in context.
+func (p *MultiTenantResourceProvider) GetCache(ctx context.Context) (cache.Cache, error) {
+	if p.cacheManager == nil {
+		return nil, &config.ConfigError{
+			Category: "not_configured",
+			Field:    "cache",
+			Message:  testMessageMultiTenant,
+			Action:   "configure multitenant.tenants.<tenant_id>.cache sections",
+		}
+	}
+
+	tenantID, ok := multitenant.GetTenant(ctx)
+	if !ok {
+		return nil, ErrNoTenantInContext
+	}
+
+	return p.cacheManager.Get(ctx, tenantID)
 }
 
 // SetDeclarations updates the declaration store used for ensuring consumers.

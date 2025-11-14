@@ -3,6 +3,7 @@ package app
 import (
 	"time"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -54,6 +55,25 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 	return messaging.ManagerOptions{
 		MaxPublishers: 10,               // Small fixed size for single-tenant
 		IdleTTL:       30 * time.Minute, // Moderate TTL for single-tenant
+	}
+}
+
+// BuildCacheOptions creates cache manager options based on deployment mode.
+// Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
+// Single-tenant mode uses smaller fixed limits and longer TTL.
+func (b *ManagerConfigBuilder) BuildCacheOptions() cache.ManagerConfig {
+	if b.multiTenantEnabled {
+		return cache.ManagerConfig{
+			MaxSize:         b.tenantLimit,  // Use configured tenant limit
+			IdleTTL:         15 * time.Minute, // Moderate TTL for multi-tenant
+			CleanupInterval: 5 * time.Minute,  // Cleanup interval
+		}
+	}
+
+	return cache.ManagerConfig{
+		MaxSize:         10,            // Small fixed size for single-tenant
+		IdleTTL:         1 * time.Hour, // Longer TTL for single-tenant
+		CleanupInterval: 15 * time.Minute, // Less frequent cleanup
 	}
 }
 
@@ -124,6 +144,31 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	msgOptions := f.configBuilder.BuildMessagingOptions()
 
 	return messaging.NewMessagingManager(resourceSource, f.logger, msgOptions, clientFactory)
+}
+
+// CreateCacheManager creates a cache manager using the resolved factory
+// and appropriate configuration options for the deployment mode.
+func (f *ResourceManagerFactory) CreateCacheManager(
+	resourceSource TenantStore,
+) *cache.CacheManager {
+	if f.configBuilder.IsMultiTenant() {
+		f.logger.Info().
+			Int("tenant_limit", f.configBuilder.TenantLimit()).
+			Msg("Creating cache manager for multi-tenant mode")
+	} else {
+		f.logger.Info().Msg("Creating cache manager for single-tenant mode")
+	}
+
+	cacheConnector := f.factoryResolver.CacheConnector()
+	cacheOptions := f.configBuilder.BuildCacheOptions()
+
+	manager, err := cache.NewCacheManager(cacheOptions, cacheConnector)
+	if err != nil {
+		f.logger.Warn().Err(err).Msg("Failed to create cache manager, cache will be disabled")
+		return nil
+	}
+
+	return manager
 }
 
 // LogFactoryInfo logs information about which factories are being used.

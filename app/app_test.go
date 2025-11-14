@@ -408,7 +408,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		},
 	)
 
-	resourceProvider := NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
+	resourceProvider := NewSingleTenantResourceProvider(dbManager, messagingManager, nil, nil)
 
 	deps := &ModuleDeps{
 		Logger: log,
@@ -462,10 +462,18 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 }
 
 func (f *testAppFixture) rebuildClosersAndHealth() {
-	f.app.healthProbes = createHealthProbesForManagers(f.app.dbManager, f.app.messagingManager, f.app.logger)
+	f.app.healthProbes = createHealthProbesForManagers(f.app.dbManager, f.app.messagingManager, f.app.cacheManager, f.app.logger)
 	f.app.closers = nil
-	f.app.registerCloser("database manager", f.app.dbManager)
-	f.app.registerCloser("messaging manager", f.app.messagingManager)
+	// Register closers with explicit nil checks to avoid typed nil interface issues
+	if f.app.dbManager != nil {
+		f.app.registerCloser("database manager", f.app.dbManager)
+	}
+	if f.app.messagingManager != nil {
+		f.app.registerCloser("messaging manager", f.app.messagingManager)
+	}
+	if f.app.cacheManager != nil {
+		f.app.registerCloser("cache manager", f.app.cacheManager)
+	}
 }
 
 func withSignalHandler(handler SignalHandler) fixtureOption {

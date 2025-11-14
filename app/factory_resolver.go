@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -44,6 +47,26 @@ func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
 	}
 }
 
+// CacheConnector returns the appropriate cache connector function.
+// If no custom connector is provided in options, returns a function that creates Redis clients.
+func (f *FactoryResolver) CacheConnector() cache.Connector {
+	if f.opts != nil && f.opts.CacheConnector != nil {
+		return f.opts.CacheConnector
+	}
+
+	// Default connector creates Redis cache instances
+	return func(ctx context.Context, key string) (cache.Cache, error) {
+		// For now, return nil - will be implemented when config is available
+		// The cache manager handles nil gracefully (cache disabled)
+		return nil, &config.ConfigError{
+			Category: "not_configured",
+			Field:    "cache",
+			Message:  "(cache not configured for this tenant)",
+			Action:   "configure cache settings in config file",
+		}
+	}
+}
+
 // ResourceSource returns the appropriate tenant resource source.
 // If no custom resource source is provided in options, creates one from config.
 func (f *FactoryResolver) ResourceSource(cfg *config.Config) TenantStore {
@@ -62,5 +85,6 @@ func (f *FactoryResolver) HasCustomFactories() bool {
 
 	return f.opts.DatabaseConnector != nil ||
 		f.opts.MessagingClientFactory != nil ||
+		f.opts.CacheConnector != nil ||
 		f.opts.ResourceSource != nil
 }

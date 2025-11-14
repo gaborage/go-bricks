@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -227,5 +228,9 @@ func (u *unknownResourceProvider) GetDB(_ context.Context) (database.Interface, 
 }
 
 func (u *unknownResourceProvider) GetMessaging(_ context.Context) (messaging.AMQPClient, error) {
+	return nil, nil
+}
+
+func (u *unknownResourceProvider) GetCache(_ context.Context) (cache.Cache, error) {
 	return nil, nil
 }

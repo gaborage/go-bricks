@@ -27,7 +27,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
 		declarations := &messaging.Declarations{}
 
-		provider := NewSingleTenantResourceProvider(dbManager, msgManager, declarations)
+		provider := NewSingleTenantResourceProvider(dbManager, msgManager, nil, declarations)
 
 		assert.NotNil(t, provider)
 		assert.Equal(t, dbManager, provider.dbManager)
@@ -38,7 +38,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetDB success", func(t *testing.T) {
 		mockDB := &testmocks.MockDatabase{}
 		dbManager := createTestDbManagerWithMock(t, mockDB)
-		provider := NewSingleTenantResourceProvider(dbManager, nil, nil)
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -47,7 +47,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	})
 
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -59,7 +59,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with database manager error", func(t *testing.T) {
 		dbManager := createTestDbManagerWithError(t, errors.New("connection failed"))
-		provider := NewSingleTenantResourceProvider(dbManager, nil, nil)
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -71,7 +71,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetMessaging success without declarations", func(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
-		provider := NewSingleTenantResourceProvider(nil, msgManager, nil)
+		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -83,7 +83,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
 		declarations := &messaging.Declarations{}
-		provider := NewSingleTenantResourceProvider(nil, msgManager, declarations)
+		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, declarations)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -92,7 +92,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	})
 
 	t.Run("GetMessaging with nil messaging manager", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -110,7 +110,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on the nil manager case which covers the main error path
 
 	t.Run("SetDeclarations", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 		newDeclarations := &messaging.Declarations{}
 
 		provider.SetDeclarations(newDeclarations)
@@ -125,7 +125,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
 		declarations := &messaging.Declarations{}
 
-		provider := NewMultiTenantResourceProvider(dbManager, msgManager, declarations)
+		provider := NewMultiTenantResourceProvider(dbManager, msgManager, nil, declarations)
 
 		assert.NotNil(t, provider)
 		assert.Equal(t, dbManager, provider.dbManager)
@@ -137,7 +137,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on testing error paths which are more critical
 
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
 		db, err := provider.GetDB(ctx)
@@ -150,7 +150,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with no tenant in context", func(t *testing.T) {
 		dbManager := createTestDbManager(t)
-		provider := NewMultiTenantResourceProvider(dbManager, nil, nil)
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -161,7 +161,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with empty tenant in context", func(t *testing.T) {
 		dbManager := createTestDbManager(t)
-		provider := NewMultiTenantResourceProvider(dbManager, nil, nil)
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
 		db, err := provider.GetDB(ctx)
@@ -178,7 +178,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on testing error paths which are more critical
 
 	t.Run("GetMessaging with nil messaging manager", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
 		client, err := provider.GetMessaging(ctx)
@@ -191,7 +191,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging with no tenant in context", func(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
-		provider := NewMultiTenantResourceProvider(nil, msgManager, nil)
+		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -202,7 +202,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging with empty tenant in context", func(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
-		provider := NewMultiTenantResourceProvider(nil, msgManager, nil)
+		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
 		client, err := provider.GetMessaging(ctx)
@@ -220,7 +220,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on the nil manager case which covers the main error path
 
 	t.Run("SetDeclarations", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		newDeclarations := &messaging.Declarations{}
 
 		provider.SetDeclarations(newDeclarations)
@@ -231,12 +231,12 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 func TestResourceProviderInterface(t *testing.T) {
 	t.Run("SingleTenantResourceProvider implements ResourceProvider", func(t *testing.T) {
-		var provider ResourceProvider = NewSingleTenantResourceProvider(nil, nil, nil)
+		var provider ResourceProvider = NewSingleTenantResourceProvider(nil, nil, nil, nil)
 		assert.NotNil(t, provider)
 	})
 
 	t.Run("MultiTenantResourceProvider implements ResourceProvider", func(t *testing.T) {
-		var provider ResourceProvider = NewMultiTenantResourceProvider(nil, nil, nil)
+		var provider ResourceProvider = NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		assert.NotNil(t, provider)
 	})
 }

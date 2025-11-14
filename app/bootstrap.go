@@ -45,13 +45,14 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 	// Create managers using the factory
 	dbManager := factory.CreateDatabaseManager(resourceSource)
 	messagingManager := factory.CreateMessagingManager(resourceSource)
+	cacheManager := factory.CreateCacheManager(resourceSource)
 
 	// Create appropriate resource provider based on mode
 	var provider ResourceProvider
 	if b.cfg.Multitenant.Enabled {
-		provider = NewMultiTenantResourceProvider(dbManager, messagingManager, nil)
+		provider = NewMultiTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
 	} else {
-		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, nil)
+		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
 	}
 
 	// Initialize observability provider (no-op if disabled)
@@ -70,12 +71,14 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 		MeterProvider: obsProvider.MeterProvider(),
 		GetDB:         provider.GetDB,
 		GetMessaging:  provider.GetMessaging,
+		GetCache:      provider.GetCache,
 	}
 
 	return &dependencyBundle{
 		deps:             deps,
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
+		cacheManager:     cacheManager,
 		provider:         provider,
 		observability:    obsProvider,
 	}
