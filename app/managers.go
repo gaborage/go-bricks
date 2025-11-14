@@ -64,15 +64,15 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 func (b *ManagerConfigBuilder) BuildCacheOptions() cache.ManagerConfig {
 	if b.multiTenantEnabled {
 		return cache.ManagerConfig{
-			MaxSize:         b.tenantLimit,  // Use configured tenant limit
+			MaxSize:         b.tenantLimit,    // Use configured tenant limit
 			IdleTTL:         15 * time.Minute, // Moderate TTL for multi-tenant
 			CleanupInterval: 5 * time.Minute,  // Cleanup interval
 		}
 	}
 
 	return cache.ManagerConfig{
-		MaxSize:         10,            // Small fixed size for single-tenant
-		IdleTTL:         1 * time.Hour, // Longer TTL for single-tenant
+		MaxSize:         10,               // Small fixed size for single-tenant
+		IdleTTL:         1 * time.Hour,    // Longer TTL for single-tenant
 		CleanupInterval: 15 * time.Minute, // Less frequent cleanup
 	}
 }
@@ -149,7 +149,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 // CreateCacheManager creates a cache manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
 func (f *ResourceManagerFactory) CreateCacheManager(
-	resourceSource TenantStore,
+	_ TenantStore,
 ) *cache.CacheManager {
 	if f.configBuilder.IsMultiTenant() {
 		f.logger.Info().

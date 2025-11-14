@@ -55,7 +55,7 @@ func (f *FactoryResolver) CacheConnector() cache.Connector {
 	}
 
 	// Default connector creates Redis cache instances
-	return func(ctx context.Context, key string) (cache.Cache, error) {
+	return func(_ context.Context, _ string) (cache.Cache, error) {
 		// For now, return nil - will be implemented when config is available
 		// The cache manager handles nil gracefully (cache disabled)
 		return nil, &config.ConfigError{
