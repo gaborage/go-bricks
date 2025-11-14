@@ -35,10 +35,10 @@ type cacheEntry struct {
 
 // CacheManager implements the Manager interface.
 type CacheManager struct {
-	mu    sync.RWMutex
+	mu     sync.RWMutex
 	caches map[string]*cacheEntry
-	lru   *list.List
-	sfg   singleflight.Group
+	lru    *list.List
+	sfg    singleflight.Group
 
 	maxSize   int
 	idleTTL   time.Duration
@@ -51,7 +51,7 @@ type CacheManager struct {
 	errors       int
 
 	// Lifecycle
-	closeCh chan struct{}
+	closeCh   chan struct{}
 	closeOnce sync.Once
 }
 
