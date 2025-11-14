@@ -57,6 +57,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("log config: %w", err)
 	}
 
+	if err := validateCache(&cfg.Cache); err != nil {
+		return fmt.Errorf("cache config: %w", err)
+	}
+
 	return nil
 }
 
@@ -408,6 +412,60 @@ func validateLog(cfg *LogConfig) error {
 	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
 	if !slices.Contains(validLevels, cfg.Level) {
 		return NewInvalidFieldError("log.level", fmt.Sprintf(errNotSupportedFmt, cfg.Level), validLevels)
+	}
+
+	return nil
+}
+
+// validateCache validates cache configuration.
+// Returns nil if cache is disabled or if all settings are valid.
+func validateCache(cfg *CacheConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+
+	// Validate cache type
+	validTypes := []string{"redis"}
+	if !slices.Contains(validTypes, cfg.Type) {
+		return NewInvalidFieldError("cache.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
+	}
+
+	// Validate Redis-specific settings
+	if cfg.Type == "redis" {
+		return validateRedisCache(&cfg.Redis)
+	}
+
+	return nil
+}
+
+// validateRedisCache validates Redis-specific cache configuration.
+func validateRedisCache(cfg *RedisConfig) error {
+	if cfg.Host == "" {
+		return NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
+	}
+
+	if cfg.Port <= 0 || cfg.Port > 65535 {
+		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf("%d is out of valid range", cfg.Port), []string{portRange})
+	}
+
+	if cfg.Database < 0 || cfg.Database > 15 {
+		return NewValidationError("cache.redis.database", "must be between 0 and 15")
+	}
+
+	if cfg.PoolSize <= 0 {
+		return NewValidationError("cache.redis.poolsize", errMustBePositive)
+	}
+
+	if cfg.DialTimeout < 0 {
+		return NewValidationError("cache.redis.dialtimeout", errMustBeNonNegative)
+	}
+
+	if cfg.ReadTimeout < -1 {
+		return NewValidationError("cache.redis.readtimeout", "must be >= -1")
+	}
+
+	if cfg.WriteTimeout < -1 {
+		return NewValidationError("cache.redis.writetimeout", "must be >= -1")
 	}
 
 	return nil

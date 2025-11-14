@@ -15,6 +15,7 @@ type Config struct {
 	App         AppConfig         `koanf:"app" json:"app" yaml:"app" toml:"app" mapstructure:"app"`
 	Server      ServerConfig      `koanf:"server" json:"server" yaml:"server" toml:"server" mapstructure:"server"`
 	Database    DatabaseConfig    `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+	Cache       CacheConfig       `koanf:"cache" json:"cache" yaml:"cache" toml:"cache" mapstructure:"cache"`
 	Log         LogConfig         `koanf:"log" json:"log" yaml:"log" toml:"log" mapstructure:"log"`
 	Messaging   MessagingConfig   `koanf:"messaging" json:"messaging" yaml:"messaging" toml:"messaging" mapstructure:"messaging"`
 	Multitenant MultitenantConfig `koanf:"multitenant" json:"multitenant" yaml:"multitenant" toml:"multitenant" mapstructure:"multitenant"`
@@ -185,6 +186,28 @@ type AuthConfig struct {
 // ConcernConfig holds MongoDB write concern settings.
 type ConcernConfig struct {
 	Write string `koanf:"write" json:"write" yaml:"write" toml:"write" mapstructure:"write"`
+}
+
+// CacheConfig holds cache backend settings.
+type CacheConfig struct {
+	Enabled bool        `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+	Type    string      `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // redis
+	Redis   RedisConfig `koanf:"redis" json:"redis" yaml:"redis" toml:"redis" mapstructure:"redis"`
+}
+
+// RedisConfig holds Redis-specific cache settings.
+type RedisConfig struct {
+	Host            string        `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
+	Port            int           `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
+	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
+	Database        int           `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+	PoolSize        int           `koanf:"poolsize" json:"poolsize" yaml:"poolsize" toml:"poolsize" mapstructure:"poolsize"`
+	DialTimeout     time.Duration `koanf:"dialtimeout" json:"dialtimeout" yaml:"dialtimeout" toml:"dialtimeout" mapstructure:"dialtimeout"`
+	ReadTimeout     time.Duration `koanf:"readtimeout" json:"readtimeout" yaml:"readtimeout" toml:"readtimeout" mapstructure:"readtimeout"`
+	WriteTimeout    time.Duration `koanf:"writetimeout" json:"writetimeout" yaml:"writetimeout" toml:"writetimeout" mapstructure:"writetimeout"`
+	MaxRetries      int           `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
+	MinRetryBackoff time.Duration `koanf:"minretrybackoff" json:"minretrybackoff" yaml:"minretrybackoff" toml:"minretrybackoff" mapstructure:"minretrybackoff"`
+	MaxRetryBackoff time.Duration `koanf:"maxretrybackoff" json:"maxretrybackoff" yaml:"maxretrybackoff" toml:"maxretrybackoff" mapstructure:"maxretrybackoff"`
 }
 
 // LogConfig holds logging settings.
