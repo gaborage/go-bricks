@@ -87,6 +87,14 @@ func (f *FactoryResolver) HasCustomFactories() bool {
 // from the resourceSource for each tenant/key and creates Redis cache instances.
 func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Connector {
 	return func(ctx context.Context, key string) (cache.Cache, error) {
+		if resourceSource == nil {
+			err := fmt.Errorf("tenant resource source is nil for key '%s'", key)
+			log.Error().
+				Str("key", key).
+				Msg("Cannot resolve cache configuration: nil resource source")
+			return nil, err
+		}
+
 		// Get cache configuration for this tenant/key
 		cacheCfg, err := resourceSource.CacheConfig(ctx, key)
 		if err != nil {
@@ -99,8 +107,9 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Defensive validation: ensure cacheCfg is not nil
 		if cacheCfg == nil {
-			err := config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
+			err := fmt.Errorf("cache configuration is nil for key '%s'", key)
 			log.Error().
+				Err(err).
 				Str("key", key).
 				Msg("Cache configuration unexpectedly nil")
 			return nil, err
