@@ -343,6 +343,17 @@ func TestMustMarshal(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, original, result)
 	})
+
+	t.Run("Panic", func(t *testing.T) {
+		// Channels are not supported by CBOR
+		type UnsupportedStruct struct {
+			Ch chan int
+		}
+
+		assert.Panics(t, func() {
+			_ = MustMarshal(UnsupportedStruct{Ch: make(chan int)})
+		})
+	})
 }
 
 func TestMustUnmarshal(t *testing.T) {
@@ -379,4 +390,18 @@ func TestInvalidData(t *testing.T) {
 		_, err := Unmarshal[SimpleStruct](emptyData)
 		assert.Error(t, err)
 	})
+}
+
+// TestMarshalError tests that Marshal returns an error for unsupported types.
+func TestMarshalError(t *testing.T) {
+	// Channels are not supported by CBOR
+	type UnsupportedStruct struct {
+		Ch chan int
+	}
+
+	data, err := Marshal(UnsupportedStruct{Ch: make(chan int)})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cbor marshal failed")
+	assert.Nil(t, data)
 }

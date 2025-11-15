@@ -23,8 +23,8 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		assert.NotNil(t, connector)
 
 		// Default connector should return "not configured" error
-		cache, err := connector(context.Background(), testCacheKey)
-		assert.Nil(t, cache)
+		c, err := connector(context.Background(), testCacheKey)
+		assert.Nil(t, c)
 		assert.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
 	})
@@ -40,8 +40,8 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		assert.NotNil(t, connector)
 
 		// Default connector should return "not configured" error
-		cache, err := connector(context.Background(), testCacheKey)
-		assert.Nil(t, cache)
+		c, err := connector(context.Background(), testCacheKey)
+		assert.Nil(t, c)
 		assert.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
 	})
@@ -51,7 +51,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		expectedCache := &mockCacheInstance{}
 
 		opts := &Options{
-			CacheConnector: func(ctx context.Context, key string) (cache.Cache, error) {
+			CacheConnector: func(_ context.Context, key string) (cache.Cache, error) {
 				customConnectorCalled = true
 				assert.Equal(t, testCacheKey, key)
 				return expectedCache, nil
@@ -74,7 +74,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		expectedError := assert.AnError
 
 		opts := &Options{
-			CacheConnector: func(ctx context.Context, key string) (cache.Cache, error) {
+			CacheConnector: func(_ context.Context, _ string) (cache.Cache, error) {
 				return nil, expectedError
 			},
 		}
@@ -82,8 +82,8 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		resolver := NewFactoryResolver(opts)
 		connector := resolver.CacheConnector()
 
-		cache, err := connector(context.Background(), testCacheKey)
-		assert.Nil(t, cache)
+		c, err := connector(context.Background(), testCacheKey)
+		assert.Nil(t, c)
 		assert.Equal(t, expectedError, err)
 	})
 
@@ -114,7 +114,7 @@ func TestFactoryResolverHasCustomFactories(t *testing.T) {
 
 	t.Run("returns true when cache connector is provided", func(t *testing.T) {
 		opts := &Options{
-			CacheConnector: func(ctx context.Context, key string) (cache.Cache, error) {
+			CacheConnector: func(_ context.Context, _ string) (cache.Cache, error) {
 				return nil, nil
 			},
 		}
@@ -127,27 +127,27 @@ func TestFactoryResolverHasCustomFactories(t *testing.T) {
 // mockCacheInstance is a minimal mock implementation of cache.Cache for testing
 type mockCacheInstance struct{}
 
-func (m *mockCacheInstance) Get(ctx context.Context, key string) ([]byte, error) {
+func (m *mockCacheInstance) Get(_ context.Context, _ string) ([]byte, error) {
 	return nil, nil
 }
 
-func (m *mockCacheInstance) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+func (m *mockCacheInstance) Set(_ context.Context, _ string, _ []byte, _ time.Duration) error {
 	return nil
 }
 
-func (m *mockCacheInstance) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) ([]byte, bool, error) {
+func (m *mockCacheInstance) GetOrSet(_ context.Context, _ string, value []byte, _ time.Duration) (data []byte, loaded bool, err error) {
 	return value, true, nil
 }
 
-func (m *mockCacheInstance) CompareAndSet(ctx context.Context, key string, expected, value []byte, ttl time.Duration) (bool, error) {
+func (m *mockCacheInstance) CompareAndSet(_ context.Context, _ string, _, _ []byte, _ time.Duration) (bool, error) {
 	return true, nil
 }
 
-func (m *mockCacheInstance) Delete(ctx context.Context, key string) error {
+func (m *mockCacheInstance) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
-func (m *mockCacheInstance) Health(ctx context.Context) error {
+func (m *mockCacheInstance) Health(_ context.Context) error {
 	return nil
 }
 
