@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -95,4 +96,9 @@ type ModuleDeps struct {
 	// In single-tenant mode, returns the global messaging client.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific client.
 	GetMessaging func(_ context.Context) (messaging.AMQPClient, error)
+
+	// GetCache returns a cache instance for the current context.
+	// In single-tenant mode, returns the global cache instance.
+	// In multi-tenant mode, resolves tenant from context and returns tenant-specific cache.
+	GetCache func(_ context.Context) (cache.Cache, error)
 }

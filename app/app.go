@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -62,6 +63,7 @@ type App struct {
 	// Unified managers
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	cacheManager     *cache.CacheManager
 	resourceProvider ResourceProvider
 
 	// Messaging declarations for manager usage
@@ -74,7 +76,7 @@ type App struct {
 }
 
 // createHealthProbesForManagers creates health probes for the new managers
-func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, log logger.Logger) []HealthProbe {
+func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, cacheManager *cache.CacheManager, log logger.Logger) []HealthProbe {
 	var probes []HealthProbe
 
 	if dbManager != nil {
@@ -83,6 +85,10 @@ func createHealthProbesForManagers(dbManager *database.DbManager, messagingManag
 
 	if messagingManager != nil {
 		probes = append(probes, messagingManagerHealthProbe(messagingManager, log))
+	}
+
+	if cacheManager != nil {
+		probes = append(probes, cacheManagerHealthProbe(cacheManager, log))
 	}
 
 	return probes

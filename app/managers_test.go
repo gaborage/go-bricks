@@ -1,10 +1,24 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 	"github.com/stretchr/testify/assert"
+)
+
+const (
+	zeroLimitMultiTenantTest     = "multi-tenant with zero tenant limit"
+	negativeLimitMultiTenantTest = "multi-tenant with negative tenant limit"
+	largeLimitTenantTest         = "large tenant limit"
 )
 
 func TestNewManagerConfigBuilder(t *testing.T) {
@@ -61,7 +75,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 		assert.Equal(t, 30*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("multi-tenant with zero tenant limit", func(t *testing.T) {
+	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 0)
 
 		options := builder.BuildDatabaseOptions()
@@ -70,7 +84,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 		assert.Equal(t, 30*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("multi-tenant with negative tenant limit", func(t *testing.T) {
+	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -5)
 
 		options := builder.BuildDatabaseOptions()
@@ -79,7 +93,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 		assert.Equal(t, 30*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("large tenant limit", func(t *testing.T) {
+	t.Run(largeLimitTenantTest, func(t *testing.T) {
 		largeLimit := 10000
 		builder := NewManagerConfigBuilder(true, largeLimit)
 
@@ -110,7 +124,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		assert.Equal(t, 5*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("multi-tenant with zero tenant limit", func(t *testing.T) {
+	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 0)
 
 		options := builder.BuildMessagingOptions()
@@ -119,7 +133,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		assert.Equal(t, 5*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("multi-tenant with negative tenant limit", func(t *testing.T) {
+	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -3)
 
 		options := builder.BuildMessagingOptions()
@@ -128,7 +142,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		assert.Equal(t, 5*time.Minute, options.IdleTTL)
 	})
 
-	t.Run("large tenant limit", func(t *testing.T) {
+	t.Run(largeLimitTenantTest, func(t *testing.T) {
 		largeLimit := 5000
 		builder := NewManagerConfigBuilder(true, largeLimit)
 
@@ -171,6 +185,60 @@ func TestManagerConfigBuilderTenantLimit(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -20)
 
 		assert.Equal(t, -20, builder.TenantLimit())
+	})
+}
+
+func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
+	t.Run("single-tenant cache options", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+
+		options := builder.BuildCacheOptions()
+
+		assert.Equal(t, 10, options.MaxSize)
+		assert.Equal(t, 1*time.Hour, options.IdleTTL)
+		assert.Equal(t, 15*time.Minute, options.CleanupInterval)
+	})
+
+	t.Run("multi-tenant cache options", func(t *testing.T) {
+		tenantLimit := 250
+		builder := NewManagerConfigBuilder(true, tenantLimit)
+
+		options := builder.BuildCacheOptions()
+
+		assert.Equal(t, tenantLimit, options.MaxSize)
+		assert.Equal(t, 15*time.Minute, options.IdleTTL)
+		assert.Equal(t, 5*time.Minute, options.CleanupInterval)
+	})
+
+	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 0)
+
+		options := builder.BuildCacheOptions()
+
+		assert.Equal(t, 0, options.MaxSize)
+		assert.Equal(t, 15*time.Minute, options.IdleTTL)
+		assert.Equal(t, 5*time.Minute, options.CleanupInterval)
+	})
+
+	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, -3)
+
+		options := builder.BuildCacheOptions()
+
+		assert.Equal(t, -3, options.MaxSize)
+		assert.Equal(t, 15*time.Minute, options.IdleTTL)
+		assert.Equal(t, 5*time.Minute, options.CleanupInterval)
+	})
+
+	t.Run(largeLimitTenantTest, func(t *testing.T) {
+		largeLimit := 5000
+		builder := NewManagerConfigBuilder(true, largeLimit)
+
+		options := builder.BuildCacheOptions()
+
+		assert.Equal(t, largeLimit, options.MaxSize)
+		assert.Equal(t, 15*time.Minute, options.IdleTTL)
+		assert.Equal(t, 5*time.Minute, options.CleanupInterval)
 	})
 }
 
@@ -266,5 +334,188 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 
 		// But tenantLimit getter should still return the configured value
 		assert.NotEqual(t, builder1.TenantLimit(), builder2.TenantLimit())
+	})
+}
+
+func TestResourceManagerFactoryCreateDatabaseManager(t *testing.T) {
+	t.Run("single-tenant creates database manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		cfg := &config.Config{
+			Database: config.DatabaseConfig{
+				Type: "postgresql",
+				Host: "localhost",
+				Port: 5432,
+			},
+		}
+		resourceSource := config.NewTenantStore(cfg)
+
+		manager := factory.CreateDatabaseManager(resourceSource)
+
+		assert.NotNil(t, manager)
+	})
+
+	t.Run("multi-tenant creates database manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(true, 100)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		cfg := &config.Config{
+			Database: config.DatabaseConfig{
+				Type: "postgresql",
+				Host: "localhost",
+				Port: 5432,
+			},
+		}
+		resourceSource := config.NewTenantStore(cfg)
+
+		manager := factory.CreateDatabaseManager(resourceSource)
+
+		assert.NotNil(t, manager)
+	})
+}
+
+func TestResourceManagerFactoryCreateMessagingManager(t *testing.T) {
+	t.Run("single-tenant creates messaging manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		cfg := &config.Config{
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
+			},
+		}
+		resourceSource := config.NewTenantStore(cfg)
+
+		manager := factory.CreateMessagingManager(resourceSource)
+
+		assert.NotNil(t, manager)
+	})
+
+	t.Run("multi-tenant creates messaging manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(true, 100)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		cfg := &config.Config{
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
+			},
+		}
+		resourceSource := config.NewTenantStore(cfg)
+
+		manager := factory.CreateMessagingManager(resourceSource)
+
+		assert.NotNil(t, manager)
+	})
+}
+
+func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
+	t.Run("single-tenant creates cache manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		manager := factory.CreateCacheManager(nil)
+
+		assert.NotNil(t, manager)
+	})
+
+	t.Run("multi-tenant creates cache manager", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(true, 100)
+		factoryResolver := createTestFactoryResolver(t)
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		manager := factory.CreateCacheManager(nil)
+
+		assert.NotNil(t, manager)
+	})
+
+	t.Run("creates cache manager with default connector", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := NewFactoryResolver(&Options{
+			CacheConnector: nil, // Uses default connector from factory resolver
+		})
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		manager := factory.CreateCacheManager(nil)
+
+		// Manager creation succeeds with default connector
+		assert.NotNil(t, manager)
+	})
+
+	t.Run("creates cache manager despite connector errors", func(t *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		expectedErr := errors.New("cache connector failed")
+		factoryResolver := NewFactoryResolver(&Options{
+			CacheConnector: func(_ context.Context, _ string) (cache.Cache, error) {
+				return nil, expectedErr
+			},
+		})
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		manager := factory.CreateCacheManager(nil)
+
+		// Manager creation succeeds even with failing connector
+		assert.NotNil(t, manager)
+
+		// Verify Get() operations fail with the connector error
+		ctx := context.Background()
+		_, err := manager.Get(ctx, "test-key")
+		assert.Error(t, err)
+		assert.ErrorContains(t, err, "cache connector failed")
+	})
+}
+
+func TestResourceManagerFactoryLogFactoryInfo(t *testing.T) {
+	t.Run("logs custom factories when provided", func(_ *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := NewFactoryResolver(&Options{
+			DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
+				return &testmocks.MockDatabase{}, nil
+			},
+		})
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		// Should not panic
+		factory.LogFactoryInfo()
+	})
+
+	t.Run("logs default factories when none provided", func(_ *testing.T) {
+		configBuilder := NewManagerConfigBuilder(false, 50)
+		factoryResolver := NewFactoryResolver(&Options{})
+		log := logger.New("error", false)
+		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+		// Should not panic
+		factory.LogFactoryInfo()
+	})
+}
+
+// Helper function to create a test factory resolver with working connectors
+func createTestFactoryResolver(t *testing.T) *FactoryResolver {
+	t.Helper()
+	return NewFactoryResolver(&Options{
+		DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+		MessagingClientFactory: func(_ string, _ logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+		CacheConnector: func(_ context.Context, _ string) (cache.Cache, error) {
+			return &mockCacheInstance{}, nil
+		},
 	})
 }

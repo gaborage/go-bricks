@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -150,5 +151,55 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			}
 			return healthyStatus, stats, nil
 		},
+	}
+}
+
+// cacheManagerHealthProbe creates a health probe for the cache manager
+func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) HealthProbe {
+	if cacheManager == nil {
+		return healthProbeFunc{
+			name: "cache",
+			fn: func(context.Context) (string, map[string]any, error) {
+				return disabledStatus, map[string]any{"status": disabledStatus}, nil
+			},
+		}
+	}
+
+	return healthProbeFunc{
+		name: "cache",
+		fn: func(ctx context.Context) (string, map[string]any, error) {
+			// Get manager stats and convert to map
+			stats := convertCacheStatsToMap(cacheManager.Stats())
+
+			// Attempt to verify readiness by getting cache instance
+			_, err := cacheManager.Get(ctx, "")
+			if err != nil {
+				// Check if cache is not configured (not a failure)
+				if config.IsNotConfigured(err) {
+					stats["status"] = notConfiguredStatus
+					return notConfiguredStatus, stats, nil
+				}
+				// Other errors are actual failures
+				stats["status"] = "connection_failed"
+				return unhealthyStatus, stats, err
+			}
+
+			// Cache manager is healthy if we can get an instance
+			stats["status"] = healthyStatus
+			return healthyStatus, stats, nil
+		},
+	}
+}
+
+// convertCacheStatsToMap converts cache.ManagerStats struct to map for health probe
+func convertCacheStatsToMap(stats cache.ManagerStats) map[string]any {
+	return map[string]any{
+		"active_caches": stats.ActiveCaches,
+		"total_created": stats.TotalCreated,
+		"evictions":     stats.Evictions,
+		"idle_cleanups": stats.IdleCleanups,
+		"errors":        stats.Errors,
+		"max_size":      stats.MaxSize,
+		"idle_ttl":      stats.IdleTTL,
 	}
 }

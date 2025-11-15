@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	tenantOne   = "tenant-1"
-	tenantTwo   = "tenant-2"
-	tenantThree = "tenant-3"
+	tenantOne      = "tenant-1"
+	tenantTwo      = "tenant-2"
+	tenantThree    = "tenant-3"
+	closeFailedMsg = "close failed"
 )
 
 // mockCache implements cache.Cache for testing.
@@ -440,6 +441,45 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	assert.NotSame(t, c2, c2Again, "tenant-2 should be a new instance after cleanup")
 }
 
+// TestCacheManagerIdleCleanupWithCloseError tests that idle cleanup
+// increments error counter when Close() fails, but still cleans up the entry.
+func TestCacheManagerIdleCleanupWithCloseError(t *testing.T) {
+	closeErr := errors.New(closeFailedMsg)
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &failingCloseCache{
+			mockCache: newMockCache(key),
+			closeErr:  closeErr,
+		}, nil
+	}
+
+	config := cache.DefaultManagerConfig()
+	config.IdleTTL = 100 * time.Millisecond
+	config.CleanupInterval = 50 * time.Millisecond
+
+	mgr, err := cache.NewCacheManager(config, connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	ctx := context.Background()
+
+	// Create cache that will become idle
+	c1, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	stats := mgr.Stats()
+	assert.Equal(t, 1, stats.ActiveCaches)
+	assert.Equal(t, 0, stats.Errors, "no errors initially")
+
+	// Wait for cleanup to occur
+	time.Sleep(300 * time.Millisecond)
+
+	stats = mgr.Stats()
+	assert.Equal(t, 0, stats.ActiveCaches, "cache should be cleaned up")
+	assert.Equal(t, 1, stats.IdleCleanups, "cleanup should have occurred")
+	assert.Equal(t, 1, stats.Errors, "error should be recorded from failed close")
+}
+
 // TestCacheManagerRemove tests explicit cache removal.
 func TestCacheManagerRemove(t *testing.T) {
 	connector := func(_ context.Context, key string) (cache.Cache, error) {
@@ -510,7 +550,7 @@ func (f *failingCloseCache) Close() error {
 // TestCacheManagerRemoveWithCloseError tests that entries are removed from
 // bookkeeping even when Close() fails.
 func TestCacheManagerRemoveWithCloseError(t *testing.T) {
-	closeErr := errors.New("close failed")
+	closeErr := errors.New(closeFailedMsg)
 	connector := func(_ context.Context, key string) (cache.Cache, error) {
 		return &failingCloseCache{
 			mockCache: newMockCache(key),
@@ -535,7 +575,7 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 	// Remove cache (Close() will fail)
 	err = mgr.Remove(tenantOne)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "close failed")
+	assert.Contains(t, err.Error(), closeFailedMsg)
 
 	// CRITICAL: Entry should still be removed from bookkeeping
 	stats = mgr.Stats()

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -27,7 +28,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
 		declarations := &messaging.Declarations{}
 
-		provider := NewSingleTenantResourceProvider(dbManager, msgManager, declarations)
+		provider := NewSingleTenantResourceProvider(dbManager, msgManager, nil, declarations)
 
 		assert.NotNil(t, provider)
 		assert.Equal(t, dbManager, provider.dbManager)
@@ -38,7 +39,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetDB success", func(t *testing.T) {
 		mockDB := &testmocks.MockDatabase{}
 		dbManager := createTestDbManagerWithMock(t, mockDB)
-		provider := NewSingleTenantResourceProvider(dbManager, nil, nil)
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -47,7 +48,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	})
 
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -59,7 +60,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with database manager error", func(t *testing.T) {
 		dbManager := createTestDbManagerWithError(t, errors.New("connection failed"))
-		provider := NewSingleTenantResourceProvider(dbManager, nil, nil)
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -71,7 +72,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetMessaging success without declarations", func(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
-		provider := NewSingleTenantResourceProvider(nil, msgManager, nil)
+		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -83,7 +84,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
 		declarations := &messaging.Declarations{}
-		provider := NewSingleTenantResourceProvider(nil, msgManager, declarations)
+		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, declarations)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -92,7 +93,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	})
 
 	t.Run("GetMessaging with nil messaging manager", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -110,12 +111,33 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on the nil manager case which covers the main error path
 
 	t.Run("SetDeclarations", func(t *testing.T) {
-		provider := NewSingleTenantResourceProvider(nil, nil, nil)
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 		newDeclarations := &messaging.Declarations{}
 
 		provider.SetDeclarations(newDeclarations)
 
 		assert.Equal(t, newDeclarations, provider.declarations)
+	})
+
+	t.Run("GetCache success", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewSingleTenantResourceProvider(nil, nil, cacheManager, nil)
+
+		c, err := provider.GetCache(context.Background())
+
+		require.NoError(t, err)
+		assert.NotNil(t, c)
+	})
+
+	t.Run("GetCache with nil cache manager", func(t *testing.T) {
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
+
+		c, err := provider.GetCache(context.Background())
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cache")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, c)
 	})
 }
 
@@ -125,7 +147,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
 		declarations := &messaging.Declarations{}
 
-		provider := NewMultiTenantResourceProvider(dbManager, msgManager, declarations)
+		provider := NewMultiTenantResourceProvider(dbManager, msgManager, nil, declarations)
 
 		assert.NotNil(t, provider)
 		assert.Equal(t, dbManager, provider.dbManager)
@@ -137,7 +159,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on testing error paths which are more critical
 
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
 		db, err := provider.GetDB(ctx)
@@ -150,7 +172,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with no tenant in context", func(t *testing.T) {
 		dbManager := createTestDbManager(t)
-		provider := NewMultiTenantResourceProvider(dbManager, nil, nil)
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 
 		db, err := provider.GetDB(context.Background())
 
@@ -161,7 +183,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetDB with empty tenant in context", func(t *testing.T) {
 		dbManager := createTestDbManager(t)
-		provider := NewMultiTenantResourceProvider(dbManager, nil, nil)
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
 		db, err := provider.GetDB(ctx)
@@ -178,7 +200,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on testing error paths which are more critical
 
 	t.Run("GetMessaging with nil messaging manager", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
 		client, err := provider.GetMessaging(ctx)
@@ -191,7 +213,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging with no tenant in context", func(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
-		provider := NewMultiTenantResourceProvider(nil, msgManager, nil)
+		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 
 		client, err := provider.GetMessaging(context.Background())
 
@@ -202,7 +224,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging with empty tenant in context", func(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
-		provider := NewMultiTenantResourceProvider(nil, msgManager, nil)
+		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
 		client, err := provider.GetMessaging(ctx)
@@ -220,23 +242,69 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// For the 80/20 rule, we focus on the nil manager case which covers the main error path
 
 	t.Run("SetDeclarations", func(t *testing.T) {
-		provider := NewMultiTenantResourceProvider(nil, nil, nil)
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		newDeclarations := &messaging.Declarations{}
 
 		provider.SetDeclarations(newDeclarations)
 
 		assert.Equal(t, newDeclarations, provider.declarations)
 	})
+
+	t.Run("GetCache success", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+		ctx := multitenant.SetTenant(context.Background(), testTenantID)
+
+		c, err := provider.GetCache(ctx)
+
+		require.NoError(t, err)
+		assert.NotNil(t, c)
+	})
+
+	t.Run("GetCache with nil cache manager", func(t *testing.T) {
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
+		ctx := multitenant.SetTenant(context.Background(), testTenantID)
+
+		c, err := provider.GetCache(ctx)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cache")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, c)
+	})
+
+	t.Run("GetCache with no tenant in context", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+
+		c, err := provider.GetCache(context.Background())
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		assert.Nil(t, c)
+	})
+
+	t.Run("GetCache with empty tenant in context", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+		ctx := multitenant.SetTenant(context.Background(), "")
+
+		c, err := provider.GetCache(ctx)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		assert.Nil(t, c)
+	})
 }
 
 func TestResourceProviderInterface(t *testing.T) {
 	t.Run("SingleTenantResourceProvider implements ResourceProvider", func(t *testing.T) {
-		var provider ResourceProvider = NewSingleTenantResourceProvider(nil, nil, nil)
+		var provider ResourceProvider = NewSingleTenantResourceProvider(nil, nil, nil, nil)
 		assert.NotNil(t, provider)
 	})
 
 	t.Run("MultiTenantResourceProvider implements ResourceProvider", func(t *testing.T) {
-		var provider ResourceProvider = NewMultiTenantResourceProvider(nil, nil, nil)
+		var provider ResourceProvider = NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		assert.NotNil(t, provider)
 	})
 }
@@ -337,4 +405,25 @@ func createTestMessagingManagerWithMock(t *testing.T, mockClient messaging.AMQPC
 			return mockClient
 		},
 	)
+}
+
+func createTestCacheManager(t *testing.T) *cache.CacheManager {
+	t.Helper()
+	return createTestCacheManagerWithConnector(t, func(_ context.Context, _ string) (cache.Cache, error) {
+		return &mockCacheInstance{}, nil
+	})
+}
+
+func createTestCacheManagerWithConnector(t *testing.T, connector cache.Connector) *cache.CacheManager {
+	t.Helper()
+	manager, err := cache.NewCacheManager(
+		cache.ManagerConfig{
+			MaxSize:         10,
+			IdleTTL:         time.Hour,
+			CleanupInterval: 5 * time.Minute,
+		},
+		connector,
+	)
+	require.NoError(t, err)
+	return manager
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/observability"
@@ -17,6 +18,7 @@ type dependencyBundle struct {
 	deps             *ModuleDeps
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	cacheManager     *cache.CacheManager
 	provider         ResourceProvider
 	observability    observability.Provider
 }

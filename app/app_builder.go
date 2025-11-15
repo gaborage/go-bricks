@@ -120,6 +120,7 @@ func (b *Builder) CreateApp() *Builder {
 		observability:    b.bundle.observability,
 		dbManager:        b.bundle.dbManager,
 		messagingManager: b.bundle.messagingManager,
+		cacheManager:     b.bundle.cacheManager,
 		resourceProvider: b.bundle.provider,
 	}
 
@@ -228,6 +229,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 	b.app.healthProbes = createHealthProbesForManagers(
 		b.app.dbManager,
 		b.app.messagingManager,
+		b.app.cacheManager,
 		b.logger,
 	)
 
@@ -245,8 +247,16 @@ func (b *Builder) RegisterClosers() *Builder {
 		return b
 	}
 
-	b.app.registerCloser("database manager", b.app.dbManager)
-	b.app.registerCloser("messaging manager", b.app.messagingManager)
+	// Register closers with explicit nil checks to avoid typed nil interface issues
+	if b.app.dbManager != nil {
+		b.app.registerCloser("database manager", b.app.dbManager)
+	}
+	if b.app.messagingManager != nil {
+		b.app.registerCloser("messaging manager", b.app.messagingManager)
+	}
+	if b.app.cacheManager != nil {
+		b.app.registerCloser("cache manager", b.app.cacheManager)
+	}
 	return b
 }
 

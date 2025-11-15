@@ -34,6 +34,7 @@ const (
 	errNotSupportedFmt   = "'%s' is not supported"
 	portRange            = "1-65535"
 	fieldDatabasePort    = "database.port"
+	errInvalidField      = "invalid value: %v"
 )
 
 func Validate(cfg *Config) error {
@@ -95,7 +96,7 @@ func validateApp(cfg *AppConfig) error {
 
 func validateServer(cfg *ServerConfig) error {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return NewInvalidFieldError("server.port", fmt.Sprintf("%d is out of valid range", cfg.Port), []string{portRange})
+		return NewInvalidFieldError("server.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 
 	if cfg.Timeout.Read <= 0 {
@@ -229,7 +230,7 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 
 func validateOptionalDatabasePort(port int) error {
 	if port < 0 || port > 65535 {
-		return NewInvalidFieldError(fieldDatabasePort, fmt.Sprintf("%d is out of valid range", port), []string{portRange})
+		return NewInvalidFieldError(fieldDatabasePort, fmt.Sprintf(errInvalidField, port), []string{portRange})
 	}
 	return nil
 }
@@ -445,7 +446,7 @@ func validateRedisCache(cfg *RedisConfig) error {
 	}
 
 	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf("%d is out of valid range", cfg.Port), []string{portRange})
+		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 
 	if cfg.Database < 0 || cfg.Database > 15 {
