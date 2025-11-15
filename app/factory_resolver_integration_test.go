@@ -62,10 +62,10 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		assert.Equal(t, testValue, retrievedValue)
 
 		// Test cache expiration
-		err = cache.Set(ctx, "short-ttl", []byte("expires-soon"), 100*time.Millisecond)
+		err = cache.Set(ctx, "short-ttl", []byte("expires-soon"), 200*time.Millisecond)
 		assert.NoError(t, err)
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 
 		expiredValue, err := cache.Get(ctx, "short-ttl")
 		assert.Error(t, err) // Should return error for expired/missing key

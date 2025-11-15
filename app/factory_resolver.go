@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/redis"
@@ -93,6 +94,43 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 				Err(err).
 				Str("key", key).
 				Msg("Cache config not available")
+			return nil, err
+		}
+
+		// Defensive validation: ensure cacheCfg is not nil
+		if cacheCfg == nil {
+			err := fmt.Errorf("cache configuration is nil for key '%s'", key)
+			log.Error().
+				Str("key", key).
+				Msg("Cache configuration unexpectedly nil")
+			return nil, err
+		}
+
+		// Defensive validation: ensure cache is enabled
+		if !cacheCfg.Enabled {
+			err := fmt.Errorf("cache is not enabled for key '%s'", key)
+			log.Error().
+				Str("key", key).
+				Msg("Cache configuration has Enabled=false")
+			return nil, err
+		}
+
+		// Validate cache type is "redis" (or empty for backward compatibility)
+		if cacheCfg.Type != "" && cacheCfg.Type != "redis" {
+			err := fmt.Errorf("unsupported cache type '%s' for key '%s' (expected 'redis')", cacheCfg.Type, key)
+			log.Error().
+				Str("key", key).
+				Str("type", cacheCfg.Type).
+				Msg("Invalid cache type - only 'redis' is supported")
+			return nil, err
+		}
+
+		// Validate Redis configuration is properly set
+		if cacheCfg.Redis.Host == "" {
+			err := fmt.Errorf("redis host is required but not configured for key '%s'", key)
+			log.Error().
+				Str("key", key).
+				Msg("Redis host is empty - cannot create cache instance")
 			return nil, err
 		}
 

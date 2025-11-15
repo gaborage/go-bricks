@@ -124,11 +124,13 @@ func MustStartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContai
 	return container
 }
 
-// WithCleanup registers a cleanup function to terminate the container when the test finishes
+// WithCleanup registers a cleanup function to terminate the container when the test finishes.
+// Uses a 30-second timeout to prevent hanging if Docker misbehaves during teardown.
 func (r *RedisContainer) WithCleanup(t *testing.T) *RedisContainer {
 	t.Helper()
 	t.Cleanup(func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		if err := r.Terminate(ctx); err != nil {
 			t.Logf("Warning: failed to terminate Redis container: %v", err)
 		}
