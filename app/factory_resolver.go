@@ -99,7 +99,7 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Defensive validation: ensure cacheCfg is not nil
 		if cacheCfg == nil {
-			err := fmt.Errorf("cache configuration is nil for key '%s'", key)
+			err := config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
 			log.Error().
 				Str("key", key).
 				Msg("Cache configuration unexpectedly nil")
@@ -108,7 +108,7 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Defensive validation: ensure cache is enabled
 		if !cacheCfg.Enabled {
-			err := fmt.Errorf("cache is not enabled for key '%s'", key)
+			err := config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled")
 			log.Error().
 				Str("key", key).
 				Msg("Cache configuration has Enabled=false")
@@ -117,7 +117,9 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Validate cache type is "redis" (or empty for backward compatibility)
 		if cacheCfg.Type != "" && cacheCfg.Type != "redis" {
-			err := fmt.Errorf("unsupported cache type '%s' for key '%s' (expected 'redis')", cacheCfg.Type, key)
+			err := config.NewInvalidFieldError("cache.type",
+				fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
+				[]string{"redis"})
 			log.Error().
 				Str("key", key).
 				Str("type", cacheCfg.Type).
@@ -127,7 +129,7 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Validate Redis configuration is properly set
 		if cacheCfg.Redis.Host == "" {
-			err := fmt.Errorf("redis host is required but not configured for key '%s'", key)
+			err := config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
 			log.Error().
 				Str("key", key).
 				Msg("Redis host is empty - cannot create cache instance")

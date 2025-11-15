@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/cache"
+	cachepkg "github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/testing/containers"
@@ -46,29 +46,29 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		connector := resolver.CacheConnector(store, log)
 		require.NotNil(t, connector)
 
-		cache, err := connector(ctx, "") // Empty key for single-tenant
+		c, err := connector(ctx, "") // Empty key for single-tenant
 		require.NoError(t, err)
-		require.NotNil(t, cache)
+		require.NotNil(t, c)
 
 		// Test cache operations - Set/Get round-trip
 		testKey := "test-key-single"
 		testValue := []byte("test-value-single")
 
-		err = cache.Set(ctx, testKey, testValue, time.Minute)
+		err = c.Set(ctx, testKey, testValue, time.Minute)
 		assert.NoError(t, err)
 
-		retrievedValue, err := cache.Get(ctx, testKey)
+		retrievedValue, err := c.Get(ctx, testKey)
 		assert.NoError(t, err)
 		assert.Equal(t, testValue, retrievedValue)
 
 		// Test cache expiration
-		err = cache.Set(ctx, "short-ttl", []byte("expires-soon"), 200*time.Millisecond)
+		err = c.Set(ctx, "short-ttl", []byte("expires-soon"), 200*time.Millisecond)
 		assert.NoError(t, err)
 
 		time.Sleep(300 * time.Millisecond)
 
-		expiredValue, err := cache.Get(ctx, "short-ttl")
-		assert.Error(t, err) // Should return error for expired/missing key
+		expiredValue, err := c.Get(ctx, "short-ttl")
+		assert.ErrorIs(t, err, cachepkg.ErrNotFound, "expired key should return ErrNotFound")
 		assert.Empty(t, expiredValue)
 	})
 
@@ -88,8 +88,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		require.NotNil(t, connector)
 
 		// Should return "not configured" error
-		cache, err := connector(ctx, "")
-		assert.Nil(t, cache)
+		c, err := connector(ctx, "")
+		assert.Nil(t, c)
 		assert.Error(t, err)
 		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
 	})
@@ -123,18 +123,18 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		require.NotNil(t, connector)
 
 		// Get cache for "acme" tenant
-		cache, err := connector(ctx, "acme")
+		c, err := connector(ctx, "acme")
 		require.NoError(t, err)
-		require.NotNil(t, cache)
+		require.NotNil(t, c)
 
 		// Test cache operations
 		testKey := "test-key-acme"
 		testValue := []byte("test-value-acme")
 
-		err = cache.Set(ctx, testKey, testValue, time.Minute)
+		err = c.Set(ctx, testKey, testValue, time.Minute)
 		assert.NoError(t, err)
 
-		retrievedValue, err := cache.Get(ctx, testKey)
+		retrievedValue, err := c.Get(ctx, testKey)
 		assert.NoError(t, err)
 		assert.Equal(t, testValue, retrievedValue)
 	})
@@ -155,8 +155,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		require.NotNil(t, connector)
 
 		// Should return error for non-existent tenant
-		cache, err := connector(ctx, "nonexistent")
-		assert.Nil(t, cache)
+		c, err := connector(ctx, "nonexistent")
+		assert.Nil(t, c)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "configuration not found")
 	})
@@ -183,8 +183,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		require.NotNil(t, connector)
 
 		// Should return "not enabled" error
-		cache, err := connector(ctx, "globex")
-		assert.Nil(t, cache)
+		c, err := connector(ctx, "globex")
+		assert.Nil(t, c)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not enabled")
 	})
@@ -192,7 +192,7 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 	t.Run("custom connector override", func(t *testing.T) {
 		// Custom connector that always returns an error
 		customError := assert.AnError
-		customConnector := func(_ context.Context, _ string) (cache.Cache, error) {
+		customConnector := func(_ context.Context, _ string) (cachepkg.Cache, error) {
 			return nil, customError
 		}
 
@@ -207,8 +207,8 @@ func TestFactoryResolverRedisConnectorIntegration(t *testing.T) {
 		connector := resolver.CacheConnector(&stubTenantResource{}, log)
 		require.NotNil(t, connector)
 
-		cache, err := connector(ctx, "test-key")
-		assert.Nil(t, cache)
+		c, err := connector(ctx, "test-key")
+		assert.Nil(t, c)
 		assert.Equal(t, customError, err)
 	})
 }
