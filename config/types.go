@@ -254,6 +254,7 @@ type MultitenantConfig struct {
 type TenantEntry struct {
 	Database  DatabaseConfig        `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
 	Messaging TenantMessagingConfig `koanf:"messaging" json:"messaging" yaml:"messaging" toml:"messaging" mapstructure:"messaging"`
+	Cache     CacheConfig           `koanf:"cache" json:"cache" yaml:"cache" toml:"cache" mapstructure:"cache"`
 }
 
 // TenantMessagingConfig holds messaging configuration for a tenant

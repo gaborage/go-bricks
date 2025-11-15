@@ -590,8 +590,9 @@ func TestRegisterModuleDifferentNames(t *testing.T) {
 }
 
 type stubTenantResource struct {
-	dbCalls  int
-	msgCalls int
+	dbCalls    int
+	msgCalls   int
+	cacheCalls int
 }
 
 func (s *stubTenantResource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
@@ -602,6 +603,12 @@ func (s *stubTenantResource) DBConfig(context.Context, string) (*config.Database
 func (s *stubTenantResource) BrokerURL(context.Context, string) (string, error) {
 	s.msgCalls++
 	return "amqp://stub/", nil
+}
+
+func (s *stubTenantResource) CacheConfig(context.Context, string) (*config.CacheConfig, error) {
+	s.cacheCalls++
+	// Return not_configured error to match real TenantStore behavior when cache is disabled
+	return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
 }
 
 func (s *stubTenantResource) IsDynamic() bool {

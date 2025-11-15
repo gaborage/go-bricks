@@ -7,6 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -32,10 +33,11 @@ type ServerRunner interface {
 	RegisterReadyHandler(handler echo.HandlerFunc)
 }
 
-// TenantStore combines the interfaces required by the database and messaging managers.
+// TenantStore combines the interfaces required by the database, messaging, and cache managers.
 type TenantStore interface {
 	database.TenantStore
 	messaging.TenantMessagingResourceSource
+	cache.TenantCacheResourceSource
 
 	// IsDynamic returns true if this store loads tenant configurations dynamically
 	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for

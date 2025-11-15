@@ -7,26 +7,28 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 )
 
 const (
-	testCacheKey = "test-key"
+	testCacheKey        = "test-key"
+	notConfiguredErrMsg = "error should be 'not configured' type"
 )
 
 func TestFactoryResolverCacheConnector(t *testing.T) {
 	t.Run("returns default connector when options are nil", func(t *testing.T) {
 		resolver := NewFactoryResolver(nil)
 
-		connector := resolver.CacheConnector()
+		connector := resolver.CacheConnector(&stubTenantResource{}, logger.New("debug", true))
 
 		assert.NotNil(t, connector)
 
-		// Default connector should return "not configured" error
+		// Default connector should return "not configured" error (stub returns Enabled=false)
 		c, err := connector(context.Background(), testCacheKey)
 		assert.Nil(t, c)
 		assert.Error(t, err)
-		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
+		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 
 	t.Run("returns default connector when cache connector option is nil", func(t *testing.T) {
@@ -35,7 +37,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		}
 		resolver := NewFactoryResolver(opts)
 
-		connector := resolver.CacheConnector()
+		connector := resolver.CacheConnector(&stubTenantResource{}, logger.New("debug", true))
 
 		assert.NotNil(t, connector)
 
@@ -43,7 +45,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		c, err := connector(context.Background(), testCacheKey)
 		assert.Nil(t, c)
 		assert.Error(t, err)
-		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
+		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 
 	t.Run("returns custom connector from options", func(t *testing.T) {
@@ -59,7 +61,7 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		}
 
 		resolver := NewFactoryResolver(opts)
-		connector := resolver.CacheConnector()
+		connector := resolver.CacheConnector(&stubTenantResource{}, logger.New("debug", true))
 
 		assert.NotNil(t, connector)
 
@@ -80,26 +82,24 @@ func TestFactoryResolverCacheConnector(t *testing.T) {
 		}
 
 		resolver := NewFactoryResolver(opts)
-		connector := resolver.CacheConnector()
+		connector := resolver.CacheConnector(&stubTenantResource{}, logger.New("debug", true))
 
 		c, err := connector(context.Background(), testCacheKey)
 		assert.Nil(t, c)
 		assert.Equal(t, expectedError, err)
 	})
 
-	t.Run("default connector returns config error with proper fields", func(t *testing.T) {
+	t.Run("default connector with disabled cache returns not_configured error", func(t *testing.T) {
 		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector()
+		// stubTenantResource returns Enabled=false
+		connector := resolver.CacheConnector(&stubTenantResource{}, logger.New("debug", true))
 
 		_, err := connector(context.Background(), testCacheKey)
 
 		assert.Error(t, err)
 
-		// Check that it's a ConfigError with the right category
-		var configErr *config.ConfigError
-		assert.ErrorAs(t, err, &configErr)
-		assert.Equal(t, "not_configured", configErr.Category)
-		assert.Equal(t, "cache", configErr.Field)
+		// Check that it's a ConfigError with "not_configured"
+		assert.True(t, config.IsNotConfigured(err), notConfiguredErrMsg)
 	})
 }
 

@@ -6,12 +6,19 @@ import (
 	"sync"
 )
 
-// TenantStore provides per-key database and messaging configurations.
+const (
+	configNotFoundErrMsg = "configuration not found"
+	notConfiguredErrMsg  = "not configured"
+	notEnabledErrMsg     = "not enabled"
+)
+
+// TenantStore provides per-key database, messaging, and cache configurations.
 // This is the default config-backed implementation that uses the static tenant map.
 type TenantStore struct {
 	// Single-tenant configurations (used when key is "")
 	defaultDB        *DatabaseConfig
 	defaultMessaging *MessagingConfig
+	defaultCache     *CacheConfig
 
 	// Multi-tenant configurations (used when key is tenant ID)
 	tenants map[string]TenantEntry
@@ -23,6 +30,7 @@ func NewTenantStore(cfg *Config) *TenantStore {
 	source := &TenantStore{
 		defaultDB:        &cfg.Database,
 		defaultMessaging: &cfg.Messaging,
+		defaultCache:     &cfg.Cache,
 		tenants:          make(map[string]TenantEntry),
 		mu:               sync.RWMutex{},
 	}
@@ -54,7 +62,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, NewMultiTenantError(key, "database", "configuration not found", fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
+		return nil, NewMultiTenantError(key, "database", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
 	}
 
 	return &tenant.Database, nil
@@ -78,14 +86,41 @@ func (s *TenantStore) BrokerURL(_ context.Context, key string) (string, error) {
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return "", NewMultiTenantError(key, "tenant", "configuration not found", fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
+		return "", NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
 	}
 
 	if tenant.Messaging.URL == "" {
-		return "", NewMultiTenantError(key, "messaging.url", "not configured", fmt.Sprintf("add multitenant.tenants.%s.messaging.url", key))
+		return "", NewMultiTenantError(key, "messaging.url", notConfiguredErrMsg, fmt.Sprintf("add multitenant.tenants.%s.messaging.url", key))
 	}
 
 	return tenant.Messaging.URL, nil
+}
+
+// CacheConfig returns the cache configuration for the given key.
+// For single-tenant (key=""), returns the default cache config.
+// For multi-tenant (key=tenantID), returns the tenant-specific cache config.
+func (s *TenantStore) CacheConfig(_ context.Context, key string) (*CacheConfig, error) {
+	// Single-tenant case
+	if key == "" {
+		if s.defaultCache == nil || !s.defaultCache.Enabled {
+			return nil, NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+		}
+		return s.defaultCache, nil
+	}
+
+	// Multi-tenant case
+	s.mu.RLock()
+	tenant, exists := s.tenants[key]
+	s.mu.RUnlock()
+	if !exists {
+		return nil, NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
+	}
+
+	if !tenant.Cache.Enabled {
+		return nil, NewMultiTenantError(key, "cache", notEnabledErrMsg, fmt.Sprintf("set multitenant.tenants.%s.cache.enabled: true", key))
+	}
+
+	return &tenant.Cache, nil
 }
 
 // AddTenant adds a new tenant configuration at runtime (useful for dynamic tenant management)
