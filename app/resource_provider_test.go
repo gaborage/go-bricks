@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -116,6 +117,27 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		provider.SetDeclarations(newDeclarations)
 
 		assert.Equal(t, newDeclarations, provider.declarations)
+	})
+
+	t.Run("GetCache success", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewSingleTenantResourceProvider(nil, nil, cacheManager, nil)
+
+		cache, err := provider.GetCache(context.Background())
+
+		require.NoError(t, err)
+		assert.NotNil(t, cache)
+	})
+
+	t.Run("GetCache with nil cache manager", func(t *testing.T) {
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
+
+		cache, err := provider.GetCache(context.Background())
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cache")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, cache)
 	})
 }
 
@@ -227,6 +249,52 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 		assert.Equal(t, newDeclarations, provider.declarations)
 	})
+
+	t.Run("GetCache success", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+		ctx := multitenant.SetTenant(context.Background(), testTenantID)
+
+		cache, err := provider.GetCache(ctx)
+
+		require.NoError(t, err)
+		assert.NotNil(t, cache)
+	})
+
+	t.Run("GetCache with nil cache manager", func(t *testing.T) {
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
+		ctx := multitenant.SetTenant(context.Background(), testTenantID)
+
+		cache, err := provider.GetCache(ctx)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cache")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, cache)
+	})
+
+	t.Run("GetCache with no tenant in context", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+
+		cache, err := provider.GetCache(context.Background())
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		assert.Nil(t, cache)
+	})
+
+	t.Run("GetCache with empty tenant in context", func(t *testing.T) {
+		cacheManager := createTestCacheManager(t)
+		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
+		ctx := multitenant.SetTenant(context.Background(), "")
+
+		cache, err := provider.GetCache(ctx)
+
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		assert.Nil(t, cache)
+	})
 }
 
 func TestResourceProviderInterface(t *testing.T) {
@@ -337,4 +405,25 @@ func createTestMessagingManagerWithMock(t *testing.T, mockClient messaging.AMQPC
 			return mockClient
 		},
 	)
+}
+
+func createTestCacheManager(t *testing.T) *cache.CacheManager {
+	t.Helper()
+	return createTestCacheManagerWithConnector(t, func(ctx context.Context, key string) (cache.Cache, error) {
+		return &mockCacheInstance{}, nil
+	})
+}
+
+func createTestCacheManagerWithConnector(t *testing.T, connector cache.Connector) *cache.CacheManager {
+	t.Helper()
+	manager, err := cache.NewCacheManager(
+		cache.ManagerConfig{
+			MaxSize:         10,
+			IdleTTL:         time.Hour,
+			CleanupInterval: 5 * time.Minute,
+		},
+		connector,
+	)
+	require.NoError(t, err)
+	return manager
 }

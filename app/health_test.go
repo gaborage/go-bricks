@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 )
@@ -105,6 +106,63 @@ func TestMessagingManagerHealthProbe(t *testing.T) {
 
 	// Note: Since messagingManagerHealthProbe requires *messaging.Manager (concrete type),
 	// and creating real Manager instances would require complex setup,
+	// we focus on testing the nil case and the internal healthProbeFunc logic.
+	// The healthProbeFunc is tested separately above.
+}
+
+func TestConvertCacheStatsToMap(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		stats := cache.ManagerStats{
+			ActiveCaches: 5,
+			TotalCreated: 10,
+			Evictions:    2,
+			IdleCleanups: 3,
+			Errors:       1,
+			MaxSize:      100,
+			IdleTTL:      300,
+		}
+
+		result := convertCacheStatsToMap(stats)
+
+		assert.Equal(t, 5, result["active_caches"])
+		assert.Equal(t, 10, result["total_created"])
+		assert.Equal(t, 2, result["evictions"])
+		assert.Equal(t, 3, result["idle_cleanups"])
+		assert.Equal(t, 1, result["errors"])
+		assert.Equal(t, 100, result["max_size"])
+		assert.Equal(t, int64(300), result["idle_ttl"])
+	})
+
+	t.Run("handles zero values", func(t *testing.T) {
+		stats := cache.ManagerStats{}
+		result := convertCacheStatsToMap(stats)
+
+		assert.Equal(t, 0, result["active_caches"])
+		assert.Equal(t, 0, result["total_created"])
+		assert.Equal(t, 0, result["evictions"])
+		assert.Equal(t, 0, result["idle_cleanups"])
+		assert.Equal(t, 0, result["errors"])
+		assert.Equal(t, 0, result["max_size"])
+		assert.Equal(t, int64(0), result["idle_ttl"])
+	})
+}
+
+func TestCacheManagerHealthProbe(t *testing.T) {
+	mockLogger := logger.New("info", false)
+
+	t.Run("nil cache manager", func(t *testing.T) {
+		probe := cacheManagerHealthProbe(nil, mockLogger)
+		result := probe.Run(context.Background())
+
+		assert.Equal(t, "cache", result.Name)
+		assert.Equal(t, disabledStatus, result.Status)
+		assert.Equal(t, map[string]any{"status": disabledStatus}, result.Details)
+		assert.NoError(t, result.Err)
+		assert.False(t, result.Critical)
+	})
+
+	// Note: Since cacheManagerHealthProbe requires *cache.CacheManager (concrete type),
+	// and creating real CacheManager instances would require complex setup,
 	// we focus on testing the nil case and the internal healthProbeFunc logic.
 	// The healthProbeFunc is tested separately above.
 }

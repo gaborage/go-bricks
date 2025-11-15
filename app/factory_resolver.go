@@ -48,7 +48,7 @@ func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
 }
 
 // CacheConnector returns the appropriate cache connector function.
-// If no custom connector is provided in options, returns a function that creates Redis clients.
+// If no custom connector is provided in options, returns a default implementation.
 func (f *FactoryResolver) CacheConnector() cache.Connector {
 	if f.opts != nil && f.opts.CacheConnector != nil {
 		return f.opts.CacheConnector
