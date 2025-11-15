@@ -440,24 +440,21 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		assert.NotNil(t, manager)
 	})
 
-	t.Run("cache manager creation error returns nil", func(t *testing.T) {
+	t.Run("creates cache manager with default connector", func(t *testing.T) {
 		configBuilder := NewManagerConfigBuilder(false, 50)
-		// Create factory resolver with connector that returns error during NewCacheManager
 		factoryResolver := NewFactoryResolver(&Options{
-			CacheConnector: nil, // Will use default connector
+			CacheConnector: nil, // Uses default connector from factory resolver
 		})
 		log := logger.New("error", false)
 		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
 
 		manager := factory.CreateCacheManager(nil)
 
-		// With nil connector, cache manager gets created with default connector
-		// which may or may not succeed depending on environment, but should not be nil
-		// unless there's an actual creation error (not just a Get() error later)
+		// Manager creation succeeds with default connector
 		assert.NotNil(t, manager)
 	})
 
-	t.Run("cache manager creation with failing connector", func(t *testing.T) {
+	t.Run("creates cache manager despite connector errors", func(t *testing.T) {
 		configBuilder := NewManagerConfigBuilder(false, 50)
 		expectedErr := errors.New("cache connector failed")
 		factoryResolver := NewFactoryResolver(&Options{
@@ -470,8 +467,14 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 
 		manager := factory.CreateCacheManager(nil)
 
-		// Manager creation should succeed but Get() will fail with connector error
+		// Manager creation succeeds even with failing connector
 		assert.NotNil(t, manager)
+
+		// Verify Get() operations fail with the connector error
+		ctx := context.Background()
+		_, err := manager.Get(ctx, "test-key")
+		assert.Error(t, err)
+		assert.ErrorContains(t, err, "cache connector failed")
 	})
 }
 
