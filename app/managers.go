@@ -149,7 +149,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 // CreateCacheManager creates a cache manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
 func (f *ResourceManagerFactory) CreateCacheManager(
-	_ TenantStore,
+	resourceSource TenantStore,
 ) *cache.CacheManager {
 	if f.configBuilder.IsMultiTenant() {
 		f.logger.Info().
@@ -159,7 +159,7 @@ func (f *ResourceManagerFactory) CreateCacheManager(
 		f.logger.Info().Msg("Creating cache manager for single-tenant mode")
 	}
 
-	cacheConnector := f.factoryResolver.CacheConnector()
+	cacheConnector := f.factoryResolver.CacheConnector(resourceSource, f.logger)
 	cacheOptions := f.configBuilder.BuildCacheOptions()
 
 	manager, err := cache.NewCacheManager(cacheOptions, cacheConnector)

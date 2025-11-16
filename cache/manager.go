@@ -7,8 +7,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"golang.org/x/sync/singleflight"
 )
+
+// TenantCacheResourceSource provides per-key cache configurations.
+// This interface abstracts where tenant-specific cache configs come from.
+type TenantCacheResourceSource interface {
+	// CacheConfig returns the cache configuration for the given key.
+	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
+	CacheConfig(ctx context.Context, key string) (*config.CacheConfig, error)
+}
 
 // ManagerStats provides metrics about the cache manager's state.
 type ManagerStats struct {
@@ -75,35 +84,35 @@ func DefaultManagerConfig() ManagerConfig {
 
 // NewCacheManager creates a new cache manager with the given configuration.
 // The connector function is called to create new cache instances on demand.
-func NewCacheManager(config ManagerConfig, connector Connector) (*CacheManager, error) {
+func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, error) {
 	if connector == nil {
 		return nil, fmt.Errorf("connector function is required")
 	}
 
-	if config.MaxSize < 0 {
+	if cfg.MaxSize < 0 {
 		return nil, fmt.Errorf("max_size cannot be negative")
 	}
 
-	if config.IdleTTL < 0 {
+	if cfg.IdleTTL < 0 {
 		return nil, fmt.Errorf("idle_ttl cannot be negative")
 	}
 
-	if config.CleanupInterval <= 0 {
-		config.CleanupInterval = 5 * time.Minute
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = 5 * time.Minute
 	}
 
 	m := &CacheManager{
 		caches:    make(map[string]*cacheEntry),
 		lru:       list.New(),
-		maxSize:   config.MaxSize,
-		idleTTL:   config.IdleTTL,
+		maxSize:   cfg.MaxSize,
+		idleTTL:   cfg.IdleTTL,
 		connector: connector,
 		closeCh:   make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine if idle TTL is configured
-	if config.IdleTTL > 0 {
-		go m.cleanupLoop(config.CleanupInterval)
+	if cfg.IdleTTL > 0 {
+		go m.cleanupLoop(cfg.CleanupInterval)
 	}
 
 	return m, nil
