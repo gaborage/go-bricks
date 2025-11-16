@@ -41,7 +41,7 @@ func setupTracked(t testing.TB, withCounter bool) (sqlmock.Sqlmock, *TrackedConn
 	t.Cleanup(func() { _ = db.Close() })
 
 	sc := &simpleConnection{db: db}
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	tracked := NewTrackedConnection(sc, log, nil).(*TrackedConnection)
 	var ctx context.Context
 	if withCounter {
@@ -73,7 +73,7 @@ func TestNewTrackedConnection(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	tracked := NewTrackedConnection(simpleConn, log, nil)
 
@@ -220,7 +220,7 @@ func TestTrackedConnectionBeginErrors(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sc := &simpleConnection{db: db}
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	tracked := NewTrackedConnection(sc, log, nil).(*TrackedConnection)
 
 	expectedBeginErr := errors.New("begin failed")
@@ -246,7 +246,7 @@ func TestTrackedConnectionUtilityAndBeginMethods(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sc := &simpleConnection{db: db}
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := logger.WithDBCounter(context.Background())
 	tracked := NewTrackedConnection(sc, log, nil)
 
@@ -296,7 +296,7 @@ func TestTrackedConnectionContextWithoutCounter(t *testing.T) {
 
 func TestTrackDBOperation(t *testing.T) {
 	t.Parallel()
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := logger.WithDBCounter(context.Background())
 
 	start := time.Now().Add(-10 * time.Millisecond) // Simulate 10ms operation
@@ -313,7 +313,7 @@ func TestTrackDBOperation(t *testing.T) {
 
 func TestTrackDBOperationWithError(t *testing.T) {
 	t.Parallel()
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := logger.WithDBCounter(context.Background())
 
 	start := time.Now()
@@ -449,7 +449,7 @@ func TestTrackDBOperationNilLogger(t *testing.T) {
 
 func TestTrackDBOperationSqlErrNoRows(t *testing.T) {
 	t.Parallel()
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)
 	settings := NewTrackingSettings(nil)
@@ -464,7 +464,7 @@ func TestTrackDBOperationSqlErrNoRows(t *testing.T) {
 
 func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 	t.Parallel()
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := context.Background()
 	settings := NewTrackingSettings(&config.DatabaseConfig{Query: config.QueryConfig{Slow: config.SlowQueryConfig{Threshold: DefaultSlowQueryThreshold}}})
 
@@ -478,7 +478,7 @@ func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 
 func TestTrackDBOperationRegularError(t *testing.T) {
 	t.Parallel()
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)
 
@@ -504,7 +504,7 @@ func TestNewTrackedDB(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	vendor := "postgresql"
 
 	trackedDB := NewTrackedDB(db, log, vendor, nil)
@@ -520,7 +520,7 @@ func TestTrackedDBQueryContext(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	// Setup expectations
@@ -545,7 +545,7 @@ func TestTrackedDBQueryContextError(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	expectedErr := errors.New("query failed")
@@ -567,7 +567,7 @@ func TestTrackedDBQueryRowContext(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "oracle", nil)
 
 	rows := sqlmock.NewRows([]string{"name"}).AddRow("John")
@@ -593,7 +593,7 @@ func TestTrackedDBExecContext(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	mock.ExpectExec(regexp.QuoteMeta(insertIntoUsersOracle)).
@@ -623,7 +623,7 @@ func TestTrackedDBExecContextError(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "oracle", nil)
 
 	expectedErr := errors.New("constraint violation")
@@ -646,7 +646,7 @@ func TestTrackedDBClose(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	mock.ExpectClose()
@@ -662,7 +662,7 @@ func TestTrackedDBPrepareContext(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "oracle", nil)
 
 	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = ?"))
@@ -684,7 +684,7 @@ func TestTrackedDBPrepareContextError(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	expectedErr := errors.New("prepare failed")
@@ -710,7 +710,7 @@ func TestTrackedStmtQuery(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	// Prepare a statement
@@ -743,7 +743,7 @@ func TestTrackedStmtQueryRow(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	// Prepare a statement
@@ -779,7 +779,7 @@ func TestTrackedStmtExec(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 	t.Cleanup(func() { _ = db.Close() })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	trackedDB := NewTrackedDB(db, log, "postgresql", nil)
 
 	// Prepare a statement for an UPDATE operation
@@ -813,7 +813,7 @@ func TestTrackedConnectionClose(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	sc := &simpleConnection{db: db}
 	conn := NewTrackedConnection(sc, log, nil)
 

@@ -93,7 +93,7 @@ func (s *stubDB) CreateMigrationTable(context.Context) error { return nil }
 
 func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 	ctx := context.Background()
-	log := logger.New("error", false)
+	log := newErrorTestLogger()
 
 	connectorCalls := 0
 	manager := NewDbManager(&stubResourceSource{configs: map[string]*config.DatabaseConfig{
@@ -114,7 +114,7 @@ func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 
 func TestDbManagerSingleflight(t *testing.T) {
 	ctx := context.Background()
-	log := logger.New("error", false)
+	log := newErrorTestLogger()
 
 	var mu sync.Mutex
 	connectorCalls := 0
@@ -142,7 +142,7 @@ func TestDbManagerSingleflight(t *testing.T) {
 
 func TestDbManagerEvictsLRU(t *testing.T) {
 	ctx := context.Background()
-	log := logger.New("error", false)
+	log := newErrorTestLogger()
 
 	var mu sync.Mutex
 	evicted := []string{}
@@ -177,7 +177,7 @@ func TestDbManagerEvictsLRU(t *testing.T) {
 
 func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
 	ctx := context.Background()
-	log := logger.New("error", false)
+	log := newErrorTestLogger()
 
 	var mu sync.Mutex
 	evicted := []string{}
@@ -208,7 +208,7 @@ func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
 
 func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 	ctx := context.Background()
-	log := logger.New("error", false)
+	log := newErrorTestLogger()
 
 	var mu sync.Mutex
 	evicted := []string{}
@@ -243,7 +243,7 @@ func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 func TestCreateConnectionReturnsErrorWhenConfigFails(t *testing.T) {
 	ctx := context.Background()
 	configErr := errors.New("config failure")
-	manager := NewDbManager(&failingResourceSource{err: configErr}, logger.New("error", false), DbManagerOptions{}, nil)
+	manager := NewDbManager(&failingResourceSource{err: configErr}, newErrorTestLogger(), DbManagerOptions{}, nil)
 
 	_, err := manager.createConnection(ctx, "tenant")
 	require.Error(t, err)
@@ -257,7 +257,7 @@ func TestCreateConnectionPropagatesConnectorError(t *testing.T) {
 	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
 		return nil, authErr
 	}
-	manager := NewDbManager(resource, logger.New("error", false), DbManagerOptions{}, connector)
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
 
 	_, err := manager.createConnection(ctx, "tenant")
 	require.Error(t, err)
@@ -271,7 +271,7 @@ func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) 
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
 		return &stubDB{key: cfg.Database}, nil
 	}
-	manager := NewDbManager(resource, logger.New("error", false), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
 
 	existing := &stubDB{key: "existing"}
 	manager.mu.Lock()
@@ -286,7 +286,7 @@ func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) 
 
 func TestStartCleanupDoesNotCreateMultipleRoutines(t *testing.T) {
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql"}}}
-	manager := NewDbManager(resource, logger.New("error", false), DbManagerOptions{}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
 		return &stubDB{}, nil
 	})
 
@@ -306,7 +306,7 @@ func TestStartCleanupDoesNotCreateMultipleRoutines(t *testing.T) {
 
 func TestCloseAggregatesErrors(t *testing.T) {
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{}}
-	manager := NewDbManager(resource, logger.New("error", false), DbManagerOptions{}, nil)
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, nil)
 
 	errA := errors.New("close a")
 	errB := errors.New("close b")

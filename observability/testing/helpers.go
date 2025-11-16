@@ -11,7 +11,7 @@
 //	defer tp.Shutdown(context.Background())
 //
 //	// Run your code that creates spans
-//	tracer := tp.Tracer("test")
+//	tracer := tp.TestTracer()
 //	_, span := tracer.Start(context.Background(), "test-span")
 //	span.End()
 //
@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -41,6 +42,10 @@ const (
 	metricNotFoundErrMsg      = "metric %s not found"
 	metricValueMismatchErrMsg = "metric %s value mismatch"
 	noDataPointsErrMsg        = "no data points for metric %s"
+
+	// TestTracerName is the default tracer name used in observability tests.
+	// This eliminates duplication of "test" string literal across 17+ test files.
+	TestTracerName = "test"
 )
 
 // TestTraceProvider wraps the SDK TracerProvider and in-memory exporter for testing.
@@ -73,6 +78,19 @@ func NewTestTraceProvider() *TestTraceProvider {
 		TracerProvider: provider,
 		Exporter:       exporter,
 	}
+}
+
+// TestTracer returns a tracer with the standard test name.
+// This is a convenience method that eliminates the need to pass TestTracerName
+// to the Tracer() method in every test.
+//
+// Example:
+//
+//	tp := NewTestTraceProvider()
+//	tracer := tp.TestTracer()
+//	_, span := tracer.Start(context.Background(), "operation")
+func (ttp *TestTraceProvider) TestTracer() trace.Tracer {
+	return ttp.Tracer(TestTracerName)
 }
 
 // TestMeterProvider wraps the SDK MeterProvider and manual reader for testing.

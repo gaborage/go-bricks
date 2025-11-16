@@ -160,7 +160,7 @@ func TestExampleSpanCollector(t *testing.T) {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create test spans
 	_, span1 := tracer.Start(context.Background(), dbQuery)
@@ -248,7 +248,7 @@ func TestExampleErrorSpan(t *testing.T) {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create an error span
 	_, span := tracer.Start(context.Background(), "failing-operation")

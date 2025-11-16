@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -53,7 +52,7 @@ func TestRecordDBMetricsCounterIncrement(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -77,7 +76,7 @@ func TestRecordDBMetricsHistogramRecording(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -138,7 +137,7 @@ func TestRecordDBMetricsWithDifferentOperations(t *testing.T) {
 			mp, cleanup := setupTestMeterProvider(t)
 			defer cleanup()
 
-			log := logger.New("disabled", false)
+			log := newDisabledTestLogger()
 			tc := &Context{
 				Logger:   log,
 				Vendor:   "postgresql",
@@ -177,7 +176,7 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 			mp, cleanup := setupTestMeterProvider(t)
 			defer cleanup()
 
-			log := logger.New("disabled", false)
+			log := newDisabledTestLogger()
 			tc := &Context{
 				Logger:   log,
 				Vendor:   v.vendor,
@@ -207,7 +206,7 @@ func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -281,7 +280,7 @@ func TestRecordDBMetricsNilContext(t *testing.T) {
 	_, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -440,7 +439,7 @@ func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",

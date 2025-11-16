@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/testing/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,7 +35,7 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
 
 	// Create logger for tests (disabled output)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Create config using connection string from container
 	cfg := &config.DatabaseConfig{
@@ -354,7 +353,7 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{

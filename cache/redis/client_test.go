@@ -15,7 +15,6 @@ import (
 
 const (
 	testKey1          = "test:key:1"
-	testKey2          = "test:key:2"
 	testNewValue      = "new-value"
 	testExistingValue = "existing-value"
 	testWorker        = "worker-1"
