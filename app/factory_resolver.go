@@ -107,9 +107,8 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Defensive validation: ensure cacheCfg is not nil
 		if cacheCfg == nil {
-			err := fmt.Errorf("cache configuration is nil for key '%s'", key)
+			err := config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
 			log.Error().
-				Err(err).
 				Str("key", key).
 				Msg("Cache configuration unexpectedly nil")
 			return nil, err

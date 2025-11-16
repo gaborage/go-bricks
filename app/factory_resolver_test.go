@@ -158,3 +158,175 @@ func (m *mockCacheInstance) Stats() (map[string]any, error) {
 func (m *mockCacheInstance) Close() error {
 	return nil
 }
+
+// TestFactoryResolverDefensiveValidation tests the defensive validation paths in newRedisConnector
+func TestFactoryResolverDefensiveValidation(t *testing.T) {
+	t.Run("nil cacheCfg returned from TenantStore", func(t *testing.T) {
+		// Mock TenantStore that returns (nil, nil) from CacheConfig
+		mockStore := &mockTenantStoreNilCacheCfg{}
+
+		resolver := NewFactoryResolver(nil)
+		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
+
+		c, err := connector(context.Background(), testCacheKey)
+
+		assert.Nil(t, c)
+		assert.Error(t, err)
+
+		// Should return typed ConfigError with "invalid" category
+		var configErr *config.ConfigError
+		assert.ErrorAs(t, err, &configErr)
+		assert.Equal(t, "invalid", configErr.Category)
+		assert.Contains(t, err.Error(), "configuration is nil")
+	})
+
+	t.Run("cache disabled (Enabled=false)", func(t *testing.T) {
+		// Mock TenantStore that returns Enabled=false
+		mockStore := &mockTenantStoreCacheDisabled{}
+
+		resolver := NewFactoryResolver(nil)
+		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
+
+		c, err := connector(context.Background(), testCacheKey)
+
+		assert.Nil(t, c)
+		assert.Error(t, err)
+
+		// Should return typed ConfigError with "not_configured" category
+		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
+
+		var configErr *config.ConfigError
+		assert.ErrorAs(t, err, &configErr)
+		assert.Equal(t, "not_configured", configErr.Category)
+		assert.Equal(t, "cache", configErr.Field)
+	})
+
+	t.Run("invalid cache type (not redis)", func(t *testing.T) {
+		// Mock TenantStore that returns Type="memcached"
+		mockStore := &mockTenantStoreInvalidType{}
+
+		resolver := NewFactoryResolver(nil)
+		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
+
+		c, err := connector(context.Background(), testCacheKey)
+
+		assert.Nil(t, c)
+		assert.Error(t, err)
+
+		// Should return typed ConfigError with "invalid" category
+		var configErr *config.ConfigError
+		assert.ErrorAs(t, err, &configErr)
+		assert.Equal(t, "invalid", configErr.Category)
+		assert.Equal(t, "cache.type", configErr.Field)
+		assert.Contains(t, err.Error(), "memcached")
+		assert.Contains(t, err.Error(), "redis")
+	})
+
+	t.Run("empty Redis host", func(t *testing.T) {
+		// Mock TenantStore that returns Redis.Host=""
+		mockStore := &mockTenantStoreEmptyHost{}
+
+		resolver := NewFactoryResolver(nil)
+		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
+
+		c, err := connector(context.Background(), testCacheKey)
+
+		assert.Nil(t, c)
+		assert.Error(t, err)
+
+		// Should return typed ConfigError with "missing" category
+		var configErr *config.ConfigError
+		assert.ErrorAs(t, err, &configErr)
+		assert.Equal(t, "missing", configErr.Category)
+		assert.Equal(t, "cache.redis.host", configErr.Field)
+		assert.Contains(t, err.Error(), "CACHE_REDIS_HOST")
+	})
+}
+
+// Mock TenantStore implementations for defensive validation tests
+
+type mockTenantStoreNilCacheCfg struct{}
+
+func (m *mockTenantStoreNilCacheCfg) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	// Returns (nil, nil) to trigger defensive nil check
+	return nil, nil
+}
+
+func (m *mockTenantStoreNilCacheCfg) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreNilCacheCfg) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreNilCacheCfg) IsDynamic() bool {
+	return false
+}
+
+type mockTenantStoreCacheDisabled struct{}
+
+func (m *mockTenantStoreCacheDisabled) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: false, // Cache disabled
+		Type:    "redis",
+	}, nil
+}
+
+func (m *mockTenantStoreCacheDisabled) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreCacheDisabled) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreCacheDisabled) IsDynamic() bool {
+	return false
+}
+
+type mockTenantStoreInvalidType struct{}
+
+func (m *mockTenantStoreInvalidType) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    "memcached", // Invalid type (only "redis" supported)
+	}, nil
+}
+
+func (m *mockTenantStoreInvalidType) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreInvalidType) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreInvalidType) IsDynamic() bool {
+	return false
+}
+
+type mockTenantStoreEmptyHost struct{}
+
+func (m *mockTenantStoreEmptyHost) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    "redis",
+		Redis: config.RedisConfig{
+			Host: "", // Empty host - required field missing
+			Port: 6379,
+		},
+	}, nil
+}
+
+func (m *mockTenantStoreEmptyHost) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreEmptyHost) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreEmptyHost) IsDynamic() bool {
+	return false
+}
