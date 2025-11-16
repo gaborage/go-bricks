@@ -241,6 +241,25 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		assert.Equal(t, "cache.redis.host", configErr.Field)
 		assert.Contains(t, err.Error(), "CACHE_REDIS_HOST")
 	})
+
+	t.Run("redis client validation failure - invalid port", func(t *testing.T) {
+		// Mock TenantStore that returns valid host but INVALID port
+		// This passes app-level validation (line 139: Host != "")
+		// but fails Redis client validation (port > 65535)
+		mockStore := &mockTenantStoreInvalidPort{}
+
+		resolver := NewFactoryResolver(nil)
+		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
+
+		c, err := connector(context.Background(), testCacheKey)
+
+		assert.Nil(t, c)
+		assert.Error(t, err)
+
+		// Should return cache.ConfigError from redis.Config.Validate()
+		// This tests the error logging path at factory_resolver.go:174-182
+		assert.Contains(t, err.Error(), "invalid port")
+	})
 }
 
 // Mock TenantStore implementations for defensive validation tests
@@ -328,5 +347,32 @@ func (m *mockTenantStoreEmptyHost) BrokerURL(_ context.Context, _ string) (strin
 }
 
 func (m *mockTenantStoreEmptyHost) IsDynamic() bool {
+	return false
+}
+
+type mockTenantStoreInvalidPort struct{}
+
+func (m *mockTenantStoreInvalidPort) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{
+		Enabled: true,
+		Type:    "redis",
+		Redis: config.RedisConfig{
+			Host:     "localhost", // Valid - passes app-level validation
+			Port:     99999,       // INVALID - fails Redis validation (> 65535)
+			Database: 0,
+			PoolSize: 10,
+		},
+	}, nil
+}
+
+func (m *mockTenantStoreInvalidPort) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
+func (m *mockTenantStoreInvalidPort) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTenantStoreInvalidPort) IsDynamic() bool {
 	return false
 }

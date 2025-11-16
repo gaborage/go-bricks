@@ -170,6 +170,24 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 		// Create Redis cache instance
 		// Note: redis.NewClient() does not accept context parameter. It creates its own
 		// 5-second timeout context for the initial PING validation during connection.
-		return redis.NewClient(redisCfg)
+		client, err := redis.NewClient(redisCfg)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("key", key).
+				Str("host", cacheCfg.Redis.Host).
+				Int("port", cacheCfg.Redis.Port).
+				Int("database", cacheCfg.Redis.Database).
+				Msg("Failed to create Redis cache client")
+			return nil, err
+		}
+
+		log.Debug().
+			Str("key", key).
+			Str("host", cacheCfg.Redis.Host).
+			Int("database", cacheCfg.Redis.Database).
+			Msg("Redis cache client created successfully")
+
+		return client, nil
 	}
 }
