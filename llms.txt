@@ -779,8 +779,8 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     }
 
     // Store in cache
-    data, _ = cache.Marshal(user)
-    cache.Set(ctx, cacheKey, data, 5*time.Minute)
+    serialized, _ := cache.Marshal(user)
+    cache.Set(ctx, cacheKey, serialized, 5*time.Minute)
 
     return user, nil
 }
@@ -1364,7 +1364,7 @@ cachetest.AssertCacheMiss(t, mockCache, "missing:key")
 
 // Operation counting
 cachetest.AssertOperationCount(t, mockCache, "Get", 5)
-cachetest.AssertOperationCountGreaterThan(t, mockCache, "Set", 10)
+cachetest.AssertOperationCountAtLeast(t, mockCache, "Set", 10)  // At least 10 Set operations
 
 // Key existence (ignores expiration)
 cachetest.AssertKeyExists(t, mockCache, "key1")

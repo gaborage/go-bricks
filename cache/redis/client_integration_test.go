@@ -82,20 +82,37 @@ func TestRealRedisTTLExpiration(t *testing.T) {
 // =============================================================================
 // Invalid TTL Handling Tests
 // =============================================================================
-func TestRealRedisTTLInvalidZeroValue(t *testing.T) {
+func TestRealRedisTTLInvalidNegativeValue(t *testing.T) {
+	client, ctx := setupRealRedis(t)
+	defer client.Close()
+
+	key := "test:ttl:negative"
+	value := []byte("test-value")
+
+	// Negative TTL should return ErrInvalidTTL
+	err := client.Set(ctx, key, value, -1*time.Second)
+	assert.ErrorIs(t, err, cache.ErrInvalidTTL, "Set with negative TTL should return ErrInvalidTTL")
+}
+
+func TestRealRedisTTLZeroNoExpiration(t *testing.T) {
 	client, ctx := setupRealRedis(t)
 	defer client.Close()
 
 	key := "test:ttl:zero"
-	value := []byte("test-value")
+	value := []byte("no-expiration-value")
 
-	// Zero TTL should return ErrInvalidTTL
+	// Zero TTL should work (no expiration)
 	err := client.Set(ctx, key, value, 0)
-	assert.ErrorIs(t, err, cache.ErrInvalidTTL, "Set with zero TTL should return ErrInvalidTTL")
+	assert.NoError(t, err, "Set with zero TTL should succeed (no expiration)")
 
-	// Negative TTL should also return ErrInvalidTTL
-	err = client.Set(ctx, key, value, -1*time.Second)
-	assert.ErrorIs(t, err, cache.ErrInvalidTTL, "Set with negative TTL should return ErrInvalidTTL")
+	// Value should still exist (no expiration)
+	retrieved, err := client.Get(ctx, key)
+	assert.NoError(t, err, "Get should succeed for key with no expiration")
+	assert.Equal(t, value, retrieved, "Retrieved value should match")
+
+	// Cleanup
+	err = client.Delete(ctx, key)
+	assert.NoError(t, err, noErrExpectedMsg)
 }
 
 // =============================================================================
@@ -235,6 +252,7 @@ func TestRealRedisGetOrSetConcurrentDeduplication(t *testing.T) {
 	const numGoroutines = 20
 	var wg sync.WaitGroup
 	results := make([]bool, numGoroutines) // Track which goroutines set vs loaded
+	errChan := make(chan error, numGoroutines)
 
 	// Spawn concurrent GetOrSet calls
 	for i := 0; i < numGoroutines; i++ {
@@ -242,12 +260,21 @@ func TestRealRedisGetOrSetConcurrentDeduplication(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			_, wasSet, err := client.GetOrSet(ctx, key, value, 10*time.Second)
-			require.NoError(t, err, getOrSetSucceedMsg)
+			if err != nil {
+				errChan <- err
+				return
+			}
 			results[idx] = wasSet
 		}(i)
 	}
 
 	wg.Wait()
+	close(errChan)
+
+	// Assert no errors occurred in goroutines (safe in main goroutine)
+	for err := range errChan {
+		assert.NoError(t, err, getOrSetSucceedMsg)
+	}
 
 	// Exactly ONE goroutine should have set (wasSet=true), rest should have loaded (wasSet=false)
 	setCount := 0

@@ -46,8 +46,11 @@ func TestAssertOperationCountGreaterThan(t *testing.T) {
 		mock.Get(ctx, "key")
 	}
 
-	// Should pass
+	// Should pass - old name (deprecated) still works
 	AssertOperationCountGreaterThan(t, mock, "Get", 5)
+
+	// New name - clearer semantics
+	AssertOperationCountAtLeast(t, mock, "Get", 10)
 }
 
 func TestAssertCacheClosed(t *testing.T) {

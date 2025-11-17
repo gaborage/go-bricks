@@ -303,15 +303,20 @@ func BenchmarkRealRedisConnectionPool(b *testing.B) {
 			key := fmt.Sprintf("benchmark:pool:key:%d", i)
 
 			// Mix of operations to stress pool
+			var err error
 			switch i % 4 {
 			case 0:
-				client.Set(ctx, key, value, time.Minute)
+				err = client.Set(ctx, key, value, time.Minute)
 			case 1:
-				client.Get(ctx, key)
+				_, err = client.Get(ctx, key)
 			case 2:
-				client.Delete(ctx, key)
+				err = client.Delete(ctx, key)
 			case 3:
-				client.GetOrSet(ctx, key, value, time.Minute)
+				_, _, err = client.GetOrSet(ctx, key, value, time.Minute)
+			}
+
+			if err != nil {
+				b.Errorf("operation %d failed: %v", i%4, err)
 			}
 
 			i++

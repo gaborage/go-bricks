@@ -133,12 +133,12 @@ func TestMockCacheInvalidTTL(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockCache()
 
-	// Zero TTL
+	// Zero TTL (no expiration) - should succeed
 	err := mock.Set(ctx, "key1", []byte("value1"), 0)
-	assert.ErrorIs(t, err, cache.ErrInvalidTTL)
+	assert.NoError(t, err)
 
-	// Negative TTL
-	err = mock.Set(ctx, "key1", []byte("value1"), -1*time.Second)
+	// Negative TTL - should return error
+	err = mock.Set(ctx, "key2", []byte("value2"), -1*time.Second)
 	assert.ErrorIs(t, err, cache.ErrInvalidTTL)
 }
 

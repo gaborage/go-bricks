@@ -196,13 +196,19 @@ func (m *MockCache) Set(ctx context.Context, key string, value []byte, ttl time.
 		return m.setError
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return cache.ErrInvalidTTL
+	}
+
+	// Handle TTL=0 as "no expiration" (100 years)
+	expiration := time.Now().Add(ttl)
+	if ttl == 0 {
+		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
 	entry := &cacheEntry{
 		value:      value,
-		expiration: time.Now().Add(ttl),
+		expiration: expiration,
 	}
 
 	m.data.Store(key, entry)
@@ -229,14 +235,20 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 		return nil, false, m.getOrSetError
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return nil, false, cache.ErrInvalidTTL
+	}
+
+	// Handle TTL=0 as "no expiration" (100 years)
+	expiration := time.Now().Add(ttl)
+	if ttl == 0 {
+		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
 	// Atomic get-or-set operation
 	actual, loaded := m.data.LoadOrStore(key, &cacheEntry{
 		value:      value,
-		expiration: time.Now().Add(ttl),
+		expiration: expiration,
 	})
 
 	entry := actual.(*cacheEntry)
@@ -246,7 +258,7 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 		// Expired, replace it
 		entry = &cacheEntry{
 			value:      value,
-			expiration: time.Now().Add(ttl),
+			expiration: expiration,
 		}
 		m.data.Store(key, entry)
 		return value, true, nil
@@ -275,15 +287,21 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 		return false, m.compareAndSetError
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return false, cache.ErrInvalidTTL
+	}
+
+	// Handle TTL=0 as "no expiration" (100 years)
+	expiration := time.Now().Add(ttl)
+	if ttl == 0 {
+		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
 	// expectedValue == nil means "set only if key doesn't exist"
 	if expectedValue == nil {
 		_, loaded := m.data.LoadOrStore(key, &cacheEntry{
 			value:      newValue,
-			expiration: time.Now().Add(ttl),
+			expiration: expiration,
 		})
 		return !loaded, nil
 	}
@@ -310,7 +328,7 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 	// Swap to new value
 	m.data.Store(key, &cacheEntry{
 		value:      newValue,
-		expiration: time.Now().Add(ttl),
+		expiration: expiration,
 	})
 
 	return true, nil
@@ -400,12 +418,13 @@ func (m *MockCache) Stats() (map[string]any, error) {
 func (m *MockCache) Close() error {
 	m.closeCalls.Add(1)
 
-	if !m.closed.CompareAndSwap(false, true) {
-		return cache.ErrClosed
-	}
-
+	// Check for configured error BEFORE changing state
 	if m.closeError != nil {
 		return m.closeError
+	}
+
+	if !m.closed.CompareAndSwap(false, true) {
+		return cache.ErrClosed
 	}
 
 	// Clear data on close

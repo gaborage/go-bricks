@@ -349,10 +349,13 @@ defer cache.Delete(ctx, lockKey)
 - Performance: <1ms latency, 100k ops/sec throughput
 - Observability integration ready (traces, metrics, health endpoints)
 
+**Completed (PR #164):**
+- ✅ `cache/testing` package with MockCache and 20+ assertion helpers
+- ✅ End-to-end Redis integration tests (TTL expiration, atomic operation verification, concurrency)
+- ✅ Comprehensive benchmark suite (Redis + CBOR serialization)
+
 **Known Gaps (Future Work):**
-- `cache/testing` package for mock utilities (similar to `database/testing`)
 - Full observability metrics implementation (cache.hit, cache.miss counters)
-- End-to-end Redis integration tests (TTL expiration, atomic operation verification)
 
 **Architectural Highlights:**
 - Follows "Explicit > Implicit" manifesto principle with function-based `deps.GetCache(ctx)`

@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+const (
+	marshalSetupFailedMsg = "Marshal setup failed: %v"
+)
+
 // =============================================================================
 // Simple Type Benchmarks
 // =============================================================================
@@ -25,7 +29,10 @@ func BenchmarkCBORMarshalString(b *testing.B) {
 
 func BenchmarkCBORUnmarshalString(b *testing.B) {
 	value := "test string value"
-	data, _ := Marshal(value)
+	data, err := Marshal(value)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -54,7 +61,10 @@ func BenchmarkCBORMarshalInt(b *testing.B) {
 
 func BenchmarkCBORUnmarshalInt(b *testing.B) {
 	value := int64(123456789)
-	data, _ := Marshal(value)
+	data, err := Marshal(value)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -101,7 +111,10 @@ func BenchmarkCBORUnmarshalSimpleStruct(b *testing.B) {
 		Name:  "Alice Smith",
 		Email: "alice@example.com",
 	}
-	data, _ := Marshal(user)
+	data, err := Marshal(user)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -189,7 +202,10 @@ func BenchmarkCBORUnmarshalComplexStruct(b *testing.B) {
 		Active:   true,
 		Score:    95.5,
 	}
-	data, _ := Marshal(user)
+	data, err := Marshal(user)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -236,7 +252,10 @@ func BenchmarkCBORUnmarshalSlice(b *testing.B) {
 			Email: "user@example.com",
 		}
 	}
-	data, _ := Marshal(users)
+	data, err := Marshal(users)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -275,7 +294,10 @@ func BenchmarkCBORUnmarshalMap(b *testing.B) {
 	for i := 0; i < 50; i++ {
 		mapData[string(rune(i))] = i
 	}
-	encoded, _ := Marshal(mapData)
+	encoded, err := Marshal(mapData)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -325,7 +347,10 @@ func BenchmarkCBORUnmarshalLargeStruct(b *testing.B) {
 	for i := range large.Data {
 		large.Data[i] = byte(i % 256)
 	}
-	data, _ := Marshal(large)
+	data, err := Marshal(large)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -431,7 +456,10 @@ func BenchmarkCBORUnmarshalParallel(b *testing.B) {
 		Name:  "Alice Smith",
 		Email: "alice@example.com",
 	}
-	data, _ := Marshal(user)
+	data, err := Marshal(user)
+	if err != nil {
+		b.Fatalf(marshalSetupFailedMsg, err)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()

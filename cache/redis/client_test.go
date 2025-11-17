@@ -131,14 +131,14 @@ func TestClientSet(t *testing.T) {
 		assert.Equal(t, "value", value)
 	})
 
-	t.Run("InvalidTTL", func(t *testing.T) {
+	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
 		client, _ := setupTestRedis(t)
 		defer client.Close()
 
 		ctx := context.Background()
+		// TTL=0 means no expiration (should succeed)
 		err := client.Set(ctx, testKey1, []byte("value"), 0)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+		assert.NoError(t, err)
 	})
 
 	t.Run("NegativeTTL", func(t *testing.T) {
@@ -233,16 +233,16 @@ func TestClientGetOrSet(t *testing.T) {
 		assert.Equal(t, testExistingValue, stored)
 	})
 
-	t.Run("InvalidTTL", func(t *testing.T) {
+	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
 		client, _ := setupTestRedis(t)
 		defer client.Close()
 
 		ctx := context.Background()
+		// TTL=0 means no expiration (should succeed)
 		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte("value"), 0)
-		assert.Error(t, err)
-		assert.False(t, wasSet)
-		assert.Nil(t, value)
-		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+		assert.NoError(t, err)
+		assert.True(t, wasSet)
+		assert.Equal(t, []byte("value"), value)
 	})
 
 	t.Run("Closed", func(t *testing.T) {
@@ -323,15 +323,15 @@ func TestClientCompareAndSet(t *testing.T) {
 		assert.Equal(t, "current-value", stored)
 	})
 
-	t.Run("InvalidTTL", func(t *testing.T) {
+	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
 		client, _ := setupTestRedis(t)
 		defer client.Close()
 
 		ctx := context.Background()
+		// TTL=0 means no expiration (should succeed)
 		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("value"), 0)
-		assert.Error(t, err)
-		assert.False(t, success)
-		assert.True(t, errors.Is(err, cache.ErrInvalidTTL))
+		assert.NoError(t, err)
+		assert.True(t, success)
 	})
 
 	t.Run("Closed", func(t *testing.T) {

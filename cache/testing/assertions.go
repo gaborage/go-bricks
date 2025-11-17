@@ -62,21 +62,27 @@ func AssertOperationCount(t *testing.T, mock *MockCache, operation string, expec
 	}
 }
 
-// AssertOperationCountGreaterThan asserts that a specific operation was called at least a certain number of times.
+// AssertOperationCountAtLeast asserts that a specific operation was called at least a certain number of times.
 // Only works with MockCache instances.
 //
 // Example:
 //
 //	mock := NewMockCache()
 //	// ... perform operations ...
-//	AssertOperationCountGreaterThan(t, mock, "Get", 10)
-func AssertOperationCountGreaterThan(t *testing.T, mock *MockCache, operation string, minimum int64) {
+//	AssertOperationCountAtLeast(t, mock, "Get", 10)
+func AssertOperationCountAtLeast(t *testing.T, mock *MockCache, operation string, minimum int64) {
 	t.Helper()
 
 	actual := mock.GetOperationCount(operation)
-	if actual <= minimum {
-		t.Errorf("expected more than %d %s operations, got %d", minimum, operation, actual)
+	if actual < minimum {
+		t.Errorf("expected at least %d %s operations, got %d", minimum, operation, actual)
 	}
+}
+
+// Deprecated: Use AssertOperationCountAtLeast instead.
+// AssertOperationCountGreaterThan is kept for backward compatibility.
+func AssertOperationCountGreaterThan(t *testing.T, mock *MockCache, operation string, minimum int64) {
+	AssertOperationCountAtLeast(t, mock, operation, minimum)
 }
 
 // AssertCacheClosed asserts that the cache has been closed.
