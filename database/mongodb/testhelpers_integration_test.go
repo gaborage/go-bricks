@@ -140,7 +140,7 @@ func sampleDocuments(count int) []any {
 
 // bsonString creates a formatted string for BSON documents
 func bsonString(prefix string, num int) string {
-	return prefix + string(rune('0'+num%10))
+	return fmt.Sprintf("%s%d", prefix, num)
 }
 
 // assertDocumentCount checks that a collection has the expected number of documents
