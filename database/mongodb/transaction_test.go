@@ -6,13 +6,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-
-	"github.com/gaborage/go-bricks/logger"
 )
 
 // createTestTransactionForInterface creates a basic transaction for interface method testing
 func createTestTransactionForInterface() *Transaction {
-	testLogger := logger.New("debug", true)
+	testLogger := newTestLogger()
 	parentCtx := context.Background()
 
 	// We create a transaction with nil session/database since we're only testing
@@ -27,7 +25,7 @@ func createTestTransactionForInterface() *Transaction {
 
 // createTestTransactionWithMockData creates transaction with mock data for getter tests
 func createTestTransactionWithMockData() *Transaction {
-	testLogger := logger.New("debug", true)
+	testLogger := newTestLogger()
 	parentCtx := context.Background()
 
 	// Use a dummy database pointer for testing getters

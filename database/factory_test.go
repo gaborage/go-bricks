@@ -90,7 +90,7 @@ func TestGetSupportedDatabaseTypes(t *testing.T) {
 }
 
 func TestNewConnectionUnsupportedType(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	cfg := &config.DatabaseConfig{
 		Type:     "unsupported",
 		Host:     "localhost",
@@ -106,7 +106,7 @@ func TestNewConnectionUnsupportedType(t *testing.T) {
 }
 
 func TestNewConnectionPostgreSQLConfigValidation(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test with invalid config that should fail during connection
 	cfg := &config.DatabaseConfig{
@@ -125,7 +125,7 @@ func TestNewConnectionPostgreSQLConfigValidation(t *testing.T) {
 }
 
 func TestNewConnectionOracleConfigValidation(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test with invalid config that should fail during connection
 	cfg := &config.DatabaseConfig{
@@ -201,7 +201,7 @@ func TestNewConnectionReturnsTrackedConnection(t *testing.T) {
 
 	// Create a simple connection wrapper for testing
 	simpleConn := &simpleConnection{db: db}
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test that NewTrackedConnection creates the correct wrapper
 	tracked := NewTrackedConnection(simpleConn, log, &config.DatabaseConfig{})
@@ -221,7 +221,7 @@ func TestFactoryIntegrationWithTracking(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	ctx := logger.WithDBCounter(context.Background())
 
 	// Set up mock expectations
@@ -374,7 +374,7 @@ func (t *simpleTransaction) Rollback() error {
 }
 
 func TestNewConnectionSuccessfulPostgreSQLMocked(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Create a test that would normally succeed if we had a real PostgreSQL connection
 	// Since we can't guarantee a real connection, we'll test the logic by temporarily
@@ -402,7 +402,7 @@ func TestNewConnectionSuccessfulPostgreSQLMocked(t *testing.T) {
 }
 
 func TestNewConnectionSuccessfulOracleMocked(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test Oracle path
 	cfg := &config.DatabaseConfig{
@@ -433,7 +433,7 @@ func TestNewConnectionSuccessfulOracleMocked(t *testing.T) {
 }
 
 func TestNewConnectionWithDifferentDatabaseTypes(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	tests := []struct {
 		name     string
@@ -489,7 +489,7 @@ func TestNewConnectionWithDifferentDatabaseTypes(t *testing.T) {
 }
 
 func TestNewConnectionNilConfig(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test with nil config - should panic or handle gracefully
 	defer func() {
@@ -508,7 +508,7 @@ func TestNewConnectionNilConfig(t *testing.T) {
 }
 
 func TestNewConnectionSuccessPath(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	// Test the exact scenario from the existing working test to ensure
 	// we exercise the successful wrapping path
@@ -541,7 +541,7 @@ func TestNewConnectionSuccessfulWrapping(t *testing.T) {
 	// Test that demonstrates the successful wrapping logic of NewConnection
 	// by using the mock infrastructure to simulate what happens when a connection succeeds
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -583,7 +583,7 @@ func TestNewConnectionSuccessfulWrapping(t *testing.T) {
 
 func TestNewConnectionCodePaths(t *testing.T) {
 	// Test various combinations to ensure all switch cases are covered
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	testCases := []struct {
 		name          string
@@ -647,7 +647,7 @@ func TestNewConnectionCodePaths(t *testing.T) {
 }
 
 func TestNewConnectionSetsServerMetadataForPostgreSQL(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -686,7 +686,7 @@ func TestNewConnectionSetsServerMetadataForPostgreSQL(t *testing.T) {
 }
 
 func TestNewConnectionSetsServerMetadataForOracleWithServiceName(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -723,7 +723,7 @@ func TestNewConnectionSetsServerMetadataForOracleWithServiceName(t *testing.T) {
 }
 
 func TestNewConnectionSetsServerMetadataForOracleWithSID(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -759,7 +759,7 @@ func TestNewConnectionSetsServerMetadataForOracleWithSID(t *testing.T) {
 }
 
 func TestNewConnectionSetsServerMetadataForOracleWithDatabaseOnly(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -790,7 +790,7 @@ func TestNewConnectionSetsServerMetadataForOracleWithDatabaseOnly(t *testing.T) 
 }
 
 func TestNewConnectionHandlesEmptyDatabaseForPostgreSQL(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -821,7 +821,7 @@ func TestNewConnectionHandlesEmptyDatabaseForPostgreSQL(t *testing.T) {
 }
 
 func TestNewConnectionHandlesEmptySchemaForPostgreSQL(t *testing.T) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()

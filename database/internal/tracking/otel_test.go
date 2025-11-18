@@ -17,7 +17,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -59,7 +58,7 @@ func TestCreateDBSpanSpanCreation(t *testing.T) {
 	exporter, cleanup := setupTestTracerProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -83,7 +82,7 @@ func TestCreateDBSpanSpanAttributes(t *testing.T) {
 	exporter, cleanup := setupTestTracerProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -145,7 +144,7 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 			exporter, cleanup := setupTestTracerProvider(t)
 			defer cleanup()
 
-			log := logger.New("disabled", false)
+			log := newDisabledTestLogger()
 			tc := &Context{
 				Logger:   log,
 				Vendor:   "postgresql",
@@ -238,7 +237,7 @@ func TestCreateDBSpanQueryTruncation(t *testing.T) {
 	exporter, cleanup := setupTestTracerProvider(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -297,7 +296,7 @@ func TestCreateDBSpanDifferentVendors(t *testing.T) {
 			exporter, cleanup := setupTestTracerProvider(t)
 			defer cleanup()
 
-			log := logger.New("disabled", false)
+			log := newDisabledTestLogger()
 			tc := &Context{
 				Logger:   log,
 				Vendor:   v.vendor,
@@ -348,7 +347,7 @@ func TestCreateDBSpanOperationTypes(t *testing.T) {
 			exporter, cleanup := setupTestTracerProvider(t)
 			defer cleanup()
 
-			log := logger.New("disabled", false)
+			log := newDisabledTestLogger()
 			tc := &Context{
 				Logger:   log,
 				Vendor:   "postgresql",
@@ -423,7 +422,7 @@ func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {
 	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -452,7 +451,7 @@ func TestTrackDBOperationWithError(t *testing.T) {
 	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -487,7 +486,7 @@ func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
 	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",
@@ -518,7 +517,7 @@ func TestTrackDBOperationMultipleOperations(t *testing.T) {
 	traceExporter, meterProvider, cleanup := setupTestObservabilityProviders(t)
 	defer cleanup()
 
-	log := logger.New("disabled", false)
+	log := newDisabledTestLogger()
 	tc := &Context{
 		Logger:   log,
 		Vendor:   "postgresql",

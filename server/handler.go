@@ -69,13 +69,11 @@ func newContextChecker(cfg *config.Config) *contextChecker {
 // checkCancellation checks if the request context has been cancelled or timed out.
 // Returns an API error if cancelled, nil otherwise.
 func (cc *contextChecker) checkCancellation(c echo.Context, stage string) IAPIError {
-	select {
-	case <-c.Request().Context().Done():
+	if err := c.Request().Context().Err(); err != nil {
 		msg := fmt.Sprintf("Request timeout %s", stage)
 		return NewServiceUnavailableError(msg)
-	default:
-		return nil
 	}
+	return nil
 }
 
 // requestAllocator handles type detection, memory allocation, and nil validation for request types.

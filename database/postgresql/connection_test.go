@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -31,7 +30,7 @@ const (
 func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	c := &Connection{db: db, logger: logger.New("disabled", true)}
+	c := &Connection{db: db, logger: newDisabledTestLogger()}
 	return db, mock, c
 }
 
@@ -81,7 +80,7 @@ func createPostgreSQLConfig(connType, value string) *config.DatabaseConfig {
 
 // testConnectionExpectedError tests that a connection attempt fails with expected error
 func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
-	log := logger.New("debug", true)
+	log := newTestLogger()
 	_, err := NewConnection(cfg, log)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), postgrePingErrorMsg)
@@ -252,7 +251,7 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 		},
 	}
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
@@ -268,7 +267,7 @@ func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 		ConnectionString: "invalid-connection-string-format",
 	}
 
-	log := logger.New("debug", true)
+	log := newTestLogger()
 
 	_, err := NewConnection(cfg, log)
 

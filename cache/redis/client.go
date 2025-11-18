@@ -24,7 +24,11 @@ local current = redis.call('GET', key)
 -- If expected is empty string, only set if key doesn't exist (SET NX semantics)
 if expected == "" then
 	if current == false then
-		redis.call('SET', key, new_value, 'PX', ttl_ms)
+		if ttl_ms == 0 then
+			redis.call('SET', key, new_value)
+		else
+			redis.call('SET', key, new_value, 'PX', ttl_ms)
+		end
 		return 1
 	end
 	return 0
@@ -32,7 +36,11 @@ end
 
 -- Normal CAS: compare current value with expected
 if current == expected then
-	redis.call('SET', key, new_value, 'PX', ttl_ms)
+	if ttl_ms == 0 then
+		redis.call('SET', key, new_value)
+	else
+		redis.call('SET', key, new_value, 'PX', ttl_ms)
+	end
 	return 1
 end
 
@@ -103,13 +111,14 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 // Set stores a value in the cache with the specified TTL.
-// Returns cache.ErrInvalidTTL if TTL is negative or zero.
+// TTL of 0 means no expiration (use with caution).
+// Returns cache.ErrInvalidTTL if TTL is negative.
 func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if c.closed.Load() {
 		return cache.ErrClosed
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return cache.ErrInvalidTTL
 	}
 
@@ -146,7 +155,7 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 		return nil, false, cache.ErrClosed
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return nil, false, cache.ErrInvalidTTL
 	}
 
@@ -183,7 +192,7 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 		return false, cache.ErrClosed
 	}
 
-	if ttl <= 0 {
+	if ttl < 0 {
 		return false, cache.ErrInvalidTTL
 	}
 
