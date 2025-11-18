@@ -97,7 +97,7 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 	assert.NotNil(t, tp)
 
 	// Should be able to create a tracer
-	tracer := tp.Tracer("test")
+	tracer := tp.Tracer(testTracerName)
 	assert.NotNil(t, tracer)
 
 	// Should be able to start a span
@@ -670,7 +670,7 @@ func TestNewProviderAppliesDefaultsInternally(t *testing.T) {
 	assert.NotNil(t, tp)
 
 	// Create a span to verify sampler is working (not dropping everything)
-	tracer := tp.Tracer("test")
+	tracer := tp.Tracer(testTracerName)
 	_, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()
@@ -821,7 +821,7 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 			// Verify provider works by creating a span
 			tp := provider.TracerProvider()
 			assert.NotNil(t, tp)
-			tracer := tp.Tracer("test")
+			tracer := tp.Tracer(testTracerName)
 			_, span := tracer.Start(context.Background(), testSpanName)
 			assert.NotNil(t, span)
 			span.End()
@@ -991,7 +991,7 @@ func TestNewProviderNoCleanupOnSuccess(t *testing.T) {
 	tp := provider.TracerProvider()
 	assert.NotNil(t, tp)
 
-	tracer := tp.Tracer("test")
+	tracer := tp.Tracer(testTracerName)
 	_, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()

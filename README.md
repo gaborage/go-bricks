@@ -24,11 +24,12 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 8. [HTTP Server](#http-server)
 9. [Messaging](#messaging)
 10. [Database](#database)
-11. [Multi-Tenant Implementation](#multi-tenant-implementation)
-12. [Observability and Operations](#observability-and-operations)
-13. [Examples](#examples)
-14. [Contributing](#contributing)
-15. [License](#license)
+11. [Cache](#cache)
+12. [Multi-Tenant Implementation](#multi-tenant-implementation)
+13. [Observability and Operations](#observability-and-operations)
+14. [Examples](#examples)
+15. [Contributing](#contributing)
+16. [License](#license)
 
 ---
 
@@ -68,6 +69,7 @@ go test -run TestName   # Run specific test
 - **AMQP messaging** with validate-once, replay-many pattern for multi-tenant isolation
 - **Configuration loader** merging defaults, YAML, and environment variables
 - **Multi-database support** for PostgreSQL, Oracle, and MongoDB with type-safe query builders
+- **Redis cache integration** with type-safe serialization, multi-tenant isolation, and automatic lifecycle management
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
 - **Observability** with W3C trace propagation, metrics, and health endpoints
@@ -138,6 +140,15 @@ database:
   database: mydb
   username: postgres
   password: password
+
+cache:
+  enabled: true
+  type: redis
+  redis:
+    host: localhost
+    port: 6379
+    database: 0
+    pool_size: 10
 
 log:
   level: info
@@ -343,6 +354,109 @@ All methods automatically handle:
 - Flyway integration for schema migrations
 - Performance tracking via OpenTelemetry
 - Type-safe query builders prevent runtime SQL errors
+
+---
+
+## Cache
+
+GoBricks provides Redis-based caching with type-safe serialization, multi-tenant isolation, and automatic lifecycle management through the CacheManager.
+
+### Quick Example
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/gaborage/go-bricks/cache"
+)
+
+type UserService struct {
+    getCache func(context.Context) (cache.Cache, error)
+}
+
+func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
+    // GetCache resolves tenant from context automatically
+    cache, err := s.getCache(ctx)
+    if err != nil {
+        return nil, err
+    }
+
+    cacheKey := fmt.Sprintf("user:%d", id)
+
+    // Try cache first
+    data, err := cache.Get(ctx, cacheKey)
+    if err == nil {
+        return cache.Unmarshal[User](data)
+    }
+
+    // Cache miss - query database
+    user, err := s.queryDatabase(ctx, id)
+    if err != nil {
+        return nil, err
+    }
+
+    // Store in cache with TTL
+    data, _ = cache.Marshal(user)
+    cache.Set(ctx, cacheKey, data, 5*time.Minute)
+
+    return user, nil
+}
+```
+
+### Key Features
+- **Type-Safe Serialization**: CBOR encoding with compile-time type safety
+- **Multi-Tenant Isolation**: Automatic tenant context resolution
+- **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
+- **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
+- **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
+- **Observability**: OpenTelemetry spans, metrics, and health checks
+
+### Operations
+
+| Operation | Method | Use Case |
+|-----------|--------|----------|
+| **Basic read** | `Get(ctx, key)` | Query result caching |
+| **Basic write** | `Set(ctx, key, value, ttl)` | Store computed data with TTL |
+| **Deduplication** | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys, atomic SET NX |
+| **Distributed lock** | `CompareAndSet(ctx, key, expected, new, ttl)` | Cross-pod job coordination |
+| **Type-safe store** | `Marshal(v)` + `Set()` | Struct serialization (CBOR) |
+| **Type-safe retrieve** | `Get()` + `Unmarshal[T](data)` | Struct deserialization |
+
+**For comprehensive examples**, see the Cache Operations section in [llms.txt](llms.txt).
+
+### Testing with Mock Cache
+
+GoBricks provides `cache/testing` package for unit tests without Redis dependencies:
+
+```go
+import cachetest "github.com/gaborage/go-bricks/cache/testing"
+
+func TestMyService(t *testing.T) {
+    mockCache := cachetest.NewMockCache()
+
+    // Configure mock behavior
+    mockCache.WithGetFailure(cache.ErrNotFound)
+
+    // Inject into service
+    deps := &app.ModuleDeps{
+        GetCache: func(ctx context.Context) (cache.Cache, error) {
+            return mockCache, nil
+        },
+    }
+    svc := NewService(deps)
+
+    // Run tests
+    result, err := svc.GetUser(ctx, 123)
+
+    // Assert cache operations
+    cachetest.AssertOperationCount(t, mockCache, "Get", 1)
+}
+```
+
+**Features:** Fluent configuration API, operation tracking, 20+ assertion helpers, TTL expiration testing, multi-tenant support.
+
+**See also:** [database/testing](https://pkg.go.dev/github.com/gaborage/go-bricks/database/testing) for similar patterns.
 
 ---
 

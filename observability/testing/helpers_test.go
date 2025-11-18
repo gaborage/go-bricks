@@ -31,7 +31,7 @@ func TestNewTestTraceProvider(t *testing.T) {
 	require.NotNil(t, tp.Exporter)
 
 	// Verify we can create a tracer
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 	require.NotNil(t, tracer)
 
 	// Verify we can create spans
@@ -96,7 +96,7 @@ func TestSpanCollectorBasics(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create test spans
 	_, span1 := tracer.Start(context.Background(), testSpanName)
@@ -125,7 +125,7 @@ func TestSpanCollectorWithName(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create spans with different names
 	_, span1 := tracer.Start(context.Background(), "query")
@@ -154,7 +154,7 @@ func TestSpanCollectorWithAttribute(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create spans with different attributes
 	_, span1 := tracer.Start(context.Background(), "db-query")
@@ -184,7 +184,7 @@ func TestSpanCollectorAssertCount(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	_, span := tracer.Start(context.Background(), "test")
 	span.End()
@@ -203,7 +203,7 @@ func TestAssertSpanName(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 	_, span := tracer.Start(context.Background(), "my-operation")
 	span.End()
 
@@ -218,7 +218,7 @@ func TestAssertSpanAttribute(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 	_, span := tracer.Start(context.Background(), "test")
 	span.SetAttributes(
 		attribute.String("string.key", "value"),
@@ -244,7 +244,7 @@ func TestAssertSpanStatus(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create span with OK status
 	_, span1 := tracer.Start(context.Background(), "success")
@@ -267,7 +267,7 @@ func TestAssertSpanStatusDescription(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 	_, span := tracer.Start(context.Background(), "test")
 	span.SetStatus(codes.Error, "connection timeout")
 	span.End()
@@ -282,7 +282,7 @@ func TestAssertSpanError(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 	_, span := tracer.Start(context.Background(), "test")
 	span.SetStatus(codes.Error, "database error")
 	span.End()
@@ -508,7 +508,7 @@ func TestSpanCollectorChaining(t *testing.T) {
 	tp := NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	tracer := tp.Tracer("test")
+	tracer := tp.TestTracer()
 
 	// Create spans
 	_, span1 := tracer.Start(context.Background(), dbQuery)

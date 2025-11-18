@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/testing/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +37,7 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
 
 	// Create logger for tests (disabled output)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Create config using connection details from container
 	cfg := &config.DatabaseConfig{
@@ -151,7 +150,7 @@ func TestConnectionWithServiceName(t *testing.T) {
 	defer cancel()
 
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Test with service name (most common pattern)
 	cfg := &config.DatabaseConfig{
@@ -185,7 +184,7 @@ func TestConnectionWithDatabaseFallback(t *testing.T) {
 	defer cancel()
 
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Test with database field (fallback pattern)
 	cfg := &config.DatabaseConfig{
@@ -211,7 +210,7 @@ func TestConnectionWithConnectionString(t *testing.T) {
 	defer cancel()
 
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Test with connection string (most flexible pattern)
 	cfg := &config.DatabaseConfig{
@@ -463,7 +462,7 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 
 	// Start container
 	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
-	log := logger.New("disabled", true)
+	log := newDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{
