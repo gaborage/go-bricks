@@ -11,6 +11,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -205,6 +206,9 @@ func TestTimeoutDuringValidation(t *testing.T) {
 
 	// Wait for context to expire
 	time.Sleep(5 * time.Millisecond)
+
+	// Explicitly verify context is cancelled (defensive test assertion)
+	require.Error(t, ctx.Err(), "Context should be cancelled after timeout")
 
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
