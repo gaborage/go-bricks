@@ -62,15 +62,19 @@ type LogsConfig struct {
     Protocol              string         // "http" or "grpc" (inherits from trace)
     DisableStdout         bool           // false=both stdout+OTLP, true=OTLP-only
     SlowRequestThreshold  time.Duration  // Latency threshold for slow request warnings
+    SamplingRate          *float64       // INFO/DEBUG trace log sampling (0.0-1.0, default 0.0)
     Batch                 BatchConfig    // Reused from traces
     Export                ExportConfig   // Reused from traces
     Max                   MaxConfig      // Reused from traces
 }
 ```
 
-**Note:** Sampling configuration was removed in favor of dual-mode logging (see `DualModeLogProcessor`).
-- Action logs (`log.type="action"`): Always sampled at 100% for request summaries
-- Trace logs (`log.type="trace"`): Filtered to WARN+ severity only
+**Log Sampling Behavior** (via `DualModeLogProcessor`):
+- **Action logs** (`log.type="action"`): Always exported at 100% for request summaries
+- **Trace logs** (`log.type="trace"`):
+  - ERROR/WARN: Always exported at 100%
+  - INFO/DEBUG: Controlled by `sampling_rate` (default 0.0 = drop all)
+  - Sampling is deterministic per trace (all logs in same trace sampled together)
 
 **2. OTel Bridge** (`logger/otel_bridge.go`)
 ```go
@@ -242,11 +246,9 @@ observability:
     protocol: "grpc"
     insecure: true
     disable_stdout: false  # Both stdout + OTLP for debugging
-    sample:
-      rate: 1.0  # 100% sampling in dev
-      always_sample_high: true
+    sampling_rate: 1.0     # 100% of INFO/DEBUG trace logs in dev
     batch:
-      timeout: 500ms  # Fast export for debugging
+      timeout: 500ms       # Fast export for debugging
       size: 512
 ```
 
@@ -263,17 +265,21 @@ observability:
     enabled: true
     endpoint: "otel-collector.prod:4317"
     protocol: "grpc"
-    insecure: false  # TLS enabled
-    disable_stdout: true  # OTLP-only, reduce disk I/O
+    insecure: false         # TLS enabled
+    disable_stdout: true    # OTLP-only, reduce disk I/O
+    sampling_rate: 0.1      # 10% of INFO/DEBUG trace logs (ERROR/WARN always 100%)
     headers:
       Authorization: "Bearer ${OTEL_API_KEY}"
-    sample:
-      rate: 0.1  # 10% sampling for INFO/DEBUG
-      always_sample_high: true  # WARN/ERROR/FATAL always exported
     batch:
-      timeout: 5s  # Efficient batching
+      timeout: 5s           # Efficient batching
       size: 1024
 ```
+
+**Sampling Behavior:**
+- `sampling_rate: 0.0` (default): Drop all INFO/DEBUG trace logs, keep ERROR/WARN
+- `sampling_rate: 0.1`: Export 10% of INFO/DEBUG, all ERROR/WARN
+- `sampling_rate: 1.0`: Export all trace logs (full visibility, higher volume)
+- Action logs (request summaries) are always exported at 100% regardless of rate
 
 ## Consequences
 

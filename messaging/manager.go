@@ -293,7 +293,7 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 
 	m.logger.Info().
 		Str("key", key).
-		Str("url", amqpURL).
+		Str("broker_url", redactAMQPURL(amqpURL)).
 		Msg("Created AMQP client for key")
 
 	return client, nil

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	testOTLPHTTPEndpoint = "localhost:4318"
+	testOTLPHTTPEndpoint = "http://localhost:4318"
 	testOTLPGRPCEndpoint = "localhost:4317"
 	testSpanName         = "test-span"
 	testTracerName       = "test-tracer"
@@ -811,6 +811,7 @@ func TestNewProviderEnvironmentAwareBatchTimeout(t *testing.T) {
 				Trace: TraceConfig{
 					Enabled:  BoolPtr(true),
 					Endpoint: tt.endpoint,
+					Protocol: ProtocolGRPC, // gRPC for non-stdout tests
 				},
 			}
 

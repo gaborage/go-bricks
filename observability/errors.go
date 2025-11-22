@@ -22,3 +22,20 @@ var ErrNotInitialized = errors.New("observability: provider not initialized")
 
 // ErrInvalidProtocol is returned when the protocol (trace or metrics) is not "http" or "grpc".
 var ErrInvalidProtocol = errors.New("observability: protocol must be either 'http' or 'grpc'")
+
+// ErrInvalidLogSamplingRate is returned when the log sampling rate is outside the valid range [0.0, 1.0].
+var ErrInvalidLogSamplingRate = errors.New("observability: log sampling rate must be between 0.0 and 1.0")
+
+// ErrInvalidEndpointFormat is returned when the endpoint format doesn't match the protocol.
+// gRPC endpoints must NOT include http:// or https:// scheme (use "host:port" format).
+// HTTP endpoints MUST include http:// or https:// scheme.
+var ErrInvalidEndpointFormat = errors.New("observability: invalid endpoint format for protocol")
+
+// ErrInvalidCompression is returned when the compression value is not "gzip" or "none".
+var ErrInvalidCompression = errors.New("observability: compression must be either 'gzip' or 'none'")
+
+// ErrInvalidTemporality is returned when the temporality value is not "delta" or "cumulative".
+var ErrInvalidTemporality = errors.New("observability: temporality must be either 'delta' or 'cumulative'")
+
+// ErrInvalidHistogramAggregation is returned when the histogram aggregation is not "exponential" or "explicit".
+var ErrInvalidHistogramAggregation = errors.New("observability: histogram aggregation must be either 'exponential' or 'explicit'")

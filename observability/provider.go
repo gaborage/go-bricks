@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -375,13 +376,32 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 	}
 }
 
+// stripScheme removes http:// or https:// prefix from endpoint.
+// OTEL HTTP exporters expect host:port without scheme - they add it automatically based on WithInsecure().
+func stripScheme(endpoint string) string {
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	return endpoint
+}
+
 // createOTLPHTTPExporter creates an OTLP HTTP trace exporter.
 func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
-	debugLogger.Printf("Creating OTLP HTTP trace exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Trace.Endpoint, p.config.Trace.Insecure, len(p.config.Trace.Headers))
+	debugLogger.Printf("Creating OTLP HTTP trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
+		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
+
+	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
+	endpoint := stripScheme(p.config.Trace.Endpoint)
 
 	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpoint(p.config.Trace.Endpoint),
+		otlptracehttp.WithEndpoint(endpoint),
+	}
+
+	// Configure compression
+	if p.config.Trace.Compression == CompressionGzip {
+		opts = append(opts, otlptracehttp.WithCompression(otlptracehttp.GzipCompression))
+		debugLogger.Println("Enabled gzip compression for trace export")
+	} else {
+		opts = append(opts, otlptracehttp.WithCompression(otlptracehttp.NoCompression))
 	}
 
 	// Configure TLS/insecure connection
@@ -406,11 +426,17 @@ func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
 
 // createOTLPGRPCExporter creates an OTLP gRPC trace exporter.
 func (p *provider) createOTLPGRPCExporter() (sdktrace.SpanExporter, error) {
-	debugLogger.Printf("Creating OTLP gRPC trace exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Trace.Endpoint, p.config.Trace.Insecure, len(p.config.Trace.Headers))
+	debugLogger.Printf("Creating OTLP gRPC trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
+		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(p.config.Trace.Endpoint),
+	}
+
+	// Configure compression
+	if p.config.Trace.Compression == CompressionGzip {
+		opts = append(opts, otlptracegrpc.WithCompressor("gzip"))
+		debugLogger.Println("Enabled gzip compression for trace export")
 	}
 
 	// Configure TLS/insecure connection

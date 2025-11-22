@@ -1648,19 +1648,202 @@ multitenant:
 
 ## Observability & Logging
 
+**Basic Configuration:**
+
 ```yaml
+# config.yaml (base config, committed to git)
 observability:
   enabled: true
-  service_name: my-service
-  trace: { enabled: true, endpoint: "http://otel-collector:4318", protocol: http }
-  metrics: { enabled: true }
+  service:
+    name: my-service
+    version: v1.0.0
+  traces:
+    enabled: true
+    endpoint: http://localhost:4318/v1/traces
+    protocol: http
+  metrics:
+    enabled: true
   logs:
     enabled: true
     slow_request_threshold: 750ms
 
 logger:
-  pretty: false # set false when exporting to OTLP
+  pretty: false  # MUST be false when observability.logs.enabled = true
   level: info
+```
+
+**New Relic Production Config (Optimized with Compression):**
+
+```yaml
+# config.production.yaml (DO NOT commit - add to .gitignore)
+observability:
+  enabled: true
+  service:
+    name: my-service
+    version: v1.0.0
+
+  # Traces with gRPC compression
+  trace:
+    enabled: true
+    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
+    protocol: grpc
+    compression: gzip  # ~70% bandwidth reduction
+    insecure: false  # TLS required for New Relic
+    headers:
+      api-key: your-new-relic-license-key  # Secret value
+
+  # Metrics with New Relic optimizations
+  metrics:
+    enabled: true
+    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
+    protocol: grpc
+    compression: gzip
+    temporality: delta  # New Relic recommendation (lower memory)
+    histogram_aggregation: exponential  # Better precision, 10x lower memory
+    headers:
+      api-key: your-new-relic-license-key  # Reuse or separate key
+
+  # Logs with compression and sampling
+  logs:
+    enabled: true
+    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
+    protocol: grpc
+    compression: gzip
+    sampling_rate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always sent)
+    headers:
+      api-key: your-new-relic-license-key
+
+logger:
+  pretty: false  # MUST be false when observability.logs.enabled = true
+  level: info
+```
+
+**HTTP Alternative (Port 4318 with Signal Paths):**
+
+```yaml
+observability:
+  enabled: true
+  service:
+    name: my-service
+
+  trace:
+    enabled: true
+    endpoint: https://otlp.nr-data.net:4318/v1/traces  # HTTP requires https:// + path
+    protocol: http
+    compression: gzip
+    headers:
+      api-key: your-license-key
+
+  metrics:
+    enabled: true
+    endpoint: https://otlp.nr-data.net:4318/v1/metrics  # Signal-specific path
+    protocol: http
+    compression: gzip
+    temporality: delta
+    histogram_aggregation: exponential
+    headers:
+      api-key: your-license-key
+
+  logs:
+    enabled: true
+    endpoint: https://otlp.nr-data.net:4318/v1/logs  # Signal-specific path
+    protocol: http
+    compression: gzip
+    headers:
+      api-key: your-license-key
+
+logger:
+  pretty: false
+```
+
+**With OTEL Collector (Recommended for Production):**
+
+```yaml
+# Application config - collector handles vendor specifics
+observability:
+  enabled: true
+  service:
+    name: my-service
+    version: v1.0.0
+
+  trace:
+    endpoint: otel-collector:4317  # Local collector
+    protocol: grpc
+    insecure: true  # Collector on same network (no TLS)
+    compression: gzip  # Reduce app→collector traffic
+
+  metrics:
+    enabled: true
+    endpoint: otel-collector:4317
+    protocol: grpc
+    compression: gzip
+    temporality: delta
+    histogram_aggregation: exponential
+
+  logs:
+    enabled: true
+    endpoint: otel-collector:4317
+    protocol: grpc
+    compression: gzip
+    sampling_rate: 0.2  # 20% trace logs
+
+logger:
+  pretty: false
+```
+
+**Security: Never commit secrets to git**
+
+```bash
+# .gitignore
+config.production.yaml
+config.staging.yaml
+config.*.local.yaml
+```
+
+**Alternative: Load secrets from environment in code**
+
+```go
+// main.go
+cfg, _ := config.Load()
+
+// Override headers with secrets from env/vault
+apiKey := os.Getenv("OTEL_API_KEY")
+cfg.Observability.Traces.Headers = map[string]string{"api-key": apiKey}
+cfg.Observability.Metrics.Headers = map[string]string{"api-key": apiKey}
+cfg.Observability.Logs.Headers = map[string]string{"api-key": apiKey}
+
+app.Run(cfg)
+```
+
+**Endpoint Format Rules (CRITICAL):**
+
+| Protocol | Format | Example | TLS |
+|----------|--------|---------|-----|
+| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Auto |
+| `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Off |
+| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | On |
+| `http` (insecure) | `http://host:port/path` | `http://localhost:4318/v1/traces` | Off |
+
+**Common Mistakes:**
+- ❌ `https://otlp.nr-data.net:4317` + `protocol: grpc` → ERROR: "too many colons"
+- ✅ `otlp.nr-data.net:4317` + `protocol: grpc` → Correct
+
+**Common Vendor Headers:**
+
+| Vendor | Header Example |
+|--------|----------------|
+| New Relic | `api-key: your-license-key` |
+| Honeycomb | `x-honeycomb-team: your-team-key` |
+| Datadog | `dd-api-key: your-api-key` |
+| Grafana Cloud | `authorization: "Basic base64-creds"` |
+| Generic | `authorization: "Bearer your-token"` |
+
+**Insecure gRPC (localhost testing):**
+```yaml
+traces:
+  endpoint: localhost:4317
+  protocol: grpc
+  insecure: true  # Disable TLS
 ```
 
 Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.

@@ -126,6 +126,48 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name: "invalid log sampling rate - negative",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(-0.1),
+				},
+			},
+			wantErr: ErrInvalidLogSamplingRate,
+		},
+		{
+			name: "invalid log sampling rate - too high",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(1.1),
+				},
+			},
+			wantErr: ErrInvalidLogSamplingRate,
+		},
+		{
+			name: "valid log sampling rate - 0.5",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(0.5),
+				},
+			},
+			wantErr: nil,
+		},
+		{
 			name: "valid OTLP HTTP protocol",
 			config: Config{
 				Enabled: true,
@@ -133,7 +175,7 @@ func TestConfigValidate(t *testing.T) {
 					Name: testServiceName,
 				},
 				Trace: TraceConfig{
-					Endpoint: testTraceEndpointA,
+					Endpoint: "http://" + testTraceEndpointA,
 					Protocol: "http",
 					Sample: SampleConfig{
 						Rate: Float64Ptr(1.0),
@@ -208,7 +250,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Metrics: MetricsConfig{
 					Enabled:  BoolPtr(true),
-					Endpoint: testTraceEndpointA,
+					Endpoint: "http://" + testTraceEndpointA,
 				},
 			},
 			wantErr: nil,
@@ -599,3 +641,409 @@ func TestCloneHeaderMapWithValues(t *testing.T) {
 // Note: Environment variable override behavior is tested in the integration tests
 // (bootstrap_observability_test.go) since it requires the full config.Load() flow.
 // This test demonstrates the structure that would be used.
+
+func TestValidateEndpointFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		protocol string
+		wantErr  error
+	}{
+		{
+			name:     "grpc with correct format",
+			endpoint: "otlp.nr-data.net:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "grpc with https scheme - invalid",
+			endpoint: "https://otlp.nr-data.net:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "grpc with http scheme - invalid",
+			endpoint: "http://localhost:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "http with https scheme - valid",
+			endpoint: "https://otlp.nr-data.net:4318/v1/traces",
+			protocol: ProtocolHTTP,
+			wantErr:  nil,
+		},
+		{
+			name:     "http with http scheme - valid",
+			endpoint: "http://localhost:4318/v1/traces",
+			protocol: ProtocolHTTP,
+			wantErr:  nil,
+		},
+		{
+			name:     "http without scheme - invalid",
+			endpoint: "localhost:4318",
+			protocol: ProtocolHTTP,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "stdout endpoint - always valid",
+			endpoint: EndpointStdout,
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "empty endpoint - always valid",
+			endpoint: "",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "grpc localhost without scheme - valid",
+			endpoint: "localhost:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEndpointFormat(tt.endpoint, tt.protocol)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateEndpointFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "trace grpc with correct format",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Endpoint: "otlp.nr-data.net:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace grpc with https - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Endpoint: "https://otlp.nr-data.net:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+		{
+			name: "metrics http with https - valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "https://otlp.nr-data.net:4318/v1/metrics",
+					Protocol: ProtocolHTTP,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics http without scheme - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "otlp.nr-data.net:4318",
+					Protocol: ProtocolHTTP,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+		{
+			name: "logs grpc with http scheme - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "http://localhost:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateCompression(t *testing.T) {
+	tests := []struct {
+		name        string
+		compression string
+		wantErr     error
+	}{
+		{
+			name:        "gzip_compression_valid",
+			compression: "gzip",
+			wantErr:     nil,
+		},
+		{
+			name:        "no_compression_valid",
+			compression: "none",
+			wantErr:     nil,
+		},
+		{
+			name:        "empty_compression_valid_will_use_default",
+			compression: "",
+			wantErr:     nil,
+		},
+		{
+			name:        "invalid_compression_brotli",
+			compression: "brotli",
+			wantErr:     ErrInvalidCompression,
+		},
+		{
+			name:        "invalid_compression_deflate",
+			compression: "deflate",
+			wantErr:     ErrInvalidCompression,
+		},
+		{
+			name:        "invalid_compression_uppercase_GZIP",
+			compression: "GZIP",
+			wantErr:     ErrInvalidCompression,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCompression(tt.compression)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateCompression(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "trace_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace_with_no_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "none",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "brotli",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "metrics_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "deflate",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "logs_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "logs_with_no_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "none",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "logs_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "GZIP",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "all_signals_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigCompressionDefaults(t *testing.T) {
+	tests := []struct {
+		name               string
+		config             Config
+		expectedTraceComp  string
+		expectedMetricComp string
+		expectedLogComp    string
+	}{
+		{
+			name: "defaults_to_gzip_for_all_signals",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+			},
+			expectedTraceComp:  "gzip",
+			expectedMetricComp: "gzip",
+			expectedLogComp:    "gzip",
+		},
+		{
+			name: "respects_explicit_none_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "none",
+				},
+				Metrics: MetricsConfig{
+					Compression: "none",
+				},
+				Logs: LogsConfig{
+					Compression: "none",
+				},
+			},
+			expectedTraceComp:  "none",
+			expectedMetricComp: "none",
+			expectedLogComp:    "none",
+		},
+		{
+			name: "mixed_compression_settings",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+				Metrics: MetricsConfig{
+					Compression: "none",
+				},
+				// Logs uses default
+			},
+			expectedTraceComp:  "gzip",
+			expectedMetricComp: "none",
+			expectedLogComp:    "gzip", // Default
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.config.ApplyDefaults()
+			assert.Equal(t, tt.expectedTraceComp, tt.config.Trace.Compression)
+			assert.Equal(t, tt.expectedMetricComp, tt.config.Metrics.Compression)
+			assert.Equal(t, tt.expectedLogComp, tt.config.Logs.Compression)
+		})
+	}
+}

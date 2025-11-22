@@ -17,14 +17,17 @@ const (
 // DualModeLogProcessor routes log records to different processors based on log.type attribute.
 // It implements the dual-mode logging architecture where:
 //   - Action logs (log.type="action") are exported with all severities (100% sampling)
-//   - Trace logs (log.type="trace") are filtered to WARN+ only (~95% volume reduction)
+//   - Trace logs (log.type="trace"): ERROR/WARN always exported, INFO/DEBUG sampled by rate
 type DualModeLogProcessor struct {
 	actionProcessor sdklog.Processor // Handles action logs (request summaries)
 	traceProcessor  sdklog.Processor // Handles trace logs (application debug logs)
+	samplingRate    float64          // Sampling rate for INFO/DEBUG trace logs (0.0-1.0)
 }
 
 // NewDualModeLogProcessor creates a new dual-mode log processor.
-func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor) *DualModeLogProcessor {
+// samplingRate controls what fraction of INFO/DEBUG trace logs to export (0.0 to 1.0).
+// ERROR/WARN logs and action logs are always exported at 100%.
+func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, samplingRate float64) *DualModeLogProcessor {
 	if actionProcessor == nil {
 		panic("observability: actionProcessor cannot be nil")
 	}
@@ -35,6 +38,7 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor) *
 	return &DualModeLogProcessor{
 		actionProcessor: actionProcessor,
 		traceProcessor:  traceProcessor,
+		samplingRate:    samplingRate,
 	}
 }
 
@@ -50,13 +54,18 @@ func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) e
 		return p.actionProcessor.OnEmit(ctx, rec)
 	}
 
-	// Trace logs and unknown types: only export WARN+ (filter out INFO/DEBUG)
+	// Trace logs and unknown types: ERROR/WARN always exported
 	// Note: OpenTelemetry severity levels: Trace=1, Debug=5, Info=9, Warn=13, Error=17, Fatal=21
 	if rec.Severity() >= log.SeverityWarn { // 13 = WARN
 		return p.traceProcessor.OnEmit(ctx, rec)
 	}
 
-	// Drop INFO/DEBUG logs (this achieves ~95% volume reduction)
+	// INFO/DEBUG logs: apply deterministic trace-based sampling
+	if p.shouldSample(rec) {
+		return p.traceProcessor.OnEmit(ctx, rec)
+	}
+
+	// Drop unsampled INFO/DEBUG logs
 	return nil
 }
 
@@ -71,8 +80,45 @@ func (p *DualModeLogProcessor) Enabled(_ context.Context, rec *sdklog.Record) bo
 		return true
 	}
 
-	// Trace logs and unknown types: WARN+ only
-	return rec.Severity() >= log.SeverityWarn
+	// Trace logs: ERROR/WARN always enabled
+	if rec.Severity() >= log.SeverityWarn {
+		return true
+	}
+
+	// INFO/DEBUG: enabled based on sampling rate (for pre-filtering optimization)
+	return p.samplingRate > 0
+}
+
+// shouldSample determines if an INFO/DEBUG log should be sampled based on trace ID.
+// Uses deterministic sampling: all logs in the same trace are sampled together.
+func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
+	// Fast path: rate 0 drops all, rate 1 keeps all
+	if p.samplingRate <= 0 {
+		return false
+	}
+	if p.samplingRate >= 1.0 {
+		return true
+	}
+
+	// Deterministic sampling based on trace ID
+	// Use the first 8 bytes of trace ID as uint64 for consistent hashing
+	traceID := rec.TraceID()
+	if !traceID.IsValid() {
+		// No trace ID: fall back to random-ish sampling using record timestamp
+		ts := rec.Timestamp().UnixNano()
+		if ts < 0 {
+			ts = 0
+		}
+		return uint64(ts)%100 < uint64(p.samplingRate*100) //nolint:gosec // G115: ts is guaranteed non-negative
+	}
+
+	// Use first 8 bytes of trace ID for deterministic sampling
+	// This ensures all logs in the same trace are sampled together
+	traceBytes := traceID[:]
+	hash := uint64(traceBytes[0]) | uint64(traceBytes[1])<<8 | uint64(traceBytes[2])<<16 | uint64(traceBytes[3])<<24 |
+		uint64(traceBytes[4])<<32 | uint64(traceBytes[5])<<40 | uint64(traceBytes[6])<<48 | uint64(traceBytes[7])<<56
+
+	return hash%100 < uint64(p.samplingRate*100)
 }
 
 // Shutdown shuts down both processors.

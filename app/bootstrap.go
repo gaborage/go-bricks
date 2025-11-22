@@ -95,7 +95,7 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 	// Try to unmarshal configuration from the "observability" key
 	if err := b.cfg.Unmarshal("observability", &obsCfg); err != nil {
 		// Configuration missing or invalid - use defaults (observability disabled)
-		b.log.Debug().Err(err).Msg("Observability configuration not found or invalid, using no-op provider")
+		b.log.Warn().Err(err).Msg("Observability configuration not found or invalid, using no-op provider")
 		return observability.MustNewProvider(&observability.Config{Enabled: false})
 	}
 
