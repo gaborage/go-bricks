@@ -46,7 +46,7 @@ func (m *mockProcessor) ForceFlush(_ context.Context) error {
 func TestDualModeLogProcessorShutdown(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	err := dualProc.Shutdown(context.Background())
 
@@ -59,7 +59,7 @@ func TestDualModeLogProcessorShutdown(t *testing.T) {
 func TestDualModeLogProcessorForceFlush(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	err := dualProc.ForceFlush(context.Background())
 
@@ -114,7 +114,7 @@ func TestExtractLogType(t *testing.T) {
 func TestDualModeLogProcessorEnabled(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	tests := []struct {
 		name       string
@@ -123,7 +123,7 @@ func TestDualModeLogProcessorEnabled(t *testing.T) {
 		expected   bool
 	}{
 		{"action INFO enabled", log.SeverityInfo, []log.KeyValue{log.String(logTypeAttr, "action")}, true},
-		{"trace INFO disabled", log.SeverityInfo, []log.KeyValue{log.String(logTypeAttr, "trace")}, false},
+		{"trace INFO disabled with rate 0", log.SeverityInfo, []log.KeyValue{log.String(logTypeAttr, "trace")}, false},
 		{"trace WARN enabled", log.SeverityWarn, []log.KeyValue{log.String(logTypeAttr, "trace")}, true},
 		{"trace ERROR enabled", log.SeverityError, []log.KeyValue{log.String(logTypeAttr, "trace")}, true},
 		{"unknown WARN treated as trace", log.SeverityWarn, []log.KeyValue{log.String(logTypeAttr, "unknown")}, true},
@@ -148,17 +148,18 @@ func TestDualModeLogProcessorEnabled(t *testing.T) {
 func TestDualModeLogProcessorCreation(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.5)
 
 	assert.NotNil(t, dualProc)
 	assert.NotNil(t, dualProc.actionProcessor)
 	assert.NotNil(t, dualProc.traceProcessor)
+	assert.Equal(t, 0.5, dualProc.samplingRate)
 }
 
 func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
@@ -176,7 +177,7 @@ func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {
 func TestDualModeLogProcessorRoutesTraceWarn(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityWarn,
@@ -191,10 +192,10 @@ func TestDualModeLogProcessorRoutesTraceWarn(t *testing.T) {
 	assert.Equal(t, 1, traceProc.emitCount)
 }
 
-func TestDualModeLogProcessorDropsTraceInfo(t *testing.T) {
+func TestDualModeLogProcessorDropsTraceInfoWithZeroRate(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
@@ -212,7 +213,7 @@ func TestDualModeLogProcessorDropsTraceInfo(t *testing.T) {
 func TestDualModeLogProcessorDefaultsToTrace(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
-	dualProc := NewDualModeLogProcessor(actionProc, traceProc)
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	factory := logtest.RecordFactory{
 		Severity: log.SeverityError,
@@ -329,7 +330,7 @@ func TestDualModeProcessorEnrichesTraceContext(t *testing.T) {
 		},
 	}
 
-	dualProc := NewDualModeLogProcessor(capturingProc, &mockProcessor{})
+	dualProc := NewDualModeLogProcessor(capturingProc, &mockProcessor{}, 0.0)
 
 	// Create context with trace
 	traceID, _ := trace.TraceIDFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1")
@@ -536,4 +537,131 @@ func TestEnrichAttributesFallback(t *testing.T) {
 	assert.Equal(t, "dddddddddddddddddddddddddddddddd", rec.TraceID().String())
 	assert.Equal(t, "dddddddddddddddd", rec.SpanID().String())
 	assert.Equal(t, trace.TraceFlags(1), rec.TraceFlags())
+}
+
+// TestSamplingRateFullExport verifies rate=1.0 exports all INFO/DEBUG logs
+func TestSamplingRateFullExport(t *testing.T) {
+	actionProc := &mockProcessor{}
+	traceProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 1.0) // 100% sampling
+
+	// Emit INFO trace log (should be exported with rate=1.0)
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityInfo,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+	}
+	rec := factory.NewRecord()
+
+	err := dualProc.OnEmit(context.Background(), &rec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, actionProc.emitCount)
+	assert.Equal(t, 1, traceProc.emitCount, "INFO log should be exported with rate=1.0")
+}
+
+// TestSamplingRateDeterministic verifies same trace ID produces same sampling decision
+func TestSamplingRateDeterministic(t *testing.T) {
+	traceProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.5) // 50% sampling
+
+	// Create a specific trace ID
+	traceID, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	spanID, _ := trace.SpanIDFromHex("fedcba9876543210")
+
+	// First call with this trace
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityInfo,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		TraceID:    traceID,
+		SpanID:     spanID,
+	}
+	rec1 := factory.NewRecord()
+	_ = dualProc.OnEmit(context.Background(), &rec1)
+	firstCount := traceProc.emitCount
+
+	// Second call with SAME trace ID should produce same decision
+	rec2 := factory.NewRecord()
+	_ = dualProc.OnEmit(context.Background(), &rec2)
+	secondCount := traceProc.emitCount
+
+	// Both should either be sampled or not (deterministic)
+	if firstCount == 1 {
+		assert.Equal(t, 2, secondCount, "Same trace ID should produce same sampling decision")
+	} else {
+		assert.Equal(t, 0, secondCount, "Same trace ID should produce same sampling decision")
+	}
+}
+
+// TestSamplingWarnAlwaysExported verifies WARN logs are always exported regardless of rate
+func TestSamplingWarnAlwaysExported(t *testing.T) {
+	traceProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.0) // 0% sampling for INFO/DEBUG
+
+	// WARN should still be exported
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityWarn,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+	}
+	rec := factory.NewRecord()
+
+	err := dualProc.OnEmit(context.Background(), &rec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, traceProc.emitCount, "WARN should always be exported regardless of sampling rate")
+}
+
+// TestSamplingErrorAlwaysExported verifies ERROR logs are always exported regardless of rate
+func TestSamplingErrorAlwaysExported(t *testing.T) {
+	traceProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.0) // 0% sampling for INFO/DEBUG
+
+	// ERROR should still be exported
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityError,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+	}
+	rec := factory.NewRecord()
+
+	err := dualProc.OnEmit(context.Background(), &rec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, traceProc.emitCount, "ERROR should always be exported regardless of sampling rate")
+}
+
+// TestSamplingActionLogsUnaffected verifies action logs are always exported at 100%
+func TestSamplingActionLogsUnaffected(t *testing.T) {
+	actionProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(actionProc, &mockProcessor{}, 0.0) // 0% sampling
+
+	// Action INFO log should still be exported
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityInfo,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+	}
+	rec := factory.NewRecord()
+
+	err := dualProc.OnEmit(context.Background(), &rec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, actionProc.emitCount, "Action logs should always be exported regardless of sampling rate")
+}
+
+// TestEnabledWithSamplingRate verifies Enabled() reflects sampling rate for INFO/DEBUG
+func TestEnabledWithSamplingRate(t *testing.T) {
+	// With rate > 0, INFO should be enabled (actual sampling happens in OnEmit)
+	dualProcWithRate := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.5)
+
+	factory := logtest.RecordFactory{
+		Severity:   log.SeverityInfo,
+		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+	}
+	rec := factory.NewRecord()
+
+	assert.True(t, dualProcWithRate.Enabled(context.Background(), &rec),
+		"INFO should be enabled when sampling rate > 0")
+
+	// With rate = 0, INFO should be disabled
+	dualProcNoRate := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.0)
+	assert.False(t, dualProcNoRate.Enabled(context.Background(), &rec),
+		"INFO should be disabled when sampling rate = 0")
 }

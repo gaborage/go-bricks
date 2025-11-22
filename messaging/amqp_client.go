@@ -452,7 +452,7 @@ func (c *AMQPClientImpl) handleReconnect() {
 		c.isReady = false
 		c.m.Unlock()
 
-		c.log.Info().Str("broker_url", c.brokerURL).Msg("Attempting to connect to AMQP broker")
+		c.log.Info().Str("broker_url", redactAMQPURL(c.brokerURL)).Msg("Attempting to connect to AMQP broker")
 
 		conn, err := c.connect()
 		if err != nil {

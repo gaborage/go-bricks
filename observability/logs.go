@@ -103,11 +103,22 @@ func (p *provider) createOTLPHTTPLogExporter() (sdklog.Exporter, error) {
 		useInsecure = *p.config.Logs.Insecure
 	}
 
-	debugLogger.Printf("Creating OTLP HTTP log exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Logs.Endpoint, useInsecure, len(p.config.Logs.Headers))
+	debugLogger.Printf("Creating OTLP HTTP log exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
+		p.config.Logs.Endpoint, useInsecure, p.config.Logs.Compression, len(p.config.Logs.Headers))
+
+	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
+	endpoint := stripScheme(p.config.Logs.Endpoint)
 
 	opts := []otlploghttp.Option{
-		otlploghttp.WithEndpoint(p.config.Logs.Endpoint),
+		otlploghttp.WithEndpoint(endpoint),
+	}
+
+	// Configure compression
+	if p.config.Logs.Compression == CompressionGzip {
+		opts = append(opts, otlploghttp.WithCompression(otlploghttp.GzipCompression))
+		debugLogger.Println("Enabled gzip compression for log export")
+	} else {
+		opts = append(opts, otlploghttp.WithCompression(otlploghttp.NoCompression))
 	}
 
 	// Configure TLS/insecure connection
@@ -137,11 +148,17 @@ func (p *provider) createOTLPGRPCLogExporter() (sdklog.Exporter, error) {
 		useInsecure = *p.config.Logs.Insecure
 	}
 
-	debugLogger.Printf("Creating OTLP gRPC log exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Logs.Endpoint, useInsecure, len(p.config.Logs.Headers))
+	debugLogger.Printf("Creating OTLP gRPC log exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
+		p.config.Logs.Endpoint, useInsecure, p.config.Logs.Compression, len(p.config.Logs.Headers))
 
 	opts := []otlploggrpc.Option{
 		otlploggrpc.WithEndpoint(p.config.Logs.Endpoint),
+	}
+
+	// Configure compression
+	if p.config.Logs.Compression == CompressionGzip {
+		opts = append(opts, otlploggrpc.WithCompressor("gzip"))
+		debugLogger.Println("Enabled gzip compression for log export")
 	}
 
 	// Configure TLS/insecure connection
@@ -185,11 +202,17 @@ func (p *provider) createDualModeProcessor(baseExporter sdklog.Exporter) (sdklog
 	// Create batch processor for action logs (100% sampling, all severities)
 	actionProcessor := p.createBatchProcessorWithResource(baseExporter, actionResource, "action")
 
-	// Create batch processor for trace logs (WARN+ only)
+	// Create batch processor for trace logs (WARN+ always, INFO/DEBUG sampled)
 	traceProcessor := p.createBatchProcessorWithResource(baseExporter, traceResource, "trace")
 
-	debugLogger.Println("Dual-mode log processor created successfully")
-	return NewDualModeLogProcessor(actionProcessor, traceProcessor), nil
+	// Get sampling rate for INFO/DEBUG trace logs (default 0.0 = drop all)
+	samplingRate := 0.0
+	if p.config.Logs.SamplingRate != nil {
+		samplingRate = *p.config.Logs.SamplingRate
+	}
+
+	debugLogger.Printf("Dual-mode log processor created successfully (sampling_rate=%.2f)", samplingRate)
+	return NewDualModeLogProcessor(actionProcessor, traceProcessor, samplingRate), nil
 }
 
 // createLogResource creates a resource with the specified log.type attribute.

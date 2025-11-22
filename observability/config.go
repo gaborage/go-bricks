@@ -1,6 +1,10 @@
 package observability
 
-import "time"
+import (
+	"maps"
+	"strings"
+	"time"
+)
 
 const (
 	// EndpointStdout is a special endpoint value that outputs to stdout (for local development).
@@ -11,6 +15,28 @@ const (
 
 	// ProtocolGRPC specifies OTLP over gRPC.
 	ProtocolGRPC = "grpc"
+
+	// CompressionGzip specifies gzip compression for OTLP export.
+	CompressionGzip = "gzip"
+
+	// CompressionNone specifies no compression for OTLP export.
+	CompressionNone = "none"
+
+	// TemporalityDelta specifies delta temporality for metrics (recommended by New Relic).
+	// Delta temporality reports the change in value since the last export.
+	TemporalityDelta = "delta"
+
+	// TemporalityCumulative specifies cumulative temporality for metrics.
+	// Cumulative temporality reports the total value since the start of the measurement.
+	TemporalityCumulative = "cumulative"
+
+	// HistogramAggregationExponential specifies exponential histogram aggregation (recommended by New Relic).
+	// Provides better precision for a wide range of values with lower memory overhead.
+	HistogramAggregationExponential = "exponential"
+
+	// HistogramAggregationExplicit specifies explicit bucket histogram aggregation.
+	// Uses fixed bucket boundaries defined by the application.
+	HistogramAggregationExplicit = "explicit"
 
 	// EnvironmentDevelopment is the default environment name for development mode.
 	EnvironmentDevelopment = "development"
@@ -35,9 +61,7 @@ func cloneHeaderMap(headers map[string]string) map[string]string {
 		return nil
 	}
 	clone := make(map[string]string, len(headers))
-	for k, v := range headers {
-		clone[k] = v
-	}
+	maps.Copy(clone, headers)
 	return clone
 }
 
@@ -121,12 +145,26 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Insecure = true
 	}
 
+	// Compression default - gzip for bandwidth reduction (New Relic recommendation)
+	if c.Trace.Compression == "" {
+		c.Trace.Compression = CompressionGzip
+	}
+
 	// Sample rate default - only set when nil (not explicitly provided)
 	// If explicitly set to 0.0, we respect that choice (and warn in NewProvider)
 	if c.Trace.Sample.Rate == nil {
 		c.Trace.Sample.Rate = Float64Ptr(1.0)
 	}
 
+	// Apply batch, export, and queue defaults
+	c.applyTraceBatchDefaults()
+}
+
+// applyTraceBatchDefaults applies batch processing defaults for traces.
+// Extracted to reduce cyclomatic complexity of applyTraceDefaults.
+//
+//nolint:dupl // Intentional duplication for type safety (Trace vs Logs fields)
+func (c *Config) applyTraceBatchDefaults() {
 	// Batch defaults - use environment-aware settings
 	// Development: faster export for better debugging experience
 	// Production: larger batches for efficiency
@@ -143,9 +181,17 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Batch.Size = 512
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings
+	// Development: faster timeout for quick feedback
+	// Production: longer timeout to accommodate network latency, TLS handshake, and batch size
 	if c.Trace.Export.Timeout == 0 {
-		c.Trace.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Trace.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Trace.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Trace.Export.Timeout = 60 * time.Second
+		}
 	}
 
 	// Max queue and batch size defaults
@@ -169,14 +215,37 @@ func (c *Config) applyMetricsDefaults() {
 		c.Metrics.Enabled = BoolPtr(true)
 	}
 
+	// Compression default - gzip for bandwidth reduction (New Relic recommendation)
+	if c.Metrics.Compression == "" {
+		c.Metrics.Compression = CompressionGzip
+	}
+
+	// Temporality default - cumulative (OTEL SDK default)
+	// New Relic recommends delta, but we default to cumulative for backward compatibility
+	if c.Metrics.Temporality == "" {
+		c.Metrics.Temporality = TemporalityCumulative
+	}
+
+	// Histogram aggregation default - explicit (OTEL SDK default)
+	// New Relic recommends exponential, but we default to explicit for backward compatibility
+	if c.Metrics.HistogramAggregation == "" {
+		c.Metrics.HistogramAggregation = HistogramAggregationExplicit
+	}
+
 	// Interval default
 	if c.Metrics.Interval == 0 {
 		c.Metrics.Interval = 10 * time.Second
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings (same pattern as traces)
 	if c.Metrics.Export.Timeout == 0 {
-		c.Metrics.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Metrics.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Metrics.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Metrics.Export.Timeout = 60 * time.Second
+		}
 	}
 }
 
@@ -211,9 +280,19 @@ func (c *Config) applyLogsDefaults() {
 		c.Logs.Headers = cloneHeaderMap(c.Trace.Headers)
 	}
 
+	// Compression default - gzip for bandwidth reduction (New Relic recommendation)
+	if c.Logs.Compression == "" {
+		c.Logs.Compression = CompressionGzip
+	}
+
 	// Slow request threshold default (used by action log severity calculation)
 	if c.Logs.SlowRequestThreshold == 0 {
 		c.Logs.SlowRequestThreshold = 1 * time.Second
+	}
+
+	// Sampling rate default - 0.0 for backward compatibility (drop INFO/DEBUG trace logs)
+	if c.Logs.SamplingRate == nil {
+		c.Logs.SamplingRate = Float64Ptr(0.0)
 	}
 
 	// Apply batch, export, and queue defaults
@@ -222,6 +301,8 @@ func (c *Config) applyLogsDefaults() {
 
 // applyLogsBatchDefaults applies batch processing defaults for logs.
 // Extracted to reduce cyclomatic complexity of applyLogsDefaults.
+//
+//nolint:dupl // Intentional duplication for type safety (Logs vs Trace fields)
 func (c *Config) applyLogsBatchDefaults() {
 	// Batch timeout - use environment-aware settings (same pattern as traces)
 	if c.Logs.Batch.Timeout == 0 {
@@ -239,9 +320,15 @@ func (c *Config) applyLogsBatchDefaults() {
 		c.Logs.Batch.Size = 512
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings (same pattern as traces)
 	if c.Logs.Export.Timeout == 0 {
-		c.Logs.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Logs.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Logs.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Logs.Export.Timeout = 60 * time.Second
+		}
 	}
 
 	// Max queue size default
@@ -282,6 +369,11 @@ type TraceConfig struct {
 	// Useful for authentication tokens or API keys.
 	// Format: map of header name to header value.
 	Headers map[string]string `mapstructure:"headers"`
+
+	// Compression specifies the compression algorithm for OTLP export.
+	// Supported values: "gzip", "none".
+	// Default: "gzip" (recommended by New Relic for bandwidth reduction).
+	Compression string `mapstructure:"compression"`
 
 	// Sample contains sampling configuration.
 	Sample SampleConfig `mapstructure:"sample"`
@@ -370,6 +462,23 @@ type MetricsConfig struct {
 	// If nil or empty, metrics inherit trace headers.
 	Headers map[string]string `mapstructure:"headers"`
 
+	// Compression specifies the compression algorithm for OTLP export.
+	// Supported values: "gzip", "none".
+	// Default: "gzip" (recommended by New Relic for bandwidth reduction).
+	Compression string `mapstructure:"compression"`
+
+	// Temporality specifies the aggregation temporality for metrics.
+	// Supported values: "delta", "cumulative".
+	// Default: "cumulative" (OTEL SDK default).
+	// New Relic recommends "delta" for better performance and lower memory usage.
+	Temporality string `mapstructure:"temporality"`
+
+	// HistogramAggregation specifies the histogram aggregation method.
+	// Supported values: "exponential", "explicit".
+	// Default: "explicit" (OTEL SDK default).
+	// New Relic recommends "exponential" for better precision and lower memory overhead.
+	HistogramAggregation string `mapstructure:"histogram_aggregation"`
+
 	// Interval specifies how often to export metrics.
 	// Shorter intervals provide more real-time data but increase overhead.
 	Interval time.Duration `mapstructure:"interval"`
@@ -415,6 +524,11 @@ type LogsConfig struct {
 	// If nil or empty, logs inherit trace headers.
 	Headers map[string]string `mapstructure:"headers"`
 
+	// Compression specifies the compression algorithm for OTLP export.
+	// Supported values: "gzip", "none".
+	// Default: "gzip" (recommended by New Relic for bandwidth reduction).
+	Compression string `mapstructure:"compression"`
+
 	// Batch contains batch processing configuration (reused from TraceConfig pattern).
 	Batch BatchConfig `mapstructure:"batch"`
 
@@ -429,6 +543,13 @@ type LogsConfig struct {
 	// This is a system-wide threshold (no per-route overrides).
 	// Default: 1 second.
 	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"`
+
+	// SamplingRate controls what fraction of INFO/DEBUG trace logs to export (0.0 to 1.0).
+	// ERROR/WARN logs and action logs are always exported at 100%.
+	// Sampling is deterministic per trace (all logs in a trace are sampled together).
+	// 1.0 means export all INFO/DEBUG logs, 0.0 means export none (default).
+	// nil = apply default (0.0 for backward compatibility).
+	SamplingRate *float64 `mapstructure:"sampling_rate"`
 }
 
 // Validate checks the configuration for common errors.
@@ -457,6 +578,70 @@ func (c *Config) Validate() error {
 	return c.validateLogsConfig()
 }
 
+// validateEndpointFormat checks that the endpoint format matches the protocol.
+// gRPC endpoints must use "host:port" format without http:// or https:// scheme.
+// HTTP endpoints must include the http:// or https:// scheme.
+func validateEndpointFormat(endpoint, protocol string) error {
+	// Skip validation for stdout endpoint
+	if endpoint == EndpointStdout || endpoint == "" {
+		return nil
+	}
+
+	hasScheme := strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")
+
+	if protocol == ProtocolGRPC && hasScheme {
+		return ErrInvalidEndpointFormat
+	}
+
+	if protocol == ProtocolHTTP && !hasScheme {
+		return ErrInvalidEndpointFormat
+	}
+
+	return nil
+}
+
+// validateCompression checks that the compression value is valid.
+// Supported values: "gzip", "none".
+func validateCompression(compression string) error {
+	if compression == "" {
+		return nil // Will be set to default "gzip"
+	}
+
+	if compression != CompressionGzip && compression != CompressionNone {
+		return ErrInvalidCompression
+	}
+
+	return nil
+}
+
+// validateTemporality checks that the temporality value is valid.
+// Supported values: "delta", "cumulative".
+func validateTemporality(temporality string) error {
+	if temporality == "" {
+		return nil // Will be set to default "cumulative"
+	}
+
+	if temporality != TemporalityDelta && temporality != TemporalityCumulative {
+		return ErrInvalidTemporality
+	}
+
+	return nil
+}
+
+// validateHistogramAggregation checks that the histogram aggregation value is valid.
+// Supported values: "exponential", "explicit".
+func validateHistogramAggregation(aggregation string) error {
+	if aggregation == "" {
+		return nil // Will be set to default "explicit"
+	}
+
+	if aggregation != HistogramAggregationExponential && aggregation != HistogramAggregationExplicit {
+		return ErrInvalidHistogramAggregation
+	}
+
+	return nil
+}
+
 func (c *Config) validateTraceConfig() error {
 	// Validate sample rate if explicitly set
 	if c.Trace.Sample.Rate != nil {
@@ -464,6 +649,11 @@ func (c *Config) validateTraceConfig() error {
 		if rate < 0.0 || rate > 1.0 {
 			return ErrInvalidSampleRate
 		}
+	}
+
+	// Validate compression
+	if err := validateCompression(c.Trace.Compression); err != nil {
+		return err
 	}
 
 	if c.Trace.Endpoint == EndpointStdout || c.Trace.Endpoint == "" {
@@ -477,7 +667,8 @@ func (c *Config) validateTraceConfig() error {
 
 	switch protocol {
 	case ProtocolHTTP, ProtocolGRPC:
-		return nil
+		// Validate endpoint format matches protocol
+		return validateEndpointFormat(c.Trace.Endpoint, protocol)
 	default:
 		return ErrInvalidProtocol
 	}
@@ -487,6 +678,21 @@ func (c *Config) validateMetricsConfig() error {
 	// Treat nil as false, only validate if explicitly enabled
 	if c.Metrics.Enabled == nil || !*c.Metrics.Enabled {
 		return nil
+	}
+
+	// Validate compression
+	if err := validateCompression(c.Metrics.Compression); err != nil {
+		return err
+	}
+
+	// Validate temporality
+	if err := validateTemporality(c.Metrics.Temporality); err != nil {
+		return err
+	}
+
+	// Validate histogram aggregation
+	if err := validateHistogramAggregation(c.Metrics.HistogramAggregation); err != nil {
+		return err
 	}
 
 	if c.Metrics.Endpoint == EndpointStdout || c.Metrics.Endpoint == "" {
@@ -505,13 +711,27 @@ func (c *Config) validateMetricsConfig() error {
 		return ErrInvalidProtocol
 	}
 
-	return nil
+	// Validate endpoint format matches protocol
+	return validateEndpointFormat(c.Metrics.Endpoint, protocol)
 }
 
 func (c *Config) validateLogsConfig() error {
 	// Treat nil as false, only validate if explicitly enabled
 	if c.Logs.Enabled == nil || !*c.Logs.Enabled {
 		return nil
+	}
+
+	// Validate sampling rate if explicitly set
+	if c.Logs.SamplingRate != nil {
+		rate := *c.Logs.SamplingRate
+		if rate < 0.0 || rate > 1.0 {
+			return ErrInvalidLogSamplingRate
+		}
+	}
+
+	// Validate compression
+	if err := validateCompression(c.Logs.Compression); err != nil {
+		return err
 	}
 
 	// Stdout endpoint doesn't require protocol validation
@@ -532,5 +752,6 @@ func (c *Config) validateLogsConfig() error {
 		return ErrInvalidProtocol
 	}
 
-	return nil
+	// Validate endpoint format matches protocol
+	return validateEndpointFormat(c.Logs.Endpoint, protocol)
 }

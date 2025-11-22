@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -46,11 +47,21 @@ func (p *provider) initMeterProvider() error {
 		sdkmetric.WithProducer(runtime.NewProducer()),
 	)
 
-	// Create meter provider
-	p.meterProvider = sdkmetric.NewMeterProvider(
+	// Create meter provider with optional histogram view
+	meterOpts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
-	)
+	}
+
+	// Apply exponential histogram view if configured (New Relic recommendation)
+	if p.config.Metrics.HistogramAggregation == HistogramAggregationExponential {
+		debugLogger.Println("Configuring exponential histogram aggregation (New Relic recommendation)")
+		meterOpts = append(meterOpts, sdkmetric.WithView(p.createExponentialHistogramView()))
+	} else {
+		debugLogger.Println("Using explicit bucket histogram aggregation (OTEL SDK default)")
+	}
+
+	p.meterProvider = sdkmetric.NewMeterProvider(meterOpts...)
 
 	// Start Go runtime metrics collection (memory, GC, goroutines, CPU, config)
 	// This automatically exports metrics when the periodic reader triggers:
@@ -119,11 +130,30 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 
 // createOTLPHTTPMetricExporter creates an OTLP HTTP metric exporter.
 func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
-	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Metrics.Endpoint, useInsecure, len(headers))
+	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
+		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
+
+	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
+	endpoint := stripScheme(p.config.Metrics.Endpoint)
 
 	opts := []otlpmetrichttp.Option{
-		otlpmetrichttp.WithEndpoint(p.config.Metrics.Endpoint),
+		otlpmetrichttp.WithEndpoint(endpoint),
+	}
+
+	// Configure compression
+	if p.config.Metrics.Compression == CompressionGzip {
+		opts = append(opts, otlpmetrichttp.WithCompression(otlpmetrichttp.GzipCompression))
+		debugLogger.Println("Enabled gzip compression for metric export")
+	} else {
+		opts = append(opts, otlpmetrichttp.WithCompression(otlpmetrichttp.NoCompression))
+	}
+
+	// Configure temporality (New Relic recommends delta)
+	if p.config.Metrics.Temporality == TemporalityDelta {
+		opts = append(opts, otlpmetrichttp.WithTemporalitySelector(p.deltaTemporalitySelector))
+		debugLogger.Println("Configured delta temporality for metrics (New Relic recommendation)")
+	} else {
+		debugLogger.Println("Using cumulative temporality for metrics (OTEL SDK default)")
 	}
 
 	// Configure TLS/insecure connection
@@ -148,11 +178,25 @@ func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[st
 
 // createOTLPGRPCMetricExporter creates an OTLP gRPC metric exporter.
 func (p *provider) createOTLPGRPCMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
-	debugLogger.Printf("Creating OTLP gRPC metric exporter: endpoint=%s, insecure=%v, headers_count=%d",
-		p.config.Metrics.Endpoint, useInsecure, len(headers))
+	debugLogger.Printf("Creating OTLP gRPC metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
+		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(p.config.Metrics.Endpoint),
+	}
+
+	// Configure compression
+	if p.config.Metrics.Compression == CompressionGzip {
+		opts = append(opts, otlpmetricgrpc.WithCompressor("gzip"))
+		debugLogger.Println("Enabled gzip compression for metric export")
+	}
+
+	// Configure temporality (New Relic recommends delta)
+	if p.config.Metrics.Temporality == TemporalityDelta {
+		opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(p.deltaTemporalitySelector))
+		debugLogger.Println("Configured delta temporality for metrics (New Relic recommendation)")
+	} else {
+		debugLogger.Println("Using cumulative temporality for metrics (OTEL SDK default)")
 	}
 
 	// Configure TLS/insecure connection
@@ -268,4 +312,24 @@ func (p *provider) metricsTransportSettings() (protocol string, useInsecure bool
 	}
 
 	return protocol, useInsecure, headers
+}
+
+// deltaTemporalitySelector returns delta temporality for all instrument kinds.
+// This is recommended by New Relic for better performance and lower memory usage.
+func (p *provider) deltaTemporalitySelector(_ sdkmetric.InstrumentKind) metricdata.Temporality {
+	return metricdata.DeltaTemporality
+}
+
+// createExponentialHistogramView creates a view that uses exponential histogram aggregation.
+// This is recommended by New Relic for better precision and lower memory overhead.
+func (p *provider) createExponentialHistogramView() sdkmetric.View {
+	return sdkmetric.NewView(
+		sdkmetric.Instrument{Kind: sdkmetric.InstrumentKindHistogram},
+		sdkmetric.Stream{
+			Aggregation: sdkmetric.AggregationBase2ExponentialHistogram{
+				MaxSize:  160, // Default max size (New Relic recommendation)
+				MaxScale: 20,  // Default max scale for good precision
+			},
+		},
+	)
 }

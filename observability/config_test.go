@@ -126,6 +126,48 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name: "invalid log sampling rate - negative",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(-0.1),
+				},
+			},
+			wantErr: ErrInvalidLogSamplingRate,
+		},
+		{
+			name: "invalid log sampling rate - too high",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(1.1),
+				},
+			},
+			wantErr: ErrInvalidLogSamplingRate,
+		},
+		{
+			name: "valid log sampling rate - 0.5",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Logs: LogsConfig{
+					Enabled:      BoolPtr(true),
+					SamplingRate: Float64Ptr(0.5),
+				},
+			},
+			wantErr: nil,
+		},
+		{
 			name: "valid OTLP HTTP protocol",
 			config: Config{
 				Enabled: true,
@@ -133,7 +175,7 @@ func TestConfigValidate(t *testing.T) {
 					Name: testServiceName,
 				},
 				Trace: TraceConfig{
-					Endpoint: testTraceEndpointA,
+					Endpoint: "http://" + testTraceEndpointA,
 					Protocol: "http",
 					Sample: SampleConfig{
 						Rate: Float64Ptr(1.0),
@@ -208,7 +250,7 @@ func TestConfigValidate(t *testing.T) {
 				},
 				Metrics: MetricsConfig{
 					Enabled:  BoolPtr(true),
-					Endpoint: testTraceEndpointA,
+					Endpoint: "http://" + testTraceEndpointA,
 				},
 			},
 			wantErr: nil,
@@ -384,7 +426,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 						Size:    512,
 					},
 					Export: ExportConfig{
-						Timeout: 30 * time.Second,
+						Timeout: 10 * time.Second, // Development + stdout = 10s
 					},
 					Max: MaxConfig{
 						Queue: QueueConfig{
@@ -400,7 +442,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Endpoint: EndpointStdout,
 					Interval: 10 * time.Second,
 					Export: MetricsExportConfig{
-						Timeout: 30 * time.Second,
+						Timeout: 10 * time.Second, // Development + stdout = 10s
 					},
 				},
 			},
@@ -440,7 +482,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 						Size:    512,
 					},
 					Export: ExportConfig{
-						Timeout: 30 * time.Second,
+						Timeout: 10 * time.Second, // Development environment = 10s
 					},
 					Max: MaxConfig{
 						Queue: QueueConfig{
@@ -456,7 +498,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Endpoint: EndpointStdout,
 					Interval: 10 * time.Second,
 					Export: MetricsExportConfig{
-						Timeout: 30 * time.Second,
+						Timeout: 10 * time.Second, // Development + stdout = 10s
 					},
 				},
 			},
@@ -599,3 +641,831 @@ func TestCloneHeaderMapWithValues(t *testing.T) {
 // Note: Environment variable override behavior is tested in the integration tests
 // (bootstrap_observability_test.go) since it requires the full config.Load() flow.
 // This test demonstrates the structure that would be used.
+
+func TestValidateEndpointFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		protocol string
+		wantErr  error
+	}{
+		{
+			name:     "grpc with correct format",
+			endpoint: "otlp.nr-data.net:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "grpc with https scheme - invalid",
+			endpoint: "https://otlp.nr-data.net:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "grpc with http scheme - invalid",
+			endpoint: "http://localhost:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "http with https scheme - valid",
+			endpoint: "https://otlp.nr-data.net:4318/v1/traces",
+			protocol: ProtocolHTTP,
+			wantErr:  nil,
+		},
+		{
+			name:     "http with http scheme - valid",
+			endpoint: "http://localhost:4318/v1/traces",
+			protocol: ProtocolHTTP,
+			wantErr:  nil,
+		},
+		{
+			name:     "http without scheme - invalid",
+			endpoint: "localhost:4318",
+			protocol: ProtocolHTTP,
+			wantErr:  ErrInvalidEndpointFormat,
+		},
+		{
+			name:     "stdout endpoint - always valid",
+			endpoint: EndpointStdout,
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "empty endpoint - always valid",
+			endpoint: "",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+		{
+			name:     "grpc localhost without scheme - valid",
+			endpoint: "localhost:4317",
+			protocol: ProtocolGRPC,
+			wantErr:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEndpointFormat(tt.endpoint, tt.protocol)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateEndpointFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "trace grpc with correct format",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Endpoint: "otlp.nr-data.net:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace grpc with https - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Endpoint: "https://otlp.nr-data.net:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+		{
+			name: "metrics http with https - valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "https://otlp.nr-data.net:4318/v1/metrics",
+					Protocol: ProtocolHTTP,
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics http without scheme - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "otlp.nr-data.net:4318",
+					Protocol: ProtocolHTTP,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+		{
+			name: "logs grpc with http scheme - invalid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: "http://localhost:4317",
+					Protocol: ProtocolGRPC,
+				},
+			},
+			wantErr: ErrInvalidEndpointFormat,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateCompression(t *testing.T) {
+	tests := []struct {
+		name        string
+		compression string
+		wantErr     error
+	}{
+		{
+			name:        "gzip_compression_valid",
+			compression: "gzip",
+			wantErr:     nil,
+		},
+		{
+			name:        "no_compression_valid",
+			compression: "none",
+			wantErr:     nil,
+		},
+		{
+			name:        "empty_compression_valid_will_use_default",
+			compression: "",
+			wantErr:     nil,
+		},
+		{
+			name:        "invalid_compression_brotli",
+			compression: "brotli",
+			wantErr:     ErrInvalidCompression,
+		},
+		{
+			name:        "invalid_compression_deflate",
+			compression: "deflate",
+			wantErr:     ErrInvalidCompression,
+		},
+		{
+			name:        "invalid_compression_uppercase_GZIP",
+			compression: "GZIP",
+			wantErr:     ErrInvalidCompression,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCompression(tt.compression)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateCompression(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "trace_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace_with_no_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "none",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "trace_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "brotli",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "metrics_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "deflate",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "logs_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "logs_with_no_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "none",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "logs_with_invalid_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "GZIP",
+				},
+			},
+			wantErr: ErrInvalidCompression,
+		},
+		{
+			name: "all_signals_with_gzip_compression_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+				Logs: LogsConfig{
+					Enabled:     BoolPtr(true),
+					Compression: "gzip",
+				},
+			},
+			wantErr: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigCompressionDefaults(t *testing.T) {
+	tests := []struct {
+		name               string
+		config             Config
+		expectedTraceComp  string
+		expectedMetricComp string
+		expectedLogComp    string
+	}{
+		{
+			name: "defaults_to_gzip_for_all_signals",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+			},
+			expectedTraceComp:  "gzip",
+			expectedMetricComp: "gzip",
+			expectedLogComp:    "gzip",
+		},
+		{
+			name: "respects_explicit_none_compression",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "none",
+				},
+				Metrics: MetricsConfig{
+					Compression: "none",
+				},
+				Logs: LogsConfig{
+					Compression: "none",
+				},
+			},
+			expectedTraceComp:  "none",
+			expectedMetricComp: "none",
+			expectedLogComp:    "none",
+		},
+		{
+			name: "mixed_compression_settings",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Trace: TraceConfig{
+					Compression: "gzip",
+				},
+				Metrics: MetricsConfig{
+					Compression: "none",
+				},
+				// Logs uses default
+			},
+			expectedTraceComp:  "gzip",
+			expectedMetricComp: "none",
+			expectedLogComp:    "gzip", // Default
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.config.ApplyDefaults()
+			assert.Equal(t, tt.expectedTraceComp, tt.config.Trace.Compression)
+			assert.Equal(t, tt.expectedMetricComp, tt.config.Metrics.Compression)
+			assert.Equal(t, tt.expectedLogComp, tt.config.Logs.Compression)
+		})
+	}
+}
+
+func TestConfigEnvironmentAwareExportTimeouts(t *testing.T) {
+	tests := []struct {
+		name                   string
+		environment            string
+		traceEndpoint          string
+		metricsEndpoint        string
+		logsEndpoint           string
+		expectedTraceTimeout   time.Duration
+		expectedMetricsTimeout time.Duration
+		expectedLogsTimeout    time.Duration
+	}{
+		{
+			name:                   "development_environment_defaults_to_10s",
+			environment:            EnvironmentDevelopment,
+			traceEndpoint:          "http://localhost:4318",
+			metricsEndpoint:        "http://localhost:4318",
+			logsEndpoint:           "http://localhost:4318",
+			expectedTraceTimeout:   10 * time.Second,
+			expectedMetricsTimeout: 10 * time.Second,
+			expectedLogsTimeout:    10 * time.Second,
+		},
+		{
+			name:                   "production_environment_defaults_to_60s",
+			environment:            "production",
+			traceEndpoint:          "otlp.nr-data.net:4317",
+			metricsEndpoint:        "otlp.nr-data.net:4317",
+			logsEndpoint:           "otlp.nr-data.net:4317",
+			expectedTraceTimeout:   60 * time.Second,
+			expectedMetricsTimeout: 60 * time.Second,
+			expectedLogsTimeout:    60 * time.Second,
+		},
+		{
+			name:                   "staging_environment_defaults_to_60s",
+			environment:            "staging",
+			traceEndpoint:          "otlp.nr-data.net:4317",
+			metricsEndpoint:        "otlp.nr-data.net:4317",
+			logsEndpoint:           "otlp.nr-data.net:4317",
+			expectedTraceTimeout:   60 * time.Second,
+			expectedMetricsTimeout: 60 * time.Second,
+			expectedLogsTimeout:    60 * time.Second,
+		},
+		{
+			name:                   "stdout_endpoint_overrides_environment_to_10s",
+			environment:            "production",
+			traceEndpoint:          EndpointStdout,
+			metricsEndpoint:        EndpointStdout,
+			logsEndpoint:           EndpointStdout,
+			expectedTraceTimeout:   10 * time.Second,
+			expectedMetricsTimeout: 10 * time.Second,
+			expectedLogsTimeout:    10 * time.Second,
+		},
+		{
+			name:                   "default_environment_treated_as_development",
+			environment:            "",
+			traceEndpoint:          "http://localhost:4318",
+			metricsEndpoint:        "http://localhost:4318",
+			logsEndpoint:           "http://localhost:4318",
+			expectedTraceTimeout:   10 * time.Second,
+			expectedMetricsTimeout: 10 * time.Second,
+			expectedLogsTimeout:    10 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: "test-service",
+				},
+				Environment: tt.environment,
+				Trace: TraceConfig{
+					Endpoint: tt.traceEndpoint,
+				},
+				Metrics: MetricsConfig{
+					Endpoint: tt.metricsEndpoint,
+				},
+				Logs: LogsConfig{
+					Endpoint: tt.logsEndpoint,
+				},
+			}
+
+			cfg.ApplyDefaults()
+
+			assert.Equal(t, tt.expectedTraceTimeout, cfg.Trace.Export.Timeout,
+				"Trace export timeout mismatch for environment=%s, endpoint=%s", tt.environment, tt.traceEndpoint)
+			assert.Equal(t, tt.expectedMetricsTimeout, cfg.Metrics.Export.Timeout,
+				"Metrics export timeout mismatch for environment=%s, endpoint=%s", tt.environment, tt.metricsEndpoint)
+			assert.Equal(t, tt.expectedLogsTimeout, cfg.Logs.Export.Timeout,
+				"Logs export timeout mismatch for environment=%s, endpoint=%s", tt.environment, tt.logsEndpoint)
+		})
+	}
+}
+
+func TestConfigExplicitExportTimeoutPreserved(t *testing.T) {
+	tests := []struct {
+		name            string
+		environment     string
+		explicitTimeout time.Duration
+	}{
+		{
+			name:            "explicit_90s_preserved_in_development",
+			environment:     EnvironmentDevelopment,
+			explicitTimeout: 90 * time.Second,
+		},
+		{
+			name:            "explicit_5s_preserved_in_production",
+			environment:     "production",
+			explicitTimeout: 5 * time.Second,
+		},
+		{
+			name:            "explicit_120s_preserved",
+			environment:     "staging",
+			explicitTimeout: 120 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: "test-service",
+				},
+				Environment: tt.environment,
+				Trace: TraceConfig{
+					Endpoint: "otlp.nr-data.net:4317",
+					Export: ExportConfig{
+						Timeout: tt.explicitTimeout,
+					},
+				},
+				Metrics: MetricsConfig{
+					Endpoint: "otlp.nr-data.net:4317",
+					Export: MetricsExportConfig{
+						Timeout: tt.explicitTimeout,
+					},
+				},
+				Logs: LogsConfig{
+					Endpoint: "otlp.nr-data.net:4317",
+					Export: ExportConfig{
+						Timeout: tt.explicitTimeout,
+					},
+				},
+			}
+
+			cfg.ApplyDefaults()
+
+			assert.Equal(t, tt.explicitTimeout, cfg.Trace.Export.Timeout,
+				"Explicit trace export timeout should be preserved")
+			assert.Equal(t, tt.explicitTimeout, cfg.Metrics.Export.Timeout,
+				"Explicit metrics export timeout should be preserved")
+			assert.Equal(t, tt.explicitTimeout, cfg.Logs.Export.Timeout,
+				"Explicit logs export timeout should be preserved")
+		})
+	}
+}
+
+func TestValidateTemporality(t *testing.T) {
+	tests := []struct {
+		name        string
+		temporality string
+		wantErr     error
+	}{
+		{
+			name:        "delta_temporality_valid",
+			temporality: "delta",
+			wantErr:     nil,
+		},
+		{
+			name:        "cumulative_temporality_valid",
+			temporality: "cumulative",
+			wantErr:     nil,
+		},
+		{
+			name:        "empty_temporality_valid_will_use_default",
+			temporality: "",
+			wantErr:     nil,
+		},
+		{
+			name:        "invalid_temporality_incremental",
+			temporality: "incremental",
+			wantErr:     ErrInvalidTemporality,
+		},
+		{
+			name:        "invalid_temporality_uppercase_DELTA",
+			temporality: "DELTA",
+			wantErr:     ErrInvalidTemporality,
+		},
+		{
+			name:        "invalid_temporality_stateful",
+			temporality: "stateful",
+			wantErr:     ErrInvalidTemporality,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemporality(tt.temporality)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateHistogramAggregation(t *testing.T) {
+	tests := []struct {
+		name        string
+		aggregation string
+		wantErr     error
+	}{
+		{
+			name:        "exponential_aggregation_valid",
+			aggregation: "exponential",
+			wantErr:     nil,
+		},
+		{
+			name:        "explicit_aggregation_valid",
+			aggregation: "explicit",
+			wantErr:     nil,
+		},
+		{
+			name:        "empty_aggregation_valid_will_use_default",
+			aggregation: "",
+			wantErr:     nil,
+		},
+		{
+			name:        "invalid_aggregation_histogram",
+			aggregation: "histogram",
+			wantErr:     ErrInvalidHistogramAggregation,
+		},
+		{
+			name:        "invalid_aggregation_uppercase_EXPONENTIAL",
+			aggregation: "EXPONENTIAL",
+			wantErr:     ErrInvalidHistogramAggregation,
+		},
+		{
+			name:        "invalid_aggregation_linear",
+			aggregation: "linear",
+			wantErr:     ErrInvalidHistogramAggregation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHistogramAggregation(tt.aggregation)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateTemporality(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "metrics_with_delta_temporality_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Temporality: "delta",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_cumulative_temporality_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Temporality: "cumulative",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_invalid_temporality",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:     BoolPtr(true),
+					Temporality: "incremental",
+				},
+			},
+			wantErr: ErrInvalidTemporality,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigValidateHistogramAggregation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		wantErr error
+	}{
+		{
+			name: "metrics_with_exponential_aggregation_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:              BoolPtr(true),
+					HistogramAggregation: "exponential",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_explicit_aggregation_valid",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:              BoolPtr(true),
+					HistogramAggregation: "explicit",
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "metrics_with_invalid_aggregation",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:              BoolPtr(true),
+					HistogramAggregation: "linear",
+				},
+			},
+			wantErr: ErrInvalidHistogramAggregation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigTemporalityDefaults(t *testing.T) {
+	tests := []struct {
+		name                 string
+		config               Config
+		expectedTemporality  string
+		expectedHistogramAgg string
+	}{
+		{
+			name: "defaults_to_cumulative_and_explicit",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+			},
+			expectedTemporality:  "cumulative",
+			expectedHistogramAgg: "explicit",
+		},
+		{
+			name: "respects_explicit_delta_and_exponential",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Temporality:          "delta",
+					HistogramAggregation: "exponential",
+				},
+			},
+			expectedTemporality:  "delta",
+			expectedHistogramAgg: "exponential",
+		},
+		{
+			name: "mixed_delta_temporality_with_explicit_histogram",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Temporality: "delta",
+					// HistogramAggregation uses default
+				},
+			},
+			expectedTemporality:  "delta",
+			expectedHistogramAgg: "explicit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.config.ApplyDefaults()
+			assert.Equal(t, tt.expectedTemporality, tt.config.Metrics.Temporality)
+			assert.Equal(t, tt.expectedHistogramAgg, tt.config.Metrics.HistogramAggregation)
+		})
+	}
+}
