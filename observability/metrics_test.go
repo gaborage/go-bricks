@@ -487,3 +487,377 @@ func (e *inMemoryMetricExporter) Shutdown(_ context.Context) error {
 func (e *inMemoryMetricExporter) GetMetrics() []metricdata.ResourceMetrics {
 	return e.metrics
 }
+
+// TestDeltaTemporalitySelector verifies that delta temporality is returned for all instrument kinds
+func TestDeltaTemporalitySelector(t *testing.T) {
+	tests := []struct {
+		name                string
+		instrumentKind      sdkmetric.InstrumentKind
+		expectedTemporality metricdata.Temporality
+	}{
+		{
+			name:                "counter_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindCounter,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+		{
+			name:                "updowncounter_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindUpDownCounter,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+		{
+			name:                "histogram_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindHistogram,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+		{
+			name:                "observable_counter_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindObservableCounter,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+		{
+			name:                "observable_updowncounter_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindObservableUpDownCounter,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+		{
+			name:                "observable_gauge_returns_delta",
+			instrumentKind:      sdkmetric.InstrumentKindObservableGauge,
+			expectedTemporality: metricdata.DeltaTemporality,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &provider{}
+			temporality := p.deltaTemporalitySelector(tt.instrumentKind)
+			assert.Equal(t, tt.expectedTemporality, temporality,
+				"Expected delta temporality for all instrument kinds")
+		})
+	}
+}
+
+// TestCreateExponentialHistogramView verifies that exponential histogram view is created correctly
+func TestCreateExponentialHistogramView(t *testing.T) {
+	p := &provider{}
+	view := p.createExponentialHistogramView()
+
+	require.NotNil(t, view, "Exponential histogram view should not be nil")
+
+	// The view is configured with MaxSize=160 and MaxScale=20 (New Relic recommendation)
+	// We can't easily inspect its internal state without applying it to actual instruments,
+	// but we can verify it doesn't panic when created
+}
+
+// TestInitMeterProviderWithDeltaTemporality verifies meter provider initialization with delta temporality
+func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
+	p := &provider{
+		config: Config{
+			Service: ServiceConfig{
+				Name:    "test-service",
+				Version: "1.0.0",
+			},
+			Environment: "test",
+			Metrics: MetricsConfig{
+				Enabled:              BoolPtr(true),
+				Endpoint:             EndpointStdout,
+				Interval:             10 * time.Second,
+				Temporality:          TemporalityDelta,
+				HistogramAggregation: HistogramAggregationExplicit,
+				Export: MetricsExportConfig{
+					Timeout: 10 * time.Second,
+				},
+			},
+		},
+	}
+
+	err := p.initMeterProvider()
+	assert.NoError(t, err)
+	assert.NotNil(t, p.meterProvider)
+
+	// Verify meter provider can create meters
+	meter := p.meterProvider.Meter("test-meter")
+	assert.NotNil(t, meter)
+
+	// Create a counter to verify pipeline works
+	counter, err := meter.Int64Counter("test.counter")
+	require.NoError(t, err)
+	counter.Add(context.Background(), 1)
+
+	// Cleanup
+	err = p.meterProvider.Shutdown(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestInitMeterProviderWithExponentialHistogram verifies meter provider initialization with exponential histogram
+func TestInitMeterProviderWithExponentialHistogram(t *testing.T) {
+	p := &provider{
+		config: Config{
+			Service: ServiceConfig{
+				Name:    "test-service",
+				Version: "1.0.0",
+			},
+			Environment: "test",
+			Metrics: MetricsConfig{
+				Enabled:              BoolPtr(true),
+				Endpoint:             EndpointStdout,
+				Interval:             10 * time.Second,
+				Temporality:          TemporalityCumulative,
+				HistogramAggregation: HistogramAggregationExponential,
+				Export: MetricsExportConfig{
+					Timeout: 10 * time.Second,
+				},
+			},
+		},
+	}
+
+	err := p.initMeterProvider()
+	assert.NoError(t, err)
+	assert.NotNil(t, p.meterProvider)
+
+	// Verify meter provider can create meters
+	meter := p.meterProvider.Meter("test-meter")
+	assert.NotNil(t, meter)
+
+	// Create a histogram to verify pipeline works with exponential aggregation
+	histogram, err := meter.Float64Histogram("test.histogram")
+	require.NoError(t, err)
+	histogram.Record(context.Background(), 123.45)
+
+	// Cleanup
+	err = p.meterProvider.Shutdown(context.Background())
+	assert.NoError(t, err)
+}
+
+// TestCreateOTLPHTTPMetricExporterWithCompression verifies HTTP metric exporter with compression settings
+func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      MetricsConfig
+		traceConfig TraceConfig
+		wantErr     bool
+	}{
+		{
+			name: "http_with_gzip_compression_and_delta_temporality",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4318",
+				Protocol:             ProtocolHTTP,
+				Compression:          CompressionGzip,
+				Temporality:          TemporalityDelta,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+		{
+			name: "http_with_no_compression_and_cumulative",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4318",
+				Protocol:             ProtocolHTTP,
+				Compression:          CompressionNone,
+				Temporality:          TemporalityCumulative,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+		{
+			name: "http_with_exponential_histogram",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4318",
+				Protocol:             ProtocolHTTP,
+				Compression:          CompressionGzip,
+				Temporality:          TemporalityCumulative,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExponential,
+			},
+			wantErr: false,
+		},
+		{
+			name: "http_with_custom_headers",
+			config: MetricsConfig{
+				Endpoint:    "localhost:4318",
+				Protocol:    ProtocolHTTP,
+				Compression: CompressionGzip,
+				Insecure:    BoolPtr(true),
+				Headers: map[string]string{
+					"DD-API-KEY":   "test-datadog-key",
+					"X-Custom-Key": "custom-value",
+				},
+				Temporality:          TemporalityDelta,
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &provider{
+				config: Config{
+					Metrics: tt.config,
+					Trace:   tt.traceConfig,
+				},
+			}
+
+			useInsecure := false
+			if tt.config.Insecure != nil {
+				useInsecure = *tt.config.Insecure
+			}
+
+			exporter, err := p.createOTLPHTTPMetricExporter(useInsecure, tt.config.Headers)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, exporter)
+			} else {
+				assert.NoError(t, err)
+				require.NotNil(t, exporter)
+
+				// Cleanup
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = exporter.Shutdown(shutdownCtx) // May error if no collector
+			}
+		})
+	}
+}
+
+// TestCreateOTLPGRPCMetricExporterWithCompression verifies gRPC metric exporter with compression settings
+func TestCreateOTLPGRPCMetricExporterWithCompression(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      MetricsConfig
+		traceConfig TraceConfig
+		wantErr     bool
+	}{
+		{
+			name: "grpc_with_gzip_compression_and_delta_temporality",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4317",
+				Protocol:             ProtocolGRPC,
+				Compression:          CompressionGzip,
+				Temporality:          TemporalityDelta,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+		{
+			name: "grpc_with_no_compression_and_cumulative",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4317",
+				Protocol:             ProtocolGRPC,
+				Compression:          CompressionNone,
+				Temporality:          TemporalityCumulative,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+		{
+			name: "grpc_with_exponential_histogram",
+			config: MetricsConfig{
+				Endpoint:             "localhost:4317",
+				Protocol:             ProtocolGRPC,
+				Compression:          CompressionGzip,
+				Temporality:          TemporalityCumulative,
+				Insecure:             BoolPtr(true),
+				HistogramAggregation: HistogramAggregationExponential,
+			},
+			wantErr: false,
+		},
+		{
+			name: "grpc_with_custom_headers",
+			config: MetricsConfig{
+				Endpoint:    "localhost:4317",
+				Protocol:    ProtocolGRPC,
+				Compression: CompressionGzip,
+				Insecure:    BoolPtr(true),
+				Headers: map[string]string{
+					"api-key":      "test-nr-key",
+					"X-Custom-Key": "custom-value",
+				},
+				Temporality:          TemporalityDelta,
+				HistogramAggregation: HistogramAggregationExplicit,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &provider{
+				config: Config{
+					Metrics: tt.config,
+					Trace:   tt.traceConfig,
+				},
+			}
+
+			useInsecure := false
+			if tt.config.Insecure != nil {
+				useInsecure = *tt.config.Insecure
+			}
+
+			exporter, err := p.createOTLPGRPCMetricExporter(useInsecure, tt.config.Headers)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, exporter)
+			} else {
+				assert.NoError(t, err)
+				require.NotNil(t, exporter)
+
+				// Cleanup
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = exporter.Shutdown(shutdownCtx) // May error if no collector
+			}
+		})
+	}
+}
+
+// TestNewProviderWithMetricsAndAllOptions verifies provider creation with all metrics options
+func TestNewProviderWithMetricsAndAllOptions(t *testing.T) {
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{
+			Name:    "test-service",
+			Version: "1.0.0",
+		},
+		Environment: "test",
+		Metrics: MetricsConfig{
+			Enabled:              BoolPtr(true),
+			Endpoint:             EndpointStdout,
+			Interval:             10 * time.Second,
+			Compression:          CompressionGzip,
+			Temporality:          TemporalityDelta,
+			HistogramAggregation: HistogramAggregationExponential,
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, provider)
+
+	// Verify meter provider is initialized
+	mp := provider.MeterProvider()
+	assert.NotNil(t, mp)
+
+	// Verify we can create a meter
+	meter := mp.Meter("test-meter")
+	assert.NotNil(t, meter)
+
+	// Create metrics to verify pipeline works
+	counter, err := meter.Int64Counter("test.counter")
+	require.NoError(t, err)
+	counter.Add(context.Background(), 1)
+
+	histogram, err := meter.Float64Histogram("test.histogram")
+	require.NoError(t, err)
+	histogram.Record(context.Background(), 123.45)
+
+	// Cleanup
+	err = provider.Shutdown(context.Background())
+	assert.NoError(t, err)
+}

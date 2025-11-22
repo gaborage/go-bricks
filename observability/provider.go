@@ -280,8 +280,8 @@ func (p *provider) initTraceProvider() error {
 	}
 
 	// Create batch span processor with configured options
-	debugLogger.Printf("Creating BatchSpanProcessor with timeout=%v, queue_size=%d, batch_size=%d",
-		p.config.Trace.Batch.Timeout, p.config.Trace.Max.Queue.Size, p.config.Trace.Max.Batch.Size)
+	debugLogger.Printf("Creating BatchSpanProcessor with batch_timeout=%v, export_timeout=%v, queue_size=%d, batch_size=%d",
+		p.config.Trace.Batch.Timeout, p.config.Trace.Export.Timeout, p.config.Trace.Max.Queue.Size, p.config.Trace.Max.Batch.Size)
 
 	bsp := sdktrace.NewBatchSpanProcessor(
 		exporter,

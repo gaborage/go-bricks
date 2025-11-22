@@ -156,6 +156,15 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Sample.Rate = Float64Ptr(1.0)
 	}
 
+	// Apply batch, export, and queue defaults
+	c.applyTraceBatchDefaults()
+}
+
+// applyTraceBatchDefaults applies batch processing defaults for traces.
+// Extracted to reduce cyclomatic complexity of applyTraceDefaults.
+//
+//nolint:dupl // Intentional duplication for type safety (Trace vs Logs fields)
+func (c *Config) applyTraceBatchDefaults() {
 	// Batch defaults - use environment-aware settings
 	// Development: faster export for better debugging experience
 	// Production: larger batches for efficiency
@@ -172,9 +181,17 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Batch.Size = 512
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings
+	// Development: faster timeout for quick feedback
+	// Production: longer timeout to accommodate network latency, TLS handshake, and batch size
 	if c.Trace.Export.Timeout == 0 {
-		c.Trace.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Trace.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Trace.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Trace.Export.Timeout = 60 * time.Second
+		}
 	}
 
 	// Max queue and batch size defaults
@@ -220,9 +237,15 @@ func (c *Config) applyMetricsDefaults() {
 		c.Metrics.Interval = 10 * time.Second
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings (same pattern as traces)
 	if c.Metrics.Export.Timeout == 0 {
-		c.Metrics.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Metrics.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Metrics.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Metrics.Export.Timeout = 60 * time.Second
+		}
 	}
 }
 
@@ -278,6 +301,8 @@ func (c *Config) applyLogsDefaults() {
 
 // applyLogsBatchDefaults applies batch processing defaults for logs.
 // Extracted to reduce cyclomatic complexity of applyLogsDefaults.
+//
+//nolint:dupl // Intentional duplication for type safety (Logs vs Trace fields)
 func (c *Config) applyLogsBatchDefaults() {
 	// Batch timeout - use environment-aware settings (same pattern as traces)
 	if c.Logs.Batch.Timeout == 0 {
@@ -295,9 +320,15 @@ func (c *Config) applyLogsBatchDefaults() {
 		c.Logs.Batch.Size = 512
 	}
 
-	// Export timeout default
+	// Export timeout default - use environment-aware settings (same pattern as traces)
 	if c.Logs.Export.Timeout == 0 {
-		c.Logs.Export.Timeout = 30 * time.Second
+		if c.Environment == EnvironmentDevelopment || c.Logs.Endpoint == EndpointStdout {
+			// Development: 10s for fail-fast behavior
+			c.Logs.Export.Timeout = 10 * time.Second
+		} else {
+			// Production: 60s to handle real-world network conditions
+			c.Logs.Export.Timeout = 60 * time.Second
+		}
 	}
 
 	// Max queue size default

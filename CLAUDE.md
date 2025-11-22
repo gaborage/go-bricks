@@ -855,9 +855,15 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 ### Observability
 
-**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod)
+**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod), environment-aware export timeouts (10s dev, 60s prod)
 
 **Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
+
+**Export Timeout Configuration:** GoBricks uses environment-aware export timeouts to balance fail-fast feedback (development) with network resilience (production):
+- **Development/stdout:** 10s (quick failure detection for debugging)
+- **Production:** 60s (accommodates network latency, TLS handshake, batch transmission)
+- **Override via YAML:** `observability.trace.export.timeout: "90s"` (applies to traces/metrics/logs)
+- **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
 
 **Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type`:
 - **Action logs** (`log.type="action"`): Always exported at 100% (request summaries)
