@@ -505,3 +505,63 @@ func TestErrorChaining(t *testing.T) {
 		}
 	}
 }
+
+func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
+	// This test verifies that the error handler respects Response.Committed
+	// to prevent double-writes when invoked multiple times (e.g., by otelecho middleware)
+	e := echo.New()
+	cfg := &config.Config{
+		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
+	}
+
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, cfg)
+	}
+
+	// Test: Call error handler when response is already committed
+	t.Run("skips_write_when_committed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		// Pre-commit the response by writing something first
+		firstWrite := map[string]string{"first": "write"}
+		_ = c.JSON(http.StatusUnauthorized, firstWrite)
+
+		// Response should now be committed
+		assert.True(t, c.Response().Committed)
+
+		// Call error handler - should be a no-op since response is committed
+		customErrorHandler(echo.NewHTTPError(http.StatusUnauthorized, "Second write"), c, cfg)
+
+		// Verify body is valid JSON and matches ONLY the first write
+		body := rec.Body.Bytes()
+		var result map[string]string
+		err := json.Unmarshal(body, &result)
+		require.NoError(t, err, "Response should be valid JSON: %s", string(body))
+		assert.Equal(t, firstWrite, result, "Response should contain only the first write")
+
+		// Double-check: error handler output should NOT be present
+		var apiResp APIResponse
+		_ = json.Unmarshal(body, &apiResp) // Unmarshal succeeds but fields won't match
+		assert.Nil(t, apiResp.Error, "Response should not contain error structure")
+	})
+
+	// Test: Normal write when not committed
+	t.Run("writes_when_not_committed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		// Response should NOT be committed yet
+		assert.False(t, c.Response().Committed)
+
+		// Call error handler - should write normally
+		customErrorHandler(echo.NewHTTPError(http.StatusUnauthorized, "Auth failed"), c, cfg)
+
+		// Verify error response was written
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		assert.Contains(t, rec.Body.String(), `"error"`)
+		assert.Contains(t, rec.Body.String(), `"UNAUTHORIZED"`)
+	})
+}
