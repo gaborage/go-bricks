@@ -505,3 +505,78 @@ func TestErrorChaining(t *testing.T) {
 		}
 	}
 }
+
+func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
+	// This test verifies that the error handler respects Response.Committed
+	// to prevent double-writes when invoked multiple times (e.g., by otelecho middleware)
+	e := echo.New()
+	cfg := &config.Config{
+		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
+	}
+
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		customErrorHandler(err, c, cfg)
+	}
+
+	// Test: Call error handler when response is already committed
+	t.Run("skips_write_when_committed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		// Pre-commit the response by writing something first
+		_ = c.JSON(http.StatusUnauthorized, map[string]string{"first": "write"})
+
+		// Response should now be committed
+		assert.True(t, c.Response().Committed)
+
+		// Call error handler - should be a no-op since response is committed
+		customErrorHandler(echo.NewHTTPError(http.StatusUnauthorized, "Second write"), c, cfg)
+
+		// Verify only ONE JSON object in body (the first write)
+		body := rec.Body.String()
+		jsonCount := countJSONObjects(body)
+		assert.Equal(t, 1, jsonCount, "Expected exactly 1 JSON object, got body: %s", body)
+
+		// Verify it's the first write, not the error response
+		assert.Contains(t, body, `"first"`)
+		assert.NotContains(t, body, `"error"`)
+	})
+
+	// Test: Normal write when not committed
+	t.Run("writes_when_not_committed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+
+		// Response should NOT be committed yet
+		assert.False(t, c.Response().Committed)
+
+		// Call error handler - should write normally
+		customErrorHandler(echo.NewHTTPError(http.StatusUnauthorized, "Auth failed"), c, cfg)
+
+		// Verify error response was written
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+		assert.Contains(t, rec.Body.String(), `"error"`)
+		assert.Contains(t, rec.Body.String(), `"UNAUTHORIZED"`)
+	})
+}
+
+// countJSONObjects counts the number of complete JSON objects in a string.
+// This is a simple heuristic that counts opening braces at the start of objects.
+func countJSONObjects(s string) int {
+	count := 0
+	depth := 0
+	for _, c := range s {
+		switch c {
+		case '{':
+			if depth == 0 {
+				count++
+			}
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	return count
+}

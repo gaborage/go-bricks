@@ -228,6 +228,13 @@ func (s *Server) readyCheck(c echo.Context) error {
 }
 
 func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
+	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
+	// This can happen with certain middleware combinations (e.g., otelecho).
+	// Matches Echo's default error handler behavior.
+	if c.Response().Committed {
+		return
+	}
+
 	// Special handling for context deadline exceeded (timeout errors)
 	if goerrors.Is(err, context.DeadlineExceeded) {
 		timeoutErr := NewServiceUnavailableError("Request processing timed out")

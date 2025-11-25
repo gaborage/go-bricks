@@ -613,6 +613,12 @@ func formatSuccessResponseWithStatus(c echo.Context, data any, status int, heade
 
 // formatErrorResponse formats an error response with standardized structure.
 func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) error {
+	// SAFETY: Prevent double-writes if response already committed.
+	// Defense in depth - primary check is in customErrorHandler.
+	if c.Response().Committed {
+		return nil
+	}
+
 	errorResp := &APIErrorResponse{
 		Code:    apiErr.ErrorCode(),
 		Message: apiErr.Message(),
