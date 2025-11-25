@@ -213,12 +213,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
+// healthCheck is the default health probe handler.
 func (s *Server) healthCheck(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }
 
+// readyCheck is the default readiness probe handler.
 func (s *Server) readyCheck(c echo.Context) error {
 	// This will be extended in App to check DB connection
 	return c.JSON(http.StatusOK, map[string]any{
@@ -227,6 +229,8 @@ func (s *Server) readyCheck(c echo.Context) error {
 	})
 }
 
+// customErrorHandler is a centralized error handler that formats errors
+// into standardized APIResponse envelopes based on error type and server configuration.
 func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
 	// This can happen with certain middleware combinations (e.g., otelecho).
@@ -284,6 +288,7 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	_ = formatErrorResponse(c, base, cfg)
 }
 
+// statusToErrorCode maps HTTP status codes to standardized error codes.
 func statusToErrorCode(status int) string {
 	switch status {
 	case http.StatusBadRequest:

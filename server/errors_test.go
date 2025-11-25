@@ -525,7 +525,8 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		c := e.NewContext(req, rec)
 
 		// Pre-commit the response by writing something first
-		_ = c.JSON(http.StatusUnauthorized, map[string]string{"first": "write"})
+		firstWrite := map[string]string{"first": "write"}
+		_ = c.JSON(http.StatusUnauthorized, firstWrite)
 
 		// Response should now be committed
 		assert.True(t, c.Response().Committed)
@@ -533,14 +534,17 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		// Call error handler - should be a no-op since response is committed
 		customErrorHandler(echo.NewHTTPError(http.StatusUnauthorized, "Second write"), c, cfg)
 
-		// Verify only ONE JSON object in body (the first write)
-		body := rec.Body.String()
-		jsonCount := countJSONObjects(body)
-		assert.Equal(t, 1, jsonCount, "Expected exactly 1 JSON object, got body: %s", body)
+		// Verify body is valid JSON and matches ONLY the first write
+		body := rec.Body.Bytes()
+		var result map[string]string
+		err := json.Unmarshal(body, &result)
+		require.NoError(t, err, "Response should be valid JSON: %s", string(body))
+		assert.Equal(t, firstWrite, result, "Response should contain only the first write")
 
-		// Verify it's the first write, not the error response
-		assert.Contains(t, body, `"first"`)
-		assert.NotContains(t, body, `"error"`)
+		// Double-check: error handler output should NOT be present
+		var apiResp APIResponse
+		_ = json.Unmarshal(body, &apiResp) // Unmarshal succeeds but fields won't match
+		assert.Nil(t, apiResp.Error, "Response should not contain error structure")
 	})
 
 	// Test: Normal write when not committed
@@ -560,23 +564,4 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), `"error"`)
 		assert.Contains(t, rec.Body.String(), `"UNAUTHORIZED"`)
 	})
-}
-
-// countJSONObjects counts the number of complete JSON objects in a string.
-// This is a simple heuristic that counts opening braces at the start of objects.
-func countJSONObjects(s string) int {
-	count := 0
-	depth := 0
-	for _, c := range s {
-		switch c {
-		case '{':
-			if depth == 0 {
-				count++
-			}
-			depth++
-		case '}':
-			depth--
-		}
-	}
-	return count
 }

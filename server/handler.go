@@ -485,6 +485,7 @@ func setFieldValue(fieldValue reflect.Value, value string) error {
 	return fmt.Errorf("unsupported field type: %s", kind)
 }
 
+// setSpecialType handles special types like time.Time.
 func setSpecialType(fieldValue reflect.Value, value string) (bool, error) {
 	if fieldValue.Type() == timeType {
 		t, err := parseTime(value)
@@ -497,11 +498,13 @@ func setSpecialType(fieldValue reflect.Value, value string) (bool, error) {
 	return false, nil
 }
 
+// setStringValue sets a string field value.
 func setStringValue(fieldValue reflect.Value, value string) error {
 	fieldValue.SetString(value)
 	return nil
 }
 
+// setSignedIntValue sets a signed integer field value.
 func setSignedIntValue(fieldValue reflect.Value, value string) error {
 	bitSize := fieldValue.Type().Bits()
 	if bitSize == 0 {
@@ -515,6 +518,7 @@ func setSignedIntValue(fieldValue reflect.Value, value string) error {
 	return nil
 }
 
+// setUnsignedIntValue sets an unsigned integer field value.
 func setUnsignedIntValue(fieldValue reflect.Value, value string) error {
 	bitSize := fieldValue.Type().Bits()
 	if bitSize == 0 {
@@ -528,6 +532,7 @@ func setUnsignedIntValue(fieldValue reflect.Value, value string) error {
 	return nil
 }
 
+// setFloatValue sets a float field value.
 func setFloatValue(fieldValue reflect.Value, value string) error {
 	floatVal, err := strconv.ParseFloat(value, 64)
 	if err != nil {
@@ -537,6 +542,7 @@ func setFloatValue(fieldValue reflect.Value, value string) error {
 	return nil
 }
 
+// setBoolValue sets a boolean field value.
 func setBoolValue(fieldValue reflect.Value, value string) error {
 	boolVal, err := strconv.ParseBool(value)
 	if err != nil {
@@ -546,6 +552,7 @@ func setBoolValue(fieldValue reflect.Value, value string) error {
 	return nil
 }
 
+// parseTime attempts to parse a string into time.Time using common layouts.
 func parseTime(s string) (time.Time, error) {
 	// Try common layouts
 	layouts := []string{
@@ -784,8 +791,6 @@ func HEAD[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, hand
 func OPTIONS[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, handler HandlerFunc[T, R], opts ...RouteOption) {
 	RegisterHandler(hr, r, http.MethodOptions, path, handler, opts...)
 }
-
-// (legacy validation formatting helpers removed; validation now centralized via server/validator.go)
 
 // ResultLike exposes status, headers, and payload for successful responses.
 type ResultLike interface {
