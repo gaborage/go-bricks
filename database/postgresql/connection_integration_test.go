@@ -383,3 +383,242 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 	assert.Equal(t, 5, stats["max_open_connections"], "Max connections should match config")
 	assert.Equal(t, 2, stats["max_idle_connections"], "Max idle connections should match config")
 }
+
+// =============================================================================
+// TCP Keep-Alive and DSN Construction Tests
+// =============================================================================
+
+// TestConnectionWithTCPKeepAlive verifies the TCP keep-alive dialer is executed
+// when connecting with KeepAlive.Enabled = true. This test exercises:
+// - makeKeepAliveDialer() closure execution
+// - TCP socket SetKeepAlive() and SetKeepAlivePeriod() calls
+// Coverage target: makeKeepAliveDialer() lines 40-64
+func TestConnectionWithTCPKeepAlive(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Start container
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Get host and port from container
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, "Failed to get container host")
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, "Failed to get container port")
+
+	// Use default config values for credentials
+	defaultCfg := containers.DefaultPostgreSQLConfig()
+
+	// Use host/port config (not ConnectionString) with KeepAlive enabled
+	// This ensures:
+	// 1. DSN building path is exercised (lines 109-122)
+	// 2. Keep-alive dialer is configured (lines 131-136)
+	// 3. Actual TCP connection with keep-alive settings (lines 47-62)
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaultCfg.Username,
+		Password: defaultCfg.Password,
+		Database: defaultCfg.Database,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 15 * time.Second,
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with TCP keep-alive should succeed")
+	defer conn.Close()
+
+	// Verify connection works with keep-alive enabled
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed with TCP keep-alive")
+
+	// Execute a query to ensure the connection is fully functional
+	rows, err := conn.Query(ctx, "SELECT 1")
+	require.NoError(t, err, "Query should succeed")
+	defer rows.Close()
+
+	require.True(t, rows.Next(), "Should have at least one row")
+	var result int
+	require.NoError(t, rows.Scan(&result))
+	assert.Equal(t, 1, result)
+}
+
+// TestConnectionWithHostPort verifies DSN construction path (not ConnectionString)
+// This exercises quoteDSN() and the DSN building logic in NewConnection.
+// Coverage target: NewConnection lines 109-122
+func TestConnectionWithHostPort(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Start container
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Get host and port from container
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, "Failed to get container host")
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, "Failed to get container port")
+
+	// Use default config values for credentials
+	defaultCfg := containers.DefaultPostgreSQLConfig()
+
+	// Use host/port config (without ConnectionString)
+	// This exercises the DSN building path instead of the ConnectionString bypass
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaultCfg.Username,
+		Password: defaultCfg.Password,
+		Database: defaultCfg.Database,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 10,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 5,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with host/port should succeed")
+	defer conn.Close()
+
+	// Verify connection works
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed")
+
+	// Verify database type
+	pgConn := conn.(*Connection)
+	assert.Equal(t, "postgresql", pgConn.DatabaseType())
+}
+
+// TestConnectionWithKeepAliveDefaultInterval tests keep-alive with Interval=0
+// which should use the default interval. This exercises the zero-interval handling.
+// Coverage target: makeKeepAliveDialer with zero interval
+func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Start container
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Get host and port from container
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, "Failed to get container host")
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, "Failed to get container port")
+
+	// Use default config values for credentials
+	defaultCfg := containers.DefaultPostgreSQLConfig()
+
+	// Use keep-alive with zero interval (should use default)
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaultCfg.Username,
+		Password: defaultCfg.Password,
+		Database: defaultCfg.Database,
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 0, // Zero interval - dialer should still work
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with zero keep-alive interval should succeed")
+	defer conn.Close()
+
+	// Verify connection works
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed with zero keep-alive interval")
+}
+
+// TestConnectionWithTLSMode verifies TLS configuration path in DSN building
+// Coverage target: NewConnection lines 117-119 (TLS mode branch)
+func TestConnectionWithTLSMode(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Start container
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Get host and port from container
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, "Failed to get container host")
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, "Failed to get container port")
+
+	// Use default config values for credentials
+	defaultCfg := containers.DefaultPostgreSQLConfig()
+
+	// Use TLS mode configuration (disable since test container doesn't have TLS)
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaultCfg.Username,
+		Password: defaultCfg.Password,
+		Database: defaultCfg.Database,
+		TLS: config.TLSConfig{
+			Mode: "disable", // Exercises the TLS mode branch
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with TLS mode should succeed")
+	defer conn.Close()
+
+	// Verify connection works
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed with TLS mode")
+}

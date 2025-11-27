@@ -778,3 +778,61 @@ func TestQuoteDSN(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Edge Case Coverage Tests
+// =============================================================================
+
+// TestConnectionStatsWithNilConfig tests Stats() when config is nil
+// This covers the else branch at connection.go line 308 where config is not available.
+// Coverage target: Stats() nil config branch
+func TestConnectionStatsWithNilConfig(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Create connection with nil config
+	c := &Connection{
+		db:     db,
+		logger: newDisabledTestLogger(),
+		config: nil, // Explicitly nil config
+	}
+
+	stats, err := c.Stats()
+	assert.NoError(t, err, "Stats() should succeed with nil config")
+	assert.NotNil(t, stats, "Stats should not be nil")
+
+	// Verify basic stats keys are present
+	assert.Contains(t, stats, "max_open_connections")
+	assert.Contains(t, stats, "open_connections")
+	assert.Contains(t, stats, "in_use")
+	assert.Contains(t, stats, "idle")
+
+	// max_idle_connections should NOT be present when config is nil
+	assert.NotContains(t, stats, "max_idle_connections",
+		"max_idle_connections should not be present when config is nil")
+}
+
+// TestConnectionCloseWithNilMetricsCleanup tests Close() when metricsCleanup is nil
+// This covers the else branch at connection.go line 320 where metricsCleanup is nil.
+// Coverage target: Close() nil metricsCleanup branch
+func TestConnectionCloseWithNilMetricsCleanup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	mock.ExpectClose()
+
+	// Create connection with nil metricsCleanup
+	c := &Connection{
+		db:             db,
+		logger:         newDisabledTestLogger(),
+		metricsCleanup: nil, // Explicitly nil - no metrics registered
+	}
+
+	err = c.Close()
+	assert.NoError(t, err, "Close() should succeed with nil metricsCleanup")
+
+	// Verify all expectations were met
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err, "All mock expectations should be met")
+}

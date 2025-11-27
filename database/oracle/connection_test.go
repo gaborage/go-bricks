@@ -1183,3 +1183,133 @@ func TestConnectionRegisterTypeWithOwner(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// Edge Case Coverage Tests
+// =============================================================================
+
+// TestConnectionStatsWithNilConfig tests Stats() when config is nil
+// This covers the else branch where config is not available.
+// Coverage target: Stats() nil config branch
+func TestConnectionStatsWithNilConfig(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Create connection with nil config
+	c := &Connection{
+		db:     db,
+		logger: newDisabledTestLogger(),
+		config: nil, // Explicitly nil config
+	}
+
+	stats, err := c.Stats()
+	assert.NoError(t, err, "Stats() should succeed with nil config")
+	assert.NotNil(t, stats, "Stats should not be nil")
+
+	// Verify basic stats keys are present
+	assert.Contains(t, stats, "max_open_connections")
+	assert.Contains(t, stats, "open_connections")
+	assert.Contains(t, stats, "in_use")
+	assert.Contains(t, stats, "idle")
+
+	// max_idle_connections should NOT be present when config is nil
+	assert.NotContains(t, stats, "max_idle_connections",
+		"max_idle_connections should not be present when config is nil")
+}
+
+// TestLogConnectionSuccessWithSID tests logConnectionSuccess with SID identifier
+// Coverage target: logConnectionSuccess switch case for SID (line 220-221)
+func TestLogConnectionSuccessWithSID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	// Use SID instead of Service.Name
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				SID: "ORCL", // SID path (not Service.Name)
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+// TestLogConnectionSuccessWithDatabaseFallback tests logConnectionSuccess with Database field
+// Coverage target: logConnectionSuccess default case (line 222-223)
+func TestLogConnectionSuccessWithDatabaseFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	// Use Database field (fallback when neither Service.Name nor SID is set)
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Database: "testdb", // Database fallback path
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}

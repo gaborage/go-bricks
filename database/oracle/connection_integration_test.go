@@ -898,3 +898,167 @@ func TestOracleUDTRegistrationLogging(t *testing.T) {
 
 	// Success path ensures debug logging is executed
 }
+
+// =============================================================================
+// TCP Keep-Alive and Collection Type Coverage Tests
+// =============================================================================
+
+// TestOracleUDTCollectionWithOwner tests RegisterTypeWithOwner with non-empty arrayTypeName
+// This covers the collection type branch where arrayTypeName != "" with owner
+// Coverage target: RegisterTypeWithOwner line 545 (collection type branch)
+func TestOracleUDTCollectionWithOwner(t *testing.T) {
+	conn, ctx := setupTestContainer(t)
+
+	// Get current user for owner parameter
+	var currentUser string
+	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	require.NoError(t, err)
+
+	// Create object type
+	objectTypeSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_ITEM_TYPE AS OBJECT (
+				ID NUMBER,
+				VALUE VARCHAR2(100)
+			)';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+	_, err = conn.Exec(ctx, objectTypeSQL)
+	require.NoError(t, err)
+
+	// Create collection type
+	collectionTypeSQL := `
+		BEGIN
+			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_ITEM_TABLE AS TABLE OF OWNER_ITEM_TYPE';
+		EXCEPTION
+			WHEN OTHERS THEN
+				IF SQLCODE != -955 THEN
+					RAISE;
+				END IF;
+		END;
+	`
+	_, err = conn.Exec(ctx, collectionTypeSQL)
+	require.NoError(t, err)
+
+	type OwnerItemType struct {
+		ID    int64  `udt:"ID"`
+		Value string `udt:"VALUE"`
+	}
+
+	// Register WITH owner AND collection type (non-empty arrayTypeName)
+	// This covers the collection type branch at line 545
+	err = conn.RegisterTypeWithOwner(currentUser, "OWNER_ITEM_TYPE", "OWNER_ITEM_TABLE", OwnerItemType{})
+	require.NoError(t, err, "RegisterTypeWithOwner with collection should succeed")
+}
+
+// TestConnectionWithTCPKeepAlive tests keep-alive dialer execution for Oracle
+// Coverage target: newKeepAliveDialer() execution, DialContext
+func TestConnectionWithTCPKeepAlive(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	// Start container
+	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Create config with TCP keep-alive enabled
+	// This exercises:
+	// 1. Keep-alive dialer creation (newKeepAliveDialer)
+	// 2. DialContext execution with TCP keep-alive settings
+	cfg := &config.DatabaseConfig{
+		Host:     oracleContainer.Host(),
+		Port:     oracleContainer.Port(),
+		Username: oracleContainer.Username(),
+		Password: oracleContainer.Password(),
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: oracleContainer.Database(),
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 15 * time.Second,
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with TCP keep-alive should succeed")
+	defer conn.Close()
+
+	// Verify connection works with keep-alive enabled
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed with TCP keep-alive")
+
+	// Execute a query to ensure the connection is fully functional
+	var result int
+	err = conn.QueryRow(ctx, "SELECT 1 FROM DUAL").Scan(&result)
+	require.NoError(t, err, "Query should succeed")
+	assert.Equal(t, 1, result)
+}
+
+// TestConnectionWithKeepAliveZeroInterval tests keep-alive with zero interval
+// Coverage target: newKeepAliveDialer with zero interval
+func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
+	// Create context with timeout to prevent indefinite hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	// Start container
+	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Create config with TCP keep-alive enabled but zero interval
+	cfg := &config.DatabaseConfig{
+		Host:     oracleContainer.Host(),
+		Port:     oracleContainer.Port(),
+		Username: oracleContainer.Username(),
+		Password: oracleContainer.Password(),
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				Name: oracleContainer.Database(),
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 5,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        30 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: time.Hour,
+			},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 0, // Zero interval - should still work
+			},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection with zero keep-alive interval should succeed")
+	defer conn.Close()
+
+	// Verify connection works
+	err = conn.Health(ctx)
+	assert.NoError(t, err, "Health check should succeed with zero keep-alive interval")
+}
