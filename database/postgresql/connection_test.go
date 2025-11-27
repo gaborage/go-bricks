@@ -465,6 +465,120 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 }
 
 // =============================================================================
+// TCP Keep-Alive Tests
+// =============================================================================
+
+func TestMakeKeepAliveDialer(t *testing.T) {
+	log := newTestLogger()
+
+	t.Run("createDialerWithValidConfig", func(t *testing.T) {
+		cfg := config.PoolKeepAliveConfig{
+			Enabled:  true,
+			Interval: 60 * time.Second,
+		}
+
+		dialer := makeKeepAliveDialer(cfg, log)
+		assert.NotNil(t, dialer, "dialer function should not be nil")
+	})
+
+	t.Run("createDialerWithZeroInterval", func(t *testing.T) {
+		cfg := config.PoolKeepAliveConfig{
+			Enabled:  true,
+			Interval: 0,
+		}
+
+		dialer := makeKeepAliveDialer(cfg, log)
+		assert.NotNil(t, dialer, "dialer function should not be nil even with zero interval")
+	})
+}
+
+func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(*pgx.ConnConfig) *sql.DB { return db }
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(*pgx.ConnConfig) *sql.DB { return db }
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  false, // Explicitly disabled
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+// =============================================================================
 // quoteDSN Tests
 // =============================================================================
 

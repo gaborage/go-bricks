@@ -673,6 +673,176 @@ func TestOracleSequenceQuery(t *testing.T) {
 }
 
 // =============================================================================
+// TCP Keep-Alive Tests
+// =============================================================================
+
+func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track the DSN passed to openOracleDB
+	var capturedDSN string
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		capturedDSN = dsn
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify DSN contains TCP keep-alive options
+	assert.Contains(t, capturedDSN, "TCP KEEPALIVE=TRUE", "DSN should contain TCP KEEPALIVE option")
+	assert.Contains(t, capturedDSN, "TCP KEEPIDLE=60", "DSN should contain TCP KEEPIDLE option")
+	assert.Contains(t, capturedDSN, "TCP KEEPINTVL=60", "DSN should contain TCP KEEPINTVL option")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track the DSN passed to openOracleDB
+	var capturedDSN string
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		capturedDSN = dsn
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  false, // Explicitly disabled
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify DSN does NOT contain TCP keep-alive options
+	assert.NotContains(t, capturedDSN, "TCP KEEPALIVE", "DSN should not contain TCP KEEPALIVE when disabled")
+	assert.NotContains(t, capturedDSN, "TCP KEEPIDLE", "DSN should not contain TCP KEEPIDLE when disabled")
+	assert.NotContains(t, capturedDSN, "TCP KEEPINTVL", "DSN should not contain TCP KEEPINTVL when disabled")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track the DSN passed to openOracleDB
+	var capturedDSN string
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		capturedDSN = dsn
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{SID: "XE"}, // Using SID instead of service name
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 30 * time.Second, // Different interval to verify
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify DSN contains both SID and TCP keep-alive options
+	assert.Contains(t, capturedDSN, "SID=XE", "DSN should contain SID option")
+	assert.Contains(t, capturedDSN, "TCP KEEPALIVE=TRUE", "DSN should contain TCP KEEPALIVE option")
+	assert.Contains(t, capturedDSN, "TCP KEEPIDLE=30", "DSN should contain TCP KEEPIDLE=30")
+	assert.Contains(t, capturedDSN, "TCP KEEPINTVL=30", "DSN should contain TCP KEEPINTVL=30")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+// =============================================================================
 // Oracle UDT Registration Tests
 // =============================================================================
 

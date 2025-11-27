@@ -43,9 +43,12 @@ database:
       connections: 25
     idle:
       connections: 5
-      time: 5m
+      time: 4m                     # Recycle idle connections before NAT/LB timeout (AWS: 350s)
     lifetime:
       max: 30m
+    keepalive:
+      enabled: true                # Enable TCP keep-alive probes (recommended for cloud deployments)
+      interval: 60s                # Send probe every 60s to prevent NAT/LB from dropping connection
 
   query:
     slow:

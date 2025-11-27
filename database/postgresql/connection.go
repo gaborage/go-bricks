@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -32,6 +33,35 @@ var (
 		return db.PingContext(ctx)
 	}
 )
+
+// makeKeepAliveDialer creates a custom dialer with TCP keep-alive enabled.
+// This prevents NAT gateways, load balancers, and firewalls from dropping
+// idle connections by sending periodic TCP probes.
+func makeKeepAliveDialer(keepAliveCfg config.PoolKeepAliveConfig, log logger.Logger) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &net.Dialer{
+			KeepAlive: keepAliveCfg.Interval,
+			Timeout:   30 * time.Second,
+		}
+
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+
+		// Explicitly enable TCP keep-alive and set the period
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			if setErr := tcpConn.SetKeepAlive(true); setErr != nil {
+				log.Warn().Err(setErr).Msg("Failed to enable TCP keep-alive on PostgreSQL connection")
+			}
+			if setErr := tcpConn.SetKeepAlivePeriod(keepAliveCfg.Interval); setErr != nil {
+				log.Warn().Err(setErr).Msg("Failed to set TCP keep-alive period on PostgreSQL connection")
+			}
+		}
+
+		return conn, nil
+	}
+}
 
 // quoteDSN quotes a DSN value according to libpq rules:
 // - Returns double single quotes for empty strings (empty value)
@@ -95,6 +125,14 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	pgxConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
+	}
+
+	// Configure TCP keep-alive if enabled (prevents NAT/LB idle connection drops)
+	if cfg.Pool.KeepAlive.Enabled {
+		pgxConfig.DialFunc = makeKeepAliveDialer(cfg.Pool.KeepAlive, log)
+		log.Debug().
+			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+			Msg("TCP keep-alive enabled for PostgreSQL connections")
 	}
 
 	// Create connection using pgx driver
