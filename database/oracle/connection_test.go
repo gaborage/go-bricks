@@ -10,6 +10,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/sijms/go-ora/v2/configurations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -681,16 +682,26 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
-	// Track the DSN passed to openOracleDB
-	var capturedDSN string
+	// Track which open function was called and capture the dialer
+	var usedDialerPath bool
+	var capturedDialer configurations.DialerContext
+
+	originalOpenWithDialer := openOracleDBWithDialer
 	originalOpen := openOracleDB
 	originalPing := pingOracleDB
-	openOracleDB = func(dsn string) (*sql.DB, error) {
-		capturedDSN = dsn
+
+	openOracleDBWithDialer = func(_ string, dialer configurations.DialerContext) *sql.DB {
+		usedDialerPath = true
+		capturedDialer = dialer
+		return db
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
 		return db, nil
 	}
 	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
 	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
 		openOracleDB = originalOpen
 		pingOracleDB = originalPing
 	})
@@ -722,10 +733,14 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
-	// Verify DSN contains TCP keep-alive options
-	assert.Contains(t, capturedDSN, "TCP KEEPALIVE=TRUE", "DSN should contain TCP KEEPALIVE option")
-	assert.Contains(t, capturedDSN, "TCP KEEPIDLE=60", "DSN should contain TCP KEEPIDLE option")
-	assert.Contains(t, capturedDSN, "TCP KEEPINTVL=60", "DSN should contain TCP KEEPINTVL option")
+	// Verify the dialer path was used and a dialer was provided
+	assert.True(t, usedDialerPath, "should use openOracleDBWithDialer when keep-alive is enabled")
+	assert.NotNil(t, capturedDialer, "dialer should be provided when keep-alive is enabled")
+
+	// Verify it's the correct dialer type with the right interval
+	kaDialer, ok := capturedDialer.(*keepAliveDialer)
+	require.True(t, ok, "dialer should be a keepAliveDialer")
+	assert.Equal(t, 60*time.Second, kaDialer.interval, "dialer should have correct interval")
 
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
@@ -736,16 +751,26 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
-	// Track the DSN passed to openOracleDB
-	var capturedDSN string
+	// Track which open function was called
+	var usedDialerPath bool
+	var usedRegularPath bool
+
+	originalOpenWithDialer := openOracleDBWithDialer
 	originalOpen := openOracleDB
 	originalPing := pingOracleDB
-	openOracleDB = func(dsn string) (*sql.DB, error) {
-		capturedDSN = dsn
+
+	openOracleDBWithDialer = func(_ string, _ configurations.DialerContext) *sql.DB {
+		usedDialerPath = true
+		return db
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
+		usedRegularPath = true
 		return db, nil
 	}
 	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
 	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
 		openOracleDB = originalOpen
 		pingOracleDB = originalPing
 	})
@@ -777,10 +802,9 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
-	// Verify DSN does NOT contain TCP keep-alive options
-	assert.NotContains(t, capturedDSN, "TCP KEEPALIVE", "DSN should not contain TCP KEEPALIVE when disabled")
-	assert.NotContains(t, capturedDSN, "TCP KEEPIDLE", "DSN should not contain TCP KEEPIDLE when disabled")
-	assert.NotContains(t, capturedDSN, "TCP KEEPINTVL", "DSN should not contain TCP KEEPINTVL when disabled")
+	// Verify the regular path was used (no custom dialer)
+	assert.False(t, usedDialerPath, "should NOT use openOracleDBWithDialer when keep-alive is disabled")
+	assert.True(t, usedRegularPath, "should use regular openOracleDB when keep-alive is disabled")
 
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
@@ -791,16 +815,27 @@ func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
-	// Track the DSN passed to openOracleDB
+	// Track DSN and dialer
 	var capturedDSN string
+	var capturedDialer configurations.DialerContext
+
+	originalOpenWithDialer := openOracleDBWithDialer
 	originalOpen := openOracleDB
 	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(dsn string, dialer configurations.DialerContext) *sql.DB {
+		capturedDSN = dsn
+		capturedDialer = dialer
+		return db
+	}
 	openOracleDB = func(dsn string) (*sql.DB, error) {
 		capturedDSN = dsn
 		return db, nil
 	}
 	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
 	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
 		openOracleDB = originalOpen
 		pingOracleDB = originalPing
 	})
@@ -832,14 +867,30 @@ func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
-	// Verify DSN contains both SID and TCP keep-alive options
+	// Verify DSN contains SID option
 	assert.Contains(t, capturedDSN, "SID=XE", "DSN should contain SID option")
-	assert.Contains(t, capturedDSN, "TCP KEEPALIVE=TRUE", "DSN should contain TCP KEEPALIVE option")
-	assert.Contains(t, capturedDSN, "TCP KEEPIDLE=30", "DSN should contain TCP KEEPIDLE=30")
-	assert.Contains(t, capturedDSN, "TCP KEEPINTVL=30", "DSN should contain TCP KEEPINTVL=30")
+
+	// Verify DSN does NOT contain fake TCP keep-alive options (they're now handled via dialer)
+	assert.NotContains(t, capturedDSN, "TCP KEEPALIVE", "DSN should not contain TCP KEEPALIVE (handled via dialer)")
+	assert.NotContains(t, capturedDSN, "TCP KEEPIDLE", "DSN should not contain TCP KEEPIDLE (handled via dialer)")
+
+	// Verify dialer was configured with correct interval
+	require.NotNil(t, capturedDialer, "dialer should be provided when keep-alive is enabled")
+	kaDialer, ok := capturedDialer.(*keepAliveDialer)
+	require.True(t, ok, "dialer should be a keepAliveDialer")
+	assert.Equal(t, 30*time.Second, kaDialer.interval, "dialer should have correct interval")
 
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
+}
+
+func TestKeepAliveDialerDialContext(t *testing.T) {
+	log := newTestLogger()
+	dialer := newKeepAliveDialer(60*time.Second, log)
+
+	// Verify dialer is properly initialized
+	assert.Equal(t, 60*time.Second, dialer.interval)
+	assert.NotNil(t, dialer.log)
 }
 
 // =============================================================================

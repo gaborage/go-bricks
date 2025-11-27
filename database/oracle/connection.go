@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"time"
 
 	go_ora "github.com/sijms/go-ora/v2"
+	"github.com/sijms/go-ora/v2/configurations"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/tracking"
@@ -26,25 +28,84 @@ var (
 	openOracleDB = func(dsn string) (*sql.DB, error) {
 		return sql.Open("oracle", dsn)
 	}
+	openOracleDBWithDialer = func(dsn string, dialer configurations.DialerContext) *sql.DB {
+		connector := go_ora.NewConnector(dsn)
+		connector.(*go_ora.OracleConnector).Dialer(dialer)
+		return sql.OpenDB(connector)
+	}
 	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
 		return db.PingContext(ctx)
 	}
 )
 
+// keepAliveDialer implements configurations.DialerContext for TCP keep-alive connections.
+// This enables TCP keep-alive probes to prevent NAT gateways and load balancers
+// from dropping idle database connections in cloud environments.
+type keepAliveDialer struct {
+	interval time.Duration
+	log      logger.Logger
+}
+
+// DialContext implements configurations.DialerContext interface.
+// It creates a TCP connection with keep-alive enabled.
+func (d *keepAliveDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: d.interval,
+	}
+	conn, err := dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+
+	// Explicitly enable keep-alive and set the period for TCP connections
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if setErr := tcpConn.SetKeepAlive(true); setErr != nil {
+			d.log.Warn().Err(setErr).Msg("Failed to enable TCP keep-alive on Oracle connection")
+		}
+		if setErr := tcpConn.SetKeepAlivePeriod(d.interval); setErr != nil {
+			d.log.Warn().Err(setErr).Msg("Failed to set TCP keep-alive period on Oracle connection")
+		}
+	}
+
+	return conn, nil
+}
+
+// newKeepAliveDialer creates a new keepAliveDialer with the specified interval.
+func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDialer {
+	return &keepAliveDialer{
+		interval: interval,
+		log:      log,
+	}
+}
+
 // NewConnection creates and returns an Oracle-backed types.Interface using the provided database configuration and logger.
 // It returns an error if cfg is nil, if the connection cannot be opened, or if an initial ping to the database fails.
 // The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
 // configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
+// When cfg.Pool.KeepAlive.Enabled is true, a custom TCP dialer is used to enable keep-alive probes.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
 	}
 
-	dsn := buildOracleDSN(cfg, log)
+	dsn := buildOracleDSN(cfg)
 
-	db, err := openOracleDB(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+	var db *sql.DB
+	var err error
+
+	if cfg.Pool.KeepAlive.Enabled {
+		// Use connector with custom keep-alive dialer
+		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
+		db = openOracleDBWithDialer(dsn, dialer)
+		log.Debug().
+			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+			Msg("TCP keep-alive enabled for Oracle connections")
+	} else {
+		db, err = openOracleDB(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+		}
 	}
 
 	configureConnectionPool(db, cfg)
@@ -68,21 +129,12 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 }
 
 // buildURLOptions constructs the URL options map for Oracle connection.
-// Includes SID (if specified) and TCP keep-alive options (if enabled).
-func buildURLOptions(cfg *config.DatabaseConfig, log logger.Logger) map[string]string {
+// Includes SID if specified. TCP keep-alive is handled separately via custom dialer.
+func buildURLOptions(cfg *config.DatabaseConfig) map[string]string {
 	urlOpts := make(map[string]string)
 
 	if cfg.Oracle.Service.SID != "" {
 		urlOpts["SID"] = cfg.Oracle.Service.SID
-	}
-
-	if cfg.Pool.KeepAlive.Enabled {
-		urlOpts["TCP KEEPALIVE"] = "TRUE"
-		urlOpts["TCP KEEPIDLE"] = fmt.Sprintf("%d", int(cfg.Pool.KeepAlive.Interval.Seconds()))
-		urlOpts["TCP KEEPINTVL"] = fmt.Sprintf("%d", int(cfg.Pool.KeepAlive.Interval.Seconds()))
-		log.Debug().
-			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
-			Msg("TCP keep-alive enabled for Oracle connections")
 	}
 
 	return urlOpts
@@ -103,12 +155,12 @@ func resolveServiceName(cfg *config.DatabaseConfig) string {
 
 // buildOracleDSN constructs an Oracle connection DSN from configuration.
 // Returns the DSN string. If ConnectionString is provided, uses it directly.
-func buildOracleDSN(cfg *config.DatabaseConfig, log logger.Logger) string {
+func buildOracleDSN(cfg *config.DatabaseConfig) string {
 	if cfg.ConnectionString != "" {
 		return cfg.ConnectionString
 	}
 
-	urlOpts := buildURLOptions(cfg, log)
+	urlOpts := buildURLOptions(cfg)
 	serviceName := resolveServiceName(cfg)
 
 	var optsArg map[string]string

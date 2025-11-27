@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -497,9 +498,15 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
+	// Capture the pgx.ConnConfig to verify DialFunc is wired
+	var capturedCfg *pgx.ConnConfig
+
 	originalOpen := openPostgresDB
 	originalPing := pingPostgresDB
-	openPostgresDB = func(*pgx.ConnConfig) *sql.DB { return db }
+	openPostgresDB = func(cfg *pgx.ConnConfig) *sql.DB {
+		capturedCfg = cfg
+		return db
+	}
 	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
 	t.Cleanup(func() {
 		openPostgresDB = originalOpen
@@ -531,6 +538,10 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
+	// Verify DialFunc was wired when keep-alive is enabled
+	require.NotNil(t, capturedCfg, "pgx.ConnConfig should have been captured")
+	assert.NotNil(t, capturedCfg.DialFunc, "DialFunc should be set when keep-alive is enabled")
+
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
 }
@@ -540,9 +551,20 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
 
+	// Get the default pgx DialFunc for comparison (pgx.ParseConfig sets a default dialer)
+	defaultPgxCfg, err := pgx.ParseConfig("host=localhost dbname=testdb")
+	require.NoError(t, err)
+	defaultDialFunc := defaultPgxCfg.DialFunc
+
+	// Capture the pgx.ConnConfig to verify DialFunc was NOT modified
+	var capturedCfg *pgx.ConnConfig
+
 	originalOpen := openPostgresDB
 	originalPing := pingPostgresDB
-	openPostgresDB = func(*pgx.ConnConfig) *sql.DB { return db }
+	openPostgresDB = func(cfg *pgx.ConnConfig) *sql.DB {
+		capturedCfg = cfg
+		return db
+	}
 	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
 	t.Cleanup(func() {
 		openPostgresDB = originalOpen
@@ -573,6 +595,18 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
+
+	// Verify DialFunc was NOT modified when keep-alive is disabled
+	// pgx.ParseConfig sets a default dialer, so we compare to pgx's default rather than nil
+	require.NotNil(t, capturedCfg, "pgx.ConnConfig should have been captured")
+
+	// When keep-alive is disabled, the DialFunc should be pgx's default (not our custom dialer)
+	// We can only compare function pointers to nil in Go, so we verify the pointer value
+	// matches what pgx.ParseConfig returns by default
+	capturedDialFuncPtr := reflect.ValueOf(capturedCfg.DialFunc).Pointer()
+	defaultDialFuncPtr := reflect.ValueOf(defaultDialFunc).Pointer()
+	assert.Equal(t, defaultDialFuncPtr, capturedDialFuncPtr,
+		"DialFunc should be pgx's default when keep-alive is disabled")
 
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
