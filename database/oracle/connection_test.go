@@ -747,6 +747,67 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
+func TestNewConnectionWithKeepAliveFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Simulate openOracleDBWithDialer returning nil (go-ora API change)
+	var usedFallbackPath bool
+
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(_ string, _ configurations.DialerContext) *sql.DB {
+		return nil // Simulate type assertion failure
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
+		usedFallbackPath = true
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true, // Keep-alive enabled but dialer fails
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "should succeed with fallback")
+	require.NotNil(t, conn)
+
+	// Verify fallback path was used
+	assert.True(t, usedFallbackPath, "should fall back to regular openOracleDB when dialer returns nil")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
 func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

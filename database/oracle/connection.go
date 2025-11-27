@@ -32,7 +32,8 @@ var (
 		connector := go_ora.NewConnector(dsn)
 		oracleConn, ok := connector.(*go_ora.OracleConnector)
 		if !ok {
-			panic(fmt.Sprintf("go-ora connector type changed: expected *go_ora.OracleConnector, got %T", connector))
+			// Return nil to signal fallback needed - caller handles graceful degradation
+			return nil
 		}
 		oracleConn.Dialer(dialer)
 		return sql.OpenDB(connector)
@@ -102,9 +103,18 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		// Use connector with custom keep-alive dialer
 		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
 		db = openOracleDBWithDialer(dsn, dialer)
-		log.Debug().
-			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
-			Msg("TCP keep-alive enabled for Oracle connections")
+		if db == nil {
+			// Graceful fallback: go-ora connector type changed, use standard connection
+			log.Warn().Msg("Keep-alive dialer setup failed (go-ora API change?), falling back to standard connection")
+			db, err = openOracleDB(dsn)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+			}
+		} else {
+			log.Debug().
+				Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+				Msg("TCP keep-alive enabled for Oracle connections")
+		}
 	} else {
 		db, err = openOracleDB(dsn)
 		if err != nil {
