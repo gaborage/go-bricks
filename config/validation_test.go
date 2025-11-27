@@ -1434,8 +1434,29 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 					KeepAlive: PoolKeepAliveConfig{}, // Zero values
 				},
 			},
-			expectedEnabled:  true,
-			expectedInterval: 60 * time.Second,
+			expectedEnabled:  defaultKeepAliveEnabled,
+			expectedInterval: defaultKeepAliveInterval,
+		},
+		{
+			name: "explicit_disabled_with_zero_interval_applies_defaults",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{Connections: 25},
+					KeepAlive: PoolKeepAliveConfig{
+						Enabled:  false, // Explicitly disabled
+						Interval: 0,     // But zero interval triggers defaults
+					},
+				},
+			},
+			// When Interval=0, defaults are applied for BOTH fields
+			// This is intentional: Interval=0 means "not configured"
+			expectedEnabled:  defaultKeepAliveEnabled,
+			expectedInterval: defaultKeepAliveInterval,
 		},
 		{
 			name: "explicit_interval_preserves_values",

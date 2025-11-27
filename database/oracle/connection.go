@@ -30,7 +30,11 @@ var (
 	}
 	openOracleDBWithDialer = func(dsn string, dialer configurations.DialerContext) *sql.DB {
 		connector := go_ora.NewConnector(dsn)
-		connector.(*go_ora.OracleConnector).Dialer(dialer)
+		oracleConn, ok := connector.(*go_ora.OracleConnector)
+		if !ok {
+			panic(fmt.Sprintf("go-ora connector type changed: expected *go_ora.OracleConnector, got %T", connector))
+		}
+		oracleConn.Dialer(dialer)
 		return sql.OpenDB(connector)
 	}
 	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
