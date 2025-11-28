@@ -345,17 +345,22 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill to capacity
-	c1, _ := mgr.Get(ctx, tenantOne)
-	c2, _ := mgr.Get(ctx, tenantTwo)
-	_, _ = mgr.Get(ctx, tenantThree)
+	c1, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	c2, err := mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantThree)
+	require.NoError(t, err)
 
 	stats := mgr.Stats()
 	assert.Equal(t, 3, stats.ActiveCaches)
 	assert.Equal(t, 0, stats.Evictions)
 
 	// Access tenant-1 and tenant-2 to refresh LRU (tenant-3 becomes oldest)
-	_, _ = mgr.Get(ctx, tenantOne)
-	_, _ = mgr.Get(ctx, tenantTwo)
+	_, err = mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
 
 	// Add tenant-4, should evict tenant-3 (oldest)
 	c4, err := mgr.Get(ctx, "tenant-4")
@@ -371,13 +376,16 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	assert.True(t, closed, "tenant-3 should have been evicted and closed")
 
 	// Verify tenant-1, tenant-2, tenant-4 still active
-	c1Again, _ := mgr.Get(ctx, tenantOne)
+	c1Again, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
 	assert.Same(t, c1, c1Again, "tenant-1 should still be active")
 
-	c2Again, _ := mgr.Get(ctx, tenantTwo)
+	c2Again, err := mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
 	assert.Same(t, c2, c2Again, "tenant-2 should still be active")
 
-	c4Again, _ := mgr.Get(ctx, "tenant-4")
+	c4Again, err := mgr.Get(ctx, "tenant-4")
+	require.NoError(t, err)
 	assert.Same(t, c4, c4Again, "tenant-4 should still be active")
 }
 
@@ -398,8 +406,10 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	ctx := context.Background()
 
 	// Create caches
-	c1, _ := mgr.Get(ctx, tenantOne)
-	c2, _ := mgr.Get(ctx, tenantTwo)
+	c1, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	c2, err := mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
 	require.NotNil(t, c1)
 	require.NotNil(t, c2)
 
@@ -415,7 +425,10 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				_, _ = mgr.Get(ctx, tenantOne)
+				_, err := mgr.Get(ctx, tenantOne)
+				if err != nil {
+					return // Manager may be closed during test cleanup
+				}
 			case <-done:
 				return
 			}
@@ -607,9 +620,12 @@ func TestCacheManagerClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple caches
-	_, _ = mgr.Get(ctx, tenantOne)
-	_, _ = mgr.Get(ctx, tenantTwo)
-	_, _ = mgr.Get(ctx, tenantThree)
+	_, err = mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantThree)
+	require.NoError(t, err)
 
 	stats := mgr.Stats()
 	assert.Equal(t, 3, stats.ActiveCaches)
@@ -661,15 +677,18 @@ func TestCacheManagerStats(t *testing.T) {
 	assert.Equal(t, int64(900), stats.IdleTTL) // 15 minutes = 900 seconds
 
 	// Create caches
-	_, _ = mgr.Get(ctx, tenantOne)
-	_, _ = mgr.Get(ctx, tenantTwo)
+	_, err = mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
 
 	stats = mgr.Stats()
 	assert.Equal(t, 2, stats.ActiveCaches)
 	assert.Equal(t, 2, stats.TotalCreated)
 
 	// Trigger eviction
-	_, _ = mgr.Get(ctx, tenantThree)
+	_, err = mgr.Get(ctx, tenantThree)
+	require.NoError(t, err)
 
 	stats = mgr.Stats()
 	assert.Equal(t, 2, stats.ActiveCaches)
@@ -716,7 +735,7 @@ func TestCacheManagerThreadSafety(t *testing.T) {
 					t.Errorf("worker %d: cache operation failed: %v", workerID, err)
 				}
 
-				// Occasionally remove cache
+				// Occasionally remove cache (ignore error - removal may race with close)
 				if j%20 == 0 {
 					_ = mgr.Remove(tenantID)
 				}
@@ -768,8 +787,10 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create caches up to capacity
-	_, _ = mgr.Get(ctx, tenantOne)
-	_, _ = mgr.Get(ctx, tenantTwo)
+	_, err = mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
 
 	// Channel to signal when Get() operations complete
 	getChan := make(chan time.Duration, 1)
@@ -822,9 +843,12 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple caches
-	_, _ = mgr.Get(ctx, tenantOne)
-	_, _ = mgr.Get(ctx, tenantTwo)
-	_, _ = mgr.Get(ctx, tenantThree)
+	_, err = mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantTwo)
+	require.NoError(t, err)
+	_, err = mgr.Get(ctx, tenantThree)
+	require.NoError(t, err)
 
 	// Start removing tenant-1 (slow close in background)
 	removeDone := make(chan error, 1)
@@ -846,7 +870,7 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 
 			start := time.Now()
 
-			// These should all complete quickly
+			// These should all complete quickly (ignore errors - concurrent operations may race)
 			_ = mgr.Stats()
 			_, _ = mgr.Get(ctx, tenantTwo)
 			_, _ = mgr.Get(ctx, tenantThree)

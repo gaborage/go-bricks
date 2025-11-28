@@ -127,7 +127,8 @@ func TestClientSet(t *testing.T) {
 
 		// Verify with miniredis
 		assert.True(t, mr.Exists(testKey1))
-		value, _ := mr.Get(testKey1)
+		value, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, "value", value)
 	})
 
@@ -212,7 +213,8 @@ func TestClientGetOrSet(t *testing.T) {
 
 		// Verify in Redis
 		assert.True(t, mr.Exists(testKey1))
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, testNewValue, stored)
 	})
 
@@ -229,7 +231,8 @@ func TestClientGetOrSet(t *testing.T) {
 		assert.Equal(t, []byte(testExistingValue), value)
 
 		// Verify original value unchanged
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, testExistingValue, stored)
 	})
 
@@ -271,7 +274,8 @@ func TestClientCompareAndSet(t *testing.T) {
 
 		// Verify in Redis
 		assert.True(t, mr.Exists(testKey1))
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, testWorker, stored)
 	})
 
@@ -287,7 +291,8 @@ func TestClientCompareAndSet(t *testing.T) {
 		assert.False(t, success)
 
 		// Verify original value unchanged
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, testWorker, stored)
 	})
 
@@ -303,7 +308,8 @@ func TestClientCompareAndSet(t *testing.T) {
 		assert.True(t, success)
 
 		// Verify updated value
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, testNewValue, stored)
 	})
 
@@ -319,7 +325,8 @@ func TestClientCompareAndSet(t *testing.T) {
 		assert.False(t, success)
 
 		// Verify original value unchanged
-		stored, _ := mr.Get(testKey1)
+		stored, err := mr.Get(testKey1)
+		require.NoError(t, err)
 		assert.Equal(t, "current-value", stored)
 	})
 

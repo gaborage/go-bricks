@@ -75,7 +75,8 @@ func TestNew(t *testing.T) {
 			var buf bytes.Buffer
 
 			// Temporarily redirect stdout
-			r, w, _ := os.Pipe()
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
 			os.Stdout = w
 
 			logger := New(tt.level, tt.pretty)
@@ -85,7 +86,8 @@ func TestNew(t *testing.T) {
 			os.Stdout = originalStdout
 
 			// Read captured output
-			io.Copy(&buf, r)
+			_, err = io.Copy(&buf, r)
+			require.NoError(t, err)
 
 			// Verify logger is created
 			require.NotNil(t, logger)
@@ -153,7 +155,8 @@ func TestNewWithFilter(t *testing.T) {
 			var buf bytes.Buffer
 
 			// Temporarily redirect stdout
-			r, w, _ := os.Pipe()
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
 			os.Stdout = w
 
 			// Copy the filter config so assertions can inspect the original values
@@ -172,7 +175,8 @@ func TestNewWithFilter(t *testing.T) {
 			os.Stdout = originalStdout
 
 			// Read captured output
-			io.Copy(&buf, r)
+			_, err = io.Copy(&buf, r)
+			require.NoError(t, err)
 
 			// Verify logger is created
 			require.NotNil(t, logger)
@@ -237,7 +241,8 @@ func TestCallerMarshalFuncSetup(t *testing.T) {
 	// This tests the sync.Once behavior
 
 	originalStdout := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	os.Stdout = w
 
 	// Create multiple loggers
@@ -249,7 +254,8 @@ func TestCallerMarshalFuncSetup(t *testing.T) {
 	os.Stdout = originalStdout
 
 	var buf bytes.Buffer
-	io.Copy(&buf, r)
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
 
 	// All loggers should be created successfully
 	assert.NotNil(t, logger1)

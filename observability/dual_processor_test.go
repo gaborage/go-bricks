@@ -243,8 +243,14 @@ func TestEnrichTraceContext(t *testing.T) {
 		{
 			name: "valid trace context",
 			setupContext: func() context.Context {
-				traceID, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
-				spanID, _ := trace.SpanIDFromHex("0123456789abcdef")
+				traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+				if err != nil {
+					panic("test trace ID parse failed: " + err.Error())
+				}
+				spanID, err := trace.SpanIDFromHex("0123456789abcdef")
+				if err != nil {
+					panic("test span ID parse failed: " + err.Error())
+				}
 				spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
 					TraceID:    traceID,
 					SpanID:     spanID,
@@ -333,8 +339,10 @@ func TestDualModeProcessorEnrichesTraceContext(t *testing.T) {
 	dualProc := NewDualModeLogProcessor(capturingProc, &mockProcessor{}, 0.0)
 
 	// Create context with trace
-	traceID, _ := trace.TraceIDFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1")
-	spanID, _ := trace.SpanIDFromHex("bbbbbbbbbbbbbb01")
+	traceID, err := trace.TraceIDFromHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("bbbbbbbbbbbbbb01")
+	require.NoError(t, err)
 	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    traceID,
 		SpanID:     spanID,
@@ -349,7 +357,7 @@ func TestDualModeProcessorEnrichesTraceContext(t *testing.T) {
 	}
 	rec := factory.NewRecord()
 
-	err := dualProc.OnEmit(ctx, &rec)
+	err = dualProc.OnEmit(ctx, &rec)
 	require.NoError(t, err)
 	require.NotNil(t, capturedRecord, "Record should be captured")
 
@@ -488,8 +496,10 @@ func TestEnrichFromAttributes(t *testing.T) {
 // TestEnrichContextVsAttributes verifies context takes precedence over attributes
 func TestEnrichContextVsAttributes(t *testing.T) {
 	// Create context with trace (context source)
-	contextTraceID, _ := trace.TraceIDFromHex("cccccccccccccccccccccccccccccccc")
-	contextSpanID, _ := trace.SpanIDFromHex("cccccccccccccccc")
+	contextTraceID, err := trace.TraceIDFromHex("cccccccccccccccccccccccccccccccc")
+	require.NoError(t, err)
+	contextSpanID, err := trace.SpanIDFromHex("cccccccccccccccc")
+	require.NoError(t, err)
 	spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
 		TraceID:    contextTraceID,
 		SpanID:     contextSpanID,
@@ -565,8 +575,10 @@ func TestSamplingRateDeterministic(t *testing.T) {
 	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.5) // 50% sampling
 
 	// Create a specific trace ID
-	traceID, _ := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
-	spanID, _ := trace.SpanIDFromHex("fedcba9876543210")
+	traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("fedcba9876543210")
+	require.NoError(t, err)
 
 	// First call with this trace
 	factory := logtest.RecordFactory{
@@ -576,12 +588,14 @@ func TestSamplingRateDeterministic(t *testing.T) {
 		SpanID:     spanID,
 	}
 	rec1 := factory.NewRecord()
-	_ = dualProc.OnEmit(context.Background(), &rec1)
+	err = dualProc.OnEmit(context.Background(), &rec1)
+	require.NoError(t, err)
 	firstCount := traceProc.emitCount
 
 	// Second call with SAME trace ID should produce same decision
 	rec2 := factory.NewRecord()
-	_ = dualProc.OnEmit(context.Background(), &rec2)
+	err = dualProc.OnEmit(context.Background(), &rec2)
+	require.NoError(t, err)
 	secondCount := traceProc.emitCount
 
 	// Both should either be sampled or not (deterministic)

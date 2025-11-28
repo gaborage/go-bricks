@@ -948,9 +948,10 @@ func TestTraceIDUtilities(t *testing.T) {
 
 		// Test that it adds header when missing
 		ctx := WithTraceID(context.Background(), "test-trace")
-		req, _ := nethttp.NewRequestWithContext(ctx, "GET", "http://example.com", nethttp.NoBody)
+		req, err := nethttp.NewRequestWithContext(ctx, "GET", "http://example.com", nethttp.NoBody)
+		require.NoError(t, err)
 
-		err := interceptor(ctx, req)
+		err = interceptor(ctx, req)
 		assert.NoError(t, err)
 		assert.Equal(t, "test-trace", req.Header.Get(HeaderXRequestID))
 
