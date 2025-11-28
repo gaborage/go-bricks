@@ -558,6 +558,7 @@ func TestTransactionCommitSuccess(t *testing.T) {
 	// Begin transaction
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err, "Begin transaction should succeed")
+	defer tx.Rollback() // No-op after commit
 	require.NotNil(t, tx, "Transaction should not be nil")
 
 	// Get transaction context (MongoDB-specific)

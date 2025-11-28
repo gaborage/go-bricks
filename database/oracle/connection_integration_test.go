@@ -374,6 +374,7 @@ func TestConnectionTransactionCommit(t *testing.T) {
 	// Begin transaction
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err, startTransactionSucceedMsg)
+	defer tx.Rollback() // No-op after commit
 
 	// Insert data in transaction
 	_, err = tx.Exec(ctx, "INSERT INTO test_tx_commit (id, value) VALUES (:1, :2)", 1, 42)

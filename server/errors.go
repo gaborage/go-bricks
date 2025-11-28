@@ -72,6 +72,11 @@ type NotFoundError struct {
 	*BaseAPIError
 }
 
+// Error implements the error interface.
+func (e *NotFoundError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
 // NewNotFoundError creates a new not found error.
 func NewNotFoundError(resource string) *NotFoundError {
 	message := fmt.Sprintf("%s not found", resource)
@@ -85,6 +90,11 @@ type ConflictError struct {
 	*BaseAPIError
 }
 
+// Error implements the error interface.
+func (e *ConflictError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
 // NewConflictError creates a new conflict error.
 func NewConflictError(message string) *ConflictError {
 	return &ConflictError{
@@ -95,6 +105,11 @@ func NewConflictError(message string) *ConflictError {
 // UnauthorizedError represents authentication errors.
 type UnauthorizedError struct {
 	*BaseAPIError
+}
+
+// Error implements the error interface.
+func (e *UnauthorizedError) Error() string {
+	return e.BaseAPIError.Error()
 }
 
 // NewUnauthorizedError creates a new unauthorized error.
@@ -112,6 +127,11 @@ type ForbiddenError struct {
 	*BaseAPIError
 }
 
+// Error implements the error interface.
+func (e *ForbiddenError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
 // NewForbiddenError creates a new forbidden error.
 func NewForbiddenError(message string) *ForbiddenError {
 	if message == "" {
@@ -125,6 +145,11 @@ func NewForbiddenError(message string) *ForbiddenError {
 // InternalServerError represents internal server errors.
 type InternalServerError struct {
 	*BaseAPIError
+}
+
+// Error implements the error interface.
+func (e *InternalServerError) Error() string {
+	return e.BaseAPIError.Error()
 }
 
 // NewInternalServerError creates a new internal server error.
@@ -142,6 +167,11 @@ type BadRequestError struct {
 	*BaseAPIError
 }
 
+// Error implements the error interface.
+func (e *BadRequestError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
 // NewBadRequestError creates a new bad request error.
 func NewBadRequestError(message string) *BadRequestError {
 	return &BadRequestError{
@@ -152,6 +182,11 @@ func NewBadRequestError(message string) *BadRequestError {
 // ServiceUnavailableError represents service unavailable errors.
 type ServiceUnavailableError struct {
 	*BaseAPIError
+}
+
+// Error implements the error interface.
+func (e *ServiceUnavailableError) Error() string {
+	return e.BaseAPIError.Error()
 }
 
 // NewServiceUnavailableError creates a new service unavailable error.
@@ -169,6 +204,11 @@ type TooManyRequestsError struct {
 	*BaseAPIError
 }
 
+// Error implements the error interface.
+func (e *TooManyRequestsError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
 // NewTooManyRequestsError creates a new too many requests error.
 func NewTooManyRequestsError(message string) *TooManyRequestsError {
 	if message == "" {
@@ -182,6 +222,11 @@ func NewTooManyRequestsError(message string) *TooManyRequestsError {
 // BusinessLogicError represents domain-specific business logic errors.
 type BusinessLogicError struct {
 	*BaseAPIError
+}
+
+// Error implements the error interface.
+func (e *BusinessLogicError) Error() string {
+	return e.BaseAPIError.Error()
 }
 
 // NewBusinessLogicError creates a new business logic error.
