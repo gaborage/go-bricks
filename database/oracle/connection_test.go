@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"net"
 	"regexp"
 	"testing"
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/sijms/go-ora/v2/configurations"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -673,6 +675,439 @@ func TestOracleSequenceQuery(t *testing.T) {
 }
 
 // =============================================================================
+// TCP Keep-Alive Tests
+// =============================================================================
+
+func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track which open function was called and capture the dialer
+	var usedDialerPath bool
+	var capturedDialer configurations.DialerContext
+
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(_ string, dialer configurations.DialerContext) *sql.DB {
+		usedDialerPath = true
+		capturedDialer = dialer
+		return db
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify the dialer path was used and a dialer was provided
+	assert.True(t, usedDialerPath, "should use openOracleDBWithDialer when keep-alive is enabled")
+	assert.NotNil(t, capturedDialer, "dialer should be provided when keep-alive is enabled")
+
+	// Verify it's the correct dialer type with the right interval
+	kaDialer, ok := capturedDialer.(*keepAliveDialer)
+	require.True(t, ok, "dialer should be a keepAliveDialer")
+	assert.Equal(t, 60*time.Second, kaDialer.interval, "dialer should have correct interval")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Simulate openOracleDBWithDialer returning nil (go-ora API change)
+	var usedFallbackPath bool
+
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(_ string, _ configurations.DialerContext) *sql.DB {
+		return nil // Simulate type assertion failure
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
+		usedFallbackPath = true
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true, // Keep-alive enabled but dialer fails
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "should succeed with fallback")
+	require.NotNil(t, conn)
+
+	// Verify fallback path was used
+	assert.True(t, usedFallbackPath, "should fall back to regular openOracleDB when dialer returns nil")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track which open function was called
+	var usedDialerPath bool
+	var usedRegularPath bool
+
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(_ string, _ configurations.DialerContext) *sql.DB {
+		usedDialerPath = true
+		return db
+	}
+	openOracleDB = func(_ string) (*sql.DB, error) {
+		usedRegularPath = true
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: "XEPDB1"},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  false, // Explicitly disabled
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify the regular path was used (no custom dialer)
+	assert.False(t, usedDialerPath, "should NOT use openOracleDBWithDialer when keep-alive is disabled")
+	assert.True(t, usedRegularPath, "should use regular openOracleDB when keep-alive is disabled")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Track DSN, dialer, and which path was used
+	var capturedDSN string
+	var capturedDialer configurations.DialerContext
+	var usedRegularPath bool
+
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithDialer = func(dsn string, dialer configurations.DialerContext) *sql.DB {
+		capturedDSN = dsn
+		capturedDialer = dialer
+		return db
+	}
+	openOracleDB = func(dsn string) (*sql.DB, error) {
+		usedRegularPath = true
+		capturedDSN = dsn
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithDialer = originalOpenWithDialer
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{SID: "XE"}, // Using SID instead of service name
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 30 * time.Second, // Different interval to verify
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify regular path was NOT used (keep-alive enabled should use dialer path)
+	assert.False(t, usedRegularPath, "should NOT use regular openOracleDB when keep-alive is enabled")
+
+	// Verify DSN contains SID option
+	assert.Contains(t, capturedDSN, "SID=XE", "DSN should contain SID option")
+
+	// Verify DSN does NOT contain fake TCP keep-alive options (they're now handled via dialer)
+	assert.NotContains(t, capturedDSN, "TCP KEEPALIVE", "DSN should not contain TCP KEEPALIVE (handled via dialer)")
+	assert.NotContains(t, capturedDSN, "TCP KEEPIDLE", "DSN should not contain TCP KEEPIDLE (handled via dialer)")
+
+	// Verify dialer was configured with correct interval
+	require.NotNil(t, capturedDialer, "dialer should be provided when keep-alive is enabled")
+	kaDialer, ok := capturedDialer.(*keepAliveDialer)
+	require.True(t, ok, "dialer should be a keepAliveDialer")
+	assert.Equal(t, 30*time.Second, kaDialer.interval, "dialer should have correct interval")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestResolveServiceName(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *config.DatabaseConfig
+		expected string
+	}{
+		{
+			name: "service_name_takes_priority",
+			cfg: &config.DatabaseConfig{
+				Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: "XEPDB1", SID: "XE"}},
+				Database: "testdb",
+			},
+			expected: "XEPDB1",
+		},
+		{
+			name: "database_fallback_when_no_service_or_sid",
+			cfg: &config.DatabaseConfig{
+				Oracle:   config.OracleConfig{},
+				Database: "testdb",
+			},
+			expected: "testdb",
+		},
+		{
+			name: "empty_when_sid_set_without_service_name",
+			cfg: &config.DatabaseConfig{
+				Oracle:   config.OracleConfig{Service: config.ServiceConfig{SID: "XE"}},
+				Database: "testdb",
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := resolveServiceName(tt.cfg)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestBuildURLOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *config.DatabaseConfig
+		expected map[string]string
+	}{
+		{
+			name: "with_sid",
+			cfg: &config.DatabaseConfig{
+				Oracle: config.OracleConfig{Service: config.ServiceConfig{SID: "XE"}},
+			},
+			expected: map[string]string{"SID": "XE"},
+		},
+		{
+			name: "without_sid",
+			cfg: &config.DatabaseConfig{
+				Oracle: config.OracleConfig{},
+			},
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildURLOptions(tt.cfg)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestKeepAliveDialerDialContext(t *testing.T) {
+	log := newTestLogger()
+	dialer := newKeepAliveDialer(60*time.Second, log)
+
+	// Verify dialer is properly initialized
+	assert.Equal(t, 60*time.Second, dialer.interval)
+	assert.NotNil(t, dialer.log)
+}
+
+func TestKeepAliveDialerDialContextWithListener(t *testing.T) {
+	log := newTestLogger()
+	dialer := newKeepAliveDialer(60*time.Second, log)
+
+	// Use context-aware listener (noctx linter requirement)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Start local TCP listener on an available port
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	conn, err := dialer.DialContext(ctx, "tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Verify it's a TCP connection (keep-alive requires TCP)
+	tcpConn, ok := conn.(*net.TCPConn)
+	assert.True(t, ok, "should return *net.TCPConn")
+	assert.NotNil(t, tcpConn)
+}
+
+func TestKeepAliveDialerDialContextError(t *testing.T) {
+	log := newTestLogger()
+	dialer := newKeepAliveDialer(60*time.Second, log)
+
+	// Use a short timeout since we expect failure
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Try to connect to a non-existent address (port 59999 is unlikely to be in use)
+	conn, err := dialer.DialContext(ctx, "tcp", "127.0.0.1:59999")
+	assert.Error(t, err, "should fail when connecting to non-existent address")
+	assert.Nil(t, conn)
+}
+
+func TestNewConnectionPingFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	// Note: mock expectations may not be met if ping fails before close
+	defer func() { _ = mock.ExpectationsWereMet() }()
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDB = func(_ string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error {
+		return errors.New("connection refused")
+	}
+
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "testuser",
+		Password: "testpass",
+		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: "XEPDB1"}},
+		Pool: config.PoolConfig{
+			KeepAlive: config.PoolKeepAliveConfig{Enabled: false},
+		},
+	}
+
+	log := newTestLogger()
+	mock.ExpectClose() // DB should be closed on ping failure
+
+	conn, err := NewConnection(cfg, log)
+	assert.Error(t, err)
+	assert.Nil(t, conn)
+	assert.Contains(t, err.Error(), oraclePingErrorMsg)
+}
+
+// =============================================================================
 // Oracle UDT Registration Tests
 // =============================================================================
 
@@ -747,4 +1182,134 @@ func TestConnectionRegisterTypeWithOwner(t *testing.T) {
 			t.Logf("RegisterTypeWithOwner with collection returned error: %v", err)
 		}
 	})
+}
+
+// =============================================================================
+// Edge Case Coverage Tests
+// =============================================================================
+
+// TestConnectionStatsWithNilConfig tests Stats() when config is nil
+// This covers the else branch where config is not available.
+// Coverage target: Stats() nil config branch
+func TestConnectionStatsWithNilConfig(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Create connection with nil config
+	c := &Connection{
+		db:     db,
+		logger: newDisabledTestLogger(),
+		config: nil, // Explicitly nil config
+	}
+
+	stats, err := c.Stats()
+	assert.NoError(t, err, "Stats() should succeed with nil config")
+	assert.NotNil(t, stats, "Stats should not be nil")
+
+	// Verify basic stats keys are present
+	assert.Contains(t, stats, "max_open_connections")
+	assert.Contains(t, stats, "open_connections")
+	assert.Contains(t, stats, "in_use")
+	assert.Contains(t, stats, "idle")
+
+	// max_idle_connections should NOT be present when config is nil
+	assert.NotContains(t, stats, "max_idle_connections",
+		"max_idle_connections should not be present when config is nil")
+}
+
+// TestLogConnectionSuccessWithSID tests logConnectionSuccess with SID identifier
+// Coverage target: logConnectionSuccess switch case for SID (line 220-221)
+func TestLogConnectionSuccessWithSID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	// Use SID instead of Service.Name
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{
+				SID: "ORCL", // SID path (not Service.Name)
+			},
+		},
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+// TestLogConnectionSuccessWithDatabaseFallback tests logConnectionSuccess with Database field
+// Coverage target: logConnectionSuccess default case (line 222-223)
+func TestLogConnectionSuccessWithDatabaseFallback(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+	openOracleDB = func(string) (*sql.DB, error) { return db, nil }
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	// Use Database field (fallback when neither Service.Name nor SID is set)
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "stub",
+		Password: "secret",
+		Database: "testdb", // Database fallback path
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{
+				Connections: 4,
+			},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+			},
+			Lifetime: config.LifetimeConfig{
+				Max: 45 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
 }

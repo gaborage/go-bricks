@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -465,6 +466,153 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 }
 
 // =============================================================================
+// TCP Keep-Alive Tests
+// =============================================================================
+
+func TestMakeKeepAliveDialer(t *testing.T) {
+	log := newTestLogger()
+
+	t.Run("createDialerWithValidConfig", func(t *testing.T) {
+		cfg := config.PoolKeepAliveConfig{
+			Enabled:  true,
+			Interval: 60 * time.Second,
+		}
+
+		dialer := makeKeepAliveDialer(cfg, log)
+		assert.NotNil(t, dialer, "dialer function should not be nil")
+	})
+
+	t.Run("createDialerWithZeroInterval", func(t *testing.T) {
+		cfg := config.PoolKeepAliveConfig{
+			Enabled:  true,
+			Interval: 0,
+		}
+
+		dialer := makeKeepAliveDialer(cfg, log)
+		assert.NotNil(t, dialer, "dialer function should not be nil even with zero interval")
+	})
+}
+
+func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Capture the pgx.ConnConfig to verify DialFunc is wired
+	var capturedCfg *pgx.ConnConfig
+
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(cfg *pgx.ConnConfig) *sql.DB {
+		capturedCfg = cfg
+		return db
+	}
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  true,
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify DialFunc was wired when keep-alive is enabled
+	require.NotNil(t, capturedCfg, "pgx.ConnConfig should have been captured")
+	assert.NotNil(t, capturedCfg.DialFunc, "DialFunc should be set when keep-alive is enabled")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	// Get the default pgx DialFunc for comparison (pgx.ParseConfig sets a default dialer)
+	defaultPgxCfg, err := pgx.ParseConfig("host=localhost dbname=testdb")
+	require.NoError(t, err)
+	defaultDialFunc := defaultPgxCfg.DialFunc
+
+	// Capture the pgx.ConnConfig to verify DialFunc was NOT modified
+	var capturedCfg *pgx.ConnConfig
+
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(cfg *pgx.ConnConfig) *sql.DB {
+		capturedCfg = cfg
+		return db
+	}
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "testuser",
+		Password: "testpass",
+		Database: "testdb",
+		Pool: config.PoolConfig{
+			Max: config.PoolMaxConfig{Connections: 5},
+			Idle: config.PoolIdleConfig{
+				Connections: 2,
+				Time:        4 * time.Minute,
+			},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+			KeepAlive: config.PoolKeepAliveConfig{
+				Enabled:  false, // Explicitly disabled
+				Interval: 60 * time.Second,
+			},
+		},
+	}
+
+	log := newTestLogger()
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	// Verify DialFunc was NOT modified when keep-alive is disabled
+	// pgx.ParseConfig sets a default dialer, so we compare to pgx's default rather than nil
+	require.NotNil(t, capturedCfg, "pgx.ConnConfig should have been captured")
+
+	// When keep-alive is disabled, the DialFunc should be pgx's default (not our custom dialer)
+	// We can only compare function pointers to nil in Go, so we verify the pointer value
+	// matches what pgx.ParseConfig returns by default
+	capturedDialFuncPtr := reflect.ValueOf(capturedCfg.DialFunc).Pointer()
+	defaultDialFuncPtr := reflect.ValueOf(defaultDialFunc).Pointer()
+	assert.Equal(t, defaultDialFuncPtr, capturedDialFuncPtr,
+		"DialFunc should be pgx's default when keep-alive is disabled")
+
+	mock.ExpectClose()
+	require.NoError(t, conn.Close())
+}
+
+// =============================================================================
 // quoteDSN Tests
 // =============================================================================
 
@@ -629,4 +777,62 @@ func TestQuoteDSN(t *testing.T) {
 			assert.Equal(t, tt.expected, result, "quoteDSN(%q) = %q, want %q", tt.input, result, tt.expected)
 		})
 	}
+}
+
+// =============================================================================
+// Edge Case Coverage Tests
+// =============================================================================
+
+// TestConnectionStatsWithNilConfig tests Stats() when config is nil
+// This covers the else branch at connection.go line 308 where config is not available.
+// Coverage target: Stats() nil config branch
+func TestConnectionStatsWithNilConfig(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Create connection with nil config
+	c := &Connection{
+		db:     db,
+		logger: newDisabledTestLogger(),
+		config: nil, // Explicitly nil config
+	}
+
+	stats, err := c.Stats()
+	assert.NoError(t, err, "Stats() should succeed with nil config")
+	assert.NotNil(t, stats, "Stats should not be nil")
+
+	// Verify basic stats keys are present
+	assert.Contains(t, stats, "max_open_connections")
+	assert.Contains(t, stats, "open_connections")
+	assert.Contains(t, stats, "in_use")
+	assert.Contains(t, stats, "idle")
+
+	// max_idle_connections should NOT be present when config is nil
+	assert.NotContains(t, stats, "max_idle_connections",
+		"max_idle_connections should not be present when config is nil")
+}
+
+// TestConnectionCloseWithNilMetricsCleanup tests Close() when metricsCleanup is nil
+// This covers the else branch at connection.go line 320 where metricsCleanup is nil.
+// Coverage target: Close() nil metricsCleanup branch
+func TestConnectionCloseWithNilMetricsCleanup(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	mock.ExpectClose()
+
+	// Create connection with nil metricsCleanup
+	c := &Connection{
+		db:             db,
+		logger:         newDisabledTestLogger(),
+		metricsCleanup: nil, // Explicitly nil - no metrics registered
+	}
+
+	err = c.Close()
+	assert.NoError(t, err, "Close() should succeed with nil metricsCleanup")
+
+	// Verify all expectations were met
+	err = mock.ExpectationsWereMet()
+	assert.NoError(t, err, "All mock expectations should be met")
 }

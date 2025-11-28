@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"time"
 
 	go_ora "github.com/sijms/go-ora/v2"
+	"github.com/sijms/go-ora/v2/configurations"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/tracking"
@@ -26,69 +28,107 @@ var (
 	openOracleDB = func(dsn string) (*sql.DB, error) {
 		return sql.Open("oracle", dsn)
 	}
+	openOracleDBWithDialer = func(dsn string, dialer configurations.DialerContext) *sql.DB {
+		connector := go_ora.NewConnector(dsn)
+		oracleConn, ok := connector.(*go_ora.OracleConnector)
+		if !ok {
+			// Return nil to signal fallback needed - caller handles graceful degradation
+			return nil
+		}
+		oracleConn.Dialer(dialer)
+		return sql.OpenDB(connector)
+	}
 	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
 		return db.PingContext(ctx)
 	}
 )
 
+// keepAliveDialer implements configurations.DialerContext for TCP keep-alive connections.
+// This enables TCP keep-alive probes to prevent NAT gateways and load balancers
+// from dropping idle database connections in cloud environments.
+type keepAliveDialer struct {
+	interval time.Duration
+	log      logger.Logger
+}
+
+// DialContext implements configurations.DialerContext interface.
+// It creates a TCP connection with keep-alive enabled.
+func (d *keepAliveDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: d.interval,
+	}
+	conn, err := dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+
+	// Explicitly enable keep-alive and set the period for TCP connections
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if setErr := tcpConn.SetKeepAlive(true); setErr != nil {
+			d.log.Warn().Err(setErr).Msg("Failed to enable TCP keep-alive on Oracle connection")
+		}
+		if setErr := tcpConn.SetKeepAlivePeriod(d.interval); setErr != nil {
+			d.log.Warn().Err(setErr).Msg("Failed to set TCP keep-alive period on Oracle connection")
+		}
+	}
+
+	return conn, nil
+}
+
+// newKeepAliveDialer creates a new keepAliveDialer with the specified interval.
+func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDialer {
+	return &keepAliveDialer{
+		interval: interval,
+		log:      log,
+	}
+}
+
 // NewConnection creates and returns an Oracle-backed types.Interface using the provided database configuration and logger.
 // It returns an error if cfg is nil, if the connection cannot be opened, or if an initial ping to the database fails.
 // The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
 // configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
+// When cfg.Pool.KeepAlive.Enabled is true, a custom TCP dialer is used to enable keep-alive probes.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
 	}
 
-	var dsn string
-	if cfg.ConnectionString != "" {
-		dsn = cfg.ConnectionString
-	} else {
-		// Build Oracle DSN
-		if cfg.Oracle.Service.Name != "" {
-			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Oracle.Service.Name, cfg.Username, cfg.Password, nil)
-		} else if cfg.Oracle.Service.SID != "" {
-			urlOpts := map[string]string{"SID": cfg.Oracle.Service.SID}
-			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, "", cfg.Username, cfg.Password, urlOpts)
+	dsn := buildOracleDSN(cfg)
+
+	var db *sql.DB
+	var err error
+
+	if cfg.Pool.KeepAlive.Enabled {
+		// Use connector with custom keep-alive dialer
+		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
+		db = openOracleDBWithDialer(dsn, dialer)
+		if db == nil {
+			// Graceful fallback: go-ora connector type changed, use standard connection
+			log.Warn().Msg("Keep-alive dialer setup failed (go-ora API change?), falling back to standard connection")
+			db, err = openOracleDB(dsn)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+			}
 		} else {
-			dsn = go_ora.BuildUrl(cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, nil)
+			log.Debug().
+				Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+				Msg("TCP keep-alive enabled for Oracle connections")
 		}
-	}
-
-	// Open Oracle connection
-	db, err := openOracleDB(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
-	}
-
-	// Configure connection pool
-	db.SetMaxOpenConns(int(cfg.Pool.Max.Connections))
-	db.SetMaxIdleConns(int(cfg.Pool.Idle.Connections))
-	db.SetConnMaxLifetime(cfg.Pool.Lifetime.Max)
-	db.SetConnMaxIdleTime(cfg.Pool.Idle.Time)
-
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := pingOracleDB(ctx, db); err != nil {
-		if closeErr := db.Close(); closeErr != nil {
-			log.Error().Err(closeErr).Msg("Failed to close Oracle database connection after ping failure")
-		}
-		return nil, fmt.Errorf("failed to ping Oracle database: %w", err)
-	}
-
-	ev := log.Info().
-		Str("host", cfg.Host).
-		Int("port", cfg.Port)
-	if cfg.Oracle.Service.Name != "" {
-		ev = ev.Str("service_name", cfg.Oracle.Service.Name)
-	} else if cfg.Oracle.Service.SID != "" {
-		ev = ev.Str("sid", cfg.Oracle.Service.SID)
 	} else {
-		ev = ev.Str("database", cfg.Database)
+		db, err = openOracleDB(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+		}
 	}
-	ev.Msg("Connected to Oracle database")
+
+	configureConnectionPool(db, cfg)
+
+	if err := verifyConnection(db, log); err != nil {
+		return nil, err
+	}
+
+	logConnectionSuccess(log, cfg)
 
 	conn := &Connection{
 		db:     db,
@@ -96,12 +136,94 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		logger: log,
 	}
 
-	// Register connection pool metrics for observability with server metadata
-	// Store cleanup function to allow proper unregistration during Close()
 	namespace := tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
 	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
+}
+
+// buildURLOptions constructs the URL options map for Oracle connection.
+// Includes SID if specified. TCP keep-alive is handled separately via custom dialer.
+func buildURLOptions(cfg *config.DatabaseConfig) map[string]string {
+	urlOpts := make(map[string]string)
+
+	if cfg.Oracle.Service.SID != "" {
+		urlOpts["SID"] = cfg.Oracle.Service.SID
+	}
+
+	return urlOpts
+}
+
+// resolveServiceName determines the Oracle service name from configuration.
+// Priority: Service.Name > Database (when no SID) > empty (when SID is set)
+func resolveServiceName(cfg *config.DatabaseConfig) string {
+	if cfg.Oracle.Service.Name != "" {
+		return cfg.Oracle.Service.Name
+	}
+	if cfg.Oracle.Service.SID == "" {
+		return cfg.Database
+	}
+	// When SID is set, service name is empty (SID passed via URL options)
+	return ""
+}
+
+// buildOracleDSN constructs an Oracle connection DSN from configuration.
+// Returns the DSN string. If ConnectionString is provided, uses it directly.
+func buildOracleDSN(cfg *config.DatabaseConfig) string {
+	if cfg.ConnectionString != "" {
+		return cfg.ConnectionString
+	}
+
+	urlOpts := buildURLOptions(cfg)
+	serviceName := resolveServiceName(cfg)
+
+	var optsArg map[string]string
+	if len(urlOpts) > 0 {
+		optsArg = urlOpts
+	}
+
+	return go_ora.BuildUrl(cfg.Host, cfg.Port, serviceName, cfg.Username, cfg.Password, optsArg)
+}
+
+// configureConnectionPool sets pool settings on the database connection.
+func configureConnectionPool(db *sql.DB, cfg *config.DatabaseConfig) {
+	db.SetMaxOpenConns(int(cfg.Pool.Max.Connections))
+	db.SetMaxIdleConns(int(cfg.Pool.Idle.Connections))
+	db.SetConnMaxLifetime(cfg.Pool.Lifetime.Max)
+	db.SetConnMaxIdleTime(cfg.Pool.Idle.Time)
+}
+
+// verifyConnection tests the database connection with a ping.
+// Closes the connection and returns an error if ping fails.
+func verifyConnection(db *sql.DB, log logger.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := pingOracleDB(ctx, db); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close Oracle database connection after ping failure")
+		}
+		return fmt.Errorf("failed to ping Oracle database: %w", err)
+	}
+	return nil
+}
+
+// logConnectionSuccess logs successful Oracle connection with appropriate identifiers.
+func logConnectionSuccess(log logger.Logger, cfg *config.DatabaseConfig) {
+	ev := log.Info().
+		Str("host", cfg.Host).
+		Int("port", cfg.Port)
+
+	switch {
+	case cfg.Oracle.Service.Name != "":
+		ev = ev.Str("service_name", cfg.Oracle.Service.Name)
+	case cfg.Oracle.Service.SID != "":
+		ev = ev.Str("sid", cfg.Oracle.Service.SID)
+	default:
+		ev = ev.Str("database", cfg.Database)
+	}
+
+	ev.Msg("Connected to Oracle database")
 }
 
 // Statement wraps sql.Stmt to implement types.Statement
@@ -364,7 +486,7 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 //
 // Registration must occur before any queries or procedures use the type.
 // Best practice: register all UDTs during application initialization.
-func (c *Connection) RegisterType(typeName, arrayTypeName string, typeObj interface{}) error {
+func (c *Connection) RegisterType(typeName, arrayTypeName string, typeObj any) error {
 	logEvent := c.logger.Info().
 		Str("type_name", typeName).
 		Str("array_type_name", arrayTypeName)
@@ -414,7 +536,7 @@ func (c *Connection) RegisterType(typeName, arrayTypeName string, typeObj interf
 //   - typeName: Oracle object type name
 //   - arrayTypeName: Oracle collection type name (use "" for single objects)
 //   - typeObj: Go struct instance with udt:"FIELD_NAME" tags
-func (c *Connection) RegisterTypeWithOwner(owner, typeName, arrayTypeName string, typeObj interface{}) error {
+func (c *Connection) RegisterTypeWithOwner(owner, typeName, arrayTypeName string, typeObj any) error {
 	logEvent := c.logger.Info().
 		Str("owner", owner).
 		Str("type_name", typeName).

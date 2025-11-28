@@ -102,9 +102,10 @@ type DatabaseConfig struct {
 
 // PoolConfig holds connection pool settings.
 type PoolConfig struct {
-	Max      PoolMaxConfig  `koanf:"max" json:"max" yaml:"max" toml:"max" mapstructure:"max"`
-	Idle     PoolIdleConfig `koanf:"idle" json:"idle" yaml:"idle" toml:"idle" mapstructure:"idle"`
-	Lifetime LifetimeConfig `koanf:"lifetime" json:"lifetime" yaml:"lifetime" toml:"lifetime" mapstructure:"lifetime"`
+	Max       PoolMaxConfig       `koanf:"max" json:"max" yaml:"max" toml:"max" mapstructure:"max"`
+	Idle      PoolIdleConfig      `koanf:"idle" json:"idle" yaml:"idle" toml:"idle" mapstructure:"idle"`
+	Lifetime  LifetimeConfig      `koanf:"lifetime" json:"lifetime" yaml:"lifetime" toml:"lifetime" mapstructure:"lifetime"`
+	KeepAlive PoolKeepAliveConfig `koanf:"keepalive" json:"keepalive" yaml:"keepalive" toml:"keepalive" mapstructure:"keepalive"`
 }
 
 // PoolMaxConfig holds maximum connections settings.
@@ -121,6 +122,22 @@ type PoolIdleConfig struct {
 // LifetimeConfig holds maximum lifetime settings for connections.
 type LifetimeConfig struct {
 	Max time.Duration `koanf:"max" json:"max" yaml:"max" toml:"max" mapstructure:"max"`
+}
+
+// PoolKeepAliveConfig holds TCP keep-alive settings for database connections.
+// TCP Keep-Alive sends periodic probes to prevent NAT gateways, load balancers,
+// and firewalls from dropping idle connections. This is essential for cloud
+// deployments (AWS, GCP, Azure) where infrastructure typically has idle
+// connection timeouts (e.g., AWS NAT Gateway: 350 seconds).
+type PoolKeepAliveConfig struct {
+	// Enabled enables TCP keep-alive probes on database connections.
+	// Default: true. Recommended for all cloud deployments.
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	// Interval is the time between keep-alive probes (TCP_KEEPINTVL).
+	// The kernel sends a probe every Interval to keep the connection alive.
+	// Default: 60s. Should be less than NAT/LB idle timeout (AWS: 350s, GCP: 600s).
+	Interval time.Duration `koanf:"interval" json:"interval" yaml:"interval" toml:"interval" mapstructure:"interval"`
 }
 
 // QueryConfig holds settings related to query logging and slow query detection.

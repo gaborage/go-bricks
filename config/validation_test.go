@@ -1414,6 +1414,102 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 	}
 }
 
+func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
+	tests := []struct {
+		name             string
+		config           DatabaseConfig
+		expectedEnabled  bool
+		expectedInterval time.Duration
+	}{
+		{
+			name: "zero_values_apply_defaults",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:       PoolMaxConfig{Connections: 25},
+					KeepAlive: PoolKeepAliveConfig{}, // Zero values
+				},
+			},
+			expectedEnabled:  defaultKeepAliveEnabled,
+			expectedInterval: defaultKeepAliveInterval,
+		},
+		{
+			name: "explicit_disabled_with_zero_interval_applies_defaults",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{Connections: 25},
+					KeepAlive: PoolKeepAliveConfig{
+						Enabled:  false, // Explicitly disabled
+						Interval: 0,     // But zero interval triggers defaults
+					},
+				},
+			},
+			// When Interval=0, defaults are applied for BOTH fields
+			// This is intentional: Interval=0 means "not configured"
+			expectedEnabled:  defaultKeepAliveEnabled,
+			expectedInterval: defaultKeepAliveInterval,
+		},
+		{
+			name: "explicit_interval_preserves_values",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{Connections: 25},
+					KeepAlive: PoolKeepAliveConfig{
+						Enabled:  true,
+						Interval: 30 * time.Second,
+					},
+				},
+			},
+			expectedEnabled:  true,
+			expectedInterval: 30 * time.Second,
+		},
+		{
+			name: "explicit_disabled_with_interval_preserved",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{Connections: 25},
+					KeepAlive: PoolKeepAliveConfig{
+						Enabled:  false,
+						Interval: 120 * time.Second,
+					},
+				},
+			},
+			expectedEnabled:  false,
+			expectedInterval: 120 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedEnabled, tt.config.Pool.KeepAlive.Enabled,
+				"KeepAlive.Enabled mismatch")
+			assert.Equal(t, tt.expectedInterval, tt.config.Pool.KeepAlive.Interval,
+				"KeepAlive.Interval mismatch")
+		})
+	}
+}
+
 func TestValidateMongoDBFields(t *testing.T) {
 	tests := []struct {
 		name          string

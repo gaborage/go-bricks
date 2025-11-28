@@ -11,6 +11,8 @@ import (
 const (
 	defaultSlowQueryThreshold = 200 * time.Millisecond
 	defaultMaxQueryLength     = 1000
+	defaultKeepAliveEnabled   = true
+	defaultKeepAliveInterval  = 60 * time.Second
 )
 
 // Database type constants
@@ -249,6 +251,8 @@ func validateRequiredDatabasePort(port int) error {
 //
 // It modifies cfg in-place:
 // - Pool.Max.Connections: if 0, sets to 25; if negative, returns an error.
+// - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
+// - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts).
 // - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
 // - Query.Slow.Threshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
 //
@@ -262,6 +266,14 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 
 	if cfg.Pool.Idle.Connections < 0 {
 		return NewValidationError("database.pool.idle.connections", errMustBeNonNegative)
+	}
+
+	// Apply keep-alive defaults for cloud deployments.
+	// When Interval is zero (not configured), apply defaults for both Enabled and Interval.
+	// This ensures omitted configs get production-safe settings.
+	if cfg.Pool.KeepAlive.Interval == 0 {
+		cfg.Pool.KeepAlive.Enabled = defaultKeepAliveEnabled
+		cfg.Pool.KeepAlive.Interval = defaultKeepAliveInterval
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {
