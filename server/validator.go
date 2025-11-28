@@ -62,6 +62,11 @@ type FieldError struct {
 	Value   string `json:"value,omitempty"`
 }
 
+// Error implements the error interface.
+func (e FieldError) Error() string {
+	return e.Message
+}
+
 // NewValidationError creates a ValidationError from go-playground/validator errors.
 // It converts the errors into a more user-friendly format with descriptive messages.
 func NewValidationError(errs validator.ValidationErrors) *ValidationError {

@@ -270,11 +270,13 @@ func TestTrackedConnectionUtilityAndBeginMethods(t *testing.T) {
 	dbType := tracked.DatabaseType()
 	assert.Equal(t, "postgresql", dbType)
 
-	_, err4 := tracked.Begin(ctx)
+	tx4, err4 := tracked.Begin(ctx)
 	require.NoError(t, err4)
+	defer tx4.Rollback() // No-op: test transaction
 
-	_, err5 := tracked.BeginTx(ctx, nil)
+	tx5, err5 := tracked.BeginTx(ctx, nil)
 	require.NoError(t, err5)
+	defer tx5.Rollback() // No-op: test transaction
 
 	// Note: The improved implementation now correctly tracks Begin/BeginTx operations
 	// This is a fix - the original implementation was missing tracking for transaction starts
@@ -374,6 +376,7 @@ func TestTrackedTransactionOperations(t *testing.T) {
 	// Begin transaction
 	tx, err := tracked.Begin(ctx)
 	require.NoError(t, err)
+	defer tx.Rollback() // No-op: test transaction
 	assert.NotNil(t, tx)
 
 	// Execute operations within transaction (each should increment counter)
@@ -411,6 +414,7 @@ func TestTrackedTransactionCommitRollback(t *testing.T) {
 
 	tx, err := tracked.Begin(context.Background())
 	require.NoError(t, err)
+	defer tx.Rollback() // No-op after commit
 
 	_, err = tx.Exec(context.Background(), "INSERT INTO users (name) VALUES ('test')")
 	require.NoError(t, err)

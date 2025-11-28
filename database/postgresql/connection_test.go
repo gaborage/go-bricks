@@ -165,6 +165,7 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	// Execute transaction operations
 	tx, err := c.Begin(ctx)
 	require.NoError(t, err)
+	defer tx.Rollback() // No-op if committed
 	_, err = tx.Exec(ctx, "DELETE FROM items WHERE id=$1", 1)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
@@ -325,6 +326,7 @@ func TestTransactionQueryPrepareAndExec(t *testing.T) {
 	mock.ExpectBegin()
 	nativeTx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
+	defer nativeTx.Rollback() // No-op after commit
 	trx := &Transaction{tx: nativeTx}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM parts WHERE sku = $1")).
@@ -375,6 +377,7 @@ func TestTransactionPrepareError(t *testing.T) {
 	mock.ExpectBegin()
 	nativeTx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
+	defer nativeTx.Rollback() // Called after explicit rollback below (no-op)
 	trx := &Transaction{tx: nativeTx}
 
 	prepareErr := errors.New("prepare failed")
