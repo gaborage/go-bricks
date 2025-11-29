@@ -2,7 +2,9 @@ package observability
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +42,29 @@ func (m *mockProcessor) Shutdown(_ context.Context) error {
 func (m *mockProcessor) ForceFlush(_ context.Context) error {
 	m.flushCount++
 	return nil
+}
+
+// errorMockProcessor is a test processor that returns configurable errors
+type errorMockProcessor struct {
+	emitErr     error
+	shutdownErr error
+	flushErr    error
+}
+
+func (m *errorMockProcessor) OnEmit(_ context.Context, _ *sdklog.Record) error {
+	return m.emitErr
+}
+
+func (m *errorMockProcessor) Enabled(_ context.Context, _ *sdklog.Record) bool {
+	return true
+}
+
+func (m *errorMockProcessor) Shutdown(_ context.Context) error {
+	return m.shutdownErr
+}
+
+func (m *errorMockProcessor) ForceFlush(_ context.Context) error {
+	return m.flushErr
 }
 
 // TestDualModeLogProcessor_Shutdown verifies shutdown calls both processors
@@ -678,4 +703,157 @@ func TestEnabledWithSamplingRate(t *testing.T) {
 	dualProcNoRate := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.0)
 	assert.False(t, dualProcNoRate.Enabled(context.Background(), &rec),
 		"INFO should be disabled when sampling rate = 0")
+}
+
+// TestNewDualModeLogProcessorPanicsOnNilActionProcessor verifies panic on nil action processor
+func TestNewDualModeLogProcessorPanicsOnNilActionProcessor(t *testing.T) {
+	assert.Panics(t, func() {
+		NewDualModeLogProcessor(nil, &mockProcessor{}, 0.5)
+	}, "Should panic when actionProcessor is nil")
+}
+
+// TestNewDualModeLogProcessorPanicsOnNilTraceProcessor verifies panic on nil trace processor
+func TestNewDualModeLogProcessorPanicsOnNilTraceProcessor(t *testing.T) {
+	assert.Panics(t, func() {
+		NewDualModeLogProcessor(&mockProcessor{}, nil, 0.5)
+	}, "Should panic when traceProcessor is nil")
+}
+
+// TestOnEmitErrorPropagation verifies errors from underlying processors are propagated
+func TestOnEmitErrorPropagation(t *testing.T) {
+	expectedErr := errors.New("processor error")
+
+	t.Run("action processor error", func(t *testing.T) {
+		actionProc := &errorMockProcessor{emitErr: expectedErr}
+		traceProc := &mockProcessor{}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+		}
+		rec := factory.NewRecord()
+
+		err := dualProc.OnEmit(context.Background(), &rec)
+		assert.ErrorIs(t, err, expectedErr, "Action processor error should be propagated")
+	})
+
+	t.Run("trace processor error", func(t *testing.T) {
+		actionProc := &mockProcessor{}
+		traceProc := &errorMockProcessor{emitErr: expectedErr}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 1.0) // 100% sampling to hit trace processor
+
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		}
+		rec := factory.NewRecord()
+
+		err := dualProc.OnEmit(context.Background(), &rec)
+		assert.ErrorIs(t, err, expectedErr, "Trace processor error should be propagated")
+	})
+}
+
+// TestShouldSampleEdgeCases verifies sampling behavior edge cases
+func TestShouldSampleEdgeCases(t *testing.T) {
+	t.Run("negative timestamp fallback", func(t *testing.T) {
+		traceProc := &mockProcessor{}
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.5)
+
+		// Create record with no trace ID (will use timestamp-based sampling)
+		// Use a negative timestamp to test the ts < 0 branch (line 109-111)
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+			Timestamp:  time.Unix(-1, 0), // Negative timestamp
+		}
+		rec := factory.NewRecord()
+
+		// Should not panic; negative timestamp should be clamped to 0
+		err := dualProc.OnEmit(context.Background(), &rec)
+		assert.NoError(t, err)
+	})
+
+	t.Run("zero sampling rate drops all without trace ID", func(t *testing.T) {
+		traceProc := &mockProcessor{}
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.0)
+
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityDebug, // DEBUG level subject to sampling
+			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		}
+		rec := factory.NewRecord()
+
+		err := dualProc.OnEmit(context.Background(), &rec)
+		require.NoError(t, err)
+		assert.Equal(t, 0, traceProc.emitCount, "Zero sampling rate should drop all INFO/DEBUG logs")
+	})
+}
+
+// TestShutdownWithErrors verifies error aggregation during shutdown
+func TestShutdownWithErrors(t *testing.T) {
+	errAction := errors.New("action shutdown error")
+	errTrace := errors.New("trace shutdown error")
+
+	t.Run("action processor error", func(t *testing.T) {
+		actionProc := &errorMockProcessor{shutdownErr: errAction}
+		traceProc := &mockProcessor{}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.Shutdown(context.Background())
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+	})
+
+	t.Run("trace processor error", func(t *testing.T) {
+		actionProc := &mockProcessor{}
+		traceProc := &errorMockProcessor{shutdownErr: errTrace}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.Shutdown(context.Background())
+		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
+
+	t.Run("both processors error", func(t *testing.T) {
+		actionProc := &errorMockProcessor{shutdownErr: errAction}
+		traceProc := &errorMockProcessor{shutdownErr: errTrace}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.Shutdown(context.Background())
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
+}
+
+// TestForceFlushWithErrors verifies error aggregation during flush
+func TestForceFlushWithErrors(t *testing.T) {
+	errAction := errors.New("action flush error")
+	errTrace := errors.New("trace flush error")
+
+	t.Run("action processor error", func(t *testing.T) {
+		actionProc := &errorMockProcessor{flushErr: errAction}
+		traceProc := &mockProcessor{}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.ForceFlush(context.Background())
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+	})
+
+	t.Run("trace processor error", func(t *testing.T) {
+		actionProc := &mockProcessor{}
+		traceProc := &errorMockProcessor{flushErr: errTrace}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.ForceFlush(context.Background())
+		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
+
+	t.Run("both processors error", func(t *testing.T) {
+		actionProc := &errorMockProcessor{flushErr: errAction}
+		traceProc := &errorMockProcessor{flushErr: errTrace}
+		dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
+
+		err := dualProc.ForceFlush(context.Background())
+		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
+		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
 }
