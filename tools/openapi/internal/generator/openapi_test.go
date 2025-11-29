@@ -1852,6 +1852,94 @@ func TestWritePropertySchema(t *testing.T) {
 	}
 }
 
+// TestToFloat64Ptr directly tests the toFloat64Ptr utility function
+func TestToFloat64Ptr(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected *float64
+	}{
+		{name: "int value", input: 42, expected: float64Ptr(42.0)},
+		{name: "int64 value", input: int64(123), expected: float64Ptr(123.0)},
+		{name: "float64 value", input: 3.14, expected: float64Ptr(3.14)},
+		{name: "valid string", input: "99.5", expected: float64Ptr(99.5)},
+		{name: "invalid string", input: "not-a-number", expected: nil},
+		{name: "empty string", input: "", expected: nil},
+		{name: "unsupported type (bool)", input: true, expected: nil},
+		{name: "unsupported type (slice)", input: []int{1, 2, 3}, expected: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := toFloat64Ptr(tt.input)
+
+			if tt.expected == nil {
+				if result != nil {
+					t.Errorf("Expected nil, got %v", *result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("Expected %v, got nil", *tt.expected)
+				} else if *result != *tt.expected {
+					t.Errorf("Expected %v, got %v", *tt.expected, *result)
+				}
+			}
+		})
+	}
+}
+
+// TestWritePropertySchemaNilProp verifies nil property handling in writePropertySchema
+func TestWritePropertySchemaNilProp(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+
+	// Should not panic and should produce empty output
+	gen.writePropertySchema(&sb, nil, "  ")
+
+	output := sb.String()
+	if output != "" {
+		t.Errorf("Expected empty output for nil property, got %q", output)
+	}
+}
+
+// TestTypeInfoToSchemaSkipsIgnoredFields verifies fields with json:"-" are skipped
+func TestTypeInfoToSchemaSkipsIgnoredFields(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	typeInfo := &models.TypeInfo{
+		Name:    "TestStruct",
+		Package: "test",
+		Fields: []models.FieldInfo{
+			{Name: "ID", Type: "int64", JSONName: "id", Required: true},
+			{Name: "Internal", Type: "string", JSONName: "-"}, // Should be skipped
+			{Name: "Name", Type: "string", JSONName: "name"},
+		},
+	}
+
+	schema := gen.typeInfoToSchema(typeInfo)
+
+	// Should have 2 properties, not 3 (Internal field should be skipped)
+	if len(schema.Properties) != 2 {
+		t.Errorf("Expected 2 properties (excluding json:\"-\" field), got %d", len(schema.Properties))
+	}
+
+	// Verify Internal field is not present
+	if _, exists := schema.Properties["-"]; exists {
+		t.Error("Field with json:\"-\" should not be included in properties")
+	}
+	if _, exists := schema.Properties["Internal"]; exists {
+		t.Error("Field with json:\"-\" should not be included (even by original name)")
+	}
+
+	// Verify other fields are present
+	if _, exists := schema.Properties["id"]; !exists {
+		t.Error("Expected 'id' property to exist")
+	}
+	if _, exists := schema.Properties["name"]; !exists {
+		t.Error("Expected 'name' property to exist")
+	}
+}
+
 func TestGenerateWithParameters(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	project := &models.Project{

@@ -34,12 +34,12 @@ type subqueryValidator interface {
 // are constructed correctly before query execution.
 func ValidateSubquery(subquery SelectQueryBuilder) {
 	if subquery == nil {
-		panic("subquery cannot be nil")
+		panic("subquery cannot be nil") //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
 	}
 
 	if validator, ok := subquery.(subqueryValidator); ok {
 		if err := validator.ValidateForSubquery(); err != nil {
-			panic(fmt.Sprintf("invalid subquery: %v", err))
+			panic(fmt.Sprintf("invalid subquery: %v", err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
 		}
 		return
 	}
@@ -47,9 +47,9 @@ func ValidateSubquery(subquery SelectQueryBuilder) {
 	// Test ToSQL() to catch construction errors early
 	sql, _, err := subquery.ToSQL()
 	if err != nil {
-		panic(fmt.Sprintf("invalid subquery: %v", err))
+		panic(fmt.Sprintf("invalid subquery: %v", err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
 	}
 	if sql == "" {
-		panic("subquery produced empty SQL")
+		panic("subquery produced empty SQL") //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
 	}
 }

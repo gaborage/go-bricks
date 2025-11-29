@@ -23,7 +23,7 @@ import (
 func ParseTime(timeStr string) time.Time {
 	t, err := time.Parse("15:04", timeStr)
 	if err != nil {
-		panic(fmt.Sprintf("scheduler: invalid time format '%s' - expected HH:MM (24-hour), error: %v", timeStr, err))
+		panic(fmt.Sprintf("scheduler: invalid time format '%s' - expected HH:MM (24-hour), error: %v", timeStr, err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid time format (configuration error)
 	}
 	return t
 }

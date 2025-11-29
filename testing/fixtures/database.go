@@ -61,7 +61,7 @@ func createFailingRow(err error) types.Row {
 	// Create a mock database connection that will return an error
 	db, sqlMock, mockErr := sqlmock.New()
 	if mockErr != nil {
-		panic(mockErr) // This should never happen in tests
+		panic(mockErr) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	defer db.Close()
 
@@ -157,7 +157,7 @@ func NewDatabaseWithData(data map[string][]any) *mocks.MockDatabase {
 		}
 		rows := NewMockRows(columns, rowsData)
 		if rows.Err() != nil {
-			panic(rows.Err()) // This should never happen in tests
+			panic(rows.Err()) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
 		}
 		mockDB.ExpectQuery(query, rows, nil)
 	}
@@ -173,7 +173,7 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 	// Allow read operations
 	rows := NewMockRows([]string{"colA"}, [][]any{{1}, {2}, {3}})
 	if rows.Err() != nil {
-		panic(rows.Err()) // This should never happen in tests
+		panic(rows.Err()) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(rows, nil)
 	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(createFailingRow(sql.ErrNoRows))
@@ -204,7 +204,7 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	// Create a mock database connection
 	db, sqlMock, err := sqlmock.New()
 	if err != nil {
-		panic(err) // This should never happen in tests
+		panic(err) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	defer db.Close()
 
@@ -225,7 +225,7 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	// Execute the query to get the actual rows
 	result, err := db.QueryContext(context.Background(), "SELECT")
 	if err != nil {
-		panic(err) // This should never happen in tests
+		panic(err) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	return result
 }

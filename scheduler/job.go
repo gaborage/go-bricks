@@ -70,13 +70,13 @@ type JobContext interface {
 // Multi-tenancy support: DB and Messaging are resolved dynamically via functions
 // to support tenant-specific resource resolution at execution time.
 type jobContextImpl struct {
-	context.Context
-	jobID        string
-	triggerType  string
-	logger       logger.Logger
-	getDB        func() types.Interface  // Resolver for multi-tenant DB
-	getMessaging func() messaging.Client // Resolver for multi-tenant messaging
-	config       *config.Config
+	context.Context //nolint:S8242 // NOSONAR: JobContext interface requires context embedding for OpenTelemetry propagation
+	jobID           string
+	triggerType     string
+	logger          logger.Logger
+	getDB           func() types.Interface  // Resolver for multi-tenant DB
+	getMessaging    func() messaging.Client // Resolver for multi-tenant messaging
+	config          *config.Config
 }
 
 // newJobContext creates a new JobContext with the provided dependencies.

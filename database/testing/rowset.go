@@ -365,7 +365,7 @@ func extractStructValues(structPtr any, columns []string) []any {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("extractStructValues: expected struct or pointer to struct, got %T", structPtr))
+		panic(fmt.Sprintf("extractStructValues: expected struct or pointer to struct, got %T", structPtr)) //nolint:S8148 // NOSONAR: Test helper - panic on invalid usage is intentional
 	}
 
 	t := v.Type()
@@ -385,10 +385,10 @@ func extractStructValues(structPtr any, columns []string) []any {
 	for i, col := range columns {
 		field, ok := tagToField[col]
 		if !ok {
-			panic(fmt.Sprintf("extractStructValues: column %q not found in struct %T (check db tags)", col, structPtr))
+			panic(fmt.Sprintf("extractStructValues: column %q not found in struct %T (check db tags)", col, structPtr)) //nolint:S8148 // NOSONAR: Test helper - panic on invalid usage is intentional
 		}
 		if !field.CanInterface() {
-			panic(fmt.Sprintf("extractStructValues: column %q maps to unexported field in struct %T (field must be exported)", col, structPtr))
+			panic(fmt.Sprintf("extractStructValues: column %q maps to unexported field in struct %T (field must be exported)", col, structPtr)) //nolint:S8148 // NOSONAR: Test helper - panic on invalid usage is intentional
 		}
 		values[i] = field.Interface()
 	}

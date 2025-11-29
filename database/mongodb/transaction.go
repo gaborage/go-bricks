@@ -17,7 +17,7 @@ type Transaction struct {
 	session   *mongo.Session
 	database  *mongo.Database
 	logger    logger.Logger
-	parentCtx context.Context
+	parentCtx context.Context //nolint:S8242 // NOSONAR: Context required by MongoDB Session API (CommitTransaction, AbortTransaction, EndSession)
 }
 
 // Query executes a query within the transaction (not applicable for MongoDB)

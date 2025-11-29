@@ -84,6 +84,7 @@ func handleMinConstraint(key, value, baseType string) []OpenAPIConstraint {
 			return []OpenAPIConstraint{{Name: "minLength", Value: length}}
 		}
 	} else if isNumericType(baseType) {
+		//nolint:S8148 // NOSONAR: Parse errors intentionally ignored - invalid validation tag values are silently skipped
 		if minVal, err := parseNumeric(value); err == nil {
 			return []OpenAPIConstraint{{Name: "minimum", Value: minVal}}
 		}
@@ -103,6 +104,7 @@ func handleMaxConstraint(key, value, baseType string) []OpenAPIConstraint {
 			return []OpenAPIConstraint{{Name: "maxLength", Value: length}}
 		}
 	} else if isNumericType(baseType) {
+		//nolint:S8148 // NOSONAR: Parse errors intentionally ignored - invalid validation tag values are silently skipped
 		if maxVal, err := parseNumeric(value); err == nil {
 			return []OpenAPIConstraint{{Name: "maximum", Value: maxVal}}
 		}
@@ -178,6 +180,7 @@ func handleEnumConstraint(key, value, baseType string) []OpenAPIConstraint {
 	enumArray := make([]any, len(enumValues))
 	if isNumericType(baseType) {
 		for i, v := range enumValues {
+			//nolint:S8148 // NOSONAR: Parse errors intentionally fall back to string value
 			if num, err := parseNumeric(v); err == nil {
 				enumArray[i] = num
 			} else {
@@ -221,6 +224,7 @@ func isNumericType(typeName string) bool {
 // parseNumeric converts a string to a numeric value (int or float)
 func parseNumeric(value string) (any, error) {
 	// Try parsing as integer first
+	//nolint:S8148 // NOSONAR: Parse error intentionally falls through to float parsing
 	if intVal, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return intVal, nil
 	}

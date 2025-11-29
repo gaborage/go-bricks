@@ -58,12 +58,12 @@ type RawExpression struct {
 func Expr(sql string, alias ...string) RawExpression {
 	// Validate SQL is not empty
 	if strings.TrimSpace(sql) == "" {
-		panic("expression SQL cannot be empty")
+		panic("expression SQL cannot be empty") //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
 	}
 
 	// Validate max 1 alias
 	if len(alias) > 1 {
-		panic(fmt.Sprintf("Expr accepts maximum 1 alias, got %d", len(alias)))
+		panic(fmt.Sprintf("Expr accepts maximum 1 alias, got %d", len(alias))) //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
 	}
 
 	// Extract alias if provided
@@ -75,7 +75,7 @@ func Expr(sql string, alias ...string) RawExpression {
 		dangerousChars := []string{";", "'", "\"", "--", "/*", "*/"}
 		for _, char := range dangerousChars {
 			if strings.Contains(aliasStr, char) {
-				panic(fmt.Sprintf("alias contains dangerous character '%s': %s", char, aliasStr))
+				panic(fmt.Sprintf("alias contains dangerous character '%s': %s", char, aliasStr)) //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
 			}
 		}
 	}

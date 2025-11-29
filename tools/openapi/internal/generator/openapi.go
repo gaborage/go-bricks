@@ -573,6 +573,7 @@ func toFloat64Ptr(value any) *float64 {
 	case float64:
 		return &val
 	case string:
+		//nolint:S8148 // NOSONAR: Parse error intentional - non-numeric strings return nil (no default value)
 		if v, err := strconv.ParseFloat(val, 64); err == nil {
 			return &v
 		}
