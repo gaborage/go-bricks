@@ -160,6 +160,43 @@ make lint                       # Run golangci-lint
 - CI/CD: Multi-platform (Ubuntu, Windows) × Go (1.24, 1.25)
 - Race detection enabled on all platforms
 
+### Breaking Change: Go Naming Conventions (S8179)
+
+GoBricks follows Go's idiomatic naming conventions. Per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/), getter methods should NOT have the `Get` prefix.
+
+**Migration Required:** If upgrading from versions prior to this change, update all call sites:
+
+| Package | Old Method | New Method |
+|---------|------------|------------|
+| `validation.TagInfo` | `GetMin()`, `GetMax()`, `GetMinLength()`, `GetMaxLength()`, `GetPattern()`, `GetEnum()`, `GetConstraints()` | `Min()`, `Max()`, `MinLength()`, `MaxLength()`, `Pattern()`, `Enum()`, `AllConstraints()` |
+| `migration.FlywayMigrator` | `GetDefaultMigrationConfig()` | `DefaultMigrationConfig()` |
+| `config.TenantStore` | `GetTenants()` | `Tenants()` |
+| `app.MetadataRegistry` | `GetModules()`, `GetModule()` | `Modules()`, `Module()` |
+| `app.App` | `GetMessagingDeclarations()` | `MessagingDeclarations()` |
+| `database/mongodb.Builder` | `GetState()`, `GetSkip()`, `GetLimit()`, `GetProjectionFields()`, `GetSortFields()` | `State()`, `SkipValue()`, `LimitValue()`, `ProjectionFields()`, `SortFields()` |
+| `database/mongodb.Connection` | `GetDatabase()`, `GetClient()` | `Database()`, `Client()` |
+| `database/mongodb.Transaction` | `GetSession()`, `GetDatabase()` | `Session()`, `Database()` |
+| `database.Interface` | `GetMigrationTable()` | `MigrationTable()` |
+| `database/testing.TestDB` | `GetQueryLog()`, `GetExecLog()` | `QueryLog()`, `ExecLog()` |
+| `database/testing.TenantDBMap` | `GetTenantDB()` | `TenantDB()` |
+| `messaging.Registry` | `GetDeclarations()` | `Declarations()` |
+| `server.RouteRegistry` | `GetRoutes()` | `Routes()` |
+
+**Example Migration:**
+```go
+// ❌ OLD
+min, ok := tagInfo.GetMin()
+tenants := store.GetTenants()
+db := tenants.GetTenantDB("acme")
+table := conn.GetMigrationTable()
+
+// ✅ NEW
+min, ok := tagInfo.Min()
+tenants := store.Tenants()
+db := tenants.TenantDB("acme")
+table := conn.MigrationTable()
+```
+
 ## Architecture
 
 ### Core Components
