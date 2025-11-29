@@ -14,7 +14,7 @@ type testContextKey string
 func TestWithAMQPCounter(t *testing.T) {
 	existingKey := testContextKey("existing_key")
 
-	tests := []struct {
+	tests := []struct { //nolint:S8242 // NOSONAR: Standard Go table-driven test pattern
 		name string
 		ctx  context.Context
 	}{
@@ -56,7 +56,7 @@ func TestWithAMQPCounter(t *testing.T) {
 func TestWithDBCounter(t *testing.T) {
 	existingKey := testContextKey("existing_key")
 
-	tests := []struct {
+	tests := []struct { //nolint:S8242 // NOSONAR: Standard Go table-driven test pattern
 		name string
 		ctx  context.Context
 	}{

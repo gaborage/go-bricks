@@ -29,10 +29,10 @@ type DualModeLogProcessor struct {
 // ERROR/WARN logs and action logs are always exported at 100%.
 func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, samplingRate float64) *DualModeLogProcessor {
 	if actionProcessor == nil {
-		panic("observability: actionProcessor cannot be nil")
+		panic("observability: actionProcessor cannot be nil") //nolint:S8148 // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
 	}
 	if traceProcessor == nil {
-		panic("observability: traceProcessor cannot be nil")
+		panic("observability: traceProcessor cannot be nil") //nolint:S8148 // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
 	}
 
 	return &DualModeLogProcessor{

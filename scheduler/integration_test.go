@@ -98,6 +98,7 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 
 // TestSchedulerLifecycleNoJobsRegistered verifies scheduler handles no jobs gracefully
 func TestSchedulerLifecycleNoJobsRegistered(t *testing.T) {
+	//nolint:S8148 // NOSONAR: Error intentionally ignored - test uses helper that fails test on error
 	module, _ := newTestScheduler(t, 5*time.Second)
 
 	// Shutdown without registering any jobs

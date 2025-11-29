@@ -74,6 +74,7 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) {
 
 	// Try .yml extension as fallback
 	ymlFile := baseName + ".yml"
+	//nolint:S8148 // NOSONAR: Error logged as warning - config files are optional and may not exist
 	if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
 		// Both files failed to load - log a warning
 		fmt.Printf("Warning: could not load %s or %s (files are optional)\n", yamlFile, ymlFile)

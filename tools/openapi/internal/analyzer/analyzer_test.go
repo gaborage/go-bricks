@@ -1375,6 +1375,7 @@ func (m *Module) Init(deps *config.Config) error { return nil }`
 			t.Fatalf(parseFailedFormat, err)
 		}
 
+		//nolint:S8148 // NOSONAR: Error intentionally ignored - test verifies module detection, not error conditions
 		result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, testFileName))
 		if result != nil {
 			t.Error("Expected no module found for wrong init parameter type")
@@ -1754,6 +1755,7 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 				t.Fatalf(parseFailedFormat, err)
 			}
 
+			//nolint:S8148 // NOSONAR: Error intentionally ignored - test verifies module detection, not error conditions
 			result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join("test", "file.go"))
 			found := (result != nil)
 			if found != tt.expected {

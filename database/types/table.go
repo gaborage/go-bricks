@@ -22,7 +22,7 @@ type TableRef struct {
 //	qb.Select("*").From(Table("users").As("u"))
 func Table(name string) *TableRef {
 	if name == "" {
-		panic("table name cannot be empty")
+		panic("table name cannot be empty") //nolint:S8148 // NOSONAR: Fail-fast on invalid table reference
 	}
 	return &TableRef{name: name}
 }
@@ -36,7 +36,7 @@ func Table(name string) *TableRef {
 //	Table("customers").As("c")
 func (t *TableRef) As(alias string) *TableRef {
 	if alias == "" {
-		panic("table alias cannot be empty")
+		panic("table alias cannot be empty") //nolint:S8148 // NOSONAR: Fail-fast on invalid table reference
 	}
 	t.alias = alias
 	return t
