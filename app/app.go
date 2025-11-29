@@ -234,8 +234,8 @@ func (a *App) registerCloser(name string, closer interface{ Close() error }) {
 	a.closers = append(a.closers, namedCloser{name: name, closer: closer})
 }
 
-// GetMessagingDeclarations returns the captured messaging declarations.
+// MessagingDeclarations returns the captured messaging declarations.
 // This is used by tenant managers to replay infrastructure for each tenant.
-func (a *App) GetMessagingDeclarations() *messaging.Declarations {
+func (a *App) MessagingDeclarations() *messaging.Declarations {
 	return a.messagingDeclarations
 }

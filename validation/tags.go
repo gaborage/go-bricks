@@ -229,8 +229,8 @@ func (t *TagInfo) IsRequired() bool {
 	return t.Required
 }
 
-// GetMin returns the minimum value constraint if present
-func (t *TagInfo) GetMin() (int, bool) {
+// Min returns the minimum value constraint if present
+func (t *TagInfo) Min() (int, bool) {
 	if minVal, ok := t.Constraints["min"]; ok {
 		if val, err := strconv.Atoi(minVal); err == nil {
 			return val, true
@@ -239,8 +239,8 @@ func (t *TagInfo) GetMin() (int, bool) {
 	return 0, false
 }
 
-// GetMax returns the maximum value constraint if present
-func (t *TagInfo) GetMax() (int, bool) {
+// Max returns the maximum value constraint if present
+func (t *TagInfo) Max() (int, bool) {
 	if maxVal, ok := t.Constraints["max"]; ok {
 		if val, err := strconv.Atoi(maxVal); err == nil {
 			return val, true
@@ -249,8 +249,8 @@ func (t *TagInfo) GetMax() (int, bool) {
 	return 0, false
 }
 
-// GetMinLength returns the minimum length constraint if present
-func (t *TagInfo) GetMinLength() (int, bool) {
+// MinLength returns the minimum length constraint if present
+func (t *TagInfo) MinLength() (int, bool) {
 	if minLen, ok := t.Constraints["min_len"]; ok {
 		if val, err := strconv.Atoi(minLen); err == nil {
 			return val, true
@@ -259,8 +259,8 @@ func (t *TagInfo) GetMinLength() (int, bool) {
 	return 0, false
 }
 
-// GetMaxLength returns the maximum length constraint if present
-func (t *TagInfo) GetMaxLength() (int, bool) {
+// MaxLength returns the maximum length constraint if present
+func (t *TagInfo) MaxLength() (int, bool) {
 	if maxLen, ok := t.Constraints["max_len"]; ok {
 		if val, err := strconv.Atoi(maxLen); err == nil {
 			return val, true
@@ -269,14 +269,14 @@ func (t *TagInfo) GetMaxLength() (int, bool) {
 	return 0, false
 }
 
-// GetPattern returns the regex pattern constraint if present
-func (t *TagInfo) GetPattern() (string, bool) {
+// Pattern returns the regex pattern constraint if present
+func (t *TagInfo) Pattern() (string, bool) {
 	pattern, ok := t.Constraints["regexp"]
 	return pattern, ok
 }
 
-// GetEnum returns enum values if present
-func (t *TagInfo) GetEnum() ([]string, bool) {
+// Enum returns enum values if present
+func (t *TagInfo) Enum() ([]string, bool) {
 	if enum, ok := t.Constraints["oneof"]; ok {
 		values := strings.Fields(enum)
 		if len(values) > 0 {
@@ -307,8 +307,8 @@ func (t *TagInfo) IsUUID() bool {
 	return t.HasFormat("uuid")
 }
 
-// GetConstraints returns all validation constraints
-func (t *TagInfo) GetConstraints() map[string]string {
+// AllConstraints returns all validation constraints
+func (t *TagInfo) AllConstraints() map[string]string {
 	result := make(map[string]string, len(t.Constraints))
 	for k, v := range t.Constraints {
 		result[k] = v

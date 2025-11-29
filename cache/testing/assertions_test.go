@@ -130,12 +130,12 @@ func TestResetMock(t *testing.T) {
 
 	ResetMock(mock)
 
-	assert.Empty(t, mock.GetAllKeys())
-	assert.Equal(t, int64(0), mock.GetOperationCount("Get"))
-	assert.Equal(t, int64(0), mock.GetOperationCount("Set"))
+	assert.Empty(t, mock.AllKeys())
+	assert.Equal(t, int64(0), mock.OperationCount("Get"))
+	assert.Equal(t, int64(0), mock.OperationCount("Set"))
 }
 
-func TestGetOperationCounts(t *testing.T) {
+func TestOperationCounts(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockCache()
 
@@ -143,7 +143,7 @@ func TestGetOperationCounts(t *testing.T) {
 	mock.Set(ctx, "key1", []byte("value"), time.Minute)
 	mock.Delete(ctx, "key1")
 
-	counts := GetOperationCounts(mock)
+	counts := OperationCounts(mock)
 	assert.Equal(t, int64(1), counts["Get"])
 	assert.Equal(t, int64(1), counts["Set"])
 	assert.Equal(t, int64(1), counts["Delete"])

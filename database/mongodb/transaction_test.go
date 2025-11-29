@@ -86,21 +86,21 @@ func TestTransactionPrepare(t *testing.T) {
 	assert.Contains(t, err.Error(), "prepared statements not supported for MongoDB transactions")
 }
 
-// TestTransactionGetSession tests session getter
-func TestTransactionGetSession(t *testing.T) {
+// TestTransactionSession tests session getter
+func TestTransactionSession(t *testing.T) {
 	transaction := createTestTransactionForInterface()
 
-	session := transaction.GetSession()
+	session := transaction.Session()
 
 	// Should return the session (nil in this case since we're testing the getter mechanism)
 	assert.Nil(t, session)
 }
 
-// TestTransactionGetDatabase tests database getter
-func TestTransactionGetDatabase(t *testing.T) {
+// TestTransactionDatabase tests database getter
+func TestTransactionDatabase(t *testing.T) {
 	transaction := createTestTransactionWithMockData()
 
-	database := transaction.GetDatabase()
+	database := transaction.Database()
 
 	assert.NotNil(t, database)
 	assert.Equal(t, transaction.database, database)

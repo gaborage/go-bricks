@@ -944,11 +944,11 @@ func TestNew(t *testing.T) {
 	})
 }
 
-func TestGetMessagingDeclarations(t *testing.T) {
+func TestMessagingDeclarations(t *testing.T) {
 	t.Run("returns nil when no declarations built", func(t *testing.T) {
 		app := &App{}
 
-		result := app.GetMessagingDeclarations()
+		result := app.MessagingDeclarations()
 		assert.Nil(t, result)
 	})
 
@@ -958,7 +958,7 @@ func TestGetMessagingDeclarations(t *testing.T) {
 			messagingDeclarations: decls,
 		}
 
-		result := app.GetMessagingDeclarations()
+		result := app.MessagingDeclarations()
 		assert.Equal(t, decls, result)
 	})
 }

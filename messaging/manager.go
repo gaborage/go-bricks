@@ -188,7 +188,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 
 	m.logger.Info().
 		Str("key", key).
-		Int("consumers", len(decls.GetConsumers())).
+		Int("consumers", len(decls.Consumers())).
 		Uint64("declaration_hash", declHash).
 		Msg("Consumers started for key")
 

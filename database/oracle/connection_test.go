@@ -201,7 +201,7 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 
 	// Test metadata methods
 	assert.Equal(t, "oracle", c.DatabaseType())
-	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
+	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.MigrationTable())
 
 	// Test CreateMigrationTable
 	require.NoError(t, c.CreateMigrationTable(ctx))
@@ -511,7 +511,7 @@ func TestConnectionMetadata(t *testing.T) {
 	mock.ExpectClose()
 
 	assert.Equal(t, "oracle", c.DatabaseType())
-	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.GetMigrationTable())
+	assert.Equal(t, "FLYWAY_SCHEMA_HISTORY", c.MigrationTable())
 	assert.NoError(t, c.Close())
 }
 

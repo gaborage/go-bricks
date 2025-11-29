@@ -380,8 +380,8 @@ func (c *Connection) DatabaseType() string {
 	return types.Oracle
 }
 
-// GetMigrationTable returns the migration table name for Oracle
-func (c *Connection) GetMigrationTable() string {
+// MigrationTable returns the migration table name for Oracle
+func (c *Connection) MigrationTable() string {
 	return "FLYWAY_SCHEMA_HISTORY"
 }
 

@@ -508,8 +508,8 @@ type BuilderState struct {
 	Pipeline   []bson.M
 }
 
-// GetState returns the current builder state for testing purposes
-func (b *Builder) GetState() BuilderState {
+// State returns the current builder state for testing purposes
+func (b *Builder) State() BuilderState {
 	state := BuilderState{
 		Match:      make(bson.M),
 		Sort:       make(bson.D, len(b.sort)),
@@ -574,8 +574,8 @@ func (b *Builder) HasPagination() bool {
 	return b.skip != nil || b.limit != nil
 }
 
-// GetSkip returns the current skip value
-func (b *Builder) GetSkip() *int64 {
+// SkipValue returns the current skip value
+func (b *Builder) SkipValue() *int64 {
 	if b.skip == nil {
 		return nil
 	}
@@ -583,8 +583,8 @@ func (b *Builder) GetSkip() *int64 {
 	return &skip
 }
 
-// GetLimit returns the current limit value
-func (b *Builder) GetLimit() *int64 {
+// LimitValue returns the current limit value
+func (b *Builder) LimitValue() *int64 {
 	if b.limit == nil {
 		return nil
 	}
@@ -592,8 +592,8 @@ func (b *Builder) GetLimit() *int64 {
 	return &limit
 }
 
-// GetProjectionFields returns the fields being projected
-func (b *Builder) GetProjectionFields() []string {
+// ProjectionFields returns the fields being projected
+func (b *Builder) ProjectionFields() []string {
 	fields := make([]string, 0, len(b.projection))
 	for field := range b.projection {
 		fields = append(fields, field)
@@ -601,8 +601,8 @@ func (b *Builder) GetProjectionFields() []string {
 	return fields
 }
 
-// GetSortFields returns the fields being sorted
-func (b *Builder) GetSortFields() []string {
+// SortFields returns the fields being sorted
+func (b *Builder) SortFields() []string {
 	fields := make([]string, 0, len(b.sort))
 	for _, elem := range b.sort {
 		fields = append(fields, elem.Key)

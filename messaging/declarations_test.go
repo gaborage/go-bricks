@@ -74,27 +74,27 @@ func (m *mockRegistry) StopConsumers() {
 	m.Called()
 }
 
-func (m *mockRegistry) GetExchanges() map[string]*ExchangeDeclaration {
+func (m *mockRegistry) Exchanges() map[string]*ExchangeDeclaration {
 	args := m.Called()
 	return args.Get(0).(map[string]*ExchangeDeclaration)
 }
 
-func (m *mockRegistry) GetQueues() map[string]*QueueDeclaration {
+func (m *mockRegistry) Queues() map[string]*QueueDeclaration {
 	args := m.Called()
 	return args.Get(0).(map[string]*QueueDeclaration)
 }
 
-func (m *mockRegistry) GetBindings() []*BindingDeclaration {
+func (m *mockRegistry) Bindings() []*BindingDeclaration {
 	args := m.Called()
 	return args.Get(0).([]*BindingDeclaration)
 }
 
-func (m *mockRegistry) GetPublishers() []*PublisherDeclaration {
+func (m *mockRegistry) Publishers() []*PublisherDeclaration {
 	args := m.Called()
 	return args.Get(0).([]*PublisherDeclaration)
 }
 
-func (m *mockRegistry) GetConsumers() []*ConsumerDeclaration {
+func (m *mockRegistry) Consumers() []*ConsumerDeclaration {
 	args := m.Called()
 	return args.Get(0).([]*ConsumerDeclaration)
 }
@@ -118,13 +118,13 @@ func TestNewDeclarations(t *testing.T) {
 		assert.NotNil(t, decls.Queues)
 		assert.NotNil(t, decls.Bindings)
 		assert.NotNil(t, decls.Publishers)
-		assert.NotNil(t, decls.GetConsumers())
+		assert.NotNil(t, decls.Consumers())
 
 		assert.Empty(t, decls.Exchanges)
 		assert.Empty(t, decls.Queues)
 		assert.Empty(t, decls.Bindings)
 		assert.Empty(t, decls.Publishers)
-		assert.Empty(t, decls.GetConsumers())
+		assert.Empty(t, decls.Consumers())
 	})
 }
 
@@ -357,7 +357,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 
 		decls.RegisterConsumer(consumer)
 
-		consumers := decls.GetConsumers()
+		consumers := decls.Consumers()
 		assert.Len(t, consumers, 1)
 		registered := consumers[0]
 		assert.Equal(t, consumer.Queue, registered.Queue)
@@ -370,7 +370,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 
 		decls.RegisterConsumer(nil)
 
-		assert.Empty(t, decls.GetConsumers())
+		assert.Empty(t, decls.Consumers())
 	})
 
 	t.Run("panics on duplicate consumer registration", func(t *testing.T) {
@@ -387,7 +387,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 		decls.RegisterConsumer(consumer)
 
 		// Verify registered
-		consumers := decls.GetConsumers()
+		consumers := decls.Consumers()
 		assert.Len(t, consumers, 1)
 		assert.Equal(t, testQueue, consumers[0].Queue)
 
@@ -414,7 +414,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 			})
 		})
 
-		assert.Len(t, decls.GetConsumers(), 2)
+		assert.Len(t, decls.Consumers(), 2)
 	})
 
 	t.Run("allows same queue with different consumer tag", func(t *testing.T) {
@@ -434,7 +434,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 			})
 		})
 
-		assert.Len(t, decls.GetConsumers(), 2)
+		assert.Len(t, decls.Consumers(), 2)
 	})
 
 	t.Run("allows same queue+consumer with different event type", func(t *testing.T) {
@@ -454,10 +454,10 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 			})
 		})
 
-		assert.Len(t, decls.GetConsumers(), 2)
+		assert.Len(t, decls.Consumers(), 2)
 	})
 
-	t.Run("GetConsumers returns consumers in registration order", func(t *testing.T) {
+	t.Run("Consumers returns consumers in registration order", func(t *testing.T) {
 		decls := NewDeclarations()
 
 		decls.RegisterConsumer(&ConsumerDeclaration{
@@ -476,7 +476,7 @@ func TestDeclarationsRegisterConsumer(t *testing.T) {
 			EventType: testEvent3,
 		})
 
-		consumers := decls.GetConsumers()
+		consumers := decls.Consumers()
 		assert.Len(t, consumers, 3)
 		assert.Equal(t, testQueue1, consumers[0].Queue)
 		assert.Equal(t, testQueue2, consumers[1].Queue)
@@ -680,7 +680,7 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Equal(t, len(decls.Queues), len(clone.Queues))
 		assert.Equal(t, len(decls.Bindings), len(clone.Bindings))
 		assert.Equal(t, len(decls.Publishers), len(clone.Publishers))
-		assert.Equal(t, len(decls.GetConsumers()), len(clone.GetConsumers()))
+		assert.Equal(t, len(decls.Consumers()), len(clone.Consumers()))
 
 		// Verify deep copy of exchanges
 		originalExchange := decls.Exchanges[testExchange]
@@ -695,7 +695,7 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Equal(t, testValue, clonedExchange.Args[testKey])
 
 		// Verify handlers are shared (shallow copy)
-		assert.Equal(t, handler, clone.GetConsumers()[0].Handler)
+		assert.Equal(t, handler, clone.Consumers()[0].Handler)
 	})
 
 	t.Run("handles nil args in clone", func(t *testing.T) {
@@ -723,7 +723,7 @@ func TestDeclarationsClone(t *testing.T) {
 		assert.Empty(t, clone.Queues)
 		assert.Empty(t, clone.Bindings)
 		assert.Empty(t, clone.Publishers)
-		assert.Empty(t, clone.GetConsumers())
+		assert.Empty(t, clone.Consumers())
 	})
 }
 
@@ -743,7 +743,7 @@ func TestRegisterConsumerPreservesWorkerPoolConfig(t *testing.T) {
 
 	decls.RegisterConsumer(consumer)
 
-	consumers := decls.GetConsumers()
+	consumers := decls.Consumers()
 	assert.Len(t, consumers, 1)
 	assert.Equal(t, 48, consumers[0].Workers, "Workers field should be preserved during registration")
 	assert.Equal(t, 480, consumers[0].PrefetchCount, "PrefetchCount field should be preserved during registration")
@@ -763,7 +763,7 @@ func TestClonePreservesWorkerPoolConfig(t *testing.T) {
 	})
 
 	clone := original.Clone()
-	consumers := clone.GetConsumers()
+	consumers := clone.Consumers()
 
 	assert.Len(t, consumers, 1)
 	assert.Equal(t, 48, consumers[0].Workers, "Workers field should be preserved during cloning")

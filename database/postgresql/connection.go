@@ -329,8 +329,8 @@ func (c *Connection) DatabaseType() string {
 	return types.PostgreSQL
 }
 
-// GetMigrationTable returns the migration table name for PostgreSQL
-func (c *Connection) GetMigrationTable() string {
+// MigrationTable returns the migration table name for PostgreSQL
+func (c *Connection) MigrationTable() string {
 	return "flyway_schema_history"
 }
 

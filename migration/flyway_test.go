@@ -153,7 +153,7 @@ func TestRunFlywayCommandSuccessWithEnv(t *testing.T) {
 	require.NoError(t, fm.Migrate(ctx, mcfg))
 }
 
-func TestGetDefaultMigrationConfig(t *testing.T) {
+func TestDefaultMigrationConfig(t *testing.T) {
 	tests := []struct {
 		name         string
 		dbType       string
@@ -215,7 +215,7 @@ func TestGetDefaultMigrationConfig(t *testing.T) {
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-			result := fm.GetDefaultMigrationConfig()
+			result := fm.DefaultMigrationConfig()
 
 			expected := tt.expectedConf(tt.dbType, tt.appEnv)
 
@@ -261,7 +261,7 @@ func TestInfo(t *testing.T) {
 
 	t.Run("info_with_nil_config_logic", func(t *testing.T) {
 		// Test the nil config handling logic by verifying default config generation
-		defaultCfg := fm.GetDefaultMigrationConfig()
+		defaultCfg := fm.DefaultMigrationConfig()
 		assert.NotNil(t, defaultCfg)
 		assert.Equal(t, "postgresql", cfg.Database.Type)
 		assert.Contains(t, defaultCfg.ConfigPath, "postgresql")
@@ -319,7 +319,7 @@ func TestValidate(t *testing.T) {
 	t.Run("validate_with_nil_config", func(t *testing.T) {
 		// This tests the nil config handling in Validate function
 		// Since we can't use default paths in tests, we'll verify the logic indirectly
-		defaultCfg := fm.GetDefaultMigrationConfig()
+		defaultCfg := fm.DefaultMigrationConfig()
 		assert.Equal(t, "oracle", cfg.Database.Type)
 		assert.Contains(t, defaultCfg.ConfigPath, "oracle")
 		assert.Contains(t, defaultCfg.MigrationPath, "oracle")

@@ -48,7 +48,7 @@ func TestRouteMetadataCapture(t *testing.T) {
 		WithDescription("A test endpoint for validation"))
 
 	// Verify route was registered
-	routes := DefaultRouteRegistry.GetRoutes()
+	routes := DefaultRouteRegistry.Routes()
 	assert.Len(t, routes, 1, "Should have registered one route")
 
 	route := routes[0]
@@ -82,11 +82,11 @@ func TestRouteRegistryOperations(t *testing.T) {
 	registry.AddRoute(&route1)
 	registry.AddRoute(&route2)
 
-	routes := registry.GetRoutes()
+	routes := registry.Routes()
 	assert.Len(t, routes, 2)
 
 	// Test filtering by method
-	getRoutes := registry.GetRoutesByMethod("GET")
+	getRoutes := registry.RoutesByMethod("GET")
 	assert.Len(t, getRoutes, 1)
 	assert.Equal(t, "GET", getRoutes[0].Method)
 
@@ -98,13 +98,13 @@ func TestRouteRegistryOperations(t *testing.T) {
 	}
 	registry.AddRoute(&route3)
 
-	moduleRoutes := registry.GetRoutesByModule("products")
+	moduleRoutes := registry.RoutesByModule("products")
 	assert.Len(t, moduleRoutes, 1)
 	assert.Equal(t, "products", moduleRoutes[0].ModuleName)
 
 	// Test clearing
 	registry.Clear()
-	assert.Len(t, registry.GetRoutes(), 0)
+	assert.Len(t, registry.Routes(), 0)
 }
 
 func TestBackwardCompatibility(t *testing.T) {
@@ -121,7 +121,7 @@ func TestBackwardCompatibility(t *testing.T) {
 	GET(registry, registrar, "/legacy/:id", testHandler)
 
 	// Verify route was registered
-	routes := DefaultRouteRegistry.GetRoutes()
+	routes := DefaultRouteRegistry.Routes()
 	assert.Len(t, routes, 1, "Should have registered one route")
 
 	route := routes[0]
@@ -174,12 +174,12 @@ func TestRouteRegistryGetByPathAndCount(t *testing.T) {
 
 	assert.Equal(t, 3, registry.Count())
 
-	users := registry.GetByPath("/users")
+	users := registry.ByPath("/users")
 	assert.Len(t, users, 2)
 	for _, route := range users {
 		assert.Equal(t, "/users", route.Path)
 	}
 
-	none := registry.GetByPath("/missing")
+	none := registry.ByPath("/missing")
 	assert.Empty(t, none)
 }

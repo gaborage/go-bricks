@@ -482,7 +482,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.Equal(t, eventTestEvent, consumer.EventType)
 
 		// Verify consumer registered
-		consumers := decls.GetConsumers()
+		consumers := decls.Consumers()
 		assert.Len(t, consumers, 1)
 		assert.Equal(t, "test.queue", consumers[0].Queue)
 
@@ -506,7 +506,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.NotNil(t, consumer)
 
 		// Verify both consumer and queue registered
-		assert.Len(t, decls.GetConsumers(), 1)
+		assert.Len(t, decls.Consumers(), 1)
 		assert.Len(t, decls.Queues, 1)
 		assert.Equal(t, "auto.queue", decls.Queues["auto.queue"].Name)
 	})
@@ -547,7 +547,7 @@ func TestDeclarationsConsumer(t *testing.T) {
 
 		assert.NotNil(t, c1)
 		assert.NotNil(t, c2)
-		assert.Len(t, decls.GetConsumers(), 2)
+		assert.Len(t, decls.Consumers(), 2)
 	})
 }
 
@@ -626,7 +626,7 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		assert.Len(t, decls.Queues, 1)
 		assert.Len(t, decls.Bindings, 1)
 		assert.Len(t, decls.Publishers, 1)
-		assert.Len(t, decls.GetConsumers(), 1)
+		assert.Len(t, decls.Consumers(), 1)
 
 		err := decls.Validate()
 		assert.NoError(t, err)

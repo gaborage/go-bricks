@@ -88,7 +88,7 @@ func (s *stubDB) Close() error {
 	return s.closeErr
 }
 func (s *stubDB) DatabaseType() string                       { return "stub" }
-func (s *stubDB) GetMigrationTable() string                  { return "schema_migrations" }
+func (s *stubDB) MigrationTable() string                     { return "schema_migrations" }
 func (s *stubDB) CreateMigrationTable(context.Context) error { return nil }
 
 func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {

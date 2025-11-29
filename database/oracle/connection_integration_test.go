@@ -238,7 +238,7 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 	assert.NoError(t, err, "CreateMigrationTable should succeed")
 
 	// Verify table exists by querying it
-	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", conn.GetMigrationTable()))
+	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", conn.MigrationTable()))
 	require.NoError(t, err, "Should be able to query migration table")
 	defer rows.Close()
 

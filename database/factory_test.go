@@ -312,7 +312,7 @@ func (c *simpleConnection) DatabaseType() string {
 	return "postgresql"
 }
 
-func (c *simpleConnection) GetMigrationTable() string {
+func (c *simpleConnection) MigrationTable() string {
 	return "flyway_schema_history"
 }
 

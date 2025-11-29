@@ -70,8 +70,8 @@ func (r *MetadataRegistry) RegisterModule(name string, module Module, pkg string
 	r.modules[name] = info
 }
 
-// GetModules returns a copy of all registered module information
-func (r *MetadataRegistry) GetModules() map[string]ModuleInfo {
+// Modules returns a copy of all registered module information
+func (r *MetadataRegistry) Modules() map[string]ModuleInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make(map[string]ModuleInfo, len(r.modules))
@@ -81,8 +81,8 @@ func (r *MetadataRegistry) GetModules() map[string]ModuleInfo {
 	return result
 }
 
-// GetModule returns information for a specific module
-func (r *MetadataRegistry) GetModule(name string) (ModuleInfo, bool) {
+// Module returns information for a specific module
+func (r *MetadataRegistry) Module(name string) (ModuleInfo, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	info, exists := r.modules[name]

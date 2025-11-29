@@ -108,9 +108,9 @@ func (m *MockDatabase) DatabaseType() string {
 	return arguments.String(0)
 }
 
-// GetMigrationTable implements types.Interface
-func (m *MockDatabase) GetMigrationTable() string {
-	arguments := m.MethodCalled("GetMigrationTable")
+// MigrationTable implements types.Interface
+func (m *MockDatabase) MigrationTable() string {
+	arguments := m.MethodCalled("MigrationTable")
 	return arguments.String(0)
 }
 

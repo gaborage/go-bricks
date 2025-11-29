@@ -49,8 +49,8 @@ func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
 	return fm
 }
 
-// GetDefaultMigrationConfig gets the default configuration for migrations
-func (fm *FlywayMigrator) GetDefaultMigrationConfig() *Config {
+// DefaultMigrationConfig returns the default configuration for migrations
+func (fm *FlywayMigrator) DefaultMigrationConfig() *Config {
 	if fm.defaultConfig == nil {
 		fm.defaultConfig = (*FlywayMigrator).defaultMigrationConfig
 	}
@@ -74,7 +74,7 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 // Migrate executes pending migrations
 func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
-		cfg = fm.GetDefaultMigrationConfig()
+		cfg = fm.DefaultMigrationConfig()
 	}
 
 	fm.logger.Info().Str("vendor", fm.config.Database.Type).Msg("Starting database migrations")
@@ -92,7 +92,7 @@ func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 // Info shows information about the status of migrations
 func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
-		cfg = fm.GetDefaultMigrationConfig()
+		cfg = fm.DefaultMigrationConfig()
 	}
 
 	args := []string{
@@ -107,7 +107,7 @@ func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 // Validate validates migrations without executing them
 func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
-		cfg = fm.GetDefaultMigrationConfig()
+		cfg = fm.DefaultMigrationConfig()
 	}
 
 	args := []string{
@@ -207,7 +207,7 @@ func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 
 // RunMigrationsAtStartup executes migrations automatically at application startup
 func (fm *FlywayMigrator) RunMigrationsAtStartup(ctx context.Context) error {
-	migrationConfig := fm.GetDefaultMigrationConfig()
+	migrationConfig := fm.DefaultMigrationConfig()
 
 	// In development, run migrations automatically
 	if fm.config.App.Env == "development" {

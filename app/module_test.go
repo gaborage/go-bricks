@@ -277,12 +277,12 @@ func TestMetadataRegistryOperations(t *testing.T) {
 
 	assert.Equal(t, 1, registry.Count())
 
-	modules := registry.GetModules()
+	modules := registry.Modules()
 	assert.Len(t, modules, 1)
 	modules["beta"] = ModuleInfo{}
 	assert.Equal(t, 1, registry.Count(), "get modules should return copy")
 
-	info, ok := registry.GetModule("alpha")
+	info, ok := registry.Module("alpha")
 	assert.True(t, ok)
 	assert.Equal(t, "alpha", info.Descriptor.Name)
 

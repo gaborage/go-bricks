@@ -285,7 +285,7 @@ type Interface interface {
 	Close() error
 
 	// Migration support
-	GetMigrationTable() string
+	MigrationTable() string
 	CreateMigrationTable(ctx context.Context) error
 }
 

@@ -137,8 +137,8 @@ func (s *TenantStore) RemoveTenant(tenantID string) {
 	delete(s.tenants, tenantID)
 }
 
-// GetTenants returns a copy of all tenant configurations
-func (s *TenantStore) GetTenants() map[string]TenantEntry {
+// Tenants returns a copy of all tenant configurations
+func (s *TenantStore) Tenants() map[string]TenantEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

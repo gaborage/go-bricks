@@ -142,7 +142,7 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 	assert.NoError(t, err, "CreateMigrationTable should succeed")
 
 	// Verify table exists by querying it
-	rows, err := conn.Query(ctx, "SELECT COUNT(*) FROM "+conn.GetMigrationTable())
+	rows, err := conn.Query(ctx, "SELECT COUNT(*) FROM "+conn.MigrationTable())
 	require.NoError(t, err, "Should be able to query migration table")
 	defer rows.Close()
 
@@ -152,12 +152,12 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 	assert.Equal(t, 0, count, "New migration table should be empty")
 
 	// Verify index exists by querying pg_indexes
-	indexRows, err := conn.Query(ctx, "SELECT indexname FROM pg_indexes WHERE tablename = $1", conn.GetMigrationTable())
+	indexRows, err := conn.Query(ctx, "SELECT indexname FROM pg_indexes WHERE tablename = $1", conn.MigrationTable())
 	require.NoError(t, err, "Should be able to query pg_indexes")
 	defer indexRows.Close()
 
 	hasIndex := false
-	expectedIndex := conn.GetMigrationTable() + "_s_idx"
+	expectedIndex := conn.MigrationTable() + "_s_idx"
 	for indexRows.Next() {
 		var indexName string
 		require.NoError(t, indexRows.Scan(&indexName))
