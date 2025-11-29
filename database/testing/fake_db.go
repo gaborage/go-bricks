@@ -192,17 +192,17 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	return tx
 }
 
-// GetQueryLog returns all Query/QueryRow calls made to this TestDB.
+// QueryLog returns all Query/QueryRow calls made to this TestDB.
 // Useful for custom assertions beyond the provided helpers.
-func (db *TestDB) GetQueryLog() []QueryCall {
+func (db *TestDB) QueryLog() []QueryCall {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return append([]QueryCall{}, db.queryLog...)
 }
 
-// GetExecLog returns all Exec calls made to this TestDB.
+// ExecLog returns all Exec calls made to this TestDB.
 // Useful for custom assertions beyond the provided helpers.
-func (db *TestDB) GetExecLog() []ExecCall {
+func (db *TestDB) ExecLog() []ExecCall {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return append([]ExecCall{}, db.execLog...)

@@ -248,15 +248,15 @@ func (tx *TestTx) IsRolledBack() bool {
 	return tx.rolledBack
 }
 
-// GetQueryLog returns all Query/QueryRow calls made within this transaction.
-func (tx *TestTx) GetQueryLog() []QueryCall {
+// QueryLog returns all Query/QueryRow calls made within this transaction.
+func (tx *TestTx) QueryLog() []QueryCall {
 	tx.mu.RLock()
 	defer tx.mu.RUnlock()
 	return append([]QueryCall{}, tx.queryLog...)
 }
 
-// GetExecLog returns all Exec calls made within this transaction.
-func (tx *TestTx) GetExecLog() []ExecCall {
+// ExecLog returns all Exec calls made within this transaction.
+func (tx *TestTx) ExecLog() []ExecCall {
 	tx.mu.RLock()
 	defer tx.mu.RUnlock()
 	return append([]ExecCall{}, tx.execLog...)

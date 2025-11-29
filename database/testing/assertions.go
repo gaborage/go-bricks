@@ -16,7 +16,7 @@ import (
 //	AssertQueryExecuted(t, db, "SELECT * FROM users")
 func AssertQueryExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 	t.Helper()
-	log := db.GetQueryLog()
+	log := db.QueryLog()
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {
 			return // Found matching query
@@ -37,7 +37,7 @@ func AssertQueryExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 //	AssertQueryNotExecuted(t, db, "DELETE FROM users")
 func AssertQueryNotExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 	t.Helper()
-	log := db.GetQueryLog()
+	log := db.QueryLog()
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {
 			t.Errorf("unexpected query executed: %q\nQuery SQL: %s",
@@ -56,7 +56,7 @@ func AssertQueryNotExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 //	AssertQueryCount(t, db, "SELECT", 2)
 func AssertQueryCount(t *testing.T, db *TestDB, sqlPattern string, expected int) {
 	t.Helper()
-	log := db.GetQueryLog()
+	log := db.QueryLog()
 	count := 0
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {
@@ -79,7 +79,7 @@ func AssertQueryCount(t *testing.T, db *TestDB, sqlPattern string, expected int)
 //	AssertExecExecuted(t, db, "INSERT INTO users")
 func AssertExecExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 	t.Helper()
-	log := db.GetExecLog()
+	log := db.ExecLog()
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {
 			return // Found matching exec
@@ -100,7 +100,7 @@ func AssertExecExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 //	AssertExecNotExecuted(t, db, "DELETE FROM users")
 func AssertExecNotExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 	t.Helper()
-	log := db.GetExecLog()
+	log := db.ExecLog()
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {
 			t.Errorf("unexpected exec executed: %q\nExec SQL: %s",
@@ -119,7 +119,7 @@ func AssertExecNotExecuted(t *testing.T, db *TestDB, sqlPattern string) {
 //	AssertExecCount(t, db, "INSERT", 5)
 func AssertExecCount(t *testing.T, db *TestDB, sqlPattern string, expected int) {
 	t.Helper()
-	log := db.GetExecLog()
+	log := db.ExecLog()
 	count := 0
 	for _, call := range log {
 		if db.matchSQL(sqlPattern, call.SQL) {

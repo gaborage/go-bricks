@@ -176,16 +176,16 @@ func (m *TenantDBMap) AsGetDBFunc() func(context.Context) (dbtypes.Interface, er
 	}
 }
 
-// GetTenantDB returns the TestDB for a specific tenant ID without context.
+// TenantDB returns the TestDB for a specific tenant ID without context.
 // Returns nil if the tenant has no configured TestDB.
 //
 // This is useful for assertions that need to inspect a specific tenant's database calls:
 //
 //	tenants := NewTenantDBMap()
 //	// ... run test code ...
-//	acmeDB := tenants.GetTenantDB("acme")
+//	acmeDB := tenants.TenantDB("acme")
 //	AssertQueryExecuted(t, acmeDB, "SELECT * FROM products")
-func (m *TenantDBMap) GetTenantDB(tenantID string) *TestDB {
+func (m *TenantDBMap) TenantDB(tenantID string) *TestDB {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.databases[tenantID]
@@ -199,7 +199,7 @@ func (m *TenantDBMap) GetTenantDB(tenantID string) *TestDB {
 //	tenants := NewTenantDBMap()
 //	// ... run test code ...
 //	for _, tenantID := range tenants.AllTenantIDs() {
-//	    db := tenants.GetTenantDB(tenantID)
+//	    db := tenants.TenantDB(tenantID)
 //	    AssertQueryExecuted(t, db, "SELECT")
 //	}
 func (m *TenantDBMap) AllTenantIDs() []string {

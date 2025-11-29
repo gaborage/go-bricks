@@ -909,14 +909,14 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 
 	// Wait for handler to process the message by checking call count
 	for range 100 { // Max 100ms wait with 1ms intervals
-		if handler.GetCallCount() >= 1 {
+		if handler.CallCount() >= 1 {
 			break
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Close channel to stop handler
 	close(deliveries)
@@ -944,7 +944,7 @@ func (h *countingTestHandler) Handle(ctx context.Context, delivery *amqp.Deliver
 	return h.testHandler.Handle(ctx, delivery)
 }
 
-func (h *countingTestHandler) GetCallCount() int {
+func (h *countingTestHandler) CallCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.callCount
@@ -1006,7 +1006,7 @@ func TestRegistryProcessMessageSuccess(t *testing.T) {
 	registry.processMessage(ctx, consumer, delivery, log)
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Verify message was acknowledged
 	assert.True(t, acker.ackCalled)
@@ -1043,7 +1043,7 @@ func TestRegistryProcessMessageHandlerError(t *testing.T) {
 	registry.processMessage(ctx, consumer, delivery, log)
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Verify message was negatively acknowledged WITHOUT requeue (prevents infinite retry loops)
 	assert.False(t, acker.ackCalled)
@@ -1080,7 +1080,7 @@ func TestRegistryProcessMessageAutoAck(t *testing.T) {
 	registry.processMessage(ctx, consumer, delivery, log)
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// With AutoAck, no manual ack/nack should happen
 	assert.False(t, acker.ackCalled)
@@ -1117,7 +1117,7 @@ func TestRegistryProcessMessageAckError(t *testing.T) {
 	registry.processMessage(ctx, consumer, delivery, log)
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Verify ack was attempted (even though it failed)
 	assert.True(t, acker.ackCalled)
@@ -1156,7 +1156,7 @@ func TestRegistryProcessMessageNackError(t *testing.T) {
 	registry.processMessage(ctx, consumer, delivery, log)
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Verify nack was attempted (even though it failed)
 	assert.False(t, acker.ackCalled)
@@ -1181,7 +1181,7 @@ func (h *panicTestHandler) Handle(_ context.Context, _ *amqp.Delivery) error {
 
 func (h *panicTestHandler) EventType() string { return "panic-test" }
 
-func (h *panicTestHandler) GetCallCount() int {
+func (h *panicTestHandler) CallCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.callCount
@@ -1218,7 +1218,7 @@ func TestRegistryProcessMessageHandlerPanic(t *testing.T) {
 	})
 
 	// Verify handler was called
-	assert.Equal(t, 1, handler.GetCallCount())
+	assert.Equal(t, 1, handler.CallCount())
 
 	// Verify message was negatively acknowledged WITHOUT requeue (same as errors)
 	assert.False(t, acker.ackCalled)
@@ -1359,7 +1359,7 @@ func TestRegistryHandleMessagesContinuesAfterPanic(t *testing.T) {
 	registry.handleMessages(ctx, panicConsumer, deliveries)
 
 	// Verify all messages were processed despite first panic
-	assert.Equal(t, 3, panicHandler.GetCallCount(), "All messages should be processed despite panics")
+	assert.Equal(t, 3, panicHandler.CallCount(), "All messages should be processed despite panics")
 	assert.True(t, acker1.nackCalled, "First message (panicked) should be nacked")
 	assert.True(t, acker2.nackCalled, "Second message (panicked) should be nacked")
 	assert.True(t, acker3.nackCalled, "Third message (panicked) should be nacked")
@@ -1432,12 +1432,12 @@ func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
 	wg.Wait()
 
 	// Verify consumer 1 panicked and nacked
-	assert.Equal(t, 1, panicHandler.GetCallCount())
+	assert.Equal(t, 1, panicHandler.CallCount())
 	assert.True(t, acker1.nackCalled, "Panicked message should be nacked")
 	assert.False(t, acker1.nackRequeue, "Panicked message should NOT be requeued")
 
 	// Verify consumer 2 succeeded and acked (unaffected by consumer 1's panic)
-	assert.Equal(t, 1, successHandler.GetCallCount())
+	assert.Equal(t, 1, successHandler.CallCount())
 	assert.True(t, acker2.ackCalled, "Success message should be acked")
 	assert.False(t, acker2.nackCalled, "Success message should NOT be nacked")
 }
@@ -1752,7 +1752,7 @@ func TestWorkerPoolConcurrentProcessing(t *testing.T) {
 	registry.handleMessages(ctx, consumer, deliveries)
 
 	// Verify all 8 messages were processed
-	assert.Equal(t, 8, handler.GetCallCount(), "All messages should be processed")
+	assert.Equal(t, 8, handler.CallCount(), "All messages should be processed")
 }
 
 func TestPrefetchAutoScaling(t *testing.T) {
@@ -1853,7 +1853,7 @@ func TestWorkerPoolGracefulShutdown(t *testing.T) {
 	}
 
 	// Verify all 3 messages were processed before shutdown
-	assert.Equal(t, 3, handler.GetCallCount(), "All messages should be processed before shutdown")
+	assert.Equal(t, 3, handler.CallCount(), "All messages should be processed before shutdown")
 }
 
 func TestWorkerResourceCaps(t *testing.T) {
