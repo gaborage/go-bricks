@@ -49,7 +49,7 @@ func TestTestDBQueryRow(t *testing.T) {
 
 		db.QueryRow(context.Background(), testQuery, nil)
 
-		log := db.GetQueryLog()
+		log := db.QueryLog()
 		assert.Len(t, log, 1)
 		assert.Equal(t, testQuery, log[0].SQL)
 	})
@@ -115,7 +115,7 @@ func TestTestDBExec(t *testing.T) {
 
 		db.Exec(context.Background(), "DELETE FROM users WHERE id = $1", 123)
 
-		log := db.GetExecLog()
+		log := db.ExecLog()
 		assert.Len(t, log, 1)
 		assert.Equal(t, "DELETE FROM users WHERE id = $1", log[0].SQL)
 	})
