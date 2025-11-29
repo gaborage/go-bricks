@@ -32,7 +32,7 @@ func TestParseValidationTags(t *testing.T) {
 	assert.Equal(t, "User ID", idTag.Description)
 	assert.Equal(t, "123", idTag.Example)
 
-	minVal, hasMin := idTag.GetMin()
+	minVal, hasMin := idTag.Min()
 	assert.True(t, hasMin)
 	assert.Equal(t, 1, minVal)
 
@@ -44,11 +44,11 @@ func TestParseValidationTags(t *testing.T) {
 	assert.True(t, nameTag.Required)
 	assert.Equal(t, "User's full name", nameTag.Description)
 
-	minLen, hasMinLen := nameTag.GetMin()
+	minLen, hasMinLen := nameTag.Min()
 	assert.True(t, hasMinLen)
 	assert.Equal(t, 2, minLen)
 
-	maxLen, hasMaxLen := nameTag.GetMax()
+	maxLen, hasMaxLen := nameTag.Max()
 	assert.True(t, hasMaxLen)
 	assert.Equal(t, 100, maxLen)
 
@@ -67,7 +67,7 @@ func TestParseValidationTags(t *testing.T) {
 	// Test Role field (enum validation)
 	roleTag := findTagByName(tags, "Role")
 	assert.NotNil(t, roleTag, "Role field should be found")
-	enum, hasEnum := roleTag.GetEnum()
+	enum, hasEnum := roleTag.Enum()
 	assert.True(t, hasEnum)
 	assert.Equal(t, []string{"admin", "user", "guest"}, enum)
 
@@ -91,15 +91,15 @@ func TestConstraintMethods(t *testing.T) {
 	assert.True(t, tag.IsRequired())
 	assert.True(t, tag.IsEmail())
 
-	minVal, hasMin := tag.GetMin()
+	minVal, hasMin := tag.Min()
 	assert.True(t, hasMin)
 	assert.Equal(t, 5, minVal)
 
-	maxVal, hasMax := tag.GetMax()
+	maxVal, hasMax := tag.Max()
 	assert.True(t, hasMax)
 	assert.Equal(t, 20, maxVal)
 
-	pattern, hasPattern := tag.GetPattern()
+	pattern, hasPattern := tag.Pattern()
 	assert.True(t, hasPattern)
 	assert.Equal(t, "^[a-z]+$", pattern)
 }
@@ -165,11 +165,11 @@ func TestTagInfoAdditionalAccessors(t *testing.T) {
 	assert.Len(t, tags, 1)
 	tag := tags[0]
 
-	minLen, ok := tag.GetMinLength()
+	minLen, ok := tag.MinLength()
 	assert.True(t, ok)
 	assert.Equal(t, 3, minLen)
 
-	maxLen, ok := tag.GetMaxLength()
+	maxLen, ok := tag.MaxLength()
 	assert.True(t, ok)
 	assert.Equal(t, 10, maxLen)
 
@@ -178,7 +178,7 @@ func TestTagInfoAdditionalAccessors(t *testing.T) {
 	assert.True(t, tag.IsUUID())
 	assert.False(t, tag.HasFormat("ipv4"))
 
-	constraints := tag.GetConstraints()
+	constraints := tag.AllConstraints()
 	assert.Equal(t, "3", constraints["min_len"])
 
 	constraints["min_len"] = "100"
@@ -204,27 +204,27 @@ func TestTagInfoNumericConstraintsInvalid(t *testing.T) {
 		"max_len": "xyz",
 	}}
 
-	_, ok := tag.GetMin()
+	_, ok := tag.Min()
 	assert.False(t, ok)
 
-	_, ok = tag.GetMax()
+	_, ok = tag.Max()
 	assert.False(t, ok)
 
-	_, ok = tag.GetMinLength()
+	_, ok = tag.MinLength()
 	assert.False(t, ok)
 
-	_, ok = tag.GetMaxLength()
+	_, ok = tag.MaxLength()
 	assert.False(t, ok)
 }
 
-func TestTagInfoGetEnumMissing(t *testing.T) {
+func TestTagInfoEnumMissing(t *testing.T) {
 	tag := &TagInfo{Constraints: map[string]string{}}
-	values, ok := tag.GetEnum()
+	values, ok := tag.Enum()
 	assert.False(t, ok)
 	assert.Nil(t, values)
 
 	tag.Constraints["oneof"] = ""
-	values, ok = tag.GetEnum()
+	values, ok = tag.Enum()
 	assert.False(t, ok)
 	assert.Nil(t, values)
 }

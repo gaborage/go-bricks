@@ -77,12 +77,12 @@ func (t *Transaction) Rollback() error {
 	return nil
 }
 
-// GetSession returns the underlying MongoDB session for document operations
-func (t *Transaction) GetSession() *mongo.Session {
+// Session returns the underlying MongoDB session for document operations
+func (t *Transaction) Session() *mongo.Session {
 	return t.session
 }
 
-// GetDatabase returns the database instance for use within the transaction
-func (t *Transaction) GetDatabase() *mongo.Database {
+// Database returns the database instance for use within the transaction
+func (t *Transaction) Database() *mongo.Database {
 	return t.database
 }

@@ -214,9 +214,9 @@ func (tc *Connection) DatabaseType() string {
 	return tc.conn.DatabaseType()
 }
 
-// GetMigrationTable returns the migration table name (no tracking needed)
-func (tc *Connection) GetMigrationTable() string {
-	return tc.conn.GetMigrationTable()
+// MigrationTable returns the migration table name (no tracking needed)
+func (tc *Connection) MigrationTable() string {
+	return tc.conn.MigrationTable()
 }
 
 // CreateMigrationTable creates the migration table if it doesn't exist with tracking

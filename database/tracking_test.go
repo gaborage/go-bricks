@@ -264,7 +264,7 @@ func TestTrackedConnectionUtilityAndBeginMethods(t *testing.T) {
 	require.NoError(t, err2)
 	assert.NotNil(t, stats)
 
-	table := tracked.GetMigrationTable()
+	table := tracked.MigrationTable()
 	assert.Equal(t, "flyway_schema_history", table)
 
 	dbType := tracked.DatabaseType()

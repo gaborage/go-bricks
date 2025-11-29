@@ -196,7 +196,7 @@ func TestConnectionMetadata(t *testing.T) {
 	mock.ExpectClose()
 
 	assert.Equal(t, "postgresql", c.DatabaseType())
-	assert.Equal(t, "flyway_schema_history", c.GetMigrationTable())
+	assert.Equal(t, "flyway_schema_history", c.MigrationTable())
 	assert.NoError(t, c.Close())
 }
 

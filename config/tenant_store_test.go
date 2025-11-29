@@ -147,7 +147,7 @@ func TestTenantStoreAddTenant(t *testing.T) {
 	store := NewTenantStore(cfg)
 
 	// Initially no tenants
-	assert.Equal(t, 0, len(store.GetTenants()))
+	assert.Equal(t, 0, len(store.Tenants()))
 	assert.False(t, store.HasTenant(newTenant))
 
 	// Add a new tenant
@@ -165,7 +165,7 @@ func TestTenantStoreAddTenant(t *testing.T) {
 
 	// Verify tenant was added
 	assert.True(t, store.HasTenant(newTenant))
-	assert.Equal(t, 1, len(store.GetTenants()))
+	assert.Equal(t, 1, len(store.Tenants()))
 
 	// Verify we can retrieve configuration for new tenant
 	dbCfg, err := store.DBConfig(context.Background(), newTenant)
@@ -209,7 +209,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 	store := NewTenantStore(cfg)
 
 	// Initially 2 tenants
-	assert.Equal(t, 2, len(store.GetTenants()))
+	assert.Equal(t, 2, len(store.Tenants()))
 	assert.True(t, store.HasTenant(tenantA))
 	assert.True(t, store.HasTenant(tenantB))
 
@@ -219,7 +219,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 	// Verify tenant-a is gone
 	assert.False(t, store.HasTenant(tenantA))
 	assert.True(t, store.HasTenant(tenantB))
-	assert.Equal(t, 1, len(store.GetTenants()))
+	assert.Equal(t, 1, len(store.Tenants()))
 
 	// Verify we get error when trying to access removed tenant
 	_, err := store.DBConfig(context.Background(), tenantA)
@@ -227,10 +227,10 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 
 	// Remove non-existent tenant (should not panic)
 	store.RemoveTenant("non-existent")
-	assert.Equal(t, 1, len(store.GetTenants()))
+	assert.Equal(t, 1, len(store.Tenants()))
 }
 
-func TestTenantStoreGetTenants(t *testing.T) {
+func TestTenantStoreTenants(t *testing.T) {
 	cfg := &Config{
 		Database:  DatabaseConfig{},
 		Messaging: MessagingConfig{},
@@ -262,7 +262,7 @@ func TestTenantStoreGetTenants(t *testing.T) {
 	store := NewTenantStore(cfg)
 
 	// Get all tenants
-	tenants := store.GetTenants()
+	tenants := store.Tenants()
 	assert.Equal(t, 2, len(tenants))
 	assert.Contains(t, tenants, tenantA)
 	assert.Contains(t, tenants, tenantB)

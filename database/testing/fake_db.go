@@ -397,8 +397,8 @@ func (db *TestDB) Close() error {
 	return nil // No-op in tests
 }
 
-// GetMigrationTable implements database.Interface.GetMigrationTable.
-func (db *TestDB) GetMigrationTable() string {
+// MigrationTable implements database.Interface.MigrationTable.
+func (db *TestDB) MigrationTable() string {
 	return "flyway_schema_history" // Default value
 }
 

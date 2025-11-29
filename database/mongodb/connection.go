@@ -474,14 +474,14 @@ func (c *Connection) DatabaseType() string {
 	return "mongodb"
 }
 
-// GetMigrationTable returns the migration collection name for MongoDB
-func (c *Connection) GetMigrationTable() string {
+// MigrationTable returns the migration collection name for MongoDB
+func (c *Connection) MigrationTable() string {
 	return "schema_migrations"
 }
 
 // CreateMigrationTable creates the migration collection if it doesn't exist
 func (c *Connection) CreateMigrationTable(ctx context.Context) error {
-	collectionName := c.GetMigrationTable()
+	collectionName := c.MigrationTable()
 
 	// Check if collection exists
 	collections, err := c.database.ListCollectionNames(ctx, map[string]any{"name": collectionName})
@@ -537,12 +537,12 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 	return nil
 }
 
-// GetDatabase returns the underlying MongoDB database instance
-func (c *Connection) GetDatabase() *mongo.Database {
+// Database returns the underlying MongoDB database instance
+func (c *Connection) Database() *mongo.Database {
 	return c.database
 }
 
-// GetClient returns the underlying MongoDB client instance
-func (c *Connection) GetClient() *mongo.Client {
+// Client returns the underlying MongoDB client instance
+func (c *Connection) Client() *mongo.Client {
 	return c.client
 }

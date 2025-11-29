@@ -146,7 +146,7 @@ func (s *stubConnection) DatabaseType() string {
 	return s.databaseTypeValue
 }
 
-func (s *stubConnection) GetMigrationTable() string {
+func (s *stubConnection) MigrationTable() string {
 	if s.migrationTable == "" {
 		return "schema_migrations"
 	}
@@ -436,7 +436,7 @@ func (m *mockConnectionFromDB) DatabaseType() string {
 	return "postgresql"
 }
 
-func (m *mockConnectionFromDB) GetMigrationTable() string {
+func (m *mockConnectionFromDB) MigrationTable() string {
 	return "flyway_schema_history"
 }
 
@@ -565,7 +565,7 @@ func TestConnectionPassthroughMethods(t *testing.T) {
 	if conn.DatabaseType() != "postgresql" {
 		t.Fatalf("unexpected database type")
 	}
-	if conn.GetMigrationTable() != "schema" {
+	if conn.MigrationTable() != "schema" {
 		t.Fatalf("unexpected migration table")
 	}
 }

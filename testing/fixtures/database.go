@@ -297,7 +297,7 @@ func NewPostgreSQLDatabase() *mocks.MockDatabase {
 	mockDB.ExpectHealthCheck(true)
 	mockDB.ExpectDatabaseType(PostgresDatabaseType)
 	mockDB.ExpectStats(getDefaultStats(), nil)
-	mockDB.On("GetMigrationTable").Return(DefaultMigrationTable)
+	mockDB.On("MigrationTable").Return(DefaultMigrationTable)
 
 	return mockDB
 }
@@ -310,7 +310,7 @@ func NewOracleDatabase() *mocks.MockDatabase {
 	mockDB.ExpectHealthCheck(true)
 	mockDB.ExpectDatabaseType(OracleDatabaseType)
 	mockDB.ExpectStats(getDefaultStats(), nil)
-	mockDB.On("GetMigrationTable").Return(OracleMigrationTable)
+	mockDB.On("MigrationTable").Return(OracleMigrationTable)
 
 	return mockDB
 }
@@ -323,7 +323,7 @@ func NewMongoDatabase() *mocks.MockDatabase {
 	mockDB.ExpectHealthCheck(true)
 	mockDB.ExpectDatabaseType(MongoDBDatabaseType)
 	mockDB.ExpectStats(getDefaultStats(), nil)
-	mockDB.On("GetMigrationTable").Return(DefaultMigrationTable)
+	mockDB.On("MigrationTable").Return(DefaultMigrationTable)
 
 	return mockDB
 }
