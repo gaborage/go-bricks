@@ -443,9 +443,9 @@ func (m *MockCache) Close() error {
 
 // Test utility methods
 
-// GetOperationCount returns the number of times a specific operation was called.
+// OperationCount returns the number of times a specific operation was called.
 // Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "Health", "Stats", "Close"
-func (m *MockCache) GetOperationCount(operation string) int64 {
+func (m *MockCache) OperationCount(operation string) int64 {
 	switch operation {
 	case "Get":
 		return m.getCalls.Load()
@@ -501,14 +501,14 @@ func (m *MockCache) ResetCounters() {
 	m.closeCalls.Store(0)
 }
 
-// GetID returns the mock cache ID.
-func (m *MockCache) GetID() string {
+// ID returns the mock cache ID.
+func (m *MockCache) ID() string {
 	return m.id
 }
 
-// GetAllKeys returns all keys currently stored (including expired).
+// AllKeys returns all keys currently stored (including expired).
 // Useful for debugging test failures.
-func (m *MockCache) GetAllKeys() []string {
+func (m *MockCache) AllKeys() []string {
 	var keys []string
 	m.data.Range(func(key, _ any) bool {
 		keys = append(keys, key.(string))

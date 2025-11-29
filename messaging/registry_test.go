@@ -337,11 +337,11 @@ func TestRegistryValidateConsumerSimple(t *testing.T) {
 	assert.False(t, registry.ValidateConsumer("unknown-queue"))
 }
 
-func TestRegistryGetPublishersSimple(t *testing.T) {
+func TestRegistryPublishersSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
-	publishers := registry.GetPublishers()
+	publishers := registry.Publishers()
 	assert.Empty(t, publishers)
 
 	// Add publishers
@@ -359,19 +359,19 @@ func TestRegistryGetPublishersSimple(t *testing.T) {
 	registry.RegisterPublisher(pub1)
 	registry.RegisterPublisher(pub2)
 
-	publishers = registry.GetPublishers()
+	publishers = registry.Publishers()
 	assert.Len(t, publishers, 2)
 
 	// Verify data integrity (returned slice should be a copy)
 	publishers[0] = nil
-	assert.Len(t, registry.GetPublishers(), 2) // Original should be unchanged
+	assert.Len(t, registry.Publishers(), 2) // Original should be unchanged
 }
 
-func TestRegistryGetConsumersSimple(t *testing.T) {
+func TestRegistryConsumersSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
-	consumers := registry.GetConsumers()
+	consumers := registry.Consumers()
 	assert.Empty(t, consumers)
 
 	// Add consumers
@@ -387,12 +387,12 @@ func TestRegistryGetConsumersSimple(t *testing.T) {
 	registry.RegisterConsumer(cons1)
 	registry.RegisterConsumer(cons2)
 
-	consumers = registry.GetConsumers()
+	consumers = registry.Consumers()
 	assert.Len(t, consumers, 2)
 
 	// Verify data integrity (returned slice should be a copy)
 	consumers[0] = nil
-	assert.Len(t, registry.GetConsumers(), 2) // Original should be unchanged
+	assert.Len(t, registry.Consumers(), 2) // Original should be unchanged
 }
 
 func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
@@ -503,11 +503,11 @@ func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
 
 // ===== Getter Methods Tests =====
 
-func TestRegistryGetExchanges(t *testing.T) {
+func TestRegistryExchanges(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
-	exchanges := registry.GetExchanges()
+	exchanges := registry.Exchanges()
 	assert.Empty(t, exchanges)
 
 	// Add exchanges
@@ -525,23 +525,23 @@ func TestRegistryGetExchanges(t *testing.T) {
 	registry.RegisterExchange(ex1)
 	registry.RegisterExchange(ex2)
 
-	exchanges = registry.GetExchanges()
+	exchanges = registry.Exchanges()
 	assert.Len(t, exchanges, 2)
 	assert.Equal(t, ex1, exchanges[testExchange1Name])
 	assert.Equal(t, ex2, exchanges[testExchange2Name])
 
 	// Verify data integrity (returned map should be a copy)
 	exchanges[testExchange1Name] = nil
-	originalExchanges := registry.GetExchanges()
+	originalExchanges := registry.Exchanges()
 	assert.Len(t, originalExchanges, 2)
 	assert.NotNil(t, originalExchanges[testExchange1Name])
 }
 
-func TestRegistryGetQueues(t *testing.T) {
+func TestRegistryQueues(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
-	queues := registry.GetQueues()
+	queues := registry.Queues()
 	assert.Empty(t, queues)
 
 	// Add queues
@@ -558,23 +558,23 @@ func TestRegistryGetQueues(t *testing.T) {
 	registry.RegisterQueue(q1)
 	registry.RegisterQueue(q2)
 
-	queues = registry.GetQueues()
+	queues = registry.Queues()
 	assert.Len(t, queues, 2)
 	assert.Equal(t, q1, queues[testQueue1Name])
 	assert.Equal(t, q2, queues[testQueue2Name])
 
 	// Verify data integrity (returned map should be a copy)
 	queues[testQueue1Name] = nil
-	originalQueues := registry.GetQueues()
+	originalQueues := registry.Queues()
 	assert.Len(t, originalQueues, 2)
 	assert.NotNil(t, originalQueues[testQueue1Name])
 }
 
-func TestRegistryGetBindings(t *testing.T) {
+func TestRegistryBindings(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// Initially empty
-	bindings := registry.GetBindings()
+	bindings := registry.Bindings()
 	assert.Empty(t, bindings)
 
 	// Add bindings
@@ -593,14 +593,14 @@ func TestRegistryGetBindings(t *testing.T) {
 	registry.RegisterBinding(b1)
 	registry.RegisterBinding(b2)
 
-	bindings = registry.GetBindings()
+	bindings = registry.Bindings()
 	assert.Len(t, bindings, 2)
 	assert.Equal(t, b1, bindings[0])
 	assert.Equal(t, b2, bindings[1])
 
 	// Verify data integrity (returned slice should be a copy)
 	bindings[0] = nil
-	originalBindings := registry.GetBindings()
+	originalBindings := registry.Bindings()
 	assert.Len(t, originalBindings, 2)
 	assert.NotNil(t, originalBindings[0])
 }
@@ -1643,7 +1643,7 @@ func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
 		EventType:  "late-event",
 	})
 
-	publishers := registry.GetPublishers()
+	publishers := registry.Publishers()
 	assert.Len(t, publishers, 1)
 }
 
@@ -1660,7 +1660,7 @@ func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
 		EventType: "late-event",
 	})
 
-	consumers := registry.GetConsumers()
+	consumers := registry.Consumers()
 	assert.Len(t, consumers, 1)
 }
 

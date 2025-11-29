@@ -38,8 +38,8 @@ func (r *RouteRegistry) Register(descriptor *RouteDescriptor) {
 	r.routes = append(r.routes, cloneDescriptor(descriptor))
 }
 
-// GetRoutes returns a copy of all registered routes
-func (r *RouteRegistry) GetRoutes() []RouteDescriptor {
+// Routes returns a copy of all registered routes
+func (r *RouteRegistry) Routes() []RouteDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]RouteDescriptor, len(r.routes))
@@ -49,8 +49,8 @@ func (r *RouteRegistry) GetRoutes() []RouteDescriptor {
 	return result
 }
 
-// GetByModule returns routes for a specific module
-func (r *RouteRegistry) GetByModule(moduleName string) []RouteDescriptor {
+// ByModule returns routes for a specific module
+func (r *RouteRegistry) ByModule(moduleName string) []RouteDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var result []RouteDescriptor
@@ -62,8 +62,8 @@ func (r *RouteRegistry) GetByModule(moduleName string) []RouteDescriptor {
 	return result
 }
 
-// GetByPath returns routes for a specific path pattern
-func (r *RouteRegistry) GetByPath(path string) []RouteDescriptor {
+// ByPath returns routes for a specific path pattern
+func (r *RouteRegistry) ByPath(path string) []RouteDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var result []RouteDescriptor
@@ -139,8 +139,8 @@ func (r *RouteRegistry) AddRoute(descriptor *RouteDescriptor) {
 	r.Register(descriptor)
 }
 
-// GetRoutesByMethod filters routes by HTTP method
-func (r *RouteRegistry) GetRoutesByMethod(method string) []RouteDescriptor {
+// RoutesByMethod filters routes by HTTP method
+func (r *RouteRegistry) RoutesByMethod(method string) []RouteDescriptor {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -153,9 +153,9 @@ func (r *RouteRegistry) GetRoutesByMethod(method string) []RouteDescriptor {
 	return result
 }
 
-// GetRoutesByModule filters routes by module name (alias for GetByModule)
-func (r *RouteRegistry) GetRoutesByModule(moduleName string) []RouteDescriptor {
-	return r.GetByModule(moduleName)
+// RoutesByModule filters routes by module name (alias for ByModule)
+func (r *RouteRegistry) RoutesByModule(moduleName string) []RouteDescriptor {
+	return r.ByModule(moduleName)
 }
 
 // cloneDescriptor deep-copies slice fields to prevent external mutation

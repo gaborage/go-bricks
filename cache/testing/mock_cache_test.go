@@ -15,14 +15,14 @@ import (
 func TestNewMockCache(t *testing.T) {
 	mock := NewMockCache()
 	assert.NotNil(t, mock)
-	assert.Equal(t, "mock", mock.GetID())
+	assert.Equal(t, "mock", mock.ID())
 	assert.False(t, mock.IsClosed())
 }
 
 func TestNewMockCacheWithID(t *testing.T) {
 	mock := NewMockCacheWithID("custom-id")
 	assert.NotNil(t, mock)
-	assert.Equal(t, "custom-id", mock.GetID())
+	assert.Equal(t, "custom-id", mock.ID())
 }
 
 func TestMockCacheGetSet(t *testing.T) {
@@ -297,14 +297,14 @@ func TestMockCacheOperationCounts(t *testing.T) {
 	mock.Health(ctx)
 	mock.Stats()
 
-	assert.Equal(t, int64(2), mock.GetOperationCount("Get"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("Set"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("Delete"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("GetOrSet"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("CompareAndSet"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("CAS")) // Alias
-	assert.Equal(t, int64(1), mock.GetOperationCount("Health"))
-	assert.Equal(t, int64(1), mock.GetOperationCount("Stats"))
+	assert.Equal(t, int64(2), mock.OperationCount("Get"))
+	assert.Equal(t, int64(1), mock.OperationCount("Set"))
+	assert.Equal(t, int64(1), mock.OperationCount("Delete"))
+	assert.Equal(t, int64(1), mock.OperationCount("GetOrSet"))
+	assert.Equal(t, int64(1), mock.OperationCount("CompareAndSet"))
+	assert.Equal(t, int64(1), mock.OperationCount("CAS")) // Alias
+	assert.Equal(t, int64(1), mock.OperationCount("Health"))
+	assert.Equal(t, int64(1), mock.OperationCount("Stats"))
 }
 
 func TestMockCacheResetCounters(t *testing.T) {
@@ -318,8 +318,8 @@ func TestMockCacheResetCounters(t *testing.T) {
 	// Reset
 	mock.ResetCounters()
 
-	assert.Equal(t, int64(0), mock.GetOperationCount("Get"))
-	assert.Equal(t, int64(0), mock.GetOperationCount("Set"))
+	assert.Equal(t, int64(0), mock.OperationCount("Get"))
+	assert.Equal(t, int64(0), mock.OperationCount("Set"))
 }
 
 func TestMockCacheClear(t *testing.T) {
@@ -333,7 +333,7 @@ func TestMockCacheClear(t *testing.T) {
 	// Clear
 	mock.Clear()
 
-	keys := mock.GetAllKeys()
+	keys := mock.AllKeys()
 	assert.Empty(t, keys)
 }
 
@@ -350,14 +350,14 @@ func TestMockCacheHas(t *testing.T) {
 	assert.False(t, mock.Has("key1"))
 }
 
-func TestMockCacheGetAllKeys(t *testing.T) {
+func TestMockCacheAllKeys(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockCache()
 
 	mock.Set(ctx, "key1", []byte("value1"), time.Minute)
 	mock.Set(ctx, "key2", []byte("value2"), time.Minute)
 
-	keys := mock.GetAllKeys()
+	keys := mock.AllKeys()
 	assert.Len(t, keys, 2)
 	assert.Contains(t, keys, "key1")
 	assert.Contains(t, keys, "key2")
@@ -395,7 +395,7 @@ func TestMockCacheChainedConfiguration(t *testing.T) {
 			assert.Equal(t, "chained", id)
 		})
 
-	assert.Equal(t, "chained", mock.GetID())
+	assert.Equal(t, "chained", mock.ID())
 	assert.Equal(t, 10*time.Millisecond, mock.delay)
 	assert.Equal(t, customErr, mock.getError)
 }

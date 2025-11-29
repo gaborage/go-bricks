@@ -106,10 +106,10 @@ func (m *MockRegistry) StopConsumers() {
 	}
 }
 
-// GetExchanges implements messaging.RegistryInterface
-func (m *MockRegistry) GetExchanges() map[string]*messaging.ExchangeDeclaration {
+// Exchanges implements messaging.RegistryInterface
+func (m *MockRegistry) Exchanges() map[string]*messaging.ExchangeDeclaration {
 	// Check if expectation exists for this method
-	if m.hasExpectation("GetExchanges") {
+	if m.hasExpectation("Exchanges") {
 		arguments := m.Called()
 		return arguments.Get(0).(map[string]*messaging.ExchangeDeclaration)
 	}
@@ -119,10 +119,10 @@ func (m *MockRegistry) GetExchanges() map[string]*messaging.ExchangeDeclaration 
 	return result
 }
 
-// GetQueues implements messaging.RegistryInterface
-func (m *MockRegistry) GetQueues() map[string]*messaging.QueueDeclaration {
+// Queues implements messaging.RegistryInterface
+func (m *MockRegistry) Queues() map[string]*messaging.QueueDeclaration {
 	// Check if expectation exists for this method
-	if m.hasExpectation("GetQueues") {
+	if m.hasExpectation("Queues") {
 		arguments := m.Called()
 		return arguments.Get(0).(map[string]*messaging.QueueDeclaration)
 	}
@@ -132,10 +132,10 @@ func (m *MockRegistry) GetQueues() map[string]*messaging.QueueDeclaration {
 	return result
 }
 
-// GetBindings implements messaging.RegistryInterface
-func (m *MockRegistry) GetBindings() []*messaging.BindingDeclaration {
+// Bindings implements messaging.RegistryInterface
+func (m *MockRegistry) Bindings() []*messaging.BindingDeclaration {
 	// Check if expectation exists for this method
-	if m.hasExpectation("GetBindings") {
+	if m.hasExpectation("Bindings") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.BindingDeclaration)
 	}
@@ -145,10 +145,10 @@ func (m *MockRegistry) GetBindings() []*messaging.BindingDeclaration {
 	return result
 }
 
-// GetPublishers implements messaging.RegistryInterface
-func (m *MockRegistry) GetPublishers() []*messaging.PublisherDeclaration {
+// Publishers implements messaging.RegistryInterface
+func (m *MockRegistry) Publishers() []*messaging.PublisherDeclaration {
 	// Check if expectation exists for this method
-	if m.hasExpectation("GetPublishers") {
+	if m.hasExpectation("Publishers") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.PublisherDeclaration)
 	}
@@ -158,10 +158,10 @@ func (m *MockRegistry) GetPublishers() []*messaging.PublisherDeclaration {
 	return result
 }
 
-// GetConsumers implements messaging.RegistryInterface
-func (m *MockRegistry) GetConsumers() []*messaging.ConsumerDeclaration {
+// Consumers implements messaging.RegistryInterface
+func (m *MockRegistry) Consumers() []*messaging.ConsumerDeclaration {
 	// Check if expectation exists for this method
-	if m.hasExpectation("GetConsumers") {
+	if m.hasExpectation("Consumers") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.ConsumerDeclaration)
 	}

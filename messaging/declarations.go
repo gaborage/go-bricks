@@ -185,9 +185,9 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 	d.consumerOrder = append(d.consumerOrder, key)
 }
 
-// GetConsumers returns all consumer declarations in registration order.
+// Consumers returns all consumer declarations in registration order.
 // Used internally by ReplayToRegistry and for observability/metrics.
-func (d *Declarations) GetConsumers() []*ConsumerDeclaration {
+func (d *Declarations) Consumers() []*ConsumerDeclaration {
 	result := make([]*ConsumerDeclaration, 0, len(d.consumerOrder))
 	for _, key := range d.consumerOrder {
 		result = append(result, d.consumerIndex[key])
@@ -209,7 +209,7 @@ func (d *Declarations) Validate() error {
 	}
 
 	// Check that all consumer queues exist
-	for _, consumer := range d.GetConsumers() {
+	for _, consumer := range d.Consumers() {
 		if _, exists := d.Queues[consumer.Queue]; !exists {
 			return fmt.Errorf("consumer references non-existent queue: %s", consumer.Queue)
 		}
@@ -253,7 +253,7 @@ func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
 	}
 
 	// Register consumers (depend on queues)
-	for _, consumer := range d.GetConsumers() {
+	for _, consumer := range d.Consumers() {
 		reg.RegisterConsumer(consumer)
 	}
 

@@ -30,12 +30,12 @@ type RegistryInterface interface {
 	StartConsumers(ctx context.Context) error
 	StopConsumers()
 
-	// Getter methods for testing/monitoring
-	GetExchanges() map[string]*ExchangeDeclaration
-	GetQueues() map[string]*QueueDeclaration
-	GetBindings() []*BindingDeclaration
-	GetPublishers() []*PublisherDeclaration
-	GetConsumers() []*ConsumerDeclaration
+	// Accessor methods for testing/monitoring
+	Exchanges() map[string]*ExchangeDeclaration
+	Queues() map[string]*QueueDeclaration
+	Bindings() []*BindingDeclaration
+	Publishers() []*PublisherDeclaration
+	Consumers() []*ConsumerDeclaration
 
 	// Validation methods
 	ValidatePublisher(exchange, routingKey string) bool
@@ -689,8 +689,8 @@ func (a *amqpDeliveryAccessor) Set(_ string, _ any) {
 	// This is intentionally a no-op as we don't modify incoming message headers
 }
 
-// GetPublishers returns all registered publishers (for documentation/monitoring)
-func (r *Registry) GetPublishers() []*PublisherDeclaration {
+// Publishers returns all registered publishers (for documentation/monitoring)
+func (r *Registry) Publishers() []*PublisherDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -699,8 +699,8 @@ func (r *Registry) GetPublishers() []*PublisherDeclaration {
 	return publishers
 }
 
-// GetConsumers returns all registered consumers (for documentation/monitoring)
-func (r *Registry) GetConsumers() []*ConsumerDeclaration {
+// Consumers returns all registered consumers (for documentation/monitoring)
+func (r *Registry) Consumers() []*ConsumerDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -738,8 +738,8 @@ func (r *Registry) ValidateConsumer(queue string) bool {
 	return false
 }
 
-// GetExchanges returns all registered exchanges (for testing/monitoring)
-func (r *Registry) GetExchanges() map[string]*ExchangeDeclaration {
+// Exchanges returns all registered exchanges (for testing/monitoring)
+func (r *Registry) Exchanges() map[string]*ExchangeDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -748,8 +748,8 @@ func (r *Registry) GetExchanges() map[string]*ExchangeDeclaration {
 	return exchanges
 }
 
-// GetQueues returns all registered queues (for testing/monitoring)
-func (r *Registry) GetQueues() map[string]*QueueDeclaration {
+// Queues returns all registered queues (for testing/monitoring)
+func (r *Registry) Queues() map[string]*QueueDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -758,8 +758,8 @@ func (r *Registry) GetQueues() map[string]*QueueDeclaration {
 	return queues
 }
 
-// GetBindings returns all registered bindings (for testing/monitoring)
-func (r *Registry) GetBindings() []*BindingDeclaration {
+// Bindings returns all registered bindings (for testing/monitoring)
+func (r *Registry) Bindings() []*BindingDeclaration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

@@ -56,7 +56,7 @@ func AssertCacheMiss(t *testing.T, c cache.Cache, key string) {
 func AssertOperationCount(t *testing.T, mock *MockCache, operation string, expected int64) {
 	t.Helper()
 
-	actual := mock.GetOperationCount(operation)
+	actual := mock.OperationCount(operation)
 	if actual != expected {
 		t.Errorf("expected %d %s operations, got %d", expected, operation, actual)
 	}
@@ -73,7 +73,7 @@ func AssertOperationCount(t *testing.T, mock *MockCache, operation string, expec
 func AssertOperationCountAtLeast(t *testing.T, mock *MockCache, operation string, minimum int64) {
 	t.Helper()
 
-	actual := mock.GetOperationCount(operation)
+	actual := mock.OperationCount(operation)
 	if actual < minimum {
 		t.Errorf("expected at least %d %s operations, got %d", minimum, operation, actual)
 	}
@@ -161,7 +161,7 @@ func AssertKeyNotExists(t *testing.T, mock *MockCache, key string) {
 func AssertCacheEmpty(t *testing.T, mock *MockCache) {
 	t.Helper()
 
-	keys := mock.GetAllKeys()
+	keys := mock.AllKeys()
 	if len(keys) > 0 {
 		t.Errorf("expected cache to be empty, but found %d keys: %v\nCache dump:\n%s",
 			len(keys), keys, mock.Dump())
@@ -180,7 +180,7 @@ func AssertCacheEmpty(t *testing.T, mock *MockCache) {
 func AssertCacheSize(t *testing.T, mock *MockCache, expected int) {
 	t.Helper()
 
-	keys := mock.GetAllKeys()
+	keys := mock.AllKeys()
 	actual := len(keys)
 	if actual != expected {
 		t.Errorf("expected cache to contain %d entries, got %d\nKeys: %v\nCache dump:\n%s",
@@ -235,25 +235,25 @@ func ResetMock(mock *MockCache) {
 	mock.ResetCounters()
 }
 
-// GetOperationCounts returns a map of all operation counts for debugging.
+// OperationCounts returns a map of all operation counts for debugging.
 // Only works with MockCache instances.
 //
 // Example:
 //
 //	mock := NewMockCache()
 //	// ... test operations ...
-//	counts := GetOperationCounts(mock)
+//	counts := OperationCounts(mock)
 //	fmt.Printf("Operations: %+v\n", counts)
-func GetOperationCounts(mock *MockCache) map[string]int64 {
+func OperationCounts(mock *MockCache) map[string]int64 {
 	return map[string]int64{
-		"Get":           mock.GetOperationCount("Get"),
-		"Set":           mock.GetOperationCount("Set"),
-		"Delete":        mock.GetOperationCount("Delete"),
-		"GetOrSet":      mock.GetOperationCount("GetOrSet"),
-		"CompareAndSet": mock.GetOperationCount("CompareAndSet"),
-		"Health":        mock.GetOperationCount("Health"),
-		"Stats":         mock.GetOperationCount("Stats"),
-		"Close":         mock.GetOperationCount("Close"),
+		"Get":           mock.OperationCount("Get"),
+		"Set":           mock.OperationCount("Set"),
+		"Delete":        mock.OperationCount("Delete"),
+		"GetOrSet":      mock.OperationCount("GetOrSet"),
+		"CompareAndSet": mock.OperationCount("CompareAndSet"),
+		"Health":        mock.OperationCount("Health"),
+		"Stats":         mock.OperationCount("Stats"),
+		"Close":         mock.OperationCount("Close"),
 	}
 }
 
@@ -268,7 +268,7 @@ func GetOperationCounts(mock *MockCache) map[string]int64 {
 func AssertNoOperations(t *testing.T, mock *MockCache) {
 	t.Helper()
 
-	counts := GetOperationCounts(mock)
+	counts := OperationCounts(mock)
 	total := int64(0)
 	for _, count := range counts {
 		total += count
