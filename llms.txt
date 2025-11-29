@@ -630,7 +630,7 @@ func TestMultiTenantService(t *testing.T) {
     result, err := svc.Process(ctx)
 
     assert.NoError(t, err)
-    dbtest.AssertQueryExecuted(t, tenants.GetTenantDB("acme"), "SELECT")
+    dbtest.AssertQueryExecuted(t, tenants.TenantDB("acme"), "SELECT")
 }
 ```
 
@@ -1520,7 +1520,7 @@ func TestCacheAsidePattern(t *testing.T) {
     // Verify cache hit
     cachetest.AssertOperationCount(t, mockCache, "Get", 2)
     cachetest.AssertOperationCount(t, mockCache, "Set", 1)  // Still 1
-    assert.Empty(t, mockDB.GetQueryLog(), "Should not query DB on cache hit")
+    assert.Empty(t, mockDB.QueryLog(), "Should not query DB on cache hit")
 }
 ```
 
