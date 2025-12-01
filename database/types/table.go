@@ -50,6 +50,9 @@ func MustTable(name string) *TableRef {
 //	table, _ := Table("customers")
 //	aliased, err := table.As("c")
 func (t *TableRef) As(alias string) (*TableRef, error) {
+	if t == nil {
+		return nil, ErrEmptyTableName
+	}
 	if alias == "" {
 		return nil, ErrEmptyTableAlias
 	}
