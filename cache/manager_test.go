@@ -797,7 +797,11 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 
 	// Start a goroutine that will trigger eviction (slow close)
 	go func() {
-		_, _ = mgr.Get(ctx, tenantThree) // Triggers eviction of tenant-1 (200ms close)
+		// Triggers eviction of tenant-1 (200ms close) - error intentionally ignored in background goroutine
+		if _, err := mgr.Get(ctx, tenantThree); err != nil {
+			// Log but don't fail - background operation
+			t.Logf("background Get error (may be expected during cleanup): %v", err)
+		}
 	}()
 
 	// Give eviction time to start (50ms should be enough to acquire lock and start close)
@@ -870,10 +874,13 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 
 			start := time.Now()
 
-			// These should all complete quickly (ignore errors - concurrent operations may race)
-			_ = mgr.Stats()
-			_, _ = mgr.Get(ctx, tenantTwo)
-			_, _ = mgr.Get(ctx, tenantThree)
+			// These should all complete quickly - errors ignored as concurrent operations may race
+			stats := mgr.Stats()
+			_ = stats // intentionally unused - just checking non-blocking behavior
+			c2, _ := mgr.Get(ctx, tenantTwo)
+			_ = c2 // intentionally unused
+			c3, _ := mgr.Get(ctx, tenantThree)
+			_ = c3 // intentionally unused
 
 			elapsed := time.Since(start)
 			assert.Less(t, elapsed, 100*time.Millisecond,

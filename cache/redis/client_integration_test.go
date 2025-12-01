@@ -352,7 +352,8 @@ func TestRealRedisHealth(t *testing.T) {
 }
 
 func TestRealRedisStats(t *testing.T) {
-	client, _ := setupRealRedis(t)
+	client, ctx := setupRealRedis(t)
+	_ = ctx // ctx not needed for Stats test
 	defer client.Close()
 
 	stats, err := client.Stats()
@@ -386,7 +387,8 @@ func TestRealRedisContextCancellation(t *testing.T) {
 }
 
 func TestRealRedisContextTimeout(t *testing.T) {
-	client, _ := setupRealRedis(t)
+	client, setupCtx := setupRealRedis(t)
+	_ = setupCtx // setupCtx not needed for this test
 	defer client.Close()
 
 	// Create context with immediate timeout

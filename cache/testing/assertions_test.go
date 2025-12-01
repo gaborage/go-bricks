@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAssertCacheHit(t *testing.T) {
@@ -188,7 +189,8 @@ func TestAssertNoError(t *testing.T) {
 
 func TestAssertStatsContains(t *testing.T) {
 	mock := NewMockCacheWithID("test-cache")
-	stats, _ := mock.Stats()
+	stats, err := mock.Stats()
+	require.NoError(t, err)
 
 	// Should pass
 	AssertStatsContains(t, stats, "id", "test-cache")

@@ -42,7 +42,8 @@ func setupTestRedis(t *testing.T) (*Client, *miniredis.Miniredis) {
 
 func TestNewClient(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		assert.NotNil(t, client)
@@ -93,7 +94,8 @@ func TestClientGet(t *testing.T) {
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -104,7 +106,8 @@ func TestClientGet(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -133,7 +136,8 @@ func TestClientSet(t *testing.T) {
 	})
 
 	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -143,7 +147,8 @@ func TestClientSet(t *testing.T) {
 	})
 
 	t.Run("NegativeTTL", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -153,7 +158,8 @@ func TestClientSet(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -169,7 +175,7 @@ func TestClientDelete(t *testing.T) {
 		client, mr := setupTestRedis(t)
 		defer client.Close()
 
-		mr.Set(testKey1, "value")
+		require.NoError(t, mr.Set(testKey1, "value"))
 
 		ctx := context.Background()
 		err := client.Delete(ctx, testKey1)
@@ -180,7 +186,8 @@ func TestClientDelete(t *testing.T) {
 	})
 
 	t.Run("NonexistentKey", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -189,7 +196,8 @@ func TestClientDelete(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -222,7 +230,7 @@ func TestClientGetOrSet(t *testing.T) {
 		client, mr := setupTestRedis(t)
 		defer client.Close()
 
-		mr.Set(testKey1, testExistingValue)
+		require.NoError(t, mr.Set(testKey1, testExistingValue))
 
 		ctx := context.Background()
 		value, wasSet, err := client.GetOrSet(ctx, testKey1, []byte(testNewValue), 5*time.Minute)
@@ -237,7 +245,8 @@ func TestClientGetOrSet(t *testing.T) {
 	})
 
 	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -249,7 +258,8 @@ func TestClientGetOrSet(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -283,7 +293,7 @@ func TestClientCompareAndSet(t *testing.T) {
 		client, mr := setupTestRedis(t)
 		defer client.Close()
 
-		mr.Set(testKey1, testWorker)
+		require.NoError(t, mr.Set(testKey1, testWorker))
 
 		ctx := context.Background()
 		success, err := client.CompareAndSet(ctx, testKey1, nil, []byte("worker-2"), 5*time.Minute)
@@ -300,7 +310,7 @@ func TestClientCompareAndSet(t *testing.T) {
 		client, mr := setupTestRedis(t)
 		defer client.Close()
 
-		mr.Set(testKey1, "old-value")
+		require.NoError(t, mr.Set(testKey1, "old-value"))
 
 		ctx := context.Background()
 		success, err := client.CompareAndSet(ctx, testKey1, []byte("old-value"), []byte(testNewValue), 5*time.Minute)
@@ -317,7 +327,7 @@ func TestClientCompareAndSet(t *testing.T) {
 		client, mr := setupTestRedis(t)
 		defer client.Close()
 
-		mr.Set(testKey1, "current-value")
+		require.NoError(t, mr.Set(testKey1, "current-value"))
 
 		ctx := context.Background()
 		success, err := client.CompareAndSet(ctx, testKey1, []byte("wrong-value"), []byte(testNewValue), 5*time.Minute)
@@ -331,7 +341,8 @@ func TestClientCompareAndSet(t *testing.T) {
 	})
 
 	t.Run("ZeroTTL_NoExpiration", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -342,7 +353,8 @@ func TestClientCompareAndSet(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -356,7 +368,8 @@ func TestClientCompareAndSet(t *testing.T) {
 // TestClientHealth tests the Health method of the Redis client.
 func TestClientHealth(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		ctx := context.Background()
@@ -365,7 +378,8 @@ func TestClientHealth(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		ctx := context.Background()
@@ -378,7 +392,8 @@ func TestClientHealth(t *testing.T) {
 // TestClientStats tests the Stats method of the Redis client.
 func TestClientStats(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		defer client.Close()
 
 		stats, err := client.Stats()
@@ -396,7 +411,8 @@ func TestClientStats(t *testing.T) {
 	})
 
 	t.Run("Closed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		stats, err := client.Stats()
@@ -409,7 +425,8 @@ func TestClientStats(t *testing.T) {
 // TestClientClose tests the Close method of the Redis client.
 func TestClientClose(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 
 		err := client.Close()
 		assert.NoError(t, err)
@@ -423,7 +440,8 @@ func TestClientClose(t *testing.T) {
 	})
 
 	t.Run("AlreadyClosed", func(t *testing.T) {
-		client, _ := setupTestRedis(t)
+		client, mr := setupTestRedis(t)
+		_ = mr // miniredis instance not needed for this test
 		client.Close()
 
 		err := client.Close()
@@ -530,7 +548,8 @@ func TestConfigAddress(t *testing.T) {
 
 // TestDistributedLockRaceCondition tests lock acquisition under concurrent load.
 func TestDistributedLockRaceCondition(t *testing.T) {
-	client, _ := setupTestRedis(t)
+	client, mr := setupTestRedis(t)
+	_ = mr // miniredis instance not needed for this test
 	defer client.Close()
 
 	const (
