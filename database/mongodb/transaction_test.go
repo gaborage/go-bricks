@@ -102,23 +102,27 @@ func TestTransactionDatabase(t *testing.T) {
 	assert.Equal(t, transaction.database, database)
 }
 
-// TestTransactionCommitPanicsWithNilSession tests that commit handles nil session gracefully
+// TestTransactionCommitWithNilSession verifies panic behavior with nil session.
+// Note: Full Commit path coverage is provided by integration tests in adapter_integration_test.go
+// which test real MongoDB transactions (TestTransactionCommitSuccess).
 func TestTransactionCommitWithNilSession(t *testing.T) {
 	transaction := createTestTransactionForInterface()
 
 	// This will cause a panic due to nil session, but that's expected behavior
-	// In real usage, session would never be nil
+	// In real usage, session would never be nil - it's initialized by Begin()
 	assert.Panics(t, func() {
 		_ = transaction.Commit(context.Background())
 	})
 }
 
-// TestTransactionRollbackWithNilSession tests that rollback handles nil session gracefully
+// TestTransactionRollbackWithNilSession verifies panic behavior with nil session.
+// Note: Full Rollback path coverage is provided by integration tests in adapter_integration_test.go
+// which test real MongoDB transactions (TestTransactionRollbackSuccess).
 func TestTransactionRollbackWithNilSession(t *testing.T) {
 	transaction := createTestTransactionForInterface()
 
 	// This will cause a panic due to nil session, but that's expected behavior
-	// In real usage, session would never be nil
+	// In real usage, session would never be nil - it's initialized by Begin()
 	assert.Panics(t, func() {
 		_ = transaction.Rollback(context.Background())
 	})

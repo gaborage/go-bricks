@@ -12,6 +12,8 @@ var (
 	// ErrEmptyTableAlias is returned when TableRef.As() is called with an empty alias.
 	ErrEmptyTableAlias = errors.New("table alias cannot be empty")
 
+	ErrNilTableRef = errors.New("table reference cannot be nil")
+
 	// ErrEmptyExpressionSQL is returned when Expr() is called with empty SQL.
 	ErrEmptyExpressionSQL = errors.New("expression SQL cannot be empty")
 

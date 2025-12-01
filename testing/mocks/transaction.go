@@ -64,7 +64,7 @@ func (m *MockTx) Commit(ctx context.Context) error {
 }
 
 // Rollback implements types.Tx
-// Note: Implementation identical to Commit by design for testify mock tracking
+// Note: Implementation follows the same pattern as Commit for consistent mock tracking
 func (m *MockTx) Rollback(ctx context.Context) error {
 	arguments := m.MethodCalled("Rollback", ctx)
 	return arguments.Error(0)
