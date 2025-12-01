@@ -118,7 +118,7 @@ func getErrorMessage(fe validator.FieldError) string {
 	}
 }
 
-// Custom validator for MCC codes - demo of a specific business rule
+// Custom validator for MCC codes
 func validateMCCCode(fl validator.FieldLevel) bool {
 	mccCode := fl.Field().String()
 	if len(mccCode) != 4 {
