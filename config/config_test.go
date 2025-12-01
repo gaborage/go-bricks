@@ -20,6 +20,7 @@ const (
 	appVersion           = "v1.0.0"
 	serverHost           = "0.0.0.0"
 	testConfigFile       = "config.yml"
+	testConfigFileYAML   = "config.yaml"
 )
 
 func TestLoadWithDefaults(t *testing.T) {
@@ -603,7 +604,7 @@ app:
   name: from-yml-file
   version: v2.0.0
 `
-		yamlFile := "config.yaml"
+		yamlFile := testConfigFileYAML
 		ymlFile := testConfigFile
 
 		err := os.WriteFile(yamlFile, []byte(yamlContent), 0644)
@@ -706,5 +707,60 @@ server:
 		// Should use default values
 		assert.Equal(t, appName, cfg.App.Name)
 		assert.Equal(t, 8080, cfg.Server.Port)
+	})
+
+	t.Run("returns_error_on_invalid_yaml_syntax", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create a config file with invalid YAML syntax
+		invalidYAML := `
+app:
+  name: test
+  invalid yaml - no colon
+  version: v1.0.0
+`
+		tmpFile := testConfigFileYAML
+		err := os.WriteFile(tmpFile, []byte(invalidYAML), 0644)
+		require.NoError(t, err)
+		defer os.Remove(tmpFile)
+
+		// Load should return an error for invalid YAML syntax
+		cfg, err := Load()
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "failed to load config.yaml")
+	})
+
+	t.Run("returns_error_on_invalid_environment_yaml_syntax", func(t *testing.T) {
+		clearEnvironmentVariables()
+
+		// Create a valid base config that sets app.env to production
+		// (env vars are loaded AFTER yaml files, so we must set env in YAML)
+		validYAML := `
+app:
+  name: base-service
+  env: production
+`
+		baseFile := testConfigFileYAML
+		err := os.WriteFile(baseFile, []byte(validYAML), 0644)
+		require.NoError(t, err)
+		defer os.Remove(baseFile)
+
+		// Create an invalid environment-specific config
+		invalidEnvYAML := `
+app:
+  name: prod-service
+  broken: [unclosed bracket
+`
+		envFile := "config.production.yaml"
+		err = os.WriteFile(envFile, []byte(invalidEnvYAML), 0644)
+		require.NoError(t, err)
+		defer os.Remove(envFile)
+
+		// Load should return an error for invalid environment YAML
+		cfg, err := Load()
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "failed to load config.production.yaml")
 	})
 }

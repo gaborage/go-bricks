@@ -16,10 +16,10 @@ import (
 //
 //	mockTx := &mocks.MockTx{}
 //	mockTx.On("Exec", mock.Anything, "INSERT INTO users", mock.Anything).Return(result, nil)
-//	mockTx.On("Commit").Return(nil)
+//	mockTx.On("Commit", mock.Anything).Return(nil)
 //
 //	// Use mockTx in your tests
-//	err := tx.Commit()
+//	err := tx.Commit(ctx)
 type MockTx struct {
 	mock.Mock
 }
@@ -89,21 +89,21 @@ func (m *MockTx) ExpectPrepare(query string, stmt types.Statement, err error) *m
 
 // ExpectCommit sets up a commit expectation with the provided error
 func (m *MockTx) ExpectCommit(err error) *mock.Call {
-	return m.On("Commit").Return(err)
+	return m.On("Commit", mock.Anything).Return(err)
 }
 
 // ExpectRollback sets up a rollback expectation with the provided error
 func (m *MockTx) ExpectRollback(err error) *mock.Call {
-	return m.On("Rollback").Return(err)
+	return m.On("Rollback", mock.Anything).Return(err)
 }
 
 // ExpectSuccessfulTransaction sets up expectations for a successful transaction
 func (m *MockTx) ExpectSuccessfulTransaction() {
-	m.On("Commit").Return(nil)
+	m.On("Commit", mock.Anything).Return(nil)
 }
 
 // ExpectFailedTransaction sets up expectations for a failed transaction that should be rolled back
 func (m *MockTx) ExpectFailedTransaction(commitErr error) {
-	m.On("Commit").Return(commitErr)
-	m.On("Rollback").Return(nil)
+	m.On("Commit", mock.Anything).Return(commitErr)
+	m.On("Rollback", mock.Anything).Return(nil)
 }
