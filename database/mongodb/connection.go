@@ -413,10 +413,9 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database
 	sessionStarted = true
 
 	return &Transaction{
-		session:   session,
-		database:  c.database,
-		logger:    c.logger,
-		parentCtx: ctx,
+		session:  session,
+		database: c.database,
+		logger:   c.logger,
 	}, nil
 }
 

@@ -360,25 +360,7 @@ func (f *inSubqueryFilter) ToSQL() (sql string, args []any, err error) {
 //	))
 //	query := qb.Select("p.name").From(Table("products").As("p")).Where(f.Exists(subquery))
 func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
-	dbtypes.ValidateSubquery(subquery)
-
-	// Extract the underlying squirrel.SelectBuilder using type assertion
-	// This avoids calling ToSQL() prematurely, allowing proper placeholder numbering
-	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
-		return Filter{sqlizer: &existsFilter{
-			sqlizer: squirrel.Expr("EXISTS (?)", sqb.buildSelectBuilder()),
-		}}
-	}
-
-	// Fallback for other implementations (e.g., mocks)
-	// This path calls ToSQL() which may have suboptimal placeholder handling
-	sql, args, err := subquery.ToSQL()
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	return Filter{sqlizer: &existsFilter{
-		sqlizer: squirrel.Expr("EXISTS ("+sql+")", args...),
-	}}
+	return ff.buildExistsFilter(subquery, "EXISTS")
 }
 
 // NotExists creates a NOT EXISTS filter for checking if a subquery returns no rows.
@@ -390,22 +372,31 @@ func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Fil
 //	query := qb.Select("*").From("customers").Where(f.NotExists(subquery))
 //	// SQL: SELECT * FROM customers WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.status = :1)
 func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
-	dbtypes.ValidateSubquery(subquery)
+	return ff.buildExistsFilter(subquery, "NOT EXISTS")
+}
+
+// buildExistsFilter is a helper that builds EXISTS or NOT EXISTS filters.
+func (ff *FilterFactory) buildExistsFilter(subquery dbtypes.SelectQueryBuilder, keyword string) dbtypes.Filter {
+	if err := dbtypes.ValidateSubquery(subquery); err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 
 	// Extract the underlying squirrel.SelectBuilder using type assertion
+	// This avoids calling ToSQL() prematurely, allowing proper placeholder numbering
 	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
 		return Filter{sqlizer: &existsFilter{
-			sqlizer: squirrel.Expr("NOT EXISTS (?)", sqb.buildSelectBuilder()),
+			sqlizer: squirrel.Expr(keyword+" (?)", sqb.buildSelectBuilder()),
 		}}
 	}
 
-	// Fallback for other implementations
+	// Fallback for other implementations (e.g., mocks)
+	// This path calls ToSQL() which may have suboptimal placeholder handling
 	sql, args, err := subquery.ToSQL()
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 	return Filter{sqlizer: &existsFilter{
-		sqlizer: squirrel.Expr("NOT EXISTS ("+sql+")", args...),
+		sqlizer: squirrel.Expr(keyword+" ("+sql+")", args...),
 	}}
 }
 
@@ -426,7 +417,9 @@ func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.
 //	subquery := qb.Select("max_price").From("price_history").Where(jf.EqColumn("price_history.product_id", "p.id"))
 //	query := qb.Select("*").From(Table("products").As("p")).Where(f.InSubquery("p.current_price", subquery))
 func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
-	dbtypes.ValidateSubquery(subquery)
+	if err := dbtypes.ValidateSubquery(subquery); err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 
 	// Quote column name for vendor-specific rules (e.g., Oracle reserved words)
 	quotedColumn := ff.qb.quoteColumnForQuery(column)

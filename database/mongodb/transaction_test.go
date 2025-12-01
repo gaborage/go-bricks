@@ -11,32 +11,28 @@ import (
 // createTestTransactionForInterface creates a basic transaction for interface method testing
 func createTestTransactionForInterface() *Transaction {
 	testLogger := newTestLogger()
-	parentCtx := context.Background()
 
 	// We create a transaction with nil session/database since we're only testing
 	// the SQL interface methods that don't use these fields
 	return &Transaction{
-		session:   nil, // Not needed for SQL interface methods
-		database:  nil, // Not needed for SQL interface methods
-		logger:    testLogger,
-		parentCtx: parentCtx,
+		session:  nil, // Not needed for SQL interface methods
+		database: nil, // Not needed for SQL interface methods
+		logger:   testLogger,
 	}
 }
 
 // createTestTransactionWithMockData creates transaction with mock data for getter tests
 func createTestTransactionWithMockData() *Transaction {
 	testLogger := newTestLogger()
-	parentCtx := context.Background()
 
 	// Use a dummy database pointer for testing getters
 	// In real usage, these would be properly initialized
 	mockDB := &mongo.Database{}
 
 	return &Transaction{
-		session:   nil, // Session interface is too complex to mock easily
-		database:  mockDB,
-		logger:    testLogger,
-		parentCtx: parentCtx,
+		session:  nil, // Session interface is too complex to mock easily
+		database: mockDB,
+		logger:   testLogger,
 	}
 }
 
@@ -106,24 +102,28 @@ func TestTransactionDatabase(t *testing.T) {
 	assert.Equal(t, transaction.database, database)
 }
 
-// TestTransactionCommitPanicsWithNilSession tests that commit handles nil session gracefully
+// TestTransactionCommitWithNilSession verifies panic behavior with nil session.
+// Note: Full Commit path coverage is provided by integration tests in adapter_integration_test.go
+// which test real MongoDB transactions (TestTransactionCommitSuccess).
 func TestTransactionCommitWithNilSession(t *testing.T) {
 	transaction := createTestTransactionForInterface()
 
 	// This will cause a panic due to nil session, but that's expected behavior
-	// In real usage, session would never be nil
+	// In real usage, session would never be nil - it's initialized by Begin()
 	assert.Panics(t, func() {
-		_ = transaction.Commit()
+		_ = transaction.Commit(context.Background())
 	})
 }
 
-// TestTransactionRollbackWithNilSession tests that rollback handles nil session gracefully
+// TestTransactionRollbackWithNilSession verifies panic behavior with nil session.
+// Note: Full Rollback path coverage is provided by integration tests in adapter_integration_test.go
+// which test real MongoDB transactions (TestTransactionRollbackSuccess).
 func TestTransactionRollbackWithNilSession(t *testing.T) {
 	transaction := createTestTransactionForInterface()
 
 	// This will cause a panic due to nil session, but that's expected behavior
-	// In real usage, session would never be nil
+	// In real usage, session would never be nil - it's initialized by Begin()
 	assert.Panics(t, func() {
-		_ = transaction.Rollback()
+		_ = transaction.Rollback(context.Background())
 	})
 }

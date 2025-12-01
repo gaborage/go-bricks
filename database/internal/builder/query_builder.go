@@ -121,8 +121,16 @@ func (qb *QueryBuilder) JoinFilter() dbtypes.JoinFilterFactory {
 
 // Expr creates a raw SQL expression for use in SELECT, GROUP BY, and ORDER BY clauses.
 // See dbtypes.Expr() for full documentation and security warnings.
-func (qb *QueryBuilder) Expr(sql string, alias ...string) dbtypes.RawExpression {
+//
+// Returns an error if the SQL is empty, too many aliases are provided, or alias contains dangerous characters.
+func (qb *QueryBuilder) Expr(sql string, alias ...string) (dbtypes.RawExpression, error) {
 	return dbtypes.Expr(sql, alias...)
+}
+
+// MustExpr is like Expr but panics on error.
+// Use this only in static initialization or tests where errors indicate programming bugs.
+func (qb *QueryBuilder) MustExpr(sql string, alias ...string) dbtypes.RawExpression {
+	return dbtypes.MustExpr(sql, alias...)
 }
 
 // Columns extracts column metadata from a struct with `db:"column_name"` tags.

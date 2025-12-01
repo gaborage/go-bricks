@@ -93,24 +93,24 @@ func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Stateme
 }
 
 // Commit commits the transaction
-func (tx *Transaction) Commit() error {
+func (tx *Transaction) Commit(ctx context.Context) error {
 	start := time.Now()
-	err := tx.tx.Commit()
+	err := tx.tx.Commit(ctx)
 
 	// Track performance metrics
-	tx.trackTx(context.Background(), "TX_COMMIT", nil, start, 0, err) // COMMIT doesn't affect rows
+	tx.trackTx(ctx, "TX_COMMIT", nil, start, 0, err) // COMMIT doesn't affect rows
 
 	// Return the original error
 	return err
 }
 
 // Rollback rolls back the transaction
-func (tx *Transaction) Rollback() error {
+func (tx *Transaction) Rollback(ctx context.Context) error {
 	start := time.Now()
-	err := tx.tx.Rollback()
+	err := tx.tx.Rollback(ctx)
 
 	// Track performance metrics
-	tx.trackTx(context.Background(), "TX_ROLLBACK", nil, start, 0, err) // ROLLBACK doesn't affect rows
+	tx.trackTx(ctx, "TX_ROLLBACK", nil, start, 0, err) // ROLLBACK doesn't affect rows
 
 	// Return the original error
 	return err

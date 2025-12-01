@@ -497,7 +497,7 @@ func TestConnectionBeginWrapsTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected begin success")
 	}
-	defer tx.Rollback() // No-op: test transaction
+	defer tx.Rollback(context.Background()) // No-op: test transaction
 	if _, ok := tx.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", tx)
 	}
@@ -506,7 +506,7 @@ func TestConnectionBeginWrapsTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected begin tx success")
 	}
-	defer txWithOpts.Rollback() // No-op: test transaction
+	defer txWithOpts.Rollback(context.Background()) // No-op: test transaction
 	if _, ok := txWithOpts.(*Transaction); !ok {
 		t.Fatalf("expected tracked transaction, got %T", txWithOpts)
 	}

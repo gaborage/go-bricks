@@ -2,9 +2,11 @@
 package types
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockValidSubquery is a mock SelectQueryBuilder that produces valid SQL
@@ -89,33 +91,44 @@ func (m *mockEmptySubquery) ToSQL() (sql string, args []any, err error) {
 }
 
 func TestValidateSubquery(t *testing.T) {
-	t.Run("Valid subquery does not panic", func(t *testing.T) {
+	t.Run("Valid subquery returns no error", func(t *testing.T) {
 		subquery := &mockValidSubquery{}
-
-		assert.NotPanics(t, func() {
-			ValidateSubquery(subquery)
-		})
+		err := ValidateSubquery(subquery)
+		require.NoError(t, err)
 	})
 
-	t.Run("Nil subquery panics", func(t *testing.T) {
-		assert.PanicsWithValue(t, "subquery cannot be nil", func() {
-			ValidateSubquery(nil)
+	t.Run("Nil subquery returns error", func(t *testing.T) {
+		err := ValidateSubquery(nil)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrNilSubquery))
+	})
+
+	t.Run("Invalid subquery returns error", func(t *testing.T) {
+		subquery := &mockInvalidSubquery{}
+		err := ValidateSubquery(subquery)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrInvalidSubquery))
+	})
+
+	t.Run("Empty SQL subquery returns error", func(t *testing.T) {
+		subquery := &mockEmptySubquery{}
+		err := ValidateSubquery(subquery)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrEmptySubquerySQL))
+	})
+}
+
+func TestMustValidateSubquery(t *testing.T) {
+	t.Run("Valid subquery does not panic", func(t *testing.T) {
+		subquery := &mockValidSubquery{}
+		assert.NotPanics(t, func() {
+			MustValidateSubquery(subquery)
 		})
 	})
 
 	t.Run("Invalid subquery panics", func(t *testing.T) {
-		subquery := &mockInvalidSubquery{}
-
 		assert.Panics(t, func() {
-			ValidateSubquery(subquery)
-		})
-	})
-
-	t.Run("Empty SQL subquery panics", func(t *testing.T) {
-		subquery := &mockEmptySubquery{}
-
-		assert.PanicsWithValue(t, "subquery produced empty SQL", func() {
-			ValidateSubquery(subquery)
+			MustValidateSubquery(nil)
 		})
 	})
 }

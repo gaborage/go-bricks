@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -24,13 +26,17 @@ func Load() (*Config, error) {
 	}
 
 	// Load from YAML file (if exists) - try both .yaml and .yml extensions
-	tryLoadYAMLFile(k, "config")
+	if err := tryLoadYAMLFile(k, "config"); err != nil {
+		return nil, err
+	}
 
 	// Load environment-specific YAML (if exists)
 	env := k.String("app.env")
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
-		tryLoadYAMLFile(k, envFile)
+		if err := tryLoadYAMLFile(k, envFile); err != nil {
+			return nil, err
+		}
 	}
 
 	// Load environment variables (highest priority)
@@ -64,21 +70,26 @@ func Load() (*Config, error) {
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.
-func tryLoadYAMLFile(k *koanf.Koanf, baseName string) {
+// However, syntax errors, permission errors, and other I/O errors are propagated.
+func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 	// Try .yaml extension first
 	yamlFile := baseName + ".yaml"
-	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err == nil {
-		// Successfully loaded .yaml file
-		return
-	}
+	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err != nil {
+		// If file doesn't exist, try .yml fallback
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to load %s: %w", yamlFile, err)
+		}
 
-	// Try .yml extension as fallback
-	ymlFile := baseName + ".yml"
-	//nolint:S8148 // NOSONAR: Error logged as warning - config files are optional and may not exist
-	if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
-		// Both files failed to load - log a warning
-		fmt.Printf("Warning: could not load %s or %s (files are optional)\n", yamlFile, ymlFile)
+		// Try .yml extension as fallback
+		ymlFile := baseName + ".yml"
+		if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
+			// File not found is OK - config files are optional
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("failed to load %s: %w", ymlFile, err)
+			}
+		}
 	}
+	return nil
 }
 
 func loadDefaults(k *koanf.Koanf) error {

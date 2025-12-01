@@ -28,28 +28,43 @@ type subqueryValidator interface {
 // JoinFilter.EqColumn() and other column-to-column comparison methods within the subquery.
 
 // ValidateSubquery checks if a subquery is valid for use in filter expressions.
-// Panics if subquery is nil or produces invalid SQL (fail-fast validation).
+// Returns an error if subquery is nil or produces invalid SQL.
+//
+// Returns:
+//   - ErrNilSubquery if subquery is nil
+//   - ErrInvalidSubquery if subquery validation fails
+//   - ErrEmptySubquerySQL if subquery produces empty SQL
 //
 // This function is called internally by filter implementations to ensure subqueries
 // are constructed correctly before query execution.
-func ValidateSubquery(subquery SelectQueryBuilder) {
+func ValidateSubquery(subquery SelectQueryBuilder) error {
 	if subquery == nil {
-		panic("subquery cannot be nil") //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
+		return ErrNilSubquery
 	}
 
 	if validator, ok := subquery.(subqueryValidator); ok {
 		if err := validator.ValidateForSubquery(); err != nil {
-			panic(fmt.Sprintf("invalid subquery: %v", err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
+			return fmt.Errorf("%w: %v", ErrInvalidSubquery, err)
 		}
-		return
+		return nil
 	}
 
 	// Test ToSQL() to catch construction errors early
 	sql, _, err := subquery.ToSQL()
 	if err != nil {
-		panic(fmt.Sprintf("invalid subquery: %v", err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
+		return fmt.Errorf("%w: %v", ErrInvalidSubquery, err)
 	}
 	if sql == "" {
-		panic("subquery produced empty SQL") //nolint:S8148 // NOSONAR: Fail-fast on invalid subquery construction
+		return ErrEmptySubquerySQL
+	}
+
+	return nil
+}
+
+// MustValidateSubquery is like ValidateSubquery but panics on error.
+// Use this only when errors indicate programming bugs that should crash immediately.
+func MustValidateSubquery(subquery SelectQueryBuilder) {
+	if err := ValidateSubquery(subquery); err != nil {
+		panic(fmt.Sprintf("MustValidateSubquery: %v", err))
 	}
 }

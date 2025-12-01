@@ -14,10 +14,9 @@ import (
 
 // Transaction implements the database.Tx interface for MongoDB
 type Transaction struct {
-	session   *mongo.Session
-	database  *mongo.Database
-	logger    logger.Logger
-	parentCtx context.Context //nolint:S8242 // NOSONAR: Context required by MongoDB Session API (CommitTransaction, AbortTransaction, EndSession)
+	session  *mongo.Session
+	database *mongo.Database
+	logger   logger.Logger
 }
 
 // Query executes a query within the transaction (not applicable for MongoDB)
@@ -42,33 +41,33 @@ func (t *Transaction) Prepare(_ context.Context, _ string) (database.Statement, 
 }
 
 // Commit commits the MongoDB transaction
-func (t *Transaction) Commit() error {
+func (t *Transaction) Commit(ctx context.Context) error {
 	// In v2, pass the context directly to transaction methods
-	err := t.session.CommitTransaction(t.parentCtx)
+	err := t.session.CommitTransaction(ctx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to commit MongoDB transaction")
 		// Still need to end session even if commit fails
-		t.session.EndSession(t.parentCtx)
+		t.session.EndSession(ctx)
 		return fmt.Errorf("failed to commit MongoDB transaction: %w", err)
 	}
 
 	// End session after successful commit
-	t.session.EndSession(t.parentCtx)
+	t.session.EndSession(ctx)
 	t.logger.Debug().Msg("MongoDB transaction committed successfully")
 	return nil
 }
 
 // Rollback rolls back the MongoDB transaction
-func (t *Transaction) Rollback() error {
+func (t *Transaction) Rollback(ctx context.Context) error {
 	// In v2, pass the context directly to transaction methods
-	err := t.session.AbortTransaction(t.parentCtx)
+	err := t.session.AbortTransaction(ctx)
 	if err != nil {
 		t.logger.Error().Err(err).Msg("Failed to rollback MongoDB transaction")
 		// Continue with session cleanup even if abort fails
 	}
 
 	// Always end session, even if abort failed
-	t.session.EndSession(t.parentCtx)
+	t.session.EndSession(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to rollback MongoDB transaction: %w", err)
 	}

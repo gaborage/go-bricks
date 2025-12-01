@@ -10,6 +10,10 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
+// mccCodeRegex is pre-compiled for efficiency and to avoid error handling on each validation call.
+// MCC codes are exactly 4 digits (e.g., "5411" for grocery stores).
+var mccCodeRegex = regexp.MustCompile(`^\d{4}$`)
+
 // Validator wraps go-playground/validator with custom validation logic.
 // It provides request validation functionality with custom validators.
 type Validator struct {
@@ -114,14 +118,13 @@ func getErrorMessage(fe validator.FieldError) string {
 	}
 }
 
-// Custom validator for MCC codes - demo of a specific business rule
+// Custom validator for MCC codes
 func validateMCCCode(fl validator.FieldLevel) bool {
 	mccCode := fl.Field().String()
 	if len(mccCode) != 4 {
 		return false
 	}
 
-	// Check if all characters are digits
-	matched, _ := regexp.MatchString(`^\d{4}$`, mccCode)
-	return matched
+	// Check if all characters are digits using pre-compiled regex
+	return mccCodeRegex.MatchString(mccCode)
 }

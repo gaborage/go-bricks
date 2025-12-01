@@ -281,12 +281,16 @@ func (t *Transaction) Prepare(ctx context.Context, query string) (types.Statemen
 }
 
 // Commit commits the transaction
-func (t *Transaction) Commit() error {
+// Note: Oracle's sql.Tx.Commit doesn't accept context; it's atomic and non-cancellable.
+// The context parameter maintains interface consistency for databases that support it.
+func (t *Transaction) Commit(_ context.Context) error {
 	return t.tx.Commit()
 }
 
 // Rollback rolls back the transaction
-func (t *Transaction) Rollback() error {
+// Note: Oracle's sql.Tx.Rollback doesn't accept context; it's atomic and non-cancellable.
+// The context parameter maintains interface consistency for databases that support it.
+func (t *Transaction) Rollback(_ context.Context) error {
 	return t.tx.Rollback()
 }
 

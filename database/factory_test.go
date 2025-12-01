@@ -365,11 +365,11 @@ func (t *simpleTransaction) Prepare(ctx context.Context, query string) (database
 	return &simpleStatement{stmt: stmt}, nil
 }
 
-func (t *simpleTransaction) Commit() error {
+func (t *simpleTransaction) Commit(_ context.Context) error {
 	return t.tx.Commit()
 }
 
-func (t *simpleTransaction) Rollback() error {
+func (t *simpleTransaction) Rollback(_ context.Context) error {
 	return t.tx.Rollback()
 }
 

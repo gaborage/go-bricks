@@ -165,16 +165,16 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	// Execute transaction operations
 	tx, err := c.Begin(ctx)
 	require.NoError(t, err)
-	defer tx.Rollback() // No-op if committed
+	defer tx.Rollback(ctx) // No-op if committed
 	_, err = tx.Exec(ctx, "DELETE FROM items WHERE id=$1", 1)
 	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
+	require.NoError(t, tx.Commit(ctx))
 
 	// Execute BeginTx + rollback
 	opts := &sql.TxOptions{Isolation: sql.LevelDefault}
 	tx2, err := c.BeginTx(ctx, opts)
 	require.NoError(t, err)
-	require.NoError(t, tx2.Rollback())
+	require.NoError(t, tx2.Rollback(ctx))
 
 	// Test Stats
 	m, err := c.Stats()
@@ -365,7 +365,7 @@ func TestTransactionQueryPrepareAndExec(t *testing.T) {
 	require.NoError(t, stmt.Close())
 
 	mock.ExpectCommit()
-	require.NoError(t, trx.Commit())
+	require.NoError(t, trx.Commit(context.Background()))
 }
 
 func TestTransactionPrepareError(t *testing.T) {
@@ -390,7 +390,7 @@ func TestTransactionPrepareError(t *testing.T) {
 	assert.ErrorIs(t, err, prepareErr)
 
 	mock.ExpectRollback()
-	require.NoError(t, trx.Rollback())
+	require.NoError(t, trx.Rollback(context.Background()))
 }
 
 func TestConnectionCreateMigrationTable(t *testing.T) {

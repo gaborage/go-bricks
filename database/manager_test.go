@@ -55,8 +55,8 @@ func (s *stubTx) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error)
 func (s *stubTx) Prepare(_ context.Context, _ string) (Statement, error) {
 	return &stubStatement{}, nil
 }
-func (s *stubTx) Commit() error   { return nil }
-func (s *stubTx) Rollback() error { return nil }
+func (s *stubTx) Commit(_ context.Context) error   { return nil }
+func (s *stubTx) Rollback(_ context.Context) error { return nil }
 
 type stubDB struct {
 	key      string

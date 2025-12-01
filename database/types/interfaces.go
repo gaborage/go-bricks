@@ -250,8 +250,10 @@ type Tx interface {
 	Prepare(ctx context.Context, query string) (Statement, error)
 
 	// Transaction control
-	Commit() error
-	Rollback() error
+	// Note: Context is passed to support proper cancellation and tracing.
+	// The context should be the same one used to begin the transaction.
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 }
 
 // Interface defines the common database operations supported by the framework.
@@ -394,7 +396,12 @@ type QueryBuilderInterface interface {
 	JoinFilter() JoinFilterFactory
 
 	// Expression builder (v2.1+)
-	Expr(sql string, alias ...string) RawExpression
+	// Returns error if SQL is empty, too many aliases provided, or alias contains dangerous characters.
+	Expr(sql string, alias ...string) (RawExpression, error)
+
+	// MustExpr is like Expr but panics on error.
+	// Use this only in static initialization or tests where errors indicate programming bugs.
+	MustExpr(sql string, alias ...string) RawExpression
 
 	// Column metadata extraction (v2.4+)
 	// Extracts column metadata from structs with `db:"column_name"` tags.

@@ -435,8 +435,11 @@ func (b *Builder) ToJSON() string {
 		"pipeline":   b.pipeline,
 	}
 
-	// Convert to JSON for debugging
-	jsonBytes, _ := bson.MarshalExtJSON(state, true, false)
+	// Convert to JSON for debugging - fall back to String() on marshal error
+	jsonBytes, err := bson.MarshalExtJSON(state, true, false)
+	if err != nil {
+		return b.String() // Fallback to simpler representation
+	}
 	return string(jsonBytes)
 }
 

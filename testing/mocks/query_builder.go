@@ -43,14 +43,23 @@ func (m *MockQueryBuilder) JoinFilter() types.JoinFilterFactory {
 }
 
 // Expr implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Expr(sql string, alias ...string) types.RawExpression {
+func (m *MockQueryBuilder) Expr(sql string, alias ...string) (types.RawExpression, error) {
 	callArgs := make([]any, len(alias)+1)
 	callArgs[0] = sql
 	for i, a := range alias {
 		callArgs[i+1] = a
 	}
 	args := m.MethodCalled("Expr", callArgs...)
-	return args.Get(0).(types.RawExpression)
+	return args.Get(0).(types.RawExpression), args.Error(1)
+}
+
+// MustExpr implements types.QueryBuilderInterface
+func (m *MockQueryBuilder) MustExpr(sql string, alias ...string) types.RawExpression {
+	expr, err := m.Expr(sql, alias...)
+	if err != nil {
+		panic(err)
+	}
+	return expr
 }
 
 // Columns implements types.QueryBuilderInterface
