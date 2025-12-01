@@ -67,18 +67,15 @@ func Load() (*Config, error) {
 func tryLoadYAMLFile(k *koanf.Koanf, baseName string) {
 	// Try .yaml extension first
 	yamlFile := baseName + ".yaml"
-	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err == nil {
+	if k.Load(file.Provider(yamlFile), yaml.Parser()) == nil {
 		// Successfully loaded .yaml file
 		return
 	}
 
 	// Try .yml extension as fallback
 	ymlFile := baseName + ".yml"
-	//nolint:S8148 // NOSONAR: Error logged as warning - config files are optional and may not exist
-	if err := k.Load(file.Provider(ymlFile), yaml.Parser()); err != nil {
-		// Both files failed to load - log a warning
-		fmt.Printf("Warning: could not load %s or %s (files are optional)\n", yamlFile, ymlFile)
-	}
+	// Config files are optional and may not exist - silently continue if neither is found
+	_ = k.Load(file.Provider(ymlFile), yaml.Parser())
 }
 
 func loadDefaults(k *koanf.Koanf) error {

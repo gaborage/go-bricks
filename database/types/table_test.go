@@ -2,63 +2,105 @@
 package types
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTableRef(t *testing.T) {
 	t.Run("Table without alias", func(t *testing.T) {
-		table := Table("users")
+		table, err := Table("users")
+		require.NoError(t, err)
 		assert.Equal(t, "users", table.Name())
 		assert.Equal(t, "", table.Alias())
 		assert.False(t, table.HasAlias())
 	})
 
 	t.Run("Table with alias", func(t *testing.T) {
-		table := Table("users").As("u")
-		assert.Equal(t, "users", table.Name())
-		assert.Equal(t, "u", table.Alias())
-		assert.True(t, table.HasAlias())
+		table, err := Table("users")
+		require.NoError(t, err)
+		aliased, err := table.As("u")
+		require.NoError(t, err)
+		assert.Equal(t, "users", aliased.Name())
+		assert.Equal(t, "u", aliased.Alias())
+		assert.True(t, aliased.HasAlias())
 	})
 
 	t.Run("Method chaining", func(t *testing.T) {
-		table := Table("customers").As("c")
-		assert.Equal(t, "customers", table.Name())
-		assert.Equal(t, "c", table.Alias())
-		assert.True(t, table.HasAlias())
+		table, err := Table("customers")
+		require.NoError(t, err)
+		aliased, err := table.As("c")
+		require.NoError(t, err)
+		assert.Equal(t, "customers", aliased.Name())
+		assert.Equal(t, "c", aliased.Alias())
+		assert.True(t, aliased.HasAlias())
 	})
 
 	t.Run("Oracle reserved word table name", func(t *testing.T) {
-		// Should not panic - validation happens at query build time
-		table := Table("LEVEL").As("lvl")
-		assert.Equal(t, "LEVEL", table.Name())
-		assert.Equal(t, "lvl", table.Alias())
+		// Should not error - validation happens at query build time
+		table, err := Table("LEVEL")
+		require.NoError(t, err)
+		aliased, err := table.As("lvl")
+		require.NoError(t, err)
+		assert.Equal(t, "LEVEL", aliased.Name())
+		assert.Equal(t, "lvl", aliased.Alias())
 	})
 }
 
 func TestTableRefValidation(t *testing.T) {
-	t.Run("Empty table name panics", func(t *testing.T) {
-		assert.Panics(t, func() {
-			Table("")
-		}, "Table() should panic on empty name")
+	t.Run("Empty table name returns error", func(t *testing.T) {
+		_, err := Table("")
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrEmptyTableName))
 	})
 
-	t.Run("Empty alias panics", func(t *testing.T) {
-		assert.Panics(t, func() {
-			Table("users").As("")
-		}, "As() should panic on empty alias")
+	t.Run("Empty alias returns error", func(t *testing.T) {
+		table, err := Table("users")
+		require.NoError(t, err)
+		_, err = table.As("")
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrEmptyTableAlias))
 	})
 
-	t.Run("Valid table name does not panic", func(t *testing.T) {
-		assert.NotPanics(t, func() {
-			Table("users")
+	t.Run("Valid table name succeeds", func(t *testing.T) {
+		_, err := Table("users")
+		require.NoError(t, err)
+	})
+
+	t.Run("Valid alias succeeds", func(t *testing.T) {
+		table, err := Table("users")
+		require.NoError(t, err)
+		_, err = table.As("u")
+		require.NoError(t, err)
+	})
+}
+
+func TestMustTable(t *testing.T) {
+	t.Run("Valid table returns successfully", func(t *testing.T) {
+		table := MustTable("users")
+		assert.Equal(t, "users", table.Name())
+	})
+
+	t.Run("Invalid table panics", func(t *testing.T) {
+		assert.Panics(t, func() {
+			MustTable("")
 		})
 	})
+}
 
-	t.Run("Valid alias does not panic", func(t *testing.T) {
-		assert.NotPanics(t, func() {
-			Table("users").As("u")
+func TestMustAs(t *testing.T) {
+	t.Run("Valid alias returns successfully", func(t *testing.T) {
+		table := MustTable("users")
+		aliased := table.MustAs("u")
+		assert.Equal(t, "u", aliased.Alias())
+	})
+
+	t.Run("Invalid alias panics", func(t *testing.T) {
+		table := MustTable("users")
+		assert.Panics(t, func() {
+			table.MustAs("")
 		})
 	})
 }

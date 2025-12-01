@@ -558,7 +558,7 @@ func TestTransactionCommitSuccess(t *testing.T) {
 	// Begin transaction
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err, "Begin transaction should succeed")
-	defer tx.Rollback() // No-op after commit
+	defer tx.Rollback(ctx) // No-op after commit
 	require.NotNil(t, tx, "Transaction should not be nil")
 
 	// Get transaction context (MongoDB-specific)
@@ -570,7 +570,7 @@ func TestTransactionCommitSuccess(t *testing.T) {
 	// doesn't expose this. For now, we'll test commit/rollback behavior.
 
 	// Commit transaction
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	assert.NoError(t, err, "Commit should succeed")
 }
 
@@ -587,7 +587,7 @@ func TestTransactionRollbackSuccess(t *testing.T) {
 	require.NotNil(t, tx, "Transaction should not be nil")
 
 	// Rollback transaction
-	err = tx.Rollback()
+	err = tx.Rollback(ctx)
 	assert.NoError(t, err, "Rollback should succeed")
 }
 

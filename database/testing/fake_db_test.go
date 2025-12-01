@@ -138,7 +138,7 @@ func TestTestTxCommitRollback(t *testing.T) {
 		txInstance, err := db.Begin(context.Background())
 		assert.NoError(t, err)
 
-		err = txInstance.Commit()
+		err = txInstance.Commit(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, tx.IsCommitted())
 		assert.False(t, tx.IsRolledBack())
@@ -151,7 +151,7 @@ func TestTestTxCommitRollback(t *testing.T) {
 		txInstance, err := db.Begin(context.Background())
 		assert.NoError(t, err)
 
-		err = txInstance.Rollback()
+		err = txInstance.Rollback(context.Background())
 		assert.NoError(t, err)
 		assert.False(t, tx.IsCommitted())
 		assert.True(t, tx.IsRolledBack())
@@ -170,7 +170,7 @@ func TestTestTxExpectationOrdering(t *testing.T) {
 
 	txConn, err := db.Begin(context.Background())
 	assert.NoError(t, err)
-	defer txConn.Rollback() // No-op if committed
+	defer txConn.Rollback(context.Background()) // No-op if committed
 
 	row := txConn.QueryRow(context.Background(), "SELECT FIRST")
 	var first int64
@@ -212,36 +212,36 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 		// First transaction
 		txConn1, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer txConn1.Rollback() // No-op if committed
+		defer txConn1.Rollback(context.Background()) // No-op if committed
 		result1, err := txConn1.Exec(context.Background(), "INSERT INTO orders VALUES (1)")
 		assert.NoError(t, err)
 		rowsAffected1, _ := result1.RowsAffected()
 		assert.Equal(t, int64(1), rowsAffected1)
-		err = txConn1.Commit()
+		err = txConn1.Commit(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, tx1.IsCommitted())
 
 		// Second transaction
 		txConn2, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer txConn2.Rollback() // No-op if committed
+		defer txConn2.Rollback(context.Background()) // No-op if committed
 		result2, err := txConn2.Exec(context.Background(), "INSERT INTO products VALUES (1)")
 		assert.NoError(t, err)
 		rowsAffected2, _ := result2.RowsAffected()
 		assert.Equal(t, int64(2), rowsAffected2)
-		err = txConn2.Commit()
+		err = txConn2.Commit(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, tx2.IsCommitted())
 
 		// Third transaction
 		txConn3, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer txConn3.Rollback() // No-op if committed
+		defer txConn3.Rollback(context.Background()) // No-op if committed
 		result3, err := txConn3.Exec(context.Background(), "INSERT INTO users VALUES (1)")
 		assert.NoError(t, err)
 		rowsAffected3, _ := result3.RowsAffected()
 		assert.Equal(t, int64(3), rowsAffected3)
-		err = txConn3.Commit()
+		err = txConn3.Commit(context.Background())
 		assert.NoError(t, err)
 		assert.True(t, tx3.IsCommitted())
 	})
@@ -264,7 +264,7 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 		// First Begin succeeds
 		tx, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer tx.Rollback() // No-op: test transaction, cleanup not critical
+		defer tx.Rollback(context.Background()) // No-op: test transaction, cleanup not critical
 
 		// Second Begin fails (no more expectations)
 		_, err = db.Begin(context.Background())
@@ -282,14 +282,14 @@ func TestMultipleTransactionExpectations(t *testing.T) {
 		// Start both transactions
 		txConn1, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer txConn1.Rollback() // No-op if committed
+		defer txConn1.Rollback(context.Background()) // No-op if committed
 		txConn2, err := db.Begin(context.Background())
 		assert.NoError(t, err)
-		defer txConn2.Rollback() // No-op if committed
+		defer txConn2.Rollback(context.Background()) // No-op if committed
 
 		// Commit both
-		txConn1.Commit()
-		txConn2.Commit()
+		txConn1.Commit(context.Background())
+		txConn2.Commit(context.Background())
 
 		// AssertTransactionCommitted should check the last one (tx2)
 		AssertTransactionCommitted(t, db)

@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"testing"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -635,7 +636,7 @@ func TestFilterExists(t *testing.T) {
 			))
 
 		query := qb.Select("p.name").
-			From(dbtypes.Table("products").As("p")).
+			From(dbtypes.MustTable("products").MustAs("p")).
 			Where(f.Exists(subquery))
 
 		sql, args, err := query.ToSQL()
@@ -769,7 +770,7 @@ func TestFilterInSubquery(t *testing.T) {
 			Where(jf.EqColumn("price_history.product_id", "p.id"))
 
 		query := qb.Select("*").
-			From(dbtypes.Table("products").As("p")).
+			From(dbtypes.MustTable("products").MustAs("p")).
 			Where(f.InSubquery("p.current_price", subquery))
 
 		sql, args, err := query.ToSQL()
@@ -867,7 +868,7 @@ func TestFilterNestedSubqueries(t *testing.T) {
 
 		// Middle EXISTS: check for orders with reviews
 		orderSubquery := qb.Select("1").
-			From(dbtypes.Table("orders").As("o")).
+			From(dbtypes.MustTable("orders").MustAs("o")).
 			Where(f.And(
 				f.Raw("o.customer_id = c.id"), // Column comparison in WHERE clause
 				f.Exists(reviewSubquery),
@@ -875,7 +876,7 @@ func TestFilterNestedSubqueries(t *testing.T) {
 
 		// Main query: customers with orders that have 5-star reviews
 		query := qb.Select("c.name").
-			From(dbtypes.Table("customers").As("c")).
+			From(dbtypes.MustTable("customers").MustAs("c")).
 			Where(f.Exists(orderSubquery))
 
 		sql, args, err := query.ToSQL()
@@ -888,34 +889,34 @@ func TestFilterNestedSubqueries(t *testing.T) {
 }
 
 func TestFilterSubqueryErrorCases(t *testing.T) {
-	t.Run("Nil subquery panics on Exists", func(t *testing.T) {
+	t.Run("Nil subquery returns error on Exists", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		f := qb.Filter()
 
-		assert.Panics(t, func() {
-			filter := f.Exists(nil)
-			_, _, _ = filter.ToSQL()
-		})
+		filter := f.Exists(nil)
+		_, _, err := filter.ToSQL()
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
 	})
 
-	t.Run("Nil subquery panics on NotExists", func(t *testing.T) {
+	t.Run("Nil subquery returns error on NotExists", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		f := qb.Filter()
 
-		assert.Panics(t, func() {
-			filter := f.NotExists(nil)
-			_, _, _ = filter.ToSQL()
-		})
+		filter := f.NotExists(nil)
+		_, _, err := filter.ToSQL()
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
 	})
 
-	t.Run("Nil subquery panics on InSubquery", func(t *testing.T) {
+	t.Run("Nil subquery returns error on InSubquery", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		f := qb.Filter()
 
-		assert.Panics(t, func() {
-			filter := f.InSubquery("user_id", nil)
-			_, _, _ = filter.ToSQL()
-		})
+		filter := f.InSubquery("user_id", nil)
+		_, _, err := filter.ToSQL()
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, dbtypes.ErrNilSubquery))
 	})
 }
 

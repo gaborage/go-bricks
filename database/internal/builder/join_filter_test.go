@@ -324,7 +324,7 @@ func TestJoinFilterEq(t *testing.T) {
 	t.Run("with_expression", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
-		filter := jf.Eq("col1", qb.Expr("TO_NUMBER(o.field1)"))
+		filter := jf.Eq("col1", qb.MustExpr("TO_NUMBER(o.field1)"))
 		sql, args, err := filter.ToSQL()
 
 		require.NoError(t, err)
@@ -409,17 +409,17 @@ func TestJoinFilterComparisonWithExpressions(t *testing.T) {
 	}{
 		{
 			name:        "NotEq_expression",
-			filter:      jf.NotEq("col1", qb.Expr("UPPER(o.field1)")),
+			filter:      jf.NotEq("col1", qb.MustExpr("UPPER(o.field1)")),
 			expectedSQL: "col1 != UPPER(o.field1)",
 		},
 		{
 			name:        "Lt_expression",
-			filter:      jf.Lt("amount", qb.Expr("TO_NUMBER(o.max_amount)")),
+			filter:      jf.Lt("amount", qb.MustExpr("TO_NUMBER(o.max_amount)")),
 			expectedSQL: "amount < TO_NUMBER(o.max_amount)",
 		},
 		{
 			name:        "Gte_expression",
-			filter:      jf.Gte("date", qb.Expr("SYSDATE")),
+			filter:      jf.Gte("date", qb.MustExpr("SYSDATE")),
 			expectedSQL: "date >= SYSDATE",
 		},
 	}
@@ -584,7 +584,7 @@ func TestJoinFilterBetween(t *testing.T) {
 	t.Run("with_both_expressions", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
-		filter := jf.Between("age", qb.Expr("18"), qb.Expr("65"))
+		filter := jf.Between("age", qb.MustExpr("18"), qb.MustExpr("65"))
 		sql, args, err := filter.ToSQL()
 
 		require.NoError(t, err)
@@ -596,7 +596,7 @@ func TestJoinFilterBetween(t *testing.T) {
 	t.Run("with_lower_expression_upper_value", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
-		filter := jf.Between("price", qb.Expr("0"), 100.0)
+		filter := jf.Between("price", qb.MustExpr("0"), 100.0)
 		sql, args, err := filter.ToSQL()
 
 		require.NoError(t, err)
@@ -608,7 +608,7 @@ func TestJoinFilterBetween(t *testing.T) {
 	t.Run("with_upper_expression_lower_value", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
-		filter := jf.Between("date", "2024-01-01", qb.Expr("SYSDATE"))
+		filter := jf.Between("date", "2024-01-01", qb.MustExpr("SYSDATE"))
 		sql, args, err := filter.ToSQL()
 
 		require.NoError(t, err)
@@ -641,7 +641,7 @@ func TestJoinFilterMixedConditions(t *testing.T) {
 		jf := qb.JoinFilter()
 		filter := jf.And(
 			jf.EqColumn("emp.id", "o.emp_id"),
-			jf.Eq("emp.col1", qb.Expr("TO_NUMBER(o.field1)")),
+			jf.Eq("emp.col1", qb.MustExpr("TO_NUMBER(o.field1)")),
 			jf.Eq("emp.status", "3"),
 		)
 
@@ -660,14 +660,14 @@ func TestJoinFilterInFullQuery(t *testing.T) {
 		jf := qb.JoinFilter()
 
 		query := qb.Select("*").
-			From(dbtypes.Table("orders").As("o")).
-			JoinOn(dbtypes.Table("customers").As("c"), jf.And(
+			From(dbtypes.MustTable("orders").MustAs("o")).
+			JoinOn(dbtypes.MustTable("customers").MustAs("c"), jf.And(
 				jf.EqColumn("c.id", "o.customer_id"),
 				jf.Eq("c.status", "active"),
 			)).
-			JoinOn(dbtypes.Table("products").As("p"), jf.And(
+			JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
 				jf.EqColumn("p.id", "o.product_id"),
-				jf.Eq("p.price", qb.Expr("TO_NUMBER(99.99)")),
+				jf.Eq("p.price", qb.MustExpr("TO_NUMBER(99.99)")),
 			))
 
 		sql, args, err := query.ToSQL()

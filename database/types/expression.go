@@ -34,36 +34,33 @@ type RawExpression struct {
 //   - sql: The raw SQL expression (e.g., "COUNT(*)", "UPPER(name)", "price * quantity")
 //   - alias: Optional alias for the expression (e.g., "total", "upper_name"). Max 1 alias allowed.
 //
-// Validation (fail-fast with panic):
-//   - SQL cannot be empty
-//   - Maximum 1 alias parameter allowed
-//   - Alias cannot contain dangerous characters: ; ' " -- (SQL injection patterns)
+// Returns:
+//   - RawExpression: The constructed expression
+//   - error: ErrEmptyExpressionSQL, ErrTooManyAliases, or ErrDangerousAlias on validation failure
 //
 // Examples:
 //
 //	// Aggregation with alias
-//	qb.Expr("COUNT(*)", "total")
+//	expr, err := qb.Expr("COUNT(*)", "total")
+//	if err != nil { return err }
 //
 //	// Function without alias
-//	qb.Expr("UPPER(name)")
+//	expr, err := qb.Expr("UPPER(name)")
 //
 //	// Calculation with alias
-//	qb.Expr("price * quantity", "line_total")
-//
-//	// Window function with alias
-//	qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY date)", "row_num")
+//	expr, err := qb.Expr("price * quantity", "line_total")
 //
 // SECURITY WARNING: Never interpolate user input directly into the sql parameter.
 // This function does NOT sanitize SQL - you are responsible for ensuring safety.
-func Expr(sql string, alias ...string) RawExpression {
+func Expr(sql string, alias ...string) (RawExpression, error) {
 	// Validate SQL is not empty
 	if strings.TrimSpace(sql) == "" {
-		panic("expression SQL cannot be empty") //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
+		return RawExpression{}, ErrEmptyExpressionSQL
 	}
 
 	// Validate max 1 alias
 	if len(alias) > 1 {
-		panic(fmt.Sprintf("Expr accepts maximum 1 alias, got %d", len(alias))) //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
+		return RawExpression{}, fmt.Errorf("%w: got %d", ErrTooManyAliases, len(alias))
 	}
 
 	// Extract alias if provided
@@ -75,7 +72,7 @@ func Expr(sql string, alias ...string) RawExpression {
 		dangerousChars := []string{";", "'", "\"", "--", "/*", "*/"}
 		for _, char := range dangerousChars {
 			if strings.Contains(aliasStr, char) {
-				panic(fmt.Sprintf("alias contains dangerous character '%s': %s", char, aliasStr)) //nolint:S8148 // NOSONAR: Fail-fast on invalid SQL expression construction
+				return RawExpression{}, fmt.Errorf("%w '%s': %s", ErrDangerousAlias, char, aliasStr)
 			}
 		}
 	}
@@ -83,5 +80,15 @@ func Expr(sql string, alias ...string) RawExpression {
 	return RawExpression{
 		SQL:   sql,
 		Alias: aliasStr,
+	}, nil
+}
+
+// MustExpr is like Expr but panics on error.
+// Use this only in static initialization or tests where errors indicate programming bugs.
+func MustExpr(sql string, alias ...string) RawExpression {
+	expr, err := Expr(sql, alias...)
+	if err != nil {
+		panic(fmt.Sprintf("MustExpr: %v", err))
 	}
+	return expr
 }

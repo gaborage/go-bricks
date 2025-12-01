@@ -16,6 +16,8 @@ import (
 
 const (
 	shouldCreateTableMsg = "Should create test table"
+	containerHostErr     = "Failed to get container host"
+	containerPortErr     = "Failed to get container port"
 )
 
 // setupTestContainer starts a PostgreSQL testcontainer and returns the connection
@@ -266,14 +268,14 @@ func TestConnectionTransactionCommit(t *testing.T) {
 	// Begin transaction
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err, "Begin transaction should succeed")
-	defer tx.Rollback() // No-op after commit
+	defer tx.Rollback(ctx) // No-op after commit
 
 	// Insert data in transaction
 	_, err = tx.Exec(ctx, "INSERT INTO test_tx_commit (value) VALUES ($1)", 42)
 	require.NoError(t, err, "Insert in transaction should succeed")
 
 	// Commit transaction
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	require.NoError(t, err, "Commit should succeed")
 
 	// Verify data is visible after commit
@@ -299,7 +301,7 @@ func TestConnectionTransactionRollback(t *testing.T) {
 	require.NoError(t, err, "Insert in transaction should succeed")
 
 	// Rollback transaction
-	err = tx.Rollback()
+	err = tx.Rollback(ctx)
 	require.NoError(t, err, "Rollback should succeed")
 
 	// Verify data is NOT visible after rollback
@@ -339,7 +341,7 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 	assert.Equal(t, 20, value2, "READ COMMITTED should see external update")
 
 	// Rollback transaction
-	err = tx.Rollback()
+	err = tx.Rollback(ctx)
 	require.NoError(t, err, "Rollback should succeed")
 }
 
@@ -405,9 +407,9 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, "Failed to get container host")
+	require.NoError(t, err, containerHostErr)
 	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, "Failed to get container port")
+	require.NoError(t, err, containerPortErr)
 
 	// Use default config values for credentials
 	defaultCfg := containers.DefaultPostgreSQLConfig()
@@ -474,9 +476,9 @@ func TestConnectionWithHostPort(t *testing.T) {
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, "Failed to get container host")
+	require.NoError(t, err, containerHostErr)
 	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, "Failed to get container port")
+	require.NoError(t, err, containerPortErr)
 
 	// Use default config values for credentials
 	defaultCfg := containers.DefaultPostgreSQLConfig()
@@ -530,9 +532,9 @@ func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, "Failed to get container host")
+	require.NoError(t, err, containerHostErr)
 	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, "Failed to get container port")
+	require.NoError(t, err, containerPortErr)
 
 	// Use default config values for credentials
 	defaultCfg := containers.DefaultPostgreSQLConfig()
@@ -584,9 +586,9 @@ func TestConnectionWithTLSMode(t *testing.T) {
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
-	require.NoError(t, err, "Failed to get container host")
+	require.NoError(t, err, containerHostErr)
 	port, err := pgContainer.MappedPort(ctx)
-	require.NoError(t, err, "Failed to get container port")
+	require.NoError(t, err, containerPortErr)
 
 	// Use default config values for credentials
 	defaultCfg := containers.DefaultPostgreSQLConfig()

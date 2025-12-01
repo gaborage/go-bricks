@@ -48,12 +48,12 @@ func (s *stubTx) Prepare(_ context.Context, _ string) (types.Statement, error) {
 	return s.preparedStmt, nil
 }
 
-func (s *stubTx) Commit() error {
+func (s *stubTx) Commit(_ context.Context) error {
 	s.commitCalled = true
 	return nil
 }
 
-func (s *stubTx) Rollback() error {
+func (s *stubTx) Rollback(_ context.Context) error {
 	s.rollbackCalled = true
 	return nil
 }
@@ -159,10 +159,10 @@ func TestTransactionCommitAndRollbackDelegate(t *testing.T) {
 	underlying := &stubTx{}
 	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatalf("expected commit to succeed")
 	}
-	if err := tx.Rollback(); err != nil {
+	if err := tx.Rollback(context.Background()); err != nil {
 		t.Fatalf("expected rollback to succeed")
 	}
 	if !underlying.commitCalled || !underlying.rollbackCalled {

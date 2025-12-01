@@ -17,6 +17,7 @@ import (
 const (
 	shouldCreateTableMsg       = "Should create test table"
 	startTransactionSucceedMsg = "Begin transaction should succeed"
+	currentUserQuery           = "SELECT USER FROM DUAL"
 )
 
 // setupTestContainer starts an Oracle testcontainer and returns the connection
@@ -374,14 +375,14 @@ func TestConnectionTransactionCommit(t *testing.T) {
 	// Begin transaction
 	tx, err := conn.Begin(ctx)
 	require.NoError(t, err, startTransactionSucceedMsg)
-	defer tx.Rollback() // No-op after commit
+	defer tx.Rollback(ctx) // No-op after commit
 
 	// Insert data in transaction
 	_, err = tx.Exec(ctx, "INSERT INTO test_tx_commit (id, value) VALUES (:1, :2)", 1, 42)
 	require.NoError(t, err, "Insert in transaction should succeed")
 
 	// Commit transaction
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	require.NoError(t, err, "Commit should succeed")
 
 	// Verify data is visible after commit
@@ -407,7 +408,7 @@ func TestConnectionTransactionRollback(t *testing.T) {
 	require.NoError(t, err, "Insert in transaction should succeed")
 
 	// Rollback transaction
-	err = tx.Rollback()
+	err = tx.Rollback(ctx)
 	require.NoError(t, err, "Rollback should succeed")
 
 	// Verify data is NOT visible after rollback
@@ -448,7 +449,7 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 	assert.Equal(t, 20, value2, "Oracle READ COMMITTED (default) should see external update")
 
 	// Rollback transaction
-	err = tx.Rollback()
+	err = tx.Rollback(ctx)
 	require.NoError(t, err, "Rollback should succeed")
 }
 
@@ -527,7 +528,7 @@ func TestOracleSequenceIntegration(t *testing.T) {
 		// Start transaction to ensure same session is used
 		tx, err := conn.Begin(ctx)
 		require.NoError(t, err)
-		defer tx.Rollback()
+		defer tx.Rollback(ctx)
 
 		// Prime the sequence with NEXTVAL (gets next value: 1001)
 		var nextID int64
@@ -541,7 +542,7 @@ func TestOracleSequenceIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(1001), currID) // Same as NEXTVAL
 
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		require.NoError(t, err)
 	})
 
@@ -814,7 +815,7 @@ func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
 
 	// Get current user for owner parameter
 	var currentUser string
-	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
 	require.NoError(t, err)
 
 	// Create object type
@@ -868,7 +869,7 @@ func TestOracleUDTRegistrationLogging(t *testing.T) {
 
 	// Get current user
 	var currentUser string
-	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
 	require.NoError(t, err)
 
 	// Create type
@@ -912,7 +913,7 @@ func TestOracleUDTCollectionWithOwner(t *testing.T) {
 
 	// Get current user for owner parameter
 	var currentUser string
-	err := conn.QueryRow(ctx, "SELECT USER FROM DUAL").Scan(&currentUser)
+	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
 	require.NoError(t, err)
 
 	// Create object type

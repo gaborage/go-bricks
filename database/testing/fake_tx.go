@@ -205,7 +205,7 @@ func (tx *TestTx) Prepare(_ context.Context, _ string) (dbtypes.Statement, error
 }
 
 // Commit implements dbtypes.Tx.Commit.
-func (tx *TestTx) Commit() error {
+func (tx *TestTx) Commit(_ context.Context) error {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 
@@ -221,7 +221,7 @@ func (tx *TestTx) Commit() error {
 }
 
 // Rollback implements dbtypes.Tx.Rollback.
-func (tx *TestTx) Rollback() error {
+func (tx *TestTx) Rollback(_ context.Context) error {
 	tx.mu.Lock()
 	defer tx.mu.Unlock()
 

@@ -29,7 +29,7 @@ import (
 //	    if err != nil {
 //	        return err
 //	    }
-//	    defer tx.Rollback()  // No-op if already committed
+//	    defer tx.Rollback(ctx)  // No-op if already committed
 //
 //	    if err := s.insertOrder(ctx, tx, order); err != nil {
 //	        return err
@@ -38,7 +38,7 @@ import (
 //	        return err
 //	    }
 //
-//	    return tx.Commit()
+//	    return tx.Commit(ctx)
 //	}
 //
 // For testing transaction logic, see the database/testing package which provides
@@ -50,9 +50,9 @@ type Transactor interface {
 	// Common usage pattern:
 	//   tx, err := db.Begin(ctx)
 	//   if err != nil { return err }
-	//   defer tx.Rollback()  // No-op if already committed
+	//   defer tx.Rollback(ctx)  // No-op if already committed
 	//   // ... execute operations on tx ...
-	//   return tx.Commit()
+	//   return tx.Commit(ctx)
 	Begin(ctx context.Context) (Tx, error)
 
 	// BeginTx starts a new transaction with explicit isolation level and read-only settings.

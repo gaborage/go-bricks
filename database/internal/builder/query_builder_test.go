@@ -713,7 +713,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("TableRef without alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers))
+		query := qb.Select(selectAll).From(dbtypes.MustTable(tableUsers))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -721,7 +721,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("TableRef with alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers).As(aliasU))
+		query := qb.Select(selectAll).From(dbtypes.MustTable(tableUsers).MustAs(aliasU))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromAliasClause)
@@ -729,7 +729,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Oracle table with alias and reserved word", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
-		query := qb.Select(selectAll).From(dbtypes.Table("LEVEL").As("lvl"))
+		query := qb.Select(selectAll).From(dbtypes.MustTable("LEVEL").MustAs("lvl"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, `FROM "LEVEL" lvl`)
@@ -737,7 +737,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Mixed string and TableRef in From", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select(selectAll).From(tableUsers, dbtypes.Table(tableProfiles).As("p"))
+		query := qb.Select(selectAll).From(tableUsers, dbtypes.MustTable(tableProfiles).MustAs("p"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM users, profiles p")
@@ -745,7 +745,7 @@ func TestTableAliasFrom(t *testing.T) {
 
 	t.Run("Multiple TableRef with aliases", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-		query := qb.Select(selectAll).From(dbtypes.Table(tableUsers).As(aliasU), dbtypes.Table(tableProfiles).As("p"))
+		query := qb.Select(selectAll).From(dbtypes.MustTable(tableUsers).MustAs(aliasU), dbtypes.MustTable(tableProfiles).MustAs("p"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM users u, profiles p")
@@ -757,8 +757,8 @@ func TestTableAliasJoin(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		jf := qb.JoinFilter()
 		query := qb.Select(selectAll).
-			From(dbtypes.Table(tableUsers).As(aliasU)).
-			JoinOn(dbtypes.Table(tableProfiles).As("p"), jf.EqColumn(colUserID, "p.user_id"))
+			From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
+			JoinOn(dbtypes.MustTable(tableProfiles).MustAs("p"), jf.EqColumn(colUserID, "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromAliasClause)
@@ -770,8 +770,8 @@ func TestTableAliasJoin(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		jf := qb.JoinFilter()
 		query := qb.Select(selectAll).
-			From(dbtypes.Table("customers").As("c")).
-			LeftJoinOn(dbtypes.Table(tableOrders).As("o"), jf.EqColumn("c.id", "o.customer_id"))
+			From(dbtypes.MustTable("customers").MustAs("c")).
+			LeftJoinOn(dbtypes.MustTable(tableOrders).MustAs("o"), jf.EqColumn("c.id", "o.customer_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, "FROM customers c")
@@ -795,7 +795,7 @@ func TestTableAliasJoin(t *testing.T) {
 		jf := qb.JoinFilter()
 		query := qb.Select(selectAll).
 			From(tableUsers).
-			InnerJoinOn(dbtypes.Table(tableProfiles).As("p"), jf.EqColumn(joinColumn, "p.user_id"))
+			InnerJoinOn(dbtypes.MustTable(tableProfiles).MustAs("p"), jf.EqColumn(joinColumn, "p.user_id"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromUsersClause)
@@ -805,8 +805,8 @@ func TestTableAliasJoin(t *testing.T) {
 	t.Run("CrossJoinOn with table alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		query := qb.Select(selectAll).
-			From(dbtypes.Table(tableUsers).As(aliasU)).
-			CrossJoinOn(dbtypes.Table("roles").As("r"))
+			From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
+			CrossJoinOn(dbtypes.MustTable("roles").MustAs("r"))
 		sql, _, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Contains(t, sql, fromAliasClause)
@@ -821,10 +821,10 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(selectAll).
-			From(dbtypes.Table(tableOrders).As("o")).
-			JoinOn(dbtypes.Table("customers").As("c"),
+			From(dbtypes.MustTable(tableOrders).MustAs("o")).
+			JoinOn(dbtypes.MustTable("customers").MustAs("c"),
 				jf.Raw("c.id = TO_NUMBER(o.customer_id)")).
-			JoinOn(dbtypes.Table(tableProducts).As("p"), jf.And(
+			JoinOn(dbtypes.MustTable(tableProducts).MustAs("p"), jf.And(
 				jf.Raw("p.sku = o.product_sku"),
 				jf.Raw("p.status = ?", statusActive),
 			)).
@@ -846,8 +846,8 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(colUserID, colUserName, "COUNT(o.id) AS order_count").
-			From(dbtypes.Table(tableUsers).As(aliasU)).
-			LeftJoinOn(dbtypes.Table(tableOrders).As("o"), jf.EqColumn(colUserID, "o.user_id")).
+			From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
+			LeftJoinOn(dbtypes.MustTable(tableOrders).MustAs("o"), jf.EqColumn(colUserID, "o.user_id")).
 			Where(f.Eq(colUserStatus, statusActive)).
 			GroupBy(colUserID, colUserName).
 			OrderBy("order_count DESC").
@@ -873,8 +873,8 @@ func TestTableAliasOracleReservedWords(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select("l.id", "n.value").
-			From(dbtypes.Table("LEVEL").As("l")).
-			JoinOn(dbtypes.Table("NUMBER").As("n"), jf.EqColumn("l.id", "n.level_id")).
+			From(dbtypes.MustTable("LEVEL").MustAs("l")).
+			JoinOn(dbtypes.MustTable("NUMBER").MustAs("n"), jf.EqColumn("l.id", "n.level_id")).
 			Where(f.Eq("l.status", statusActive))
 
 		sql, _, err := query.ToSQL()
@@ -906,7 +906,7 @@ func TestSelectExpressions(t *testing.T) {
 	t.Run("Simple expression without alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
-		query := qb.Select(colID, qb.Expr(countClause)).From(tableProducts)
+		query := qb.Select(colID, qb.MustExpr(countClause)).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -917,7 +917,7 @@ func TestSelectExpressions(t *testing.T) {
 	t.Run("Expression with alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		query := qb.Select(colCategory, qb.Expr("SUM(amount)", "total_sales")).From(tableOrders)
+		query := qb.Select(colCategory, qb.MustExpr("SUM(amount)", "total_sales")).From(tableOrders)
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -930,9 +930,9 @@ func TestSelectExpressions(t *testing.T) {
 
 		query := qb.Select(
 			colCategory,
-			qb.Expr(countClause, "product_count"),
-			qb.Expr("AVG(price)", "avg_price"),
-			qb.Expr("SUM(stock)", "total_stock"),
+			qb.MustExpr(countClause, "product_count"),
+			qb.MustExpr("AVG(price)", "avg_price"),
+			qb.MustExpr("SUM(stock)", "total_stock"),
 		).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
@@ -948,7 +948,7 @@ func TestSelectExpressions(t *testing.T) {
 		query := qb.Select(
 			colID,
 			colName,
-			qb.Expr("UPPER(category)", "upper_category"),
+			qb.MustExpr("UPPER(category)", "upper_category"),
 			colStatus,
 		).From(tableProducts)
 
@@ -964,7 +964,7 @@ func TestSelectExpressions(t *testing.T) {
 
 		query := qb.Select(
 			"user_id",
-			qb.Expr("COALESCE(email, phone, 'N/A')", "contact"),
+			qb.MustExpr("COALESCE(email, phone, 'N/A')", "contact"),
 		).From(tableUsers)
 
 		sql, args, err := query.ToSQL()
@@ -980,7 +980,7 @@ func TestSelectExpressions(t *testing.T) {
 			"product_id",
 			colCategory,
 			colPrice,
-			qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
+			qb.MustExpr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
 		).From(tableProducts)
 
 		sql, args, err := query.ToSQL()
@@ -995,7 +995,7 @@ func TestSelectExpressions(t *testing.T) {
 
 		query := qb.Select(
 			colLevel,
-			qb.Expr(countClause, "total"),
+			qb.MustExpr(countClause, "total"),
 		).From("categories")
 
 		sql, args, err := query.ToSQL()
@@ -1012,11 +1012,11 @@ func TestGroupByExpressions(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(
-			qb.Expr(testExpr, "date"),
-			qb.Expr(countClause, "count"),
+			qb.MustExpr(testExpr, "date"),
+			qb.MustExpr(countClause, "count"),
 		).
 			From(tableOrders).
-			GroupBy(qb.Expr(testExpr)).
+			GroupBy(qb.MustExpr(testExpr)).
 			Where(f.Eq(colStatus, "completed"))
 
 		sql, args, err := query.ToSQL()
@@ -1032,11 +1032,11 @@ func TestGroupByExpressions(t *testing.T) {
 
 		query := qb.Select(
 			colCategory,
-			qb.Expr("YEAR(order_date)", "year"),
-			qb.Expr("SUM(amount)", "total"),
+			qb.MustExpr("YEAR(order_date)", "year"),
+			qb.MustExpr("SUM(amount)", "total"),
 		).
 			From(tableOrders).
-			GroupBy(colCategory, qb.Expr("YEAR(order_date)"))
+			GroupBy(colCategory, qb.MustExpr("YEAR(order_date)"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1048,11 +1048,11 @@ func TestGroupByExpressions(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		query := qb.Select(
-			qb.Expr(testExpr, "date"),
-			qb.Expr(countClause, "order_count"),
+			qb.MustExpr(testExpr, "date"),
+			qb.MustExpr(countClause, "order_count"),
 		).
 			From(tableOrders).
-			GroupBy(qb.Expr(testExpr)).
+			GroupBy(qb.MustExpr(testExpr)).
 			Having("COUNT(*) > ?", 10)
 
 		sql, args, err := query.ToSQL()
@@ -1069,7 +1069,7 @@ func TestOrderByExpressions(t *testing.T) {
 
 		query := qb.Select(selectAll).
 			From(tableProducts).
-			OrderBy(qb.Expr("COUNT(*) DESC"))
+			OrderBy(qb.MustExpr("COUNT(*) DESC"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1082,7 +1082,7 @@ func TestOrderByExpressions(t *testing.T) {
 
 		query := qb.Select(colID, colName, colPrice).
 			From(tableProducts).
-			OrderBy(colName, qb.Expr("UPPER(category) ASC"), "price DESC")
+			OrderBy(colName, qb.MustExpr("UPPER(category) ASC"), "price DESC")
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1095,7 +1095,7 @@ func TestOrderByExpressions(t *testing.T) {
 
 		query := qb.Select(colID, "created_at").
 			From(tableOrders).
-			OrderBy(qb.Expr("DATE(created_at) DESC"))
+			OrderBy(qb.MustExpr("DATE(created_at) DESC"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1132,16 +1132,16 @@ func TestExpressionErrorCases(t *testing.T) {
 	t.Run("Empty expression SQL panics", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		assert.PanicsWithValue(t, "expression SQL cannot be empty", func() {
-			qb.Select(qb.Expr("")).From(tableUsers)
+		assert.PanicsWithValue(t, "MustExpr: expression SQL cannot be empty", func() {
+			qb.Select(qb.MustExpr("")).From(tableUsers)
 		})
 	})
 
 	t.Run("Multiple aliases panic", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		assert.PanicsWithValue(t, "Expr accepts maximum 1 alias, got 2", func() {
-			qb.Select(qb.Expr(countClause, "total", "count")).From(tableUsers)
+		assert.PanicsWithValue(t, "MustExpr: expression accepts maximum 1 alias: got 2", func() {
+			qb.Select(qb.MustExpr(countClause, "total", "count")).From(tableUsers)
 		})
 	})
 
@@ -1149,7 +1149,7 @@ func TestExpressionErrorCases(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		assert.Panics(t, func() {
-			qb.Select(qb.Expr(countClause, "total;DROP TABLE users")).From(tableUsers)
+			qb.Select(qb.MustExpr(countClause, "total;DROP TABLE users")).From(tableUsers)
 		})
 	})
 }
@@ -1161,16 +1161,16 @@ func TestComplexExpressionQueries(t *testing.T) {
 
 		query := qb.Select(
 			colCategory,
-			qb.Expr(countClause, "product_count"),
-			qb.Expr("AVG(price)", "avg_price"),
-			qb.Expr("MIN(price)", "min_price"),
-			qb.Expr("MAX(price)", "max_price"),
+			qb.MustExpr(countClause, "product_count"),
+			qb.MustExpr("AVG(price)", "avg_price"),
+			qb.MustExpr("MIN(price)", "min_price"),
+			qb.MustExpr("MAX(price)", "max_price"),
 		).
 			From(tableProducts).
 			Where(f.Eq(colStatus, statusActive)).
 			GroupBy(colCategory).
 			Having("COUNT(*) > ?", 5).
-			OrderBy(qb.Expr("COUNT(*) DESC"))
+			OrderBy(qb.MustExpr("COUNT(*) DESC"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1199,15 +1199,15 @@ func TestComplexExpressionQueries(t *testing.T) {
 		query := qb.Select(
 			colID,
 			colName,
-			qb.Expr("price * 1.1", "price_with_tax"),
-			qb.Expr("UPPER(category)", "upper_category"),
+			qb.MustExpr("price * 1.1", "price_with_tax"),
+			qb.MustExpr("UPPER(category)", "upper_category"),
 		).
 			From(tableProducts).
 			Where(f.And(
 				f.InSubquery("category_id", subquery),
 				f.Gt("stock", 0),
 			)).
-			OrderBy(qb.Expr("price * 1.1 DESC"))
+			OrderBy(qb.MustExpr("price * 1.1 DESC"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1232,15 +1232,15 @@ func TestComplexExpressionQueries(t *testing.T) {
 		f := qb.Filter()
 
 		query := qb.Select(
-			qb.Expr(testExpr, "order_date"),
-			qb.Expr(countClause, "order_count"),
-			qb.Expr("SUM(total_amount)", "daily_revenue"),
+			qb.MustExpr(testExpr, "order_date"),
+			qb.MustExpr(countClause, "order_count"),
+			qb.MustExpr("SUM(total_amount)", "daily_revenue"),
 		).
 			From(tableOrders).
 			Where(f.Gte("created_at", testDate)).
-			GroupBy(qb.Expr(testExpr)).
+			GroupBy(qb.MustExpr(testExpr)).
 			Having("SUM(total_amount) > ?", 1000).
-			OrderBy(qb.Expr("DATE(created_at) DESC"))
+			OrderBy(qb.MustExpr("DATE(created_at) DESC"))
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
@@ -1562,8 +1562,8 @@ func TestColumnsComplexQuery(t *testing.T) {
 			"u."+userCols.Col(fieldName),
 			"a."+acctCols.Col(fieldNumber),
 		).
-			From(dbtypes.Table(tableUsers).As(aliasU)).
-			JoinOn(dbtypes.Table(tableAccounts).As(aliasA), jf.EqColumn(
+			From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
+			JoinOn(dbtypes.MustTable(tableAccounts).MustAs(aliasA), jf.EqColumn(
 				"u."+userCols.Col(fieldID),
 				"a."+acctCols.Col(fieldID),
 			)).
@@ -1582,7 +1582,7 @@ func TestColumnsComplexQuery(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		cols := qb.Columns(&IntegrationUser{})
 
-		query := qb.Select(cols.Col(fieldStatus), qb.Expr("COUNT(*)", "user_count")).
+		query := qb.Select(cols.Col(fieldStatus), qb.MustExpr("COUNT(*)", "user_count")).
 			From(tableUsers).
 			GroupBy(cols.Col(fieldStatus)).
 			OrderBy(cols.Col(fieldStatus))
@@ -1731,8 +1731,8 @@ func TestColumnAliasingInSelectQuery(t *testing.T) {
 		u.Col(fieldName),
 		a.Col(fieldNumber),
 	).
-		From(dbtypes.Table(tableUsers).As(aliasU)).
-		JoinOn(dbtypes.Table(tableAccounts).As(aliasA), jf.EqColumn(
+		From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
+		JoinOn(dbtypes.MustTable(tableAccounts).MustAs(aliasA), jf.EqColumn(
 			u.Col(fieldID),
 			a.Col(fieldID),
 		)).

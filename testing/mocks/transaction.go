@@ -58,15 +58,15 @@ func (m *MockTx) Prepare(ctx context.Context, query string) (types.Statement, er
 }
 
 // Commit implements types.Tx
-func (m *MockTx) Commit() error {
-	arguments := m.MethodCalled("Commit")
+func (m *MockTx) Commit(ctx context.Context) error {
+	arguments := m.MethodCalled("Commit", ctx)
 	return arguments.Error(0)
 }
 
 // Rollback implements types.Tx
 // Note: Implementation identical to Commit by design for testify mock tracking
-func (m *MockTx) Rollback() error {
-	arguments := m.MethodCalled("Rollback")
+func (m *MockTx) Rollback(ctx context.Context) error {
+	arguments := m.MethodCalled("Rollback", ctx)
 	return arguments.Error(0)
 }
 
