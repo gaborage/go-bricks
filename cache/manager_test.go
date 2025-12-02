@@ -868,7 +868,7 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(operations)
 
-	for i := 0; i < operations; i++ {
+	for i := range operations {
 		go func(_ int) {
 			defer wg.Done()
 
@@ -877,9 +877,17 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 			// These should all complete quickly - errors ignored as concurrent operations may race
 			stats := mgr.Stats()
 			_ = stats // intentionally unused - just checking non-blocking behavior
-			c2, _ := mgr.Get(ctx, tenantTwo)
+			c2, err := mgr.Get(ctx, tenantTwo)
+			if err != nil {
+				t.Fail()
+			}
 			_ = c2 // intentionally unused
-			c3, _ := mgr.Get(ctx, tenantThree)
+
+			c3, err := mgr.Get(ctx, tenantThree)
+			if err != nil {
+				t.Fail()
+			}
+
 			_ = c3 // intentionally unused
 
 			elapsed := time.Since(start)
