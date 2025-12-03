@@ -517,8 +517,8 @@ func TestConnectionBeginPropagatesError(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	//nolint:S8168 // NOSONAR: Begin() intentionally fails (beginErr set) - no transaction to rollback
-	_, err := conn.Begin(context.Background())
+	ctx := context.Background()
+	_, err := conn.Begin(ctx)
 	if err == nil {
 		t.Fatalf("expected begin error")
 	}

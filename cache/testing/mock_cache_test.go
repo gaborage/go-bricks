@@ -100,7 +100,8 @@ func TestMockCacheCompareAndSet(t *testing.T) {
 		assert.True(t, swapped)
 
 		// Verify new value
-		value, _ := mock.Get(ctx, "key2")
+		value, err := mock.Get(ctx, "key2")
+		require.NoError(t, err)
 		assert.Equal(t, []byte("new-value"), value)
 
 		// CAS with wrong old value

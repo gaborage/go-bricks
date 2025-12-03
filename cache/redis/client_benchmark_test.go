@@ -42,7 +42,7 @@ func setupBenchmarkRedis(b *testing.B) (*Client, context.Context) {
 	}
 
 	// Test connection
-	if err := client.Health(ctx); err != nil {
+	if client.Health(ctx) != nil {
 		b.Skip("Redis not healthy, skipping benchmark")
 		return nil, nil
 	}
@@ -394,7 +394,8 @@ func BenchmarkRealRedisHealth(b *testing.B) {
 }
 
 func BenchmarkRealRedisStats(b *testing.B) {
-	client, _ := setupBenchmarkRedis(b)
+	client, ctx := setupBenchmarkRedis(b)
+	_ = ctx // ctx not needed for Stats benchmark
 	defer client.Close()
 
 	b.ResetTimer()

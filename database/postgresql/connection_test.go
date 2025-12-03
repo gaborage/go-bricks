@@ -451,7 +451,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 
 	// Test Begin error
 	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
-	_, err := c.Begin(ctx)
+	_, err := c.Begin(ctx) //nolint:S8168 // NOSONAR: Begin() expected to fail - no transaction to rollback
 	assert.Error(t, err)
 
 	// Test BeginTx error
