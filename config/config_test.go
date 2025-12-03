@@ -489,9 +489,15 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	assert.Equal(t, "testuser", cfg.Database.Username)
 	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections)
 
+	// Verify production-safe pool defaults are applied
+	assert.Equal(t, int32(2), cfg.Database.Pool.Idle.Connections)         // Default: warm connections
+	assert.Equal(t, 5*time.Minute, cfg.Database.Pool.Idle.Time)           // Default: idle timeout
+	assert.Equal(t, 30*time.Minute, cfg.Database.Pool.Lifetime.Max)       // Default: max lifetime
+	assert.True(t, cfg.Database.Pool.KeepAlive.Enabled)                   // Default: keep-alive enabled
+	assert.Equal(t, 60*time.Second, cfg.Database.Pool.KeepAlive.Interval) // Default: probe interval
+
 	// Verify database fields that should be zero/empty since no defaults
-	assert.Equal(t, "", cfg.Database.TLS.Mode)                    // No default provided
-	assert.Equal(t, int32(0), cfg.Database.Pool.Idle.Connections) // No default provided
+	assert.Equal(t, "", cfg.Database.TLS.Mode) // No default provided
 }
 
 // TestLoad_DatabaseConnectionStringOnly test removed - connection string

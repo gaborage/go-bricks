@@ -1510,6 +1510,157 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 	}
 }
 
+func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
+	tests := []struct {
+		name                    string
+		config                  DatabaseConfig
+		expectedIdleTime        time.Duration
+		expectedLifetimeMax     time.Duration
+		expectedIdleConnections int32
+	}{
+		{
+			name: "zero_values_apply_all_defaults",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool:     PoolConfig{}, // All zero values
+			},
+			expectedIdleTime:        defaultPoolIdleTime,
+			expectedLifetimeMax:     defaultPoolLifetimeMax,
+			expectedIdleConnections: defaultPoolIdleConnections,
+		},
+		{
+			name: "explicit_values_preserved",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:      PoolMaxConfig{Connections: 50},
+					Idle:     PoolIdleConfig{Connections: 5, Time: 10 * time.Minute},
+					Lifetime: LifetimeConfig{Max: 1 * time.Hour},
+				},
+			},
+			expectedIdleTime:        10 * time.Minute,
+			expectedLifetimeMax:     1 * time.Hour,
+			expectedIdleConnections: 5,
+		},
+		{
+			name: "partial_config_applies_missing_defaults",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:  PoolMaxConfig{Connections: 25},
+					Idle: PoolIdleConfig{Time: 3 * time.Minute}, // Only idle time set
+				},
+			},
+			expectedIdleTime:        3 * time.Minute,
+			expectedLifetimeMax:     defaultPoolLifetimeMax,     // Default applied
+			expectedIdleConnections: defaultPoolIdleConnections, // Default applied
+		},
+		{
+			name: "only_idle_connections_set",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Idle: PoolIdleConfig{Connections: 10},
+				},
+			},
+			expectedIdleTime:        defaultPoolIdleTime,    // Default applied
+			expectedLifetimeMax:     defaultPoolLifetimeMax, // Default applied
+			expectedIdleConnections: 10,                     // Explicit value preserved
+		},
+		{
+			name: "only_lifetime_set",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Lifetime: LifetimeConfig{Max: 15 * time.Minute},
+				},
+			},
+			expectedIdleTime:        defaultPoolIdleTime,        // Default applied
+			expectedLifetimeMax:     15 * time.Minute,           // Explicit value preserved
+			expectedIdleConnections: defaultPoolIdleConnections, // Default applied
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedIdleTime, tt.config.Pool.Idle.Time,
+				"Pool.Idle.Time mismatch")
+			assert.Equal(t, tt.expectedLifetimeMax, tt.config.Pool.Lifetime.Max,
+				"Pool.Lifetime.Max mismatch")
+			assert.Equal(t, tt.expectedIdleConnections, tt.config.Pool.Idle.Connections,
+				"Pool.Idle.Connections mismatch")
+		})
+	}
+}
+
+func TestApplyDatabasePoolDefaultsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		errorContains string
+	}{
+		{
+			name: "negative_idle_time_rejected",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:  PoolMaxConfig{Connections: 25},
+					Idle: PoolIdleConfig{Time: -1 * time.Minute},
+				},
+			},
+			errorContains: "database.pool.idle.time",
+		},
+		{
+			name: "negative_lifetime_rejected",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:      PoolMaxConfig{Connections: 25},
+					Lifetime: LifetimeConfig{Max: -1 * time.Hour},
+				},
+			},
+			errorContains: "database.pool.lifetime.max",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			assertValidationError(t, err, tt.errorContains)
+		})
+	}
+}
+
 func TestValidateMongoDBFields(t *testing.T) {
 	tests := []struct {
 		name          string

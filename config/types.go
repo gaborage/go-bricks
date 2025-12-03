@@ -101,6 +101,13 @@ type DatabaseConfig struct {
 }
 
 // PoolConfig holds connection pool settings.
+// Production-safe defaults are applied automatically when database is configured:
+//   - Max.Connections: 25 (maximum open connections)
+//   - Idle.Connections: 2 (minimum warm connections)
+//   - Idle.Time: 5m (close idle connections before NAT/firewall timeout)
+//   - Lifetime.Max: 30m (periodic connection recycling)
+//   - KeepAlive.Enabled: true (TCP keep-alive probes)
+//   - KeepAlive.Interval: 60s (probe interval, below typical NAT timeouts)
 type PoolConfig struct {
 	Max       PoolMaxConfig       `koanf:"max" json:"max" yaml:"max" toml:"max" mapstructure:"max"`
 	Idle      PoolIdleConfig      `koanf:"idle" json:"idle" yaml:"idle" toml:"idle" mapstructure:"idle"`
@@ -110,17 +117,30 @@ type PoolConfig struct {
 
 // PoolMaxConfig holds maximum connections settings.
 type PoolMaxConfig struct {
+	// Connections is the maximum number of open connections to the database.
+	// Default: 25. Set based on your workload and database server capacity.
 	Connections int32 `koanf:"connections" json:"connections" yaml:"connections" toml:"connections" mapstructure:"connections"`
 }
 
 // PoolIdleConfig holds idle connections settings.
 type PoolIdleConfig struct {
-	Connections int32         `koanf:"connections" json:"connections" yaml:"connections" toml:"connections" mapstructure:"connections"`
-	Time        time.Duration `koanf:"time" json:"time" yaml:"time" toml:"time" mapstructure:"time"`
+	// Connections is the minimum number of idle connections to maintain in the pool.
+	// Default: 2. Maintains warm connections to reduce cold-start latency.
+	Connections int32 `koanf:"connections" json:"connections" yaml:"connections" toml:"connections" mapstructure:"connections"`
+
+	// Time is the maximum duration an idle connection may remain unused before closing.
+	// This prevents stale connections from accumulating when traffic decreases.
+	// Default: 5m. Should be shorter than NAT/firewall idle timeouts (AWS: 350s, GCP: 30s).
+	// Combined with KeepAlive, connections are recycled before becoming stale.
+	Time time.Duration `koanf:"time" json:"time" yaml:"time" toml:"time" mapstructure:"time"`
 }
 
 // LifetimeConfig holds maximum lifetime settings for connections.
 type LifetimeConfig struct {
+	// Max is the maximum duration a connection may be reused before closing.
+	// This forces periodic connection recycling for memory hygiene, DNS re-resolution,
+	// and server-side resource cleanup.
+	// Default: 30m. Set to 0 for no lifetime limit (not recommended for cloud deployments).
 	Max time.Duration `koanf:"max" json:"max" yaml:"max" toml:"max" mapstructure:"max"`
 }
 

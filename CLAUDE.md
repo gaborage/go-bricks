@@ -1584,6 +1584,39 @@ func TestFeature(t *testing.T) {
 | **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
 | **MongoDB** | N/A | Document-based with SQL-like interface, aggregation pipeline |
 
+### Connection Pool Defaults
+
+GoBricks applies production-safe connection pool defaults when database is configured:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `pool.max.connections` | 25 | Maximum open connections |
+| `pool.idle.connections` | 2 | Minimum warm connections |
+| `pool.idle.time` | 5m | Close idle connections (prevents stale connections) |
+| `pool.lifetime.max` | 30m | Force periodic recycling (DNS, memory hygiene) |
+| `pool.keepalive.enabled` | true | TCP keep-alive probes |
+| `pool.keepalive.interval` | 60s | Probe interval (below NAT timeouts) |
+
+**Cloud Provider Idle Timeouts:**
+| Provider | Component | Timeout |
+|----------|-----------|---------|
+| AWS | NAT Gateway/ALB | 350s |
+| GCP | Cloud NAT | 30s |
+| Azure | NAT Gateway | 240s |
+| On-prem | Firewalls | 60-300s |
+
+**Override defaults** in `config.yaml`:
+```yaml
+database:
+  pool:
+    idle:
+      time: 3m          # More aggressive recycling
+    lifetime:
+      max: 15m          # Shorter lifetime
+    keepalive:
+      interval: 30s     # More frequent probes
+```
+
 ### Oracle SEQUENCE Objects (No Configuration Required)
 
 Oracle SEQUENCE objects for ID generation work immediately with standard queries:
@@ -1723,6 +1756,37 @@ golangci-lint run
 
 # "database not configured" errors
 # → Set database.type, database.host OR database.connection_string (see [ADR-003](wiki/adr-003-database-by-intent.md))
+```
+
+**Connection Pool Issues (ORA-01013, connection reset):**
+
+```bash
+# ORA-01013: "user requested cancel of current operation" after idle period
+# → This indicates stale connections being used after NAT/firewall timeout
+# → GoBricks applies production-safe defaults automatically:
+#   - Pool.KeepAlive.Enabled: true (60s probes prevent silent drops)
+#   - Pool.Idle.Time: 5m (recycle idle connections before timeout)
+#   - Pool.Lifetime.Max: 30m (periodic connection recycling)
+# → For custom configuration, ensure keepalive interval < NAT timeout
+
+# Override defaults for aggressive environments (e.g., strict firewall):
+database:
+  pool:
+    keepalive:
+      enabled: true
+      interval: 30s       # Probe every 30s for strict firewalls
+    idle:
+      time: 2m            # Close idle after 2 minutes
+    lifetime:
+      max: 15m            # Recycle all connections every 15 minutes
+
+# For on-premises with no NAT/firewall concerns, opt-out of recycling:
+database:
+  pool:
+    idle:
+      time: 0             # 0 = no idle timeout (not recommended for cloud)
+    lifetime:
+      max: 1h             # Longer lifetime acceptable without NAT
 ```
 
 **Cache Issues:**
