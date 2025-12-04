@@ -1,4 +1,4 @@
-package http
+package httpclient
 
 import (
 	"context"
@@ -143,7 +143,7 @@ func (l *fakeLogger) WithFields(_ map[string]any) logger.Logger {
 	return l
 }
 
-func (l *fakeLogger) getEventsByLevel(level string) []loggedEvent {
+func (l *fakeLogger) eventsByLevel(level string) []loggedEvent {
 	var events []loggedEvent
 	for _, event := range l.events {
 		if event.level == level {
@@ -180,7 +180,7 @@ func TestClientLogRequest(t *testing.T) {
 
 		c.logRequest(req, body, traceID)
 
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
 		infoEvent := infoEvents[0]
@@ -193,7 +193,7 @@ func TestClientLogRequest(t *testing.T) {
 		assert.Equal(t, len(body), infoEvent.fields["body_size"])
 
 		// Should not have debug events when LogPayloads is false
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 0)
 	})
 
@@ -209,7 +209,7 @@ func TestClientLogRequest(t *testing.T) {
 
 		c.logRequest(req, nil, "trace-456")
 
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
 		infoEvent := infoEvents[0]
@@ -242,10 +242,10 @@ func TestClientLogRequest(t *testing.T) {
 		c.logRequest(req, body, "trace-789")
 
 		// Should have both info and debug events
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 1)
 
 		debugEvent := debugEvents[0]
@@ -275,7 +275,7 @@ func TestClientLogRequest(t *testing.T) {
 		largeBody := []byte("This is a very long body that should be truncated for logging purposes")
 		c.logRequest(req, largeBody, "trace-truncate")
 
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 1)
 
 		debugEvent := debugEvents[0]
@@ -305,7 +305,7 @@ func TestClientLogRequest(t *testing.T) {
 
 		c.logRequest(req, largeBody, "trace-default")
 
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 1)
 
 		debugEvent := debugEvents[0]
@@ -339,7 +339,7 @@ func TestClientLogResponse(t *testing.T) {
 
 		c.logResponse(response, "trace-response-123")
 
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
 		infoEvent := infoEvents[0]
@@ -352,7 +352,7 @@ func TestClientLogResponse(t *testing.T) {
 		assert.Equal(t, len(response.Body), infoEvent.fields["body_size"])
 
 		// Should not have debug events when LogPayloads is false
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 0)
 	})
 
@@ -375,7 +375,7 @@ func TestClientLogResponse(t *testing.T) {
 
 		c.logResponse(response, "trace-empty")
 
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
 		infoEvent := infoEvents[0]
@@ -409,10 +409,10 @@ func TestClientLogResponse(t *testing.T) {
 		c.logResponse(response, "trace-debug")
 
 		// Should have both info and debug events
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 1)
 
 		debugEvent := debugEvents[0]
@@ -449,7 +449,7 @@ func TestClientLogResponse(t *testing.T) {
 
 		c.logResponse(response, "trace-large")
 
-		debugEvents := fakeLog.getEventsByLevel("debug")
+		debugEvents := fakeLog.eventsByLevel("debug")
 		assert.Len(t, debugEvents, 1)
 
 		debugEvent := debugEvents[0]
@@ -477,7 +477,7 @@ func TestClientLogResponse(t *testing.T) {
 
 		c.logResponse(response, "trace-error")
 
-		infoEvents := fakeLog.getEventsByLevel("info")
+		infoEvents := fakeLog.eventsByLevel("info")
 		assert.Len(t, infoEvents, 1)
 
 		infoEvent := infoEvents[0]
@@ -504,10 +504,15 @@ func TestLoggingIntegration(t *testing.T) {
 		assert.Equal(t, 1024, clientImpl.config.MaxPayloadLogBytes)
 
 		// Test that logging methods work
-		req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://test.com", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), "GET", "http://test.com", http.NoBody)
+
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+
 		clientImpl.logRequest(req, []byte("test"), "test-integration")
 
-		events := fakeLog.getEventsByLevel("info")
+		events := fakeLog.eventsByLevel("info")
 		assert.Len(t, events, 1)
 		assert.Equal(t, "REST client request", events[0].message)
 	})
@@ -524,15 +529,20 @@ func TestLoggingIntegration(t *testing.T) {
 			},
 		}
 
-		req, _ := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", http.NoBody)
+
+		if err != nil {
+			t.Fatalf("failed to create request: %v", err)
+		}
+
 		body := []byte("short body")
 		clientImpl.logRequest(req, body, "test-payload")
 
 		// Should have both info and debug logs
-		assert.Len(t, fakeLog.getEventsByLevel("info"), 1)
-		assert.Len(t, fakeLog.getEventsByLevel("debug"), 1)
+		assert.Len(t, fakeLog.eventsByLevel("info"), 1)
+		assert.Len(t, fakeLog.eventsByLevel("debug"), 1)
 
-		debugEvent := fakeLog.getEventsByLevel("debug")[0]
+		debugEvent := fakeLog.eventsByLevel("debug")[0]
 		assert.Contains(t, debugEvent.fields, "body_preview")
 		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
 	})

@@ -599,10 +599,8 @@ func assignInt64(dest *int64, src any) error {
 func assignInt32(dest *int32, src any) error {
 	switch s := src.(type) {
 	case int64:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in int32
 		*dest = int32(s)
 	case int:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in int32
 		*dest = int32(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *int32", src)
@@ -752,22 +750,18 @@ func assignUint64(dest *uint64, src any) error {
 func assignUint32(dest *uint32, src any) error {
 	switch s := src.(type) {
 	case uint64:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
 		*dest = uint32(s)
 	case uint:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
 		*dest = uint32(s)
 	case int64:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint32", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
 		*dest = uint32(s)
 	case int:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint32", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint32
 		*dest = uint32(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint32", src)
@@ -778,22 +772,18 @@ func assignUint32(dest *uint32, src any) error {
 func assignUint16(dest *uint16, src any) error {
 	switch s := src.(type) {
 	case uint64:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
 		*dest = uint16(s)
 	case uint:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
 		*dest = uint16(s)
 	case int64:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint16", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
 		*dest = uint16(s)
 	case int:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint16", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint16
 		*dest = uint16(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint16", src)
@@ -804,22 +794,18 @@ func assignUint16(dest *uint16, src any) error {
 func assignUint8(dest *uint8, src any) error {
 	switch s := src.(type) {
 	case uint64:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
 		*dest = uint8(s)
 	case uint:
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
 		*dest = uint8(s)
 	case int64:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint8", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
 		*dest = uint8(s)
 	case int:
 		if s < 0 {
 			return fmt.Errorf("cannot convert negative value %d to uint8", s)
 		}
-		//nolint:gosec // G115: Caller responsible for ensuring value fits in uint8
 		*dest = uint8(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint8", src)

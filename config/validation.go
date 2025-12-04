@@ -9,10 +9,13 @@ import (
 )
 
 const (
-	defaultSlowQueryThreshold = 200 * time.Millisecond
-	defaultMaxQueryLength     = 1000
-	defaultKeepAliveEnabled   = true
-	defaultKeepAliveInterval  = 60 * time.Second
+	defaultSlowQueryThreshold  = 200 * time.Millisecond
+	defaultMaxQueryLength      = 1000
+	defaultKeepAliveEnabled    = true
+	defaultKeepAliveInterval   = 60 * time.Second
+	defaultPoolIdleTime        = 5 * time.Minute  // Close idle connections before NAT/firewall timeout
+	defaultPoolLifetimeMax     = 30 * time.Minute // Force periodic connection recycling
+	defaultPoolIdleConnections = int32(2)         // Maintain minimal warm connections
 )
 
 // Database type constants
@@ -247,10 +250,13 @@ func validateRequiredDatabasePort(port int) error {
 	return nil
 }
 
-// applyDatabasePoolDefaults sets sensible defaults and validates database pool/query settings on cfg.
+// applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query settings.
 //
 // It modifies cfg in-place:
 // - Pool.Max.Connections: if 0, sets to 25; if negative, returns an error.
+// - Pool.Idle.Connections: if 0, sets to 2 (minimal warm connections); if negative, returns an error.
+// - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
+// - Pool.Lifetime.Max: if 0, sets to 30m (forces periodic connection recycling); if negative, returns an error.
 // - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
 // - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts).
 // - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
@@ -266,6 +272,24 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 
 	if cfg.Pool.Idle.Connections < 0 {
 		return NewValidationError("database.pool.idle.connections", errMustBeNonNegative)
+	}
+	// Apply default idle connections if not configured
+	if cfg.Pool.Idle.Connections == 0 {
+		cfg.Pool.Idle.Connections = defaultPoolIdleConnections
+	}
+
+	// Apply default idle time - closes connections before NAT/firewall timeout
+	if cfg.Pool.Idle.Time == 0 {
+		cfg.Pool.Idle.Time = defaultPoolIdleTime
+	} else if cfg.Pool.Idle.Time < 0 {
+		return NewValidationError("database.pool.idle.time", errMustBeNonNegative)
+	}
+
+	// Apply default connection lifetime - forces periodic recycling
+	if cfg.Pool.Lifetime.Max == 0 {
+		cfg.Pool.Lifetime.Max = defaultPoolLifetimeMax
+	} else if cfg.Pool.Lifetime.Max < 0 {
+		return NewValidationError("database.pool.lifetime.max", errMustBeNonNegative)
 	}
 
 	// Apply keep-alive defaults for cloud deployments.

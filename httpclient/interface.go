@@ -1,4 +1,4 @@
-package http
+package httpclient
 
 import (
 	"context"
@@ -97,9 +97,6 @@ func TraceIDFromContext(ctx context.Context) (string, bool) { return gobrickstra
 // EnsureTraceID returns an existing trace ID from context or generates a new one
 func EnsureTraceID(ctx context.Context) string { return gobrickstrace.EnsureTraceID(ctx) }
 
-// GetTraceIDFromContext remains for backward compatibility; it ensures a non-empty value
-func GetTraceIDFromContext(ctx context.Context) string { return EnsureTraceID(ctx) }
-
 // WithTraceParent adds a W3C traceparent value to the context
 func WithTraceParent(ctx context.Context, traceParent string) context.Context {
 	return gobrickstrace.WithTraceParent(ctx, traceParent)
@@ -131,7 +128,7 @@ func GenerateTraceParent() string { return gobrickstrace.GenerateTraceParent() }
 func NewTraceIDInterceptor() RequestInterceptor {
 	return func(ctx context.Context, req *nethttp.Request) error {
 		if req.Header.Get(HeaderXRequestID) == "" {
-			traceID := GetTraceIDFromContext(ctx)
+			traceID := EnsureTraceID(ctx)
 			req.Header.Set(HeaderXRequestID, traceID)
 		}
 		return nil
@@ -145,7 +142,7 @@ func NewTraceIDInterceptorFor(header string) RequestInterceptor {
 	}
 	return func(ctx context.Context, req *nethttp.Request) error {
 		if req.Header.Get(header) == "" {
-			req.Header.Set(header, GetTraceIDFromContext(ctx))
+			req.Header.Set(header, EnsureTraceID(ctx))
 		}
 		return nil
 	}

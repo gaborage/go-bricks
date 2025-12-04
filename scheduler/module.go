@@ -456,7 +456,7 @@ func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error
 	case ScheduleTypeDaily:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.DailyJob(1, gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115: Hour (0-23) and Minute (0-59) are bounded, no overflow possible
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)
@@ -464,7 +464,7 @@ func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error
 	case ScheduleTypeWeekly:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.WeeklyJob(1, gocron.NewWeekdays(entry.schedule.DayOfWeek), gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115: Hour (0-23) and Minute (0-59) are bounded, no overflow possible
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)
@@ -478,7 +478,7 @@ func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error
 	case ScheduleTypeMonthly:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.MonthlyJob(1, gocron.NewDaysOfTheMonth(entry.schedule.DayOfMonth), gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115: Hour (0-23) and Minute (0-59) are bounded, no overflow possible
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)

@@ -16,7 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/http"
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 )
 
 // IAPIError defines the interface for API errors with structured information.

@@ -1,7 +1,7 @@
 package server
 
 import (
-	gobrickshttp "github.com/gaborage/go-bricks/http"
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/labstack/echo/v4"
 )
 
