@@ -651,7 +651,7 @@ cache:
   enabled: true
   type: redis
   manager:
-    max_size: 100          # Max tenant cache instances (0 = unlimited)
+    max_size: 100          # Max tenant cache instances
     idle_ttl: 15m          # Idle timeout per cache
     cleanup_interval: 5m   # Cleanup goroutine frequency
   redis:
@@ -1615,6 +1615,83 @@ database:
       max: 15m          # Shorter lifetime
     keepalive:
       interval: 30s     # More frequent probes
+```
+
+### Messaging Reconnection Defaults
+
+GoBricks applies production-safe AMQP reconnection defaults when messaging is configured:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `reconnect.delay` | 5s | Initial delay before reconnect attempts |
+| `reconnect.reinit_delay` | 2s | Delay between channel re-initialization |
+| `reconnect.resend_delay` | 5s | Delay before resending failed messages |
+| `reconnect.connection_timeout` | 30s | Timeout for connection establishment |
+| `reconnect.max_delay` | 60s | Maximum backoff cap for exponential retry |
+| `publisher.max_cached` | 50 | Maximum cached publisher channels |
+| `publisher.idle_ttl` | 10m | TTL for idle publisher channels |
+
+**Override defaults** in `config.yaml`:
+```yaml
+messaging:
+  reconnect:
+    delay: 10s            # Slower initial reconnect
+    max_delay: 120s       # Higher backoff cap
+  publisher:
+    max_cached: 100       # More cached publishers for high-throughput
+    idle_ttl: 30m         # Keep publishers longer
+```
+
+### Cache Manager Defaults
+
+GoBricks applies production-safe cache manager defaults when cache is configured:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `manager.max_size` | 100 | Maximum tenant cache instances |
+| `manager.idle_ttl` | 15m | Close idle cache connections |
+| `manager.cleanup_interval` | 5m | Frequency of idle cache cleanup |
+
+**Override defaults** in `config.yaml`:
+```yaml
+cache:
+  manager:
+    max_size: 200         # Support more tenants
+    idle_ttl: 30m         # Keep caches longer
+    cleanup_interval: 10m # Less frequent cleanup
+```
+
+### Startup Timeout Defaults
+
+GoBricks applies component-specific startup timeouts for graceful initialization:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `startup.timeout` | 10s | Overall startup timeout (also serves as fallback for unset components) |
+| `startup.database` | 10s | Database connection establishment |
+| `startup.messaging` | 10s | AMQP broker connection |
+| `startup.cache` | 5s | Redis connection |
+| `startup.observability` | 15s | OTLP endpoint connection (higher for TLS handshake) |
+
+**Fallback Hierarchy:**
+1. Explicit component value (e.g., `startup.database: 15s`) → preserved
+2. Global timeout (if set): `startup.timeout: 30s` → applied to all unset components
+3. Per-component default (shown in table) → used when neither is set
+
+**Example - Global fallback:**
+```yaml
+app:
+  startup:
+    timeout: 30s  # All components inherit 30s (database, messaging, cache, observability)
+```
+
+**Override defaults** in `config.yaml`:
+```yaml
+app:
+  startup:
+    timeout: 30s          # Longer overall timeout
+    database: 15s         # More time for slow databases
+    observability: 30s    # More time for remote OTLP endpoints
 ```
 
 ### Oracle SEQUENCE Objects (No Configuration Required)

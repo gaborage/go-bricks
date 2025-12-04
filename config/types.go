@@ -39,8 +39,32 @@ type AppConfig struct {
 }
 
 // StartupConfig holds application startup settings.
+// Production-safe defaults are applied automatically:
+//   - Timeout: 10s (overall startup timeout, fallback for unset components)
+//   - Database: 10s (database health check timeout)
+//   - Messaging: 10s (broker connection timeout)
+//   - Cache: 5s (cache initialization timeout)
+//   - Observability: 15s (OTLP provider initialization timeout)
 type StartupConfig struct {
+	// Timeout is the overall startup timeout (fallback when component-specific not set).
+	// Default: 10s.
 	Timeout time.Duration `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
+
+	// Database is the timeout for database health check during startup.
+	// Default: 10s. Set higher for slow network connections.
+	Database time.Duration `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+
+	// Messaging is the timeout for broker connection during startup.
+	// Default: 10s. Set higher for cluster failover scenarios.
+	Messaging time.Duration `koanf:"messaging" json:"messaging" yaml:"messaging" toml:"messaging" mapstructure:"messaging"`
+
+	// Cache is the timeout for cache initialization during startup.
+	// Default: 5s. Cache is fast to connect; lower timeout prevents blocking.
+	Cache time.Duration `koanf:"cache" json:"cache" yaml:"cache" toml:"cache" mapstructure:"cache"`
+
+	// Observability is the timeout for OTLP provider initialization.
+	// Default: 15s. Remote OTLP endpoints may need extra time for TLS handshake.
+	Observability time.Duration `koanf:"observability" json:"observability" yaml:"observability" toml:"observability" mapstructure:"observability"`
 }
 
 // RateConfig holds rate limiting settings.
@@ -226,10 +250,32 @@ type ConcernConfig struct {
 }
 
 // CacheConfig holds cache backend settings.
+// Production-safe defaults are applied automatically when cache is enabled.
 type CacheConfig struct {
-	Enabled bool        `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
-	Type    string      `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // redis
-	Redis   RedisConfig `koanf:"redis" json:"redis" yaml:"redis" toml:"redis" mapstructure:"redis"`
+	Enabled bool               `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+	Type    string             `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // redis
+	Redis   RedisConfig        `koanf:"redis" json:"redis" yaml:"redis" toml:"redis" mapstructure:"redis"`
+	Manager CacheManagerConfig `koanf:"manager" json:"manager" yaml:"manager" toml:"manager" mapstructure:"manager"`
+}
+
+// CacheManagerConfig holds cache manager lifecycle settings.
+// Production-safe defaults are applied automatically:
+//   - MaxSize: 100 (maximum tenant cache instances)
+//   - IdleTTL: 15m (idle timeout per cache)
+//   - CleanupInterval: 5m (cleanup goroutine frequency)
+type CacheManagerConfig struct {
+	// MaxSize is the maximum number of active cache instances.
+	// 0 = use default (100); negative values are invalid.
+	// Set higher for applications with many tenants.
+	MaxSize int `koanf:"max_size" json:"max_size" yaml:"max_size" toml:"max_size" mapstructure:"max_size"`
+
+	// IdleTTL is the idle timeout before cache instances are closed.
+	// Default: 15m. Set lower for memory-constrained environments.
+	IdleTTL time.Duration `koanf:"idle_ttl" json:"idle_ttl" yaml:"idle_ttl" toml:"idle_ttl" mapstructure:"idle_ttl"`
+
+	// CleanupInterval is how often the cleanup goroutine runs.
+	// Default: 5m. Should be less than IdleTTL for effective cleanup.
+	CleanupInterval time.Duration `koanf:"cleanup_interval" json:"cleanup_interval" yaml:"cleanup_interval" toml:"cleanup_interval" mapstructure:"cleanup_interval"`
 }
 
 // RedisConfig holds Redis-specific cache settings.
@@ -261,10 +307,56 @@ type OutputConfig struct {
 }
 
 // MessagingConfig holds messaging/broker settings.
+// Production-safe defaults are applied automatically when messaging is configured.
 type MessagingConfig struct {
-	Broker  BrokerConfig      `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
-	Routing RoutingConfig     `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
-	Headers map[string]string `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
+	Broker    BrokerConfig        `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
+	Routing   RoutingConfig       `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
+	Headers   map[string]string   `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
+	Reconnect ReconnectConfig     `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
+	Publisher PublisherPoolConfig `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
+}
+
+// ReconnectConfig holds AMQP reconnection settings.
+// Production-safe defaults are applied automatically:
+//   - Delay: 5s (initial delay between reconnection attempts)
+//   - ReinitDelay: 2s (delay before channel reinitialization)
+//   - ResendDelay: 5s (delay before retrying failed publishes)
+//   - ConnectionTimeout: 30s (timeout for connection/confirmation)
+//   - MaxDelay: 60s (maximum delay for exponential backoff cap)
+type ReconnectConfig struct {
+	// Delay is the initial delay between reconnection attempts.
+	// Default: 5s. Set higher for unstable networks.
+	Delay time.Duration `koanf:"delay" json:"delay" yaml:"delay" toml:"delay" mapstructure:"delay"`
+
+	// ReinitDelay is the delay before channel reinitialization after failure.
+	// Default: 2s.
+	ReinitDelay time.Duration `koanf:"reinit_delay" json:"reinit_delay" yaml:"reinit_delay" toml:"reinit_delay" mapstructure:"reinit_delay"`
+
+	// ResendDelay is the delay before retrying a failed publish operation.
+	// Default: 5s.
+	ResendDelay time.Duration `koanf:"resend_delay" json:"resend_delay" yaml:"resend_delay" toml:"resend_delay" mapstructure:"resend_delay"`
+
+	// ConnectionTimeout is the timeout for connection establishment and publish confirmation.
+	// Default: 30s. Set higher for high-latency networks.
+	ConnectionTimeout time.Duration `koanf:"connection_timeout" json:"connection_timeout" yaml:"connection_timeout" toml:"connection_timeout" mapstructure:"connection_timeout"`
+
+	// MaxDelay is the maximum delay for exponential backoff during reconnection.
+	// Default: 60s. Prevents unbounded delays during prolonged outages.
+	MaxDelay time.Duration `koanf:"max_delay" json:"max_delay" yaml:"max_delay" toml:"max_delay" mapstructure:"max_delay"`
+}
+
+// PublisherPoolConfig holds publisher cache/pool settings.
+// Production-safe defaults are applied automatically:
+//   - MaxCached: 50 (maximum publisher clients in cache)
+//   - IdleTTL: 10m (time before idle publishers are evicted)
+type PublisherPoolConfig struct {
+	// MaxCached is the maximum number of publisher clients to keep in the cache.
+	// Default: 50. Set higher for applications with many tenants.
+	MaxCached int `koanf:"max_cached" json:"max_cached" yaml:"max_cached" toml:"max_cached" mapstructure:"max_cached"`
+
+	// IdleTTL is the time after which idle publisher clients are evicted.
+	// Default: 10m. Set lower for memory-constrained environments.
+	IdleTTL time.Duration `koanf:"idle_ttl" json:"idle_ttl" yaml:"idle_ttl" toml:"idle_ttl" mapstructure:"idle_ttl"`
 }
 
 // BrokerConfig holds message broker connection settings.
