@@ -465,48 +465,74 @@ func applyCacheManagerDefaults(cfg *CacheConfig) error {
 
 // applyStartupDefaults sets production-safe defaults for startup configuration.
 //
-// It modifies cfg in-place:
-// - Timeout: if 0, sets to 10s; if negative, returns an error.
-// - Database: if 0, sets to 10s; if negative, returns an error.
-// - Messaging: if 0, sets to 10s; if negative, returns an error.
-// - Cache: if 0, sets to 5s; if negative, returns an error.
-// - Observability: if 0, sets to 15s; if negative, returns an error.
+// Fallback hierarchy for component timeouts:
+//  1. Explicit component value (preserved if set)
+//  2. Global Timeout (used when component is 0 and Timeout was explicitly set)
+//  3. Per-component default (used when both component and original Timeout are 0)
 //
-// Returns an error when any value is invalid; otherwise returns nil.
+// Default values:
+// - Timeout: 10s, Database: 10s, Messaging: 10s, Cache: 5s, Observability: 15s
+//
+// Returns an error when any value is negative; otherwise returns nil.
 func applyStartupDefaults(cfg *StartupConfig) error {
-	// Timeout (overall)
-	if cfg.Timeout == 0 {
-		cfg.Timeout = defaultStartupTimeout
-	} else if cfg.Timeout < 0 {
+	// Capture whether global timeout was originally set (non-zero)
+	// This determines whether unset components inherit from global or use per-component defaults
+	globalWasSet := cfg.Timeout != 0
+
+	// Validate and default the global timeout first
+	if cfg.Timeout < 0 {
 		return NewValidationError("app.startup.timeout", errMustBeNonNegative)
 	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = defaultStartupTimeout
+	}
 
-	// Database
-	if cfg.Database == 0 {
-		cfg.Database = defaultStartupDatabaseTimeout
-	} else if cfg.Database < 0 {
+	// Database: explicit > global fallback > per-component default
+	if cfg.Database < 0 {
 		return NewValidationError("app.startup.database", errMustBeNonNegative)
 	}
+	if cfg.Database == 0 {
+		if globalWasSet {
+			cfg.Database = cfg.Timeout
+		} else {
+			cfg.Database = defaultStartupDatabaseTimeout
+		}
+	}
 
-	// Messaging
-	if cfg.Messaging == 0 {
-		cfg.Messaging = defaultStartupMessagingTimeout
-	} else if cfg.Messaging < 0 {
+	// Messaging: explicit > global fallback > per-component default
+	if cfg.Messaging < 0 {
 		return NewValidationError("app.startup.messaging", errMustBeNonNegative)
 	}
-
-	// Cache
-	if cfg.Cache == 0 {
-		cfg.Cache = defaultStartupCacheTimeout
-	} else if cfg.Cache < 0 {
-		return NewValidationError("app.startup.cache", errMustBeNonNegative)
+	if cfg.Messaging == 0 {
+		if globalWasSet {
+			cfg.Messaging = cfg.Timeout
+		} else {
+			cfg.Messaging = defaultStartupMessagingTimeout
+		}
 	}
 
-	// Observability
-	if cfg.Observability == 0 {
-		cfg.Observability = defaultStartupObservabilityTimeout
-	} else if cfg.Observability < 0 {
+	// Cache: explicit > global fallback > per-component default
+	if cfg.Cache < 0 {
+		return NewValidationError("app.startup.cache", errMustBeNonNegative)
+	}
+	if cfg.Cache == 0 {
+		if globalWasSet {
+			cfg.Cache = cfg.Timeout
+		} else {
+			cfg.Cache = defaultStartupCacheTimeout
+		}
+	}
+
+	// Observability: explicit > global fallback > per-component default
+	if cfg.Observability < 0 {
 		return NewValidationError("app.startup.observability", errMustBeNonNegative)
+	}
+	if cfg.Observability == 0 {
+		if globalWasSet {
+			cfg.Observability = cfg.Timeout
+		} else {
+			cfg.Observability = defaultStartupObservabilityTimeout
+		}
 	}
 
 	return nil

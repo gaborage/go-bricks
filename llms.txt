@@ -703,7 +703,7 @@ GoBricks uses CacheManager to handle per-tenant cache instances with automatic l
 cache:
   enabled: true
   manager:
-    max_size: 100          # Max tenant cache instances (0 = unlimited)
+    max_size: 100          # Max tenant cache instances
     idle_ttl: 15m          # Idle timeout per cache
     cleanup_interval: 5m   # Cleanup goroutine frequency
   redis:

@@ -264,8 +264,9 @@ type CacheConfig struct {
 //   - IdleTTL: 15m (idle timeout per cache)
 //   - CleanupInterval: 5m (cleanup goroutine frequency)
 type CacheManagerConfig struct {
-	// MaxSize is the maximum number of active cache instances (0 = unlimited after defaults applied).
-	// Default: 100. Set higher for applications with many tenants.
+	// MaxSize is the maximum number of active cache instances.
+	// 0 = use default (100); negative values are invalid.
+	// Set higher for applications with many tenants.
 	MaxSize int `koanf:"max_size" json:"max_size" yaml:"max_size" toml:"max_size" mapstructure:"max_size"`
 
 	// IdleTTL is the idle timeout before cache instances are closed.

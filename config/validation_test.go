@@ -1676,7 +1676,7 @@ func TestApplyMessagingDefaults(t *testing.T) {
 		{
 			name: "zero_values_apply_all_defaults",
 			config: MessagingConfig{
-				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+				Broker: BrokerConfig{URL: testAMQPHost},
 			},
 			expectedReconnectDelay:    defaultReconnectDelay,
 			expectedReinitDelay:       defaultReinitDelay,
@@ -1689,7 +1689,7 @@ func TestApplyMessagingDefaults(t *testing.T) {
 		{
 			name: "explicit_values_preserved",
 			config: MessagingConfig{
-				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+				Broker: BrokerConfig{URL: testAMQPHost},
 				Reconnect: ReconnectConfig{
 					Delay:             10 * time.Second,
 					ReinitDelay:       5 * time.Second,
@@ -1713,7 +1713,7 @@ func TestApplyMessagingDefaults(t *testing.T) {
 		{
 			name: "partial_config_applies_missing_defaults",
 			config: MessagingConfig{
-				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+				Broker: BrokerConfig{URL: testAMQPHost},
 				Reconnect: ReconnectConfig{
 					Delay: 15 * time.Second, // Only delay set
 				},
@@ -1752,7 +1752,7 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 		{
 			name: "negative_reconnect_delay_rejected",
 			config: MessagingConfig{
-				Broker:    BrokerConfig{URL: "amqp://localhost:5672"},
+				Broker:    BrokerConfig{URL: testAMQPHost},
 				Reconnect: ReconnectConfig{Delay: -1 * time.Second},
 			},
 			errorContains: "messaging.reconnect.delay",
@@ -1760,7 +1760,7 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 		{
 			name: "negative_max_publishers_rejected",
 			config: MessagingConfig{
-				Broker:    BrokerConfig{URL: "amqp://localhost:5672"},
+				Broker:    BrokerConfig{URL: testAMQPHost},
 				Publisher: PublisherPoolConfig{MaxCached: -1},
 			},
 			errorContains: "messaging.publisher.max_cached",
@@ -1917,6 +1917,30 @@ func TestApplyStartupDefaults(t *testing.T) {
 			expectedMessaging:     defaultStartupMessagingTimeout,
 			expectedCache:         defaultStartupCacheTimeout,
 			expectedObservability: defaultStartupObservabilityTimeout,
+		},
+		{
+			name: "global_timeout_used_as_fallback",
+			config: StartupConfig{
+				Timeout: 30 * time.Second, // Global set, all components unset
+			},
+			expectedTimeout:       30 * time.Second, // Preserved
+			expectedDatabase:      30 * time.Second, // Inherits from global
+			expectedMessaging:     30 * time.Second, // Inherits from global
+			expectedCache:         30 * time.Second, // Inherits from global
+			expectedObservability: 30 * time.Second, // Inherits from global
+		},
+		{
+			name: "explicit_component_overrides_global",
+			config: StartupConfig{
+				Timeout:  30 * time.Second,
+				Database: 45 * time.Second, // Explicit override
+				Cache:    8 * time.Second,  // Explicit override
+			},
+			expectedTimeout:       30 * time.Second, // Preserved
+			expectedDatabase:      45 * time.Second, // Explicit, preserved
+			expectedMessaging:     30 * time.Second, // Inherits from global
+			expectedCache:         8 * time.Second,  // Explicit, preserved
+			expectedObservability: 30 * time.Second, // Inherits from global
 		},
 	}
 
