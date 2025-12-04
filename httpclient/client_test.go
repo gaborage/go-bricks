@@ -928,16 +928,16 @@ func TestTraceIDPropagation(t *testing.T) {
 }
 
 func TestTraceIDUtilities(t *testing.T) {
-	t.Run("WithTraceID and GetTraceIDFromContext", func(t *testing.T) {
+	t.Run("WithTraceID and EnsureTraceID", func(t *testing.T) {
 		expectedTraceID := "test-trace-123"
 		ctx := WithTraceID(context.Background(), expectedTraceID)
 
-		actualTraceID := GetTraceIDFromContext(ctx)
+		actualTraceID := EnsureTraceID(ctx)
 		assert.Equal(t, expectedTraceID, actualTraceID)
 	})
 
-	t.Run("GetTraceIDFromContext generates UUID when no trace ID", func(t *testing.T) {
-		traceID := GetTraceIDFromContext(context.Background())
+	t.Run("EnsureTraceID generates UUID when no trace ID", func(t *testing.T) {
+		traceID := EnsureTraceID(context.Background())
 		assert.NotEmpty(t, traceID)
 		assert.Len(t, traceID, 36) // UUID format
 	})
