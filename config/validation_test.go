@@ -1661,6 +1661,309 @@ func TestApplyDatabasePoolDefaultsNegativeValues(t *testing.T) {
 	}
 }
 
+func TestApplyMessagingDefaults(t *testing.T) {
+	tests := []struct {
+		name                      string
+		config                    MessagingConfig
+		expectedReconnectDelay    time.Duration
+		expectedReinitDelay       time.Duration
+		expectedResendDelay       time.Duration
+		expectedConnectionTimeout time.Duration
+		expectedMaxDelay          time.Duration
+		expectedMaxPublishers     int
+		expectedPublisherIdleTTL  time.Duration
+	}{
+		{
+			name: "zero_values_apply_all_defaults",
+			config: MessagingConfig{
+				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+			},
+			expectedReconnectDelay:    defaultReconnectDelay,
+			expectedReinitDelay:       defaultReinitDelay,
+			expectedResendDelay:       defaultResendDelay,
+			expectedConnectionTimeout: defaultConnectionTimeout,
+			expectedMaxDelay:          defaultMaxReconnectDelay,
+			expectedMaxPublishers:     defaultMaxPublishers,
+			expectedPublisherIdleTTL:  defaultPublisherIdleTTL,
+		},
+		{
+			name: "explicit_values_preserved",
+			config: MessagingConfig{
+				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+				Reconnect: ReconnectConfig{
+					Delay:             10 * time.Second,
+					ReinitDelay:       5 * time.Second,
+					ResendDelay:       8 * time.Second,
+					ConnectionTimeout: 45 * time.Second,
+					MaxDelay:          120 * time.Second,
+				},
+				Publisher: PublisherPoolConfig{
+					MaxCached: 100,
+					IdleTTL:   5 * time.Minute,
+				},
+			},
+			expectedReconnectDelay:    10 * time.Second,
+			expectedReinitDelay:       5 * time.Second,
+			expectedResendDelay:       8 * time.Second,
+			expectedConnectionTimeout: 45 * time.Second,
+			expectedMaxDelay:          120 * time.Second,
+			expectedMaxPublishers:     100,
+			expectedPublisherIdleTTL:  5 * time.Minute,
+		},
+		{
+			name: "partial_config_applies_missing_defaults",
+			config: MessagingConfig{
+				Broker: BrokerConfig{URL: "amqp://localhost:5672"},
+				Reconnect: ReconnectConfig{
+					Delay: 15 * time.Second, // Only delay set
+				},
+			},
+			expectedReconnectDelay:    15 * time.Second,   // Preserved
+			expectedReinitDelay:       defaultReinitDelay, // Defaulted
+			expectedResendDelay:       defaultResendDelay, // Defaulted
+			expectedConnectionTimeout: defaultConnectionTimeout,
+			expectedMaxDelay:          defaultMaxReconnectDelay,
+			expectedMaxPublishers:     defaultMaxPublishers,
+			expectedPublisherIdleTTL:  defaultPublisherIdleTTL,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMessaging(&tt.config)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedReconnectDelay, tt.config.Reconnect.Delay, "Reconnect.Delay mismatch")
+			assert.Equal(t, tt.expectedReinitDelay, tt.config.Reconnect.ReinitDelay, "Reconnect.ReinitDelay mismatch")
+			assert.Equal(t, tt.expectedResendDelay, tt.config.Reconnect.ResendDelay, "Reconnect.ResendDelay mismatch")
+			assert.Equal(t, tt.expectedConnectionTimeout, tt.config.Reconnect.ConnectionTimeout, "Reconnect.ConnectionTimeout mismatch")
+			assert.Equal(t, tt.expectedMaxDelay, tt.config.Reconnect.MaxDelay, "Reconnect.MaxDelay mismatch")
+			assert.Equal(t, tt.expectedMaxPublishers, tt.config.Publisher.MaxCached, "Publisher.MaxCached mismatch")
+			assert.Equal(t, tt.expectedPublisherIdleTTL, tt.config.Publisher.IdleTTL, "Publisher.IdleTTL mismatch")
+		})
+	}
+}
+
+func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        MessagingConfig
+		errorContains string
+	}{
+		{
+			name: "negative_reconnect_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: "amqp://localhost:5672"},
+				Reconnect: ReconnectConfig{Delay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.delay",
+		},
+		{
+			name: "negative_max_publishers_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: "amqp://localhost:5672"},
+				Publisher: PublisherPoolConfig{MaxCached: -1},
+			},
+			errorContains: "messaging.publisher.max_cached",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMessaging(&tt.config)
+			assertValidationError(t, err, tt.errorContains)
+		})
+	}
+}
+
+func TestApplyCacheManagerDefaults(t *testing.T) {
+	tests := []struct {
+		name                    string
+		config                  CacheConfig
+		expectedMaxSize         int
+		expectedIdleTTL         time.Duration
+		expectedCleanupInterval time.Duration
+	}{
+		{
+			name: "zero_values_apply_all_defaults",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+			},
+			expectedMaxSize:         defaultCacheMaxSize,
+			expectedIdleTTL:         defaultCacheIdleTTL,
+			expectedCleanupInterval: defaultCacheCleanupInterval,
+		},
+		{
+			name: "explicit_values_preserved",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{
+					MaxSize:         200,
+					IdleTTL:         30 * time.Minute,
+					CleanupInterval: 10 * time.Minute,
+				},
+			},
+			expectedMaxSize:         200,
+			expectedIdleTTL:         30 * time.Minute,
+			expectedCleanupInterval: 10 * time.Minute,
+		},
+		{
+			name: "partial_config_applies_missing_defaults",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{
+					MaxSize: 50, // Only max_size set
+				},
+			},
+			expectedMaxSize:         50,                          // Preserved
+			expectedIdleTTL:         defaultCacheIdleTTL,         // Defaulted
+			expectedCleanupInterval: defaultCacheCleanupInterval, // Defaulted
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCache(&tt.config)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedMaxSize, tt.config.Manager.MaxSize, "Manager.MaxSize mismatch")
+			assert.Equal(t, tt.expectedIdleTTL, tt.config.Manager.IdleTTL, "Manager.IdleTTL mismatch")
+			assert.Equal(t, tt.expectedCleanupInterval, tt.config.Manager.CleanupInterval, "Manager.CleanupInterval mismatch")
+		})
+	}
+}
+
+func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        CacheConfig
+		errorContains string
+	}{
+		{
+			name: "negative_max_size_rejected",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{MaxSize: -1},
+			},
+			errorContains: "cache.manager.max_size",
+		},
+		{
+			name: "negative_idle_ttl_rejected",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{IdleTTL: -1 * time.Minute},
+			},
+			errorContains: "cache.manager.idle_ttl",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCache(&tt.config)
+			assertValidationError(t, err, tt.errorContains)
+		})
+	}
+}
+
+func TestApplyStartupDefaults(t *testing.T) {
+	tests := []struct {
+		name                  string
+		config                StartupConfig
+		expectedTimeout       time.Duration
+		expectedDatabase      time.Duration
+		expectedMessaging     time.Duration
+		expectedCache         time.Duration
+		expectedObservability time.Duration
+	}{
+		{
+			name:                  "zero_values_apply_all_defaults",
+			config:                StartupConfig{},
+			expectedTimeout:       defaultStartupTimeout,
+			expectedDatabase:      defaultStartupDatabaseTimeout,
+			expectedMessaging:     defaultStartupMessagingTimeout,
+			expectedCache:         defaultStartupCacheTimeout,
+			expectedObservability: defaultStartupObservabilityTimeout,
+		},
+		{
+			name: "explicit_values_preserved",
+			config: StartupConfig{
+				Timeout:       20 * time.Second,
+				Database:      30 * time.Second,
+				Messaging:     25 * time.Second,
+				Cache:         10 * time.Second,
+				Observability: 45 * time.Second,
+			},
+			expectedTimeout:       20 * time.Second,
+			expectedDatabase:      30 * time.Second,
+			expectedMessaging:     25 * time.Second,
+			expectedCache:         10 * time.Second,
+			expectedObservability: 45 * time.Second,
+		},
+		{
+			name: "partial_config_applies_missing_defaults",
+			config: StartupConfig{
+				Database: 30 * time.Second, // Only database set
+			},
+			expectedTimeout:       defaultStartupTimeout, // Defaulted
+			expectedDatabase:      30 * time.Second,      // Preserved
+			expectedMessaging:     defaultStartupMessagingTimeout,
+			expectedCache:         defaultStartupCacheTimeout,
+			expectedObservability: defaultStartupObservabilityTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := applyStartupDefaults(&tt.config)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedTimeout, tt.config.Timeout, "Timeout mismatch")
+			assert.Equal(t, tt.expectedDatabase, tt.config.Database, "Database mismatch")
+			assert.Equal(t, tt.expectedMessaging, tt.config.Messaging, "Messaging mismatch")
+			assert.Equal(t, tt.expectedCache, tt.config.Cache, "Cache mismatch")
+			assert.Equal(t, tt.expectedObservability, tt.config.Observability, "Observability mismatch")
+		})
+	}
+}
+
+func TestApplyStartupDefaultsNegativeValues(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        StartupConfig
+		errorContains string
+	}{
+		{
+			name:          "negative_timeout_rejected",
+			config:        StartupConfig{Timeout: -1 * time.Second},
+			errorContains: "app.startup.timeout",
+		},
+		{
+			name:          "negative_database_rejected",
+			config:        StartupConfig{Database: -1 * time.Second},
+			errorContains: "app.startup.database",
+		},
+		{
+			name:          "negative_observability_rejected",
+			config:        StartupConfig{Observability: -1 * time.Second},
+			errorContains: "app.startup.observability",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := applyStartupDefaults(&tt.config)
+			assertValidationError(t, err, tt.errorContains)
+		})
+	}
+}
+
 func TestValidateMongoDBFields(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Database pool defaults
 const (
 	defaultSlowQueryThreshold  = 200 * time.Millisecond
 	defaultMaxQueryLength      = 1000
@@ -16,6 +17,33 @@ const (
 	defaultPoolIdleTime        = 5 * time.Minute  // Close idle connections before NAT/firewall timeout
 	defaultPoolLifetimeMax     = 30 * time.Minute // Force periodic connection recycling
 	defaultPoolIdleConnections = int32(2)         // Maintain minimal warm connections
+)
+
+// Messaging reconnection defaults
+const (
+	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
+	defaultReinitDelay       = 2 * time.Second  // Delay before channel reinitialization
+	defaultResendDelay       = 5 * time.Second  // Delay before retrying failed publishes
+	defaultConnectionTimeout = 30 * time.Second // Timeout for connection/confirmation
+	defaultMaxReconnectDelay = 60 * time.Second // Maximum delay for exponential backoff cap
+	defaultMaxPublishers     = 50               // Maximum publisher clients in cache
+	defaultPublisherIdleTTL  = 10 * time.Minute // Time before idle publishers are evicted
+)
+
+// Cache manager defaults
+const (
+	defaultCacheMaxSize         = 100              // Maximum tenant cache instances
+	defaultCacheIdleTTL         = 15 * time.Minute // Idle timeout per cache
+	defaultCacheCleanupInterval = 5 * time.Minute  // Cleanup goroutine frequency
+)
+
+// Startup timeout defaults
+const (
+	defaultStartupTimeout              = 10 * time.Second // Overall startup timeout
+	defaultStartupDatabaseTimeout      = 10 * time.Second // Database health check timeout
+	defaultStartupMessagingTimeout     = 10 * time.Second // Broker connection timeout
+	defaultStartupCacheTimeout         = 5 * time.Second  // Cache initialization timeout
+	defaultStartupObservabilityTimeout = 15 * time.Second // OTLP provider initialization timeout
 )
 
 // Database type constants
@@ -67,7 +95,22 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("cache config: %w", err)
 	}
 
+	if err := validateMessaging(&cfg.Messaging); err != nil {
+		return fmt.Errorf("messaging config: %w", err)
+	}
+
 	return nil
+}
+
+// validateMessaging validates messaging configuration and applies defaults.
+// Returns nil if messaging is not configured or if all settings are valid.
+func validateMessaging(cfg *MessagingConfig) error {
+	if !IsMessagingConfigured(cfg) {
+		return nil
+	}
+
+	// Apply messaging defaults (reconnection, publisher pool)
+	return applyMessagingDefaults(cfg)
 }
 
 // validateApp validates the application configuration in cfg.
@@ -94,6 +137,11 @@ func validateApp(cfg *AppConfig) error {
 
 	if cfg.Rate.Burst < 0 {
 		return NewValidationError("app.rate.burst", errMustBeNonNegative)
+	}
+
+	// Apply startup timeout defaults
+	if err := applyStartupDefaults(&cfg.Startup); err != nil {
+		return err
 	}
 
 	return nil
@@ -317,6 +365,153 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
+// applyMessagingDefaults sets production-safe defaults for messaging configuration.
+//
+// It modifies cfg in-place:
+// - Reconnect.Delay: if 0, sets to 5s; if negative, returns an error.
+// - Reconnect.ReinitDelay: if 0, sets to 2s; if negative, returns an error.
+// - Reconnect.ResendDelay: if 0, sets to 5s; if negative, returns an error.
+// - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
+// - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
+// - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
+// - Publisher.IdleTTL: if 0, sets to 10m; if negative, returns an error.
+//
+// Returns an error when any value is invalid; otherwise returns nil.
+func applyMessagingDefaults(cfg *MessagingConfig) error {
+	// Reconnect.Delay
+	if cfg.Reconnect.Delay == 0 {
+		cfg.Reconnect.Delay = defaultReconnectDelay
+	} else if cfg.Reconnect.Delay < 0 {
+		return NewValidationError("messaging.reconnect.delay", errMustBeNonNegative)
+	}
+
+	// Reconnect.ReinitDelay
+	if cfg.Reconnect.ReinitDelay == 0 {
+		cfg.Reconnect.ReinitDelay = defaultReinitDelay
+	} else if cfg.Reconnect.ReinitDelay < 0 {
+		return NewValidationError("messaging.reconnect.reinit_delay", errMustBeNonNegative)
+	}
+
+	// Reconnect.ResendDelay
+	if cfg.Reconnect.ResendDelay == 0 {
+		cfg.Reconnect.ResendDelay = defaultResendDelay
+	} else if cfg.Reconnect.ResendDelay < 0 {
+		return NewValidationError("messaging.reconnect.resend_delay", errMustBeNonNegative)
+	}
+
+	// Reconnect.ConnectionTimeout
+	if cfg.Reconnect.ConnectionTimeout == 0 {
+		cfg.Reconnect.ConnectionTimeout = defaultConnectionTimeout
+	} else if cfg.Reconnect.ConnectionTimeout < 0 {
+		return NewValidationError("messaging.reconnect.connection_timeout", errMustBeNonNegative)
+	}
+
+	// Reconnect.MaxDelay
+	if cfg.Reconnect.MaxDelay == 0 {
+		cfg.Reconnect.MaxDelay = defaultMaxReconnectDelay
+	} else if cfg.Reconnect.MaxDelay < 0 {
+		return NewValidationError("messaging.reconnect.max_delay", errMustBeNonNegative)
+	}
+
+	// Publisher.MaxCached
+	if cfg.Publisher.MaxCached == 0 {
+		cfg.Publisher.MaxCached = defaultMaxPublishers
+	} else if cfg.Publisher.MaxCached < 0 {
+		return NewValidationError("messaging.publisher.max_cached", errMustBeNonNegative)
+	}
+
+	// Publisher.IdleTTL
+	if cfg.Publisher.IdleTTL == 0 {
+		cfg.Publisher.IdleTTL = defaultPublisherIdleTTL
+	} else if cfg.Publisher.IdleTTL < 0 {
+		return NewValidationError("messaging.publisher.idle_ttl", errMustBeNonNegative)
+	}
+
+	return nil
+}
+
+// applyCacheManagerDefaults sets production-safe defaults for cache manager configuration.
+//
+// It modifies cfg in-place:
+// - Manager.MaxSize: if 0, sets to 100; if negative, returns an error.
+// - Manager.IdleTTL: if 0, sets to 15m; if negative, returns an error.
+// - Manager.CleanupInterval: if 0, sets to 5m; if negative, returns an error.
+//
+// Returns an error when any value is invalid; otherwise returns nil.
+func applyCacheManagerDefaults(cfg *CacheConfig) error {
+	// Manager.MaxSize
+	if cfg.Manager.MaxSize == 0 {
+		cfg.Manager.MaxSize = defaultCacheMaxSize
+	} else if cfg.Manager.MaxSize < 0 {
+		return NewValidationError("cache.manager.max_size", errMustBeNonNegative)
+	}
+
+	// Manager.IdleTTL
+	if cfg.Manager.IdleTTL == 0 {
+		cfg.Manager.IdleTTL = defaultCacheIdleTTL
+	} else if cfg.Manager.IdleTTL < 0 {
+		return NewValidationError("cache.manager.idle_ttl", errMustBeNonNegative)
+	}
+
+	// Manager.CleanupInterval
+	if cfg.Manager.CleanupInterval == 0 {
+		cfg.Manager.CleanupInterval = defaultCacheCleanupInterval
+	} else if cfg.Manager.CleanupInterval < 0 {
+		return NewValidationError("cache.manager.cleanup_interval", errMustBeNonNegative)
+	}
+
+	return nil
+}
+
+// applyStartupDefaults sets production-safe defaults for startup configuration.
+//
+// It modifies cfg in-place:
+// - Timeout: if 0, sets to 10s; if negative, returns an error.
+// - Database: if 0, sets to 10s; if negative, returns an error.
+// - Messaging: if 0, sets to 10s; if negative, returns an error.
+// - Cache: if 0, sets to 5s; if negative, returns an error.
+// - Observability: if 0, sets to 15s; if negative, returns an error.
+//
+// Returns an error when any value is invalid; otherwise returns nil.
+func applyStartupDefaults(cfg *StartupConfig) error {
+	// Timeout (overall)
+	if cfg.Timeout == 0 {
+		cfg.Timeout = defaultStartupTimeout
+	} else if cfg.Timeout < 0 {
+		return NewValidationError("app.startup.timeout", errMustBeNonNegative)
+	}
+
+	// Database
+	if cfg.Database == 0 {
+		cfg.Database = defaultStartupDatabaseTimeout
+	} else if cfg.Database < 0 {
+		return NewValidationError("app.startup.database", errMustBeNonNegative)
+	}
+
+	// Messaging
+	if cfg.Messaging == 0 {
+		cfg.Messaging = defaultStartupMessagingTimeout
+	} else if cfg.Messaging < 0 {
+		return NewValidationError("app.startup.messaging", errMustBeNonNegative)
+	}
+
+	// Cache
+	if cfg.Cache == 0 {
+		cfg.Cache = defaultStartupCacheTimeout
+	} else if cfg.Cache < 0 {
+		return NewValidationError("app.startup.cache", errMustBeNonNegative)
+	}
+
+	// Observability
+	if cfg.Observability == 0 {
+		cfg.Observability = defaultStartupObservabilityTimeout
+	} else if cfg.Observability < 0 {
+		return NewValidationError("app.startup.observability", errMustBeNonNegative)
+	}
+
+	return nil
+}
+
 // validateVendorSpecificFields validates database vendor-specific configuration fields
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	switch cfg.Type {
@@ -459,6 +654,11 @@ func validateLog(cfg *LogConfig) error {
 func validateCache(cfg *CacheConfig) error {
 	if !cfg.Enabled {
 		return nil
+	}
+
+	// Apply cache manager defaults
+	if err := applyCacheManagerDefaults(cfg); err != nil {
+		return err
 	}
 
 	// Validate cache type
