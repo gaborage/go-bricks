@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
 
-	gobrickshttp "github.com/gaborage/go-bricks/http"
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )

@@ -109,7 +109,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 		if ts < 0 {
 			ts = 0
 		}
-		return uint64(ts)%100 < uint64(p.samplingRate*100) //nolint:gosec // G115: ts is guaranteed non-negative
+		return uint64(ts)%100 < uint64(p.samplingRate*100)
 	}
 
 	// Use first 8 bytes of trace ID for deterministic sampling

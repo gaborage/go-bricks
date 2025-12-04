@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/http"
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 )
 
 const (

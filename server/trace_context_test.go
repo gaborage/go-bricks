@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gobrickshttp "github.com/gaborage/go-bricks/http"
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 )
 
 const (
