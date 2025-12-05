@@ -126,9 +126,9 @@ func (m *SchedulerModule) Init(deps *app.ModuleDeps) error {
 	}
 
 	// Store multi-tenant resource resolvers
-	m.getDB = deps.GetDB
+	m.getDB = deps.DB
 	m.getMessaging = func(ctx context.Context) (messaging.Client, error) {
-		amqpClient, err := deps.GetMessaging(ctx)
+		amqpClient, err := deps.Messaging(ctx)
 		if err != nil {
 			return nil, err
 		}

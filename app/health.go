@@ -126,7 +126,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			}
 
 			// Attempt to verify readiness using an existing publisher key when available
-			client, err := msgManager.GetPublisher(ctx, "")
+			client, err := msgManager.Publisher(ctx, "")
 			if err != nil {
 				// Check if messaging is not configured (not a failure)
 				if config.IsNotConfigured(err) {

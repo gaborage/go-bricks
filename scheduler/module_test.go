@@ -110,10 +110,10 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 		},
 		Tracer:        nil,
 		MeterProvider: mp.MeterProvider,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}
@@ -161,10 +161,10 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 		},
 		Tracer:        nil,
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}
@@ -201,10 +201,10 @@ func TestJobExecutionWithDBGetterError(t *testing.T) {
 		},
 		Tracer:        nil,
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, errors.New("DB connection failed")
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}
@@ -238,10 +238,10 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 		},
 		Tracer:        nil,
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, errors.New("Messaging connection failed")
 		},
 	}
@@ -276,10 +276,10 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 		},
 		Tracer:        nil,
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}
@@ -314,10 +314,10 @@ func TestJobExecutionWithoutTracer(t *testing.T) {
 		},
 		Tracer:        nil, // Explicitly nil tracer
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}
@@ -356,10 +356,10 @@ func TestJobExecutionWithTracer(t *testing.T) {
 		},
 		Tracer:        tp.Tracer("test-scheduler"),
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}

@@ -13,8 +13,8 @@ const (
 	errMsgRequiredKeyInvalid   = "required configuration key '%s' is invalid: %w"
 )
 
-// GetString retrieves a string value from the configuration or the provided default.
-func (c *Config) GetString(key string, defaultVal ...string) string {
+// String retrieves a string value from the configuration or the provided default.
+func (c *Config) String(key string, defaultVal ...string) string {
 	if c == nil || c.k == nil || !c.k.Exists(key) {
 		if len(defaultVal) > 0 {
 			return defaultVal[0]
@@ -24,8 +24,8 @@ func (c *Config) GetString(key string, defaultVal ...string) string {
 	return c.k.String(key)
 }
 
-// GetInt retrieves an int value from the configuration or the provided default.
-func (c *Config) GetInt(key string, defaultVal ...int) int {
+// Int retrieves an int value from the configuration or the provided default.
+func (c *Config) Int(key string, defaultVal ...int) int {
 	val, ok := c.rawValue(key)
 	if !ok {
 		return optionalDefault(0, defaultVal...)
@@ -38,8 +38,8 @@ func (c *Config) GetInt(key string, defaultVal ...int) int {
 	return n
 }
 
-// GetInt64 retrieves an int64 value from the configuration or the provided default.
-func (c *Config) GetInt64(key string, defaultVal ...int64) int64 {
+// Int64 retrieves an int64 value from the configuration or the provided default.
+func (c *Config) Int64(key string, defaultVal ...int64) int64 {
 	val, ok := c.rawValue(key)
 	if !ok {
 		return optionalDefault(int64(0), defaultVal...)
@@ -52,8 +52,8 @@ func (c *Config) GetInt64(key string, defaultVal ...int64) int64 {
 	return n
 }
 
-// GetFloat64 retrieves a float64 value from the configuration or the provided default.
-func (c *Config) GetFloat64(key string, defaultVal ...float64) float64 {
+// Float64 retrieves a float64 value from the configuration or the provided default.
+func (c *Config) Float64(key string, defaultVal ...float64) float64 {
 	val, ok := c.rawValue(key)
 	if !ok {
 		return optionalDefault(float64(0), defaultVal...)
@@ -66,8 +66,8 @@ func (c *Config) GetFloat64(key string, defaultVal ...float64) float64 {
 	return f
 }
 
-// GetBool retrieves a bool value from the configuration or the provided default.
-func (c *Config) GetBool(key string, defaultVal ...bool) bool {
+// Bool retrieves a bool value from the configuration or the provided default.
+func (c *Config) Bool(key string, defaultVal ...bool) bool {
 	val, ok := c.rawValue(key)
 	if !ok {
 		return optionalDefault(false, defaultVal...)
@@ -80,8 +80,8 @@ func (c *Config) GetBool(key string, defaultVal ...bool) bool {
 	return b
 }
 
-// GetRequiredString retrieves a required string value from the configuration.
-func (c *Config) GetRequiredString(key string) (string, error) {
+// RequiredString retrieves a required string value from the configuration.
+func (c *Config) RequiredString(key string) (string, error) {
 	if c == nil || c.k == nil || !c.k.Exists(key) {
 		return "", fmt.Errorf(errMsgRequiredKeyMissing, key)
 	}
@@ -93,8 +93,8 @@ func (c *Config) GetRequiredString(key string) (string, error) {
 	return val, nil
 }
 
-// GetRequiredInt retrieves a required int value from the configuration.
-func (c *Config) GetRequiredInt(key string) (int, error) {
+// RequiredInt retrieves a required int value from the configuration.
+func (c *Config) RequiredInt(key string) (int, error) {
 	val, err := c.rawRequiredValue(key)
 	if err != nil {
 		return 0, err
@@ -107,8 +107,8 @@ func (c *Config) GetRequiredInt(key string) (int, error) {
 	return n, nil
 }
 
-// GetRequiredInt64 retrieves a required int64 value from the configuration.
-func (c *Config) GetRequiredInt64(key string) (int64, error) {
+// RequiredInt64 retrieves a required int64 value from the configuration.
+func (c *Config) RequiredInt64(key string) (int64, error) {
 	val, err := c.rawRequiredValue(key)
 	if err != nil {
 		return 0, err
@@ -121,8 +121,8 @@ func (c *Config) GetRequiredInt64(key string) (int64, error) {
 	return n, nil
 }
 
-// GetRequiredFloat64 retrieves a required float64 value from the configuration.
-func (c *Config) GetRequiredFloat64(key string) (float64, error) {
+// RequiredFloat64 retrieves a required float64 value from the configuration.
+func (c *Config) RequiredFloat64(key string) (float64, error) {
 	val, err := c.rawRequiredValue(key)
 	if err != nil {
 		return 0, err
@@ -135,8 +135,8 @@ func (c *Config) GetRequiredFloat64(key string) (float64, error) {
 	return f, nil
 }
 
-// GetRequiredBool retrieves a required bool value from the configuration.
-func (c *Config) GetRequiredBool(key string) (bool, error) {
+// RequiredBool retrieves a required bool value from the configuration.
+func (c *Config) RequiredBool(key string) (bool, error) {
 	val, err := c.rawRequiredValue(key)
 	if err != nil {
 		return false, err

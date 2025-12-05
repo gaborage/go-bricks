@@ -195,9 +195,9 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	return nil
 }
 
-// GetPublisher returns a publisher client for the given key.
+// Publisher returns a publisher client for the given key.
 // Publishers are cached with LRU eviction and lazy initialization.
-func (m *Manager) GetPublisher(ctx context.Context, key string) (AMQPClient, error) {
+func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, error) {
 	// Try to get existing publisher first (fast path)
 	if client := m.getExistingPublisher(key); client != nil {
 		return client, nil

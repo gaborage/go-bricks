@@ -282,10 +282,10 @@ func newTestRegistrar() app.JobRegistrar {
 		Config:        &config.Config{},
 		Tracer:        nil,
 		MeterProvider: nil,
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
 		},
 	}

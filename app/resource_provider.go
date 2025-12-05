@@ -18,9 +18,9 @@ const (
 // ResourceProvider abstracts database, messaging, and cache access with support for
 // both single-tenant and multi-tenant deployment modes.
 type ResourceProvider interface {
-	GetDB(ctx context.Context) (database.Interface, error)
-	GetMessaging(ctx context.Context) (messaging.AMQPClient, error)
-	GetCache(ctx context.Context) (cache.Cache, error)
+	DB(ctx context.Context) (database.Interface, error)
+	Messaging(ctx context.Context) (messaging.AMQPClient, error)
+	Cache(ctx context.Context) (cache.Cache, error)
 }
 
 // SingleTenantResourceProvider provides database, messaging, and cache resources
@@ -47,8 +47,8 @@ func NewSingleTenantResourceProvider(
 	}
 }
 
-// GetDB returns the database interface for single-tenant mode.
-func (p *SingleTenantResourceProvider) GetDB(ctx context.Context) (database.Interface, error) {
+// DB returns the database interface for single-tenant mode.
+func (p *SingleTenantResourceProvider) DB(ctx context.Context) (database.Interface, error) {
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
@@ -60,9 +60,9 @@ func (p *SingleTenantResourceProvider) GetDB(ctx context.Context) (database.Inte
 	return p.dbManager.Get(ctx, "")
 }
 
-// GetMessaging returns the messaging client for single-tenant mode.
+// Messaging returns the messaging client for single-tenant mode.
 // It ensures consumers are initialized before returning the publisher.
-func (p *SingleTenantResourceProvider) GetMessaging(ctx context.Context) (messaging.AMQPClient, error) {
+func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging.AMQPClient, error) {
 	if p.messagingManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
@@ -79,11 +79,11 @@ func (p *SingleTenantResourceProvider) GetMessaging(ctx context.Context) (messag
 		}
 	}
 
-	return p.messagingManager.GetPublisher(ctx, "")
+	return p.messagingManager.Publisher(ctx, "")
 }
 
-// GetCache returns the cache instance for single-tenant mode.
-func (p *SingleTenantResourceProvider) GetCache(ctx context.Context) (cache.Cache, error) {
+// Cache returns the cache instance for single-tenant mode.
+func (p *SingleTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, error) {
 	if p.cacheManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
@@ -124,8 +124,8 @@ func NewMultiTenantResourceProvider(
 	}
 }
 
-// GetDB returns the database interface for the tenant specified in context.
-func (p *MultiTenantResourceProvider) GetDB(ctx context.Context) (database.Interface, error) {
+// DB returns the database interface for the tenant specified in context.
+func (p *MultiTenantResourceProvider) DB(ctx context.Context) (database.Interface, error) {
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
@@ -143,9 +143,9 @@ func (p *MultiTenantResourceProvider) GetDB(ctx context.Context) (database.Inter
 	return p.dbManager.Get(ctx, tenantID)
 }
 
-// GetMessaging returns the messaging client for the tenant specified in context.
+// Messaging returns the messaging client for the tenant specified in context.
 // It ensures tenant-specific consumers are initialized before returning the publisher.
-func (p *MultiTenantResourceProvider) GetMessaging(ctx context.Context) (messaging.AMQPClient, error) {
+func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.AMQPClient, error) {
 	if p.messagingManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
@@ -167,11 +167,11 @@ func (p *MultiTenantResourceProvider) GetMessaging(ctx context.Context) (messagi
 		}
 	}
 
-	return p.messagingManager.GetPublisher(ctx, tenantID)
+	return p.messagingManager.Publisher(ctx, tenantID)
 }
 
-// GetCache returns the cache instance for the tenant specified in context.
-func (p *MultiTenantResourceProvider) GetCache(ctx context.Context) (cache.Cache, error) {
+// Cache returns the cache instance for the tenant specified in context.
+func (p *MultiTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, error) {
 	if p.cacheManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
