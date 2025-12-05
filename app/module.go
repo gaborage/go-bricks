@@ -66,7 +66,7 @@ type JobProvider interface {
 
 // ModuleDeps contains the dependencies that are injected into each module.
 // It provides access to core services like database, logging, messaging, observability, and job scheduling.
-// All modules must use GetDB() and GetMessaging() functions for resource access.
+// All modules must use DB() and Messaging() functions for resource access.
 type ModuleDeps struct {
 	Logger logger.Logger
 	Config *config.Config
