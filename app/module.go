@@ -87,18 +87,18 @@ type ModuleDeps struct {
 	// Example: deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, time.Date(0, 0, 0, 3, 0, 0, 0, time.Local))
 	Scheduler JobRegistrar
 
-	// GetDB returns a database interface for the current context.
+	// DB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific database.
-	GetDB func(_ context.Context) (database.Interface, error)
+	DB func(_ context.Context) (database.Interface, error)
 
-	// GetMessaging returns a messaging client for the current context.
+	// Messaging returns a messaging client for the current context.
 	// In single-tenant mode, returns the global messaging client.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific client.
-	GetMessaging func(_ context.Context) (messaging.AMQPClient, error)
+	Messaging func(_ context.Context) (messaging.AMQPClient, error)
 
-	// GetCache returns a cache instance for the current context.
+	// Cache returns a cache instance for the current context.
 	// In single-tenant mode, returns the global cache instance.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific cache.
-	GetCache func(_ context.Context) (cache.Cache, error)
+	Cache func(_ context.Context) (cache.Cache, error)
 }

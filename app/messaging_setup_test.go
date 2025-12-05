@@ -223,14 +223,14 @@ func TestNewMessagingInitializer(t *testing.T) {
 // Mock types for testing
 type unknownResourceProvider struct{}
 
-func (u *unknownResourceProvider) GetDB(_ context.Context) (database.Interface, error) {
+func (u *unknownResourceProvider) DB(_ context.Context) (database.Interface, error) {
 	return nil, nil
 }
 
-func (u *unknownResourceProvider) GetMessaging(_ context.Context) (messaging.AMQPClient, error) {
+func (u *unknownResourceProvider) Messaging(_ context.Context) (messaging.AMQPClient, error) {
 	return nil, nil
 }
 
-func (u *unknownResourceProvider) GetCache(_ context.Context) (cache.Cache, error) {
+func (u *unknownResourceProvider) Cache(_ context.Context) (cache.Cache, error) {
 	return nil, nil
 }

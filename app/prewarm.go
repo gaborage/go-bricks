@@ -134,7 +134,7 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 	}
 
 	// Pre-warm publisher
-	if _, err := w.messagingManager.GetPublisher(ctx, key); err != nil {
+	if _, err := w.messagingManager.Publisher(ctx, key); err != nil {
 		return fmt.Errorf("failed to get publisher: %w", err)
 	}
 	w.logger.Info().Msg("Pre-warmed messaging publisher")

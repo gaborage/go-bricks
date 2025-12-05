@@ -161,10 +161,10 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*SchedulerMo
 		},
 		Tracer:        nil, // No-op tracer for tests
 		MeterProvider: nil, // No-op meter for tests
-		GetDB: func(_ context.Context) (types.Interface, error) {
+		DB: func(_ context.Context) (types.Interface, error) {
 			return nil, nil // No DB for MVP tests
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil // No messaging for MVP tests
 		},
 	}

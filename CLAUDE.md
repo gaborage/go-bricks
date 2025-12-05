@@ -168,6 +168,13 @@ GoBricks follows Go's idiomatic naming conventions. Per [SonarCloud rule S8179](
 
 | Package | Old Method | New Method |
 |---------|------------|------------|
+| `config.Config` | `GetString()`, `GetInt()`, `GetInt64()`, `GetFloat64()`, `GetBool()` | `String()`, `Int()`, `Int64()`, `Float64()`, `Bool()` |
+| `config.Config` | `GetRequiredString()`, `GetRequiredInt()`, `GetRequiredInt64()`, `GetRequiredFloat64()`, `GetRequiredBool()` | `RequiredString()`, `RequiredInt()`, `RequiredInt64()`, `RequiredFloat64()`, `RequiredBool()` |
+| `app.ResourceProvider` | `GetDB()`, `GetMessaging()`, `GetCache()` | `DB()`, `Messaging()`, `Cache()` |
+| `app.ModuleDeps` | `GetDB`, `GetMessaging`, `GetCache` (fields) | `DB`, `Messaging`, `Cache` (fields) |
+| `app.Builder` | `GetError()` | `Error()` |
+| `messaging.Manager` | `GetPublisher()` | `Publisher()` |
+| `server.Validator` | `GetValidator()` | `Validator()` |
 | `validation.TagInfo` | `GetMin()`, `GetMax()`, `GetMinLength()`, `GetMaxLength()`, `GetPattern()`, `GetEnum()`, `GetConstraints()` | `Min()`, `Max()`, `MinLength()`, `MaxLength()`, `Pattern()`, `Enum()`, `AllConstraints()` |
 | `migration.FlywayMigrator` | `GetDefaultMigrationConfig()` | `DefaultMigrationConfig()` |
 | `config.TenantStore` | `GetTenants()` | `Tenants()` |
@@ -185,16 +192,16 @@ GoBricks follows Go's idiomatic naming conventions. Per [SonarCloud rule S8179](
 **Example Migration:**
 ```go
 // ❌ OLD
-min, ok := tagInfo.GetMin()
-tenants := store.GetTenants()
-db := tenants.GetTenantDB("acme")
-table := conn.GetMigrationTable()
+host := cfg.GetString("server.host", "0.0.0.0")
+port := cfg.GetInt("server.port", 8080)
+db, err := deps.GetDB(ctx)
+client, err := manager.GetPublisher(ctx, "tenant-1")
 
 // ✅ NEW
-min, ok := tagInfo.Min()
-tenants := store.Tenants()
-db := tenants.TenantDB("acme")
-table := conn.MigrationTable()
+host := cfg.String("server.host", "0.0.0.0")
+port := cfg.Int("server.port", 8080)
+db, err := deps.DB(ctx)
+client, err := manager.Publisher(ctx, "tenant-1")
 ```
 
 ## Architecture

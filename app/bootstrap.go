@@ -69,9 +69,9 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 		Config:        b.cfg,
 		Tracer:        obsProvider.TracerProvider().Tracer(b.cfg.App.Name),
 		MeterProvider: obsProvider.MeterProvider(),
-		GetDB:         provider.GetDB,
-		GetMessaging:  provider.GetMessaging,
-		GetCache:      provider.GetCache,
+		DB:            provider.DB,
+		Messaging:     provider.Messaging,
+		Cache:         provider.Cache,
 	}
 
 	return &dependencyBundle{

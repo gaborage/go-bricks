@@ -30,10 +30,10 @@ func TestNewModuleRegistry(t *testing.T) {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
-		GetDB: func(_ context.Context) (database.Interface, error) {
+		DB: func(_ context.Context) (database.Interface, error) {
 			return mockDB, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return mockMessaging, nil
 		},
 	}
@@ -54,10 +54,10 @@ func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
-		GetDB: func(_ context.Context) (database.Interface, error) {
+		DB: func(_ context.Context) (database.Interface, error) {
 			return mockDB, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return mockMessaging, nil
 		},
 	}
@@ -82,10 +82,10 @@ func TestModuleRegistryRegisterInitError(t *testing.T) {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
-		GetDB: func(_ context.Context) (database.Interface, error) {
+		DB: func(_ context.Context) (database.Interface, error) {
 			return mockDB, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return mockMessaging, nil
 		},
 	}
@@ -111,10 +111,10 @@ func TestModuleRegistryRegisterRoutes(t *testing.T) {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
-		GetDB: func(_ context.Context) (database.Interface, error) {
+		DB: func(_ context.Context) (database.Interface, error) {
 			return mockDB, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return mockMessaging, nil
 		},
 	}
@@ -156,10 +156,10 @@ func TestModuleRegistryDeclareMessaging(t *testing.T) {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: &config.Config{},
-		GetDB: func(_ context.Context) (database.Interface, error) {
+		DB: func(_ context.Context) (database.Interface, error) {
 			return mockDB, nil
 		},
-		GetMessaging: func(_ context.Context) (messaging.AMQPClient, error) {
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, fmt.Errorf("messaging not configured")
 		},
 	}

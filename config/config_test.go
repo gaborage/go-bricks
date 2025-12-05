@@ -271,13 +271,13 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		require.NotNil(t, cfg.k, "Koanf instance should be set")
 
 		// Test accessing custom configuration
-		assert.True(t, cfg.GetBool("custom.feature.enabled"))
-		assert.Equal(t, "https://api.test.com", cfg.GetString("custom.service.endpoint"))
-		timeout := cfg.GetString("custom.service.timeout")
+		assert.True(t, cfg.Bool("custom.feature.enabled"))
+		assert.Equal(t, "https://api.test.com", cfg.String("custom.service.endpoint"))
+		timeout := cfg.String("custom.service.timeout")
 		dur, err := time.ParseDuration(timeout)
 		require.NoError(t, err)
 		assert.Equal(t, 30*time.Second, dur)
-		assert.Equal(t, 5, cfg.GetInt("custom.max.retries"))
+		assert.Equal(t, 5, cfg.Int("custom.max.retries"))
 	})
 
 	t.Run("custom_config_with_defaults", func(t *testing.T) {
@@ -291,9 +291,9 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		require.NotNil(t, cfg)
 
 		// Test default values for missing custom config
-		assert.Equal(t, "default-value", cfg.GetString("custom.missing.key", "default-value"))
-		assert.Equal(t, 100, cfg.GetInt("custom.missing.int", 100))
-		assert.False(t, cfg.GetBool("custom.missing.bool"))
+		assert.Equal(t, "default-value", cfg.String("custom.missing.key", "default-value"))
+		assert.Equal(t, 100, cfg.Int("custom.missing.int", 100))
+		assert.False(t, cfg.Bool("custom.missing.bool"))
 	})
 
 	t.Run("custom_config_required_fields", func(t *testing.T) {
@@ -308,12 +308,12 @@ func TestLoadCustomConfiguration(t *testing.T) {
 		require.NotNil(t, cfg)
 
 		// Test required field that exists
-		apiKey, err := cfg.GetRequiredString("custom.api.key")
+		apiKey, err := cfg.RequiredString("custom.api.key")
 		assert.NoError(t, err)
 		assert.Equal(t, "secret-key-123", apiKey)
 
 		// Test required field that doesn't exist
-		_, err = cfg.GetRequiredString("custom.missing.required")
+		_, err = cfg.RequiredString("custom.missing.required")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "missing")
 	})

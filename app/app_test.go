@@ -413,11 +413,11 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	deps := &ModuleDeps{
 		Logger: log,
 		Config: cfg,
-		GetDB: func(ctx context.Context) (database.Interface, error) {
+		DB: func(ctx context.Context) (database.Interface, error) {
 			return dbManager.Get(ctx, "")
 		},
-		GetMessaging: func(ctx context.Context) (messaging.AMQPClient, error) {
-			return messagingManager.GetPublisher(ctx, "")
+		Messaging: func(ctx context.Context) (messaging.AMQPClient, error) {
+			return messagingManager.Publisher(ctx, "")
 		},
 	}
 
@@ -634,7 +634,7 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 
 	_, err = app.dbManager.Get(context.Background(), "")
 	require.NoError(t, err)
-	_, err = app.messagingManager.GetPublisher(context.Background(), "")
+	_, err = app.messagingManager.Publisher(context.Background(), "")
 	require.NoError(t, err)
 
 	assert.Greater(t, resource.dbCalls, 0)
@@ -844,7 +844,7 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dbMock, dbConn)
 
-	msgClient, err := app.messagingManager.GetPublisher(ctx, "")
+	msgClient, err := app.messagingManager.Publisher(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, msgMock, msgClient)
 }

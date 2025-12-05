@@ -41,7 +41,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		dbManager := createTestDbManagerWithMock(t, mockDB)
 		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
-		db, err := provider.GetDB(context.Background())
+		db, err := provider.DB(context.Background())
 
 		require.NoError(t, err)
 		assert.Equal(t, mockDB, db)
@@ -50,7 +50,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
 		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
-		db, err := provider.GetDB(context.Background())
+		db, err := provider.DB(context.Background())
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database")
@@ -62,7 +62,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		dbManager := createTestDbManagerWithError(t, errors.New("connection failed"))
 		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
 
-		db, err := provider.GetDB(context.Background())
+		db, err := provider.DB(context.Background())
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "connection failed")
@@ -74,7 +74,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
 		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, nil)
 
-		client, err := provider.GetMessaging(context.Background())
+		client, err := provider.Messaging(context.Background())
 
 		require.NoError(t, err)
 		assert.Equal(t, mockClient, client)
@@ -86,7 +86,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		declarations := &messaging.Declarations{}
 		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, declarations)
 
-		client, err := provider.GetMessaging(context.Background())
+		client, err := provider.Messaging(context.Background())
 
 		require.NoError(t, err)
 		assert.Equal(t, mockClient, client)
@@ -95,7 +95,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetMessaging with nil messaging manager", func(t *testing.T) {
 		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
-		client, err := provider.GetMessaging(context.Background())
+		client, err := provider.Messaging(context.Background())
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "messaging")
@@ -123,7 +123,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 		cacheManager := createTestCacheManager(t)
 		provider := NewSingleTenantResourceProvider(nil, nil, cacheManager, nil)
 
-		c, err := provider.GetCache(context.Background())
+		c, err := provider.Cache(context.Background())
 
 		require.NoError(t, err)
 		assert.NotNil(t, c)
@@ -132,7 +132,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("GetCache with nil cache manager", func(t *testing.T) {
 		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
 
-		c, err := provider.GetCache(context.Background())
+		c, err := provider.Cache(context.Background())
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cache")
@@ -162,7 +162,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
-		db, err := provider.GetDB(ctx)
+		db, err := provider.DB(ctx)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "database")
@@ -174,7 +174,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		dbManager := createTestDbManager(t)
 		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 
-		db, err := provider.GetDB(context.Background())
+		db, err := provider.DB(context.Background())
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)
@@ -186,7 +186,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
-		db, err := provider.GetDB(ctx)
+		db, err := provider.DB(ctx)
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)
@@ -203,7 +203,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
-		client, err := provider.GetMessaging(ctx)
+		client, err := provider.Messaging(ctx)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "messaging")
@@ -215,7 +215,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		msgManager := createTestMessagingManager(t)
 		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 
-		client, err := provider.GetMessaging(context.Background())
+		client, err := provider.Messaging(context.Background())
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)
@@ -227,7 +227,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, msgManager, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
-		client, err := provider.GetMessaging(ctx)
+		client, err := provider.Messaging(ctx)
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)
@@ -255,7 +255,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
-		c, err := provider.GetCache(ctx)
+		c, err := provider.Cache(ctx)
 
 		require.NoError(t, err)
 		assert.NotNil(t, c)
@@ -265,7 +265,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)
 
-		c, err := provider.GetCache(ctx)
+		c, err := provider.Cache(ctx)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cache")
@@ -277,7 +277,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		cacheManager := createTestCacheManager(t)
 		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
 
-		c, err := provider.GetCache(context.Background())
+		c, err := provider.Cache(context.Background())
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)
@@ -289,7 +289,7 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, cacheManager, nil)
 		ctx := multitenant.SetTenant(context.Background(), "")
 
-		c, err := provider.GetCache(ctx)
+		c, err := provider.Cache(ctx)
 
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNoTenantInContext)

@@ -205,7 +205,7 @@ func (b *Builder) performPreInitialization() {
 
 	// Pre-initialize messaging if configured
 	if b.bundle.messagingManager != nil && config.IsMessagingConfigured(&b.cfg.Messaging) {
-		if _, err := b.bundle.messagingManager.GetPublisher(ctx, ""); err != nil {
+		if _, err := b.bundle.messagingManager.Publisher(ctx, ""); err != nil {
 			b.err = fmt.Errorf("messaging connection failed during startup: %w", err)
 			return
 		}
@@ -296,7 +296,7 @@ func (b *Builder) Build() (*App, logger.Logger, error) {
 	return b.app, log, nil
 }
 
-// GetError returns any error encountered during the building process.
-func (b *Builder) GetError() error {
+// Error returns any error encountered during the building process.
+func (b *Builder) Error() error {
 	return b.err
 }

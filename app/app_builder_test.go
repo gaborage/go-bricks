@@ -243,17 +243,17 @@ func TestAppBuilderBuildErrors(t *testing.T) {
 	})
 }
 
-func TestAppBuilderGetError(t *testing.T) {
+func TestAppBuilderError(t *testing.T) {
 	t.Run("no error", func(t *testing.T) {
 		builder := NewAppBuilder()
-		err := builder.GetError()
+		err := builder.Error()
 		assert.Nil(t, err)
 	})
 
 	t.Run("with error", func(t *testing.T) {
 		expectedError := assert.AnError
 		builder := &Builder{err: expectedError}
-		err := builder.GetError()
+		err := builder.Error()
 		assert.Equal(t, expectedError, err)
 	})
 }

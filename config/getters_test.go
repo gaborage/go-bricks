@@ -36,18 +36,18 @@ func setupTestConfig(t *testing.T, data map[string]any) *Config {
 // BASIC ACCESSOR TESTS
 // ========================================
 
-func TestGetString(t *testing.T) {
+func TestString(t *testing.T) {
 	cfg := setupTestConfig(t, map[string]any{
 		name:           "test-service",
 		"custom.empty": "",
 	})
 
-	assert.Equal(t, "test-service", cfg.GetString(name))
-	assert.Equal(t, "fallback", cfg.GetString(missing, "fallback"))
-	assert.Equal(t, "", cfg.GetString("custom.empty"))
+	assert.Equal(t, "test-service", cfg.String(name))
+	assert.Equal(t, "fallback", cfg.String(missing, "fallback"))
+	assert.Equal(t, "", cfg.String("custom.empty"))
 }
 
-func TestGetNumericAndBool(t *testing.T) {
+func TestNumericAndBool(t *testing.T) {
 	cfg := setupTestConfig(t, map[string]any{
 		port:          8080,
 		retries:       "3",
@@ -57,20 +57,20 @@ func TestGetNumericAndBool(t *testing.T) {
 		invalidInt:    "oops",
 	})
 
-	assert.Equal(t, 8080, cfg.GetInt(port))
-	assert.Equal(t, 3, cfg.GetInt(retries))
-	assert.Equal(t, 7, cfg.GetInt(missing, 7))
-	assert.Equal(t, 0, cfg.GetInt(invalidInt))
+	assert.Equal(t, 8080, cfg.Int(port))
+	assert.Equal(t, 3, cfg.Int(retries))
+	assert.Equal(t, 7, cfg.Int(missing, 7))
+	assert.Equal(t, 0, cfg.Int(invalidInt))
 
-	assert.Equal(t, int64(42), cfg.GetInt64("custom.long"))
-	assert.Equal(t, int64(5), cfg.GetInt64("custom.missing_long", 5))
+	assert.Equal(t, int64(42), cfg.Int64("custom.long"))
+	assert.Equal(t, int64(5), cfg.Int64("custom.missing_long", 5))
 
-	assert.InEpsilon(t, 0.75, cfg.GetFloat64(threshold), 0.001)
-	assert.Equal(t, 1.5, cfg.GetFloat64("custom.missing_float", 1.5))
+	assert.InEpsilon(t, 0.75, cfg.Float64(threshold), 0.001)
+	assert.Equal(t, 1.5, cfg.Float64("custom.missing_float", 1.5))
 
-	assert.True(t, cfg.GetBool(enabled))
-	assert.False(t, cfg.GetBool("custom.missing_bool"))
-	assert.True(t, cfg.GetBool("custom.missing_bool", true))
+	assert.True(t, cfg.Bool(enabled))
+	assert.False(t, cfg.Bool("custom.missing_bool"))
+	assert.True(t, cfg.Bool("custom.missing_bool", true))
 }
 
 // ========================================
@@ -87,29 +87,29 @@ func TestRequiredAccessors(t *testing.T) {
 		invalidInt: "oops",
 	})
 
-	val, err := cfg.GetRequiredString(name)
+	val, err := cfg.RequiredString(name)
 	require.NoError(t, err)
 	assert.Equal(t, "example", val)
 
-	_, err = cfg.GetRequiredString(missing)
+	_, err = cfg.RequiredString(missing)
 	assert.Error(t, err)
 
-	vInt, err := cfg.GetRequiredInt(port)
+	vInt, err := cfg.RequiredInt(port)
 	require.NoError(t, err)
 	assert.Equal(t, 8080, vInt)
 
-	_, err = cfg.GetRequiredInt(invalidInt)
+	_, err = cfg.RequiredInt(invalidInt)
 	assert.Error(t, err)
 
-	vInt64, err := cfg.GetRequiredInt64(retries)
+	vInt64, err := cfg.RequiredInt64(retries)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), vInt64)
 
-	vFloat, err := cfg.GetRequiredFloat64(threshold)
+	vFloat, err := cfg.RequiredFloat64(threshold)
 	require.NoError(t, err)
 	assert.InEpsilon(t, 0.91, vFloat, 0.0001)
 
-	vBool, err := cfg.GetRequiredBool(enabled)
+	vBool, err := cfg.RequiredBool(enabled)
 	require.NoError(t, err)
 	assert.True(t, vBool)
 }
@@ -121,16 +121,16 @@ func TestRequiredAccessors(t *testing.T) {
 func TestNilConfigAccessors(t *testing.T) {
 	cfg := &Config{}
 
-	assert.Equal(t, "fallback", cfg.GetString("any", "fallback"))
-	assert.Equal(t, 0, cfg.GetInt("any"))
-	assert.Equal(t, int64(0), cfg.GetInt64("any"))
-	assert.Equal(t, 0.0, cfg.GetFloat64("any"))
-	assert.False(t, cfg.GetBool("any"))
+	assert.Equal(t, "fallback", cfg.String("any", "fallback"))
+	assert.Equal(t, 0, cfg.Int("any"))
+	assert.Equal(t, int64(0), cfg.Int64("any"))
+	assert.Equal(t, 0.0, cfg.Float64("any"))
+	assert.False(t, cfg.Bool("any"))
 
-	_, err := cfg.GetRequiredInt("any")
+	_, err := cfg.RequiredInt("any")
 	assert.Error(t, err)
 
-	_, err = cfg.GetRequiredString("any")
+	_, err = cfg.RequiredString("any")
 	assert.Error(t, err)
 
 	err = cfg.Unmarshal("custom", &struct{}{})
@@ -199,12 +199,12 @@ func TestInvalidTypesReturnDefaults(t *testing.T) {
 		"custom.bool_invalid": struct{}{},
 	})
 
-	assert.Equal(t, 5, cfg.GetInt(port, 5))
-	assert.Equal(t, int64(7), cfg.GetInt64("custom.int64", 7))
-	assert.Equal(t, 9.9, cfg.GetFloat64("custom.float", 9.9))
-	assert.True(t, cfg.GetBool("custom.bool", true))
+	assert.Equal(t, 5, cfg.Int(port, 5))
+	assert.Equal(t, int64(7), cfg.Int64("custom.int64", 7))
+	assert.Equal(t, 9.9, cfg.Float64("custom.float", 9.9))
+	assert.True(t, cfg.Bool("custom.bool", true))
 
-	_, err := cfg.GetRequiredBool("custom.bool_invalid")
+	_, err := cfg.RequiredBool("custom.bool_invalid")
 	assert.Error(t, err)
 }
 

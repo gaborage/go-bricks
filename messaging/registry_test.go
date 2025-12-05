@@ -290,6 +290,7 @@ func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
 
 	// Simulate active consumers
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure cleanup even if StopConsumers doesn't call it
 	registry.consumersActive = true
 	registry.cancelConsumers = cancel
 
@@ -1552,7 +1553,7 @@ type multipleMockAMQPClient struct {
 	consumeErrors map[string]error
 }
 
-func (m *multipleMockAMQPClient) ConsumeFromQueue(_ context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
+func (m *multipleMockAMQPClient) ConsumeFromQueue(ctx context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
 	if m.consumeErrors != nil {
 		if err, exists := m.consumeErrors[opts.Queue]; exists {
 			return nil, err
@@ -1565,8 +1566,8 @@ func (m *multipleMockAMQPClient) ConsumeFromQueue(_ context.Context, opts Consum
 		}
 	}
 
-	// Default behavior
-	return m.simpleMockAMQPClient.ConsumeFromQueue(context.Background(), opts)
+	// Default behavior - propagate context for proper cancellation/deadline handling
+	return m.simpleMockAMQPClient.ConsumeFromQueue(ctx, opts)
 }
 
 // ===== Edge Cases and Boundary Conditions =====

@@ -369,7 +369,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				_, err := cfg.GetRequiredString(tt.key)
+				_, err := cfg.RequiredString(tt.key)
 				assert.Error(t, err)
 				if tt.name == emptyString {
 					assert.Contains(t, err.Error(), "empty")
@@ -391,7 +391,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				_, err := cfg.GetRequiredInt64(tt.key)
+				_, err := cfg.RequiredInt64(tt.key)
 				assert.Error(t, err)
 			})
 		}
@@ -408,7 +408,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				_, err := cfg.GetRequiredFloat64(tt.key)
+				_, err := cfg.RequiredFloat64(tt.key)
 				assert.Error(t, err)
 			})
 		}
@@ -425,7 +425,7 @@ func TestRequiredAccessorErrorPaths(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				_, err := cfg.GetRequiredBool(tt.key)
+				_, err := cfg.RequiredBool(tt.key)
 				assert.Error(t, err)
 			})
 		}
@@ -439,12 +439,12 @@ func TestGetStringEdgeCases(t *testing.T) {
 	})
 
 	t.Run("non-string value returns string representation", func(t *testing.T) {
-		result := cfg.GetString("non.string")
+		result := cfg.String("non.string")
 		assert.Equal(t, "42", result)
 	})
 
 	t.Run("missing key with no default", func(t *testing.T) {
-		result := cfg.GetString("missing.key")
+		result := cfg.String("missing.key")
 		assert.Equal(t, "", result)
 	})
 }
@@ -476,7 +476,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 		})
 
 		// This should work on 64-bit systems but might trigger different paths
-		result := cfg.GetInt("large.number")
+		result := cfg.Int("large.number")
 		assert.True(t, result != 0 || result == 0) // Just ensure it doesn't panic
 	})
 
@@ -486,7 +486,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 			"overflow.uint": uint64(math.MaxUint64),
 		})
 
-		result := cfg.GetBool("overflow.uint")
+		result := cfg.Bool("overflow.uint")
 		// This tests the error path in toBool when toInt64 fails for uint types
 		assert.False(t, result) // Should return false on conversion error
 	})

@@ -33,8 +33,8 @@ func NewValidator() *Validator {
 	return &Validator{validate: v}
 }
 
-// GetValidator returns the underlying validator instance.
-func (v *Validator) GetValidator() *validator.Validate {
+// Validator returns the underlying validator instance.
+func (v *Validator) Validator() *validator.Validate {
 	return v.validate
 }
 
