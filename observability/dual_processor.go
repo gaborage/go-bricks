@@ -69,23 +69,21 @@ func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) e
 	return nil
 }
 
-// Enabled checks if the processor should process the given record.
-// Note: The Processor interface does not require Enabled() method,
-// so we implement basic severity-based filtering logic here.
-func (p *DualModeLogProcessor) Enabled(_ context.Context, rec *sdklog.Record) bool {
-	logType := extractLogType(rec)
-
-	// Action logs: all severities enabled
-	if logType == logTypeAction {
+// Enabled checks if the processor should process logs with the given parameters.
+// The EnabledParameters only provides severity and scope (not full record attributes),
+// so we use severity-based pre-filtering. Full routing (action vs trace logs)
+// happens in OnEmit where we have access to the complete record.
+//
+//nolint:gocritic // hugeParam: EnabledParameters passed by value per OTel SDK interface contract
+func (p *DualModeLogProcessor) Enabled(_ context.Context, param sdklog.EnabledParameters) bool {
+	// ERROR/WARN: always enabled (exported regardless of sampling)
+	if param.Severity >= log.SeverityWarn {
 		return true
 	}
 
-	// Trace logs: ERROR/WARN always enabled
-	if rec.Severity() >= log.SeverityWarn {
-		return true
-	}
-
-	// INFO/DEBUG: enabled based on sampling rate (for pre-filtering optimization)
+	// INFO/DEBUG: enabled if sampling rate > 0
+	// Note: Action logs are always exported via OnEmit routing, but we can't
+	// distinguish them here (no access to log.type attribute in EnabledParameters)
 	return p.samplingRate > 0
 }
 
