@@ -30,7 +30,8 @@ func (m *mockProcessor) OnEmit(_ context.Context, _ *sdklog.Record) error {
 	return nil
 }
 
-func (m *mockProcessor) Enabled(_ context.Context, _ *sdklog.Record) bool {
+//nolint:gocritic // hugeParam: EnabledParameters passed by value per OTel SDK interface contract
+func (m *mockProcessor) Enabled(_ context.Context, _ sdklog.EnabledParameters) bool {
 	return true
 }
 
@@ -55,7 +56,8 @@ func (m *errorMockProcessor) OnEmit(_ context.Context, _ *sdklog.Record) error {
 	return m.emitErr
 }
 
-func (m *errorMockProcessor) Enabled(_ context.Context, _ *sdklog.Record) bool {
+//nolint:gocritic // hugeParam: EnabledParameters passed by value per OTel SDK interface contract
+func (m *errorMockProcessor) Enabled(_ context.Context, _ sdklog.EnabledParameters) bool {
 	return true
 }
 
@@ -135,34 +137,32 @@ func TestExtractLogType(t *testing.T) {
 	}
 }
 
-// TestDualModeLogProcessor_Enabled verifies Enabled() method severity filtering
+// TestDualModeLogProcessorEnabled verifies Enabled() method severity filtering
+// Note: EnabledParameters only provides Severity (no access to attributes like log.type),
+// so the test focuses on severity-based filtering. Full log.type routing happens in OnEmit.
 func TestDualModeLogProcessorEnabled(t *testing.T) {
 	actionProc := &mockProcessor{}
 	traceProc := &mockProcessor{}
 	dualProc := NewDualModeLogProcessor(actionProc, traceProc, 0.0)
 
 	tests := []struct {
-		name       string
-		severity   log.Severity
-		attributes []log.KeyValue
-		expected   bool
+		name     string
+		severity log.Severity
+		expected bool
 	}{
-		{"action INFO enabled", log.SeverityInfo, []log.KeyValue{log.String(logTypeAttr, "action")}, true},
-		{"trace INFO disabled with rate 0", log.SeverityInfo, []log.KeyValue{log.String(logTypeAttr, "trace")}, false},
-		{"trace WARN enabled", log.SeverityWarn, []log.KeyValue{log.String(logTypeAttr, "trace")}, true},
-		{"trace ERROR enabled", log.SeverityError, []log.KeyValue{log.String(logTypeAttr, "trace")}, true},
-		{"unknown WARN treated as trace", log.SeverityWarn, []log.KeyValue{log.String(logTypeAttr, "unknown")}, true},
+		// With sampling rate 0: INFO/DEBUG disabled, WARN/ERROR enabled
+		{"INFO disabled with rate 0", log.SeverityInfo, false},
+		{"DEBUG disabled with rate 0", log.SeverityDebug, false},
+		{"WARN enabled", log.SeverityWarn, true},
+		{"ERROR enabled", log.SeverityError, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			factory := logtest.RecordFactory{
-				Severity:   tt.severity,
-				Attributes: tt.attributes,
-			}
-			rec := factory.NewRecord()
+			param := sdklog.EnabledParameters{}
+			param.Severity = tt.severity
 
-			result := dualProc.Enabled(context.Background(), &rec)
+			result := dualProc.Enabled(context.Background(), param)
 
 			assert.Equal(t, tt.expected, result)
 		})
@@ -404,7 +404,8 @@ func (c *capturingProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) err
 	return nil
 }
 
-func (c *capturingProcessor) Enabled(_ context.Context, _ *sdklog.Record) bool {
+//nolint:gocritic // hugeParam: EnabledParameters passed by value per OTel SDK interface contract
+func (c *capturingProcessor) Enabled(_ context.Context, _ sdklog.EnabledParameters) bool {
 	return true
 }
 
@@ -690,18 +691,15 @@ func TestEnabledWithSamplingRate(t *testing.T) {
 	// With rate > 0, INFO should be enabled (actual sampling happens in OnEmit)
 	dualProcWithRate := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.5)
 
-	factory := logtest.RecordFactory{
-		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
-	}
-	rec := factory.NewRecord()
+	param := sdklog.EnabledParameters{}
+	param.Severity = log.SeverityInfo
 
-	assert.True(t, dualProcWithRate.Enabled(context.Background(), &rec),
+	assert.True(t, dualProcWithRate.Enabled(context.Background(), param),
 		"INFO should be enabled when sampling rate > 0")
 
 	// With rate = 0, INFO should be disabled
 	dualProcNoRate := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.0)
-	assert.False(t, dualProcNoRate.Enabled(context.Background(), &rec),
+	assert.False(t, dualProcNoRate.Enabled(context.Background(), param),
 		"INFO should be disabled when sampling rate = 0")
 }
 
