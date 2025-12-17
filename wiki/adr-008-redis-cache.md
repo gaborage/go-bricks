@@ -282,7 +282,7 @@ defer cache.Delete(ctx, lockKey)
 - **PR #2-8**: 80%+ coverage per PR (SonarCloud enforced)
 - **Integration Tests**: Real Redis via testcontainers (PR #8)
 - **Race Detection**: All tests run with `-race` flag
-- **Multi-Platform CI**: Ubuntu/Windows × Go 1.24/1.25
+- **Multi-Platform CI**: Ubuntu/Windows × Go 1.25
 
 ### Success Metrics
 1. **Zero Regressions**: All existing tests pass unchanged
