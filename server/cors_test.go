@@ -36,8 +36,8 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	// Test preflight request
 	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
-	req.Header.Set("Access-Control-Request-Method", "POST")
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
+	req.Header.Set(HeaderAccessControlRequestHeaders, "Content-Type")
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -46,12 +46,12 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify CORS headers allow all origins in development
-	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-	assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
-	assert.Equal(t, "86400", rec.Header().Get("Access-Control-Max-Age"))
+	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
+	assert.Equal(t, "86400", rec.Header().Get(HeaderAccessControlMaxAge))
 
 	// Verify allowed methods
-	allowedMethods := rec.Header().Get("Access-Control-Allow-Methods")
+	allowedMethods := rec.Header().Get(HeaderAccessControlAllowMethods)
 	assert.Contains(t, allowedMethods, "GET")
 	assert.Contains(t, allowedMethods, "POST")
 	assert.Contains(t, allowedMethods, "PUT")
@@ -118,7 +118,7 @@ func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 			req.Header.Set("Origin", tt.origin)
-			req.Header.Set("Access-Control-Request-Method", "POST")
+			req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -127,11 +127,11 @@ func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.expectHeaders {
-				assert.Equal(t, tt.expectedOrigin, rec.Header().Get("Access-Control-Allow-Origin"))
-				assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+				assert.Equal(t, tt.expectedOrigin, rec.Header().Get(HeaderAccessControlAllowOrigin))
+				assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 			} else {
 				// For disallowed origins, the middleware should not set CORS headers
-				assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
+				assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin))
 			}
 		})
 	}
@@ -162,7 +162,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	// Test with any origin - should allow all since no specific origins are set
 	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "https://somesite.com")
-	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -171,7 +171,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should still allow * when no CORS_ORIGINS is set in production
-	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
 }
 
 func TestCORSAllowedHeaders(t *testing.T) {
@@ -195,8 +195,8 @@ func TestCORSAllowedHeaders(t *testing.T) {
 	// Test preflight with various headers
 	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
-	req.Header.Set("Access-Control-Request-Method", "POST")
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization, X-Request-ID")
+	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
+	req.Header.Set(HeaderAccessControlRequestHeaders, "Content-Type, Authorization, X-Request-ID")
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -205,12 +205,12 @@ func TestCORSAllowedHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify allowed headers
-	allowedHeaders := rec.Header().Get("Access-Control-Allow-Headers")
+	allowedHeaders := rec.Header().Get(HeaderAccessControlAllowHeaders)
 	assert.Contains(t, allowedHeaders, "Origin")
 	assert.Contains(t, allowedHeaders, "Content-Type")
 	assert.Contains(t, allowedHeaders, "Accept")
 	assert.Contains(t, allowedHeaders, "Authorization")
-	assert.Contains(t, allowedHeaders, "X-Request-ID")
+	assert.Contains(t, allowedHeaders, echo.HeaderXRequestID)
 }
 
 func TestCORSExposedHeaders(t *testing.T) {
@@ -229,7 +229,7 @@ func TestCORSExposedHeaders(t *testing.T) {
 	// Create a simple handler that sets response headers
 	handler := corsMiddleware(func(c echo.Context) error {
 		c.Response().Header().Set("X-Request-ID", "test-123")
-		c.Response().Header().Set("X-Response-Time", "50ms")
+		c.Response().Header().Set(HeaderXResponseTime, "50ms")
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -244,9 +244,9 @@ func TestCORSExposedHeaders(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify exposed headers
-	exposedHeaders := rec.Header().Get("Access-Control-Expose-Headers")
-	assert.Contains(t, exposedHeaders, "X-Request-ID")
-	assert.Contains(t, exposedHeaders, "X-Response-Time")
+	exposedHeaders := rec.Header().Get(HeaderAccessControlExposeHeaders)
+	assert.Contains(t, exposedHeaders, echo.HeaderXRequestID)
+	assert.Contains(t, exposedHeaders, HeaderXResponseTime)
 }
 
 func TestCORSActualRequestHandling(t *testing.T) {
@@ -288,8 +288,8 @@ func TestCORSActualRequestHandling(t *testing.T) {
 			require.NoError(t, err)
 
 			// Verify CORS headers are set for actual requests
-			assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-			assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+			assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+			assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 
 			// Verify handler was executed
 			assert.Equal(t, http.StatusOK, rec.Code)
@@ -318,7 +318,7 @@ func TestCORSMaxAge(t *testing.T) {
 	// Test preflight request
 	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
-	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -327,7 +327,7 @@ func TestCORSMaxAge(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify Max-Age is set to 86400 seconds (24 hours)
-	assert.Equal(t, "86400", rec.Header().Get("Access-Control-Max-Age"))
+	assert.Equal(t, "86400", rec.Header().Get(HeaderAccessControlMaxAge))
 }
 
 func TestCORSCredentialsEnabled(t *testing.T) {
@@ -359,7 +359,7 @@ func TestCORSCredentialsEnabled(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify credentials are allowed
-	assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 }
 
 func TestCORSEmptyOriginsList(t *testing.T) {
@@ -385,7 +385,7 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "https://test.com")
-	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -394,7 +394,7 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 	require.NoError(t, err)
 
 	// When CORS_ORIGINS is empty string, should still allow all
-	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
 }
 
 func TestCORSSingleOrigin(t *testing.T) {
@@ -439,7 +439,7 @@ func TestCORSSingleOrigin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
 			req.Header.Set("Origin", tt.origin)
-			req.Header.Set("Access-Control-Request-Method", "GET")
+			req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -448,9 +448,9 @@ func TestCORSSingleOrigin(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.expectedOrigin != "" {
-				assert.Equal(t, tt.expectedOrigin, rec.Header().Get("Access-Control-Allow-Origin"))
+				assert.Equal(t, tt.expectedOrigin, rec.Header().Get(HeaderAccessControlAllowOrigin))
 			} else {
-				assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
+				assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin))
 			}
 		})
 	}
@@ -486,6 +486,6 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "ok")
 
 	// Verify CORS headers
-	assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
-	assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
+	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 }

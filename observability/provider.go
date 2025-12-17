@@ -270,7 +270,7 @@ func (p *provider) initTraceProvider() error {
 	// Create resource with service information
 	res, err := p.createResource()
 	if err != nil {
-		return fmt.Errorf("failed to create resource: %w", err)
+		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
 	// Create trace exporter

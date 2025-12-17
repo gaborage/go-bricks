@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
@@ -1088,7 +1089,7 @@ func TestNewConnectionPingFailure(t *testing.T) {
 
 	openOracleDB = func(_ string) (*sql.DB, error) { return db, nil }
 	pingOracleDB = func(context.Context, *sql.DB) error {
-		return errors.New("connection refused")
+		return errors.New(testutil.TestConnectionRefused)
 	}
 
 	t.Cleanup(func() {

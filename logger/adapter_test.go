@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,7 @@ func TestLogEventAdapterMsgf(t *testing.T) {
 func TestLogEventAdapterErr(t *testing.T) {
 	logger, buf := createTestLogger()
 
-	testErr := errors.New("test error")
+	testErr := errors.New(testutil.TestError)
 
 	// Create a log event with an error
 	logger.Error().Err(testErr).Msg("error occurred")
@@ -66,7 +67,7 @@ func TestLogEventAdapterErr(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the error and message
-	assert.Equal(t, "test error", logEntry["error"])
+	assert.Equal(t, testutil.TestError, logEntry["error"])
 	assert.Equal(t, "error occurred", logEntry["message"])
 	assert.Equal(t, "error", logEntry["level"])
 }
@@ -340,7 +341,7 @@ func TestLogEventAdapterInterfaceCompliance(t *testing.T) {
 	event = event.Dur("duration", time.Second)
 	event = event.Interface("data", map[string]string{"test": "value"})
 	event = event.Bytes("bytes", []byte("test"))
-	event = event.Err(errors.New("test error"))
+	event = event.Err(errors.New(testutil.TestError))
 
 	// This shouldn't panic
 	event.Msg("test complete")

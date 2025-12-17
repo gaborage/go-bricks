@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 func TestNewMockCache(t *testing.T) {
@@ -387,7 +388,7 @@ func TestMockCacheContextCancellation(t *testing.T) {
 }
 
 func TestMockCacheChainedConfiguration(t *testing.T) {
-	customErr := errors.New("test error")
+	customErr := errors.New(testutil.TestError)
 
 	mock := NewMockCacheWithID("chained").
 		WithDelay(10 * time.Millisecond).

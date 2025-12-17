@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -455,7 +456,7 @@ func TestLoggerIntegrationWithLoggingMethods(t *testing.T) {
 	logger.Info().Str("message", "test").Msg("info test")
 
 	// Test error logging
-	logger.Error().Str("error", "test error").Msg("error test")
+	logger.Error().Str("error", testutil.TestError).Msg("error test")
 
 	// Test debug logging (might not appear due to level)
 	logger.Debug().Str("debug", "test debug").Msg("debug test")

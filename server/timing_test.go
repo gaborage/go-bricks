@@ -10,6 +10,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 func TestTiming(t *testing.T) {
@@ -55,7 +57,7 @@ func TestTiming(t *testing.T) {
 			actualDuration := time.Since(start)
 
 			// Verify response time header is present
-			responseTimeHeader := rec.Header().Get("X-Response-Time")
+			responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 			if tt.expectHeader {
 				assert.NotEmpty(t, responseTimeHeader, "X-Response-Time header should be present")
 
@@ -91,7 +93,7 @@ func TestTimingErrorHandler(t *testing.T) {
 	// Handler that returns an error
 	e.GET("/error", func(_ echo.Context) error {
 		time.Sleep(50 * time.Millisecond)
-		return echo.NewHTTPError(http.StatusBadRequest, "test error")
+		return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/error", http.NoBody)
@@ -100,7 +102,7 @@ func TestTimingErrorHandler(t *testing.T) {
 	e.ServeHTTP(rec, req)
 
 	// Verify timing header is still added even when handler returns error
-	responseTimeHeader := rec.Header().Get("X-Response-Time")
+	responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 	assert.NotEmpty(t, responseTimeHeader, "X-Response-Time header should be present even on error")
 
 	// Parse and verify duration
@@ -144,7 +146,7 @@ func TestTimingPanicHandler(t *testing.T) {
 	e.ServeHTTP(rec, req)
 
 	// Verify timing header is present (timing middleware should execute and add header)
-	responseTimeHeader := rec.Header().Get("X-Response-Time")
+	responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 	assert.NotEmpty(t, responseTimeHeader, "X-Response-Time header should be present even when panic occurs")
 
 	// Parse duration
@@ -188,7 +190,7 @@ func TestTimingConcurrentRequests(t *testing.T) {
 			e.ServeHTTP(rec, req)
 
 			// Parse timing header
-			responseTimeHeader := rec.Header().Get("X-Response-Time")
+			responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 			duration, err := time.ParseDuration(responseTimeHeader)
 
 			assert.NoError(t, err, "Should have valid duration for delay %d", d)
@@ -229,7 +231,7 @@ func TestTimingHeaderFormat(t *testing.T) {
 
 	e.ServeHTTP(rec, req)
 
-	responseTimeHeader := rec.Header().Get("X-Response-Time")
+	responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 	assert.NotEmpty(t, responseTimeHeader)
 
 	// Verify the header format is a valid Go duration string
@@ -282,7 +284,7 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 	// Verify both custom header and timing header are present
 	assert.Equal(t, "test", rec.Header().Get("X-Custom-Header"))
 
-	responseTimeHeader := rec.Header().Get("X-Response-Time")
+	responseTimeHeader := rec.Header().Get(HeaderXResponseTime)
 	assert.NotEmpty(t, responseTimeHeader)
 
 	// Verify timing includes all middleware processing

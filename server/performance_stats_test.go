@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -47,7 +48,7 @@ func TestPerformanceStats(t *testing.T) {
 				ctx := c.Request().Context()
 				logger.IncrementAMQPCounter(ctx)
 				logger.IncrementDBCounter(ctx)
-				return echo.NewHTTPError(http.StatusBadRequest, "test error")
+				return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 			},
 			expectError: true,
 		},

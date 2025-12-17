@@ -142,7 +142,7 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	newHeaderResolver := func() multitenant.TenantResolver {
 		name := resolverCfg.Header
 		if name == "" {
-			name = "X-Tenant-ID"
+			name = HeaderXTenantID
 		}
 		return &multitenant.HeaderResolver{HeaderName: name}
 	}

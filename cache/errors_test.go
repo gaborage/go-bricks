@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -73,7 +74,7 @@ func TestConfigError(t *testing.T) {
 
 func TestConnectionError(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
-		underlying := errors.New("connection refused")
+		underlying := errors.New(testutil.TestConnectionRefused)
 		err := NewConnectionError("dial", testRedisHost, underlying)
 
 		assert.NotNil(t, err)
@@ -83,7 +84,7 @@ func TestConnectionError(t *testing.T) {
 		assert.Contains(t, err.Error(), "cache connection error")
 		assert.Contains(t, err.Error(), "dial")
 		assert.Contains(t, err.Error(), testRedisHost)
-		assert.Contains(t, err.Error(), "connection refused")
+		assert.Contains(t, err.Error(), testutil.TestConnectionRefused)
 	})
 
 	t.Run("PingOperation", func(t *testing.T) {

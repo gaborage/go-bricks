@@ -68,7 +68,7 @@ func TestRateLimit(t *testing.T) {
 			for i := 0; i < tt.requestCount; i++ {
 				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 				// Use same IP to trigger rate limiting
-				req.Header.Set("X-Real-IP", "192.168.1.100")
+				req.Header.Set(HeaderXRealIP, "192.168.1.100")
 				req.RemoteAddr = "192.168.1.100:12345"
 				rec := httptest.NewRecorder()
 
@@ -111,7 +111,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 			// Each IP should be able to make burst requests (2 * 2 = 4)
 			for i := 0; i < 6; i++ {
 				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-				req.Header.Set("X-Real-IP", ip)
+				req.Header.Set(HeaderXRealIP, ip)
 				req.RemoteAddr = ip + ":12345"
 				rec := httptest.NewRecorder()
 
@@ -146,7 +146,7 @@ func TestRateLimitErrorResponse(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		req.Header.Set("X-Real-IP", ip)
+		req.Header.Set(HeaderXRealIP, ip)
 		req.RemoteAddr = ip + ":12345"
 		rec := httptest.NewRecorder()
 
@@ -189,14 +189,14 @@ func TestRateLimitIPExtraction(t *testing.T) {
 		{
 			name: "x_real_ip_header",
 			setupReq: func(req *http.Request) {
-				req.Header.Set("X-Real-IP", "203.0.113.1")
+				req.Header.Set(HeaderXRealIP, "203.0.113.1")
 				req.RemoteAddr = "192.168.1.1:8080"
 			},
 		},
 		{
 			name: "x_forwarded_for_header",
 			setupReq: func(req *http.Request) {
-				req.Header.Set("X-Forwarded-For", "203.0.113.2, 192.168.1.1")
+				req.Header.Set(HeaderXForwardedFor, "203.0.113.2, 192.168.1.1")
 				req.RemoteAddr = "192.168.1.1:8080"
 			},
 		},
@@ -275,7 +275,7 @@ func TestRateLimitDisabled(t *testing.T) {
 
 			for i := 0; i < tt.requestCount; i++ {
 				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-				req.Header.Set("X-Real-IP", testIP)
+				req.Header.Set(HeaderXRealIP, testIP)
 				req.RemoteAddr = testIP + ":12345"
 				rec := httptest.NewRecorder()
 
@@ -309,14 +309,14 @@ func TestRateLimitReset(t *testing.T) {
 	// Exhaust rate limit
 	for i := 0; i < 6; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		req.Header.Set("X-Real-IP", ip)
+		req.Header.Set(HeaderXRealIP, ip)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 	}
 
 	// Last request should be blocked
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-	req.Header.Set("X-Real-IP", ip)
+	req.Header.Set(HeaderXRealIP, ip)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
@@ -326,7 +326,7 @@ func TestRateLimitReset(t *testing.T) {
 
 	// Request should be allowed again
 	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-	req.Header.Set("X-Real-IP", ip)
+	req.Header.Set(HeaderXRealIP, ip)
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
