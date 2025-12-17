@@ -17,6 +17,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -133,7 +134,7 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 		},
 		{
 			name:            "actual_error",
-			err:             errors.New("connection refused"),
+			err:             errors.New(testutil.TestConnectionRefused),
 			expectedStatus:  codes.Error,
 			shouldRecordErr: true,
 		},

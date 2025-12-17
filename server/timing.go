@@ -18,7 +18,7 @@ func Timing() echo.MiddlewareFunc {
 			// SAFETY: Check if response is still valid (may be nil after timeout)
 			// This middleware runs AFTER the timeout middleware in the chain
 			if resp := c.Response(); resp != nil {
-				resp.Header().Set("X-Response-Time", duration.String())
+				resp.Header().Set(HeaderXResponseTime, duration.String())
 			}
 			return err
 		}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -260,7 +261,7 @@ func TestNewConnectionError(t *testing.T) {
 		{
 			name:     "database connection error with troubleshooting",
 			resource: "database",
-			message:  "connection refused",
+			message:  testutil.TestConnectionRefused,
 			troubleshooting: []string{
 				"check if database is running",
 				"verify network connectivity",
@@ -479,7 +480,7 @@ func TestIsNotConfigured(t *testing.T) {
 			err: &ConfigError{
 				Category: "connection",
 				Field:    "database",
-				Message:  "connection refused",
+				Message:  testutil.TestConnectionRefused,
 			},
 			expected: false,
 		},

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gaborage/go-bricks/server"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -203,10 +204,10 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xForwardedFor != "" {
-				req.Header.Set("X-Forwarded-For", tt.xForwardedFor)
+				req.Header.Set(server.HeaderXForwardedFor, tt.xForwardedFor)
 			}
 			if tt.xRealIP != "" {
-				req.Header.Set("X-Real-IP", tt.xRealIP)
+				req.Header.Set(server.HeaderXRealIP, tt.xRealIP)
 			}
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -306,10 +307,10 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xForwardedFor != "" {
-				req.Header.Set("X-Forwarded-For", tt.xForwardedFor)
+				req.Header.Set(server.HeaderXForwardedFor, tt.xForwardedFor)
 			}
 			if tt.xRealIP != "" {
-				req.Header.Set("X-Real-IP", tt.xRealIP)
+				req.Header.Set(server.HeaderXRealIP, tt.xRealIP)
 			}
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)

@@ -9,6 +9,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
@@ -222,7 +223,7 @@ func TestHandleDatabaseConnectionError(t *testing.T) {
 	})
 
 	t.Run("connection error", func(t *testing.T) {
-		connErr := errors.New("connection refused")
+		connErr := errors.New(testutil.TestConnectionRefused)
 		dbManager := createTestDbManagerWithError(t, connErr)
 
 		status, stats, err := handleDatabaseConnectionError(connErr, dbManager)
@@ -234,7 +235,7 @@ func TestHandleDatabaseConnectionError(t *testing.T) {
 	})
 
 	t.Run("nil stats map", func(t *testing.T) {
-		connErr := errors.New("test error")
+		connErr := errors.New(testutil.TestError)
 		dbManager := createTestDbManagerWithNilStats(t)
 
 		status, stats, err := handleDatabaseConnectionError(connErr, dbManager)

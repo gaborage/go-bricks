@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -250,7 +251,7 @@ func TestIsSQLNoRowsError(t *testing.T) {
 		},
 		{
 			name:     "other_error",
-			err:      errors.New("connection refused"),
+			err:      errors.New(testutil.TestConnectionRefused),
 			expected: false,
 		},
 	}

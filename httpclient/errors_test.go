@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 // Test constants to avoid string duplication
@@ -112,7 +114,7 @@ func TestErrorTypeIdentification(t *testing.T) {
 // TestErrorUnwrapping tests Unwrap() implementations and error chaining
 func TestErrorUnwrapping(t *testing.T) {
 	t.Run("network error unwrapping", func(t *testing.T) {
-		underlyingErr := errors.New("connection refused")
+		underlyingErr := errors.New(testutil.TestConnectionRefused)
 		netErr := NewNetworkError("failed to connect", underlyingErr)
 
 		// Test direct unwrapping
@@ -199,7 +201,7 @@ func TestHTTPErrorBodyAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			httpErr := NewHTTPError("test error", 500, tt.body)
+			httpErr := NewHTTPError(testutil.TestError, 500, tt.body)
 
 			// Test Body() method
 			if bodyAccessor, ok := httpErr.(interface{ Body() []byte }); ok {

@@ -43,7 +43,7 @@ func (d *DebugHandlers) handleGoroutinesText(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get goroutine dump")
 	}
 
-	c.Response().Header().Set("Content-Type", "text/plain")
+	c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlain)
 	return c.String(http.StatusOK, buf.String())
 }
 

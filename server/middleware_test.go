@@ -92,9 +92,9 @@ func TestSetupMiddlewares(t *testing.T) {
 			e.ServeHTTP(rec, req)
 
 			// Verify security headers are set
-			assert.Equal(t, "1; mode=block", rec.Header().Get("X-XSS-Protection"))
-			assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
-			assert.Equal(t, "SAMEORIGIN", rec.Header().Get("X-Frame-Options"))
+			assert.Equal(t, "1; mode=block", rec.Header().Get(HeaderXXSSProtection))
+			assert.Equal(t, "nosniff", rec.Header().Get(HeaderXContentTypeOptions))
+			assert.Equal(t, "SAMEORIGIN", rec.Header().Get(HeaderXFrameOptions))
 			assert.Equal(t, "default-src 'self'", rec.Header().Get("Content-Security-Policy"))
 
 			// HSTS header might not be set for HTTP in test environment
@@ -107,7 +107,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			assert.NotEmpty(t, rec.Header().Get(echo.HeaderXRequestID))
 
 			// Verify timing header is set
-			assert.NotEmpty(t, rec.Header().Get("X-Response-Time"))
+			assert.NotEmpty(t, rec.Header().Get(HeaderXResponseTime))
 
 			// Response should be successful
 			assert.Equal(t, http.StatusOK, rec.Code)

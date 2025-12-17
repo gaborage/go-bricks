@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gaborage/go-bricks/server"
 	"github.com/labstack/echo/v4"
 )
 
@@ -134,14 +135,14 @@ func extractRemoteIP(r *http.Request, trustedNets []*net.IPNet) string {
 
 	// Peer is trusted - check proxy headers
 	// Parse X-Forwarded-For right-to-left to find first untrusted IP
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	if xff := r.Header.Get(server.HeaderXForwardedFor); xff != "" {
 		if clientIP := resolveXForwardedFor(xff, trustedNets); clientIP != "" {
 			return clientIP
 		}
 	}
 
 	// Check X-Real-IP if X-Forwarded-For not present
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+	if xri := r.Header.Get(server.HeaderXRealIP); xri != "" {
 		return strings.TrimSpace(xri)
 	}
 

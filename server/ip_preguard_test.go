@@ -15,8 +15,7 @@ import (
 const (
 	testIPPreGuardIP = "10.0.0.100"
 
-	// Header and connection constants
-	headerXRealIP        = "X-Real-IP"
+	// Connection constants
 	portSuffix           = ":12345"
 	headerTestMiddleware = "X-Test-Middleware"
 )
@@ -85,7 +84,7 @@ func TestIPPreGuard(t *testing.T) {
 			for range tt.requestCount {
 				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 				// Use same IP to trigger rate limiting
-				req.Header.Set(headerXRealIP, testIPPreGuardIP)
+				req.Header.Set(HeaderXRealIP, testIPPreGuardIP)
 				req.RemoteAddr = testIPPreGuardIP + portSuffix
 				rec := httptest.NewRecorder()
 
@@ -128,7 +127,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 			// Make multiple requests to test rate limiting per IP
 			for range 6 {
 				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-				req.Header.Set(headerXRealIP, ip)
+				req.Header.Set(HeaderXRealIP, ip)
 				req.RemoteAddr = ip + portSuffix
 				rec := httptest.NewRecorder()
 
@@ -163,7 +162,7 @@ func TestIPPreGuardErrorResponse(t *testing.T) {
 
 	for range 5 {
 		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(headerXRealIP, ip)
+		req.Header.Set(HeaderXRealIP, ip)
 		req.RemoteAddr = ip + portSuffix
 		rec := httptest.NewRecorder()
 
@@ -209,7 +208,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 
 	// Test that requests below limit work normally
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-	req.Header.Set(headerXRealIP, "192.168.1.50")
+	req.Header.Set(HeaderXRealIP, "192.168.1.50")
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -220,7 +219,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 	// Test that rate limited requests still have middleware headers
 	for range 10 {
 		req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(headerXRealIP, "192.168.1.50")
+		req.Header.Set(HeaderXRealIP, "192.168.1.50")
 		rec = httptest.NewRecorder()
 
 		e.ServeHTTP(rec, req)

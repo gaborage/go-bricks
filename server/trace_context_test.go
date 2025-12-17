@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (
@@ -137,7 +138,7 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 
 	e.GET("/error", func(c echo.Context) error {
 		capturedContext = c.Request().Context()
-		return echo.NewHTTPError(http.StatusBadRequest, "test error")
+		return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 	})
 
 	traceparent := testTraceparent

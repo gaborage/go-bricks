@@ -288,13 +288,13 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
 
 // bindJSONBody binds JSON request body if Content-Type indicates JSON
 func (rb *RequestBinder) bindJSONBody(c echo.Context, target any) error {
-	ct := c.Request().Header.Get("Content-Type")
+	ct := c.Request().Header.Get(echo.HeaderContentType)
 	if ct == "" {
 		return nil
 	}
 
 	mt, _, _ := mime.ParseMediaType(ct)
-	if mt == "application/json" || strings.HasSuffix(mt, "+json") {
+	if mt == echo.MIMEApplicationJSON || strings.HasSuffix(mt, "+json") {
 		if err := c.Bind(target); err != nil {
 			return fmt.Errorf("failed to bind JSON body: %w", err)
 		}
