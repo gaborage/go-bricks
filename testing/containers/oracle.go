@@ -78,12 +78,16 @@ func StartOracleContainer(ctx context.Context, t *testing.T, cfg *OracleContaine
 	}
 
 	// Create container request
+	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
+	// This prevents race conditions where the log appears but Oracle isn't ready to accept connections
 	req := testcontainers.ContainerRequest{
 		Image:        fmt.Sprintf("gvenzl/oracle-free:%s", cfg.ImageTag),
 		ExposedPorts: []string{"1521/tcp"},
 		Env:          env,
-		WaitingFor: wait.ForLog("DATABASE IS READY TO USE!").
-			WithStartupTimeout(cfg.StartupTimeout),
+		WaitingFor: wait.ForAll(
+			wait.ForLog("DATABASE IS READY TO USE!"),
+			wait.ForListeningPort("1521/tcp"),
+		).WithStartupTimeout(cfg.StartupTimeout),
 	}
 
 	// Start container
