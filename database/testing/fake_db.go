@@ -40,6 +40,13 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+const (
+	valueOverflowsInt32ErrMsg  = "value %d overflows int32"
+	valueOverflowsUInt32ErrMsg = "value %d overflows uint32"
+	valueOverflowsUInt16ErrMsg = "value %d overflows uint16"
+	valueOverflowsUInt8ErrMsg  = "value %d overflows uint8"
+)
+
 // TestDB is an in-memory fake database that implements both database.Querier and database.Interface.
 // It provides a fluent API for setting up query expectations and tracking calls for assertions.
 //
@@ -601,12 +608,12 @@ func assignInt32(dest *int32, src any) error {
 	switch s := src.(type) {
 	case int64:
 		if s < math.MinInt32 || s > math.MaxInt32 {
-			return fmt.Errorf("value %d overflows int32", s)
+			return fmt.Errorf(valueOverflowsInt32ErrMsg, s)
 		}
 		*dest = int32(s)
 	case int:
 		if int64(s) < math.MinInt32 || int64(s) > math.MaxInt32 {
-			return fmt.Errorf("value %d overflows int32", s)
+			return fmt.Errorf(valueOverflowsInt32ErrMsg, s)
 		}
 		*dest = int32(s) //nolint:gosec // G115 - overflow checked above
 	default:
@@ -759,22 +766,22 @@ func assignUint32(dest *uint32, src any) error {
 	switch s := src.(type) {
 	case uint64:
 		if s > math.MaxUint32 {
-			return fmt.Errorf("value %d overflows uint32", s)
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
 		*dest = uint32(s)
 	case uint:
 		if uint64(s) > math.MaxUint32 {
-			return fmt.Errorf("value %d overflows uint32", s)
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
 		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
 		if s < 0 || s > math.MaxUint32 {
-			return fmt.Errorf("value %d overflows uint32", s)
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
 		*dest = uint32(s)
 	case int:
 		if s < 0 || int64(s) > math.MaxUint32 {
-			return fmt.Errorf("value %d overflows uint32", s)
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
 		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
 	default:
@@ -788,22 +795,22 @@ func assignUint16(dest *uint16, src any) error {
 	switch s := src.(type) {
 	case uint64:
 		if s > math.MaxUint16 {
-			return fmt.Errorf("value %d overflows uint16", s)
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
 		*dest = uint16(s)
 	case uint:
 		if uint64(s) > math.MaxUint16 {
-			return fmt.Errorf("value %d overflows uint16", s)
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
 		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
 		if s < 0 || s > math.MaxUint16 {
-			return fmt.Errorf("value %d overflows uint16", s)
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
 		*dest = uint16(s)
 	case int:
 		if s < 0 || int64(s) > math.MaxUint16 {
-			return fmt.Errorf("value %d overflows uint16", s)
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
 		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
 	default:
@@ -817,22 +824,22 @@ func assignUint8(dest *uint8, src any) error {
 	switch s := src.(type) {
 	case uint64:
 		if s > math.MaxUint8 {
-			return fmt.Errorf("value %d overflows uint8", s)
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
 		*dest = uint8(s)
 	case uint:
 		if uint64(s) > math.MaxUint8 {
-			return fmt.Errorf("value %d overflows uint8", s)
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
 		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
 		if s < 0 || s > math.MaxUint8 {
-			return fmt.Errorf("value %d overflows uint8", s)
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
 		*dest = uint8(s)
 	case int:
 		if s < 0 || int64(s) > math.MaxUint8 {
-			return fmt.Errorf("value %d overflows uint8", s)
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
 		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
 	default:
