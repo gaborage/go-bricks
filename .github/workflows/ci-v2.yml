@@ -44,7 +44,6 @@ jobs:
     if: needs.changes.outputs.framework == 'true'
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -55,7 +54,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.25'
           cache: true
           cache-dependency-path: go.sum
 
@@ -129,7 +128,7 @@ jobs:
           exit 0
 
       - name: Upload unit test coverage artifact (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v5
         with:
           name: coverage-unit
@@ -139,11 +138,7 @@ jobs:
   framework-integration-test:
     needs: changes
     if: needs.changes.outputs.framework == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.24', '1.25']
-      fail-fast: false
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
@@ -151,7 +146,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.25'
           cache: true
           cache-dependency-path: go.sum
 
@@ -165,6 +160,7 @@ jobs:
           docker pull postgres:17-alpine &
           docker pull gvenzl/oracle-free:23-slim &
           docker pull rabbitmq:3.13-management-alpine &
+          docker pull redis:7-alpine &
           wait
           echo "All container images cached"
 
@@ -174,10 +170,9 @@ jobs:
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
           # Build tag controls which tests run - only integration tests will execute
-          go test -race -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
+          go test -race -parallel 2 -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
 
       - name: Upload integration test coverage artifact
-        if: matrix.go-version == '1.25'
         uses: actions/upload-artifact@v5
         with:
           name: coverage-integration
@@ -363,7 +358,6 @@ jobs:
     if: needs.changes.outputs.framework == 'true'
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -374,7 +368,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.25'
           cache: true
           cache-dependency-path: go.sum
 
@@ -405,7 +399,7 @@ jobs:
           go build -v $packages
 
       - name: Verify go mod (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
@@ -419,7 +413,6 @@ jobs:
     if: needs.changes.outputs.tool == 'true'
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -433,7 +426,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.25'
           cache: true
           cache-dependency-path: tools/openapi/go.sum
 
@@ -452,8 +445,8 @@ jobs:
               echo "Testing package: $pkg"
               go test -race "$pkg"
             done
-            # Generate combined coverage for SonarCloud (Ubuntu + Go 1.25 only)
-            if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.go-version }}" = "1.25" ]; then
+            # Generate combined coverage for SonarCloud (Ubuntu only)
+            if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
               echo "Generating coverage report for SonarCloud"
               go test -race -coverprofile=coverage.out -covermode=atomic $packages || {
                 echo "Coverage generation failed, but tests passed"
@@ -526,7 +519,7 @@ jobs:
           exit 0
 
       - name: Upload coverage artifact for SonarCloud (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v5
         with:
           name: openapi-tool-coverage-report
@@ -539,7 +532,6 @@ jobs:
     if: needs.changes.outputs.tool == 'true'
     strategy:
       matrix:
-        go-version: ['1.24', '1.25']
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -553,7 +545,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.25'
           cache: true
           cache-dependency-path: tools/openapi/go.sum
 
@@ -580,7 +572,7 @@ jobs:
           Write-Host "CLI validation passed"
 
       - name: Verify go mod (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum

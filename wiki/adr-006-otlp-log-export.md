@@ -347,7 +347,7 @@ observability:
    - ✅ `make check` passes (fmt, lint, race detection)
    - ✅ Zero linting issues (golangci-lint)
    - ✅ All existing tests pass unchanged
-   - ✅ Multi-platform CI (Ubuntu, Windows × Go 1.24, 1.25)
+   - ✅ Multi-platform CI (Ubuntu, Windows × Go 1.25)
 
 ### Code Quality Metrics
 

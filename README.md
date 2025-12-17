@@ -80,7 +80,7 @@ go test -run TestName   # Run specific test
 ## Quick Start
 
 ### Requirements
-- **Go 1.24 or 1.25** (CI tests both versions)
+- **Go 1.25** required
 - Modern Go toolchain with module support
 - Docker Desktop or Docker Engine (integration tests only)
 
