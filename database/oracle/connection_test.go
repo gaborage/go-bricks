@@ -488,12 +488,18 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 
 	// Test Begin error
 	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
-	_, err := c.Begin(ctx) //nolint:S8168 // NOSONAR: Begin() expected to fail - no transaction to rollback
+	tx, err := c.Begin(ctx)
+	if tx != nil {
+		defer tx.Rollback(ctx) // Safety: should never execute since Begin is expected to fail
+	}
 	assert.Error(t, err)
 
 	// Test BeginTx error
 	mock.ExpectBegin().WillReturnError(sql.ErrTxDone)
-	_, err = c.BeginTx(ctx, &sql.TxOptions{})
+	txOpts, err := c.BeginTx(ctx, &sql.TxOptions{})
+	if txOpts != nil {
+		defer txOpts.Rollback(ctx) // Safety: should never execute since BeginTx is expected to fail
+	}
 	assert.Error(t, err)
 
 	// Test successful Prepare error in statement

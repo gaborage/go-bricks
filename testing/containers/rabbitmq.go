@@ -65,13 +65,17 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 	}
 
 	// Create RabbitMQ container with configuration
+	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
+	// This prevents race conditions where the log appears but RabbitMQ isn't ready to accept connections
 	rmqContainer, err := rabbitmq.Run(ctx,
 		fmt.Sprintf("rabbitmq:%s", cfg.ImageTag),
 		rabbitmq.WithAdminUsername(cfg.Username),
 		rabbitmq.WithAdminPassword(cfg.Password),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Server startup complete").
-				WithStartupTimeout(cfg.StartupTimeout),
+			wait.ForAll(
+				wait.ForLog("Server startup complete"),
+				wait.ForListeningPort("5672/tcp"),
+			).WithStartupTimeout(cfg.StartupTimeout),
 		),
 	)
 	if err != nil {

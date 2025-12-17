@@ -65,15 +65,19 @@ func StartPostgreSQLContainer(ctx context.Context, t *testing.T, cfg *PostgreSQL
 	}
 
 	// Create PostgreSQL container with configuration
+	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
+	// This prevents race conditions where the log appears but PostgreSQL isn't ready to accept connections
 	pgContainer, err := postgres.Run(ctx,
 		fmt.Sprintf("postgres:%s", cfg.ImageTag),
 		postgres.WithDatabase(cfg.Database),
 		postgres.WithUsername(cfg.Username),
 		postgres.WithPassword(cfg.Password),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2). // Postgres restarts after initial setup
-				WithStartupTimeout(cfg.StartupTimeout),
+			wait.ForAll(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2), // Postgres restarts after initial setup
+				wait.ForListeningPort("5432/tcp"),
+			).WithStartupTimeout(cfg.StartupTimeout),
 		),
 	)
 	if err != nil {

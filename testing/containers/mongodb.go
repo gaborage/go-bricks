@@ -66,13 +66,17 @@ func StartMongoDBContainer(ctx context.Context, t *testing.T, cfg *MongoDBContai
 	}
 
 	// Create MongoDB container with configuration
+	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
+	// This prevents race conditions where the log appears but MongoDB isn't ready to accept connections
 	mongoContainer, err := mongodb.Run(ctx,
 		fmt.Sprintf("mongo:%s", cfg.ImageTag),
 		mongodb.WithUsername(cfg.Username),
 		mongodb.WithPassword(cfg.Password),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Waiting for connections").
-				WithStartupTimeout(cfg.StartupTimeout),
+			wait.ForAll(
+				wait.ForLog("Waiting for connections"),
+				wait.ForListeningPort("27017/tcp"),
+			).WithStartupTimeout(cfg.StartupTimeout),
 		),
 	)
 	if err != nil {

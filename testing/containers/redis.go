@@ -56,11 +56,15 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 	}
 
 	// Create Redis container with configuration
+	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
+	// This prevents race conditions where the log appears but Redis isn't ready to accept connections
 	redisContainer, err := redis.Run(ctx,
 		fmt.Sprintf("redis:%s", cfg.ImageTag),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Ready to accept connections").
-				WithStartupTimeout(cfg.StartupTimeout),
+			wait.ForAll(
+				wait.ForLog("Ready to accept connections"),
+				wait.ForListeningPort("6379/tcp"),
+			).WithStartupTimeout(cfg.StartupTimeout),
 		),
 	)
 	if err != nil {

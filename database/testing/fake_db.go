@@ -32,11 +32,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+)
+
+const (
+	valueOverflowsInt32ErrMsg  = "value %d overflows int32"
+	valueOverflowsUInt32ErrMsg = "value %d overflows uint32"
+	valueOverflowsUInt16ErrMsg = "value %d overflows uint16"
+	valueOverflowsUInt8ErrMsg  = "value %d overflows uint8"
 )
 
 // TestDB is an in-memory fake database that implements both database.Querier and database.Interface.
@@ -599,9 +607,15 @@ func assignInt64(dest *int64, src any) error {
 func assignInt32(dest *int32, src any) error {
 	switch s := src.(type) {
 	case int64:
+		if s < math.MinInt32 || s > math.MaxInt32 {
+			return fmt.Errorf(valueOverflowsInt32ErrMsg, s)
+		}
 		*dest = int32(s)
 	case int:
-		*dest = int32(s)
+		if int64(s) < math.MinInt32 || int64(s) > math.MaxInt32 {
+			return fmt.Errorf(valueOverflowsInt32ErrMsg, s)
+		}
+		*dest = int32(s) //nolint:gosec // G115 - overflow checked above
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *int32", src)
 	}
@@ -747,66 +761,87 @@ func assignUint64(dest *uint64, src any) error {
 	return nil
 }
 
+//nolint:dupl // Intentionally similar to assignUint16/assignUint8 - type-safe helpers for test utilities
 func assignUint32(dest *uint32, src any) error {
 	switch s := src.(type) {
 	case uint64:
+		if s > math.MaxUint32 {
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
+		}
 		*dest = uint32(s)
 	case uint:
-		*dest = uint32(s)
+		if uint64(s) > math.MaxUint32 {
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
+		}
+		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint32", s)
+		if s < 0 || s > math.MaxUint32 {
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
 		*dest = uint32(s)
 	case int:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint32", s)
+		if s < 0 || int64(s) > math.MaxUint32 {
+			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
-		*dest = uint32(s)
+		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint32", src)
 	}
 	return nil
 }
 
+//nolint:dupl // Intentionally similar to assignUint32/assignUint8 - type-safe helpers for test utilities
 func assignUint16(dest *uint16, src any) error {
 	switch s := src.(type) {
 	case uint64:
+		if s > math.MaxUint16 {
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
+		}
 		*dest = uint16(s)
 	case uint:
-		*dest = uint16(s)
+		if uint64(s) > math.MaxUint16 {
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
+		}
+		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint16", s)
+		if s < 0 || s > math.MaxUint16 {
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
 		*dest = uint16(s)
 	case int:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint16", s)
+		if s < 0 || int64(s) > math.MaxUint16 {
+			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
-		*dest = uint16(s)
+		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint16", src)
 	}
 	return nil
 }
 
+//nolint:dupl // Intentionally similar to assignUint32/assignUint16 - type-safe helpers for test utilities
 func assignUint8(dest *uint8, src any) error {
 	switch s := src.(type) {
 	case uint64:
+		if s > math.MaxUint8 {
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
+		}
 		*dest = uint8(s)
 	case uint:
-		*dest = uint8(s)
+		if uint64(s) > math.MaxUint8 {
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
+		}
+		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
 	case int64:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint8", s)
+		if s < 0 || s > math.MaxUint8 {
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
 		*dest = uint8(s)
 	case int:
-		if s < 0 {
-			return fmt.Errorf("cannot convert negative value %d to uint8", s)
+		if s < 0 || int64(s) > math.MaxUint8 {
+			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
-		*dest = uint8(s)
+		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint8", src)
 	}
