@@ -23,6 +23,7 @@
 !MULTI_TENANT.md
 !CLAUDE.md
 !llms.txt
+!context7.json
 
 !Makefile
 
