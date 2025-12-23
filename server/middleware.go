@@ -2,6 +2,7 @@ package server
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,11 +10,11 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
-	"github.com/gaborage/go-bricks/server/internal/tracking"
 )
 
 // SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
@@ -23,8 +24,8 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// Request ID
 	e.Use(middleware.RequestID())
 
-	// OpenTelemetry instrumentation - creates spans for HTTP requests
-	// Skip health/ready probes to avoid noisy traces
+	// OpenTelemetry instrumentation - creates spans AND metrics for HTTP requests
+	// Skip health/ready probes to avoid noisy traces/metrics
 	// IMPORTANT: We explicitly pass WithTracerProvider(otel.GetTracerProvider()) to capture
 	// the global provider at middleware setup time. The otelecho.Middleware() function caches
 	// the tracer provider when called, NOT at request time.
@@ -33,10 +34,31 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// the server is created, so the real provider is captured here. However, explicit wiring
 	// makes this dependency clear and ensures correct behavior if SetupMiddlewares is called
 	// directly (e.g., in tests or custom server initialization scenarios).
+	//
+	// Custom attributes (url.scheme, error.type) are added via WithEchoMetricAttributeFn to
+	// enhance otelecho's built-in metrics without duplicating metric collection.
 	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 	e.Use(otelecho.Middleware(
 		cfg.App.Name,
 		otelecho.WithTracerProvider(otel.GetTracerProvider()),
+		otelecho.WithEchoMetricAttributeFn(func(c echo.Context) []attribute.KeyValue {
+			attrs := []attribute.KeyValue{}
+
+			// Add url.scheme (proxy-aware)
+			scheme := "http"
+			if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
+				scheme = "https"
+			}
+			attrs = append(attrs, attribute.String("url.scheme", scheme))
+
+			// Add error.type for 4xx/5xx responses
+			status := c.Response().Status
+			if status >= 400 {
+				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(status)))
+			}
+
+			return attrs
+		}),
 		otelecho.WithSkipper(func(c echo.Context) bool {
 			return probeSkipper(c)
 		}),
@@ -47,12 +69,6 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// Operation Tracker - Initialize AMQP and DB operation tracking for each request
 	e.Use(PerformanceStats())
-
-	// HTTP Metrics - Record request duration and active requests per OTel semantic conventions
-	// Uses the same skipper as OTEL traces to avoid metrics for health/ready probes
-	e.Use(tracking.HTTPMetrics(tracking.HTTPMetricsConfig{
-		Skipper: probeSkipper,
-	}))
 
 	// CORS
 	e.Use(CORS())
