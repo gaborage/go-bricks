@@ -484,7 +484,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // - db.client.connection.count{state="used"}: Active connections in use
 // - db.client.connection.count{state="idle"}: Idle connections in pool
 // - db.client.connection.idle.max: Maximum configured idle connections
-// - db.client.connection.idle.min: Minimum configured idle connections
+// - db.client.connection.idle.configured: Configured idle connection target (not enforced as minimum)
 // - db.client.connection.max: Maximum configured connections
 // - db.client.connection.wait_count: Cumulative count of waits for connections from pool
 // - db.client.connection.timeouts: Cumulative count of connection wait timeouts
