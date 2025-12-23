@@ -359,10 +359,12 @@ func (c *Connection) Stats() (map[string]any, error) {
 		"max_lifetime_closed":  stats.MaxLifetimeClosed,
 	}
 
-	// Add configured max idle connections if config is available
+	// Add configured idle connections if config is available
 	if c.config != nil {
 		result["max_idle_connections"] = int(c.config.Pool.Idle.Connections)
-		result["min_idle_connections"] = int(c.config.Pool.Idle.Connections)
+		// configured_idle_connections represents the target maximum idle connections setting.
+		// Go's sql.DB does not enforce a minimum idle count; this is purely a configured target.
+		result["configured_idle_connections"] = int(c.config.Pool.Idle.Connections)
 	}
 
 	return result, nil
