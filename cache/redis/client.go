@@ -9,6 +9,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Lua script for atomic Compare-And-Set operation.
@@ -52,6 +54,14 @@ type Client struct {
 	client *redis.Client
 	config *Config
 	closed atomic.Bool
+}
+
+// namespace returns the tenant identifier for metric attribution.
+func (c *Client) namespace(ctx context.Context) string {
+	if tenantID, ok := multitenant.GetTenant(ctx); ok {
+		return tenantID
+	}
+	return ""
 }
 
 // NewClient creates a new Redis cache client.
@@ -99,11 +109,25 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, cache.ErrClosed
 	}
 
+	start := time.Now()
 	result, err := c.client.Get(ctx, key).Bytes()
+	duration := time.Since(start)
+
+	// Determine hit/miss status
+	hit := err == nil
+	var recordErr error
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
+			// Cache miss - not an error, just not found
+			tracking.RecordCacheOperation(ctx, tracking.OpGet, duration, false, nil, c.namespace(ctx))
 			return nil, cache.ErrNotFound
 		}
+		recordErr = err
+	}
+
+	tracking.RecordCacheOperation(ctx, tracking.OpGet, duration, hit, recordErr, c.namespace(ctx))
+
+	if err != nil {
 		return nil, cache.NewOperationError("get", key, err)
 	}
 
@@ -122,7 +146,13 @@ func (c *Client) Set(ctx context.Context, key string, value []byte, ttl time.Dur
 		return cache.ErrInvalidTTL
 	}
 
-	if err := c.client.Set(ctx, key, value, ttl).Err(); err != nil {
+	start := time.Now()
+	err := c.client.Set(ctx, key, value, ttl).Err()
+	duration := time.Since(start)
+
+	tracking.RecordCacheOperation(ctx, tracking.OpSet, duration, false, err, c.namespace(ctx))
+
+	if err != nil {
 		return cache.NewOperationError("set", key, err)
 	}
 
@@ -136,7 +166,13 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return cache.ErrClosed
 	}
 
-	if err := c.client.Del(ctx, key).Err(); err != nil {
+	start := time.Now()
+	err := c.client.Del(ctx, key).Err()
+	duration := time.Since(start)
+
+	tracking.RecordCacheOperation(ctx, tracking.OpDelete, duration, false, err, c.namespace(ctx))
+
+	if err != nil {
 		return cache.NewOperationError("delete", key, err)
 	}
 
@@ -159,6 +195,8 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 		return nil, false, cache.ErrInvalidTTL
 	}
 
+	start := time.Now()
+
 	// SET key value NX GET PX ttl_ms
 	// Returns nil if key was set (didn't exist before)
 	// Returns old value if key already existed
@@ -168,15 +206,20 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 		TTL:  ttl,
 	}).Result()
 
+	duration := time.Since(start)
+
 	if err != nil {
 		// redis.Nil means key was successfully set (didn't exist before)
 		if errors.Is(err, redis.Nil) {
+			tracking.RecordCacheOperation(ctx, tracking.OpGetOrSet, duration, false, nil, c.namespace(ctx))
 			return value, true, nil
 		}
+		tracking.RecordCacheOperation(ctx, tracking.OpGetOrSet, duration, false, err, c.namespace(ctx))
 		return nil, false, cache.NewOperationError("getorset", key, err)
 	}
 
 	// Key already existed, return the existing value
+	tracking.RecordCacheOperation(ctx, tracking.OpGetOrSet, duration, true, nil, c.namespace(ctx))
 	return []byte(result), false, nil
 }
 
@@ -202,8 +245,14 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 		expected = string(expectedValue)
 	}
 
+	start := time.Now()
+
 	// Execute Lua script
 	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttl.Milliseconds()).Int()
+
+	duration := time.Since(start)
+	tracking.RecordCacheOperation(ctx, tracking.OpCompareAndSet, duration, false, err, c.namespace(ctx))
+
 	if err != nil {
 		return false, cache.NewOperationError("cas", key, err)
 	}
@@ -218,7 +267,13 @@ func (c *Client) Health(ctx context.Context) error {
 		return cache.ErrClosed
 	}
 
-	if err := c.client.Ping(ctx).Err(); err != nil {
+	start := time.Now()
+	err := c.client.Ping(ctx).Err()
+	duration := time.Since(start)
+
+	tracking.RecordCacheOperation(ctx, tracking.OpHealth, duration, false, err, c.namespace(ctx))
+
+	if err != nil {
 		return cache.NewConnectionError("ping", c.config.Address(), err)
 	}
 

@@ -25,9 +25,16 @@ const (
 	metricDBDuration = "db.client.operation.duration" // Histogram in seconds
 
 	// Connection pool metrics per OTel spec
-	metricDBConnectionCount   = "db.client.connection.count"    // Gauge with state attribute
+	// Note: Changed from Gauge to UpDownCounter per OTEL semconv recommendation
+	metricDBConnectionCount   = "db.client.connection.count"    // UpDownCounter with state attribute
 	metricDBConnectionIdleMax = "db.client.connection.idle.max" // Max configured idle connections
+	metricDBConnectionIdleMin = "db.client.connection.idle.min" // Min configured idle connections
 	metricDBConnectionMax     = "db.client.connection.max"      // Max configured connections
+
+	// New pool saturation metrics per OTEL semconv
+	metricDBConnectionWaitCount    = "db.client.connection.wait_count"    // Counter: cumulative wait count
+	metricDBConnectionTimeouts     = "db.client.connection.timeouts"      // Counter: timeout events
+	metricDBConnectionPendingCount = "db.client.connection.pending_count" // UpDownCounter: currently waiting
 
 	// Attribute keys per OTel semantic conventions
 	attrDBSystem         = "db.system.name"
@@ -309,59 +316,112 @@ func extractTableName(query string) string {
 	return unknownTable
 }
 
-// createGauge creates an observable gauge and logs errors without failing.
-// Returns the created gauge or nil if creation failed.
-func createGauge(meter metric.Meter, name, description string) metric.Int64ObservableGauge {
-	gauge, err := meter.Int64ObservableGauge(name, metric.WithDescription(description))
+// createObservableUpDownCounter creates an observable up-down counter and logs errors without failing.
+// Returns the created counter or nil if creation failed.
+// Note: Changed from Gauge to UpDownCounter per OTEL semconv recommendation for pool metrics.
+func createObservableUpDownCounter(meter metric.Meter, name, description string) metric.Int64ObservableUpDownCounter {
+	counter, err := meter.Int64ObservableUpDownCounter(name, metric.WithDescription(description))
 	logMetricError(name, err)
-	return gauge
+	return counter
 }
 
-// collectInstruments collects non-nil observable instruments into a slice.
+// createObservableCounter creates an observable counter and logs errors without failing.
+// Returns the created counter or nil if creation failed.
+func createObservableCounter(meter metric.Meter, name, description string) metric.Int64ObservableCounter {
+	counter, err := meter.Int64ObservableCounter(name, metric.WithDescription(description))
+	logMetricError(name, err)
+	return counter
+}
+
+// collectObservables collects non-nil observable instruments into a slice.
 // This helper eliminates repetitive nil-checking code.
-func collectInstruments(gauges ...metric.Int64ObservableGauge) []metric.Observable {
-	var instruments []metric.Observable
-	for _, g := range gauges {
-		if g != nil {
-			instruments = append(instruments, g)
+func collectObservables(instruments ...metric.Observable) []metric.Observable {
+	var result []metric.Observable
+	for _, inst := range instruments {
+		if inst != nil {
+			result = append(result, inst)
 		}
 	}
-	return instruments
+	return result
 }
 
-// extractPoolStats extracts connection counts from a stats map and returns
-// the number of in-use (active) connections, idle connections, and the
-// configured maximum open connections. Missing or non-numeric entries are
-// treated as zero and values are converted using asInt64.
-func extractPoolStats(stats map[string]any) (inUse, idle, maxIdle, maxOpen int64) {
+// poolStats holds extracted connection pool statistics.
+type poolStats struct {
+	InUse        int64
+	Idle         int64
+	MaxIdle      int64
+	MinIdle      int64
+	MaxOpen      int64
+	WaitCount    int64
+	WaitDuration time.Duration
+	Timeouts     int64
+	PendingCount int64
+}
+
+// extractPoolStats extracts connection counts from a stats map.
+// Missing or non-numeric entries are treated as zero and values are converted using asInt64.
+func extractPoolStats(stats map[string]any) poolStats {
+	var ps poolStats
+
 	if val, ok := asInt64(stats["in_use"]); ok {
-		inUse = val
+		ps.InUse = val
 	}
 	if val, ok := asInt64(stats["idle"]); ok {
-		idle = val
+		ps.Idle = val
 	}
 	if val, ok := asInt64(stats["max_idle_connections"]); ok {
-		maxIdle = val
+		ps.MaxIdle = val
+	}
+	if val, ok := asInt64(stats["min_idle_connections"]); ok {
+		ps.MinIdle = val
 	}
 	if val, ok := asInt64(stats["max_open_connections"]); ok {
-		maxOpen = val
+		ps.MaxOpen = val
 	}
-	return
+	if val, ok := asInt64(stats["wait_count"]); ok {
+		ps.WaitCount = val
+	}
+	if val, ok := asInt64(stats["timeouts"]); ok {
+		ps.Timeouts = val
+	}
+	if val, ok := asInt64(stats["pending_count"]); ok {
+		ps.PendingCount = val
+	}
+	// Parse wait_duration from string format
+	if durStr, ok := stats["wait_duration"].(string); ok {
+		if dur, err := time.ParseDuration(durStr); err == nil {
+			ps.WaitDuration = dur
+		}
+	}
+
+	return ps
 }
 
-// poolMetricsRegistration encapsulates pool metrics gauge state and observation logic.
+// poolMetricsRegistration encapsulates pool metrics state and observation logic.
 // This struct implements OTel semantic conventions using state attribute for connection counts.
+// Note: Changed from Gauge to UpDownCounter per OTEL semconv recommendation.
 type poolMetricsRegistration struct {
 	conn interface {
 		Stats() (map[string]any, error)
 	}
-	connectionCountGauge metric.Int64ObservableGauge // Single gauge with state attribute
-	idleMaxGauge         metric.Int64ObservableGauge // Max configured idle connections
-	maxGauge             metric.Int64ObservableGauge // Max configured connections
-	baseAttrs            []attribute.KeyValue        // db.system.name attribute
+	// Connection state metrics (UpDownCounter per OTEL spec)
+	connectionCountCounter metric.Int64ObservableUpDownCounter // Current connections with state attribute
+	idleMaxCounter         metric.Int64ObservableUpDownCounter // Max configured idle connections
+	idleMinCounter         metric.Int64ObservableUpDownCounter // Min configured idle connections
+	maxCounter             metric.Int64ObservableUpDownCounter // Max configured connections
+
+	// Pool saturation metrics (Counters for cumulative values)
+	waitCountCounter metric.Int64ObservableCounter // Cumulative wait count
+	timeoutsCounter  metric.Int64ObservableCounter // Cumulative timeout count
+
+	// Pool pressure metric
+	pendingCountCounter metric.Int64ObservableUpDownCounter // Current number of pending requests
+
+	// Base attributes for all metrics
+	baseAttrs []attribute.KeyValue
 }
 
-// observePoolStats reads connection pool statistics and updates gauges per OTel spec.
+// observePoolStats reads connection pool statistics and updates metrics per OTel spec.
 // This method is called automatically during metrics collection (typically every 30s).
 func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer metric.Observer) error {
 	stats, err := r.conn.Stats()
@@ -369,53 +429,75 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 		return nil // Best-effort - don't fail metrics collection
 	}
 
-	inUse, idle, maxIdle, maxOpen := extractPoolStats(stats)
+	ps := extractPoolStats(stats)
 
 	// Record connection count with state attribute per OTel spec
-	if r.connectionCountGauge != nil {
+	if r.connectionCountCounter != nil {
 		// state=used for active connections
 		usedAttrs := make([]attribute.KeyValue, len(r.baseAttrs)+1)
 		copy(usedAttrs, r.baseAttrs)
 		usedAttrs[len(r.baseAttrs)] = attribute.String(attrConnectionState, "used")
-		observer.ObserveInt64(r.connectionCountGauge, inUse, metric.WithAttributes(usedAttrs...))
+		observer.ObserveInt64(r.connectionCountCounter, ps.InUse, metric.WithAttributes(usedAttrs...))
 
 		// state=idle for idle connections
 		idleAttrs := make([]attribute.KeyValue, len(r.baseAttrs)+1)
 		copy(idleAttrs, r.baseAttrs)
 		idleAttrs[len(r.baseAttrs)] = attribute.String(attrConnectionState, "idle")
-		observer.ObserveInt64(r.connectionCountGauge, idle, metric.WithAttributes(idleAttrs...))
+		observer.ObserveInt64(r.connectionCountCounter, ps.Idle, metric.WithAttributes(idleAttrs...))
 	}
 
 	// Record configuration limits
-	if r.idleMaxGauge != nil {
-		observer.ObserveInt64(r.idleMaxGauge, maxIdle, metric.WithAttributes(r.baseAttrs...))
+	if r.idleMaxCounter != nil {
+		observer.ObserveInt64(r.idleMaxCounter, ps.MaxIdle, metric.WithAttributes(r.baseAttrs...))
 	}
-	if r.maxGauge != nil {
-		observer.ObserveInt64(r.maxGauge, maxOpen, metric.WithAttributes(r.baseAttrs...))
+	if r.idleMinCounter != nil {
+		observer.ObserveInt64(r.idleMinCounter, ps.MinIdle, metric.WithAttributes(r.baseAttrs...))
+	}
+	if r.maxCounter != nil {
+		observer.ObserveInt64(r.maxCounter, ps.MaxOpen, metric.WithAttributes(r.baseAttrs...))
+	}
+
+	// Record cumulative wait count (shows pool saturation over time)
+	if r.waitCountCounter != nil {
+		observer.ObserveInt64(r.waitCountCounter, ps.WaitCount, metric.WithAttributes(r.baseAttrs...))
+	}
+
+	// Record cumulative timeout count
+	if r.timeoutsCounter != nil {
+		observer.ObserveInt64(r.timeoutsCounter, ps.Timeouts, metric.WithAttributes(r.baseAttrs...))
+	}
+
+	// Record current pending request count
+	if r.pendingCountCounter != nil {
+		observer.ObserveInt64(r.pendingCountCounter, ps.PendingCount, metric.WithAttributes(r.baseAttrs...))
 	}
 
 	return nil
 }
 
-// RegisterConnectionPoolMetrics registers ObservableGauges for connection pool metrics
+// RegisterConnectionPoolMetrics registers observable metrics for connection pool metrics
 // following OpenTelemetry semantic conventions v1.32.0.
 //
 // This function should be called once per database connection during initialization.
 //
-// Metrics registered per OTel spec:
+// Metrics registered per OTel spec (using UpDownCounter per OTEL semconv recommendation):
 // - db.client.connection.count{state="used"}: Active connections in use
 // - db.client.connection.count{state="idle"}: Idle connections in pool
 // - db.client.connection.idle.max: Maximum configured idle connections
+// - db.client.connection.idle.min: Minimum configured idle connections
 // - db.client.connection.max: Maximum configured connections
+// - db.client.connection.wait_count: Cumulative count of waits for connections from pool
+// - db.client.connection.timeouts: Cumulative count of connection wait timeouts
+// - db.client.connection.pending_count: Number of pending connection requests
 //
 // Server Metadata Attributes:
 // All metrics include server.address, server.port, and db.namespace (when available) in addition
 // to db.system.name for full OTel compliance and correlation with operation metrics.
 //
-// The gauges are updated automatically when metrics are collected (typically every 30s).
+// The metrics are updated automatically when collected (typically every 30s).
 // Returns a cleanup function that can be called to unregister the metrics (optional).
 //
-// This function uses graceful degradation - if any gauge fails to register, it continues
+// This function uses graceful degradation - if any metric fails to register, it continues
 // with others and provides partial metrics coverage.
 func RegisterConnectionPoolMetrics(conn interface {
 	Stats() (map[string]any, error)
@@ -446,16 +528,38 @@ func RegisterConnectionPoolMetrics(conn interface {
 		baseAttrs: baseAttrs,
 	}
 
-	// Create gauges per OTel semantic conventions
-	reg.connectionCountGauge = createGauge(meter, metricDBConnectionCount,
+	// Create UpDownCounters per OTel semantic conventions (changed from Gauge per OTEL spec)
+	reg.connectionCountCounter = createObservableUpDownCounter(meter, metricDBConnectionCount,
 		"Number of connections that are currently in state described by the state attribute")
-	reg.idleMaxGauge = createGauge(meter, metricDBConnectionIdleMax,
+	reg.idleMaxCounter = createObservableUpDownCounter(meter, metricDBConnectionIdleMax,
 		"The maximum number of idle open connections allowed")
-	reg.maxGauge = createGauge(meter, metricDBConnectionMax,
+	reg.idleMinCounter = createObservableUpDownCounter(meter, metricDBConnectionIdleMin,
+		"The minimum number of idle open connections allowed")
+	reg.maxCounter = createObservableUpDownCounter(meter, metricDBConnectionMax,
 		"The maximum number of open connections allowed")
 
-	// Collect non-nil gauges for callback registration
-	instruments := collectInstruments(reg.connectionCountGauge, reg.idleMaxGauge, reg.maxGauge)
+	// Create counter for cumulative wait count (shows pool saturation over time)
+	reg.waitCountCounter = createObservableCounter(meter, metricDBConnectionWaitCount,
+		"The total number of times a connection was requested from the pool")
+
+	// Create counter for cumulative wait timeouts
+	reg.timeoutsCounter = createObservableCounter(meter, metricDBConnectionTimeouts,
+		"The total number of times a connection request timed out")
+
+	// Create up-down counter for current pending requests
+	reg.pendingCountCounter = createObservableUpDownCounter(meter, metricDBConnectionPendingCount,
+		"The number of connection requests currently waiting for a connection")
+
+	// Collect non-nil instruments for callback registration
+	instruments := collectObservables(
+		reg.connectionCountCounter,
+		reg.idleMaxCounter,
+		reg.idleMinCounter,
+		reg.maxCounter,
+		reg.waitCountCounter,
+		reg.timeoutsCounter,
+		reg.pendingCountCounter,
+	)
 	if len(instruments) == 0 {
 		return noOpCleanup()
 	}

@@ -362,6 +362,7 @@ func (c *Connection) Stats() (map[string]any, error) {
 	// Add configured max idle connections if config is available
 	if c.config != nil {
 		result["max_idle_connections"] = int(c.config.Pool.Idle.Connections)
+		result["min_idle_connections"] = int(c.config.Pool.Idle.Connections)
 	}
 
 	return result, nil

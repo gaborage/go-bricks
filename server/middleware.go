@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/server/internal/tracking"
 )
 
 // SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
@@ -46,6 +47,12 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// Operation Tracker - Initialize AMQP and DB operation tracking for each request
 	e.Use(PerformanceStats())
+
+	// HTTP Metrics - Record request duration and active requests per OTel semantic conventions
+	// Uses the same skipper as OTEL traces to avoid metrics for health/ready probes
+	e.Use(tracking.HTTPMetrics(tracking.HTTPMetricsConfig{
+		Skipper: probeSkipper,
+	}))
 
 	// CORS
 	e.Use(CORS())
