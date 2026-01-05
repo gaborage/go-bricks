@@ -14,6 +14,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
+const (
+	attributeMismatchErrMsg = "attribute %s value mismatch"
+)
+
 func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	ResetForTesting()
@@ -83,30 +87,8 @@ func TestRecordCacheHitMiss(t *testing.T) {
 	err := reader.Collect(context.Background(), &rm)
 	require.NoError(t, err)
 
-	// Find hit and miss counters
-	var hitCount, missCount int64
-	for _, sm := range rm.ScopeMetrics {
-		if sm.Scope.Name != cacheMeterName {
-			continue
-		}
-		for _, m := range sm.Metrics {
-			switch m.Name {
-			case metricCacheHit:
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sum.DataPoints {
-					hitCount += dp.Value
-				}
-			case metricCacheMiss:
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sum.DataPoints {
-					missCount += dp.Value
-				}
-			}
-		}
-	}
-
+	// Verify hit/miss counts
+	hitCount, missCount := collectHitMissCounts(t, rm)
 	assert.Equal(t, int64(3), hitCount, "expected 3 cache hits")
 	assert.Equal(t, int64(2), missCount, "expected 2 cache misses")
 }
@@ -237,31 +219,8 @@ func TestNonGetOperationsDoNotRecordHitMiss(t *testing.T) {
 	err := reader.Collect(context.Background(), &rm)
 	require.NoError(t, err)
 
-	// Verify no hit/miss counters for non-Get operations
-	var hitCount, missCount int64
-	for _, sm := range rm.ScopeMetrics {
-		if sm.Scope.Name != cacheMeterName {
-			continue
-		}
-		for _, m := range sm.Metrics {
-			switch m.Name {
-			case metricCacheHit:
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sum.DataPoints {
-					hitCount += dp.Value
-				}
-			case metricCacheMiss:
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				require.True(t, ok)
-				for _, dp := range sum.DataPoints {
-					missCount += dp.Value
-				}
-			}
-		}
-	}
-
 	// Hit/miss should not be recorded for Set/Delete
+	hitCount, missCount := collectHitMissCounts(t, rm)
 	assert.Equal(t, int64(0), hitCount, "expected no cache hits for non-Get operations")
 	assert.Equal(t, int64(0), missCount, "expected no cache misses for non-Get operations")
 }
@@ -273,11 +232,11 @@ func assertAttribute(t *testing.T, attrs []attribute.KeyValue, key string, expec
 		if string(kv.Key) == key {
 			switch ev := expectedValue.(type) {
 			case int64:
-				assert.Equal(t, ev, kv.Value.AsInt64(), "attribute %s value mismatch", key)
+				assert.Equal(t, ev, kv.Value.AsInt64(), attributeMismatchErrMsg, key)
 			case int:
-				assert.Equal(t, int64(ev), kv.Value.AsInt64(), "attribute %s value mismatch", key)
+				assert.Equal(t, int64(ev), kv.Value.AsInt64(), attributeMismatchErrMsg, key)
 			case string:
-				assert.Equal(t, ev, kv.Value.AsString(), "attribute %s value mismatch", key)
+				assert.Equal(t, ev, kv.Value.AsString(), attributeMismatchErrMsg, key)
 			default:
 				t.Errorf("unsupported expected value type for attribute %s", key)
 			}
@@ -285,4 +244,35 @@ func assertAttribute(t *testing.T, attrs []attribute.KeyValue, key string, expec
 		}
 	}
 	t.Errorf("attribute %s not found in %v", key, attrs)
+}
+
+// sumCounterValue finds a counter metric by name within the cache scope
+// and returns the sum of all data point values.
+func sumCounterValue(t *testing.T, rm metricdata.ResourceMetrics, metricName string) int64 {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != cacheMeterName {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != metricName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			require.True(t, ok, "expected Sum[int64] data for %s", metricName)
+
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0 // Metric not found - valid for "no operations recorded" scenarios
+}
+
+// collectHitMissCounts returns the accumulated hit and miss counter values.
+func collectHitMissCounts(t *testing.T, rm metricdata.ResourceMetrics) (hits, misses int64) {
+	t.Helper()
+	return sumCounterValue(t, rm, metricCacheHit), sumCounterValue(t, rm, metricCacheMiss)
 }
