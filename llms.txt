@@ -21,11 +21,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Framework auto-initializes when observability.enabled: true in config:
+	// - Distributed tracing (OpenTelemetry spans)
+	// - Metrics (HTTP, database, messaging)
+	// - Structured logging with trace correlation
+	// - HTTP request auto-instrumentation
 	fw, err := app.NewWithConfig(cfg, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	fw.RegisterModules(/* modules */)
+
+	// Graceful shutdown: flushes pending spans/metrics before exit
 	log.Fatal(fw.Run())
 }
 ```
@@ -65,20 +74,23 @@ Add observability settings as needed (see Observability & Logging).
 
 ```go
 type Module struct {
-	db     database.Interface
+	// Function-based injection: works for both single-tenant AND multi-tenant
+	getDB  func(context.Context) (database.Interface, error)
 	logger logger.Logger
 }
 
 func (m *Module) Name() string { return "mymodule" }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-	m.db = deps.DB
+	// Store function reference, NOT database instance
+	// In multi-tenant mode, database is resolved per-request from tenant context
+	m.getDB = deps.DB
 	m.logger = deps.Logger.WithFields(map[string]any{"module": m.Name()})
 	return nil
 }
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
-	handler := NewHandler(m.db, m.logger)
+	handler := NewHandler(m.getDB, m.logger)
 	server.POST(hr, e, "/users", handler.Create)
 }
 
@@ -1638,13 +1650,144 @@ Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
 - Resolution strategies: `header`, `host`, or custom store implementing `multitenant.Store`.
 - Each tenant gets isolated DB connections, messaging clients, and module lifecycle events.
 
+**Configuration:**
+
 ```yaml
 multitenant:
   enabled: true
-  tenant_resolution:
-    strategy: header
-    header_name: X-Tenant-ID
+  resolver:
+    type: header
+    header: X-Tenant-ID
+  tenants:
+    acme:
+      database:
+        type: postgresql
+        host: acme-db.example.com
+        name: acme_production
+    globex:
+      database:
+        type: postgresql
+        host: globex-db.example.com
+        name: globex_production
 ```
+
+**Multi-Tenant Service Implementation:**
+
+```go
+import (
+    "context"
+    "errors"
+    "fmt"
+
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/database"
+    "github.com/gaborage/go-bricks/logger"
+    "github.com/gaborage/go-bricks/server"
+)
+
+// Service with tenant-aware database access
+type UserService struct {
+    getDB  func(context.Context) (database.Interface, error)
+    logger logger.Logger
+}
+
+func NewUserService(getDB func(context.Context) (database.Interface, error), logger logger.Logger) *UserService {
+    return &UserService{getDB: getDB, logger: logger}
+}
+
+func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
+    // Resolve tenant-specific database from context
+    db, err := s.getDB(ctx)
+    if err != nil {
+        // Handle missing tenant context (X-Tenant-ID header not provided)
+        if errors.Is(err, app.ErrNoTenantInContext) {
+            s.logger.Error("Tenant not found in context", "user_id", id)
+            return nil, fmt.Errorf("tenant context required: %w", err)
+        }
+        return nil, fmt.Errorf("database unavailable: %w", err)
+    }
+
+    // Query runs against tenant-isolated database
+    var user User
+    err = db.QueryRow(ctx, "SELECT id, name, email FROM users WHERE id = $1", id).
+        Scan(&user.ID, &user.Name, &user.Email)
+    if err != nil {
+        return nil, fmt.Errorf("query failed: %w", err)
+    }
+
+    return &user, nil
+}
+
+func (s *UserService) CreateUser(ctx context.Context, name, email string) (*User, error) {
+    db, err := s.getDB(ctx)
+    if err != nil {
+        return nil, err
+    }
+
+    var id int64
+    err = db.QueryRow(ctx,
+        "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+        name, email).Scan(&id)
+    if err != nil {
+        return nil, fmt.Errorf("insert failed: %w", err)
+    }
+
+    return &User{ID: id, Name: name, Email: email}, nil
+}
+```
+
+**Handler Integration (Tenant Context Flows Automatically):**
+
+```go
+type Handler struct {
+    svc *UserService
+}
+
+func NewHandler(getDB func(context.Context) (database.Interface, error), logger logger.Logger) *Handler {
+    return &Handler{svc: NewUserService(getDB, logger)}
+}
+
+func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+    // Tenant automatically resolved from X-Tenant-ID header by middleware
+    // Context contains tenant ID when multitenant.enabled: true
+    reqCtx := ctx.Request().Context()
+
+    user, err := h.svc.GetUser(reqCtx, req.ID)
+    if err != nil {
+        // Map domain errors to HTTP responses
+        if errors.Is(err, app.ErrNoTenantInContext) {
+            return server.Result[User]{}, server.BadRequest(errors.New("X-Tenant-ID header required"))
+        }
+        return server.Result[User]{}, server.InternalServerError(err)
+    }
+
+    return server.OK(user), nil
+}
+
+type GetUserReq struct {
+    ID int64 `param:"id" validate:"required,gt=0"`
+}
+```
+
+**Complete Request Flow:**
+
+```
+1. HTTP Request with header: X-Tenant-ID: acme
+2. Middleware extracts tenant ID → sets in context via multitenant.SetTenant(ctx, "acme")
+3. Handler calls service.GetUser(reqCtx, id)
+4. Service calls getDB(ctx) → framework resolves acme's database connection
+5. Query runs against acme_production database
+6. Response returned to acme tenant
+```
+
+**Error Handling Reference:**
+
+| Error | HTTP Status | User Message |
+|-------|-------------|--------------|
+| `app.ErrNoTenantInContext` | 400 | "X-Tenant-ID header required" |
+| `app.ErrTenantNotFound` | 404 | "Tenant not configured" |
+| Database connection error | 503 | "Service temporarily unavailable" |
+| Query error | 500 | "Internal server error" |
 
 ## Observability & Logging
 
@@ -1847,6 +1990,135 @@ traces:
 ```
 
 Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
+
+## Distributed Tracing (Custom Spans)
+
+**HTTP requests are automatically traced** when `observability.enabled: true`. Each incoming request creates a span:
+- Span name: `HTTP {method} {route}` (e.g., `HTTP POST /users`)
+- Attributes: `http.method`, `http.route`, `http.status_code`, `http.request.body_size`
+- W3C `traceparent` header propagation (cross-service tracing)
+
+**No code changes required for basic tracing** — just enable in config.
+
+**Adding Custom Spans in Modules:**
+
+```go
+import (
+    "context"
+
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/database"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/codes"
+    "go.opentelemetry.io/otel/trace"
+)
+
+type OrderModule struct {
+    tracer trace.Tracer  // Store tracer for custom spans
+    getDB  func(context.Context) (database.Interface, error)
+}
+
+func (m *OrderModule) Init(deps *app.ModuleDeps) error {
+    m.tracer = deps.Tracer  // Injected by framework
+    m.getDB = deps.DB
+    return nil
+}
+
+// Create custom spans for business operations
+func (m *OrderModule) ProcessOrder(ctx context.Context, orderID int64) error {
+    // Create child span under HTTP request span
+    ctx, span := m.tracer.Start(ctx, "ProcessOrder")
+    defer span.End()
+
+    // Add attributes for debugging in trace viewer
+    span.SetAttributes(
+        attribute.Int64("order.id", orderID),
+        attribute.String("order.status", "processing"),
+    )
+
+    db, err := m.getDB(ctx)
+    if err != nil {
+        span.RecordError(err)
+        span.SetStatus(codes.Error, "database unavailable")
+        return err
+    }
+
+    // Database operations automatically inherit trace context
+    _, err = db.Exec(ctx, "UPDATE orders SET status = $1 WHERE id = $2", "processed", orderID)
+    if err != nil {
+        span.RecordError(err)
+        span.SetStatus(codes.Error, err.Error())
+        return err
+    }
+
+    span.SetAttributes(attribute.String("order.status", "completed"))
+    return nil
+}
+
+// Nested spans for complex operations
+func (m *OrderModule) ProcessOrderWithPayment(ctx context.Context, orderID int64) error {
+    ctx, parentSpan := m.tracer.Start(ctx, "ProcessOrderWithPayment")
+    defer parentSpan.End()
+
+    // Child span 1: validate order
+    ctx, validateSpan := m.tracer.Start(ctx, "ValidateOrder")
+    if err := m.validateOrder(ctx, orderID); err != nil {
+        validateSpan.RecordError(err)
+        validateSpan.End()
+        return err
+    }
+    validateSpan.End()
+
+    // Child span 2: process payment
+    ctx, paymentSpan := m.tracer.Start(ctx, "ProcessPayment")
+    if err := m.processPayment(ctx, orderID); err != nil {
+        paymentSpan.RecordError(err)
+        paymentSpan.End()
+        return err
+    }
+    paymentSpan.End()
+
+    return nil
+}
+```
+
+**End-to-End Trace Flow:**
+
+```
+HTTP Request (traceparent header)
+    ↓
+Auto-span: "HTTP POST /orders/123/process"
+    ↓
+Custom span: "ProcessOrderWithPayment"
+    ├── Child span: "ValidateOrder"
+    │       └── DB span: "db.query" (auto-traced)
+    └── Child span: "ProcessPayment"
+            └── HTTP span: "HTTP POST /payments" (outgoing call)
+    ↓
+Response (trace_id in logs)
+```
+
+**Trace Context Propagation (Cross-Service):**
+
+```go
+import "go.opentelemetry.io/otel/propagation"
+
+// Outgoing HTTP request automatically propagates trace context
+func (s *Service) CallExternalAPI(ctx context.Context, data []byte) error {
+    req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/process", bytes.NewReader(data))
+
+    // Inject trace headers (W3C traceparent) - automatic when using otelhttp
+    otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+
+    resp, err := http.DefaultClient.Do(req)
+    // ... handle response
+}
+```
+
+**Viewing Traces:**
+- Traces export to configured OTLP endpoint (New Relic, Jaeger, Zipkin, etc.)
+- Each trace shows: request duration, child spans, errors, custom attributes
+- Filter by `service.name`, `http.route`, custom attributes
 
 ## Common Patterns
 - **Error handling**: wrap service errors with `server.InternalServerError`; map domain errors to `server.NotFound`, `server.Unauthorized`, etc.
