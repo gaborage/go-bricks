@@ -151,7 +151,11 @@ func (g *OpenAPIGenerator) getDescription(project *models.Project) string {
 
 // getAllRoutes flattens routes from all modules
 func (g *OpenAPIGenerator) getAllRoutes(project *models.Project) []models.Route {
-	var routes []models.Route
+	totalRoutes := 0
+	for _, module := range project.Modules {
+		totalRoutes += len(module.Routes)
+	}
+	routes := make([]models.Route, 0, totalRoutes)
 	for _, module := range project.Modules {
 		routes = append(routes, module.Routes...)
 	}
