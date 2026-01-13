@@ -97,10 +97,9 @@ func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging
 		}
 	}
 
-	// Ensure consumers are set up for single-tenant
 	if p.declarations != nil {
 		if err := p.messagingManager.EnsureConsumers(ctx, "", p.declarations); err != nil {
-			return nil, err // Pass through the error from manager (already well-formatted)
+			return nil, err
 		}
 	}
 
@@ -176,9 +175,9 @@ func (p *MultiTenantResourceProvider) DBByName(ctx context.Context, name string)
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
 			Category: "not_configured",
-			Field:    "database",
-			Message:  testMessageMultiTenant,
-			Action:   "configure multitenant.tenants.<tenant_id>.database sections",
+			Field:    "databases",
+			Message:  "(named databases are shared across tenants)",
+			Action:   "add databases.<name> sections to config.yaml for named database access",
 		}
 	}
 	if name == "" {

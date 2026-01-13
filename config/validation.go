@@ -68,6 +68,7 @@ const (
 	portRange            = "1-65535"
 	fieldDatabasePort    = "database.port"
 	errInvalidField      = "invalid value: %v"
+	databasesFieldPrefix = "databases.%s"
 )
 
 func Validate(cfg *Config) error {
@@ -85,6 +86,10 @@ func Validate(cfg *Config) error {
 
 	if err := validateDatabase(&cfg.Database); err != nil {
 		return fmt.Errorf("database config: %w", err)
+	}
+
+	if err := validateNamedDatabases(cfg.Databases, &cfg.Multitenant); err != nil {
+		return fmt.Errorf("databases config: %w", err)
 	}
 
 	if err := validateLog(&cfg.Log); err != nil {
@@ -360,6 +365,73 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	}
 	if cfg.Query.Slow.Threshold == 0 {
 		cfg.Query.Slow.Threshold = defaultSlowQueryThreshold
+	}
+
+	return nil
+}
+
+// validateNamedDatabases validates the named databases configuration.
+// Named databases are optional but when provided:
+// - Each entry must be a valid DatabaseConfig
+// - Names cannot conflict with tenant IDs when multi-tenancy is enabled
+// - Names cannot be empty or contain the "named:" prefix
+func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
+	if len(databases) == 0 {
+		return nil
+	}
+
+	for name := range databases {
+		dbCfg := databases[name]
+		if err := validateNamedDatabaseEntry(name, &dbCfg, mt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateNamedDatabaseEntry validates a single named database entry.
+func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *MultitenantConfig) error {
+	if name == "" {
+		return &ConfigError{
+			Category: "invalid",
+			Field:    "databases",
+			Message:  "database name cannot be empty",
+			Action:   "provide a non-empty key for each entry in databases section",
+		}
+	}
+
+	if strings.HasPrefix(name, NamedDatabasePrefix) {
+		return &ConfigError{
+			Category: "invalid",
+			Field:    fmt.Sprintf(databasesFieldPrefix, name),
+			Message:  fmt.Sprintf("name cannot start with reserved prefix '%s'", NamedDatabasePrefix),
+			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
+		}
+	}
+
+	if mt.Enabled && mt.Tenants != nil {
+		if _, exists := mt.Tenants[name]; exists {
+			return &ConfigError{
+				Category: "invalid",
+				Field:    fmt.Sprintf(databasesFieldPrefix, name),
+				Message:  fmt.Sprintf("name conflicts with tenant ID '%s'", name),
+				Action:   fmt.Sprintf("rename databases.%s or multitenant.tenants.%s to avoid conflict", name, name),
+			}
+		}
+	}
+
+	if !IsDatabaseConfigured(dbCfg) {
+		return &ConfigError{
+			Category: "missing",
+			Field:    fmt.Sprintf(databasesFieldPrefix, name),
+			Message:  "database configuration incomplete",
+			Action:   fmt.Sprintf("add host/type or connectionstring to databases.%s", name),
+		}
+	}
+
+	if err := validateDatabase(dbCfg); err != nil {
+		return fmt.Errorf("databases.%s: %w", name, err)
 	}
 
 	return nil
