@@ -23,6 +23,9 @@ const (
 	serverPort                   = "server.port"
 	databaseType                 = "database.type"
 	databasePort                 = "database.port"
+	dbLocalField                 = "db.local"
+	cacheTypeField               = "cache.type"
+	redisPortField               = "cache.redis.port"
 	logLevel                     = "log.level"
 	mongoDBReplicaPreference     = "database.mongo.replica.preference"
 	mongoDBWriteConcern          = "database.mongo.concern.write"
@@ -3143,17 +3146,17 @@ func TestValidateCacheTypeFailures(t *testing.T) {
 		{
 			name:          "invalid_type",
 			cacheType:     "memcached",
-			expectedError: "cache.type",
+			expectedError: cacheTypeField,
 		},
 		{
 			name:          "empty_type",
 			cacheType:     "",
-			expectedError: "cache.type",
+			expectedError: cacheTypeField,
 		},
 		{
 			name:          "uppercase_type",
 			cacheType:     "REDIS",
-			expectedError: "cache.type",
+			expectedError: cacheTypeField,
 		},
 	}
 
@@ -3191,7 +3194,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 				Host: "localhost",
 				Port: 0,
 			},
-			expectedError: "cache.redis.port",
+			expectedError: redisPortField,
 		},
 		{
 			name: "invalid_port_negative",
@@ -3199,7 +3202,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 				Host: "localhost",
 				Port: -1,
 			},
-			expectedError: "cache.redis.port",
+			expectedError: redisPortField,
 		},
 		{
 			name: "invalid_port_too_high",
@@ -3207,7 +3210,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 				Host: "localhost",
 				Port: 99999,
 			},
-			expectedError: "cache.redis.port",
+			expectedError: redisPortField,
 		},
 		{
 			name: "invalid_database_negative",
@@ -3356,4 +3359,233 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateNamedDatabasesSuccess(t *testing.T) {
+	tests := []struct {
+		name      string
+		databases map[string]DatabaseConfig
+		mt        MultitenantConfig
+	}{
+		{
+			name:      "nil_databases_map",
+			databases: nil,
+			mt:        MultitenantConfig{Enabled: false},
+		},
+		{
+			name:      "empty_databases_map",
+			databases: map[string]DatabaseConfig{},
+			mt:        MultitenantConfig{Enabled: false},
+		},
+		{
+			name: "single_postgresql_database",
+			databases: map[string]DatabaseConfig{
+				"legacy": {
+					Type:     PostgreSQL,
+					Host:     "legacy.db.local",
+					Port:     5432,
+					Database: "legacy_db",
+					Username: "legacy_user",
+				},
+			},
+			mt: MultitenantConfig{Enabled: false},
+		},
+		{
+			name: "multiple_databases_mixed_vendors",
+			databases: map[string]DatabaseConfig{
+				"legacy": {
+					Type:     Oracle,
+					Host:     testOracleHost,
+					Port:     1521,
+					Username: "oracle_user",
+					Oracle:   OracleConfig{Service: ServiceConfig{Name: "LEGACYDB"}},
+				},
+				"analytics": {
+					Type:     PostgreSQL,
+					Host:     "analytics.db.local",
+					Port:     5432,
+					Database: "analytics_db",
+					Username: "analytics_user",
+				},
+			},
+			mt: MultitenantConfig{Enabled: false},
+		},
+		{
+			name: "named_databases_with_multitenant_no_conflict",
+			databases: map[string]DatabaseConfig{
+				"shared_analytics": {
+					Type:     PostgreSQL,
+					Host:     "shared.db.local",
+					Port:     5432,
+					Database: "shared_db",
+					Username: "shared_user",
+				},
+			},
+			mt: MultitenantConfig{
+				Enabled: true,
+				Tenants: map[string]TenantEntry{
+					tenantA: { // Different from named database key
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     testTenantDBHost,
+							Port:     5432,
+							Database: "tenant_a",
+							Username: "tenant_user",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "database_with_connection_string",
+			databases: map[string]DatabaseConfig{
+				"external": {
+					ConnectionString: testConnectionString,
+				},
+			},
+			mt: MultitenantConfig{Enabled: false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNamedDatabases(tt.databases, &tt.mt)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateNamedDatabasesFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		databases   map[string]DatabaseConfig
+		mt          MultitenantConfig
+		errContains string
+	}{
+		{
+			name: "empty_database_name",
+			databases: map[string]DatabaseConfig{
+				"": {
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     5432,
+					Database: "db",
+					Username: "user",
+				},
+			},
+			mt:          MultitenantConfig{Enabled: false},
+			errContains: "cannot be empty",
+		},
+		{
+			name: "reserved_prefix_in_name",
+			databases: map[string]DatabaseConfig{
+				"named:legacy": {
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     5432,
+					Database: "db",
+					Username: "user",
+				},
+			},
+			mt:          MultitenantConfig{Enabled: false},
+			errContains: "reserved prefix",
+		},
+		{
+			name: "conflict_with_tenant_id",
+			databases: map[string]DatabaseConfig{
+				tenantA: { // Same as tenant ID
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     5432,
+					Database: "db",
+					Username: "user",
+				},
+			},
+			mt: MultitenantConfig{
+				Enabled: true,
+				Tenants: map[string]TenantEntry{
+					tenantA: {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     testTenantDBHost,
+							Port:     5432,
+							Database: "tenant_a",
+							Username: "tenant_user",
+						},
+					},
+				},
+			},
+			errContains: "conflicts with tenant ID",
+		},
+		{
+			name: "incomplete_database_config",
+			databases: map[string]DatabaseConfig{
+				"incomplete": {
+					// Missing required fields
+				},
+			},
+			mt:          MultitenantConfig{Enabled: false},
+			errContains: "incomplete",
+		},
+		{
+			name: "invalid_database_type",
+			databases: map[string]DatabaseConfig{
+				"invalid": {
+					Type:     "mysql", // Not supported
+					Host:     dbLocalField,
+					Port:     3306,
+					Database: "db",
+					Username: "user",
+				},
+			},
+			mt:          MultitenantConfig{Enabled: false},
+			errContains: "not supported",
+		},
+		{
+			name: "invalid_port",
+			databases: map[string]DatabaseConfig{
+				"badport": {
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     -1,
+					Database: "db",
+					Username: "user",
+				},
+			},
+			mt:          MultitenantConfig{Enabled: false},
+			errContains: "port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNamedDatabases(tt.databases, &tt.mt)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+		})
+	}
+}
+
+func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
+	// When multitenant is disabled, no conflict check is needed
+	databases := map[string]DatabaseConfig{
+		tenantA: { // Would conflict if multitenant were enabled
+			Type:     PostgreSQL,
+			Host:     dbLocalField,
+			Port:     5432,
+			Database: "db",
+			Username: "user",
+		},
+	}
+	mt := MultitenantConfig{
+		Enabled: false,
+		Tenants: map[string]TenantEntry{
+			tenantA: {
+				Database: DatabaseConfig{},
+			},
+		},
+	}
+
+	err := validateNamedDatabases(databases, &mt)
+	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }

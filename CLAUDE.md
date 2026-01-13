@@ -377,6 +377,84 @@ Unified `database.Interface` supporting PostgreSQL, Oracle, MongoDB with:
 - `database/internal/tracking/` - Performance metrics
 - `database/internal/builder/` - Query builder implementations
 
+#### Named Databases (Single-Tenant Multi-Database)
+
+GoBricks supports accessing multiple databases in single-tenant mode, useful for legacy system migrations where applications need to access both old (e.g., Oracle) and new (e.g., PostgreSQL) databases.
+
+**Configuration:**
+```yaml
+# Default database (unchanged - backward compatible)
+database:
+  type: postgres
+  host: primary.db.example.com
+  port: 5432
+  database: main_db
+
+# Named databases (NEW) - supports mixed vendors
+databases:
+  legacy:
+    type: oracle
+    host: legacy-oracle.example.com
+    port: 1521
+    service_name: LEGACYDB
+    username: legacy_user
+    password: ${LEGACY_DATABASE_PASSWORD}
+  analytics:
+    type: postgres
+    host: analytics.db.example.com
+    port: 5432
+    database: analytics_db
+```
+
+**Module Usage:**
+```go
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    m.getDB = deps.DB              // Default database (unchanged)
+    m.getDBByName = deps.DBByName  // Named database access (NEW)
+    return nil
+}
+
+// Handler with cross-database operations
+func (h *Handler) MigrateLegacyData(ctx context.Context) error {
+    // Access legacy Oracle database
+    legacyDB, err := h.getDBByName(ctx, "legacy")
+    if err != nil {
+        return err
+    }
+
+    // Access default PostgreSQL database
+    mainDB, err := h.getDB(ctx)
+    if err != nil {
+        return err
+    }
+
+    // Cross-database operation: Oracle -> PostgreSQL
+    oracleQB := builder.NewQueryBuilder(dbtypes.Oracle)
+    rows, _ := legacyDB.Query(ctx, oracleQB.Select("*").From("OLD_USERS").Build())
+    // ... process and write to mainDB ...
+    return nil
+}
+```
+
+**Key Features:**
+- **Mixed vendor support:** Each named database can have a different type (Oracle, PostgreSQL, MongoDB)
+- **Backward compatible:** `deps.DB(ctx)` works exactly as before
+- **Explicit selection:** `deps.DBByName(ctx, "name")` for clarity
+- **Reuses infrastructure:** Same DbManager with LRU, connection pooling, idle cleanup
+- **Works with multi-tenant:** Named databases are shared across all tenants
+
+**Testing:**
+```go
+namedDBs := dbtest.NewNamedDBMap()
+namedDBs.ForNameWithVendor("legacy", dbtypes.Oracle).ExpectQuery("SELECT").WillReturnRows(...)
+namedDBs.SetDefaultDB(dbtest.NewTestDB(dbtypes.PostgreSQL))
+
+deps := &app.ModuleDeps{
+    DB:       namedDBs.AsDBFunc(),
+    DBByName: namedDBs.AsDBByNameFunc(),
+}
+```
+
 #### Breaking Change: Struct-Based Column Extraction (v0.15.0+)
 
 **Problem:** Raw string column names bypass Oracle identifier quoting and lack type safety:

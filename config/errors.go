@@ -150,3 +150,15 @@ func NewValidationError(field, message string) *ConfigError {
 		Message:  message,
 	}
 }
+
+// NewNamedDatabaseError creates an error for a missing named database configuration.
+// This is used when DBByName() is called with a name that doesn't exist in the
+// databases config section.
+func NewNamedDatabaseError(name string) *ConfigError {
+	return &ConfigError{
+		Category: "missing",
+		Field:    fmt.Sprintf("databases.%s", name),
+		Message:  fmt.Sprintf("named database '%s' not found", name),
+		Action:   fmt.Sprintf("add databases.%s section to config.yaml", name),
+	}
+}

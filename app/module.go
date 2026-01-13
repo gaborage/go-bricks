@@ -92,6 +92,13 @@ type ModuleDeps struct {
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific database.
 	DB func(_ context.Context) (database.Interface, error)
 
+	// DBByName returns a named database interface for explicit database selection.
+	// Use this when working with multiple databases in single-tenant mode.
+	// The name must match a key in the 'databases:' config section.
+	// Example: db, err := deps.DBByName(ctx, "legacy") for databases.legacy config.
+	// Named databases are shared across all tenants in multi-tenant mode.
+	DBByName func(ctx context.Context, name string) (database.Interface, error)
+
 	// Messaging returns a messaging client for the current context.
 	// In single-tenant mode, returns the global messaging client.
 	// In multi-tenant mode, resolves tenant from context and returns tenant-specific client.

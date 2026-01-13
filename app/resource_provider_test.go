@@ -19,8 +19,17 @@ import (
 )
 
 const (
-	testTenantID = "tenant-123"
+	testTenantID         = "tenant-123"
+	testNamedDBHost      = "legacy.db"
+	testNamedDBName      = "legacy_db"
+	testNamedDBConnError = "named db connection failed"
 )
+
+func testNamedDBConfig() map[string]config.DatabaseConfig {
+	return map[string]config.DatabaseConfig{
+		"legacy": {Type: "postgresql", Host: testNamedDBHost, Port: 5432, Database: testNamedDBName, Username: "user"},
+	}
+}
 
 func TestSingleTenantResourceProvider(t *testing.T) {
 	t.Run("constructor", func(t *testing.T) {
@@ -66,6 +75,65 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "connection failed")
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName success", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		require.NoError(t, err)
+		assert.Equal(t, mockDB, db)
+	})
+
+	t.Run("DBByName with nil database manager", func(t *testing.T) {
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "database")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with empty name", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "database_name")
+		assert.Contains(t, err.Error(), "cannot be empty")
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with database manager error", func(t *testing.T) {
+		dbManager := createTestDbManagerWithNamedDBError(t, testNamedDBConfig(), errors.New(testNamedDBConnError))
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), testNamedDBConnError)
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with unknown database name", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewSingleTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "unknown_db")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown_db")
+		assert.Contains(t, err.Error(), "not found")
 		assert.Nil(t, db)
 	})
 
@@ -195,6 +263,65 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 
 	// Note: Database manager error testing with tenant would require complex tenant configuration
 	// For the 80/20 rule, the nil database manager and no-tenant-in-context tests cover the main error scenarios
+
+	t.Run("DBByName success", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		require.NoError(t, err)
+		assert.Equal(t, mockDB, db)
+	})
+
+	t.Run("DBByName with nil database manager", func(t *testing.T) {
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "databases")
+		assert.Contains(t, err.Error(), "not_configured")
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with empty name", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "database_name")
+		assert.Contains(t, err.Error(), "cannot be empty")
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with database manager error", func(t *testing.T) {
+		dbManager := createTestDbManagerWithNamedDBError(t, testNamedDBConfig(), errors.New(testNamedDBConnError))
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "legacy")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), testNamedDBConnError)
+		assert.Nil(t, db)
+	})
+
+	t.Run("DBByName with unknown database name", func(t *testing.T) {
+		mockDB := &testmocks.MockDatabase{}
+		dbManager := createTestDbManagerWithNamedDBMock(t, mockDB, testNamedDBConfig())
+		provider := NewMultiTenantResourceProvider(dbManager, nil, nil, nil)
+
+		db, err := provider.DBByName(context.Background(), "unknown_db")
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown_db")
+		assert.Contains(t, err.Error(), "not found")
+		assert.Nil(t, db)
+	})
 
 	// Note: Multi-tenant messaging success testing requires tenant-specific configuration
 	// For the 80/20 rule, we focus on testing error paths which are more critical
@@ -365,6 +492,48 @@ func createTestDbManagerWithError(t *testing.T, err error) *database.DbManager {
 
 	return database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return nil, err
+		},
+	)
+}
+
+func createTestDbManagerWithNamedDBMock(t *testing.T, mockDB *testmocks.MockDatabase, namedDBs map[string]config.DatabaseConfig) *database.DbManager {
+	t.Helper()
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "localhost",
+			Port: 5432,
+		},
+		Databases: namedDBs,
+	}
+	resourceSource := config.NewTenantStore(cfg)
+	log := logger.New("debug", true)
+
+	return database.NewDbManager(resourceSource, log,
+		database.DbManagerOptions{MaxSize: 10, IdleTTL: time.Hour},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return mockDB, nil
+		},
+	)
+}
+
+func createTestDbManagerWithNamedDBError(t *testing.T, namedDBs map[string]config.DatabaseConfig, err error) *database.DbManager {
+	t.Helper()
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "localhost",
+			Port: 5432,
+		},
+		Databases: namedDBs,
+	}
+	resourceSource := config.NewTenantStore(cfg)
+	log := logger.New("debug", true)
+
+	return database.NewDbManager(resourceSource, log,
+		database.DbManagerOptions{MaxSize: 10, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return nil, err
 		},
