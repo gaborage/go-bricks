@@ -70,6 +70,7 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 		Tracer:        obsProvider.TracerProvider().Tracer(b.cfg.App.Name),
 		MeterProvider: obsProvider.MeterProvider(),
 		DB:            provider.DB,
+		DBByName:      provider.DBByName,
 		Messaging:     provider.Messaging,
 		Cache:         provider.Cache,
 	}

@@ -12,6 +12,10 @@ const (
 	tenantA       = "tenant-a"
 	newTenant     = "tenant-new"
 	tenantB       = "tenant-b"
+	tenantADB     = "tenant-a.db"
+	defaultDB     = "default.db"
+	legacyDB      = "legacy.db"
+	analyticsDB   = "analytics.db"
 )
 
 func TestTenantStoreDefaults(t *testing.T) {
@@ -187,7 +191,7 @@ func TestTenantStoreRemoveTenant(t *testing.T) {
 				tenantA: {
 					Database: DatabaseConfig{
 						Type:     PostgreSQL,
-						Host:     "tenant-a.db",
+						Host:     tenantADB,
 						Port:     5432,
 						Database: "tenant_a",
 					},
@@ -240,7 +244,7 @@ func TestTenantStoreTenants(t *testing.T) {
 				tenantA: {
 					Database: DatabaseConfig{
 						Type:     PostgreSQL,
-						Host:     "tenant-a.db",
+						Host:     tenantADB,
 						Port:     5432,
 						Database: "tenant_a",
 					},
@@ -311,4 +315,157 @@ func TestTenantStoreIsDynamic(t *testing.T) {
 
 	// TenantStore uses static YAML configuration
 	assert.False(t, store.IsDynamic())
+}
+
+// Tests for named databases feature
+
+func TestTenantStoreNamedDatabases(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{
+			Type:     PostgreSQL,
+			Host:     defaultDB,
+			Port:     5432,
+			Database: "main_db",
+		},
+		Databases: map[string]DatabaseConfig{
+			"legacy": {
+				Type:     Oracle,
+				Host:     legacyDB,
+				Port:     1521,
+				Database: "legacy_db",
+			},
+			"analytics": {
+				Type:     PostgreSQL,
+				Host:     analyticsDB,
+				Port:     5432,
+				Database: "analytics_db",
+			},
+		},
+		Multitenant: MultitenantConfig{Enabled: false},
+	}
+
+	store := NewTenantStore(cfg)
+
+	t.Run("returns default database for empty key", func(t *testing.T) {
+		dbCfg, err := store.DBConfig(context.Background(), "")
+		assert.NoError(t, err)
+		assert.Equal(t, defaultDB, dbCfg.Host)
+		assert.Equal(t, PostgreSQL, dbCfg.Type)
+	})
+
+	t.Run("returns named database for named prefix", func(t *testing.T) {
+		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"legacy")
+		assert.NoError(t, err)
+		assert.Equal(t, legacyDB, dbCfg.Host)
+		assert.Equal(t, Oracle, dbCfg.Type)
+	})
+
+	t.Run("returns different named database", func(t *testing.T) {
+		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"analytics")
+		assert.NoError(t, err)
+		assert.Equal(t, analyticsDB, dbCfg.Host)
+		assert.Equal(t, PostgreSQL, dbCfg.Type)
+	})
+
+	t.Run("returns error for unknown named database", func(t *testing.T) {
+		_, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"unknown")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown")
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
+func TestTenantStoreNamedDatabasesHelpers(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{Type: PostgreSQL, Host: defaultDB},
+		Databases: map[string]DatabaseConfig{
+			"legacy":    {Type: Oracle, Host: legacyDB},
+			"analytics": {Type: PostgreSQL, Host: analyticsDB},
+		},
+	}
+
+	store := NewTenantStore(cfg)
+
+	t.Run("NamedDatabases returns all named databases", func(t *testing.T) {
+		named := store.NamedDatabases()
+		assert.Len(t, named, 2)
+		assert.Contains(t, named, "legacy")
+		assert.Contains(t, named, "analytics")
+		assert.Equal(t, legacyDB, named["legacy"].Host)
+		assert.Equal(t, analyticsDB, named["analytics"].Host)
+	})
+
+	t.Run("NamedDatabases returns a copy", func(t *testing.T) {
+		named := store.NamedDatabases()
+		delete(named, "legacy")
+		// Original should still have legacy
+		assert.True(t, store.HasNamedDatabase("legacy"))
+	})
+
+	t.Run("HasNamedDatabase returns true for existing", func(t *testing.T) {
+		assert.True(t, store.HasNamedDatabase("legacy"))
+		assert.True(t, store.HasNamedDatabase("analytics"))
+	})
+
+	t.Run("HasNamedDatabase returns false for non-existing", func(t *testing.T) {
+		assert.False(t, store.HasNamedDatabase("unknown"))
+		assert.False(t, store.HasNamedDatabase(""))
+	})
+}
+
+func TestTenantStoreNamedDatabasesWithMultitenant(t *testing.T) {
+	// Named databases work alongside multi-tenant databases
+	cfg := &Config{
+		Database: DatabaseConfig{Type: PostgreSQL, Host: defaultDB},
+		Databases: map[string]DatabaseConfig{
+			"shared_analytics": {Type: PostgreSQL, Host: "shared-analytics.db"},
+		},
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]TenantEntry{
+				tenantA: {
+					Database: DatabaseConfig{Type: PostgreSQL, Host: tenantADB},
+				},
+			},
+		},
+	}
+
+	store := NewTenantStore(cfg)
+
+	t.Run("named database works in multi-tenant mode", func(t *testing.T) {
+		// Named database (shared across tenants)
+		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"shared_analytics")
+		assert.NoError(t, err)
+		assert.Equal(t, "shared-analytics.db", dbCfg.Host)
+	})
+
+	t.Run("tenant database still works", func(t *testing.T) {
+		// Tenant-specific database
+		dbCfg, err := store.DBConfig(context.Background(), tenantA)
+		assert.NoError(t, err)
+		assert.Equal(t, tenantADB, dbCfg.Host)
+	})
+}
+
+func TestTenantStoreEmptyNamedDatabases(t *testing.T) {
+	cfg := &Config{
+		Database:  DatabaseConfig{Type: PostgreSQL, Host: defaultDB},
+		Databases: nil, // No named databases configured
+	}
+
+	store := NewTenantStore(cfg)
+
+	t.Run("returns error for named prefix when no named DBs configured", func(t *testing.T) {
+		_, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"anything")
+		assert.Error(t, err)
+	})
+
+	t.Run("NamedDatabases returns empty map", func(t *testing.T) {
+		named := store.NamedDatabases()
+		assert.Empty(t, named)
+	})
+
+	t.Run("HasNamedDatabase returns false", func(t *testing.T) {
+		assert.False(t, store.HasNamedDatabase("anything"))
+	})
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -12,6 +13,11 @@ const (
 	notEnabledErrMsg     = "not enabled"
 )
 
+// NamedDatabasePrefix is the key prefix used to identify named database lookups.
+// When DBConfig receives a key starting with this prefix, it looks up the named
+// database configuration instead of tenant configuration.
+const NamedDatabasePrefix = "named:"
+
 // TenantStore provides per-key database, messaging, and cache configurations.
 // This is the default config-backed implementation that uses the static tenant map.
 type TenantStore struct {
@@ -19,6 +25,11 @@ type TenantStore struct {
 	defaultDB        *DatabaseConfig
 	defaultMessaging *MessagingConfig
 	defaultCache     *CacheConfig
+
+	// Named database configurations (used when key starts with "named:")
+	// This enables single-tenant applications to access multiple databases
+	// by name, supporting legacy system migrations and mixed-vendor scenarios.
+	namedDatabases map[string]*DatabaseConfig
 
 	// Multi-tenant configurations (used when key is tenant ID)
 	tenants map[string]TenantEntry
@@ -31,8 +42,17 @@ func NewTenantStore(cfg *Config) *TenantStore {
 		defaultDB:        &cfg.Database,
 		defaultMessaging: &cfg.Messaging,
 		defaultCache:     &cfg.Cache,
+		namedDatabases:   make(map[string]*DatabaseConfig),
 		tenants:          make(map[string]TenantEntry),
 		mu:               sync.RWMutex{},
+	}
+
+	// Copy named database configurations for single-tenant multi-database scenarios
+	if cfg.Databases != nil {
+		for name := range cfg.Databases {
+			cfgCopy := cfg.Databases[name] // Create copy to avoid pointer aliasing
+			source.namedDatabases[name] = &cfgCopy
+		}
 	}
 
 	// Copy tenant configurations if multi-tenant is enabled
@@ -46,15 +66,29 @@ func NewTenantStore(cfg *Config) *TenantStore {
 }
 
 // DBConfig returns the database configuration for the given key.
-// For single-tenant (key=""), returns the default database config.
-// For multi-tenant (key=tenantID), returns the tenant-specific database config.
+// Key semantics:
+//   - "" (empty): Returns the default database config (single-tenant mode)
+//   - "named:<name>": Returns named database config from databases.<name> section
+//   - "<tenantID>": Returns tenant-specific database config (multi-tenant mode)
 func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, error) {
-	// Single-tenant case
+	// Single-tenant default case
 	if key == "" {
 		if s.defaultDB == nil {
 			return nil, NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
 		}
 		return s.defaultDB, nil
+	}
+
+	// Named database case (single-tenant with multiple databases)
+	if strings.HasPrefix(key, NamedDatabasePrefix) {
+		name := strings.TrimPrefix(key, NamedDatabasePrefix)
+		s.mu.RLock()
+		cfg, exists := s.namedDatabases[name]
+		s.mu.RUnlock()
+		if !exists {
+			return nil, NewNamedDatabaseError(name)
+		}
+		return cfg, nil
 	}
 
 	// Multi-tenant case
@@ -160,4 +194,27 @@ func (s *TenantStore) HasTenant(tenantID string) bool {
 // IsDynamic returns false since this store uses static YAML configuration
 func (s *TenantStore) IsDynamic() bool {
 	return false
+}
+
+// NamedDatabases returns a copy of all named database configurations.
+// This is useful for introspection and validation.
+func (s *TenantStore) NamedDatabases() map[string]DatabaseConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]DatabaseConfig, len(s.namedDatabases))
+	for name, cfg := range s.namedDatabases {
+		if cfg != nil {
+			result[name] = *cfg
+		}
+	}
+	return result
+}
+
+// HasNamedDatabase checks if a named database configuration exists.
+func (s *TenantStore) HasNamedDatabase(name string) bool {
+	s.mu.RLock()
+	_, exists := s.namedDatabases[name]
+	s.mu.RUnlock()
+	return exists
 }

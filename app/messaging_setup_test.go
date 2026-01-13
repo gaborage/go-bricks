@@ -227,6 +227,10 @@ func (u *unknownResourceProvider) DB(_ context.Context) (database.Interface, err
 	return nil, nil
 }
 
+func (u *unknownResourceProvider) DBByName(_ context.Context, _ string) (database.Interface, error) {
+	return nil, nil
+}
+
 func (u *unknownResourceProvider) Messaging(_ context.Context) (messaging.AMQPClient, error) {
 	return nil, nil
 }

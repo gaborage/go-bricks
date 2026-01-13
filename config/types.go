@@ -12,16 +12,17 @@ import (
 // The embedded koanf.Koanf instance allows for flexible access to
 // additional custom configurations not explicitly defined in the struct.
 type Config struct {
-	App         AppConfig         `koanf:"app" json:"app" yaml:"app" toml:"app" mapstructure:"app"`
-	Server      ServerConfig      `koanf:"server" json:"server" yaml:"server" toml:"server" mapstructure:"server"`
-	Database    DatabaseConfig    `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
-	Cache       CacheConfig       `koanf:"cache" json:"cache" yaml:"cache" toml:"cache" mapstructure:"cache"`
-	Log         LogConfig         `koanf:"log" json:"log" yaml:"log" toml:"log" mapstructure:"log"`
-	Messaging   MessagingConfig   `koanf:"messaging" json:"messaging" yaml:"messaging" toml:"messaging" mapstructure:"messaging"`
-	Multitenant MultitenantConfig `koanf:"multitenant" json:"multitenant" yaml:"multitenant" toml:"multitenant" mapstructure:"multitenant"`
-	Debug       DebugConfig       `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
-	Source      SourceConfig      `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
-	Scheduler   SchedulerConfig   `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
+	App         AppConfig                 `koanf:"app" json:"app" yaml:"app" toml:"app" mapstructure:"app"`
+	Server      ServerConfig              `koanf:"server" json:"server" yaml:"server" toml:"server" mapstructure:"server"`
+	Database    DatabaseConfig            `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
+	Databases   map[string]DatabaseConfig `koanf:"databases" json:"databases" yaml:"databases" toml:"databases" mapstructure:"databases"`
+	Cache       CacheConfig               `koanf:"cache" json:"cache" yaml:"cache" toml:"cache" mapstructure:"cache"`
+	Log         LogConfig                 `koanf:"log" json:"log" yaml:"log" toml:"log" mapstructure:"log"`
+	Messaging   MessagingConfig           `koanf:"messaging" json:"messaging" yaml:"messaging" toml:"messaging" mapstructure:"messaging"`
+	Multitenant MultitenantConfig         `koanf:"multitenant" json:"multitenant" yaml:"multitenant" toml:"multitenant" mapstructure:"multitenant"`
+	Debug       DebugConfig               `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
+	Source      SourceConfig              `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
+	Scheduler   SchedulerConfig           `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`

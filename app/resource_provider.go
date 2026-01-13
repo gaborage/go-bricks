@@ -19,6 +19,7 @@ const (
 // both single-tenant and multi-tenant deployment modes.
 type ResourceProvider interface {
 	DB(ctx context.Context) (database.Interface, error)
+	DBByName(ctx context.Context, name string) (database.Interface, error)
 	Messaging(ctx context.Context) (messaging.AMQPClient, error)
 	Cache(ctx context.Context) (cache.Cache, error)
 }
@@ -58,6 +59,30 @@ func (p *SingleTenantResourceProvider) DB(ctx context.Context) (database.Interfa
 		}
 	}
 	return p.dbManager.Get(ctx, "")
+}
+
+// DBByName returns a named database interface for single-tenant mode.
+// Use this for explicit database selection when working with multiple databases.
+// The name must match a key in the 'databases:' config section.
+func (p *SingleTenantResourceProvider) DBByName(ctx context.Context, name string) (database.Interface, error) {
+	if p.dbManager == nil {
+		return nil, &config.ConfigError{
+			Category: "not_configured",
+			Field:    "database",
+			Message:  testMessage,
+			Action:   "to enable: set DATABASE_HOST env var or add database.host to config.yaml",
+		}
+	}
+	if name == "" {
+		return nil, &config.ConfigError{
+			Category: "invalid",
+			Field:    "database_name",
+			Message:  "database name cannot be empty",
+			Action:   "provide a valid database name from 'databases:' config section",
+		}
+	}
+	// Use "named:" prefix to distinguish from tenant keys
+	return p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
 }
 
 // Messaging returns the messaging client for single-tenant mode.
@@ -141,6 +166,31 @@ func (p *MultiTenantResourceProvider) DB(ctx context.Context) (database.Interfac
 	}
 
 	return p.dbManager.Get(ctx, tenantID)
+}
+
+// DBByName returns a named database interface for multi-tenant mode.
+// Named databases are shared across all tenants (tenant-agnostic configuration).
+// Use this for explicit database selection when working with multiple databases.
+// The name must match a key in the 'databases:' config section.
+func (p *MultiTenantResourceProvider) DBByName(ctx context.Context, name string) (database.Interface, error) {
+	if p.dbManager == nil {
+		return nil, &config.ConfigError{
+			Category: "not_configured",
+			Field:    "database",
+			Message:  testMessageMultiTenant,
+			Action:   "configure multitenant.tenants.<tenant_id>.database sections",
+		}
+	}
+	if name == "" {
+		return nil, &config.ConfigError{
+			Category: "invalid",
+			Field:    "database_name",
+			Message:  "database name cannot be empty",
+			Action:   "provide a valid database name from 'databases:' config section",
+		}
+	}
+	// Named databases are tenant-agnostic - shared configuration across all tenants
+	return p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
 }
 
 // Messaging returns the messaging client for the tenant specified in context.

@@ -646,6 +646,42 @@ func TestMultiTenantService(t *testing.T) {
 }
 ```
 
+**Named Databases Test (Single-Tenant Multi-Database):**
+
+```go
+func TestCrossDatabase_LegacyMigration(t *testing.T) {
+    namedDBs := dbtest.NewNamedDBMap()
+
+    // Setup default PostgreSQL database
+    defaultDB := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    defaultDB.ExpectExec("INSERT INTO users").WillReturnRowsAffected(1)
+    namedDBs.SetDefaultDB(defaultDB)
+
+    // Setup legacy Oracle database
+    namedDBs.ForNameWithVendor("legacy", dbtypes.Oracle).
+        ExpectQuery("SELECT").WillReturnRows(
+            dbtest.NewRowSet("id", "name").AddRow(int64(1), "LegacyUser"),
+        )
+
+    // Setup analytics PostgreSQL database
+    namedDBs.ForName("analytics").
+        ExpectExec("INSERT INTO events").WillReturnRowsAffected(1)
+
+    deps := &app.ModuleDeps{
+        DB:       namedDBs.AsDBFunc(),       // Default database
+        DBByName: namedDBs.AsDBByNameFunc(), // Named databases
+    }
+
+    svc := NewMigrationService(deps)
+    err := svc.MigrateLegacyUser(context.Background(), 1)
+
+    assert.NoError(t, err)
+    dbtest.AssertQueryExecuted(t, namedDBs.NamedDB("legacy"), "SELECT")
+    dbtest.AssertExecExecuted(t, namedDBs.DefaultDB(), "INSERT INTO users")
+    dbtest.AssertExecExecuted(t, namedDBs.NamedDB("analytics"), "INSERT INTO events")
+}
+```
+
 **RowSet Builders:**
 
 ```go
