@@ -1,6 +1,6 @@
 module github.com/gaborage/go-bricks
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -17,7 +17,8 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.0
-	github.com/labstack/echo/v4 v4.15.0
+	github.com/labstack/echo/v4 v4.13.4
+	github.com/labstack/echo/v5 v5.0.0
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/rs/zerolog v1.34.0
