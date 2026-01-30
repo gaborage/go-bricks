@@ -2096,8 +2096,17 @@ func (s *UserService) Create(ctx context.Context, email, name string) (*User, er
 }
 
 func (s *UserService) List(ctx context.Context, status string) ([]User, error) {
-    tenantID, _ := multitenant.GetTenant(ctx)
-    db, _ := s.getDB(ctx)
+    // Validate tenant context
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok {
+        return nil, errors.New("tenant context required")
+    }
+
+    // Get database connection
+    db, err := s.getDB(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("database unavailable: %w", err)
+    }
 
     qb := builder.NewQueryBuilder(db.DatabaseType())
     cols := qb.Columns(&User{})
@@ -2113,7 +2122,23 @@ func (s *UserService) List(ctx context.Context, status string) ([]User, error) {
         ToSQL()
 
     rows, err := db.Query(ctx, sql, args...)
-    // ... iterate rows
+    if err != nil {
+        return nil, fmt.Errorf("query failed: %w", err)
+    }
+    defer rows.Close()  // Always close rows
+
+    var users []User
+    for rows.Next() {
+        var u User
+        if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.Name); err != nil {
+            return nil, fmt.Errorf("scan failed: %w", err)
+        }
+        users = append(users, u)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iteration error: %w", err)
+    }
+    return users, nil
 }
 ```
 
@@ -2138,12 +2163,23 @@ multitenant:
 
 ```go
 // WithTenantFilter adds tenant isolation to any query
+// Returns a safe no-match condition if tenant context is missing (prevents data leaks)
 func WithTenantFilter(ctx context.Context, f *builder.Filter, cols dbtypes.ColumnMetadata) builder.Condition {
-    tenantID, _ := multitenant.GetTenant(ctx)
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok || tenantID == "" {
+        // Return always-false condition to prevent returning any data
+        // This is a safety fallback - callers should validate tenant first
+        return f.Raw("1 = 0")  // No rows will match
+    }
     return f.Eq(cols.Col("TenantID"), tenantID)
 }
 
-// Usage in queries:
+// Usage in queries (tenant validation recommended before calling):
+tenantID, ok := multitenant.GetTenant(ctx)
+if !ok {
+    return nil, errors.New("tenant context required")
+}
+
 sql, args := qb.Select(cols.All()...).
     From("orders").
     Where(f.And(
