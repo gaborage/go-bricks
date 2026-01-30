@@ -1055,6 +1055,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) 
 ```
 
 **Metric Types:**
+
 | Type | Use Case | Example |
 |------|----------|---------|
 | `Int64Counter` | Monotonically increasing counts | Requests, errors, events |
