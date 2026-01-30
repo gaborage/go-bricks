@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	nethttp "net/http"
@@ -214,9 +215,7 @@ func deepCopyConfig(src *Config) *Config {
 	// Copy DefaultHeaders
 	if src.DefaultHeaders != nil {
 		dst.DefaultHeaders = make(map[string]string, len(src.DefaultHeaders))
-		for k, v := range src.DefaultHeaders {
-			dst.DefaultHeaders[k] = v
-		}
+		maps.Copy(dst.DefaultHeaders, src.DefaultHeaders)
 	}
 
 	// Copy interceptors (new slice headers)
