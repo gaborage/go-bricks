@@ -123,6 +123,51 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 	}
 	return server.Created(user), nil
 }
+
+// === Simple HTTP GET Endpoints ===
+
+// Static message endpoint (simplest possible handler)
+func (h *Handler) Health(_ server.NoBody, ctx server.HandlerContext) (server.Result[string], server.IAPIError) {
+	return server.OK("Service is healthy"), nil
+}
+
+// Register: server.GET(hr, e, "/health", h.Health)
+
+// GET with path parameter
+type GetUserReq struct {
+	ID string `param:"id" validate:"required,uuid"`
+}
+
+func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	user, err := h.svc.FindByID(ctx.Request().Context(), req.ID)
+	if err != nil {
+		return server.Result[User]{}, server.NotFound(errors.New("user not found"))
+	}
+	return server.OK(user), nil
+}
+
+// Register: server.GET(hr, e, "/users/:id", h.GetUser)
+
+// GET with query parameters
+type ListUsersReq struct {
+	Status string `query:"status" validate:"omitempty,oneof=active inactive"`
+	Limit  int    `query:"limit" validate:"omitempty,min=1,max=100"`
+}
+
+func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server.Result[[]User], server.IAPIError) {
+	limit := req.Limit
+	if limit == 0 {
+		limit = 20 // Default
+	}
+	users, err := h.svc.List(ctx.Request().Context(), req.Status, limit)
+	if err != nil {
+		return server.Result[[]User]{}, server.InternalServerError(err)
+	}
+	return server.OK(users), nil
+}
+
+// Register: server.GET(hr, e, "/users", h.ListUsers)
+// Usage: GET /users?status=active&limit=50
 ```
 
 | Pattern          | Request binding              | Success helper          | Notes                          |
@@ -205,6 +250,130 @@ func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) 
 - **1KB-10KB**: Consider pointers for high-traffic endpoints
 - **>10KB**: Always use pointers (file uploads, bulk operations)
 - Pointer fields (`*string`, `*int`) work correctly with validation (`omitempty`, `min=`)
+
+## HTTP Middleware
+
+```go
+// === Custom Middleware Function Structure ===
+// Middleware wraps handlers to perform pre/post processing
+
+import (
+	"context"
+
+	"github.com/labstack/echo/v4"
+	"github.com/gaborage/go-bricks/server"
+	"github.com/gaborage/go-bricks/multitenant"
+)
+
+// Authentication middleware - validates token and injects user into context
+func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		token := c.Request().Header.Get("Authorization")
+		if token == "" {
+			return server.NewUnauthorizedError("missing authorization header")
+		}
+
+		// Validate token (your auth logic here)
+		userID, err := validateToken(token)
+		if err != nil {
+			return server.NewUnauthorizedError("invalid token")
+		}
+
+		// Add user to context for downstream handlers
+		ctx := context.WithValue(c.Request().Context(), "user_id", userID)
+		c.SetRequest(c.Request().WithContext(ctx))
+		return next(c)
+	}
+}
+
+// Logging middleware - logs request details
+func LoggingMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		start := time.Now()
+		err := next(c)
+		duration := time.Since(start)
+
+		logger.Info().
+			Str("method", c.Request().Method).
+			Str("path", c.Request().URL.Path).
+			Int("status", c.Response().Status).
+			Dur("duration", duration).
+			Msg("Request completed")
+
+		return err
+	}
+}
+
+// === Register Middleware in Module ===
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	// Global middleware for all routes in this module
+	r.Use(LoggingMiddleware)
+
+	// Group with auth middleware - all routes inherit it
+	admin := r.Group("/admin", AuthMiddleware)
+	server.GET(hr, admin, "/users", m.listUsers)
+	server.POST(hr, admin, "/users", m.createUser)
+	server.DELETE(hr, admin, "/users/:id", m.deleteUser)
+
+	// Public routes (no auth middleware)
+	server.GET(hr, r, "/health", m.healthCheck)
+	server.GET(hr, r, "/version", m.version)
+}
+
+// === Middleware with Skipper (Conditional Execution) ===
+
+// RateLimitWithSkipper - skips rate limiting for health probes
+func RateLimitWithSkipper(rps int, skipper func(echo.Context) bool) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if skipper != nil && skipper(c) {
+				return next(c) // Skip rate limiting
+			}
+			// Apply rate limiting logic here
+			return next(c)
+		}
+	}
+}
+
+// Common skipper - skip health and ready probes
+func healthSkipper(c echo.Context) bool {
+	path := c.Request().URL.Path
+	return path == "/health" || path == "/ready"
+}
+
+// === Context Propagation Pattern (Tenant/User Injection) ===
+
+// TenantMiddleware - extracts tenant from header and injects into context
+func TenantMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		tenantID := c.Request().Header.Get("X-Tenant-ID")
+		if tenantID == "" {
+			return server.NewBadRequestError("X-Tenant-ID header required")
+		}
+
+		// Inject tenant into context - available to all downstream code
+		ctx := multitenant.SetTenant(c.Request().Context(), tenantID)
+		c.SetRequest(c.Request().WithContext(ctx))
+		return next(c)
+	}
+}
+
+// Access tenant in handler
+func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	tenantID := multitenant.GetTenant(ctx.Request().Context())
+	// tenantID is now available for tenant-specific logic
+	user, err := h.svc.GetUserForTenant(ctx.Request().Context(), tenantID, req.ID)
+	// ...
+}
+```
+
+| Pattern | Use Case | Example |
+|---------|----------|---------|
+| `r.Use(middleware)` | Apply to all routes in group | Logging, metrics |
+| `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
+| Skipper function | Conditionally skip | Skip rate limit for /health |
+| Context propagation | Pass data downstream | User ID, tenant ID |
 
 ## Database Builder & Operations
 
@@ -2026,6 +2195,131 @@ traces:
 ```
 
 Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
+
+## Structured Logging with Custom Fields
+
+```go
+import (
+	"context"
+	"time"
+
+	"github.com/gaborage/go-bricks/logger"
+)
+
+// === Basic Informational Log with Custom Fields ===
+
+logger.Info().
+	Str("user_id", "alice@example.com").
+	Str("action", "login").
+	Msg("User logged in successfully")
+// Output: {"level":"info","user_id":"alice@example.com","action":"login","message":"User logged in successfully"}
+
+// === Multiple Field Types in Single Log ===
+
+logger.Info().
+	Str("order_id", "ord_12345").
+	Int("item_count", 3).
+	Int64("total_cents", 4999).
+	Dur("processing_time", 150*time.Millisecond).
+	Interface("metadata", map[string]string{"source": "web", "region": "us-west"}).
+	Msg("Order processed")
+
+// === Error Logging with Context ===
+
+logger.Error().
+	Err(err).
+	Str("operation", "payment_process").
+	Str("payment_id", "pay_789").
+	Int64("amount", 5000).
+	Msg("Payment processing failed")
+
+// === Using WithContext for Trace Correlation ===
+// Automatically adds trace_id and span_id from OpenTelemetry context
+
+func (h *Handler) ProcessOrder(ctx context.Context, orderID string) error {
+	// Inject trace/span IDs from context - enables log correlation in trace viewer
+	ctxLogger := h.logger.WithContext(ctx)
+
+	ctxLogger.Info().
+		Str("order_id", orderID).
+		Msg("Starting order processing")
+
+	// All subsequent logs include trace_id for correlation
+	if err := h.processPayment(ctx, orderID); err != nil {
+		ctxLogger.Error().
+			Err(err).
+			Str("order_id", orderID).
+			Msg("Payment processing failed")
+		return err
+	}
+
+	ctxLogger.Info().
+		Str("order_id", orderID).
+		Str("status", "completed").
+		Msg("Order processed successfully")
+
+	return nil
+}
+
+// === Using WithFields for Persistent Module Context ===
+// Fields added here appear in ALL subsequent logs from this logger
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.logger = deps.Logger.WithFields(map[string]any{
+		"module":  m.Name(),
+		"version": "1.2.0",
+	})
+	return nil
+}
+// All logs from m.logger now include "module" and "version" fields automatically
+
+// === Complete Handler Example with Structured Logging ===
+
+type CreateUserReq struct {
+	Email string `json:"email" validate:"required,email"`
+	Role  string `json:"role" validate:"required,oneof=admin user guest"`
+}
+
+func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	log := h.logger.WithContext(ctx.Request().Context())
+
+	log.Info().
+		Str("email", req.Email).
+		Str("role", req.Role).
+		Msg("Creating new user")
+
+	user, err := h.service.Create(ctx.Request().Context(), req)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("email", req.Email).
+			Msg("User creation failed")
+		return server.Result[User]{}, server.InternalServerError(err)
+	}
+
+	log.Info().
+		Str("user_id", user.ID).
+		Str("email", user.Email).
+		Msg("User created successfully")
+
+	return server.Created(user), nil
+}
+```
+
+| Method | Field Type | Example |
+|--------|------------|---------|
+| `Str(key, val)` | String | `Str("user_id", "123")` |
+| `Int(key, val)` | Integer | `Int("count", 5)` |
+| `Int64(key, val)` | Int64 | `Int64("total", 9999999)` |
+| `Dur(key, val)` | Duration (ms) | `Dur("elapsed", 150*time.Millisecond)` |
+| `Err(err)` | Error | `Err(err)` (adds "error" field) |
+| `Interface(key, val)` | Any type | `Interface("meta", map[string]any{...})` |
+| `Bytes(key, val)` | Byte slice | `Bytes("hash", hashBytes)` |
+
+**Key Patterns:**
+- `logger.WithContext(ctx)` → Injects trace_id/span_id for correlation
+- `logger.WithFields(map)` → Persistent fields for all subsequent logs
+- Fluent API: chain methods → end with `.Msg("message")`
 
 ## Distributed Tracing (Custom Spans)
 
