@@ -1994,6 +1994,216 @@ type GetUserReq struct {
 | Database connection error | 503 | "Service temporarily unavailable" |
 | Query error | 500 | "Internal server error" |
 
+### Shared Database Multi-Tenancy (Same DB Instance)
+
+When you need multiple tenants in the **same database instance** (cost optimization, simpler operations), use tenant_id column filtering instead of separate databases.
+
+**1. Database Schema - Add tenant_id to all tables:**
+
+```sql
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id VARCHAR(50) NOT NULL,  -- Tenant identifier
+    email VARCHAR(255) NOT NULL,
+    name VARCHAR(100),
+    created_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_email_per_tenant UNIQUE (tenant_id, email)
+);
+
+CREATE INDEX idx_users_tenant ON users(tenant_id);
+```
+
+**2. Entity with tenant_id field:**
+
+```go
+type User struct {
+    ID       int64  `db:"id"`
+    TenantID string `db:"tenant_id"`
+    Email    string `db:"email"`
+    Name     string `db:"name"`
+}
+```
+
+**3. Service with tenant-aware queries:**
+
+```go
+import (
+    "context"
+    "errors"
+
+    "github.com/gaborage/go-bricks/database"
+    "github.com/gaborage/go-bricks/database/internal/builder"
+    "github.com/gaborage/go-bricks/multitenant"
+)
+
+type UserService struct {
+    getDB func(context.Context) (database.Interface, error)
+}
+
+func (s *UserService) FindByEmail(ctx context.Context, email string) (*User, error) {
+    // Extract tenant from context (set by TenantMiddleware)
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok {
+        return nil, errors.New("tenant context required")
+    }
+
+    db, err := s.getDB(ctx)
+    if err != nil {
+        return nil, err
+    }
+
+    qb := builder.NewQueryBuilder(db.DatabaseType())
+    cols := qb.Columns(&User{})
+    f := qb.Filter()
+
+    // Always filter by tenant_id for data isolation
+    sql, args := qb.Select(cols.All()...).
+        From("users").
+        Where(f.And(
+            f.Eq(cols.Col("TenantID"), tenantID),  // Tenant isolation
+            f.Eq(cols.Col("Email"), email),
+        )).
+        ToSQL()
+
+    var user User
+    err = db.QueryRow(ctx, sql, args...).Scan(&user.ID, &user.TenantID, &user.Email, &user.Name)
+    if err != nil {
+        return nil, err
+    }
+    return &user, nil
+}
+
+func (s *UserService) Create(ctx context.Context, email, name string) (*User, error) {
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok {
+        return nil, errors.New("tenant context required")
+    }
+
+    db, _ := s.getDB(ctx)
+    qb := builder.NewQueryBuilder(db.DatabaseType())
+    cols := qb.Columns(&User{})
+
+    // Always include tenant_id in INSERT
+    sql, args := qb.Insert("users").
+        Columns(cols.Col("TenantID"), cols.Col("Email"), cols.Col("Name")).
+        Values(tenantID, email, name).
+        Suffix("RETURNING id").
+        ToSQL()
+
+    var id int64
+    err := db.QueryRow(ctx, sql, args...).Scan(&id)
+    return &User{ID: id, TenantID: tenantID, Email: email, Name: name}, err
+}
+
+func (s *UserService) List(ctx context.Context, status string) ([]User, error) {
+    // Validate tenant context
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok {
+        return nil, errors.New("tenant context required")
+    }
+
+    // Get database connection
+    db, err := s.getDB(ctx)
+    if err != nil {
+        return nil, fmt.Errorf("database unavailable: %w", err)
+    }
+
+    qb := builder.NewQueryBuilder(db.DatabaseType())
+    cols := qb.Columns(&User{})
+    f := qb.Filter()
+
+    // Tenant isolation + business filter
+    sql, args := qb.Select(cols.All()...).
+        From("users").
+        Where(f.And(
+            f.Eq(cols.Col("TenantID"), tenantID),  // Always filter by tenant
+            f.Eq(cols.Col("Status"), status),       // Business filter
+        )).
+        ToSQL()
+
+    rows, err := db.Query(ctx, sql, args...)
+    if err != nil {
+        return nil, fmt.Errorf("query failed: %w", err)
+    }
+    defer rows.Close()  // Always close rows
+
+    var users []User
+    for rows.Next() {
+        var u User
+        if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.Name); err != nil {
+            return nil, fmt.Errorf("scan failed: %w", err)
+        }
+        users = append(users, u)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iteration error: %w", err)
+    }
+    return users, nil
+}
+```
+
+**4. Configuration (Single shared database):**
+
+```yaml
+# Shared database for ALL tenants (no per-tenant database config)
+database:
+  type: postgresql
+  host: shared-db.example.com
+  database: app_production  # Single database
+
+multitenant:
+  enabled: true
+  resolver:
+    type: header
+    header: X-Tenant-ID
+  # No tenants.*.database section needed - uses shared database above
+```
+
+**5. Helper function to reduce boilerplate:**
+
+```go
+// WithTenantFilter adds tenant isolation to any query
+// Returns a safe no-match condition if tenant context is missing (prevents data leaks)
+func WithTenantFilter(ctx context.Context, f *builder.Filter, cols dbtypes.ColumnMetadata) builder.Condition {
+    tenantID, ok := multitenant.GetTenant(ctx)
+    if !ok || tenantID == "" {
+        // Return always-false condition to prevent returning any data
+        // This is a safety fallback - callers should validate tenant first
+        return f.Raw("1 = 0")  // No rows will match
+    }
+    return f.Eq(cols.Col("TenantID"), tenantID)
+}
+
+// Usage in queries (tenant validation recommended before calling):
+tenantID, ok := multitenant.GetTenant(ctx)
+if !ok {
+    return nil, errors.New("tenant context required")
+}
+
+sql, args := qb.Select(cols.All()...).
+    From("orders").
+    Where(f.And(
+        WithTenantFilter(ctx, f, cols),  // Tenant isolation
+        f.Eq(cols.Col("Status"), "pending"),
+    )).
+    ToSQL()
+```
+
+**Strategy Comparison:**
+
+| Strategy | Isolation | Cost | Complexity | Use Case |
+|----------|-----------|------|------------|----------|
+| **Database-per-tenant** | Strongest | Higher (N databases) | Lower code | Enterprise, regulated industries |
+| **Shared DB + tenant_id** | Application-level | Lower (1 database) | Higher code (manual filtering) | SaaS startups, cost-sensitive |
+| **Schema-per-tenant** | Strong | Medium | Medium | PostgreSQL-specific, balanced |
+
+**Key Points:**
+- **Always** include `tenant_id` in WHERE clauses for SELECT/UPDATE/DELETE
+- **Always** include `tenant_id` in INSERT statements
+- Use `multitenant.GetTenant(ctx)` to extract tenant from request context
+- Add composite indexes on `(tenant_id, other_columns)` for query performance
+- Consider PostgreSQL Row-Level Security (RLS) for additional database-level protection
+
 ## Observability & Logging
 
 **Basic Configuration:**
