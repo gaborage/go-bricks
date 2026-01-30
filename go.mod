@@ -7,7 +7,7 @@ require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.36.1
 	github.com/fxamacker/cbor/v2 v2.9.0
-	github.com/go-co-op/gocron/v2 v2.19.0
+	github.com/go-co-op/gocron/v2 v2.19.1
 	github.com/go-playground/validator/v10 v10.30.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
@@ -28,7 +28,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.40.0
-	go.mongodb.org/mongo-driver/v2 v2.4.2
+	go.mongodb.org/mongo-driver/v2 v2.5.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho v0.64.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.64.0
 	go.opentelemetry.io/otel v1.39.0
@@ -81,8 +81,7 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/golang/snappy v1.0.0 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.5 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -137,8 +136,8 @@ require (
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260122232226-8e98ce8d340d // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260122232226-8e98ce8d340d // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
