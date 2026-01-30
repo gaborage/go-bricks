@@ -2156,6 +2156,195 @@ func (s *Service) CallExternalAPI(ctx context.Context, data []byte) error {
 - Each trace shows: request duration, child spans, errors, custom attributes
 - Filter by `service.name`, `http.route`, custom attributes
 
+## Custom Metrics
+
+GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.
+
+**Module Setup Pattern:**
+
+```go
+package orders
+
+import (
+    "context"
+    "time"
+
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/observability"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/metric"
+)
+
+type OrderModule struct {
+    // Store MeterProvider for creating instruments
+    meterProvider metric.MeterProvider
+
+    // Pre-created instruments (performance optimization)
+    orderCounter      metric.Int64Counter
+    processingTime    metric.Float64Histogram
+    activeConnections metric.Int64UpDownCounter
+}
+
+func (m *OrderModule) Init(deps *app.ModuleDeps) error {
+    m.meterProvider = deps.MeterProvider
+
+    // Create instruments once in Init() - cached for lifetime of module
+    if m.meterProvider != nil {
+        meter := m.meterProvider.Meter("orders")
+
+        // Counter: monotonically increasing values (requests, errors)
+        m.orderCounter, _ = observability.CreateCounter(
+            meter,
+            "orders.created.total",
+            "Total number of orders created",
+        )
+
+        // Histogram: value distributions (latency, size)
+        m.processingTime, _ = observability.CreateHistogram(
+            meter,
+            "orders.processing.duration",
+            "Order processing duration in seconds",
+        )
+
+        // UpDownCounter: values that increase/decrease (connections, queue depth)
+        m.activeConnections, _ = observability.CreateUpDownCounter(
+            meter,
+            "orders.connections.active",
+            "Active order processing connections",
+        )
+    }
+
+    return nil
+}
+```
+
+**Recording Metrics with Attributes:**
+
+```go
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
+    start := time.Now()
+
+    // Track active processing
+    if s.activeConnections != nil {
+        s.activeConnections.Add(ctx, 1)
+        defer s.activeConnections.Add(ctx, -1)
+    }
+
+    order, err := s.processOrder(ctx, req)
+
+    // Record metrics with dimensional attributes
+    if s.orderCounter != nil {
+        status := "success"
+        if err != nil {
+            status = "failure"
+        }
+        s.orderCounter.Add(ctx, 1,
+            metric.WithAttributes(
+                attribute.String("status", status),
+                attribute.String("order_type", req.Type),
+                attribute.String("region", req.Region),
+            ),
+        )
+    }
+
+    // Record processing duration
+    if s.processingTime != nil {
+        s.processingTime.Record(ctx, time.Since(start).Seconds(),
+            metric.WithAttributes(
+                attribute.String("order_type", req.Type),
+            ),
+        )
+    }
+
+    return order, err
+}
+```
+
+**Observable Gauge (Callback Pattern):**
+
+For metrics that report current state rather than accumulated values (e.g., current queue size, memory usage):
+
+```go
+func (m *QueueModule) Init(deps *app.ModuleDeps) error {
+    if deps.MeterProvider != nil {
+        meter := deps.MeterProvider.Meter("queue")
+
+        // Observable gauge with callback - called on each metrics collection
+        _, _ = meter.Int64ObservableGauge(
+            "queue.depth",
+            metric.WithDescription("Current number of items in queue"),
+            metric.WithInt64Callback(func(ctx context.Context, observer metric.Int64Observer) error {
+                // Report current queue size for each queue
+                for name, queue := range m.queues {
+                    observer.Observe(int64(queue.Len()),
+                        metric.WithAttributes(
+                            attribute.String("queue.name", name),
+                        ),
+                    )
+                }
+                return nil
+            }),
+        )
+    }
+    return nil
+}
+```
+
+**Metric Types Quick Reference:**
+
+| Type | Use Case | Example |
+|------|----------|---------|
+| `Int64Counter` | Monotonically increasing counts | Requests, errors, events |
+| `Float64Histogram` | Value distributions | Latency (seconds), payload size (bytes) |
+| `Int64UpDownCounter` | Values that can increase/decrease | Active connections, queue depth |
+| `Int64ObservableGauge` | Current state via callback | Memory usage, pool size |
+| `Float64ObservableGauge` | Current float state via callback | CPU percentage, temperature |
+
+**Helper Functions (observability/metrics.go):**
+
+```go
+// CreateCounter creates a counter with description
+counter, err := observability.CreateCounter(meter, "name", "description")
+
+// CreateHistogram creates a histogram with description
+histogram, err := observability.CreateHistogram(meter, "name", "description")
+
+// CreateUpDownCounter creates an up-down counter with description
+upDown, err := observability.CreateUpDownCounter(meter, "name", "description")
+```
+
+**Best Practices:**
+
+1. **Pre-create instruments in Init()** - Avoid per-request instrument creation (expensive)
+2. **Use semantic naming**: `<namespace>.<entity>.<measurement>` (e.g., `orders.processing.duration`)
+3. **Add attributes for dimensions** - Enable filtering/grouping in dashboards
+4. **Nil-check instruments** - Safe when observability disabled
+5. **Use appropriate units** - Seconds for duration, bytes for size (follow UCUM conventions)
+
+**Testing Custom Metrics:**
+
+```go
+import (
+    "testing"
+
+    "go.opentelemetry.io/otel/metric/noop"
+)
+
+func TestOrderModule(t *testing.T) {
+    // Use no-op meter provider for unit tests
+    deps := &app.ModuleDeps{
+        MeterProvider: noop.NewMeterProvider(),
+    }
+
+    module := &OrderModule{}
+    err := module.Init(deps)
+    assert.NoError(t, err)
+
+    // Instruments are created but no-ops - safe to call
+    module.orderCounter.Add(context.Background(), 1)
+}
+```
+
 ## Common Patterns
 - **Error handling**: wrap service errors with `server.InternalServerError`; map domain errors to `server.NotFound`, `server.Unauthorized`, etc.
 - **Graceful shutdown**: close external resources in `Module.Shutdown`; the framework waits on outstanding requests.

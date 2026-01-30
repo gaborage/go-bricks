@@ -1007,6 +1007,72 @@ obtest.AssertLogTypeExists(t, tp.LogExporter, "action")
 
 **Common Issues:** Spans not appearing (check `observability.enabled`, wait for batch timeout), logs not exported (verify `observability.logs.enabled`, set `logger.pretty: false`), pretty mode conflict (fails fast at startup). See [Troubleshooting](#troubleshooting) for details
 
+#### Custom Metrics
+
+GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.
+
+**Available in ModuleDeps:**
+- `deps.MeterProvider` - OpenTelemetry MeterProvider for creating custom instruments
+
+**Helper Functions (observability/metrics.go):**
+- `CreateCounter(meter, name, description)` - Monotonically increasing values (requests, errors)
+- `CreateHistogram(meter, name, description)` - Distributions (latency, size)
+- `CreateUpDownCounter(meter, name, description)` - Values that increase/decrease (connections, queue depth)
+
+**Pattern:**
+1. Store `MeterProvider` in module struct
+2. Create instruments in `Init()` (one-time, cached)
+3. Record values in business logic with attributes
+
+**Quick Example:**
+```go
+type OrderModule struct {
+    meterProvider metric.MeterProvider
+    orderCounter  metric.Int64Counter
+}
+
+func (m *OrderModule) Init(deps *app.ModuleDeps) error {
+    m.meterProvider = deps.MeterProvider
+    if m.meterProvider != nil {
+        meter := m.meterProvider.Meter("orders")
+        m.orderCounter, _ = observability.CreateCounter(meter, "orders.created.total", "Total orders created")
+    }
+    return nil
+}
+
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
+    // Record metric with attributes
+    if s.orderCounter != nil {
+        s.orderCounter.Add(ctx, 1,
+            metric.WithAttributes(
+                attribute.String("order_type", req.Type),
+                attribute.String("status", "success"),
+            ),
+        )
+    }
+    // ... business logic
+}
+```
+
+**Metric Types:**
+| Type | Use Case | Example |
+|------|----------|---------|
+| `Int64Counter` | Monotonically increasing counts | Requests, errors, events |
+| `Float64Histogram` | Value distributions | Latency (seconds), payload size (bytes) |
+| `Int64UpDownCounter` | Values that increase/decrease | Active connections, queue depth |
+| `Int64ObservableGauge` | Current state via callback | Memory usage, pool size |
+
+**Best Practices:**
+- Pre-create instruments in `Init()` for performance (avoid per-request creation)
+- Use semantic naming: `<namespace>.<entity>.<measurement>` (e.g., `orders.processing.duration`)
+- Add attributes for dimensions: `status`, `tenant_id`, `operation_type`
+- Nil-check instruments when recording (safe when observability disabled)
+- Test with no-op provider: `noop.NewMeterProvider()` from `go.opentelemetry.io/otel/metric/noop`
+
+**Real-World Example:** See `scheduler/module.go` for production usage with counter, histogram, and panic tracking.
+
+See [llms.txt](llms.txt) Custom Metrics section for complete code examples including observable gauges and testing patterns.
+
 #### Observability Headers & Authentication
 
 **IMPORTANT:** Headers (API keys, bearer tokens) MUST be configured in YAML files, NOT via environment variables. GoBricks does not support `OBSERVABILITY_*_HEADERS_*` env vars.
