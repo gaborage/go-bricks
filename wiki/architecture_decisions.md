@@ -75,12 +75,39 @@ Reflection-based column extraction from struct tags with lazy caching. Eliminate
 
 ---
 
-### [ADR-008: Cache Interface and Manager (Draft)](adr-008-cache-draft.md)
-**Status:** Draft
+### [ADR-008: Database Testing with Interface Segregation](adr-008-database-testing-interface-segregation.md)
+**Date:** 2025-01-10 | **Status:** Accepted
 
-Proposed cache abstraction layer with pluggable backends and optional observability integration.
+Interface segregation for database testing utilities, enabling 73% less boilerplate with fluent expectation APIs, multi-tenant support, and vendor-agnostic row builders.
 
-**Status:** Under development
+**Key Benefits:** Simplified mocking, transaction tracking, partial SQL matching
+
+---
+
+### [ADR-009: Consumer Worker Pool Concurrency](adr-009-consumer-worker-pool-concurrency.md)
+**Date:** 2025-02-01 | **Status:** Accepted
+
+Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-threaded message processing for 20-30x throughput improvement.
+
+**Key Benefits:** Automatic I/O-bound scaling, configurable concurrency, resource safeguards
+
+---
+
+### [ADR-010: Panic-to-Error Conversion in Message Handlers](adr-010-panic-to-error-conversion.md)
+**Date:** 2025-02-15 | **Status:** Accepted
+
+Automatic panic recovery in AMQP message handlers with stack trace logging, consistent nack-without-requeue behavior, and service continuity.
+
+**Key Benefits:** Service resilience, consistent error semantics, observability integration
+
+---
+
+### [ADR-011: Redis Cache Backend with CBOR Serialization](adr-011-redis-cache.md)
+**Date:** 2025-11-09 | **Status:** Accepted
+
+Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation via CacheManager, and automatic lifecycle management (LRU eviction, idle cleanup, singleflight).
+
+**Key Benefits:** Type-safe serialization, tenant isolation, production-safe defaults
 
 ---
 

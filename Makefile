@@ -62,8 +62,10 @@ update: ## Update dependencies to latest versions
 	go get -u ./...
 	go mod tidy
 
-clean: ## Clean build cache
+clean: ## Clean build cache and test artifacts
 	go clean -cache -testcache
+	rm -f coverage.out coverage-integration.out coverage.html coverage.func
+	rm -f *.test
 
 check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
 

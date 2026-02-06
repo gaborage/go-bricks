@@ -1,4 +1,4 @@
-# ADR-008: Redis Cache Backend with CBOR Serialization
+# ADR-011: Redis Cache Backend with CBOR Serialization
 
 **Date:** 2025-11-09
 **Updated:** 2025-11-15

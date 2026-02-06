@@ -28,6 +28,13 @@ go test -bench=.        # Run benchmarks
 - [llms.txt](llms.txt) - Quick code examples for LLMs
 - [.golangci.yml](.golangci.yml) - Linting configuration
 
+**Additional Documentation:**
+- [TESTING.md](TESTING.md) - Testing strategy deep-dive
+- [METRICS.md](METRICS.md) - Observability metrics reference
+- [TODO.md](TODO.md) - Technical backlog
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
+- [config.example.yaml](config.example.yaml) - Full configuration template
+
 **External Resources:**
 - [Demo Project](https://github.com/gaborage/go-bricks-demo-project) - Complete examples
 - [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) - Code quality metrics
@@ -211,8 +218,10 @@ client, err := manager.Publisher(ctx, "tenant-1")
 - **config/** - Configuration management (Koanf: YAML + env vars)
 - **database/** - Multi-database interface with query builder
 - **cache/** - Redis caching with type-safe CBOR serialization
+- **httpclient/** - HTTP client with retries, W3C trace propagation, and interceptors
 - **logger/** - Structured logging (zerolog)
 - **messaging/** - AMQP client for RabbitMQ
+- **scheduler/** - gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** - Echo-based HTTP server
 - **migration/** - Flyway integration
 - **observability/** - OpenTelemetry tracing and metrics
@@ -703,7 +712,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
 - **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements)
-- **TenantStore Integration**: Automatic tenant resolution from context via `deps.GetCache(ctx)`
+- **TenantStore Integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
 
 **Lifecycle Management (CacheManager):**
 - **Lazy Initialization**: Cache created on first access per tenant (no upfront connections)
@@ -754,7 +763,7 @@ type Module struct {
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getCache = deps.GetCache  // Tenant-aware resolution
+    m.getCache = deps.Cache  // Tenant-aware resolution
     return nil
 }
 
@@ -793,7 +802,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 **Multi-Tenant Isolation:**
 - Each tenant gets separate Redis database (configurable per-tenant)
 - Cache instances managed by CacheManager with automatic lifecycle
-- Context propagation ensures tenant resolution via `deps.GetCache(ctx)`
+- Context propagation ensures tenant resolution via `deps.Cache(ctx)`
 - No key collision between tenants (different Redis databases)
 
 **Observability Integration:**
@@ -803,6 +812,62 @@ When `observability.enabled: true`, cache operations automatically emit:
 - **Health**: Automatic integration with `/health` endpoint (Redis PING command)
 
 **For comprehensive examples**, see the Cache Operations section in [llms.txt](llms.txt)
+
+### HTTP Client
+
+The `httpclient` package provides a production-ready HTTP client with built-in observability and resilience.
+
+**Key Features:**
+- **Builder pattern**: Fluent configuration via `NewBuilder(logger).WithTimeout(...).Build()`
+- **W3C trace propagation**: Automatic `traceparent`/`tracestate` header injection
+- **Retry with backoff**: Exponential backoff with full jitter, configurable max retries
+- **Interceptors**: Request/response interceptor chains for cross-cutting concerns
+- **Structured logging**: Info-level metadata (no PII), optional debug payload logging
+
+```go
+// Builder pattern with trace propagation
+client := httpclient.NewBuilder(logger).
+    WithTimeout(10 * time.Second).
+    WithRetries(3, 500 * time.Millisecond).
+    WithDefaultHeader("Accept", "application/json").
+    WithW3CTrace(true).
+    Build()
+
+resp, err := client.Get(ctx, &httpclient.Request{
+    URL: "https://api.example.com/users",
+})
+```
+
+**Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete`, `Do` — all accept `context.Context` and `*Request`, return `*Response` and `error`.
+
+### Scheduler
+
+The `scheduler` package provides gocron-based job scheduling integrated with the GoBricks module system.
+
+**Key Features:**
+- **Lazy initialization**: Scheduler created only when first job is registered
+- **Overlapping prevention**: Mutex-based lock per job (skips trigger if already running)
+- **Panic recovery**: Automatic recovery with stack trace logging and metrics
+- **System APIs**: `GET /_sys/jobs` (list), `POST /_sys/job/:jobId` (manual trigger), secured via CIDR middleware
+- **OpenTelemetry**: Counter, histogram, and panic tracking per job
+
+**Job Interface:**
+```go
+type Job interface {
+    Execute(ctx JobContext) error
+}
+
+// JobContext provides: JobID(), TriggerType(), Logger(), DB(), Messaging(), Config()
+```
+
+**Registration via ModuleDeps:**
+```go
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+}
+```
+
+**Schedule Types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`
 
 ### Messaging Architecture
 AMQP-based messaging with **validate-once, replay-many** pattern:
@@ -1076,434 +1141,36 @@ See [llms.txt](llms.txt) Custom Metrics section for complete code examples inclu
 
 #### Observability Headers & Authentication
 
-**IMPORTANT:** Headers (API keys, bearer tokens) MUST be configured in YAML files, NOT via environment variables. GoBricks does not support `OBSERVABILITY_*_HEADERS_*` env vars.
+Headers (API keys, bearer tokens) MUST be configured in YAML files, NOT via environment variables. Use environment-specific config files (e.g., `config.production.yaml`) with vendor headers. Never commit secrets to git.
 
-**Recommended Approach (Production):**
+**Supported vendors:** New Relic, Honeycomb, Datadog, Grafana Cloud, generic Bearer tokens.
 
-Create environment-specific config files with headers:
-
-```yaml
-# config.production.yaml (DO NOT commit - add to .gitignore)
-observability:
-  enabled: true
-  service:
-    name: my-service
-    version: v1.0.0
-
-  # Traces
-  traces:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC
-    protocol: grpc
-    headers:
-      api-key: your-new-relic-license-key-here
-
-  # Metrics (reuses traces endpoint)
-  metrics:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC
-    protocol: grpc
-    headers:
-      api-key: your-new-relic-license-key-here
-
-  # Logs (reuses traces endpoint)
-  logs:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC
-    protocol: grpc
-    headers:
-      api-key: your-new-relic-license-key-here
-```
-
-**Security Best Practices:**
-
-1. **Never commit secrets to git:**
-   ```bash
-   # .gitignore
-   config.production.yaml
-   config.staging.yaml
-   config.*.local.yaml
-   ```
-
-2. **Use separate config files per environment:**
-   - `config.yaml` - Base config (committed, no secrets)
-   - `config.production.yaml` - Production secrets (NOT committed)
-   - `config.development.yaml` - Dev/local settings (committed or git-ignored)
-
-3. **Alternative: Read from secret managers**
-   ```go
-   // In main.go before app.Run()
-   apiKey := os.Getenv("OTEL_API_KEY")  // From AWS Secrets Manager, Vault, etc.
-
-   // Override config programmatically
-   cfg.Observability.Traces.Headers = map[string]string{
-       "api-key": apiKey,
-   }
-   ```
-
-**Vendor-Specific Examples:**
-
-```yaml
-# New Relic
-headers:
-  api-key: your-license-key
-
-# Honeycomb
-headers:
-  x-honeycomb-team: your-team-key
-
-# Datadog
-headers:
-  dd-api-key: your-api-key
-
-# Grafana Cloud
-headers:
-  authorization: "Basic base64-encoded-credentials"
-
-# Generic Bearer Token
-headers:
-  authorization: "Bearer your-token"
-```
+For complete configuration examples, security best practices, and vendor-specific headers, see [wiki/observability-headers-auth.md](wiki/observability-headers-auth.md).
 
 #### New Relic OTLP Integration (Optimized)
 
-GoBricks supports all New Relic OTLP optimizations for bandwidth reduction and performance:
-
-**Complete New Relic Configuration (gRPC - Recommended):**
-
-```yaml
-# config.production.yaml
-observability:
-  enabled: true
-  service:
-    name: my-service
-    version: v1.0.0
-
-  # Traces with gRPC (recommended by New Relic)
-  trace:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # gRPC port (NO https:// prefix)
-    protocol: grpc
-    insecure: false  # TLS required for New Relic
-    compression: gzip  # ~70% bandwidth reduction
-    headers:
-      api-key: your-new-relic-license-key-here
-
-  # Metrics with New Relic optimizations
-  metrics:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # Reuse trace endpoint
-    protocol: grpc
-    compression: gzip
-    temporality: delta  # New Relic recommendation (lower memory, better performance)
-    histogram_aggregation: exponential  # Better precision, ~10x lower memory
-    headers:
-      api-key: your-new-relic-license-key-here
-
-  # Logs with gRPC
-  logs:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # Reuse trace endpoint
-    protocol: grpc
-    compression: gzip
-    sampling_rate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always exported)
-    headers:
-      api-key: your-new-relic-license-key-here
-```
-
-**New Relic HTTP Alternative (Port 4318):**
-
-```yaml
-observability:
-  enabled: true
-  service:
-    name: my-service
-    version: v1.0.0
-
-  trace:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/traces  # HTTP requires https:// + path
-    protocol: http
-    compression: gzip
-    headers:
-      api-key: your-license-key
-
-  metrics:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/metrics  # Signal-specific path required
-    protocol: http
-    compression: gzip
-    temporality: delta
-    histogram_aggregation: exponential
-    headers:
-      api-key: your-license-key
-
-  logs:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/logs  # Signal-specific path required
-    protocol: http
-    compression: gzip
-    headers:
-      api-key: your-license-key
-```
-
-**New Relic Port 443 Alternative:**
-
-New Relic supports both gRPC and HTTP on port 443 (default HTTPS port). This simplifies firewall rules:
-
-```yaml
-# gRPC on port 443
-trace:
-  endpoint: otlp.nr-data.net:443  # Explicit port 443 for gRPC
-  protocol: grpc
-
-# HTTP on port 443 (port implicit when using https://)
-trace:
-  endpoint: https://otlp.nr-data.net/v1/traces  # Port 443 implicit
-  protocol: http
-```
-
-**New Relic Configuration Options Explained:**
-
-| Option | Values | Default | New Relic Recommendation |
-|--------|--------|---------|--------------------------|
-| `compression` | `gzip`, `none` | `gzip` | **gzip** (~70% bandwidth reduction) |
-| `temporality` | `delta`, `cumulative` | `cumulative` | **delta** (lower memory, better performance) |
-| `histogram_aggregation` | `exponential`, `explicit` | `explicit` | **exponential** (better precision, ~10x lower memory) |
-| `protocol` | `http`, `grpc` | `http` | **grpc** (lower latency, better performance) |
-
-**New Relic Attribute Limits:**
-
-GoBricks automatically handles New Relic's attribute limits, but be aware of:
-- **Maximum attributes per span/metric/log:** 255 attributes
-- **Maximum attribute value size:** 4095 bytes
-- **Truncation behavior:** Attributes exceeding limits are dropped with warning logs
-
-**Performance Impact:**
-
-| Feature | Bandwidth Savings | Memory Savings | Notes |
-|---------|-------------------|----------------|-------|
-| gzip compression | ~70% | N/A | CPU overhead ~1-2ms per batch |
-| Delta temporality | N/A | ~50% | Resets counters after each export |
-| Exponential histograms | ~30% | ~90% | MaxSize=160, MaxScale=20 (auto-configured) |
+GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandwidth reduction), delta temporality (~50% memory savings), and exponential histograms (~90% memory savings).
 
 **Endpoint Format Rules (CRITICAL):**
 
-| Protocol | Endpoint Format | Example | TLS |
-|----------|-----------------|---------|-----|
-| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Auto-enabled for 4317 |
-| `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Disabled |
-| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | Enabled |
-| `http` (insecure) | `http://host:port/path` | `http://localhost:4318/v1/traces` | Disabled |
+| Protocol | Endpoint Format | Example |
+|----------|-----------------|---------|
+| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` |
+| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` |
 
 **Common Mistakes:**
-- ❌ `https://otlp.nr-data.net:4317` with `protocol: grpc` → **ERROR: "too many colons in address"**
-- ❌ `otlp.nr-data.net:4318` with `protocol: http` → **ERROR: missing scheme**
-- ✅ `otlp.nr-data.net:4317` with `protocol: grpc` → **Correct**
-- ✅ `https://otlp.nr-data.net:4318/v1/traces` with `protocol: http` → **Correct**
+- ❌ `https://otlp.nr-data.net:4317` with `protocol: grpc` → ERROR
+- ✅ `otlp.nr-data.net:4317` with `protocol: grpc` → Correct
 
-**Insecure gRPC Example (localhost):**
-```yaml
-traces:
-  endpoint: localhost:4317  # No https://
-  protocol: grpc
-  insecure: true  # Disable TLS for local testing
-```
-
-**Validation:** GoBricks validates endpoint format at startup (fail-fast). Invalid combinations return `ErrInvalidEndpointFormat`.
-
-**Why Not Environment Variables?**
-
-Environment variables like `OBSERVABILITY_TRACES_HEADERS_API_KEY` would require complex parsing logic that conflicts with Koanf's nested key handling. The explicit YAML approach:
-- ✅ Aligns with "Explicit > Implicit" manifesto principle
-- ✅ Matches industry standard (Docker Compose, Kubernetes ConfigMaps)
-- ✅ Simpler implementation, fewer edge cases
-- ✅ Users control exact header names (no automatic `_` → `-` conversion)
+For complete gRPC/HTTP configs, port 443 alternatives, and performance benchmarks, see [wiki/new-relic-otlp.md](wiki/new-relic-otlp.md).
 
 #### OpenTelemetry Collector (Recommended for Production)
 
-The OpenTelemetry Collector is a **vendor-agnostic proxy** that sits between your application and observability backends. GoBricks supports direct export to vendors (New Relic, Datadog, Honeycomb), but using a collector provides significant production benefits.
+For high-volume production, use an OTEL Collector as a vendor-agnostic proxy. Benefits: advanced retry/buffering, multi-backend support, data transformation, no vendor lock-in.
 
-**Why Use a Collector?**
+**Deployment patterns:** Sidecar (per-pod), DaemonSet (per-node), Gateway (centralized). When using a collector, the GoBricks app points to the collector endpoint with `insecure: true` and no vendor headers.
 
-| Feature | Direct Export | With OTEL Collector |
-|---------|---------------|---------------------|
-| **Retry Logic** | Limited (SDK retries 5x) | Advanced retry with exponential backoff |
-| **Buffering** | Small in-memory buffers | Large disk-backed queues |
-| **Batching** | Fixed batch sizes | Dynamic batching based on backend load |
-| **Vendor Lock-In** | Coupled to vendor | Change backends without code changes |
-| **Resource Usage** | App memory/CPU for retries | Offloaded to collector |
-| **Multi-Backend** | Not supported | Send to multiple backends simultaneously |
-| **Data Transformation** | Not supported | Filter, sample, enrich telemetry data |
-
-**Common Deployment Patterns:**
-
-**1. Sidecar Pattern (Kubernetes)**
-
-Each application pod runs a collector sidecar:
-
-```yaml
-# deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: my-service
-spec:
-  template:
-    spec:
-      containers:
-      - name: app
-        image: my-service:v1.0.0
-        env:
-        - name: OBSERVABILITY_TRACE_ENDPOINT
-          value: "localhost:4317"  # Collector sidecar
-        - name: OBSERVABILITY_TRACE_PROTOCOL
-          value: "grpc"
-      - name: otel-collector
-        image: otel/opentelemetry-collector-contrib:0.96.0
-        ports:
-        - containerPort: 4317  # gRPC receiver
-        - containerPort: 4318  # HTTP receiver
-        volumeMounts:
-        - name: collector-config
-          mountPath: /etc/otelcol
-      volumes:
-      - name: collector-config
-        configMap:
-          name: otel-collector-config
-```
-
-**Benefits:** Simple network configuration (localhost), isolated per service, automatic scaling with pods
-
-**2. DaemonSet Pattern (Kubernetes)**
-
-One collector per node, shared by all pods on that node:
-
-```yaml
-# GoBricks config (points to node-local collector)
-observability:
-  trace:
-    endpoint: ${NODE_IP}:4317  # DaemonSet collector on host network
-    protocol: grpc
-```
-
-**Benefits:** Lower resource overhead, simplified configuration, node-level batching
-
-**3. Gateway Pattern (High Volume)**
-
-Central collector cluster with load balancing:
-
-```yaml
-# GoBricks config (points to load balancer)
-observability:
-  trace:
-    endpoint: otel-gateway.monitoring.svc.cluster.local:4317
-    protocol: grpc
-    compression: gzip  # Reduce network traffic to gateway
-```
-
-**Benefits:** Centralized retry/buffering, horizontal scaling, advanced processing pipelines
-
-**Minimal Collector Configuration (New Relic):**
-
-```yaml
-# otel-collector-config.yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-      http:
-        endpoint: 0.0.0.0:4318
-
-processors:
-  batch:
-    timeout: 10s
-    send_batch_size: 1024
-    send_batch_max_size: 2048
-
-  # Retry with exponential backoff
-  retry:
-    enabled: true
-    initial_interval: 5s
-    max_interval: 30s
-    max_elapsed_time: 300s  # 5 minutes total retry window
-
-exporters:
-  otlp:
-    endpoint: otlp.nr-data.net:4317
-    compression: gzip
-    headers:
-      api-key: ${NEW_RELIC_LICENSE_KEY}
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [batch, retry]
-      exporters: [otlp]
-    metrics:
-      receivers: [otlp]
-      processors: [batch, retry]
-      exporters: [otlp]
-    logs:
-      receivers: [otlp]
-      processors: [batch, retry]
-      exporters: [otlp]
-```
-
-**When to Use Collector:**
-
-| Scenario | Recommendation |
-|----------|----------------|
-| **Development/Staging** | Direct export (simpler, faster iteration) |
-| **Production (low volume)** | Direct export with compression (simplicity > overhead) |
-| **Production (high volume)** | Collector (retry logic, buffering critical) |
-| **Multi-region** | Collector per region (reduces cross-region latency) |
-| **Multi-vendor** | Collector (send to multiple backends without app changes) |
-| **Compliance/Filtering** | Collector (PII scrubbing, data sampling) |
-
-**GoBricks Configuration with Collector:**
-
-```yaml
-# Application points to collector, collector handles vendor specifics
-observability:
-  enabled: true
-  service:
-    name: my-service
-    version: v1.0.0
-
-  trace:
-    endpoint: otel-collector:4317  # Collector endpoint
-    protocol: grpc
-    insecure: true  # Collector often on same network (no TLS needed)
-    compression: gzip  # Reduce app→collector network traffic
-    # NO headers needed - collector handles vendor auth
-
-  metrics:
-    enabled: true
-    endpoint: otel-collector:4317
-    protocol: grpc
-    compression: gzip
-    temporality: delta  # Collector can convert if needed
-    histogram_aggregation: exponential
-
-  logs:
-    enabled: true
-    endpoint: otel-collector:4317
-    protocol: grpc
-    compression: gzip
-```
-
-**Collector Resources:**
-- [OpenTelemetry Collector Documentation](https://opentelemetry.io/docs/collector/)
-- [Collector Configuration Reference](https://opentelemetry.io/docs/collector/configuration/)
-- [Collector Contrib Distributions](https://github.com/open-telemetry/opentelemetry-collector-contrib) (vendor-specific exporters)
+For deployment patterns, collector configs, and when-to-use guidance, see [wiki/otel-collector.md](wiki/otel-collector.md).
 
 ## Testing Guidelines
 
@@ -1575,7 +1242,7 @@ func TestProductService_FindActive(t *testing.T) {
         )
 
     deps := &app.ModuleDeps{
-        GetDB: func(ctx context.Context) (database.Interface, error) {
+        DB: func(ctx context.Context) (database.Interface, error) {
             return db, nil
         },
     }
@@ -1609,7 +1276,7 @@ tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
 tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
 
 deps := &app.ModuleDeps{
-    GetDB: tenants.AsGetDBFunc(),  // Resolves tenant from context
+    DB: tenants.AsDBFunc(),  // Resolves tenant from context
 }
 
 ctx := multitenant.SetTenant(context.Background(), "acme")
@@ -1637,7 +1304,7 @@ func TestUserServiceCaching(t *testing.T) {
     mockCache := cachetest.NewMockCache()
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             return mockCache, nil
         },
     }
@@ -1671,7 +1338,7 @@ tenantCaches := map[string]*cachetest.MockCache{
 }
 
 deps := &app.ModuleDeps{
-    GetCache: func(ctx context.Context) (cache.Cache, error) {
+    Cache: func(ctx context.Context) (cache.Cache, error) {
         tenantID := multitenant.GetTenant(ctx)
         return tenantCaches[tenantID], nil
     },
@@ -2031,7 +1698,7 @@ database:
 # → Check firewall rules if Redis on different host
 
 # Multi-tenant cache issues
-# → Use deps.GetCache(ctx), NOT deps.Cache (function vs field)
+# → Use deps.Cache(ctx) (function-based, resolves tenant from context)
 # → Ensure tenant context set: multitenant.SetTenant(ctx, tenantID)
 # → Verify tenant has cache.enabled: true in tenant config
 
@@ -2117,7 +1784,7 @@ make check-all  # Run comprehensive validation (framework + tool)
 
 ```bash
 # "tenant ID not found in context"
-# → Use deps.GetDB(ctx), not deps.DB (function-based access)
+# → Use deps.DB(ctx) (function-based, resolves tenant from context)
 # → Ensure tenant resolver configured in multitenant.resolver
 
 # Messaging registry initialization errors
@@ -2213,7 +1880,14 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 | SonarCloud | Coverage metrics (80% target), quality gate validation before releases |
 
 ## File Organization
-- **internal/** - Private packages
+- **internal/** - Private packages (reflection utilities, test helpers)
+- **testing/** - Framework-wide testing utilities
+  - **testing/mocks/** - Testify-based mocks for database, messaging, query builder interfaces
+  - **testing/fixtures/** - Pre-configured mocks and SQL result builders for common scenarios
+  - **testing/containers/** - Testcontainers helpers (MongoDB, PostgreSQL, Oracle, RabbitMQ, Redis)
+- **database/testing/** - Database-specific testing (TestDB, TenantDBMap, fluent expectations)
+- **cache/testing/** - Cache-specific testing (MockCache, assertion helpers)
+- **observability/testing/** - Test utilities for spans, metrics, and logs
 - **tools/** - Development tooling (OpenAPI generator)
 - **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
 - **.claude/tasks/** - Development task planning
@@ -2221,9 +1895,6 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
   - **memory/constitution.md** - Project governance framework
   - **templates/** - Spec, plan, task, and checklist templates
   - **scripts/bash/** - Automation scripts for SpecKit commands
-- **observability/testing/** - Test utilities for spans, metrics, and logs
-- **observability/dual_processor.go** - Dual-mode log routing implementation
-- **server/logger_context.go** - Request log context tracking
 - **llms.txt** - Quick reference examples for LLM code generation
 - Tests alongside source files (`*_test.go`)
 
