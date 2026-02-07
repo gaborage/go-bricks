@@ -14,7 +14,7 @@ import (
 // RowSet represents a collection of rows for testing Query results.
 // It provides a fluent API for building test data that can be returned from TestDB.Query().
 //
-// RowSet is vendor-agnostic - it works the same way for PostgreSQL, Oracle, and MongoDB tests.
+// RowSet is vendor-agnostic - it works the same way for PostgreSQL and Oracle tests.
 //
 // Usage example:
 //

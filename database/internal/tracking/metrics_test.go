@@ -168,8 +168,6 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 		{"postgresql", "postgresql"},
 		{"postgres", "postgresql"},
 		{"oracle", "oracle.db"}, // OTel spec requires .db suffix
-		{"mongodb", "mongodb"},
-		{"mongo", "mongodb"},
 	}
 
 	for _, v := range vendors {

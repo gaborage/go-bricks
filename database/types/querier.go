@@ -42,7 +42,6 @@ type Querier interface {
 	// The query should use vendor-specific placeholders:
 	//   - PostgreSQL: $1, $2, $3
 	//   - Oracle: :1, :2, :3
-	//   - MongoDB: N/A (query builder handles translation)
 	//
 	// For vendor-agnostic query construction, use the QueryBuilder.
 	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -60,7 +59,7 @@ type Querier interface {
 	Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
 
 	// DatabaseType returns the vendor identifier for this database connection.
-	// Valid values are defined as constants: PostgreSQL, Oracle, MongoDB.
+	// Valid values are defined as constants: PostgreSQL, Oracle.
 	//
 	// This is included in Querier (despite being metadata) because the query builder
 	// requires vendor information for placeholder generation and identifier quoting.

@@ -70,16 +70,6 @@ database:
       name: ORCL
       sid: ""
 
-  # MongoDB-specific configuration
-  mongo:
-    replica:
-      set: rs0
-      preference: primary
-    auth:
-      source: admin
-    concern:
-      write: majority
-
 # Cache configuration (OPTIONAL - Redis-based caching)
 # If not using cache, set enabled: false or omit this section
 cache:

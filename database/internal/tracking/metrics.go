@@ -198,7 +198,7 @@ func getDBMeter() metric.Meter {
 // - Units: seconds
 //
 // Attributes Added:
-// - db.system.name: Database vendor (postgresql, oracle.db, mongodb) - always included
+// - db.system.name: Database vendor (postgresql, oracle.db) - always included
 // - db.operation.name: Operation type (select, insert, update, delete, etc.) - always included
 // - db.collection.name: Table/collection name - optional, included when available
 // - db.namespace: Vendor-specific namespace format - optional, included when available

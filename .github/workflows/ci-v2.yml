@@ -156,7 +156,6 @@ jobs:
       - name: Pre-pull container images
         run: |
           echo "Warming Docker cache with container images..."
-          docker pull mongo:8.0 &
           docker pull postgres:17-alpine &
           docker pull gvenzl/oracle-free:23-slim &
           docker pull rabbitmq:3.13-management-alpine &

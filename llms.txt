@@ -49,7 +49,7 @@ server:
   enabled: true
   port: 8080
 database:
-  type: postgres # postgres | oracle | mongo
+  type: postgres # postgres | oracle
 cache:
   enabled: true
   type: redis
@@ -435,7 +435,7 @@ sql, args := qb.Delete("users").
 result, err := m.db.Exec(ctx, sql, args...)
 ```
 
-Access to vendor quirks (Oracle quoting, Mongo builders) routes through the same interface; switching drivers requires config only.
+Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.
 
 **Struct-Based Columns (v0.15.0+):**
 

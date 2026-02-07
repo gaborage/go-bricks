@@ -83,7 +83,7 @@ type Tx interface {
 }
 ```
 
-**Rationale:** This fixes S8242 (context-in-struct) by removing stored context from MongoDB transactions. Context now flows through method parameters following Go idioms.
+**Rationale:** This fixes S8242 (context-in-struct) by removing stored context from transactions. Context now flows through method parameters following Go idioms.
 
 **Migration:**
 ```go

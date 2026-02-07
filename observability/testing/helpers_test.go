@@ -162,7 +162,7 @@ func TestSpanCollectorWithAttribute(t *testing.T) {
 	span1.End()
 
 	_, span2 := tracer.Start(context.Background(), "db-query")
-	span2.SetAttributes(attribute.String(dbSystemAttr, "mongodb"))
+	span2.SetAttributes(attribute.String(dbSystemAttr, "mysql"))
 	span2.End()
 
 	_, span3 := tracer.Start(context.Background(), httpRequestAttr)

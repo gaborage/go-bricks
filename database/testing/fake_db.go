@@ -117,7 +117,7 @@ type TxExpectation struct {
 }
 
 // NewTestDB creates a new in-memory fake database for the specified vendor.
-// The vendor parameter should be one of: dbtypes.PostgreSQL, dbtypes.Oracle, dbtypes.MongoDB.
+// The vendor parameter should be one of: dbtypes.PostgreSQL, dbtypes.Oracle.
 //
 // The returned TestDB implements both database.Querier (for simple mocking) and
 // database.Interface (for full compatibility with framework code).

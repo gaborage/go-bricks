@@ -303,17 +303,13 @@ func TestColumnRegistryVendorCacheMultipleVendors(t *testing.T) {
 
 	oracleCache := registry.getOrCreateVendorCache(dbtypes.Oracle)
 	pgCache := registry.getOrCreateVendorCache(dbtypes.PostgreSQL)
-	mongoCache := registry.getOrCreateVendorCache(dbtypes.MongoDB)
 
 	// All caches should be different instances
 	assert.NotSame(t, oracleCache, pgCache)
-	assert.NotSame(t, oracleCache, mongoCache)
-	assert.NotSame(t, pgCache, mongoCache)
 
 	// Each should have the correct vendor
 	assert.Equal(t, dbtypes.Oracle, oracleCache.vendor)
 	assert.Equal(t, dbtypes.PostgreSQL, pgCache.vendor)
-	assert.Equal(t, dbtypes.MongoDB, mongoCache.vendor)
 }
 
 // TestColumnRegistryIntegrationRealWorldUsage tests realistic usage patterns

@@ -111,6 +111,15 @@ Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation v
 
 ---
 
+### [ADR-012: Remove MongoDB Support](adr-012-remove-mongodb-support.md)
+**Date:** 2026-02-06 | **Status:** Accepted
+
+Complete removal of MongoDB support to focus exclusively on PostgreSQL and Oracle. Eliminates ~5,000 lines of code, document-oriented interfaces, and MongoDB driver dependency.
+
+**Key Benefits:** Reduced complexity, smaller dependency tree, clearer framework scope
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented

@@ -93,7 +93,7 @@ func ExampleSpanCollector() {
 	span2.End()
 
 	_, span3 := tracer.Start(context.Background(), databaseQuerySpan)
-	span3.SetAttributes(attribute.String(dbSystemAttr, "mongodb"))
+	span3.SetAttributes(attribute.String(dbSystemAttr, "mysql"))
 	span3.End()
 
 	// Get spans and count them by filtering
@@ -172,7 +172,7 @@ func TestExampleSpanCollector(t *testing.T) {
 	span2.End()
 
 	_, span3 := tracer.Start(context.Background(), dbQuery)
-	span3.SetAttributes(attribute.String(dbSystemAttr, "mongodb"))
+	span3.SetAttributes(attribute.String(dbSystemAttr, "mysql"))
 	span3.End()
 
 	// Use SpanCollector for fluent assertions
