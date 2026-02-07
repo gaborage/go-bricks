@@ -139,7 +139,7 @@ GoBricks automatically handles New Relic's attribute limits, but be aware of:
 ## Insecure gRPC Example (localhost)
 
 ```yaml
-traces:
+trace:
   endpoint: localhost:4317  # No https://
   protocol: grpc
   insecure: true  # Disable TLS for local testing

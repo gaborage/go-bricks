@@ -100,13 +100,6 @@ processors:
     send_batch_size: 1024
     send_batch_max_size: 2048
 
-  # Retry with exponential backoff
-  retry:
-    enabled: true
-    initial_interval: 5s
-    max_interval: 30s
-    max_elapsed_time: 300s  # 5 minutes total retry window
-
 exporters:
   otlp:
     endpoint: otlp.nr-data.net:4317
@@ -123,15 +116,15 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch, retry]
+      processors: [batch]
       exporters: [otlp]
     metrics:
       receivers: [otlp]
-      processors: [batch, retry]
+      processors: [batch]
       exporters: [otlp]
     logs:
       receivers: [otlp]
-      processors: [batch, retry]
+      processors: [batch]
       exporters: [otlp]
 ```
 

@@ -14,15 +14,15 @@ observability:
     name: my-service
     version: v1.0.0
 
-  # Traces
-  traces:
+  # Trace
+  trace:
     enabled: true
     endpoint: otlp.nr-data.net:4317  # No https:// for gRPC
     protocol: grpc
     headers:
       api-key: your-new-relic-license-key-here
 
-  # Metrics (reuses traces endpoint)
+  # Metrics (reuses trace endpoint)
   metrics:
     enabled: true
     endpoint: otlp.nr-data.net:4317  # No https:// for gRPC
@@ -30,7 +30,7 @@ observability:
     headers:
       api-key: your-new-relic-license-key-here
 
-  # Logs (reuses traces endpoint)
+  # Logs (reuses trace endpoint)
   logs:
     enabled: true
     endpoint: otlp.nr-data.net:4317  # No https:// for gRPC

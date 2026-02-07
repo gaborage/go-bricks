@@ -102,10 +102,10 @@ Automatic panic recovery in AMQP message handlers with stack trace logging, cons
 
 ---
 
-### [ADR-011: Redis Cache Backend with CBOR Serialization](adr-011-redis-cache.md)
+### [ADR-011: Redis Cache Backend with CBOR Serialization (ModuleDeps Extension)](adr-011-redis-cache.md)
 **Date:** 2025-11-09 | **Status:** Accepted
 
-Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation via CacheManager, and automatic lifecycle management (LRU eviction, idle cleanup, singleflight).
+Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation via CacheManager, and automatic lifecycle management (LRU eviction, idle cleanup, singleflight). Breaking change: introduces `ModuleDeps` extension (`Cache` field) which is a breaking API change and may require dependent modules to be updated.
 
 **Key Benefits:** Type-safe serialization, tenant isolation, production-safe defaults
 
