@@ -597,7 +597,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: golangci-lint (framework)
-        uses: golangci/golangci-lint-action@2c963d3543d699fc1331bd69134fcd9f7f4efc4e
+        uses: golangci/golangci-lint-action@b62bd5d2341b1c3d8e43b6c576edb853a7e63ada
         with:
           version: latest
           args: --timeout=5m --skip-dirs=tools
@@ -618,7 +618,7 @@ jobs:
           cache-dependency-path: tools/openapi/go.sum
 
       - name: golangci-lint (tool)
-        uses: golangci/golangci-lint-action@2c963d3543d699fc1331bd69134fcd9f7f4efc4e
+        uses: golangci/golangci-lint-action@b62bd5d2341b1c3d8e43b6c576edb853a7e63ada
         with:
           version: latest
           working-directory: tools/openapi
