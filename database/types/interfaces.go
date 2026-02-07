@@ -192,7 +192,6 @@ type Vendor = string
 const (
 	PostgreSQL Vendor = "postgresql"
 	Oracle     Vendor = "oracle"
-	MongoDB    Vendor = "mongodb"
 )
 
 // Row represents a single result set row with basic scanning behaviour.

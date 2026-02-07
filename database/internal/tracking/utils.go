@@ -24,7 +24,6 @@ const (
 	// Database vendor normalization constants matching OTel semantic conventions
 	dbVendorPostgreSQL = "postgresql"
 	dbVendorOracle     = "oracle.db" // OTel spec requires "oracle.db" not "oracle"
-	dbVendorMongoDB    = "mongodb"
 	dbVendorMySQL      = "mysql"
 	dbVendorSQLite     = "sqlite"
 
@@ -306,8 +305,8 @@ func extractDBOperation(query string) string {
 // normalizeDBVendor maps common database vendor identifiers to the OpenTelemetry
 // `db.system.name` values.
 // It lowercases the input and maps known aliases (for example: "postgres" or
-// "postgresql" → "postgresql", "oracle" → "oracle.db", "mongo" or "mongodb" →
-// "mongodb", "mysql" → "mysql", "sqlite" or "sqlite3" → "sqlite"). If no mapping
+// "postgresql" → "postgresql", "oracle" → "oracle.db",
+// "mysql" → "mysql", "sqlite" or "sqlite3" → "sqlite"). If no mapping
 // applies, the lowercased input is returned unchanged.
 func normalizeDBVendor(vendor string) string {
 	vendor = strings.ToLower(vendor)
@@ -316,8 +315,6 @@ func normalizeDBVendor(vendor string) string {
 		return dbVendorPostgreSQL
 	case "oracle", dbVendorOracle:
 		return dbVendorOracle // Returns "oracle.db" per OTel spec
-	case dbVendorMongoDB, "mongo":
-		return dbVendorMongoDB
 	case dbVendorMySQL:
 		return dbVendorMySQL
 	case dbVendorSQLite, "sqlite3":
@@ -350,11 +347,4 @@ func BuildOracleNamespace(serviceName, sid, database string) string {
 	}
 	// Return full format with all values (empty strings for missing ones)
 	return serviceName + "|" + sid + "|" + database
-}
-
-// BuildMongoDBNamespace builds the db.namespace attribute for MongoDB.
-// BuildMongoDBNamespace builds the db.namespace value for MongoDB according to OpenTelemetry conventions by returning the provided database name.
-// If database is empty, an empty string is returned.
-func BuildMongoDBNamespace(database string) string {
-	return database
 }

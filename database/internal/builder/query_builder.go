@@ -71,8 +71,6 @@ func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {
 	case dbtypes.Oracle:
 		// Oracle uses :1, :2, ... placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Colon)
-	case dbtypes.MongoDB:
-		panic("QueryBuilder is SQL-only; do not construct for MongoDB") //nolint:S8148 // NOSONAR: Fail-fast on unsupported database vendor for SQL builder
 	default:
 		// Default to question mark placeholders
 		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)

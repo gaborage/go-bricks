@@ -122,7 +122,6 @@ type DatabaseConfig struct {
 
 	PostgreSQL PostgreSQLConfig `koanf:"postgresql" json:"postgresql" yaml:"postgresql" toml:"postgresql" mapstructure:"postgresql"`
 	Oracle     OracleConfig     `koanf:"oracle" json:"oracle" yaml:"oracle" toml:"oracle" mapstructure:"oracle"`
-	Mongo      MongoConfig      `koanf:"mongo" json:"mongo" yaml:"mongo" toml:"mongo" mapstructure:"mongo"`
 }
 
 // PoolConfig holds connection pool settings.
@@ -225,29 +224,6 @@ type OracleConfig struct {
 type ServiceConfig struct {
 	Name string `koanf:"name" json:"name" yaml:"name" toml:"name" mapstructure:"name"`
 	SID  string `koanf:"sid" json:"sid" yaml:"sid" toml:"sid" mapstructure:"sid"`
-}
-
-// MongoConfig holds MongoDB-specific database settings.
-type MongoConfig struct {
-	Replica ReplicaConfig `koanf:"replica" json:"replica" yaml:"replica" toml:"replica" mapstructure:"replica"`
-	Auth    AuthConfig    `koanf:"auth" json:"auth" yaml:"auth" toml:"auth" mapstructure:"auth"`
-	Concern ConcernConfig `koanf:"concern" json:"concern" yaml:"concern" toml:"concern" mapstructure:"concern"`
-}
-
-// ReplicaConfig holds MongoDB replica set and read preference settings.
-type ReplicaConfig struct {
-	Set        string `koanf:"set" json:"set" yaml:"set" toml:"set" mapstructure:"set"`
-	Preference string `koanf:"preference" json:"preference" yaml:"preference" toml:"preference" mapstructure:"preference"`
-}
-
-// AuthConfig holds MongoDB authentication source settings.
-type AuthConfig struct {
-	Source string `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
-}
-
-// ConcernConfig holds MongoDB write concern settings.
-type ConcernConfig struct {
-	Write string `koanf:"write" json:"write" yaml:"write" toml:"write" mapstructure:"write"`
 }
 
 // CacheConfig holds cache backend settings.

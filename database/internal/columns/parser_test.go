@@ -136,19 +136,6 @@ func TestParseStructPostgreSQL(t *testing.T) {
 	}
 }
 
-// TestParseStructMongoDB tests MongoDB vendor (no quoting)
-func TestParseStructMongoDB(t *testing.T) {
-	metadata, err := parseStruct(dbtypes.MongoDB, &ValidUser{})
-
-	require.NoError(t, err)
-	require.NotNil(t, metadata)
-
-	// MongoDB uses document field names, no SQL quoting
-	for _, col := range metadata.Columns {
-		assert.Equal(t, col.DBColumn, col.QuotedColumn, "MongoDB should not quote field names")
-	}
-}
-
 // TestParseStructMixedExport tests handling of unexported fields and explicit skips
 func TestParseStructMixedExport(t *testing.T) {
 	metadata, err := parseStruct(dbtypes.PostgreSQL, &MixedExport{})
@@ -438,12 +425,6 @@ func TestApplyVendorQuoting(t *testing.T) {
 			vendor: dbtypes.PostgreSQL,
 			column: "number",
 			want:   "number",
-		},
-		{
-			name:   "MongoDB field name",
-			vendor: dbtypes.MongoDB,
-			column: "user_id",
-			want:   "user_id",
 		},
 		{
 			name:   "Unknown vendor",

@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -50,7 +49,6 @@ const (
 const (
 	PostgreSQL = "postgresql"
 	Oracle     = "oracle"
-	MongoDB    = "mongodb"
 )
 
 // Environment constants
@@ -254,10 +252,10 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 }
 
 // validateDatabaseType validates that dbType is one of the supported database type
-// constants (PostgreSQL, Oracle, or MongoDB). It returns nil when dbType is valid and an
+// constants (PostgreSQL or Oracle). It returns nil when dbType is valid and an
 // error describing the invalid value and the allowed types when it is not.
 func validateDatabaseType(dbType string) error {
-	validTypes := []string{PostgreSQL, Oracle, MongoDB}
+	validTypes := []string{PostgreSQL, Oracle}
 	if !slices.Contains(validTypes, dbType) {
 		return NewInvalidFieldError("database.type", fmt.Sprintf(errNotSupportedFmt, dbType), validTypes)
 	}
@@ -605,8 +603,6 @@ func applyStartupDefaults(cfg *StartupConfig) error {
 // validateVendorSpecificFields validates database vendor-specific configuration fields
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	switch cfg.Type {
-	case MongoDB:
-		return validateMongoDBFields(cfg)
 	case Oracle:
 		return validateOracleFields(cfg)
 	case PostgreSQL:
@@ -616,66 +612,6 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 		// Unknown database type should have been caught by validateDatabaseType
 		return nil
 	}
-}
-
-// validateMongoDBFields validates MongoDB-specific configuration fields
-func validateMongoDBFields(cfg *DatabaseConfig) error {
-	if cfg.Mongo.Replica.Preference != "" {
-		if err := validateMongoDBReadPreference(cfg.Mongo.Replica.Preference); err != nil {
-			return err
-		}
-	}
-
-	if cfg.Mongo.Concern.Write != "" {
-		if err := validateMongoDBWriteConcern(cfg.Mongo.Concern.Write); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// validateMongoDBReadPreference validates MongoDB read preference values
-func validateMongoDBReadPreference(pref string) error {
-	validPreferences := map[string]struct{}{
-		"primary":            {},
-		"primarypreferred":   {},
-		"secondary":          {},
-		"secondarypreferred": {},
-		"nearest":            {},
-	}
-
-	if _, ok := validPreferences[strings.ToLower(pref)]; ok {
-		return nil
-	}
-
-	validOptions := []string{"primary", "primaryPreferred", "secondary", "secondaryPreferred", "nearest"}
-	return NewInvalidFieldError("database.mongo.replica.preference", fmt.Sprintf(errNotSupportedFmt, pref), validOptions)
-}
-
-// validateMongoDBWriteConcern validates MongoDB write concern values
-func validateMongoDBWriteConcern(concern string) error {
-	// First, try to parse as a non-negative integer
-	if num, err := strconv.Atoi(concern); err == nil && num >= 0 {
-		return nil
-	}
-
-	// Check for valid textual concerns (case-insensitive)
-	validConcerns := []string{
-		"majority",
-		"acknowledged",
-		"unacknowledged",
-	}
-
-	concernLower := strings.ToLower(concern)
-	for _, valid := range validConcerns {
-		if strings.EqualFold(valid, concernLower) {
-			return nil
-		}
-	}
-
-	validOptions := []string{"majority", "acknowledged", "unacknowledged", "or a non-negative integer"}
-	return NewInvalidFieldError("database.mongo.concern.write", fmt.Sprintf(errNotSupportedFmt, concern), validOptions)
 }
 
 // validateOracleFields validates Oracle-specific configuration fields.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle/MongoDB), and clean architecture patterns.
+GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle), and clean architecture patterns.
 
 **Requirements**:
 - **Go 1.25** required
@@ -187,9 +187,6 @@ GoBricks follows Go's idiomatic naming conventions. Per [SonarCloud rule S8179](
 | `config.TenantStore` | `GetTenants()` | `Tenants()` |
 | `app.MetadataRegistry` | `GetModules()`, `GetModule()` | `Modules()`, `Module()` |
 | `app.App` | `GetMessagingDeclarations()` | `MessagingDeclarations()` |
-| `database/mongodb.Builder` | `GetState()`, `GetSkip()`, `GetLimit()`, `GetProjectionFields()`, `GetSortFields()` | `State()`, `SkipValue()`, `LimitValue()`, `ProjectionFields()`, `SortFields()` |
-| `database/mongodb.Connection` | `GetDatabase()`, `GetClient()` | `Database()`, `Client()` |
-| `database/mongodb.Transaction` | `GetSession()`, `GetDatabase()` | `Session()`, `Database()` |
 | `database.Interface` | `GetMigrationTable()` | `MigrationTable()` |
 | `database/testing.TestDB` | `GetQueryLog()`, `GetExecLog()` | `QueryLog()`, `ExecLog()` |
 | `database/testing.TenantDBMap` | `GetTenantDB()` | `TenantDB()` |
@@ -375,7 +372,7 @@ linters-settings:
 ```
 
 ### Database Architecture
-Unified `database.Interface` supporting PostgreSQL, Oracle, MongoDB with:
+Unified `database.Interface` supporting PostgreSQL and Oracle with:
 - Query builder with vendor-specific SQL generation
 - Type-safe WHERE clause methods (prevents Oracle reserved word errors)
 - Performance tracking via OpenTelemetry
@@ -446,7 +443,7 @@ func (h *Handler) MigrateLegacyData(ctx context.Context) error {
 ```
 
 **Key Features:**
-- **Mixed vendor support:** Each named database can have a different type (Oracle, PostgreSQL, MongoDB)
+- **Mixed vendor support:** Each named database can have a different type (Oracle, PostgreSQL)
 - **Backward compatible:** `deps.DB(ctx)` works exactly as before
 - **Explicit selection:** `deps.DBByName(ctx, "name")` for clarity
 - **Reuses infrastructure:** Same DbManager with LRU, connection pooling, idle cleanup
@@ -700,7 +697,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Performance:** First use ~0.6µs (reflection), cached access ~26ns (map lookup), thread-safe via `sync.Map`
 
-**Vendor Quoting:** Oracle auto-quotes reserved words (`"NUMBER"`, `"LEVEL"`), PostgreSQL/MongoDB no quoting
+**Vendor Quoting:** Oracle auto-quotes reserved words (`"NUMBER"`, `"LEVEL"`), PostgreSQL: no quoting
 
 **For detailed examples** (INSERT, JOINs, complex queries), see [llms.txt](llms.txt) and [ADR-007](wiki/adr-007-struct-based-columns.md)
 
@@ -1219,7 +1216,7 @@ func Test_Filter_Eq(t *testing.T) { }
 
 ### Testing Strategy
 - **Unit tests:** testify, database/testing (database), httptest (server), fake adapters (messaging)
-- **Integration tests:** testcontainers (MongoDB), `-tags=integration` flag
+- **Integration tests:** testcontainers, `-tags=integration` flag
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
 
@@ -1365,7 +1362,6 @@ See [cache/testing](cache/testing/) package for full API documentation and the C
 ```bash
 make test-integration           # All integration tests
 make test-coverage-integration  # With coverage
-go test -v -tags=integration ./database/mongodb/...
 ```
 
 **Build Tag Isolation:** Integration tests use `//go:build integration` - testcontainers dependencies only compiled with `-tags=integration`
@@ -1401,7 +1397,6 @@ func TestFeature(t *testing.T) {
 |----------|--------------|--------------|
 | **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options, **SEQUENCE support (built-in), UDT registration for custom types** |
 | **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
-| **MongoDB** | N/A | Document-based with SQL-like interface, aggregation pipeline |
 
 ### Connection Pool Defaults
 
@@ -1884,7 +1879,7 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 - **testing/** - Framework-wide testing utilities
   - **testing/mocks/** - Testify-based mocks for database, messaging, query builder interfaces
   - **testing/fixtures/** - Pre-configured mocks and SQL result builders for common scenarios
-  - **testing/containers/** - Testcontainers helpers (MongoDB, PostgreSQL, Oracle, RabbitMQ, Redis)
+  - **testing/containers/** - Testcontainers helpers (PostgreSQL, Oracle, RabbitMQ, Redis)
 - **database/testing/** - Database-specific testing (TestDB, TenantDBMap, fluent expectations)
 - **cache/testing/** - Cache-specific testing (MockCache, assertion helpers)
 - **observability/testing/** - Test utilities for spans, metrics, and logs

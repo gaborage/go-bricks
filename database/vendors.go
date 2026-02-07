@@ -7,5 +7,4 @@ import "github.com/gaborage/go-bricks/database/types"
 const (
 	PostgreSQL = types.PostgreSQL
 	Oracle     = types.Oracle
-	MongoDB    = types.MongoDB
 )

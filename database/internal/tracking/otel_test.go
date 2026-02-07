@@ -216,9 +216,6 @@ func TestNormalizeDBVendor(t *testing.T) {
 		{"oracle", oracleDBVendorName},           // OTel spec requires .db suffix
 		{"Oracle", oracleDBVendorName},           // OTel spec requires .db suffix
 		{oracleDBVendorName, oracleDBVendorName}, // Already normalized
-		{"mongodb", "mongodb"},
-		{"mongo", "mongodb"},
-		{"MongoDB", "mongodb"},
 		{"mysql", "mysql"},
 		{"MySQL", "mysql"},
 		{"sqlite", "sqlite"},
@@ -288,8 +285,6 @@ func TestCreateDBSpanDifferentVendors(t *testing.T) {
 		{"postgresql", "postgresql"},
 		{"postgres", "postgresql"},
 		{"oracle", oracleDBVendorName}, // OTel spec requires .db suffix
-		{"mongodb", "mongodb"},
-		{"mongo", "mongodb"},
 	}
 
 	for _, v := range vendors {

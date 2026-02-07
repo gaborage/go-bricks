@@ -18,7 +18,6 @@ const (
 	MockDatabaseType     = "mock"
 	PostgresDatabaseType = "postgres"
 	OracleDatabaseType   = "oracle"
-	MongoDBDatabaseType  = "mongodb"
 )
 
 // Database stats field constants
@@ -311,19 +310,6 @@ func NewOracleDatabase() *mocks.MockDatabase {
 	mockDB.ExpectDatabaseType(OracleDatabaseType)
 	mockDB.ExpectStats(getDefaultStats(), nil)
 	mockDB.On("MigrationTable").Return(OracleMigrationTable)
-
-	return mockDB
-}
-
-// NewMongoDatabase creates a mock database that behaves like MongoDB (via the adapter).
-func NewMongoDatabase() *mocks.MockDatabase {
-	mockDB := &mocks.MockDatabase{}
-
-	// Setup healthy responses for MongoDB
-	mockDB.ExpectHealthCheck(true)
-	mockDB.ExpectDatabaseType(MongoDBDatabaseType)
-	mockDB.ExpectStats(getDefaultStats(), nil)
-	mockDB.On("MigrationTable").Return(DefaultMigrationTable)
 
 	return mockDB
 }

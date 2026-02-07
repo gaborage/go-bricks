@@ -513,35 +513,3 @@ func TestBuildOracleNamespace(t *testing.T) {
 		})
 	}
 }
-
-// TestBuildMongoDBNamespace tests the MongoDB namespace builder.
-func TestBuildMongoDBNamespace(t *testing.T) {
-	tests := []struct {
-		name     string
-		database string
-		expected string
-	}{
-		{
-			name:     "withDatabase",
-			database: "analytics",
-			expected: "analytics",
-		},
-		{
-			name:     "emptyDatabase",
-			database: "",
-			expected: "",
-		},
-		{
-			name:     "complexDatabaseName",
-			database: "user_analytics_db",
-			expected: "user_analytics_db",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := BuildMongoDBNamespace(tt.database)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}

@@ -100,7 +100,6 @@ const (
 	TestPortRedis      = 6379
 	TestPortHTTP       = 8080
 	TestPortPostgreSQL = 5432
-	TestPortMongoDB    = 27017
 )
 
 // Size Constants

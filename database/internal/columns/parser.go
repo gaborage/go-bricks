@@ -149,9 +149,6 @@ func applyVendorQuoting(vendor, column string) string {
 	case dbtypes.PostgreSQL:
 		// PostgreSQL typically doesn't need quoting for standard column names
 		return column
-	case dbtypes.MongoDB:
-		// MongoDB uses document field names, no SQL quoting needed
-		return column
 	default:
 		// Unknown vendor: return as-is
 		return column

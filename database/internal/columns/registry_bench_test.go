@@ -209,17 +209,6 @@ func BenchmarkVendorComparison(b *testing.B) {
 			_ = registry.Get(dbtypes.PostgreSQL, &ReservedWordStruct{})
 		}
 	})
-
-	b.Run("MongoDB (no quoting)", func(b *testing.B) {
-		registry := &ColumnRegistry{
-			vendorCaches: make(map[string]*vendorCache),
-		}
-		_ = registry.Get(dbtypes.MongoDB, &ReservedWordStruct{})
-		b.ResetTimer()
-		for b.Loop() {
-			_ = registry.Get(dbtypes.MongoDB, &ReservedWordStruct{})
-		}
-	})
 }
 
 // BenchmarkConcurrentAccess benchmarks concurrent cached access

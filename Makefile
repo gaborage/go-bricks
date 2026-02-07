@@ -2,7 +2,7 @@
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
-INTEGRATION_PKGS := ./database/mongodb/...
+INTEGRATION_PKGS :=
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"

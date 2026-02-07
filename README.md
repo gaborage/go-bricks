@@ -68,7 +68,7 @@ go test -run TestName   # Run specific test
 - **Echo-based HTTP server** with typed handlers and standardized response envelopes
 - **AMQP messaging** with validate-once, replay-many pattern for multi-tenant isolation
 - **Configuration loader** merging defaults, YAML, and environment variables
-- **Multi-database support** for PostgreSQL, Oracle, and MongoDB with type-safe query builders
+- **Multi-database support** for PostgreSQL and Oracle with type-safe query builders
 - **Redis cache integration** with type-safe serialization, multi-tenant isolation, and automatic lifecycle management
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
@@ -301,7 +301,7 @@ AMQP/RabbitMQ support with validate-once, replay-many declaration pattern:
 
 ## Database
 
-Unified interface supporting PostgreSQL, Oracle, and MongoDB with vendor-specific optimizations and type-safe query building across all operations.
+Unified interface supporting PostgreSQL and Oracle with vendor-specific optimizations and type-safe query building across all operations.
 
 ### Type-Safe Filter API
 
@@ -347,7 +347,6 @@ All methods automatically handle:
 ### Database Support
 - **PostgreSQL**: `$1, $2` placeholders, pgx driver, advanced features
 - **Oracle**: `:1, :2` placeholders, reserved word quoting, service name/SID support
-- **MongoDB**: Document operations with SQL-like interface, aggregation pipelines
 
 ### Features
 - Connection pooling and health monitoring
