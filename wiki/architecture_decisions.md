@@ -118,6 +118,10 @@ Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation v
 - **Deprecated**: Superseded by newer decision (see related ADRs)
 - **Superseded**: Replaced by specific ADR (reference provided)
 
+### Numbering Policy
+
+ADR numbers (ADR-001 through ADR-011) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr-011-redis-cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+
 ## Writing New ADRs
 
 When creating a new ADR:
