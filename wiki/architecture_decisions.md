@@ -75,12 +75,39 @@ Reflection-based column extraction from struct tags with lazy caching. Eliminate
 
 ---
 
-### [ADR-008: Cache Interface and Manager (Draft)](adr-008-cache-draft.md)
-**Status:** Draft
+### [ADR-008: Database Testing with Interface Segregation](adr-008-database-testing-interface-segregation.md)
+**Date:** 2025-01-10 | **Status:** Accepted
 
-Proposed cache abstraction layer with pluggable backends and optional observability integration.
+Interface segregation for database testing utilities, enabling 73% less boilerplate with fluent expectation APIs, multi-tenant support, and vendor-agnostic row builders.
 
-**Status:** Under development
+**Key Benefits:** Simplified mocking, transaction tracking, partial SQL matching
+
+---
+
+### [ADR-009: Consumer Worker Pool Concurrency](adr-009-consumer-worker-pool-concurrency.md)
+**Date:** 2025-02-01 | **Status:** Accepted
+
+Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-threaded message processing for 20-30x throughput improvement.
+
+**Key Benefits:** Automatic I/O-bound scaling, configurable concurrency, resource safeguards
+
+---
+
+### [ADR-010: Panic-to-Error Conversion in Message Handlers](adr-010-panic-to-error-conversion.md)
+**Date:** 2025-02-15 | **Status:** Accepted
+
+Automatic panic recovery in AMQP message handlers with stack trace logging, consistent nack-without-requeue behavior, and service continuity.
+
+**Key Benefits:** Service resilience, consistent error semantics, observability integration
+
+---
+
+### [ADR-011: Redis Cache Backend with CBOR Serialization (ModuleDeps Extension)](adr-011-redis-cache.md)
+**Date:** 2025-11-09 | **Status:** Accepted
+
+Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation via CacheManager, and automatic lifecycle management (LRU eviction, idle cleanup, singleflight). Breaking change: introduces `ModuleDeps` extension (`Cache` field) which is a breaking API change and may require dependent modules to be updated.
+
+**Key Benefits:** Type-safe serialization, tenant isolation, production-safe defaults
 
 ---
 
@@ -90,6 +117,10 @@ Proposed cache abstraction layer with pluggable backends and optional observabil
 - **Accepted**: Decision made and implementation complete
 - **Deprecated**: Superseded by newer decision (see related ADRs)
 - **Superseded**: Replaced by specific ADR (reference provided)
+
+### Numbering Policy
+
+ADR numbers (ADR-001 through ADR-011) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr-011-redis-cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

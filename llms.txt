@@ -1,6 +1,6 @@
 # GoBricks Framework
 
-Enterprise Go microservice toolkit (Go 1.24+). Provides multi-database access, typed HTTP handlers, AMQP messaging, tenant isolation, and built-in OpenTelemetry.
+Enterprise Go microservice toolkit (Go 1.25+). Provides multi-database access, typed HTTP handlers, AMQP messaging, tenant isolation, and built-in OpenTelemetry.
 
 ## Quick Start
 - `go get github.com/gaborage/go-bricks`
