@@ -1,8 +1,5 @@
 name: CI
 
-permissions:
-  contents: read
-
 on:
   push:
     branches: [main]
@@ -14,6 +11,8 @@ jobs:
   # Job 1: Detect which components changed
   # ============================================================================
   changes:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       # yamllint: valid GitHub Actions context expression
@@ -40,6 +39,8 @@ jobs:
   # ============================================================================
 
   framework-test:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     strategy:
@@ -136,6 +137,8 @@ jobs:
           retention-days: 1
 
   framework-integration-test:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-24.04
@@ -179,6 +182,8 @@ jobs:
           retention-days: 1
 
   framework-merge-coverage:
+    permissions:
+      contents: read
     needs: [changes, framework-test, framework-integration-test, tool-test]
     if: |
       always() &&
@@ -353,6 +358,8 @@ jobs:
           retention-days: 1
 
   framework-build:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     strategy:
@@ -408,6 +415,8 @@ jobs:
   # ============================================================================
 
   tool-test:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.tool == 'true'
     strategy:
@@ -527,6 +536,8 @@ jobs:
           if-no-files-found: ignore
 
   tool-build:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.tool == 'true'
     strategy:
@@ -581,6 +592,8 @@ jobs:
   # ============================================================================
 
   lint-framework:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-latest
@@ -602,6 +615,8 @@ jobs:
           args: --timeout=5m --skip-dirs=tools
 
   lint-tool:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.tool == 'true'
     runs-on: ubuntu-latest
@@ -624,6 +639,8 @@ jobs:
           args: --timeout=5m
 
   security-framework:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-latest
@@ -653,6 +670,8 @@ jobs:
           fi
 
   security-tool:
+    permissions:
+      contents: read
     needs: changes
     if: needs.changes.outputs.tool == 'true'
     runs-on: ubuntu-latest
@@ -689,6 +708,8 @@ jobs:
   # ============================================================================
 
   sonarcloud:
+    permissions:
+      contents: read
     name: SonarCloud
     needs: [changes, framework-merge-coverage]
     if: |
