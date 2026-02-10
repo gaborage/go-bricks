@@ -2878,7 +2878,7 @@ type IAPIError interface {
 | `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
 | `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
 
-All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable, included in responses only in development mode for 5xx errors).
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.environment: development`), details are included in responses for all HTTP status codes. In production, details are hidden for 5xx errors to avoid leaking internals.
 
 ### Step 1: Define Domain Errors
 
