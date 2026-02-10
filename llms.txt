@@ -2849,8 +2849,197 @@ func TestOrderModule(t *testing.T) {
 }
 ```
 
+## Custom Application Errors
+
+GoBricks provides `server.IAPIError` for structured HTTP error responses and idiomatic Go error patterns for domain logic. Define domain errors once, then map them consistently at each service boundary (HTTP handlers, AMQP consumers).
+
+### IAPIError Interface
+
+```go
+type IAPIError interface {
+    ErrorCode() string       // Machine-readable code (e.g., "NOT_FOUND")
+    Message() string         // Human-readable message
+    HTTPStatus() int         // HTTP status code
+    Details() map[string]any // Additional metadata (dev-mode only for 5xx)
+}
+```
+
+### Available Error Types
+
+| Factory Function | Status | Code | Use Case |
+|------------------|--------|------|----------|
+| `NewBadRequestError(msg)` | 400 | `BAD_REQUEST` | Invalid input, malformed request |
+| `NewUnauthorizedError(msg)` | 401 | `UNAUTHORIZED` | Missing/invalid credentials |
+| `NewForbiddenError(msg)` | 403 | `FORBIDDEN` | Insufficient permissions |
+| `NewNotFoundError(resource)` | 404 | `NOT_FOUND` | Resource doesn't exist (generates "`resource` not found") |
+| `NewConflictError(msg)` | 409 | `CONFLICT` | Duplicate resource, version conflict |
+| `NewBusinessLogicError(code, msg)` | 422 | *custom code* | Domain rule violations (custom error code) |
+| `NewTooManyRequestsError(msg)` | 429 | `TOO_MANY_REQUESTS` | Rate limit exceeded |
+| `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
+| `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
+
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.environment: development`), details are included in responses for all HTTP status codes. In production, details are hidden for 5xx errors to avoid leaking internals.
+
+### Step 1: Define Domain Errors
+
+Define domain errors in your module's `errors.go`. Use sentinel errors for simple conditions and struct-based errors when you need context:
+
+```go
+package orders
+
+import (
+    "errors"
+    "fmt"
+)
+
+// Sentinel errors — checked with errors.Is()
+var (
+    ErrOrderNotFound     = errors.New("order not found")
+    ErrInsufficientStock = errors.New("insufficient stock for requested quantity")
+)
+
+// Struct-based error — checked with errors.As(), carries context
+type DuplicateOrderError struct {
+    OrderID    string
+    ExistingID string
+}
+
+func (e *DuplicateOrderError) Error() string {
+    return fmt.Sprintf("order %s duplicates existing order %s", e.OrderID, e.ExistingID)
+}
+```
+
+### Step 2: Map Domain Errors → IAPIError in HTTP Handlers
+
+Create a mapping function that translates domain errors to structured HTTP responses:
+
+```go
+package orders
+
+import (
+    "errors"
+
+    "github.com/gaborage/go-bricks/server"
+)
+
+// mapOrderError translates domain errors to HTTP API errors.
+func mapOrderError(err error) server.IAPIError {
+    // Sentinel errors — errors.Is()
+    if errors.Is(err, ErrOrderNotFound) {
+        return server.NewNotFoundError("Order")
+    }
+    if errors.Is(err, ErrInsufficientStock) {
+        return server.NewBusinessLogicError("INSUFFICIENT_STOCK", err.Error()).
+            WithDetails("suggestion", "reduce quantity or wait for restock")
+    }
+
+    // Struct-based errors — errors.As()
+    var dupErr *DuplicateOrderError
+    if errors.As(err, &dupErr) {
+        return server.NewConflictError(dupErr.Error()).
+            WithDetails("existing_order_id", dupErr.ExistingID)
+    }
+
+    // Unknown errors — safe fallback (details hidden in production)
+    return server.NewInternalServerError("An internal error occurred")
+}
+
+// Handler uses the mapper for consistent error translation
+func (h *Handler) CreateOrder(req CreateOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
+    order, err := h.svc.Create(ctx.Echo.Request().Context(), req.ProductID, req.Quantity)
+    if err != nil {
+        return server.Result[Order]{}, mapOrderError(err)
+    }
+    return server.Created(order), nil
+}
+
+type CreateOrderReq struct {
+    ProductID int64 `json:"product_id" validate:"required,gt=0"`
+    Quantity  int   `json:"quantity" validate:"required,gt=0"`
+}
+```
+
+**Response example** (422 for insufficient stock):
+```json
+{
+  "error": {
+    "code": "INSUFFICIENT_STOCK",
+    "message": "insufficient stock for requested quantity",
+    "details": { "suggestion": "reduce quantity or wait for restock" }
+  },
+  "meta": { "api_version": "1.0" }
+}
+```
+
+### Step 3: Handle Domain Errors in AMQP Consumers
+
+The same domain errors appear in AMQP consumers, but the handling differs: no HTTP response, just log + ACK/nack decisions. GoBricks uses a **no-retry policy** — returning an error nacks the message without requeue.
+
+```go
+package orders
+
+import (
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+
+    amqp "github.com/rabbitmq/amqp091-go"
+
+    "github.com/gaborage/go-bricks/logger"
+)
+
+type OrderConsumer struct {
+    svc    *OrderService
+    logger logger.Logger
+}
+
+func (h *OrderConsumer) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+    var req CreateOrderMessage
+    if err := json.Unmarshal(delivery.Body, &req); err != nil {
+        return fmt.Errorf("invalid message format: %w", err) // nack + drop
+    }
+
+    err := h.svc.Create(ctx, req.ProductID, req.Quantity)
+    if err != nil {
+        // Business-rule violations: log and ACK (skip, don't retry)
+        if errors.Is(err, ErrInsufficientStock) {
+            h.logger.Warn("Order skipped: insufficient stock",
+                "product_id", req.ProductID, "quantity", req.Quantity)
+            return nil // ACK — retrying won't change stock levels
+        }
+
+        var dupErr *DuplicateOrderError
+        if errors.As(err, &dupErr) {
+            h.logger.Warn("Duplicate order ignored",
+                "order_id", dupErr.OrderID, "existing_id", dupErr.ExistingID)
+            return nil // ACK — idempotent, already processed
+        }
+
+        // Unexpected errors: return error → nack + drop + ERROR log
+        return fmt.Errorf("order processing failed: %w", err)
+    }
+    return nil // ACK
+}
+
+func (h *OrderConsumer) EventType() string { return "order.create" }
+```
+
+### Cross-Boundary Consistency
+
+Same domain errors, different boundary handling:
+
+| Domain Error | HTTP Handler (IAPIError) | AMQP Consumer |
+|-------------|--------------------------|---------------|
+| `ErrOrderNotFound` | `NewNotFoundError("Order")` → 404 | Log WARN + ACK (skip) |
+| `ErrInsufficientStock` | `NewBusinessLogicError("INSUFFICIENT_STOCK", ...)` → 422 | Log WARN + ACK (skip) |
+| `*DuplicateOrderError` | `NewConflictError(...)` → 409 with details | Log WARN + ACK (idempotent) |
+| Unexpected error | `NewInternalServerError(...)` → 500 | Return error → nack + drop |
+
+**Key principle:** Domain errors are defined once in the module. Each boundary (HTTP, AMQP) decides how to translate them — HTTP maps to status codes, AMQP maps to ACK/nack decisions with logging.
+
 ## Common Patterns
-- **Error handling**: wrap service errors with `server.InternalServerError`; map domain errors to `server.NotFound`, `server.Unauthorized`, etc.
+- **Error handling**: Define domain errors (sentinel + struct), map to `server.New*Error` in HTTP handlers, log + ACK/nack in AMQP consumers. See Custom Application Errors section above.
 - **Graceful shutdown**: close external resources in `Module.Shutdown`; the framework waits on outstanding requests.
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans/logs; mock `database.Interface` and `messaging.Client` directly.
