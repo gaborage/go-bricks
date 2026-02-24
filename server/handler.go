@@ -202,20 +202,27 @@ func (rp *requestProcessor[T]) process(c echo.Context) (T, IAPIError) {
 	return request, nil
 }
 
+// rawResponseContextKey is used to signal raw response mode to the global error handler.
+// It is set on the Echo context before any processing so that even panics that escape
+// to customErrorHandler can detect it.
+const rawResponseContextKey = "_raw_response"
+
 // handlerWrapper composes all request processing components to create an Echo-compatible handler.
 // It orchestrates: context checking, request processing, business logic execution, and response handling.
 type handlerWrapper[T any, R any] struct {
-	processor *requestProcessor[T]
-	responder *responseHandler
-	checker   *contextChecker
+	processor   *requestProcessor[T]
+	responder   *responseHandler
+	checker     *contextChecker
+	rawResponse bool
 }
 
 // newHandlerWrapper creates a new handler wrapper with all processing components initialized.
-func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config) *handlerWrapper[T, R] {
+func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
-		processor: newRequestProcessor[T](binder, cfg),
-		responder: newResponseHandler(cfg),
-		checker:   newContextChecker(cfg),
+		processor:   newRequestProcessor[T](binder, cfg),
+		responder:   newResponseHandler(cfg),
+		checker:     newContextChecker(cfg),
+		rawResponse: rawResponse,
 	}
 }
 
@@ -223,20 +230,30 @@ func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config) *han
 // This is the high-level orchestration that delegates to specialized components.
 func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// Stamp raw response mode early so customErrorHandler can detect it even on panics
+		if hw.rawResponse {
+			c.Set(rawResponseContextKey, true)
+		}
+
+		formatErr := formatErrorResponse
+		if hw.rawResponse {
+			formatErr = formatRawErrorResponse
+		}
+
 		// Pre-processing context check
 		if apiErr := hw.checker.checkCancellation(c, "or cancelled"); apiErr != nil {
-			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+			return formatErr(c, apiErr, hw.responder.cfg)
 		}
 
 		// Process request (allocate, bind, validate)
 		request, apiErr := hw.processor.process(c)
 		if apiErr != nil {
-			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+			return formatErr(c, apiErr, hw.responder.cfg)
 		}
 
 		// Post-validation context check
 		if apiErr := hw.checker.checkCancellation(c, "during validation"); apiErr != nil {
-			return formatErrorResponse(c, apiErr, hw.responder.cfg)
+			return formatErr(c, apiErr, hw.responder.cfg)
 		}
 
 		// Execute business logic
@@ -246,10 +263,13 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		// Check context after handler execution
 		ctx := c.Request().Context()
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return formatErrorResponse(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
+			return formatErr(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
 		}
 
 		// Handle response
+		if hw.rawResponse {
+			return hw.responder.handleRawResponse(c, response, apiErr)
+		}
 		return hw.responder.handleResponse(c, response, apiErr)
 	}
 }
@@ -259,7 +279,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 // Supports both value and pointer types for requests (T) and responses (R).
 // Pointer types eliminate copy overhead for large payloads (>1KB recommended).
 //
-// This function now delegates to handlerWrapper which composes specialized components:
+// This function delegates to handlerWrapper which composes specialized components:
 // - contextChecker: Detects request cancellation/timeout
 // - requestProcessor: Allocates, binds, and validates requests
 // - responseHandler: Formats success and error responses
@@ -268,7 +288,18 @@ func WrapHandler[T any, R any](
 	binder *RequestBinder,
 	cfg *config.Config,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg)
+	return wrapHandler(handlerFunc, binder, cfg, false)
+}
+
+// wrapHandler is the internal implementation that supports raw response mode.
+// RegisterHandler passes descriptor.RawResponse here; WrapHandler always passes false.
+func wrapHandler[T any, R any](
+	handlerFunc HandlerFunc[T, R],
+	binder *RequestBinder,
+	cfg *config.Config,
+	rawResponse bool,
+) echo.HandlerFunc {
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -650,6 +681,77 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 	return c.JSON(apiErr.HTTPStatus(), response)
 }
 
+// handleRawResponse formats and sends the HTTP response without the APIResponse envelope.
+// Mirrors handleResponse logic but writes the response data directly as JSON.
+func (rh *responseHandler) handleRawResponse(c echo.Context, response any, apiErr IAPIError) error {
+	if apiErr != nil {
+		return formatRawErrorResponse(c, apiErr, rh.cfg)
+	}
+
+	if rl, ok := response.(ResultLike); ok {
+		status, headers, data := rl.ResultMeta()
+		return formatRawSuccessResponseWithStatus(c, data, status, headers)
+	}
+
+	return formatRawSuccessResponse(c, response)
+}
+
+// formatRawSuccessResponse writes the response data directly as JSON without the APIResponse envelope.
+func formatRawSuccessResponse(c echo.Context, data any) error {
+	ensureTraceParentHeader(c)
+	return c.JSON(http.StatusOK, data)
+}
+
+// formatRawSuccessResponseWithStatus writes the response data directly with a custom status and headers.
+func formatRawSuccessResponseWithStatus(c echo.Context, data any, status int, headers http.Header) error {
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if resp := c.Response(); resp != nil {
+		for k, vals := range headers {
+			for _, v := range vals {
+				resp.Header().Add(k, v)
+			}
+		}
+	}
+
+	ensureTraceParentHeader(c)
+	if status == http.StatusNoContent {
+		return c.NoContent(http.StatusNoContent)
+	}
+
+	return c.JSON(status, data)
+}
+
+// rawErrorPayload is the minimal error structure used in raw response mode.
+type rawErrorPayload struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// formatRawErrorResponse formats an error without the APIResponse envelope.
+// Produces minimal JSON: {"code": "...", "message": "..."} with optional details in development.
+func formatRawErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) error {
+	if c.Response().Committed {
+		return nil
+	}
+
+	payload := rawErrorPayload{
+		Code:    apiErr.ErrorCode(),
+		Message: apiErr.Message(),
+	}
+
+	if isDevelopmentEnv(cfg.App.Env) {
+		if details := apiErr.Details(); details != nil {
+			payload.Details = details
+		}
+	}
+
+	ensureTraceParentHeader(c)
+	return c.JSON(apiErr.HTTPStatus(), payload)
+}
+
 // getTraceID extracts or generates a trace ID for the request.
 func getTraceID(c echo.Context) string {
 	// Prefer incoming request header set by upstream/proxy/middleware
@@ -753,7 +855,7 @@ func RegisterHandler[T any, R any](
 	DefaultRouteRegistry.Register(&descriptor)
 
 	// Register with route registrar (works with both Echo instances and Groups)
-	wrappedHandler := WrapHandler(handler, hr.binder, hr.cfg)
+	wrappedHandler := wrapHandler(handler, hr.binder, hr.cfg, descriptor.RawResponse)
 	r.Add(method, path, wrappedHandler)
 }
 

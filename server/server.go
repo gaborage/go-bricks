@@ -231,6 +231,8 @@ func (s *Server) readyCheck(c echo.Context) error {
 
 // customErrorHandler is a centralized error handler that formats errors
 // into standardized APIResponse envelopes based on error type and server configuration.
+// When the request context carries the raw response flag (set by handlerWrapper.wrap),
+// it uses formatRawErrorResponse which writes minimal JSON without the envelope.
 func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
 	// This can happen with certain middleware combinations (e.g., otelecho).
@@ -239,21 +241,32 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 		return
 	}
 
-	// Special handling for context deadline exceeded (timeout errors)
-	if goerrors.Is(err, context.DeadlineExceeded) {
-		timeoutErr := NewServiceUnavailableError("Request processing timed out")
-		_ = formatErrorResponse(c, timeoutErr, cfg)
-		return
+	// Select formatter based on raw response mode (set early in handlerWrapper.wrap)
+	formatter := formatErrorResponse
+	if raw, ok := c.Get(rawResponseContextKey).(bool); ok && raw {
+		formatter = formatRawErrorResponse
 	}
 
-	// If this is a structured API error, reuse its fields
+	apiErr := classifyError(err, c, cfg)
+	_ = formatter(c, apiErr, cfg)
+}
+
+// classifyError converts an arbitrary error into a structured IAPIError.
+// It handles context.DeadlineExceeded, IAPIError, echo.HTTPError, and
+// untyped errors, applying production sanitization and server-error logging.
+func classifyError(err error, c echo.Context, cfg *config.Config) IAPIError {
+	// Context deadline exceeded (timeout errors)
+	if goerrors.Is(err, context.DeadlineExceeded) {
+		return NewServiceUnavailableError("Request processing timed out")
+	}
+
+	// Already a structured API error — use as-is
 	var apiErr IAPIError
 	if goerrors.As(err, &apiErr) {
-		_ = formatErrorResponse(c, apiErr, cfg)
-		return
+		return apiErr
 	}
 
-	// Map echo.HTTPError and untyped errors to standardized envelope
+	// Map echo.HTTPError and untyped errors
 	status := http.StatusInternalServerError
 	msg := "Internal server error"
 	var he *echo.HTTPError
@@ -285,7 +298,7 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 		_ = base.WithDetails("error", err.Error())
 	}
 
-	_ = formatErrorResponse(c, base, cfg)
+	return base
 }
 
 // statusToErrorCode maps HTTP status codes to standardized error codes.

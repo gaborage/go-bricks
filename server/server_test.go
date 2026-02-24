@@ -449,3 +449,81 @@ func TestModuleGroupBehavior(t *testing.T) {
 		assert.Equal(t, "/api", group.FullPath("/"))
 	})
 }
+
+// ==================== Raw Mode Custom Error Handler Tests ====================
+
+func TestCustomErrorHandlerRawMode(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e := echo.New()
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Set raw response mode (as handlerWrapper.wrap does)
+	c.Set(rawResponseContextKey, true)
+
+	// Simulate an IAPIError
+	apiErr := NewNotFoundError("Resource")
+	customErrorHandler(apiErr, c, cfg)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "NOT_FOUND", raw["code"])
+	assert.Equal(t, "Resource not found", raw["message"])
+
+	// No envelope keys
+	_, hasMeta := raw["meta"]
+	_, hasError := raw["error"]
+	assert.False(t, hasMeta, "raw error handler should not produce meta key")
+	assert.False(t, hasError, "raw error handler should not produce error envelope key")
+}
+
+func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e := echo.New()
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	c.Set(rawResponseContextKey, true)
+
+	customErrorHandler(context.DeadlineExceeded, c, cfg)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "SERVICE_UNAVAILABLE", raw["code"])
+	assert.Equal(t, "Request processing timed out", raw["message"])
+
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasMeta, "raw timeout error should not produce meta key")
+}
+
+func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e := echo.New()
+
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	c.Set(rawResponseContextKey, true)
+
+	echoErr := echo.NewHTTPError(http.StatusForbidden, "access denied")
+	customErrorHandler(echoErr, c, cfg)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "FORBIDDEN", raw["code"])
+	assert.Equal(t, "access denied", raw["message"])
+
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasMeta, "raw echo error should not produce meta key")
+}

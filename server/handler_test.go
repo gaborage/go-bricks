@@ -1329,3 +1329,196 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 	require.NoError(t, json.Unmarshal(dataBytes, &respData))
 	assert.Equal(t, "No name provided", respData.Message)
 }
+
+// ==================== Raw Response Mode Tests ====================
+
+func TestWrapHandlerRawResponseSuccess(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	require.NotNil(t, v)
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: testResponse + req.Name}, nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Parse response as raw JSON — no data/meta envelope
+	var resp helloResp
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Hello John", resp.Message)
+
+	// Verify NO envelope keys present
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	_, hasData := raw["data"]
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasData, "raw response should not have 'data' key")
+	assert.False(t, hasMeta, "raw response should not have 'meta' key")
+
+	// W3C trace propagation still works
+	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	require.NotEmpty(t, got, "traceparent header should be set in raw mode")
+}
+
+func TestWrapHandlerRawResponseWithResult(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
+		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	// Response is directly the helloResp, not wrapped
+	var resp helloResp
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Hello Jane", resp.Message)
+}
+
+func TestWrapHandlerRawResponseError(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{}, NewNotFoundError("User")
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Error is minimal JSON, not wrapped in APIResponse
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "NOT_FOUND", raw["code"])
+	assert.Equal(t, "User not found", raw["message"])
+
+	// No envelope keys
+	_, hasError := raw["error"]
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasError, "raw error should not have 'error' key (APIResponse envelope)")
+	assert.False(t, hasMeta, "raw error should not have 'meta' key")
+}
+
+func TestWrapHandlerRawResponseValidationError(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: testResponse + req.Name}, nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	// Missing required query parameter "name" triggers validation error
+	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "BAD_REQUEST", raw["code"])
+	assert.Equal(t, "Request validation failed", raw["message"])
+
+	// No envelope keys
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasMeta, "raw error should not have 'meta' key")
+}
+
+func TestWrapHandlerRawResponseNoContent(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
+		return NoContent(), nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, 0, rec.Body.Len())
+}
+
+func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "production"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{}, NewNotFoundError("User")
+	}
+
+	h := wrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "NOT_FOUND", raw["code"])
+	// Details should be omitted in production
+	_, hasDetails := raw["details"]
+	assert.False(t, hasDetails, "production raw error should not include details")
+}

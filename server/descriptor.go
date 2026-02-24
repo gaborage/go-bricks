@@ -20,6 +20,7 @@ type RouteDescriptor struct {
 	Tags         []string     // Optional grouping tags
 	Summary      string       // Optional summary from comments
 	Description  string       // Optional description from comments
+	RawResponse  bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
 }
 
 // RouteRegistry maintains discovered routes for introspection
@@ -131,6 +132,15 @@ func WithMiddleware(middlewareNames ...string) RouteOption {
 func WithHandlerName(name string) RouteOption {
 	return func(d *RouteDescriptor) {
 		d.HandlerName = name
+	}
+}
+
+// WithRawResponse configures the route to bypass the standard APIResponse envelope,
+// returning the handler's response directly as JSON. Useful for Strangler Fig migrations
+// where legacy endpoints must return their original response format.
+func WithRawResponse() RouteOption {
+	return func(d *RouteDescriptor) {
+		d.RawResponse = true
 	}
 }
 
