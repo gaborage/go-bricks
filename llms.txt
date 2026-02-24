@@ -116,7 +116,7 @@ type User struct {
 }
 
 func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	reqCtx := ctx.Request().Context()
+	reqCtx := ctx.Echo.Request().Context()
 	user, err := h.svc.Create(reqCtx, req)
 	if err != nil {
 		return server.Result[User]{}, server.InternalServerError(err)
@@ -139,7 +139,7 @@ type GetUserReq struct {
 }
 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	user, err := h.svc.FindByID(ctx.Request().Context(), req.ID)
+	user, err := h.svc.FindByID(ctx.Echo.Request().Context(), req.ID)
 	if err != nil {
 		return server.Result[User]{}, server.NotFound(errors.New("user not found"))
 	}
@@ -159,7 +159,7 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 	if limit == 0 {
 		limit = 20 // Default
 	}
-	users, err := h.svc.List(ctx.Request().Context(), req.Status, limit)
+	users, err := h.svc.List(ctx.Echo.Request().Context(), req.Status, limit)
 	if err != nil {
 		return server.Result[[]User]{}, server.InternalServerError(err)
 	}
@@ -467,9 +467,9 @@ func TenantMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // Access tenant in handler
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	tenantID := multitenant.GetTenant(ctx.Request().Context())
+	tenantID := multitenant.GetTenant(ctx.Echo.Request().Context())
 	// tenantID is now available for tenant-specific logic
-	user, err := h.svc.GetUserForTenant(ctx.Request().Context(), tenantID, req.ID)
+	user, err := h.svc.GetUserForTenant(ctx.Echo.Request().Context(), tenantID, req.ID)
 	// ...
 }
 ```
@@ -2061,7 +2061,7 @@ func NewHandler(getDB func(context.Context) (database.Interface, error), logger 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
     // Tenant automatically resolved from X-Tenant-ID header by middleware
     // Context contains tenant ID when multitenant.enabled: true
-    reqCtx := ctx.Request().Context()
+    reqCtx := ctx.Echo.Request().Context()
 
     user, err := h.svc.GetUser(reqCtx, req.ID)
     if err != nil {
@@ -2597,14 +2597,14 @@ type CreateUserReq struct {
 }
 
 func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	log := h.logger.WithContext(ctx.Request().Context())
+	log := h.logger.WithContext(ctx.Echo.Request().Context())
 
 	log.Info().
 		Str("email", req.Email).
 		Str("role", req.Role).
 		Msg("Creating new user")
 
-	user, err := h.service.Create(ctx.Request().Context(), req)
+	user, err := h.service.Create(ctx.Echo.Request().Context(), req)
 	if err != nil {
 		log.Error().
 			Err(err).
