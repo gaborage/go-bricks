@@ -379,7 +379,7 @@ func assertHistogramCount(t *testing.T, name string, actualCount uint64, expecte
 		if v < 0 {
 			t.Fatalf("negative count value %d for histogram metric", v)
 		}
-		assert.Equal(t, uint64(v), actualCount, "metric %s count mismatch", name)
+		assert.Equal(t, uint64(v), actualCount, "metric %s count mismatch", name) //nolint:gosec // G115 - negative check on line above ensures safe conversion
 	default:
 		t.Fatalf("unsupported expected value type %T for %s metric", expectedValue, metricType)
 	}

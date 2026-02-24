@@ -52,7 +52,7 @@ type Stats struct {
 // BasicAuth contains basic authentication credentials
 type BasicAuth struct {
 	Username string
-	Password string
+	Password string //nolint:gosec // G117 - credential struct, values provided at runtime
 }
 
 // RequestInterceptor is called before sending the request
