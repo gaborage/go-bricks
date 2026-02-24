@@ -251,6 +251,92 @@ func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) 
 - **>10KB**: Always use pointers (file uploads, bulk operations)
 - Pointer fields (`*string`, `*int`) work correctly with validation (`omitempty`, `min=`)
 
+### Raw Response Mode (Strangler Fig Migration)
+
+Bypass the `APIResponse` envelope (`data`/`meta`) on specific routes for legacy API compatibility.
+New endpoints keep the standard envelope; legacy-compatible endpoints return their response directly as JSON.
+
+```go
+// === Route Registration ===
+
+// Legacy route — response written directly, no envelope
+server.GET(hr, e, "/v1/legacy/users/:id", h.getLegacyUser,
+    server.WithRawResponse(),
+    server.WithTags("legacy"),
+)
+
+// New route — standard APIResponse envelope (unchanged, no options needed)
+server.GET(hr, e, "/v2/users/:id", h.getUser)
+
+// === Legacy Handler ===
+
+// Response type matches the exact legacy JSON contract
+type LegacyUser struct {
+    UserID   int64  `json:"userId"`
+    UserName string `json:"userName"`
+    Status   string `json:"status"`
+}
+
+func (h *Handler) getLegacyUser(req GetUserReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
+    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        return LegacyUser{}, server.NewNotFoundError("user")
+    }
+    return LegacyUser{
+        UserID:   user.ID,
+        UserName: user.Name,
+        Status:   user.Status,
+    }, nil
+}
+// GET /v1/legacy/users/123
+// Response: {"userId":123,"userName":"Alice","status":"active"}
+// (no {"data":...,"meta":...} wrapper)
+
+// === Custom Status with Result[R] ===
+
+func (h *Handler) createLegacyUser(req CreateReq, ctx server.HandlerContext) (server.Result[LegacyUser], server.IAPIError) {
+    user, err := h.svc.Create(ctx.Echo.Request().Context(), req)
+    if err != nil {
+        return server.Result[LegacyUser]{}, server.NewInternalServerError("creation failed")
+    }
+    return server.Created(LegacyUser{UserID: user.ID, UserName: user.Name}), nil
+}
+// POST /v1/legacy/users
+// Response (201): {"userId":456,"userName":"Bob","status":""}
+
+// === Legacy Error Format ===
+
+// For full control over legacy error shapes, return errors as the response type:
+type LegacyErrorResponse struct {
+    ErrorCode int    `json:"errorCode"`
+    ErrorText string `json:"errorText"`
+}
+
+func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (server.Result[LegacyErrorResponse], server.IAPIError) {
+    err := h.svc.Delete(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        // Return domain error in legacy format (not IAPIError)
+        return server.NewResult(http.StatusUnprocessableEntity, LegacyErrorResponse{
+            ErrorCode: 4001,
+            ErrorText: "Cannot delete user with active orders",
+        }), nil
+    }
+    return server.NewResult[LegacyErrorResponse](http.StatusNoContent, LegacyErrorResponse{}), nil
+}
+// DELETE /v1/legacy/users/789
+// Error response (422): {"errorCode":4001,"errorText":"Cannot delete user with active orders"}
+```
+
+| Behavior | Standard Mode | Raw Mode (`WithRawResponse()`) |
+|----------|--------------|-------------------------------|
+| Success body | `{"data": ..., "meta": {...}}` | Handler return value directly |
+| Error body (IAPIError) | `{"error": {"code","message"}, "meta": {...}}` | `{"code": "...", "message": "..."}` |
+| `traceparent` header | Set | Set (observability preserved) |
+| Custom headers | Via `Result[R]` | Via `Result[R]` |
+| `NoContent()` (204) | Empty body | Empty body |
+
+**When to use:** Strangler Fig migration, third-party API compatibility, webhook callbacks requiring specific shapes.
+
 ## HTTP Middleware
 
 ```go
