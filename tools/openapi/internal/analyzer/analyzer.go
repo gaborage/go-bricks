@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -675,24 +674,38 @@ func (a *ProjectAnalyzer) extractPackageDescription(astFile *ast.File) string {
 }
 
 // parsePackage parses all Go files (excluding tests) within the module's directory
-func (a *ProjectAnalyzer) parsePackage(filePath, packageName string) (files map[string]*ast.File, err error) {
+func (a *ProjectAnalyzer) parsePackage(filePath, packageName string) (map[string]*ast.File, error) {
 	dir := filepath.Dir(filePath)
-	pkgs, err := parser.ParseDir(a.fileSet, dir, func(info fs.FileInfo) bool {
-		if info.IsDir() {
-			return false
-		}
-		name := info.Name()
-		return strings.HasSuffix(name, goFileExt) && !strings.HasSuffix(name, testFileExt)
-	}, parser.ParseComments)
-	if len(pkgs) == 0 {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return nil, err
 	}
 
-	if pkg, ok := pkgs[packageName]; ok {
-		return pkg.Files, nil
+	files := make(map[string]*ast.File)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, goFileExt) || strings.HasSuffix(name, testFileExt) {
+			continue
+		}
+
+		fullPath := filepath.Join(dir, name)
+		astFile, parseErr := parser.ParseFile(a.fileSet, fullPath, nil, parser.ParseComments)
+		if parseErr != nil {
+			continue
+		}
+		if astFile.Name.Name == packageName {
+			files[fullPath] = astFile
+		}
 	}
 
-	return nil, fmt.Errorf("package %s not found in %s", packageName, dir)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("package %s not found in %s", packageName, dir)
+	}
+
+	return files, nil
 }
 
 // extractImportAliases returns the aliases used for a specific import path within a file
