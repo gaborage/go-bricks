@@ -116,7 +116,7 @@ type User struct {
 }
 
 func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	reqCtx := ctx.Request().Context()
+	reqCtx := ctx.Echo.Request().Context()
 	user, err := h.svc.Create(reqCtx, req)
 	if err != nil {
 		return server.Result[User]{}, server.InternalServerError(err)
@@ -139,7 +139,7 @@ type GetUserReq struct {
 }
 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	user, err := h.svc.FindByID(ctx.Request().Context(), req.ID)
+	user, err := h.svc.FindByID(ctx.Echo.Request().Context(), req.ID)
 	if err != nil {
 		return server.Result[User]{}, server.NotFound(errors.New("user not found"))
 	}
@@ -159,7 +159,7 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 	if limit == 0 {
 		limit = 20 // Default
 	}
-	users, err := h.svc.List(ctx.Request().Context(), req.Status, limit)
+	users, err := h.svc.List(ctx.Echo.Request().Context(), req.Status, limit)
 	if err != nil {
 		return server.Result[[]User]{}, server.InternalServerError(err)
 	}
@@ -250,6 +250,112 @@ func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) 
 - **1KB-10KB**: Consider pointers for high-traffic endpoints
 - **>10KB**: Always use pointers (file uploads, bulk operations)
 - Pointer fields (`*string`, `*int`) work correctly with validation (`omitempty`, `min=`)
+
+### Raw Response Mode (Strangler Fig Migration)
+
+Bypass the `APIResponse` envelope (`data`/`meta`) on specific routes for legacy API compatibility.
+New endpoints keep the standard envelope; legacy-compatible endpoints return their response directly as JSON.
+
+```go
+// === Route Registration ===
+
+// Legacy route — response written directly, no envelope
+server.GET(hr, e, "/v1/legacy/users/:id", h.getLegacyUser,
+    server.WithRawResponse(),
+    server.WithTags("legacy"),
+)
+
+// New route — standard APIResponse envelope (unchanged, no options needed)
+server.GET(hr, e, "/v2/users/:id", h.getUser)
+
+// === Legacy Handler ===
+
+// Response type matches the exact legacy JSON contract
+type LegacyUser struct {
+    UserID   int64  `json:"userId"`
+    UserName string `json:"userName"`
+    Status   string `json:"status"`
+}
+
+func (h *Handler) getLegacyUser(req GetUserReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
+    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        return LegacyUser{}, server.NewNotFoundError("user")
+    }
+    return LegacyUser{
+        UserID:   user.ID,
+        UserName: user.Name,
+        Status:   user.Status,
+    }, nil
+}
+// GET /v1/legacy/users/123
+// Response: {"userId":123,"userName":"Alice","status":"active"}
+// (no {"data":...,"meta":...} wrapper)
+
+// === Custom Status with Result[R] ===
+
+func (h *Handler) createLegacyUser(req CreateReq, ctx server.HandlerContext) (server.Result[LegacyUser], server.IAPIError) {
+    user, err := h.svc.Create(ctx.Echo.Request().Context(), req)
+    if err != nil {
+        return server.Result[LegacyUser]{}, server.NewInternalServerError("creation failed")
+    }
+    return server.Created(LegacyUser{UserID: user.ID, UserName: user.Name}), nil
+}
+// POST /v1/legacy/users
+// Response (201): {"userId":456,"userName":"Bob","status":""}
+
+// === Legacy Error Format ===
+
+// For full control over legacy error shapes, return errors as the response type:
+type LegacyErrorResponse struct {
+    ErrorCode int    `json:"errorCode"`
+    ErrorText string `json:"errorText"`
+}
+
+type DeleteReq struct {
+    ID string `param:"id" validate:"required"`
+}
+
+func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
+    err := h.svc.Delete(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        // Return domain error in legacy format via IAPIError
+        return server.NoContentResult{}, server.NewBusinessLogicError("DELETE_BLOCKED", "Cannot delete user with active orders")
+    }
+    return server.NoContent(), nil
+}
+// DELETE /v1/legacy/users/789 (success)  → 204 empty body
+// DELETE /v1/legacy/users/789 (blocked)  → 422 {"code":"DELETE_BLOCKED","message":"Cannot delete user with active orders"}
+
+// For FULL control over legacy error shapes (not just code/message), return errors
+// as the response type R instead of using IAPIError:
+func (h *Handler) updateLegacyUser(req GetUserReq, ctx server.HandlerContext) (server.Result[LegacyErrorResponse], server.IAPIError) {
+    err := h.svc.Update(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        // Domain error in legacy format — returned as the response, not IAPIError
+        return server.NewResult(http.StatusUnprocessableEntity, LegacyErrorResponse{
+            ErrorCode: 4001,
+            ErrorText: "Cannot update user with active orders",
+        }), nil
+    }
+    return server.NewResult(http.StatusOK, LegacyErrorResponse{
+        ErrorCode: 0,
+        ErrorText: "User updated successfully",
+    }), nil
+}
+// PUT /v1/legacy/users/789 (success) → 200 {"errorCode":0,"errorText":"User updated successfully"}
+// PUT /v1/legacy/users/789 (blocked) → 422 {"errorCode":4001,"errorText":"Cannot update user with active orders"}
+```
+
+| Behavior | Standard Mode | Raw Mode (`WithRawResponse()`) |
+|----------|--------------|-------------------------------|
+| Success body | `{"data": ..., "meta": {...}}` | Handler return value directly |
+| Error body (IAPIError) | `{"error": {"code","message"}, "meta": {...}}` | `{"code": "...", "message": "..."}` |
+| `traceparent` header | Set | Set (observability preserved) |
+| Custom headers | Via `Result[R]` | Via `Result[R]` |
+| `NoContent()` (204) | Empty body | Empty body |
+
+**When to use:** Strangler Fig migration, third-party API compatibility, webhook callbacks requiring specific shapes.
 
 ## HTTP Middleware
 
@@ -361,9 +467,9 @@ func TenantMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // Access tenant in handler
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	tenantID := multitenant.GetTenant(ctx.Request().Context())
+	tenantID := multitenant.GetTenant(ctx.Echo.Request().Context())
 	// tenantID is now available for tenant-specific logic
-	user, err := h.svc.GetUserForTenant(ctx.Request().Context(), tenantID, req.ID)
+	user, err := h.svc.GetUserForTenant(ctx.Echo.Request().Context(), tenantID, req.ID)
 	// ...
 }
 ```
@@ -1955,7 +2061,7 @@ func NewHandler(getDB func(context.Context) (database.Interface, error), logger 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
     // Tenant automatically resolved from X-Tenant-ID header by middleware
     // Context contains tenant ID when multitenant.enabled: true
-    reqCtx := ctx.Request().Context()
+    reqCtx := ctx.Echo.Request().Context()
 
     user, err := h.svc.GetUser(reqCtx, req.ID)
     if err != nil {
@@ -2491,14 +2597,14 @@ type CreateUserReq struct {
 }
 
 func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	log := h.logger.WithContext(ctx.Request().Context())
+	log := h.logger.WithContext(ctx.Echo.Request().Context())
 
 	log.Info().
 		Str("email", req.Email).
 		Str("role", req.Role).
 		Msg("Creating new user")
 
-	user, err := h.service.Create(ctx.Request().Context(), req)
+	user, err := h.service.Create(ctx.Echo.Request().Context(), req)
 	if err != nil {
 		log.Error().
 			Err(err).

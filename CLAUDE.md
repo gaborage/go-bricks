@@ -371,6 +371,52 @@ linters-settings:
       - composites
 ```
 
+#### Raw Response Mode (Strangler Fig Migration)
+
+For **Strangler Fig pattern** migrations — incrementally replacing a legacy API — some routes must return the exact legacy JSON format without the standard `APIResponse` envelope (`data`/`meta` wrapper). Use `WithRawResponse()` for per-route control:
+
+```go
+// Legacy-compatible route — no envelope, returns handler response directly as JSON
+server.GET(hr, e, "/v1/legacy/users/:id", h.getLegacyUser,
+    server.WithRawResponse(),
+    server.WithTags("legacy"),
+)
+
+// New route — standard APIResponse envelope (unchanged)
+server.GET(hr, e, "/v2/users/:id", h.getUser)
+```
+
+**Handler returns the exact legacy shape:**
+```go
+type LegacyUser struct {
+    UserID   int64  `json:"userId"`
+    UserName string `json:"userName"`
+}
+
+func (h *Handler) getLegacyUser(req GetReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
+    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        return LegacyUser{}, server.NewNotFoundError("user")
+    }
+    return LegacyUser{UserID: user.ID, UserName: user.Name}, nil
+}
+// Response: {"userId": 123, "userName": "Alice"} (no data/meta wrapper)
+```
+
+**Error Handling in Raw Mode:**
+
+| Error Path | Raw Mode Behavior |
+|------------|-------------------|
+| Handler returns `IAPIError` | Minimal JSON: `{"code": "...", "message": "..."}` |
+| Binding/validation fails | Same minimal JSON |
+| Unhandled error (panic, timeout) | Detected via context key, same minimal JSON |
+
+For **full control** over legacy error formats, catch domain errors in the handler and return them as the response type `R` with a custom status via `Result[R]`. `IAPIError` is for framework-level issues only.
+
+**What is preserved in raw mode:** W3C `traceparent` header propagation, custom headers via `Result[R]`, `NoContent()` (204), all status codes via `Result[R]`.
+
+**What is bypassed:** `data`/`meta` envelope, `APIErrorResponse` envelope (replaced with minimal `{"code","message"}` structure).
+
 ### Database Architecture
 Unified `database.Interface` supporting PostgreSQL and Oracle with:
 - Query builder with vendor-specific SQL generation
