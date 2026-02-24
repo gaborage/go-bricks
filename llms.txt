@@ -312,19 +312,39 @@ type LegacyErrorResponse struct {
     ErrorText string `json:"errorText"`
 }
 
-func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (server.Result[LegacyErrorResponse], server.IAPIError) {
+type DeleteReq struct {
+    ID string `param:"id" validate:"required"`
+}
+
+func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
     err := h.svc.Delete(ctx.Echo.Request().Context(), req.ID)
     if err != nil {
-        // Return domain error in legacy format (not IAPIError)
+        // Return domain error in legacy format via IAPIError
+        return server.NoContentResult{}, server.NewBusinessLogicError("DELETE_BLOCKED", "Cannot delete user with active orders")
+    }
+    return server.NoContent(), nil
+}
+// DELETE /v1/legacy/users/789 (success)  → 204 empty body
+// DELETE /v1/legacy/users/789 (blocked)  → 422 {"code":"DELETE_BLOCKED","message":"Cannot delete user with active orders"}
+
+// For FULL control over legacy error shapes (not just code/message), return errors
+// as the response type R instead of using IAPIError:
+func (h *Handler) updateLegacyUser(req GetUserReq, ctx server.HandlerContext) (server.Result[LegacyErrorResponse], server.IAPIError) {
+    err := h.svc.Update(ctx.Echo.Request().Context(), req.ID)
+    if err != nil {
+        // Domain error in legacy format — returned as the response, not IAPIError
         return server.NewResult(http.StatusUnprocessableEntity, LegacyErrorResponse{
             ErrorCode: 4001,
-            ErrorText: "Cannot delete user with active orders",
+            ErrorText: "Cannot update user with active orders",
         }), nil
     }
-    return server.NewResult[LegacyErrorResponse](http.StatusNoContent, LegacyErrorResponse{}), nil
+    return server.NewResult(http.StatusOK, LegacyErrorResponse{
+        ErrorCode: 0,
+        ErrorText: "User updated successfully",
+    }), nil
 }
-// DELETE /v1/legacy/users/789
-// Error response (422): {"errorCode":4001,"errorText":"Cannot delete user with active orders"}
+// PUT /v1/legacy/users/789 (success) → 200 {"errorCode":0,"errorText":"User updated successfully"}
+// PUT /v1/legacy/users/789 (blocked) → 422 {"errorCode":4001,"errorText":"Cannot update user with active orders"}
 ```
 
 | Behavior | Standard Mode | Raw Mode (`WithRawResponse()`) |
