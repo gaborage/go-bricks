@@ -615,7 +615,7 @@ func assignInt32(dest *int32, src any) error {
 		if int64(s) < math.MinInt32 || int64(s) > math.MaxInt32 {
 			return fmt.Errorf(valueOverflowsInt32ErrMsg, s)
 		}
-		*dest = int32(s) //nolint:gosec // G115 - overflow checked above
+		*dest = int32(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *int32", src)
 	}
@@ -773,7 +773,7 @@ func assignUint32(dest *uint32, src any) error {
 		if uint64(s) > math.MaxUint32 {
 			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
-		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint32(s)
 	case int64:
 		if s < 0 || s > math.MaxUint32 {
 			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
@@ -783,7 +783,7 @@ func assignUint32(dest *uint32, src any) error {
 		if s < 0 || int64(s) > math.MaxUint32 {
 			return fmt.Errorf(valueOverflowsUInt32ErrMsg, s)
 		}
-		*dest = uint32(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint32(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint32", src)
 	}
@@ -802,7 +802,7 @@ func assignUint16(dest *uint16, src any) error {
 		if uint64(s) > math.MaxUint16 {
 			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
-		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint16(s)
 	case int64:
 		if s < 0 || s > math.MaxUint16 {
 			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
@@ -812,7 +812,7 @@ func assignUint16(dest *uint16, src any) error {
 		if s < 0 || int64(s) > math.MaxUint16 {
 			return fmt.Errorf(valueOverflowsUInt16ErrMsg, s)
 		}
-		*dest = uint16(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint16(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint16", src)
 	}
@@ -831,7 +831,7 @@ func assignUint8(dest *uint8, src any) error {
 		if uint64(s) > math.MaxUint8 {
 			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
-		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint8(s)
 	case int64:
 		if s < 0 || s > math.MaxUint8 {
 			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
@@ -841,7 +841,7 @@ func assignUint8(dest *uint8, src any) error {
 		if s < 0 || int64(s) > math.MaxUint8 {
 			return fmt.Errorf(valueOverflowsUInt8ErrMsg, s)
 		}
-		*dest = uint8(s) //nolint:gosec // G115 - overflow checked above
+		*dest = uint8(s)
 	default:
 		return fmt.Errorf("unsupported conversion from %T to *uint8", src)
 	}

@@ -316,7 +316,7 @@ func (c *client) executeAttempt(
 
 	c.logRequest(httpReq, req.Body, traceIDForLog)
 
-	httpResp, err := c.httpClient.Do(httpReq)
+	httpResp, err := c.httpClient.Do(httpReq) //nolint:gosec // G704 - HTTP client is designed to accept caller-provided URLs
 	if err != nil {
 		if httpResp != nil && httpResp.Body != nil {
 			httpResp.Body.Close()

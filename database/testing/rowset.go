@@ -314,7 +314,7 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 		if uint64(val) > ^uint64(0)>>1 {
 			return nil, fmt.Errorf("uint value %d overflows int64", val)
 		}
-		return int64(val), nil //nolint:gosec // G115 - overflow checked above
+		return int64(val), nil
 	case uint64:
 		if val > ^uint64(0)>>1 {
 			return nil, fmt.Errorf("uint64 value %d overflows int64", val)

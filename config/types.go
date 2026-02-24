@@ -112,7 +112,7 @@ type DatabaseConfig struct {
 	Port     int    `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
 	Database string `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
 	Username string `koanf:"username" json:"username" yaml:"username" toml:"username" mapstructure:"username"`
-	Password string `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
+	Password string `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"` //nolint:gosec // G117 - config field, loaded from env/vault
 
 	ConnectionString string `koanf:"connectionstring" json:"connectionstring" yaml:"connectionstring" toml:"connectionstring" mapstructure:"connectionstring"`
 
@@ -259,7 +259,7 @@ type CacheManagerConfig struct {
 type RedisConfig struct {
 	Host            string        `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
 	Port            int           `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
-	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"`
+	Password        string        `koanf:"password" json:"password" yaml:"password" toml:"password" mapstructure:"password"` //nolint:gosec // G117 - config field, loaded from env/vault
 	Database        int           `koanf:"database" json:"database" yaml:"database" toml:"database" mapstructure:"database"`
 	PoolSize        int           `koanf:"poolsize" json:"poolsize" yaml:"poolsize" toml:"poolsize" mapstructure:"poolsize"`
 	DialTimeout     time.Duration `koanf:"dialtimeout" json:"dialtimeout" yaml:"dialtimeout" toml:"dialtimeout" mapstructure:"dialtimeout"`
@@ -386,7 +386,7 @@ type DebugConfig struct {
 	Enabled     bool                 `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`                     // Enable debug endpoints
 	PathPrefix  string               `koanf:"pathprefix" json:"pathprefix" yaml:"pathprefix" toml:"pathprefix" mapstructure:"pathprefix"`      // URL path prefix for debug endpoints
 	AllowedIPs  []string             `koanf:"allowedips" json:"allowedips" yaml:"allowedips" toml:"allowedips" mapstructure:"allowedips"`      // List of allowed IP addresses/CIDRs
-	BearerToken string               `koanf:"bearertoken" json:"bearertoken" yaml:"bearertoken" toml:"bearertoken" mapstructure:"bearertoken"` // Optional bearer token for authentication
+	BearerToken string               `koanf:"bearertoken" json:"bearertoken" yaml:"bearertoken" toml:"bearertoken" mapstructure:"bearertoken"` //nolint:gosec // G117 - config field, loaded from env/vault
 	Endpoints   DebugEndpointsConfig `koanf:"endpoints" json:"endpoints" yaml:"endpoints" toml:"endpoints" mapstructure:"endpoints"`           // Individual endpoint settings
 }
 

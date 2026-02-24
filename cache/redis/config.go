@@ -17,7 +17,7 @@ type Config struct {
 
 	// Password for Redis authentication (optional).
 	// Should be provided via environment variable: CACHE_REDIS_PASSWORD
-	Password string `config:"password"`
+	Password string `config:"password"` //nolint:gosec // G117 - config field, loaded from env/vault
 
 	// Database number to use (default: 0).
 	// Redis supports databases 0-15 by default.

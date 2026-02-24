@@ -238,7 +238,7 @@ func AssertNoTransaction(t *testing.T, db *TestDB) {
 
 	if len(startedTxs) > 0 {
 		var details strings.Builder
-		details.WriteString(fmt.Sprintf("unexpected transaction(s) started: %d total\n", len(startedTxs)))
+		fmt.Fprintf(&details, "unexpected transaction(s) started: %d total\n", len(startedTxs))
 		for i, txExp := range startedTxs {
 			status := "pending"
 			if txExp.tx != nil {
@@ -248,7 +248,7 @@ func AssertNoTransaction(t *testing.T, db *TestDB) {
 					status = "rolled back"
 				}
 			}
-			details.WriteString(fmt.Sprintf("  %d. Transaction [status: %s]\n", i+1, status))
+			fmt.Fprintf(&details, "  %d. Transaction [status: %s]\n", i+1, status)
 		}
 		t.Errorf("%s", details.String())
 	}
@@ -262,9 +262,9 @@ func formatQueryLog(log []QueryCall) string {
 
 	var sb strings.Builder
 	for i, call := range log {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, call.SQL))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, call.SQL)
 		if len(call.Args) > 0 {
-			sb.WriteString(fmt.Sprintf("     Args: %v\n", call.Args))
+			fmt.Fprintf(&sb, "     Args: %v\n", call.Args)
 		}
 	}
 	return sb.String()
@@ -278,9 +278,9 @@ func formatExecLog(log []ExecCall) string {
 
 	var sb strings.Builder
 	for i, call := range log {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, call.SQL))
+		fmt.Fprintf(&sb, "  %d. %s\n", i+1, call.SQL)
 		if len(call.Args) > 0 {
-			sb.WriteString(fmt.Sprintf("     Args: %v\n", call.Args))
+			fmt.Fprintf(&sb, "     Args: %v\n", call.Args)
 		}
 	}
 	return sb.String()
