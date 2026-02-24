@@ -231,11 +231,19 @@ func (s *Server) readyCheck(c echo.Context) error {
 
 // customErrorHandler is a centralized error handler that formats errors
 // into standardized APIResponse envelopes based on error type and server configuration.
+// When the request context carries the raw response flag (set by handlerWrapper.wrap),
+// it delegates to customRawErrorHandler which writes minimal JSON without the envelope.
 func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
 	// This can happen with certain middleware combinations (e.g., otelecho).
 	// Matches Echo's default error handler behavior.
 	if c.Response().Committed {
+		return
+	}
+
+	// Detect raw response mode (set early in handlerWrapper.wrap before any processing)
+	if raw, ok := c.Get(rawResponseContextKey).(bool); ok && raw {
+		customRawErrorHandler(err, c, cfg)
 		return
 	}
 
@@ -286,6 +294,58 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 	}
 
 	_ = formatErrorResponse(c, base, cfg)
+}
+
+// customRawErrorHandler handles errors for routes in raw response mode.
+// Same error classification logic as customErrorHandler but writes minimal JSON
+// without the APIResponse envelope.
+func customRawErrorHandler(err error, c echo.Context, cfg *config.Config) {
+	// Special handling for context deadline exceeded (timeout errors)
+	if goerrors.Is(err, context.DeadlineExceeded) {
+		timeoutErr := NewServiceUnavailableError("Request processing timed out")
+		_ = formatRawErrorResponse(c, timeoutErr, cfg)
+		return
+	}
+
+	// If this is a structured API error, reuse its fields
+	var apiErr IAPIError
+	if goerrors.As(err, &apiErr) {
+		_ = formatRawErrorResponse(c, apiErr, cfg)
+		return
+	}
+
+	// Map echo.HTTPError and untyped errors
+	status := http.StatusInternalServerError
+	msg := "Internal server error"
+	var he *echo.HTTPError
+	if goerrors.As(err, &he) {
+		status = he.Code
+		switch m := he.Message.(type) {
+		case string:
+			msg = m
+		case error:
+			msg = m.Error()
+		default:
+			// keep default
+		}
+	}
+
+	// In non-debug (production) hide internal details for 500s
+	if !cfg.App.Debug && status == http.StatusInternalServerError {
+		msg = "An error occurred while processing your request"
+	}
+
+	if status >= http.StatusInternalServerError {
+		c.Echo().Logger.Errorf("unhandled error: %v", err)
+	}
+
+	code := statusToErrorCode(status)
+	base := NewBaseAPIError(code, msg, status)
+	if isDevelopmentEnv(cfg.App.Env) {
+		_ = base.WithDetails("error", err.Error())
+	}
+
+	_ = formatRawErrorResponse(c, base, cfg)
 }
 
 // statusToErrorCode maps HTTP status codes to standardized error codes.

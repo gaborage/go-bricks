@@ -161,6 +161,14 @@ func TestRouteOptions(t *testing.T) {
 	assert.Equal(t, "customHandler", descriptor.HandlerName)
 }
 
+func TestWithRawResponse(t *testing.T) {
+	var descriptor RouteDescriptor
+	assert.False(t, descriptor.RawResponse, "default should be false")
+
+	WithRawResponse()(&descriptor)
+	assert.True(t, descriptor.RawResponse, "should be true after applying option")
+}
+
 func TestRouteRegistryGetByPathAndCount(t *testing.T) {
 	registry := &RouteRegistry{}
 

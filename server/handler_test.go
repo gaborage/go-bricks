@@ -46,7 +46,7 @@ func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -78,7 +78,7 @@ func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestWrapHandlerValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Missing required query parameter "name"
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -161,7 +161,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/users/5?names=a&names=b&active=true&when=2025-01-01T00:00:00Z", http.NoBody)
 	req.Header.Set("X-Items", "a, b , c")
@@ -204,7 +204,7 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=3.5", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -242,7 +242,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=not-a-number", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -324,7 +324,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -386,7 +386,7 @@ func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Missing required query parameter "name" triggers validation error
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -416,7 +416,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -452,7 +452,7 @@ func TestWrapHandlerNoContentResult(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -496,7 +496,7 @@ func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 		return r, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -520,7 +520,7 @@ func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -558,7 +558,7 @@ func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T)
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Missing required query param triggers validation error
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -870,7 +870,7 @@ func TestWrapHandlerPointerRequestType(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	reqBody := `{"name":"Alice","email":"alice@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -913,7 +913,7 @@ func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
 		return helloResp{Message: fmt.Sprintf("Hello %s, age %d", req.Name, req.Age)}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/test?name=Bob&age=25", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -950,7 +950,7 @@ func TestWrapHandlerPointerResponseType(t *testing.T) {
 		}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/test?name=Charlie", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -990,7 +990,7 @@ func TestWrapHandlerBothPointerTypes(t *testing.T) {
 		}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	reqBody := `{"name":"Diana","email":"diana@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1027,7 +1027,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 			return helloResp{Message: testResponse + req.Name}, nil
 		}
 
-		h := WrapHandler(handler, binder, cfg)
+		h := WrapHandler(handler, binder, cfg, false)
 
 		reqBody := `{"name":"Eve","email":"eve@example.com"}`
 		req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1052,7 +1052,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 			return &helloResp{Message: testResponse + req.Name}, nil
 		}
 
-		h := WrapHandler(handler, binder, cfg)
+		h := WrapHandler(handler, binder, cfg, false)
 
 		req := httptest.NewRequest(http.MethodGet, "/test?name=Frank", http.NoBody)
 		rec := httptest.NewRecorder()
@@ -1085,7 +1085,7 @@ func TestWrapHandlerLargePayloadPointer(t *testing.T) {
 		return helloResp{Message: fmt.Sprintf("Processed %d records", len(req.Records))}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Simulate large payload (e.g., bulk import with many records)
 	records := make([]string, 1000)
@@ -1132,7 +1132,7 @@ func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Missing required field
 	reqBody := `{"email":"invalid-email"}`
@@ -1168,7 +1168,7 @@ func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
 		}), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	reqBody := `{"name":"Grace","email":"grace@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1217,7 +1217,7 @@ func TestWrapHandlerPointerFieldsInStruct(t *testing.T) {
 		return helloResp{Message: msg}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	name := "Henry"
 	age := 30
@@ -1266,7 +1266,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Valid request should succeed (baseline test)
 	reqBody := `{"name":"Test","email":"test@example.com"}`
@@ -1307,7 +1307,7 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg)
+	h := WrapHandler(handler, binder, cfg, false)
 
 	// Empty JSON object
 	reqBody := `{}`
@@ -1328,4 +1328,197 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 	var respData helloResp
 	require.NoError(t, json.Unmarshal(dataBytes, &respData))
 	assert.Equal(t, "No name provided", respData.Message)
+}
+
+// ==================== Raw Response Mode Tests ====================
+
+func TestWrapHandlerRawResponseSuccess(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	require.NotNil(t, v)
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: testResponse + req.Name}, nil
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Parse response as raw JSON — no data/meta envelope
+	var resp helloResp
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Hello John", resp.Message)
+
+	// Verify NO envelope keys present
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	_, hasData := raw["data"]
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasData, "raw response should not have 'data' key")
+	assert.False(t, hasMeta, "raw response should not have 'meta' key")
+
+	// W3C trace propagation still works
+	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	require.NotEmpty(t, got, "traceparent header should be set in raw mode")
+}
+
+func TestWrapHandlerRawResponseWithResult(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
+		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	// Response is directly the helloResp, not wrapped
+	var resp helloResp
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "Hello Jane", resp.Message)
+}
+
+func TestWrapHandlerRawResponseError(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{}, NewNotFoundError("User")
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Error is minimal JSON, not wrapped in APIResponse
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "NOT_FOUND", raw["code"])
+	assert.Equal(t, "User not found", raw["message"])
+
+	// No envelope keys
+	_, hasError := raw["error"]
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasError, "raw error should not have 'error' key (APIResponse envelope)")
+	assert.False(t, hasMeta, "raw error should not have 'meta' key")
+}
+
+func TestWrapHandlerRawResponseValidationError(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: testResponse + req.Name}, nil
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	// Missing required query parameter "name" triggers validation error
+	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "BAD_REQUEST", raw["code"])
+	assert.Equal(t, "Request validation failed", raw["message"])
+
+	// No envelope keys
+	_, hasMeta := raw["meta"]
+	assert.False(t, hasMeta, "raw error should not have 'meta' key")
+}
+
+func TestWrapHandlerRawResponseNoContent(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
+		return NoContent(), nil
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, 0, rec.Body.Len())
+}
+
+func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "production"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{}, NewNotFoundError("User")
+	}
+
+	h := WrapHandler(handler, binder, cfg, true)
+
+	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := h(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, "NOT_FOUND", raw["code"])
+	// Details should be omitted in production
+	_, hasDetails := raw["details"]
+	assert.False(t, hasDetails, "production raw error should not include details")
 }
