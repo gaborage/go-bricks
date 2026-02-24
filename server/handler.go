@@ -279,15 +279,21 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 // Supports both value and pointer types for requests (T) and responses (R).
 // Pointer types eliminate copy overhead for large payloads (>1KB recommended).
 //
-// When rawResponse is true, the handler bypasses the standard APIResponse envelope
-// and writes the response data directly as JSON. This is useful for Strangler Fig
-// migrations where legacy routes must return their original response format.
-//
 // This function delegates to handlerWrapper which composes specialized components:
 // - contextChecker: Detects request cancellation/timeout
 // - requestProcessor: Allocates, binds, and validates requests
 // - responseHandler: Formats success and error responses
 func WrapHandler[T any, R any](
+	handlerFunc HandlerFunc[T, R],
+	binder *RequestBinder,
+	cfg *config.Config,
+) echo.HandlerFunc {
+	return wrapHandler(handlerFunc, binder, cfg, false)
+}
+
+// wrapHandler is the internal implementation that supports raw response mode.
+// RegisterHandler passes descriptor.RawResponse here; WrapHandler always passes false.
+func wrapHandler[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
 	cfg *config.Config,
@@ -849,7 +855,7 @@ func RegisterHandler[T any, R any](
 	DefaultRouteRegistry.Register(&descriptor)
 
 	// Register with route registrar (works with both Echo instances and Groups)
-	wrappedHandler := WrapHandler(handler, hr.binder, hr.cfg, descriptor.RawResponse)
+	wrappedHandler := wrapHandler(handler, hr.binder, hr.cfg, descriptor.RawResponse)
 	r.Add(method, path, wrappedHandler)
 }
 

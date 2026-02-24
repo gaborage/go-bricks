@@ -46,7 +46,7 @@ func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -78,7 +78,7 @@ func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestWrapHandlerValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query parameter "name"
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -161,7 +161,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/users/5?names=a&names=b&active=true&when=2025-01-01T00:00:00Z", http.NoBody)
 	req.Header.Set("X-Items", "a, b , c")
@@ -204,7 +204,7 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=3.5", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -242,7 +242,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 		return req, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=not-a-number", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -293,7 +293,7 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -324,7 +324,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -386,7 +386,7 @@ func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query parameter "name" triggers validation error
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -416,7 +416,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -452,7 +452,7 @@ func TestWrapHandlerNoContentResult(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -496,7 +496,7 @@ func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 		return r, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -520,7 +520,7 @@ func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -558,7 +558,7 @@ func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T)
 		return helloResp{Message: "ok"}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query param triggers validation error
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -870,7 +870,7 @@ func TestWrapHandlerPointerRequestType(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Alice","email":"alice@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -913,7 +913,7 @@ func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
 		return helloResp{Message: fmt.Sprintf("Hello %s, age %d", req.Name, req.Age)}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/test?name=Bob&age=25", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -950,7 +950,7 @@ func TestWrapHandlerPointerResponseType(t *testing.T) {
 		}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/test?name=Charlie", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -990,7 +990,7 @@ func TestWrapHandlerBothPointerTypes(t *testing.T) {
 		}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Diana","email":"diana@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1027,7 +1027,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 			return helloResp{Message: testResponse + req.Name}, nil
 		}
 
-		h := WrapHandler(handler, binder, cfg, false)
+		h := WrapHandler(handler, binder, cfg)
 
 		reqBody := `{"name":"Eve","email":"eve@example.com"}`
 		req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1052,7 +1052,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 			return &helloResp{Message: testResponse + req.Name}, nil
 		}
 
-		h := WrapHandler(handler, binder, cfg, false)
+		h := WrapHandler(handler, binder, cfg)
 
 		req := httptest.NewRequest(http.MethodGet, "/test?name=Frank", http.NoBody)
 		rec := httptest.NewRecorder()
@@ -1085,7 +1085,7 @@ func TestWrapHandlerLargePayloadPointer(t *testing.T) {
 		return helloResp{Message: fmt.Sprintf("Processed %d records", len(req.Records))}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Simulate large payload (e.g., bulk import with many records)
 	records := make([]string, 1000)
@@ -1132,7 +1132,7 @@ func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required field
 	reqBody := `{"email":"invalid-email"}`
@@ -1168,7 +1168,7 @@ func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
 		}), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Grace","email":"grace@example.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
@@ -1217,7 +1217,7 @@ func TestWrapHandlerPointerFieldsInStruct(t *testing.T) {
 		return helloResp{Message: msg}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	name := "Henry"
 	age := 30
@@ -1266,7 +1266,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Valid request should succeed (baseline test)
 	reqBody := `{"name":"Test","email":"test@example.com"}`
@@ -1307,7 +1307,7 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, false)
+	h := WrapHandler(handler, binder, cfg)
 
 	// Empty JSON object
 	reqBody := `{}`
@@ -1345,7 +1345,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1385,7 +1385,7 @@ func TestWrapHandlerRawResponseWithResult(t *testing.T) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1413,7 +1413,7 @@ func TestWrapHandlerRawResponseError(t *testing.T) {
 		return helloResp{}, NewNotFoundError("User")
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1448,7 +1448,7 @@ func TestWrapHandlerRawResponseValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	// Missing required query parameter "name" triggers validation error
 	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
@@ -1481,7 +1481,7 @@ func TestWrapHandlerRawResponseNoContent(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1505,7 +1505,7 @@ func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
 		return helloResp{}, NewNotFoundError("User")
 	}
 
-	h := WrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, true)
 
 	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
