@@ -64,7 +64,7 @@ observability:
     endpoint: stdout  # stdout | http://collector:4318/v1/traces | collector:4317 (gRPC)
 logger:
   level: info
-  pretty: true  # Set to false when observability.logs.enabled = true
+  pretty: false  # Must be false when observability is enabled (pretty + OTLP logs = panic)
 ```
 
 `Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
@@ -2476,15 +2476,17 @@ config.*.local.yaml
 // main.go
 cfg, _ := config.Load()
 
-// Override headers with secrets from env/vault
-apiKey := os.Getenv("OTEL_API_KEY")
-if apiKey == "" {
-    log.Fatal("OTEL_API_KEY must be set when observability is enabled")
+// Override headers with secrets from env/vault (only when observability is enabled)
+if cfg.Observability.Enabled {
+    apiKey := os.Getenv("OTEL_API_KEY")
+    if apiKey == "" {
+        log.Fatal("OTEL_API_KEY must be set when observability is enabled")
+    }
+    headers := map[string]string{"api-key": apiKey}
+    cfg.Observability.Trace.Headers = headers
+    cfg.Observability.Metrics.Headers = headers
+    cfg.Observability.Logs.Headers = headers
 }
-headers := map[string]string{"api-key": apiKey}
-cfg.Observability.Trace.Headers = headers
-cfg.Observability.Metrics.Headers = headers
-cfg.Observability.Logs.Headers = headers
 
 app.Run(cfg)
 ```
@@ -2515,6 +2517,7 @@ app.Run(cfg)
 **Insecure gRPC (localhost testing):**
 ```yaml
 observability:
+  enabled: true
   trace:
     endpoint: localhost:4317
     protocol: grpc
