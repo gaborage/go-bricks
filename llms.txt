@@ -2510,10 +2510,11 @@ app.Run(cfg)
 
 **Insecure gRPC (localhost testing):**
 ```yaml
-trace:
-  endpoint: localhost:4317
-  protocol: grpc
-  insecure: true  # Disable TLS
+observability:
+  trace:
+    endpoint: localhost:4317
+    protocol: grpc
+    insecure: true  # Disable TLS
 ```
 
 Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
@@ -2745,25 +2746,32 @@ curl -i http://localhost:8080/health
 
 ```yaml
 # OTEL Collector (gRPC, recommended for production)
-trace:
-  endpoint: otel-collector:4317
-  protocol: grpc
-  insecure: true              # Collector on same network
+observability:
+  trace:
+    endpoint: otel-collector:4317
+    protocol: grpc
+    insecure: true              # Collector on same network
+```
 
+```yaml
 # New Relic (gRPC + TLS)
-trace:
-  endpoint: otlp.nr-data.net:4317   # NO https:// for gRPC!
-  protocol: grpc
-  insecure: false
-  compression: gzip
-  headers:
-    api-key: your-license-key
+observability:
+  trace:
+    endpoint: otlp.nr-data.net:4317   # NO https:// for gRPC!
+    protocol: grpc
+    insecure: false
+    compression: gzip
+    headers:
+      api-key: your-license-key
+```
 
+```yaml
 # Jaeger (HTTP)
-trace:
-  endpoint: http://jaeger:4318/v1/traces
-  protocol: http
-  insecure: true
+observability:
+  trace:
+    endpoint: http://jaeger:4318/v1/traces
+    protocol: http
+    insecure: true
 ```
 
 ## Distributed Tracing (Custom Spans)
