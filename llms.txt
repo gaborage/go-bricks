@@ -56,9 +56,15 @@ cache:
   redis:
     host: localhost
     port: 6379
+observability:
+  enabled: true
+  service:
+    name: my-service
+  trace:
+    endpoint: stdout  # stdout | http://collector:4318/v1/traces | collector:4317 (gRPC)
 logger:
   level: info
-  pretty: true
+  pretty: false  # Must be false when observability is enabled (pretty + OTLP logs = panic)
 ```
 
 `Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
@@ -2321,7 +2327,7 @@ observability:
   service:
     name: my-service
     version: v1.0.0
-  traces:
+  trace:
     enabled: true
     endpoint: http://localhost:4318/v1/traces
     protocol: http
@@ -2470,11 +2476,14 @@ config.*.local.yaml
 // main.go
 cfg, _ := config.Load()
 
-// Override headers with secrets from env/vault
-apiKey := os.Getenv("OTEL_API_KEY")
-cfg.Observability.Traces.Headers = map[string]string{"api-key": apiKey}
-cfg.Observability.Metrics.Headers = map[string]string{"api-key": apiKey}
-cfg.Observability.Logs.Headers = map[string]string{"api-key": apiKey}
+// Inject vendor auth headers from env/vault when present
+// (not needed for local collector, Jaeger, or stdout endpoints)
+if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
+    headers := map[string]string{"api-key": apiKey}
+    cfg.Observability.Trace.Headers = headers
+    cfg.Observability.Metrics.Headers = headers
+    cfg.Observability.Logs.Headers = headers
+}
 
 app.Run(cfg)
 ```
@@ -2504,10 +2513,12 @@ app.Run(cfg)
 
 **Insecure gRPC (localhost testing):**
 ```yaml
-traces:
-  endpoint: localhost:4317
-  protocol: grpc
-  insecure: true  # Disable TLS
+observability:
+  enabled: true
+  trace:
+    endpoint: localhost:4317
+    protocol: grpc
+    insecure: true  # Disable TLS
 ```
 
 Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
@@ -2636,6 +2647,139 @@ func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (serv
 - `logger.WithContext(ctx)` → Injects trace_id/span_id for correlation
 - `logger.WithFields(map)` → Persistent fields for all subsequent logs
 - Fluent API: chain methods → end with `.Msg("message")`
+
+## Distributed Tracing Setup
+
+Complete setup for enabling distributed traces on incoming HTTP requests. Zero application code required — just config + bootstrap.
+
+**Step 1 — YAML config (`config.yaml`):**
+
+```yaml
+observability:
+  enabled: true
+  service:
+    name: my-service          # Appears as service.name in all spans
+    version: v1.0.0           # Optional: filter by version in trace viewer
+  trace:
+    endpoint: stdout          # Local dev: prints spans to console
+    # endpoint: http://localhost:4318/v1/traces  # OTEL Collector (HTTP)
+    # endpoint: localhost:4317                   # OTEL Collector (gRPC)
+
+logger:
+  pretty: false               # Must be false when observability.logs.enabled = true
+  level: info
+```
+
+**Step 2 — Go bootstrap (`main.go`):**
+
+```go
+package main
+
+import (
+    "log"
+
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/config"
+)
+
+func main() {
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // NewWithConfig does ALL of the following automatically:
+    // 1. Creates TracerProvider from observability config
+    // 2. Sets it as the global OTel provider (otel.SetTracerProvider)
+    // 3. Registers otelecho.Middleware → creates spans for every incoming HTTP request
+    // 4. Registers W3C propagator → inbound traceparent headers create linked spans
+    fw, err := app.NewWithConfig(cfg, nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fw.RegisterModules( /* your modules */ )
+    log.Fatal(fw.Run()) // Graceful shutdown flushes pending spans
+}
+```
+
+**What you get automatically (no code changes):**
+
+| Component | Span Name | Key Attributes | Trigger |
+|-----------|-----------|----------------|---------|
+| HTTP server | `HTTP {method} {route}` | `http.method`, `http.route`, `http.status_code` | Every incoming request |
+| Database | `db.query` / `db.exec` | `db.system`, `db.statement` | Every `Query()`/`Exec()` call |
+| AMQP publish | `amqp.publish` | `messaging.destination`, `messaging.operation` | Every `Publish()` call |
+| AMQP consume | `amqp.consume` | `messaging.destination`, `messaging.operation` | Every message received |
+| Outbound HTTP | Propagates `traceparent` | `http.url`, `http.method` | Via `httpclient` package |
+
+**Initialization flow:**
+
+```
+config.Load()
+    → app.NewWithConfig(cfg, nil)
+        → bootstrap.initializeObservability()
+            → observability.NewProvider(&obsCfg)
+                → initTraceProvider()    // Creates SDK TracerProvider
+                → initMeterProvider()    // Creates SDK MeterProvider
+            → registerGlobalProviders()
+                → otel.SetTracerProvider(tp)  // Global provider set HERE
+                → otel.SetTextMapPropagator() // W3C traceparent propagation
+        → server.New(cfg, logger)
+            → SetupMiddlewares()
+                → otelecho.Middleware(appName, WithTracerProvider(otel.GetTracerProvider()))
+                    // ↑ Captures the global provider — creates spans for ALL incoming HTTP requests
+```
+
+**Local verification:**
+
+```bash
+# Start service with stdout tracing
+go run main.go
+
+# Send a request
+curl -i http://localhost:8080/health
+
+# Console output includes spans like:
+# {"Name":"HTTP GET /health","SpanContext":{"TraceID":"abc123...","SpanID":"def456..."},
+#  "StartTime":"...","EndTime":"...","Attributes":[{"Key":"http.method","Value":"GET"},
+#  {"Key":"http.route","Value":"/health"},{"Key":"http.status_code","Value":200}]}
+```
+
+**Production endpoint examples:**
+
+```yaml
+# OTEL Collector (gRPC, recommended for production)
+observability:
+  enabled: true
+  trace:
+    endpoint: otel-collector:4317
+    protocol: grpc
+    insecure: true              # Collector on same network
+```
+
+```yaml
+# New Relic (gRPC + TLS)
+observability:
+  enabled: true
+  trace:
+    endpoint: otlp.nr-data.net:4317   # NO https:// for gRPC!
+    protocol: grpc
+    insecure: false
+    compression: gzip
+    headers:
+      api-key: your-license-key
+```
+
+```yaml
+# Jaeger (HTTP)
+observability:
+  enabled: true
+  trace:
+    endpoint: http://jaeger:4318/v1/traces
+    protocol: http
+    insecure: true
+```
 
 ## Distributed Tracing (Custom Spans)
 

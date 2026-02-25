@@ -60,7 +60,7 @@ observability:
    apiKey := os.Getenv("OTEL_API_KEY")  // From AWS Secrets Manager, Vault, etc.
 
    // Override config programmatically
-   cfg.Observability.Traces.Headers = map[string]string{
+   cfg.Observability.Trace.Headers = map[string]string{
        "api-key": apiKey,
    }
    ```
