@@ -2476,12 +2476,9 @@ config.*.local.yaml
 // main.go
 cfg, _ := config.Load()
 
-// Override headers with secrets from env/vault (only when observability is enabled)
-if cfg.Observability.Enabled {
-    apiKey := os.Getenv("OTEL_API_KEY")
-    if apiKey == "" {
-        log.Fatal("OTEL_API_KEY must be set when observability is enabled")
-    }
+// Inject vendor auth headers from env/vault when present
+// (not needed for local collector, Jaeger, or stdout endpoints)
+if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
     headers := map[string]string{"api-key": apiKey}
     cfg.Observability.Trace.Headers = headers
     cfg.Observability.Metrics.Headers = headers
