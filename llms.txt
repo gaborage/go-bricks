@@ -2478,9 +2478,13 @@ cfg, _ := config.Load()
 
 // Override headers with secrets from env/vault
 apiKey := os.Getenv("OTEL_API_KEY")
-cfg.Observability.Trace.Headers = map[string]string{"api-key": apiKey}
-cfg.Observability.Metrics.Headers = map[string]string{"api-key": apiKey}
-cfg.Observability.Logs.Headers = map[string]string{"api-key": apiKey}
+if apiKey == "" {
+    log.Fatal("OTEL_API_KEY must be set when observability is enabled")
+}
+headers := map[string]string{"api-key": apiKey}
+cfg.Observability.Trace.Headers = headers
+cfg.Observability.Metrics.Headers = headers
+cfg.Observability.Logs.Headers = headers
 
 app.Run(cfg)
 ```
@@ -2747,6 +2751,7 @@ curl -i http://localhost:8080/health
 ```yaml
 # OTEL Collector (gRPC, recommended for production)
 observability:
+  enabled: true
   trace:
     endpoint: otel-collector:4317
     protocol: grpc
@@ -2756,6 +2761,7 @@ observability:
 ```yaml
 # New Relic (gRPC + TLS)
 observability:
+  enabled: true
   trace:
     endpoint: otlp.nr-data.net:4317   # NO https:// for gRPC!
     protocol: grpc
@@ -2768,6 +2774,7 @@ observability:
 ```yaml
 # Jaeger (HTTP)
 observability:
+  enabled: true
   trace:
     endpoint: http://jaeger:4318/v1/traces
     protocol: http
