@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -474,7 +475,7 @@ func TestHandleGC(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/gc", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/gc", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -503,7 +504,7 @@ func TestHandleForceGC(t *testing.T) {
 
 	// Create test request
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/gc", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/gc", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 

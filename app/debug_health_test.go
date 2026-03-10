@@ -117,7 +117,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 			debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "/health-debug", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
