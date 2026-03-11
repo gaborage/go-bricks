@@ -127,7 +127,7 @@ func newTestServer(basePath, healthRoute, readyRoute string) *Server {
 }
 
 func assertHTTPGetResponse(t *testing.T, server *Server, path string, expectedStatus int, expectedBody ...string) {
-	req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
 	rec := httptest.NewRecorder()
 	server.Echo().ServeHTTP(rec, req)
 
@@ -139,13 +139,13 @@ func assertHTTPGetResponse(t *testing.T, server *Server, path string, expectedSt
 
 func assertHealthEndpoints(t *testing.T, server *Server, healthPath, readyPath string) {
 	// Test health endpoint
-	req := httptest.NewRequest(http.MethodGet, healthPath, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, healthPath, http.NoBody)
 	rec := httptest.NewRecorder()
 	server.Echo().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Test ready endpoint with JSON validation
-	req = httptest.NewRequest(http.MethodGet, readyPath, http.NoBody)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyPath, http.NoBody)
 	rec = httptest.NewRecorder()
 	server.Echo().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -456,7 +456,7 @@ func TestCustomErrorHandlerRawMode(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	e := echo.New()
 
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -485,7 +485,7 @@ func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	e := echo.New()
 
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -508,7 +508,7 @@ func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	e := echo.New()
 
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 

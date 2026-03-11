@@ -76,7 +76,7 @@ type SchedulerModule struct {
 // NewSchedulerModule creates a new SchedulerModule instance.
 // Per FR-016: The scheduler itself is lazy-initialized on first job registration.
 func NewSchedulerModule() *SchedulerModule {
-	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in struct field, called in Shutdown()
 
 	return &SchedulerModule{
 		jobs:           make(map[string]*jobEntry),

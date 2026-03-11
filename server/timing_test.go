@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -49,7 +50,7 @@ func TestTiming(t *testing.T) {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 			})
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 
 			start := time.Now()
@@ -96,7 +97,7 @@ func TestTimingErrorHandler(t *testing.T) {
 		return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/error", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/error", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -139,7 +140,7 @@ func TestTimingPanicHandler(t *testing.T) {
 		panic("test panic")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/panic", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	// This should not crash
@@ -184,7 +185,7 @@ func TestTimingConcurrentRequests(t *testing.T) {
 	// Launch concurrent requests
 	for _, delay := range delays {
 		go func(d int) {
-			req := httptest.NewRequest(http.MethodGet, "/test?delay="+strconv.Itoa(d), http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test?delay="+strconv.Itoa(d), http.NoBody)
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
@@ -226,7 +227,7 @@ func TestTimingHeaderFormat(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -276,7 +277,7 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)

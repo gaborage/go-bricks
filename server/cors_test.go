@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -34,7 +35,7 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	})
 
 	// Test preflight request
-	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 	req.Header.Set(HeaderAccessControlRequestHeaders, "Content-Type")
@@ -116,7 +117,7 @@ func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 			req.Header.Set("Origin", tt.origin)
 			req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 
@@ -160,7 +161,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	})
 
 	// Test with any origin - should allow all since no specific origins are set
-	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "https://somesite.com")
 	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
@@ -193,7 +194,7 @@ func TestCORSAllowedHeaders(t *testing.T) {
 	})
 
 	// Test preflight with various headers
-	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 	req.Header.Set(HeaderAccessControlRequestHeaders, "Content-Type, Authorization, X-Request-ID")
@@ -234,7 +235,7 @@ func TestCORSExposedHeaders(t *testing.T) {
 	})
 
 	// Test actual request (not preflight)
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 
 	rec := httptest.NewRecorder()
@@ -277,7 +278,7 @@ func TestCORSActualRequestHandling(t *testing.T) {
 
 	for _, method := range methods {
 		t.Run("method_"+method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), method, "/", http.NoBody)
 			req.Header.Set("Origin", "http://localhost:3000")
 			req.Header.Set("Content-Type", "application/json")
 
@@ -316,7 +317,7 @@ func TestCORSMaxAge(t *testing.T) {
 	})
 
 	// Test preflight request
-	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
 
@@ -348,7 +349,7 @@ func TestCORSCredentialsEnabled(t *testing.T) {
 	})
 
 	// Test with credentials
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 	req.Header.Set("Cookie", "session=abc123")
 
@@ -383,7 +384,7 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 		return c.String(http.StatusOK, "test")
 	})
 
-	req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "https://test.com")
 	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
@@ -437,7 +438,7 @@ func TestCORSSingleOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodOptions, "/", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 			req.Header.Set("Origin", tt.origin)
 			req.Header.Set(HeaderAccessControlRequestMethod, "GET")
 
@@ -475,7 +476,7 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	})
 
 	// Test the actual integration
-	req := httptest.NewRequest(http.MethodGet, "/api/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/test", http.NoBody)
 	req.Header.Set("Origin", "http://localhost:3000")
 
 	rec := httptest.NewRecorder()

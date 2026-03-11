@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -82,7 +83,7 @@ func TestIPPreGuard(t *testing.T) {
 			blockedCount := 0
 
 			for range tt.requestCount {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				// Use same IP to trigger rate limiting
 				req.Header.Set(HeaderXRealIP, testIPPreGuardIP)
 				req.RemoteAddr = testIPPreGuardIP + portSuffix
@@ -126,7 +127,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 
 			// Make multiple requests to test rate limiting per IP
 			for range 6 {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				req.Header.Set(HeaderXRealIP, ip)
 				req.RemoteAddr = ip + portSuffix
 				rec := httptest.NewRecorder()
@@ -161,7 +162,7 @@ func TestIPPreGuardErrorResponse(t *testing.T) {
 	var blockedResponse *httptest.ResponseRecorder
 
 	for range 5 {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(HeaderXRealIP, ip)
 		req.RemoteAddr = ip + portSuffix
 		rec := httptest.NewRecorder()
@@ -207,7 +208,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 	})
 
 	// Test that requests below limit work normally
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.Header.Set(HeaderXRealIP, "192.168.1.50")
 	rec := httptest.NewRecorder()
 
@@ -218,7 +219,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 
 	// Test that rate limited requests still have middleware headers
 	for range 10 {
-		req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(HeaderXRealIP, "192.168.1.50")
 		rec = httptest.NewRecorder()
 

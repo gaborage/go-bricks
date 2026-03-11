@@ -73,7 +73,7 @@ func TestTimeoutHandling(t *testing.T) {
 			GET(hr, registrar, "/test", handler)
 
 			// Create request
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 
 			// Create context with timeout
 			ctx, cancel := context.WithTimeout(context.Background(), tt.contextTimeout)
@@ -125,7 +125,7 @@ func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
 	GET(hr, registrar, "/test", handler)
 
 	// Create request with already-cancelled context
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 	req = req.WithContext(ctx)
@@ -160,7 +160,7 @@ func TestCustomErrorHandlerTimeoutDetection(t *testing.T) {
 	})
 
 	// Make request
-	req := httptest.NewRequest(http.MethodGet, "/timeout", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/timeout", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -198,7 +198,7 @@ func TestTimeoutDuringValidation(t *testing.T) {
 
 	// Create request with very short timeout and valid JSON body
 	// Use valid JSON so binding succeeds, allowing us to test the post-validation timeout checkpoint
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"name":"x"}`))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(`{"name":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
@@ -247,7 +247,7 @@ func TestContextCancellationDuringHandlerExecution(t *testing.T) {
 	GET(hr, registrar, "/test", handler)
 
 	// Create request with short timeout that expires during handler execution
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 
@@ -316,7 +316,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/slow", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/slow", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	// Should not panic, should return 503 Service Unavailable
@@ -385,7 +385,7 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 				done <- true
 			}()
 
-			req := httptest.NewRequest(http.MethodGet, "/endpoint", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/endpoint", http.NoBody)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 

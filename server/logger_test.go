@@ -106,7 +106,7 @@ func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 	})
 
 	// Provide an inbound request ID so getTraceID returns this value for both logger and meta
-	req := httptest.NewRequest(http.MethodGet, "/t", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/t", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "fixed-req-id")
 	rec := httptest.NewRecorder()
 	_ = e.NewContext(req, rec)
@@ -140,7 +140,7 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	})
 
 	inboundTP := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
-	req := httptest.NewRequest(http.MethodGet, "/tp", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tp", http.NoBody)
 	req.Header.Set("traceparent", inboundTP)
 	rec := httptest.NewRecorder()
 
@@ -178,7 +178,7 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 
 	// Test both configured probe paths and ensure suffix matching no longer applies
 	for _, path := range []string{testHealthPath, testReadyPath} {
-		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
 		rec := httptest.NewRecorder()
 
 		// If the middleware logs, recLog.last will be non-nil; reset before each request
@@ -191,7 +191,7 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 
 	// Test that paths with health/ready suffixes are now logged (no more suffix matching)
 	for _, path := range []string{"/api/health", "/api/ready"} {
-		req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
 		rec := httptest.NewRecorder()
 
 		recLog.last = nil
@@ -246,7 +246,7 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
 			rec := httptest.NewRecorder()
 
 			recLog.last = nil
@@ -279,7 +279,7 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 		return c.JSON(http.StatusOK, map[string]string{"ok": "yes"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/explicit-warn", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/explicit-warn", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	recLog.last = nil
@@ -306,7 +306,7 @@ func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
 	// Don't register any route - let Echo return its default 404 error
 	// This simulates a request to an unmatched route like /metrics
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	recLog.last = nil
@@ -424,7 +424,7 @@ func TestEscalateSeverityConcurrency(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"ok": "concurrent"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/concurrent", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/concurrent", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	// This test primarily validates no race conditions with -race flag
@@ -751,7 +751,7 @@ func TestCreateActionMessage(t *testing.T) {
 // TestExtractRequestMetadataWithResponse verifies metadata extraction when response is available.
 func TestExtractRequestMetadataWithResponse(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/users/123?q=test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/users/123?q=test", http.NoBody)
 	req.Header.Set("User-Agent", "test-agent/1.0")
 	rec := httptest.NewRecorder()
 
@@ -775,7 +775,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 // TestExtractRequestMetadataFallbackToRequestHeader verifies fallback to request header.
 func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, testHealthPath, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testHealthPath, http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "fallback-789")
 	rec := httptest.NewRecorder()
 
@@ -795,7 +795,7 @@ func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
 // TestExtractRequestMetadataNoRequestID verifies behavior with missing request ID.
 func TestExtractRequestMetadataNoRequestID(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	c := e.NewContext(req, rec)
@@ -812,7 +812,7 @@ func TestExtractRequestMetadataNoRequestID(t *testing.T) {
 // TestExtractRequestMetadataAllFields verifies all 8 fields are populated correctly.
 func TestExtractRequestMetadataAllFields(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPut, "/api/resource", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/api/resource", http.NoBody)
 	req.Header.Set("User-Agent", testUserAgent)
 	rec := httptest.NewRecorder()
 
@@ -1148,7 +1148,7 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 			if urlPath == "" {
 				urlPath = tt.path
 			}
-			req := httptest.NewRequest(http.MethodGet, urlPath, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, urlPath, http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 			c.SetPath(tt.path)
@@ -1165,7 +1165,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 
 	t.Run("error status takes precedence", func(t *testing.T) {
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -1181,7 +1181,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 
 	t.Run("response status when no error", func(t *testing.T) {
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -1193,7 +1193,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 
 	t.Run("zero when no status written", func(t *testing.T) {
 		e := echo.New()
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -1218,7 +1218,7 @@ func TestRequestLoggerHandleFullFlow(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, testAPITestPath, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 	rec := httptest.NewRecorder()
 
 	recLog.last = nil
@@ -1259,7 +1259,7 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
 			rec := httptest.NewRecorder()
 
 			recLog.last = nil
@@ -1276,7 +1276,7 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 // even though the response object is non-nil.
 func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, testAPITestPath, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
@@ -1297,7 +1297,7 @@ func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
 // This ensures that if only one header is empty in the response, only that header falls back.
 func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/partial", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/partial", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
@@ -1317,7 +1317,7 @@ func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
 // This ensures the existing behavior is maintained - response headers are preferred.
 func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/priority", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/priority", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
@@ -1338,7 +1338,7 @@ func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
 // This ensures the function doesn't panic and returns empty strings gracefully.
 func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/api/no-headers", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/no-headers", http.NoBody)
 	// Don't set any headers in request
 	rec := httptest.NewRecorder()
 
