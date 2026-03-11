@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -301,7 +302,7 @@ func TestCustomErrorHandler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
@@ -380,7 +381,7 @@ func TestErrorResponseFormatting(t *testing.T) {
 			WithDetails("value", "invalid-email")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -447,7 +448,7 @@ func TestErrorHandlerLogging(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			loggedErrors = []string{} // Reset logs
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
@@ -480,7 +481,7 @@ func TestErrorChaining(t *testing.T) {
 	wrappedErr := fmt.Errorf("failed to create user: %w", originalErr)
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -520,7 +521,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 
 	// Test: Call error handler when response is already committed
 	t.Run("skips_write_when_committed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -549,7 +550,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 
 	// Test: Normal write when not committed
 	t.Run("writes_when_not_committed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 

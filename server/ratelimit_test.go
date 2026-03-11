@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func TestRateLimit(t *testing.T) {
 			blockedCount := 0
 
 			for i := 0; i < tt.requestCount; i++ {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				// Use same IP to trigger rate limiting
 				req.Header.Set(HeaderXRealIP, "192.168.1.100")
 				req.RemoteAddr = "192.168.1.100:12345"
@@ -110,7 +111,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 
 			// Each IP should be able to make burst requests (2 * 2 = 4)
 			for i := 0; i < 6; i++ {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				req.Header.Set(HeaderXRealIP, ip)
 				req.RemoteAddr = ip + ":12345"
 				rec := httptest.NewRecorder()
@@ -145,7 +146,7 @@ func TestRateLimitErrorResponse(t *testing.T) {
 	var blockedResponse *httptest.ResponseRecorder
 
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(HeaderXRealIP, ip)
 		req.RemoteAddr = ip + ":12345"
 		rec := httptest.NewRecorder()
@@ -215,7 +216,7 @@ func TestRateLimitIPExtraction(t *testing.T) {
 
 			// Make multiple requests to test rate limiting per IP
 			for i := 0; i < 6; i++ {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				tt.setupReq(req)
 				rec := httptest.NewRecorder()
 
@@ -274,7 +275,7 @@ func TestRateLimitDisabled(t *testing.T) {
 			e.GET("/test", handler)
 
 			for i := 0; i < tt.requestCount; i++ {
-				req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				req.Header.Set(HeaderXRealIP, testIP)
 				req.RemoteAddr = testIP + ":12345"
 				rec := httptest.NewRecorder()
@@ -308,14 +309,14 @@ func TestRateLimitReset(t *testing.T) {
 
 	// Exhaust rate limit
 	for i := 0; i < 6; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(HeaderXRealIP, ip)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 	}
 
 	// Last request should be blocked
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.Header.Set(HeaderXRealIP, ip)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -325,7 +326,7 @@ func TestRateLimitReset(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Request should be allowed again
-	req = httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.Header.Set(HeaderXRealIP, ip)
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)

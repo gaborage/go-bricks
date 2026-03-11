@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -81,7 +82,7 @@ func TestAuthMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create test request
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -150,7 +151,7 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 	for _, tt := range tokens {
 		t.Run("token_"+tt.token, func(t *testing.T) {
 			e := echo.New()
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.Header.Set("Authorization", "Bearer "+tt.token)
 			req.RemoteAddr = "127.0.0.1:12345"
 			rec := httptest.NewRecorder()

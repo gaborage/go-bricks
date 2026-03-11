@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -86,7 +87,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			})
 
 			// Test request
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
@@ -212,7 +213,7 @@ func TestMiddlewareOrder(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -264,7 +265,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 
 	t.Run("body_within_limit", func(t *testing.T) {
 		body := strings.NewReader(`{"data": "small payload"}`)
-		req := httptest.NewRequest(http.MethodPost, "/test", body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", body)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
@@ -277,7 +278,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 		// Create a payload larger than 10MB
 		largePayload := strings.Repeat("x", 11*1024*1024) // 11MB
 		body := strings.NewReader(largePayload)
-		req := httptest.NewRequest(http.MethodPost, "/test", body)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", body)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
@@ -309,7 +310,7 @@ func TestGzipMiddleware(t *testing.T) {
 	})
 
 	t.Run("gzip_compression_enabled", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set("Accept-Encoding", "gzip")
 		rec := httptest.NewRecorder()
 
@@ -324,7 +325,7 @@ func TestGzipMiddleware(t *testing.T) {
 	})
 
 	t.Run("no_compression_when_not_requested", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		// No Accept-Encoding header
 		rec := httptest.NewRecorder()
 
@@ -357,7 +358,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		panic("test panic")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/panic", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	// This should not crash the server
@@ -388,7 +389,7 @@ func TestSecurityHeaders(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)

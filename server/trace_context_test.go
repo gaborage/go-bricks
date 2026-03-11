@@ -30,7 +30,7 @@ func TestTraceContext(t *testing.T) {
 	})
 
 	t.Run("trace_id_injected", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 
 		e.ServeHTTP(rec, req)
@@ -47,7 +47,7 @@ func TestTraceContext(t *testing.T) {
 	t.Run("existing_traceparent_propagated", func(t *testing.T) {
 		traceparent := testTraceparent
 
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
 		rec := httptest.NewRecorder()
 
@@ -66,7 +66,7 @@ func TestTraceContext(t *testing.T) {
 	t.Run("existing_tracestate_propagated", func(t *testing.T) {
 		tracestate := "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
 
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(gobrickshttp.HeaderTraceState, tracestate)
 		rec := httptest.NewRecorder()
 
@@ -86,7 +86,7 @@ func TestTraceContext(t *testing.T) {
 		traceparent := testTraceparent
 		tracestate := "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
 
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
 		req.Header.Set(gobrickshttp.HeaderTraceState, tracestate)
 		rec := httptest.NewRecorder()
@@ -107,7 +107,7 @@ func TestTraceContext(t *testing.T) {
 	})
 
 	t.Run("missing_headers_handled", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		// No trace headers
 		rec := httptest.NewRecorder()
 
@@ -143,7 +143,7 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 
 	traceparent := testTraceparent
 
-	req := httptest.NewRequest(http.MethodGet, "/error", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/error", http.NoBody)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
 	rec := httptest.NewRecorder()
 
@@ -190,7 +190,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
 	rec := httptest.NewRecorder()
 
@@ -254,7 +254,7 @@ func TestTraceContextInvalidHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 
 			if tt.traceparent != "" {
 				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
@@ -333,7 +333,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 
 	for i, tp := range traceparents {
 		go func(_ int, traceparent string) {
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
 			rec := httptest.NewRecorder()
 
@@ -344,7 +344,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 	// Also send requests without traceparent
 	for i := 0; i < 5; i++ {
 		go func() {
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)

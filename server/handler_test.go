@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,7 +49,7 @@ func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	// Set a request ID to verify trace propagation
@@ -80,7 +81,7 @@ func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -108,7 +109,7 @@ func TestWrapHandlerValidationError(t *testing.T) {
 	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query parameter "name"
-	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -163,7 +164,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/users/5?names=a&names=b&active=true&when=2025-01-01T00:00:00Z", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/5?names=a&names=b&active=true&when=2025-01-01T00:00:00Z", http.NoBody)
 	req.Header.Set("X-Items", "a, b , c")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -206,7 +207,7 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=3.5", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/accounts/7?limit=42&ratio=3.5", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("accountID")
@@ -244,7 +245,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/accounts/7?limit=42&ratio=not-a-number", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/accounts/7?limit=42&ratio=not-a-number", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("accountID")
@@ -268,7 +269,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 
 func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, "00-11111111111111111111111111111111-2222222222222222-01")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -295,7 +296,7 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -326,7 +327,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -347,7 +348,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 
 func TestFormatSuccessResponseWithStatusDefaultsWhenZero(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -389,7 +390,7 @@ func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query parameter "name" triggers validation error
-	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -418,7 +419,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -454,7 +455,7 @@ func TestWrapHandlerNoContentResult(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -498,7 +499,7 @@ func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -522,7 +523,7 @@ func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -561,7 +562,7 @@ func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T)
 	h := WrapHandler(handler, binder, cfg)
 
 	// Missing required query param triggers validation error
-	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -873,7 +874,7 @@ func TestWrapHandlerPointerRequestType(t *testing.T) {
 	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Alice","email":"alice@example.com"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -915,7 +916,7 @@ func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/test?name=Bob&age=25", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test?name=Bob&age=25", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -952,7 +953,7 @@ func TestWrapHandlerPointerResponseType(t *testing.T) {
 
 	h := WrapHandler(handler, binder, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/test?name=Charlie", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test?name=Charlie", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -993,7 +994,7 @@ func TestWrapHandlerBothPointerTypes(t *testing.T) {
 	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Diana","email":"diana@example.com"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1030,7 +1031,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 		h := WrapHandler(handler, binder, cfg)
 
 		reqBody := `{"name":"Eve","email":"eve@example.com"}`
-		req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -1054,7 +1055,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 
 		h := WrapHandler(handler, binder, cfg)
 
-		req := httptest.NewRequest(http.MethodGet, "/test?name=Frank", http.NoBody)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test?name=Frank", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 
@@ -1100,7 +1101,7 @@ func TestWrapHandlerLargePayloadPointer(t *testing.T) {
 	reqBodyBytes, err := json.Marshal(reqBodyMap)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(string(reqBodyBytes)))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/upload", strings.NewReader(string(reqBodyBytes)))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1136,7 +1137,7 @@ func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
 
 	// Missing required field
 	reqBody := `{"email":"invalid-email"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1171,7 +1172,7 @@ func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
 	h := WrapHandler(handler, binder, cfg)
 
 	reqBody := `{"name":"Grace","email":"grace@example.com"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1224,7 +1225,7 @@ func TestWrapHandlerPointerFieldsInStruct(t *testing.T) {
 	active := true
 
 	reqBody := fmt.Sprintf(`{"name":%q,"age":%d,"active":%v}`, name, age, active)
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1270,7 +1271,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 
 	// Valid request should succeed (baseline test)
 	reqBody := `{"name":"Test","email":"test@example.com"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1311,7 +1312,7 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 
 	// Empty JSON object
 	reqBody := `{}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(reqBody))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(reqBody))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -1347,7 +1348,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 
 	h := wrapHandler(handler, binder, cfg, true)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1387,7 +1388,7 @@ func TestWrapHandlerRawResponseWithResult(t *testing.T) {
 
 	h := wrapHandler(handler, binder, cfg, true)
 
-	req := httptest.NewRequest(http.MethodGet, "/hello?name=Jane", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1415,7 +1416,7 @@ func TestWrapHandlerRawResponseError(t *testing.T) {
 
 	h := wrapHandler(handler, binder, cfg, true)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1451,7 +1452,7 @@ func TestWrapHandlerRawResponseValidationError(t *testing.T) {
 	h := wrapHandler(handler, binder, cfg, true)
 
 	// Missing required query parameter "name" triggers validation error
-	req := httptest.NewRequest(http.MethodGet, testRoute, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1483,7 +1484,7 @@ func TestWrapHandlerRawResponseNoContent(t *testing.T) {
 
 	h := wrapHandler(handler, binder, cfg, true)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -1507,7 +1508,7 @@ func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
 
 	h := wrapHandler(handler, binder, cfg, true)
 
-	req := httptest.NewRequest(http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 

@@ -85,7 +85,7 @@ func TestOTelMiddlewareSpanCreation(t *testing.T) {
 	})
 
 	// Make request
-	req := httptest.NewRequest(http.MethodGet, "/api/users/123", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/users/123", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -110,7 +110,7 @@ func TestOTelMiddlewareSpanAttributes(t *testing.T) {
 	})
 
 	// Make request
-	req := httptest.NewRequest(http.MethodPost, "/api/resources", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/resources", http.NoBody)
 	req.Header.Set("User-Agent", "test-client/1.0")
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -150,7 +150,7 @@ func TestOTelMiddlewareTraceContextPropagation(t *testing.T) {
 
 	// Send request with existing traceparent header
 	incomingTraceparent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	req := httptest.NewRequest(http.MethodGet, testAPIEndpoint, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, incomingTraceparent)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
@@ -215,7 +215,7 @@ func TestOTelMiddlewareErrorRecording(t *testing.T) {
 				return c.JSON(tt.statusCode, map[string]string{"status": "test"})
 			})
 
-			req := httptest.NewRequest(http.MethodGet, testAPIEndpoint, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -288,7 +288,7 @@ func TestOTelMiddlewareHealthProbeExclusion(t *testing.T) {
 			// Reset exporter
 			exporter.Reset()
 
-			req := httptest.NewRequest(http.MethodGet, tt.path, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -335,7 +335,7 @@ func TestOTelMiddlewareSpanNaming(t *testing.T) {
 				}
 			}
 
-			req := httptest.NewRequest(route.method, requestPath, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), route.method, requestPath, http.NoBody)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 
@@ -361,7 +361,7 @@ func TestOTelMiddlewareConcurrentRequests(t *testing.T) {
 
 	for i := 0; i < numRequests; i++ {
 		go func() {
-			req := httptest.NewRequest(http.MethodGet, testAPIEndpoint, http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
 			assert.Equal(t, http.StatusOK, rec.Code)
@@ -401,7 +401,7 @@ func TestOTelMiddlewareIntegrationWithTraceContext(t *testing.T) {
 	incomingTraceparent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	incomingTracestate := "congo=t61rcWkgMzE"
 
-	req := httptest.NewRequest(http.MethodGet, testAPIEndpoint, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
 	req.Header.Set(gobrickshttp.HeaderTraceParent, incomingTraceparent)
 	req.Header.Set(gobrickshttp.HeaderTraceState, incomingTracestate)
 	rec := httptest.NewRecorder()
@@ -479,7 +479,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/123", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/users/123", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 

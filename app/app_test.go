@@ -510,7 +510,7 @@ func defaultTestConfig() *config.Config {
 
 func (f *testAppFixture) newReadyContext() (echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, readyEndpoint, http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
 	return e.NewContext(req, rec), rec
 }

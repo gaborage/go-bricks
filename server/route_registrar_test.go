@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/users", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/users", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -39,7 +40,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	req = httptest.NewRequest(http.MethodGet, "/api/orders", http.NoBody)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/orders", http.NoBody)
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -51,7 +52,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	req = httptest.NewRequest(http.MethodGet, "/api", http.NoBody)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api", http.NoBody)
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -80,13 +81,13 @@ func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
 		return c.String(http.StatusOK, "analytics")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/widgets", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/widgets", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "widgets", rec.Body.String())
 
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/analytics", http.NoBody)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v1/analytics", http.NoBody)
 	rec = httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -111,7 +112,7 @@ func TestRouteGroupUseAppliesMiddleware(t *testing.T) {
 		return c.String(http.StatusOK, "pong")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/ping", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ping", http.NoBody)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 

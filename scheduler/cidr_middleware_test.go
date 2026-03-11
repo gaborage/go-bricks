@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"net/http"
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 				return c.String(http.StatusOK, "OK")
 			})
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -125,7 +126,7 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 				return c.String(http.StatusOK, "OK")
 			})
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -201,7 +202,7 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 				return c.String(http.StatusOK, "OK")
 			})
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xForwardedFor != "" {
 				req.Header.Set(server.HeaderXForwardedFor, tt.xForwardedFor)
@@ -304,7 +305,7 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 				return c.String(http.StatusOK, "OK")
 			})
 
-			req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xForwardedFor != "" {
 				req.Header.Set(server.HeaderXForwardedFor, tt.xForwardedFor)
@@ -341,7 +342,7 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	})
 
 	// Test localhost is allowed
-	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = testLocalhostAddr
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -351,7 +352,7 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Test external IP is blocked
-	req2 := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req2.RemoteAddr = "192.168.1.1:12345"
 	rec2 := httptest.NewRecorder()
 	c2 := e.NewContext(req2, rec2)
