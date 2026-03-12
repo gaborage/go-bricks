@@ -23,7 +23,6 @@ go test -bench=.        # Run benchmarks
 
 **Key Files:**
 - [CLAUDE.md](CLAUDE.md) - This development guide
-- [.specify/memory/constitution.md](.specify/memory/constitution.md) - Project governance
 - [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
 - [llms.txt](llms.txt) - Quick code examples for LLMs
 - [.golangci.yml](.golangci.yml) - Linting configuration
@@ -70,9 +69,8 @@ go test -bench=.        # Run benchmarks
 2. This file (CLAUDE.md) - Architecture and commands (5-minute orientation)
 
 **For Deep Understanding** (Architecture exploration):
-1. [.specify/memory/constitution.md](.specify/memory/constitution.md) - Non-negotiable principles
-2. [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
-3. [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Working examples
+1. [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
+2. [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Working examples
 
 **For End Users** (Application developers):
 1. [README.md](README.md) - Public-facing overview and quick start
@@ -81,7 +79,7 @@ go test -bench=.        # Run benchmarks
 
 ## Developer Manifesto (MANDATORY)
 
-> **Note:** The full governance framework is defined in [.specify/memory/constitution.md](.specify/memory/constitution.md). This section provides an overview of core principles that guide all development.
+> This section provides an overview of core principles that guide all development.
 
 ### Framework Philosophy
 GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
@@ -1435,7 +1433,7 @@ func TestFeature(t *testing.T) {
 
 **Documentation:**
 - Architecture Decisions: `wiki/architecture_decisions.md`, Quick Examples: `llms.txt`
-- Governance: `.specify/memory/constitution.md`, Task Planning: `.claude/tasks/archive/`
+- Task Planning: `.claude/tasks/archive/`
 
 ## Database-Specific Notes
 
@@ -1632,6 +1630,13 @@ cd tools/openapi && make check    # Validates tool against current framework
 - Changing struct tags or validation logic
 - Refactoring shared types or error handling
 - Before creating PRs that touch framework APIs
+
+### Claude Code Workflow Rules
+- Always run `make check` (or `make check-all` for API changes) before committing. Never commit or push without a passing build.
+- Confirm current Git branch before committing or pushing. Never push directly to `main` unless explicitly instructed.
+- When fixing lint/build errors, run `make check` after each fix cycle. Common issues: import ordering, trailing newlines, type errors.
+- For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
+- After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
 
 ### CI Workflow Testing
 The unified CI workflow (`ci-v2.yml`) intelligently runs only necessary jobs:
@@ -1875,40 +1880,6 @@ grep "Panic recovered in message handler" logs/app.log
 # → Ensure request struct has proper validation tags
 ```
 
-## SpecKit Workflow (Feature Development)
-
-GoBricks uses SpecKit for structured feature development with built-in slash commands:
-
-### Available Commands
-- `/speckit.specify` - Create feature specification from natural language description
-- `/speckit.plan` - Generate implementation plan with design artifacts
-- `/speckit.tasks` - Generate actionable, dependency-ordered task list
-- `/speckit.implement` - Execute implementation plan by processing tasks
-- `/speckit.clarify` - Identify underspecified areas and ask clarification questions
-- `/speckit.checklist` - Generate custom checklist for current feature
-- `/speckit.analyze` - Cross-artifact consistency and quality analysis
-- `/speckit.constitution` - Update project constitution and sync templates
-
-### Typical Workflow
-1. `/speckit.specify` - Start with feature requirements
-2. `/speckit.clarify` - Resolve ambiguities (if needed)
-3. `/speckit.plan` - Generate detailed implementation plan
-4. `/speckit.tasks` - Break down into actionable tasks
-5. `/speckit.implement` - Execute tasks with tracking
-6. `/speckit.analyze` - Verify consistency across artifacts
-
-### Constitution Reference
-The project constitution (`.specify/memory/constitution.md`) defines non-negotiable governance:
-- Explicit > Implicit (no magic configuration)
-- Type Safety > Dynamic Hacks (breaking changes acceptable for safety)
-- Test-First Development (80% coverage enforced)
-- Security First (mandatory input validation)
-- Observability as First-Class Citizen (OpenTelemetry standards)
-- Performance Standards (minimal framework overhead)
-- User Experience Consistency (predictable APIs)
-
-See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full governance framework.
-
 ### When to Use Each Tool
 
 | Tool | Primary Use Case |
@@ -1916,7 +1887,6 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 | `make check` | Daily development, pre-commit checks (fast feedback on framework code) |
 | `make check-all` | Before PRs that modify public interfaces (server, database, config, observability) |
 | `make test-integration` | Testing database/messaging vendor differences (requires Docker) |
-| SpecKit commands | Planning multi-step features (>3 tasks) with structured task breakdown |
 | `go test -run TestName` | Debugging specific failing tests, fast iteration on single test cases |
 | SonarCloud | Coverage metrics (80% target), quality gate validation before releases |
 
@@ -1932,10 +1902,6 @@ See [.specify/memory/constitution.md](.specify/memory/constitution.md) for full 
 - **tools/** - Development tooling (OpenAPI generator)
 - **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
 - **.claude/tasks/** - Development task planning
-- **.specify/** - SpecKit feature development workflow
-  - **memory/constitution.md** - Project governance framework
-  - **templates/** - Spec, plan, task, and checklist templates
-  - **scripts/bash/** - Automation scripts for SpecKit commands
 - **llms.txt** - Quick reference examples for LLM code generation
 - Tests alongside source files (`*_test.go`)
 

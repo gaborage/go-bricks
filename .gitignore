@@ -38,7 +38,7 @@
 
 !sonar-project.properties
 
-!.specify/**/*
+!.claude/commands/*
 !specs/**/*
 
 # ...even if they are in subdirectories
