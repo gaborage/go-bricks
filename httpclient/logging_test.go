@@ -82,6 +82,11 @@ func (e *fakeLogEvent) Bytes(key string, val []byte) logger.LogEvent {
 	return e
 }
 
+func (e *fakeLogEvent) Bool(key string, value bool) logger.LogEvent {
+	e.fields[key] = value
+	return e
+}
+
 // fakeLogger implements logger.Logger for testing
 type fakeLogger struct {
 	events []loggedEvent

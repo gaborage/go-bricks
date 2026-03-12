@@ -89,6 +89,7 @@ func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
 func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *recEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
 
 // Test that the request logger logs the same correlation_id as the response meta.traceId
 func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {

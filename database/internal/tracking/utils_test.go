@@ -135,6 +135,11 @@ func (e *recordingEvent) Bytes(key string, value []byte) logger.LogEvent {
 	return e
 }
 
+func (e *recordingEvent) Bool(key string, value bool) logger.LogEvent {
+	e.record.Fields[key] = value
+	return e
+}
+
 func TestTruncateStringNoTruncation(t *testing.T) {
 	original := "short"
 	if TruncateString(original, len(original)+1) != original {

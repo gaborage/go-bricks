@@ -95,6 +95,7 @@ func (e *testLogEvent) Uint64(string, uint64) logger.LogEvent     { return e }
 func (e *testLogEvent) Dur(string, time.Duration) logger.LogEvent { return e }
 func (e *testLogEvent) Interface(string, any) logger.LogEvent     { return e }
 func (e *testLogEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+func (e *testLogEvent) Bool(string, bool) logger.LogEvent         { return e }
 
 // Test helpers for common setup patterns
 func newTestConfig(basePath, healthRoute, readyRoute string) *config.Config {
