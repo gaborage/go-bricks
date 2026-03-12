@@ -159,10 +159,10 @@ func TestTransactionCommitAndRollbackDelegate(t *testing.T) {
 	underlying := &stubTx{}
 	tx := NewTransaction(underlying, newRecordingLogger(), "postgresql", Settings{})
 
-	if err := tx.Commit(context.Background()); err != nil {
+	if tx.Commit(context.Background()) != nil {
 		t.Fatalf("expected commit to succeed")
 	}
-	if err := tx.Rollback(context.Background()); err != nil {
+	if tx.Rollback(context.Background()) != nil {
 		t.Fatalf("expected rollback to succeed")
 	}
 	if !underlying.commitCalled || !underlying.rollbackCalled {

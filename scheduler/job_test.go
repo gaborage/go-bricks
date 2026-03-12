@@ -12,11 +12,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestJobInterface verifies that Job interface can be implemented
+// TestJobInterface verifies that Executor interface can be implemented
 func TestJobInterface(t *testing.T) {
 	t.Run("simple job implementation compiles", func(_ *testing.T) {
 		job := &testJob{}
-		var _ Job = job // Compile-time check
+		var _ Executor = job // Compile-time check
 	})
 
 	t.Run("job execution can be called", func(t *testing.T) {

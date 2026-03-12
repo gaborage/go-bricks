@@ -38,7 +38,7 @@ func TestShutdownTiming(t *testing.T) {
 		logger:       testLogger,
 		registry:     NewModuleRegistry(deps),
 		closers:      []namedCloser{},
-		healthProbes: []HealthProbe{},
+		healthProbes: []Prober{},
 	}
 
 	// Test that shutdown completes in reasonable time

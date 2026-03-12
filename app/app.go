@@ -72,12 +72,12 @@ type App struct {
 	connectionPreWarmer   *ConnectionPreWarmer
 
 	closers      []namedCloser
-	healthProbes []HealthProbe
+	healthProbes []Prober
 }
 
 // createHealthProbesForManagers creates health probes for the new managers
-func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, cacheManager *cache.CacheManager, log logger.Logger) []HealthProbe {
-	var probes []HealthProbe
+func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, cacheManager *cache.CacheManager, log logger.Logger) []Prober {
+	var probes []Prober
 
 	if dbManager != nil {
 		probes = append(probes, databaseManagerHealthProbe(dbManager, log))

@@ -553,14 +553,14 @@ func TestConnectionPassthroughMethods(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	if err := conn.Health(context.Background()); err != nil {
+	if conn.Health(context.Background()) != nil {
 		t.Fatalf("expected health to succeed")
 	}
 	gotStats, err := conn.Stats()
 	if err != nil || gotStats["ok"] != true {
 		t.Fatalf("unexpected stats result: %v %v", gotStats, err)
 	}
-	if err := conn.Close(); err != nil {
+	if conn.Close() != nil {
 		t.Fatalf("expected close to succeed")
 	}
 	if !underlying.closeCalled {

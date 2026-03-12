@@ -36,7 +36,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 				app := &App{
 					cfg:    cfg,
 					logger: logger.New("info", false),
-					healthProbes: []HealthProbe{
+					healthProbes: []Prober{
 						&testHealthProbe{
 							name:   "database",
 							status: "healthy",
@@ -68,7 +68,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 				app := &App{
 					cfg:    cfg,
 					logger: logger.New("info", false),
-					healthProbes: []HealthProbe{
+					healthProbes: []Prober{
 						&testHealthProbe{
 							name:     "database",
 							status:   "unhealthy",
@@ -93,7 +93,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 				app := &App{
 					cfg:          nil,
 					logger:       logger.New("info", false),
-					healthProbes: []HealthProbe{},
+					healthProbes: []Prober{},
 				}
 				return app
 			},

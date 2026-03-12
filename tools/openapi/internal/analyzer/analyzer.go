@@ -114,7 +114,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 // discoverProjectMetadata extracts project information from go.mod
 func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 	goModPath := filepath.Join(a.projectRoot, goModFileName)
-	if err := a.validateProjectPath(goModPath); err != nil {
+	if a.validateProjectPath(goModPath) != nil {
 		return // Skip if path validation fails
 	}
 	// #nosec G304 - goModPath is validated to be within project root
