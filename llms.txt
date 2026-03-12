@@ -49,7 +49,12 @@ server:
   enabled: true
   port: 8080
 database:
-  type: postgres # postgres | oracle
+  type: postgres    # postgres | oracle
+  host: localhost
+  port: 5432
+  database: myapp_db
+  username: myapp_user
+  password: ${DATABASE_PASSWORD}  # From environment variable
 cache:
   enabled: true
   type: redis
@@ -106,6 +111,64 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 func (m *Module) Shutdown() error { return nil }
 ```
+
+## Database Connection & Queries
+
+```go
+// Step 1: Module receives database access via dependency injection
+type UserModule struct {
+	getDB  func(context.Context) (database.Interface, error)
+	logger logger.Logger
+}
+
+func (m *UserModule) Init(deps *app.ModuleDeps) error {
+	m.getDB = deps.DB // Function-based: resolves per-request (supports multi-tenant)
+	m.logger = deps.Logger
+	return nil
+}
+
+// Step 2: Use getDB(ctx) in service/handler methods to obtain a connection
+func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
+	db, err := m.getDB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("database unavailable: %w", err)
+	}
+
+	// Step 3: Build type-safe query
+	qb := builder.NewQueryBuilder(db.DatabaseType())
+	cols := qb.Columns(&User{})
+	f := qb.Filter()
+
+	sql, args := qb.Select(cols.All()...).
+		From("users").
+		Where(f.Eq(cols.Col("Status"), "active")).
+		ToSQL()
+
+	// Step 4: Execute query via database.Interface (NOT raw *sql.DB)
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	// Step 5: Scan results
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Status); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+```
+
+**Key points:**
+- Framework manages connection pooling, keep-alive, and health checks — never construct `*sql.DB` directly
+- `deps.DB` is a function, not an instance — call `getDB(ctx)` each time to support multi-tenant resolution
+- `db.Query()` / `db.Exec()` accept standard `context.Context` for tracing and cancellation
+- Query builder auto-handles vendor differences (PostgreSQL `$1` vs Oracle `:1` placeholders)
 
 ## Typed HTTP Handlers
 
@@ -497,7 +560,13 @@ type User struct {
     Status string `db:"status"`
 }
 
-qb := builder.NewQueryBuilder(m.db.DatabaseType())
+// Obtain db from getDB(ctx) — see "Database Connection & Queries" above
+db, err := m.getDB(ctx)
+if err != nil {
+    return nil, err
+}
+
+qb := builder.NewQueryBuilder(db.DatabaseType())
 f := qb.Filter()
 cols := qb.Columns(&User{})
 
@@ -509,8 +578,7 @@ sql, args := qb.Select(cols.Fields("ID", "Email")...).
 	)).
 	ToSQL()
 
-ctx := context.Background() // or propagate incoming request context
-rows, err := m.db.Query(ctx, sql, args...)
+rows, err := db.Query(ctx, sql, args...)
 ```
 
 | Need                | Builder call / API usage                                               |
@@ -530,7 +598,7 @@ sql, args := qb.Insert("users").
     Columns(cols.Col("Name"), cols.Col("Email")).
     Values("Alice", "alice@example.com").
     ToSQL()
-result, err := m.db.Exec(ctx, sql, args...)
+result, err := db.Exec(ctx, sql, args...)
 
 // UPDATE
 sql, args := qb.Update("users").
@@ -538,13 +606,13 @@ sql, args := qb.Update("users").
     Set(cols.Col("Email"), "bob@example.com").
     Where(f.Eq(cols.Col("ID"), 123)).
     ToSQL()
-result, err := m.db.Exec(ctx, sql, args...)
+result, err := db.Exec(ctx, sql, args...)
 
 // DELETE
 sql, args := qb.Delete("users").
     Where(f.Eq(cols.Col("ID"), 123)).
     ToSQL()
-result, err := m.db.Exec(ctx, sql, args...)
+result, err := db.Exec(ctx, sql, args...)
 ```
 
 Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.
@@ -1069,14 +1137,14 @@ import (
     "github.com/gaborage/go-bricks/cache"
 )
 
-// IMPORTANT: Store GetCache function, NOT cache instance
+// IMPORTANT: Store Cache function, NOT cache instance
 type Module struct {
     getCache func(context.Context) (cache.Cache, error)
     logger   logger.Logger
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getCache = deps.GetCache  // Store function for tenant-aware resolution
+    m.getCache = deps.Cache  // Store function for tenant-aware resolution
     m.logger = deps.Logger
     return nil
 }
@@ -1087,7 +1155,7 @@ type UserService struct {
 }
 
 func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
-    // GetCache resolves tenant from context automatically
+    // Cache resolves tenant from context automatically
     cache, err := s.getCache(ctx)
     if err != nil {
         return nil, fmt.Errorf("cache not available: %w", err)
@@ -1156,7 +1224,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
         return fmt.Errorf("cache config injection failed: %w", err)
     }
 
-    m.getCache = deps.GetCache
+    m.getCache = deps.Cache
     m.defaultTTL = cacheCfg.DefaultTTL
     m.keyPrefix = cacheCfg.KeyPrefix
 
