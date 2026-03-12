@@ -584,6 +584,43 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		assert.NotContains(t, output, "nested_secret")
 	})
 
+	t.Run("Bool_with_sensitive_key_masked", func(t *testing.T) {
+		buf.Reset()
+
+		// Bool with a sensitive key should be masked via Interface fallback
+		logger.Info().
+			Bool("active", true).     // Not filtered — normal bool
+			Bool("is_secret", false). // Key contains "secret" — masked
+			Msg("bool filter test")
+
+		output := buf.String()
+
+		var logEntry map[string]any
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		// Non-sensitive bool preserved as native JSON bool
+		assert.Equal(t, true, logEntry["active"])
+		// Sensitive key masked to string via Interface fallback
+		assert.Equal(t, "[FILTERED]", logEntry["is_secret"])
+		assert.NotContains(t, output, "false")
+	})
+
+	t.Run("Bool_with_non_sensitive_key_and_filter", func(t *testing.T) {
+		buf.Reset()
+
+		// Bool with a non-sensitive key should pass through as native bool
+		logger.Info().
+			Bool("enabled", true).
+			Msg("bool passthrough")
+
+		var logEntry map[string]any
+		err := json.Unmarshal(buf.Bytes(), &logEntry)
+		require.NoError(t, err)
+
+		assert.Equal(t, true, logEntry["enabled"])
+	})
+
 	t.Run("Str_and_Interface_with_nil_filter", func(t *testing.T) {
 		// Test the nil filter path to ensure 100% coverage
 		buf.Reset()

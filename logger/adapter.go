@@ -75,6 +75,14 @@ func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
 
 // Bool adds a boolean field to the log event
 func (lea *LogEventAdapter) Bool(key string, value bool) LogEvent {
+	if lea.filter != nil {
+		filtered := lea.filter.FilterValue(key, value)
+		if b, ok := filtered.(bool); ok {
+			return &LogEventAdapter{event: lea.event.Bool(key, b), filter: lea.filter, level: lea.level, hook: lea.hook}
+		}
+		// Sensitive field was masked to a string — fall back to Interface to preserve the mask
+		return &LogEventAdapter{event: lea.event.Interface(key, filtered), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Bool(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
