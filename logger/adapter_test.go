@@ -195,6 +195,30 @@ func TestLogEventAdapterBytes(t *testing.T) {
 	assert.Equal(t, "binary payload", logEntry["message"])
 }
 
+func TestLogEventAdapterBool(t *testing.T) {
+	logger, buf := createTestLogger()
+
+	// Create a log event with a boolean field
+	logger.Info().Bool("active", true).Msg("user status")
+
+	// Parse the JSON output
+	var logEntry map[string]any
+	err := json.Unmarshal(buf.Bytes(), &logEntry)
+	require.NoError(t, err)
+
+	// Verify the boolean field is a native JSON bool (not wrapped via Interface)
+	assert.Equal(t, true, logEntry["active"])
+	assert.Equal(t, "user status", logEntry["message"])
+
+	// Test false value
+	buf.Reset()
+	logger.Info().Bool("enabled", false).Msg("feature flag")
+
+	err = json.Unmarshal(buf.Bytes(), &logEntry)
+	require.NoError(t, err)
+	assert.Equal(t, false, logEntry["enabled"])
+}
+
 func TestLogEventAdapterChainedFields(t *testing.T) {
 	logger, buf := createTestLogger()
 

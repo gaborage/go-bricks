@@ -64,6 +64,9 @@ func (e *LogEvent) Interface(_ string, _ any) logger.LogEvent { return e }
 // Bytes adds a byte slice field to the log event (no-op for testing)
 func (e *LogEvent) Bytes(_ string, _ []byte) logger.LogEvent { return e }
 
+// Bool adds a boolean field to the log event (no-op for testing)
+func (e *LogEvent) Bool(_ string, _ bool) logger.LogEvent { return e }
+
 // Err adds an error field to the log event (no-op for testing)
 func (e *LogEvent) Err(_ error) logger.LogEvent { return e }
 

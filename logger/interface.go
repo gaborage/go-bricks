@@ -29,4 +29,5 @@ type LogEvent interface {
 	Dur(key string, d time.Duration) LogEvent
 	Interface(key string, i any) LogEvent
 	Bytes(key string, val []byte) LogEvent
+	Bool(key string, value bool) LogEvent
 }

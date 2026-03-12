@@ -73,6 +73,11 @@ func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
 	return &LogEventAdapter{event: lea.event.Bytes(key, val), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
+// Bool adds a boolean field to the log event
+func (lea *LogEventAdapter) Bool(key string, value bool) LogEvent {
+	return &LogEventAdapter{event: lea.event.Bool(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+}
+
 func (lea *LogEventAdapter) trackSeverity() {
 	if lea.hook != nil && lea.level >= zerolog.WarnLevel {
 		lea.hook(lea.level)

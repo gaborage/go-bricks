@@ -166,6 +166,7 @@ func (e *mockLogEvent) Uint64(string, uint64) logger.LogEvent     { return e }
 func (e *mockLogEvent) Dur(string, time.Duration) logger.LogEvent { return e }
 func (e *mockLogEvent) Interface(string, any) logger.LogEvent     { return e }
 func (e *mockLogEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+func (e *mockLogEvent) Bool(string, bool) logger.LogEvent         { return e }
 
 // TestEnhanceLoggerWithOTelNonZeroLogger verifies that when the logger
 // is not a ZeroLogger instance, it logs a warning and returns the original logger.
