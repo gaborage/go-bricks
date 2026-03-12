@@ -901,7 +901,7 @@ func TestProductService_FindActive(t *testing.T) {
         )
 
     deps := &app.ModuleDeps{
-        GetDB: func(ctx context.Context) (database.Interface, error) {
+        DB: func(ctx context.Context) (database.Interface, error) {
             return db, nil
         },
     }
@@ -953,7 +953,7 @@ func TestOrderService_CreateWithItems(t *testing.T) {
         ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
 
     deps := &app.ModuleDeps{
-        GetDB: func(ctx context.Context) (database.Interface, error) {
+        DB: func(ctx context.Context) (database.Interface, error) {
             return db, nil
         },
     }
@@ -983,7 +983,7 @@ func TestMultiTenantService(t *testing.T) {
         )
 
     deps := &app.ModuleDeps{
-        GetDB: tenants.AsGetDBFunc(),  // Resolves tenant from ctx
+        DB: tenants.AsGetDBFunc(),  // Resolves tenant from ctx
     }
 
     // Test with tenant context
@@ -1371,7 +1371,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
     globexCache := NewMockCache()
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             tenantID := multitenant.GetTenant(ctx)
             switch tenantID {
             case "acme":
@@ -1691,7 +1691,7 @@ func TestUserService_CacheHit(t *testing.T) {
     mockCache := NewMockCache()
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             return mockCache, nil
         },
     }
@@ -1723,7 +1723,7 @@ func TestUserService(t *testing.T) {
     mockCache := cachetest.NewMockCache()
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             return mockCache, nil
         },
     }
@@ -1803,7 +1803,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
     }
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             tenantID := multitenant.GetTenant(ctx)
             return tenantCaches[tenantID], nil
         },
@@ -1887,10 +1887,10 @@ func TestCacheAsidePattern(t *testing.T) {
     )
 
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             return mockCache, nil
         },
-        GetDB: func(ctx context.Context) (database.Interface, error) {
+        DB: func(ctx context.Context) (database.Interface, error) {
             return mockDB, nil
         },
     }
