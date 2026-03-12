@@ -14,8 +14,8 @@ import (
 // - Mutex for overlapping execution prevention per FR-026
 // - gocron job handle for lifecycle management
 type jobEntry struct {
-	// job is the user-provided Job implementation
-	job Job
+	// job is the user-provided Executor implementation
+	job Executor
 
 	// schedule describes when/how the job should execute
 	schedule ScheduleConfiguration

@@ -173,7 +173,7 @@ func TestStatementCloseDelegates(t *testing.T) {
 	underlying := &stubStatement{}
 	statement := NewStatement(underlying, newRecordingLogger(), "postgresql", "SELECT", Settings{})
 
-	if err := statement.Close(); err != nil {
+	if statement.Close() != nil {
 		t.Fatalf("expected close to succeed")
 	}
 	if !underlying.closeCalled {

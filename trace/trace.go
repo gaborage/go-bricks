@@ -253,7 +253,7 @@ func computeTraceIDPreserve(ctx context.Context, headers HeaderAccessor, tracepa
 // setHeader writes a header value, honoring preserve=true to avoid overwrites
 func setHeader(headers HeaderAccessor, key, value string, preserve bool) {
 	if preserve {
-		if existing := headerString(headers, key); existing != "" {
+		if headerString(headers, key) != "" {
 			return
 		}
 	}

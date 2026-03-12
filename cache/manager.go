@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// TenantCacheResourceSource provides per-key cache configurations.
+// ConfigProvider provides per-key cache configurations.
 // This interface abstracts where tenant-specific cache configs come from.
-type TenantCacheResourceSource interface {
+type ConfigProvider interface {
 	// CacheConfig returns the cache configuration for the given key.
 	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
 	CacheConfig(ctx context.Context, key string) (*config.CacheConfig, error)

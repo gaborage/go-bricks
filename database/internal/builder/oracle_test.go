@@ -21,12 +21,8 @@ const (
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
-	if got := qb.quoteOracleColumn("number"); got != `"number"` {
-		t.Fatalf("expected reserved word to be quoted, got %s", got)
-	}
-	if got := qb.quoteOracleColumn("name"); got != "name" {
-		t.Fatalf("expected non-reserved word to remain unchanged")
-	}
+	assert.Equal(t, `"number"`, qb.quoteOracleColumn("number"), "reserved word should be quoted")
+	assert.Equal(t, "name", qb.quoteOracleColumn("name"), "non-reserved word should remain unchanged")
 }
 
 func TestQuoteOracleColumnsForDMLPreservesCase(t *testing.T) {

@@ -125,7 +125,7 @@ func TestTimingPanicHandler(t *testing.T) {
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			defer func() {
-				if r := recover(); r != nil {
+				if recover() != nil {
 					// Convert panic to HTTP error
 					c.JSON(http.StatusInternalServerError, map[string]string{"error": "panic occurred"})
 				}

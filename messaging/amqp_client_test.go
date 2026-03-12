@@ -207,7 +207,7 @@ func TestPublishToExchangeNackThenCancel(t *testing.T) {
 	// Signal that publish is starting
 	close(publishStarted)
 
-	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err == nil {
+	if c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")) == nil {
 		t.Fatalf("expected context error after cancel")
 	}
 }
@@ -263,7 +263,7 @@ func TestCloseChannelAndConnectionErrors(t *testing.T) {
 	c.isReady = true
 	c.m.Unlock()
 	c.connection = &fakeConnAdapter{closeErr: errors.New("connection close failed")}
-	if err := c.Close(); err == nil {
+	if c.Close() == nil {
 		t.Fatalf("expected close error from channel close")
 	}
 }
@@ -288,7 +288,7 @@ func TestInitSuccessAndFailurePaths(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	// Use connection adapter that returns no real channel, but we'll set channel directly via changeChannel
 	// emulate by calling init with a connection that cannot create channel -> expect error
-	if err := c.init(&fakeConnAdapter{}); err == nil {
+	if c.init(&fakeConnAdapter{}) == nil {
 		// Channel() in adapter returns error; expect error
 		t.Fatalf("expected error from init when channel creation fails")
 	}

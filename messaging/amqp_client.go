@@ -466,7 +466,7 @@ func (c *AMQPClientImpl) handleReconnect() {
 			continue
 		}
 
-		if done := c.handleReInit(conn); done {
+		if c.handleReInit(conn) {
 			break
 		}
 	}

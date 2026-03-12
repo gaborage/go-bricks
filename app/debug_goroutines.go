@@ -39,7 +39,7 @@ func (d *DebugHandlers) handleGoroutines(c echo.Context) error {
 // handleGoroutinesText returns raw goroutine stacks as text
 func (d *DebugHandlers) handleGoroutinesText(c echo.Context) error {
 	var buf strings.Builder
-	if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
+	if pprof.Lookup("goroutine").WriteTo(&buf, 1) != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get goroutine dump")
 	}
 

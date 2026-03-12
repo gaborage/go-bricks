@@ -206,6 +206,30 @@ db, err := deps.DB(ctx)
 client, err := manager.Publisher(ctx, "tenant-1")
 ```
 
+### Breaking Change: Go Interface Naming Conventions (S8196)
+
+GoBricks follows Go's idiomatic interface naming. Per [SonarCloud rule S8196](https://rules.sonarsource.com/go/RSPEC-8196/) and [ADR-013](wiki/adr-013-interface-naming-conventions.md), interfaces are renamed for clarity.
+
+| Package | Old Interface | New Interface |
+|---------|---------------|---------------|
+| `scheduler` | `Job` | `Executor` |
+| `app` | `HealthProbe` | `Prober` |
+| `database` | `TenantStore` | `DBConfigProvider` |
+| `messaging` | `TenantMessagingResourceSource` | `BrokerURLProvider` |
+| `server` | `ResultLike` | `ResultMetaProvider` |
+| `cache` | `TenantCacheResourceSource` | `ConfigProvider` |
+
+**Example Migration:**
+```go
+// ❌ OLD
+var job scheduler.Job = &MyJob{}
+var probe app.HealthProbe = myProbe
+
+// ✅ NEW
+var job scheduler.Executor = &MyJob{}
+var probe app.Prober = myProbe
+```
+
 ## Architecture
 
 ### Core Components
@@ -892,9 +916,9 @@ The `scheduler` package provides gocron-based job scheduling integrated with the
 - **System APIs**: `GET /_sys/jobs` (list), `POST /_sys/job/:jobId` (manual trigger), secured via CIDR middleware
 - **OpenTelemetry**: Counter, histogram, and panic tracking per job
 
-**Job Interface:**
+**Executor Interface:**
 ```go
-type Job interface {
+type Executor interface {
     Execute(ctx JobContext) error
 }
 

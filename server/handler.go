@@ -69,7 +69,7 @@ func newContextChecker(cfg *config.Config) *contextChecker {
 // checkCancellation checks if the request context has been cancelled or timed out.
 // Returns an API error if cancelled, nil otherwise.
 func (cc *contextChecker) checkCancellation(c echo.Context, stage string) IAPIError {
-	if err := c.Request().Context().Err(); err != nil {
+	if c.Request().Context().Err() != nil {
 		msg := fmt.Sprintf("Request timeout %s", stage)
 		return NewServiceUnavailableError(msg)
 	}
@@ -132,14 +132,14 @@ func newResponseHandler(cfg *config.Config) *responseHandler {
 // handleResponse formats and sends the HTTP response based on the handler result.
 // Handles three cases:
 // 1. API error: formats error response with appropriate status code
-// 2. ResultLike interface: custom status/headers response
+// 2. ResultMetaProvider interface: custom status/headers response
 // 3. Default: standard 200 OK response
 func (rh *responseHandler) handleResponse(c echo.Context, response any, apiErr IAPIError) error {
 	if apiErr != nil {
 		return formatErrorResponse(c, apiErr, rh.cfg)
 	}
 
-	if rl, ok := response.(ResultLike); ok {
+	if rl, ok := response.(ResultMetaProvider); ok {
 		status, headers, data := rl.ResultMeta()
 		return formatSuccessResponseWithStatus(c, data, status, headers)
 	}
@@ -261,8 +261,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		response, apiErr := handlerFunc(request, handlerCtx)
 
 		// Check context after handler execution
-		ctx := c.Request().Context()
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if c.Request().Context().Err() != nil {
 			return formatErr(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
 		}
 
@@ -688,7 +687,7 @@ func (rh *responseHandler) handleRawResponse(c echo.Context, response any, apiEr
 		return formatRawErrorResponse(c, apiErr, rh.cfg)
 	}
 
-	if rl, ok := response.(ResultLike); ok {
+	if rl, ok := response.(ResultMetaProvider); ok {
 		status, headers, data := rl.ResultMeta()
 		return formatRawSuccessResponseWithStatus(c, data, status, headers)
 	}
@@ -894,8 +893,8 @@ func OPTIONS[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, h
 	RegisterHandler(hr, r, http.MethodOptions, path, handler, opts...)
 }
 
-// ResultLike exposes status, headers, and payload for successful responses.
-type ResultLike interface {
+// ResultMetaProvider exposes status, headers, and payload for successful responses.
+type ResultMetaProvider interface {
 	ResultMeta() (status int, headers http.Header, data any)
 }
 
@@ -907,7 +906,7 @@ type Result[R any] struct {
 	Headers http.Header
 }
 
-// ResultMeta implements ResultLike for Result[R].
+// ResultMeta implements ResultMetaProvider for Result[R].
 func (r Result[R]) ResultMeta() (status int, headers http.Header, data any) {
 	return r.Status, r.Headers, r.Data
 }
@@ -923,7 +922,7 @@ func NewResult[R any](status int, data R) Result[R] {
 // NoContentResult represents a 204 No Content response without a body
 type NoContentResult struct{}
 
-// ResultMeta implements ResultLike for NoContentResult
+// ResultMeta implements ResultMetaProvider for NoContentResult
 func (NoContentResult) ResultMeta() (status int, headers http.Header, data any) {
 	return http.StatusNoContent, nil, nil
 }

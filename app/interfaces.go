@@ -35,9 +35,9 @@ type ServerRunner interface {
 
 // TenantStore combines the interfaces required by the database, messaging, and cache managers.
 type TenantStore interface {
-	database.TenantStore
-	messaging.TenantMessagingResourceSource
-	cache.TenantCacheResourceSource
+	database.DBConfigProvider
+	messaging.BrokerURLProvider
+	cache.ConfigProvider
 
 	// IsDynamic returns true if this store loads tenant configurations dynamically
 	// from external sources (e.g., AWS Secrets Manager, Vault). Returns false for

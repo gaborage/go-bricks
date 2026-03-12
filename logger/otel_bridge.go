@@ -39,7 +39,7 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 	}
 
 	var entry map[string]interface{}
-	if err := json.Unmarshal(p, &entry); err != nil {
+	if json.Unmarshal(p, &entry) != nil {
 		// Ignore malformed or non-JSON entries (e.g., pretty logs)
 		return len(p), nil
 	}

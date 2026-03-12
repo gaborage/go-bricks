@@ -34,7 +34,7 @@ const (
 	jobScheduleTypeAttr = "job.schedule_type"
 
 	// Error message for job type validation
-	errJobInterfaceMsg = "must implement scheduler.Job interface, got %T"
+	errJobInterfaceMsg = "must implement scheduler.Executor interface, got %T"
 )
 
 // SchedulerModule implements the GoBricks Module interface for job scheduling.
@@ -252,15 +252,23 @@ func (m *SchedulerModule) ensureSchedulerInitialized() error {
 
 // JobRegistrar interface implementation
 
-// FixedRate implements JobRegistrar per FR-003
-func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duration) error {
-	// Validate job implements scheduler.Job interface
-	schedulerJob, ok := job.(Job)
+// validateExecutor checks that job implements the Executor interface.
+func validateExecutor(job any) (Executor, error) {
+	executor, ok := job.(Executor)
 	if !ok {
-		return &ValidationError{
+		return nil, &ValidationError{
 			Field:   "job",
 			Message: fmt.Sprintf(errJobInterfaceMsg, job),
 		}
+	}
+	return executor, nil
+}
+
+// FixedRate implements JobRegistrar per FR-003
+func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duration) error {
+	schedulerJob, err := validateExecutor(job)
+	if err != nil {
+		return err
 	}
 
 	// Validate parameters per FR-023
@@ -279,13 +287,9 @@ func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duratio
 
 // DailyAt implements JobRegistrar per FR-004
 func (m *SchedulerModule) DailyAt(jobID string, job any, localTime time.Time) error {
-	// Validate job implements scheduler.Job interface
-	schedulerJob, ok := job.(Job)
-	if !ok {
-		return &ValidationError{
-			Field:   "job",
-			Message: fmt.Sprintf(errJobInterfaceMsg, job),
-		}
+	schedulerJob, err := validateExecutor(job)
+	if err != nil {
+		return err
 	}
 
 	hour, minute, _ := localTime.Clock()
@@ -299,13 +303,9 @@ func (m *SchedulerModule) DailyAt(jobID string, job any, localTime time.Time) er
 
 // WeeklyAt implements JobRegistrar per FR-005
 func (m *SchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
-	// Validate job implements scheduler.Job interface
-	schedulerJob, ok := job.(Job)
-	if !ok {
-		return &ValidationError{
-			Field:   "job",
-			Message: fmt.Sprintf(errJobInterfaceMsg, job),
-		}
+	schedulerJob, err := validateExecutor(job)
+	if err != nil {
+		return err
 	}
 
 	hour, minute, _ := localTime.Clock()
@@ -320,13 +320,9 @@ func (m *SchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday
 
 // HourlyAt implements JobRegistrar per FR-006
 func (m *SchedulerModule) HourlyAt(jobID string, job any, minute int) error {
-	// Validate job implements scheduler.Job interface
-	schedulerJob, ok := job.(Job)
-	if !ok {
-		return &ValidationError{
-			Field:   "job",
-			Message: fmt.Sprintf(errJobInterfaceMsg, job),
-		}
+	schedulerJob, err := validateExecutor(job)
+	if err != nil {
+		return err
 	}
 
 	// Validate parameters per FR-023
@@ -345,13 +341,9 @@ func (m *SchedulerModule) HourlyAt(jobID string, job any, minute int) error {
 
 // MonthlyAt implements JobRegistrar per FR-007
 func (m *SchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
-	// Validate job implements scheduler.Job interface
-	schedulerJob, ok := job.(Job)
-	if !ok {
-		return &ValidationError{
-			Field:   "job",
-			Message: fmt.Sprintf(errJobInterfaceMsg, job),
-		}
+	schedulerJob, err := validateExecutor(job)
+	if err != nil {
+		return err
 	}
 
 	// Validate parameters per FR-023
@@ -375,7 +367,7 @@ func (m *SchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, local
 // registerJob is the internal method that handles job registration and scheduler setup.
 // Per FR-022: Validates unique job IDs.
 // Per FR-016: Lazy-initializes scheduler on first job registration.
-func (m *SchedulerModule) registerJob(jobID string, job Job, schedule ScheduleConfiguration) error {
+func (m *SchedulerModule) registerJob(jobID string, job Executor, schedule ScheduleConfiguration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

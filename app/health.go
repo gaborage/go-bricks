@@ -19,8 +19,8 @@ type HealthStatus struct {
 	Critical bool
 }
 
-// HealthProbe exposes a uniform interface for readiness probes.
-type HealthProbe interface {
+// Prober exposes a uniform interface for readiness probes.
+type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }
 
@@ -45,7 +45,7 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 }
 
 // databaseManagerHealthProbe creates a health probe for the database manager
-func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) HealthProbe {
+func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) Prober {
 	if dbManager == nil {
 		return healthProbeFunc{
 			name: "database",
@@ -106,7 +106,7 @@ func getStatsOrEmpty(stats map[string]any) map[string]any {
 }
 
 // messagingManagerHealthProbe creates a health probe for the messaging manager
-func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) HealthProbe {
+func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) Prober {
 	if msgManager == nil {
 		return healthProbeFunc{
 			name: "messaging",
@@ -155,7 +155,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 }
 
 // cacheManagerHealthProbe creates a health probe for the cache manager
-func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) HealthProbe {
+func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) Prober {
 	if cacheManager == nil {
 		return healthProbeFunc{
 			name: "cache",

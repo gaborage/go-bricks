@@ -9,7 +9,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-// Job represents a unit of work to be executed on a schedule.
+// Executor represents a unit of work to be executed on a schedule.
 // Implementations must be thread-safe as different job instances may run concurrently
 // (though the scheduler prevents overlapping executions of the SAME job per FR-026).
 //
@@ -26,7 +26,7 @@ import (
 //	    defer rows.Close()
 //	    return nil
 //	}
-type Job interface {
+type Executor interface {
 	// Execute performs the job's work using the provided context.
 	// Return error to mark execution as failed (will be logged and recorded in metrics per FR-020).
 	// Panic will be recovered, logged with stack trace, and marked as failed per FR-021.

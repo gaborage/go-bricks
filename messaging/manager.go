@@ -13,9 +13,9 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// TenantMessagingResourceSource provides per-key AMQP configurations.
+// BrokerURLProvider provides per-key AMQP configurations.
 // This interface abstracts where tenant-specific messaging configs come from.
-type TenantMessagingResourceSource interface {
+type BrokerURLProvider interface {
 	// BrokerURL returns the AMQP broker URL for the given key.
 	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
 	BrokerURL(ctx context.Context, key string) (string, error)
@@ -30,7 +30,7 @@ type ClientFactory func(string, logger.Logger) AMQPClient
 // The manager is key-agnostic - it doesn't know about tenants, just manages named clients.
 type Manager struct {
 	logger         logger.Logger
-	resourceSource TenantMessagingResourceSource
+	resourceSource BrokerURLProvider
 	clientFactory  ClientFactory // Injected for testability
 
 	// Publishers (evictable)
@@ -76,7 +76,7 @@ type ManagerOptions struct {
 }
 
 // NewMessagingManager creates a new messaging manager
-func NewMessagingManager(resourceSource TenantMessagingResourceSource, log logger.Logger, opts ManagerOptions, clientFactory ClientFactory) *Manager {
+func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, opts ManagerOptions, clientFactory ClientFactory) *Manager {
 	if opts.MaxPublishers <= 0 {
 		opts.MaxPublishers = 50 // sensible default
 	}
