@@ -15,7 +15,7 @@ import (
 // Column "error" is renamed to "error_msg" (Oracle reserved word).
 const oracleCreateTableSQL = `
 CREATE TABLE %s (
-    id            VARCHAR2(36) DEFAULT SYS_GUID() PRIMARY KEY,
+    id            VARCHAR2(36) PRIMARY KEY,
     event_type    VARCHAR2(255) NOT NULL,
     aggregate_id  VARCHAR2(255) NOT NULL,
     payload       BLOB NOT NULL,
@@ -47,8 +47,12 @@ type oracleStore struct {
 }
 
 // NewOracleStore creates a new Oracle outbox store.
-func NewOracleStore(tableName string) Store {
-	return &oracleStore{tableName: tableName}
+// Returns an error if the table name contains invalid identifier characters.
+func NewOracleStore(tableName string) (Store, error) {
+	if err := validateTableName(tableName); err != nil {
+		return nil, err
+	}
+	return &oracleStore{tableName: tableName}, nil
 }
 
 func (s *oracleStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {

@@ -42,8 +42,12 @@ type postgresStore struct {
 }
 
 // NewPostgresStore creates a new PostgreSQL outbox store.
-func NewPostgresStore(tableName string) Store {
-	return &postgresStore{tableName: tableName}
+// Returns an error if the table name contains invalid identifier characters.
+func NewPostgresStore(tableName string) (Store, error) {
+	if err := validateTableName(tableName); err != nil {
+		return nil, err
+	}
+	return &postgresStore{tableName: tableName}, nil
 }
 
 func (s *postgresStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {

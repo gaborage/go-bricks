@@ -233,6 +233,22 @@ func TestPublisherPublishNilPayload(t *testing.T) {
 	assert.Equal(t, []byte("null"), store.insertedRecords[0].Payload)
 }
 
+func TestPublisherPublishNilTransaction(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+		Payload:     []byte("{}"),
+	}
+
+	_, err := pub.Publish(context.Background(), nil, event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "transaction must not be nil")
+}
+
 func TestMarshalPayloadStruct(t *testing.T) {
 	type TestPayload struct {
 		Name string `json:"name"`

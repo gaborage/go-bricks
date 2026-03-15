@@ -2131,7 +2131,18 @@ tx.Commit(ctx) // Both events guaranteed to be published
 
 ```go
 func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
-    eventID := delivery.Headers["x-outbox-event-id"].(string)
+    // Safely extract outbox event ID for deduplication
+    raw, ok := delivery.Headers["x-outbox-event-id"]
+    if !ok {
+        return fmt.Errorf("missing x-outbox-event-id header")
+    }
+    eventID, ok := raw.(string)
+    if !ok {
+        eventID = fmt.Sprint(raw) // Handle []byte or other types
+    }
+    if eventID == "" {
+        return fmt.Errorf("empty x-outbox-event-id header")
+    }
 
     if h.isProcessed(ctx, eventID) {
         return nil // Skip duplicate

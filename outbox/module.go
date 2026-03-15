@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
@@ -38,6 +39,7 @@ type OutboxModule struct {
 	publisher app.OutboxPublisher
 	cfg       config.OutboxConfig
 
+	initMu       sync.Mutex // Protects store initialization (lazy init from concurrent goroutines)
 	tableCreated bool
 }
 
@@ -65,6 +67,10 @@ func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
 	}
 	applyDefaults(&m.cfg)
 
+	if err := validateConfig(&m.cfg); err != nil {
+		return err
+	}
+
 	if !m.cfg.Enabled {
 		m.logger.Info().Msg("Outbox module disabled (outbox.enabled=false)")
 		return nil
@@ -86,7 +92,18 @@ func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
 
 // ensureStoreInitialized creates the vendor-specific store on first use.
 // This is lazy because the database vendor type is only known at runtime.
+// Uses double-check locking (mutex, not sync.Once) because initialization
+// can fail and should be retried — matching the scheduler module pattern.
 func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
+	// Fast path: already initialized (no lock needed)
+	if m.store != nil {
+		return nil
+	}
+
+	m.initMu.Lock()
+	defer m.initMu.Unlock()
+
+	// Double-check after acquiring lock
 	if m.store != nil {
 		return nil
 	}
@@ -96,26 +113,33 @@ func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
 		return fmt.Errorf("outbox: database unavailable: %w", err)
 	}
 
-	// Create vendor-specific store
+	// Create vendor-specific store into local variable — only assign to m.store on success
+	var store Store
 	switch db.DatabaseType() {
 	case dbtypes.PostgreSQL:
-		m.store = NewPostgresStore(m.cfg.TableName)
+		store, err = NewPostgresStore(m.cfg.TableName)
 	case dbtypes.Oracle:
-		m.store = NewOracleStore(m.cfg.TableName)
+		store, err = NewOracleStore(m.cfg.TableName)
 	default:
 		return fmt.Errorf("outbox: unsupported database vendor: %s", db.DatabaseType())
 	}
+	if err != nil {
+		return fmt.Errorf("outbox: failed to create store: %w", err)
+	}
 
-	// Auto-create table if configured
+	// Auto-create table if configured.
+	// Warning-only on failure: CREATE TABLE IF NOT EXISTS may fail if the table
+	// already exists and the user lacks DDL permissions. This is benign.
 	if m.cfg.AutoCreateTable && !m.tableCreated {
-		if err := m.store.CreateTable(ctx, db); err != nil {
-			m.logger.Warn().Err(err).
+		if createErr := store.CreateTable(ctx, db); createErr != nil {
+			m.logger.Warn().Err(createErr).
 				Str("table", m.cfg.TableName).
 				Msg("Outbox table creation failed (may already exist)")
 		}
 		m.tableCreated = true
 	}
 
+	m.store = store
 	return nil
 }
 

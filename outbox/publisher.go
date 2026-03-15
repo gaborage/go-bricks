@@ -27,6 +27,10 @@ func newPublisher(store Store, defaultExchange string) app.OutboxPublisher {
 }
 
 func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
+	if tx == nil {
+		return "", fmt.Errorf("outbox: transaction must not be nil")
+	}
+
 	if event == nil {
 		return "", fmt.Errorf("outbox: event must not be nil")
 	}
