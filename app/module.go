@@ -7,6 +7,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -42,6 +43,52 @@ type JobRegistrar interface {
 
 	// MonthlyAt schedules a job to run monthly on the specified day and time
 	MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error
+}
+
+// OutboxPublisher defines the interface for writing events to the transactional outbox.
+// This interface is defined here to avoid circular imports between app and outbox packages.
+// The outbox package implements this interface via OutboxModule.
+//
+// Events are written to the outbox table within the caller's database transaction,
+// ensuring atomic consistency with business data. A background relay publishes
+// them to the message broker after the transaction commits.
+type OutboxPublisher interface {
+	// Publish writes an event to the outbox table within the given transaction.
+	// Returns the generated event ID (UUID) for correlation and idempotency.
+	Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
+}
+
+// OutboxEvent represents a domain event to be reliably published via the outbox pattern.
+// This type is defined here to avoid circular imports. The outbox package provides
+// additional utilities for working with events.
+type OutboxEvent struct {
+	// EventType identifies the kind of event (e.g., "order.created").
+	EventType string
+
+	// AggregateID identifies the entity this event relates to (e.g., "order-123").
+	AggregateID string
+
+	// Payload is the event data. If []byte, stored as-is. Otherwise, JSON-marshaled.
+	Payload any
+
+	// Headers are optional AMQP headers propagated to the published message.
+	Headers map[string]any
+
+	// Exchange is the target AMQP exchange. If empty, uses the default from outbox config.
+	Exchange string
+
+	// RoutingKey overrides the default routing key. If empty, uses EventType.
+	RoutingKey string
+}
+
+// OutboxProvider is an optional interface that modules can implement to provide
+// an OutboxPublisher for dependency injection into other modules.
+// When a module implements this interface, the ModuleRegistry automatically
+// wires its OutboxPublisher into ModuleDeps.Outbox.
+//
+// This follows the same pattern as JobRegistrar for the scheduler module.
+type OutboxProvider interface {
+	OutboxPublisher() OutboxPublisher
 }
 
 // JobProvider is an optional interface that modules can implement to register scheduled jobs.
@@ -86,6 +133,13 @@ type ModuleDeps struct {
 	// This field is nil if no SchedulerModule is registered.
 	// Example: deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, time.Date(0, 0, 0, 3, 0, 0, 0, time.Local))
 	Scheduler JobRegistrar
+
+	// Outbox provides transactional event publishing.
+	// Events are written to the outbox table atomically with business data,
+	// then reliably delivered to the message broker by a background relay.
+	// This field is nil if no OutboxModule is registered or outbox.enabled is false.
+	// Example: deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{EventType: "order.created", ...})
+	Outbox OutboxPublisher
 
 	// DB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.

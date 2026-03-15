@@ -88,6 +88,18 @@ cache:
     minretrybackoff: 8ms             # Minimum backoff between retries
     maxretrybackoff: 512ms           # Maximum backoff between retries
 
+# Transactional Outbox (OPTIONAL - reliable event publishing)
+# Requires: database + messaging + scheduler modules
+outbox:
+  enabled: false                     # Enable transactional outbox pattern
+  table_name: gobricks_outbox        # Outbox table name in database
+  auto_create_table: true            # Create table on first use (set false for managed migrations)
+  default_exchange: ""               # Fallback AMQP exchange when Event.Exchange is empty
+  poll_interval: 5s                  # How often the relay checks for pending events
+  batch_size: 100                    # Maximum events processed per relay cycle
+  max_retries: 5                     # Max publish attempts before giving up
+  retention_period: 72h              # How long published events are kept (0 = disable cleanup)
+
 log:
   level: debug
   pretty: true
