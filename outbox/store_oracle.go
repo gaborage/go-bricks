@@ -163,8 +163,12 @@ func (s *oracleStore) DeletePublished(ctx context.Context, db dbtypes.Interface,
 	return count, nil
 }
 
+// CreateTable creates the outbox table and indexes in Oracle.
+// Unlike PostgreSQL (which uses IF NOT EXISTS), Oracle DDL will return ORA-00955
+// if the table or indexes already exist. The caller (ensureStoreInitialized) treats
+// all CreateTable errors as warnings, so existing objects are handled gracefully.
 func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	// Create table
+	// Create table (ORA-00955 if already exists — handled by caller as warning)
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreateTableSQL, s.tableName)); err != nil {
 		return fmt.Errorf("outbox oracle: create table failed: %w", err)
 	}

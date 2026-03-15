@@ -128,8 +128,13 @@ func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
 	}
 
 	// Auto-create table if configured.
-	// Warning-only on failure: CREATE TABLE IF NOT EXISTS may fail if the table
-	// already exists and the user lacks DDL permissions. This is benign.
+	// Warning-only on failure: PostgreSQL uses IF NOT EXISTS (idempotent),
+	// Oracle may return ORA-00955 if the table/index already exists.
+	// Both cases are benign — the table is usable either way.
+	//
+	// m.tableCreated is set unconditionally to prevent repeated warnings on
+	// every subsequent call. If the failure was transient (e.g., network),
+	// the store operations themselves will fail with a clear error.
 	if m.cfg.AutoCreateTable && !m.tableCreated {
 		if createErr := store.CreateTable(ctx, db); createErr != nil {
 			m.logger.Warn().Err(createErr).
@@ -213,8 +218,10 @@ func (m *OutboxModule) Shutdown() error {
 }
 
 // lazyPublisher wraps app.OutboxPublisher to lazily initialize the store on first use.
+// Caches the publisher instance after first successful initialization.
 type lazyPublisher struct {
-	module *OutboxModule
+	module    *OutboxModule
+	cachedPub app.OutboxPublisher
 }
 
 func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
@@ -222,8 +229,10 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 		return "", err
 	}
 
-	pub := newPublisher(p.module.store, p.module.cfg.DefaultExchange)
-	return pub.Publish(ctx, tx, event)
+	if p.cachedPub == nil {
+		p.cachedPub = newPublisher(p.module.store, p.module.cfg.DefaultExchange)
+	}
+	return p.cachedPub.Publish(ctx, tx, event)
 }
 
 // lazyStore wraps Store to lazily initialize via the module.
