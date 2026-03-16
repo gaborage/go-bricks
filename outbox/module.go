@@ -73,6 +73,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
+	// Fail fast: when outbox is enabled, DB and Messaging resolvers are required.
+	// Without them, the relay job would panic on first poll instead of failing at startup.
+	if m.getDB == nil {
+		return fmt.Errorf("outbox: database resolver (deps.DB) is required when outbox is enabled")
+	}
+	if m.getMsg == nil {
+		return fmt.Errorf("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
+	}
+
 	// Store creation is deferred until first use (lazy init like scheduler)
 	// because we need to know the database vendor type, which requires a DB connection.
 	// The publisher wraps the store and handles lazy initialization.

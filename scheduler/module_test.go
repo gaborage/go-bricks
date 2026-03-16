@@ -15,6 +15,7 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // TestSchedulerModuleName verifies the module name
@@ -381,6 +382,63 @@ func TestJobExecutionWithTracer(t *testing.T) {
 	obtest.AssertSpanAttribute(t, &span, "job.trigger", "scheduled")
 }
 
+// TestJobExecutionWithTracerPropagatesContext verifies that the traced context from tracer.Start
+// is propagated to the job's Execute method, so child spans nest under "job.execute".
+func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	defer tp.Shutdown(context.Background())
+
+	module := NewModule()
+	appDeps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Scheduler: config.SchedulerConfig{
+				Timeout: config.SchedulerTimeoutConfig{
+					Shutdown: 5 * time.Second,
+				},
+			},
+		},
+		Tracer:        tp.Tracer("test-scheduler"),
+		MeterProvider: nil,
+		DB: func(_ context.Context) (types.Interface, error) {
+			return nil, nil
+		},
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
+			return nil, nil
+		},
+	}
+
+	err := module.Init(appDeps)
+	require.NoError(t, err)
+	defer module.Shutdown()
+
+	// Job that creates a child span to verify context propagation
+	tracer := tp.Tracer("test-child")
+	job := &spanCapturingJob{tracer: tracer}
+	err = module.FixedRate("ctx-propagation-job", job, 100*time.Millisecond)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	assert.Greater(t, job.count(), 0, "Job should execute")
+
+	// Verify both parent and child spans exist
+	collector := obtest.NewSpanCollector(t, tp.Exporter)
+	parentSpans := collector.WithName("job.execute")
+	parentSpans.AssertCount(1)
+
+	childSpans := collector.WithName("child.operation")
+	childSpans.AssertCount(1)
+
+	// Verify the child span's parent is the "job.execute" span
+	parentSpan := parentSpans.First()
+	childSpan := childSpans.First()
+	assert.Equal(t, parentSpan.SpanContext.TraceID(), childSpan.SpanContext.TraceID(),
+		"Child span should share the same trace ID as the parent")
+	assert.Equal(t, parentSpan.SpanContext.SpanID(), childSpan.Parent.SpanID(),
+		"Child span's parent should be the job.execute span")
+}
+
 // TestCreateJobLogEventLevels verifies correct log event creation for different severity levels
 func TestCreateJobLogEventLevels(t *testing.T) {
 	log := logger.New("info", false)
@@ -487,6 +545,23 @@ func (j *messagingCheckJob) Execute(ctx JobContext) error {
 
 func (j *messagingCheckJob) wasExecuted() bool {
 	return atomic.LoadInt32(&j.executed) == 1
+}
+
+// spanCapturingJob creates a child span during execution to verify context propagation
+type spanCapturingJob struct {
+	tracer     trace.Tracer
+	executions int32
+}
+
+func (j *spanCapturingJob) Execute(ctx JobContext) error {
+	atomic.AddInt32(&j.executions, 1)
+	_, span := j.tracer.Start(ctx, "child.operation")
+	defer span.End()
+	return nil
+}
+
+func (j *spanCapturingJob) count() int {
+	return int(atomic.LoadInt32(&j.executions))
 }
 
 // place near test helpers (non-diff, supporting snippet)

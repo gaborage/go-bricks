@@ -550,10 +550,13 @@ func (m *Module) createJobWrapper(entry *jobEntry) func() {
 // Per FR-021: Recover panics, log with stack trace, mark as failed.
 // Per FR-017 to FR-020: Create spans, record metrics, propagate trace context.
 func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
-	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured
+	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured.
+	// Propagate the traced context so child spans and WithContext(ctx) logs
+	// nest under this "job.execute" span.
 	var span trace.Span
 	if m.tracer != nil {
-		_, span = m.tracer.Start(
+		var tracedCtx context.Context
+		tracedCtx, span = m.tracer.Start(
 			ctx,
 			"job.execute",
 			trace.WithAttributes(
@@ -562,6 +565,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 			),
 		)
 		defer span.End()
+		ctx = ctx.(*jobContextImpl).withContext(tracedCtx)
 	}
 
 	start := time.Now()

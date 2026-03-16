@@ -139,3 +139,11 @@ func (ctx *jobContextImpl) Messaging() messaging.Client {
 func (ctx *jobContextImpl) Config() *config.Config {
 	return ctx.config
 }
+
+// withContext returns a shallow copy of the jobContextImpl with a different embedded context.
+// Used to propagate traced context from tracer.Start while preserving all other fields.
+func (ctx *jobContextImpl) withContext(parent context.Context) *jobContextImpl {
+	cp := *ctx
+	cp.Context = parent
+	return &cp
+}
