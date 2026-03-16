@@ -557,3 +557,78 @@ func TestModuleRegistryKeyStoreAvailableDuringInit(t *testing.T) {
 	ksModule.AssertExpectations(t)
 	consumer.AssertExpectations(t)
 }
+
+// minimalModule implements only the core Module interface (no routes, no messaging).
+type minimalModule struct {
+	name string
+}
+
+func (m *minimalModule) Name() string             { return m.name }
+func (m *minimalModule) Init(_ *ModuleDeps) error { return nil }
+func (m *minimalModule) Shutdown() error          { return nil }
+
+// routeModule implements Module + RouteRegisterer (no messaging).
+type routeModule struct {
+	name       string
+	routeCalls int
+}
+
+func (m *routeModule) Name() string             { return m.name }
+func (m *routeModule) Init(_ *ModuleDeps) error { return nil }
+func (m *routeModule) Shutdown() error          { return nil }
+func (m *routeModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
+	m.routeCalls++
+}
+
+// TestRegisterRoutesSkipsModulesWithoutRouteRegisterer verifies that modules
+// without RegisterRoutes are silently skipped during route registration.
+func TestRegisterRoutesSkipsModulesWithoutRouteRegisterer(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register a minimal module (no routes)
+	minimal := &minimalModule{name: "minimal"}
+	require.NoError(t, registry.Register(minimal))
+
+	// Register a route module
+	route := &routeModule{name: "with-routes"}
+	require.NoError(t, registry.Register(route))
+
+	// Call RegisterRoutes — minimal should be skipped, route should be called
+	srv := server.New(&config.Config{}, log)
+	registry.RegisterRoutes(srv.ModuleGroup())
+
+	assert.Equal(t, 1, route.routeCalls, "RouteRegisterer module should have RegisterRoutes called")
+}
+
+// TestDeclareMessagingSkipsModulesWithoutMessagingDeclarer verifies that modules
+// without DeclareMessaging are silently skipped during messaging declaration.
+func TestDeclareMessagingSkipsModulesWithoutMessagingDeclarer(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register a minimal module (no messaging)
+	minimal := &minimalModule{name: "minimal"}
+	require.NoError(t, registry.Register(minimal))
+
+	// Register a module that declares messaging
+	counter := &declarationCounterModule{}
+	require.NoError(t, registry.Register(counter))
+
+	// Call DeclareMessaging — minimal should be skipped, counter should be called
+	decls := messaging.NewDeclarations()
+	err := registry.DeclareMessaging(decls)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 1, counter.callCount, "MessagingDeclarer module should have DeclareMessaging called")
+}

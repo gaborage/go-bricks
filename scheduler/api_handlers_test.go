@@ -51,7 +51,7 @@ func TestListJobsHandler(t *testing.T) {
 
 // TestListJobsHandlerEmptyScheduler verifies empty job list when no jobs registered
 func TestListJobsHandlerEmptyScheduler(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 
 	req := EmptyRequest{}
 	ctx := server.HandlerContext{
@@ -113,7 +113,7 @@ func TestTriggerJobHandler(t *testing.T) {
 
 // TestTriggerJobHandlerNotFound verifies 404 for unknown job
 func TestTriggerJobHandlerNotFound(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 
 	req := JobIDParam{JobID: "non-existent-job"}
 	ctx := server.HandlerContext{

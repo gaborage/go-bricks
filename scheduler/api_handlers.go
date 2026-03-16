@@ -38,7 +38,7 @@ type JobIDParam struct {
 
 // listJobsHandler returns all registered jobs with their metadata
 // GET /_sys/job
-func (m *SchedulerModule) listJobsHandler(_ EmptyRequest, _ server.HandlerContext) (server.Result[JobListResponse], server.IAPIError) {
+func (m *Module) listJobsHandler(_ EmptyRequest, _ server.HandlerContext) (server.Result[JobListResponse], server.IAPIError) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -71,7 +71,7 @@ func (m *SchedulerModule) listJobsHandler(_ EmptyRequest, _ server.HandlerContex
 
 // triggerJobHandler manually triggers a job execution
 // POST /_sys/job/:jobId
-func (m *SchedulerModule) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (server.Result[JobTriggerResponse], server.IAPIError) {
+func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (server.Result[JobTriggerResponse], server.IAPIError) {
 	jobID := req.JobID
 
 	m.mu.RLock()
@@ -106,7 +106,7 @@ func (m *SchedulerModule) triggerJobHandler(req JobIDParam, _ server.HandlerCont
 }
 
 // executeManualJob executes a job triggered manually (not by scheduler)
-func (m *SchedulerModule) executeManualJob(entry *jobEntry) {
+func (m *Module) executeManualJob(entry *jobEntry) {
 	// Overlapping prevention (same as scheduled execution)
 	if !entry.tryLock() {
 		m.logger.Warn().

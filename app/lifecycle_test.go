@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -83,16 +82,12 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	// Register scheduler module
 	scheduler := &MockSchedulerModule{name: "scheduler"}
 	scheduler.On("Init", deps).Return(nil)
-	scheduler.On("DeclareMessaging", mock.Anything).Return()
-	scheduler.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
 	err := registry.Register(scheduler)
 	assert.NoError(t, err)
 
 	// Register JobProvider module
 	jobProvider := &MockJobProviderModule{name: "job-provider"}
 	jobProvider.On("Init", deps).Return(nil)
-	jobProvider.On("DeclareMessaging", mock.Anything).Return()
-	jobProvider.On("RegisterRoutes", mock.Anything, mock.Anything).Return()
 	jobProvider.On("RegisterJobs", scheduler).Return(nil)
 	err = registry.Register(jobProvider)
 	assert.NoError(t, err)

@@ -274,7 +274,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 
 // newTestRegistrar creates a test JobRegistrar using the real SchedulerModule
 func newTestRegistrar() app.JobRegistrar {
-	module := NewSchedulerModule()
+	module := NewModule()
 
 	// Initialize with minimal dependencies
 	deps := &app.ModuleDeps{

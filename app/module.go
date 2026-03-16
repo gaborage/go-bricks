@@ -16,19 +16,34 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Module defines the interface that all application modules must implement.
-// It provides hooks for initialization, route registration, messaging setup, and cleanup.
+// Module defines the core interface that all application modules must implement.
+// It provides hooks for initialization and cleanup. Route registration and messaging
+// declaration are optional — implement RouteRegisterer and/or MessagingDeclarer
+// only if your module needs them.
 type Module interface {
 	Name() string
 	Init(deps *ModuleDeps) error
-	RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
-	DeclareMessaging(decls *messaging.Declarations)
 	Shutdown() error
+}
+
+// RouteRegisterer is an optional interface that modules can implement to register HTTP routes.
+// Modules that implement this interface will have RegisterRoutes called automatically
+// during application startup.
+type RouteRegisterer interface {
+	RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
+}
+
+// MessagingDeclarer is an optional interface that modules can implement to declare
+// AMQP exchanges, queues, bindings, publishers, and consumers.
+// Modules that implement this interface will have DeclareMessaging called automatically
+// during application startup.
+type MessagingDeclarer interface {
+	DeclareMessaging(decls *messaging.Declarations)
 }
 
 // JobRegistrar defines the interface for scheduling jobs.
 // This interface is defined here to avoid circular imports between app and scheduler packages.
-// The scheduler package implements this interface via SchedulerModule.
+// The scheduler package implements this interface via its Module type.
 type JobRegistrar interface {
 	// FixedRate schedules a job to run every interval duration
 	FixedRate(jobID string, job any, interval time.Duration) error
@@ -48,7 +63,7 @@ type JobRegistrar interface {
 
 // OutboxPublisher defines the interface for writing events to the transactional outbox.
 // This interface is defined here to avoid circular imports between app and outbox packages.
-// The outbox package implements this interface via OutboxModule.
+// The outbox package implements this interface via its Module type.
 //
 // Events are written to the outbox table within the caller's database transaction,
 // ensuring atomic consistency with business data. A background relay publishes
@@ -129,7 +144,7 @@ type KeyStoreProvider interface {
 //	}
 //
 // The scheduler parameter is guaranteed to be non-nil when this method is called.
-// If no SchedulerModule is registered, this method will not be called.
+// If no scheduler module is registered, this method will not be called.
 type JobProvider interface {
 	RegisterJobs(JobRegistrar) error
 }
@@ -153,14 +168,14 @@ type ModuleDeps struct {
 
 	// Scheduler provides job scheduling capabilities.
 	// Modules can register jobs using methods like FixedRate, DailyAt, WeeklyAt, etc.
-	// This field is nil if no SchedulerModule is registered.
+	// This field is nil if no scheduler module is registered.
 	// Example: deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, time.Date(0, 0, 0, 3, 0, 0, 0, time.Local))
 	Scheduler JobRegistrar
 
 	// Outbox provides transactional event publishing.
 	// Events are written to the outbox table atomically with business data,
 	// then reliably delivered to the message broker by a background relay.
-	// This field is nil if no OutboxModule is registered or outbox.enabled is false.
+	// This field is nil if no outbox module is registered or outbox.enabled is false.
 	// Example: deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{EventType: "order.created", ...})
 	Outbox OutboxPublisher
 

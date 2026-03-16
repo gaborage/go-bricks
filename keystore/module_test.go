@@ -25,13 +25,13 @@ func newTestDeps(t *testing.T, cfg config.KeyStoreConfig) *app.ModuleDeps {
 }
 
 func TestKeystoreModuleName(t *testing.T) {
-	m := NewKeystoreModule()
+	m := NewModule()
 	assert.Equal(t, "keystore", m.Name())
 }
 
 func TestKeystoreModuleInitNoCerts(t *testing.T) {
 	deps := newTestDeps(t, config.KeyStoreConfig{})
-	m := NewKeystoreModule()
+	m := NewModule()
 
 	err := m.Init(deps)
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestKeystoreModuleInitWithValidKeys(t *testing.T) {
 		},
 	})
 
-	m := NewKeystoreModule()
+	m := NewModule()
 	err = m.Init(deps)
 	require.NoError(t, err)
 	assert.NotNil(t, m.store)
@@ -76,7 +76,7 @@ func TestKeystoreModuleInitFileNotFound(t *testing.T) {
 		},
 	})
 
-	m := NewKeystoreModule()
+	m := NewModule()
 	err := m.Init(deps)
 	assert.ErrorContains(t, err, "read file")
 }
@@ -90,13 +90,13 @@ func TestKeystoreModuleInitMissingPublicKey(t *testing.T) {
 		},
 	})
 
-	m := NewKeystoreModule()
+	m := NewModule()
 	err := m.Init(deps)
 	assert.ErrorContains(t, err, "public key is required")
 }
 
 func TestKeystoreModuleProviderInterface(t *testing.T) {
-	m := NewKeystoreModule()
+	m := NewModule()
 
 	// Verify it implements KeyStoreProvider
 	var provider app.KeyStoreProvider = m
@@ -108,7 +108,7 @@ func TestKeystoreModuleProviderInterface(t *testing.T) {
 
 func TestKeystoreModuleShutdown(t *testing.T) {
 	deps := newTestDeps(t, config.KeyStoreConfig{})
-	m := NewKeystoreModule()
+	m := NewModule()
 	require.NoError(t, m.Init(deps))
 
 	err := m.Shutdown()

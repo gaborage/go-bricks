@@ -21,7 +21,7 @@
 // Register the module before modules that need keys:
 //
 //	fw.RegisterModules(
-//	    keystore.NewKeystoreModule(),
+//	    keystore.NewModule(),
 //	    &myapp.JWEModule{},
 //	)
 //

@@ -248,14 +248,21 @@ var probe app.Prober = myProbe
 - **keystore/** - Named RSA key pair management from DER files or base64 env vars
 
 ### Module System
-Modules implement this interface:
+Modules implement this core interface (route registration and messaging are optional):
 ```go
 type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
-    RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
-    DeclareMessaging(decls *messaging.Declarations)
     Shutdown() error
+}
+
+// Optional interfaces — implement only if your module needs them
+type RouteRegisterer interface {
+    RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
+}
+
+type MessagingDeclarer interface {
+    DeclareMessaging(decls *messaging.Declarations)
 }
 
 type ModuleDeps struct {
@@ -1122,8 +1129,8 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 **Module Setup:**
 ```go
 fw.RegisterModules(
-    scheduler.NewSchedulerModule(),  // Required: relay runs as a scheduled job
-    outbox.NewOutboxModule(),        // Outbox module
+    scheduler.NewModule(),  // Required: relay runs as a scheduled job
+    outbox.NewModule(),     // Outbox module
     &myapp.OrderModule{},
 )
 
@@ -2050,7 +2057,7 @@ grep "Panic recovered in message handler" logs/app.log
 
 ```bash
 # "outbox not configured" or deps.Outbox is nil
-# → Register OutboxModule BEFORE your application modules
+# → Register outbox module BEFORE your application modules
 # → Set outbox.enabled: true in config
 
 # Events stuck in "pending" status

@@ -19,22 +19,13 @@ import (
 
 // TestSchedulerModuleName verifies the module name
 func TestSchedulerModuleName(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	assert.Equal(t, "scheduler", module.Name())
-}
-
-// TestSchedulerModuleDeclareMessaging verifies no-op messaging declaration
-func TestSchedulerModuleDeclareMessaging(_ *testing.T) {
-	module := NewSchedulerModule()
-
-	// DeclareMessaging is a no-op but should not panic
-	decls := &messaging.Declarations{}
-	module.DeclareMessaging(decls)
 }
 
 // TestSchedulerModuleRegisterRoutes verifies route registration (stub for Phase 4)
 func TestSchedulerModuleRegisterRoutes(_ *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 
 	// RegisterRoutes is a stub but should not panic
 	module.RegisterRoutes(nil, nil)
@@ -98,7 +89,7 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	defer mp.Shutdown(context.Background())
 
 	// Create scheduler with observability
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -149,7 +140,7 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 
 // TestJobSkippedDuringShutdown verifies jobs skip execution when shutdown is triggered
 func TestJobSkippedDuringShutdown(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -189,7 +180,7 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 
 // TestJobExecutionWithDBGetterError verifies error handling when DB getter fails
 func TestJobExecutionWithDBGetterError(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -226,7 +217,7 @@ func TestJobExecutionWithDBGetterError(t *testing.T) {
 
 // TestJobExecutionWithMessagingGetterError verifies error handling when messaging getter fails
 func TestJobExecutionWithMessagingGetterError(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -263,7 +254,7 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 
 // TestSlowJobThresholdWarning verifies slow job detection and WARN severity
 func TestSlowJobThresholdWarning(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -302,7 +293,7 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 
 // TestJobExecutionWithoutTracer verifies jobs execute successfully when tracer is nil
 func TestJobExecutionWithoutTracer(t *testing.T) {
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
@@ -344,7 +335,7 @@ func TestJobExecutionWithTracer(t *testing.T) {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	module := NewSchedulerModule()
+	module := NewModule()
 	appDeps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
