@@ -676,7 +676,15 @@ func validateKeyStore(cfg *KeyStoreConfig) error {
 		return nil
 	}
 
-	for name, kp := range cfg.Keys {
+	// Sort keys for deterministic error ordering
+	names := make([]string, 0, len(cfg.Keys))
+	for name := range cfg.Keys {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		kp := cfg.Keys[name]
 		if err := validateKeySource(kp.Public, name, "public", true); err != nil {
 			return err
 		}
