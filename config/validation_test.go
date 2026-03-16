@@ -3309,3 +3309,73 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 	err := validateNamedDatabases(databases, &mt)
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
+
+// =============================================================================
+// KeyStore Validation Tests
+// =============================================================================
+
+func TestValidateKeyStoreEmpty(t *testing.T) {
+	cfg := &KeyStoreConfig{}
+	assert.NoError(t, validateKeyStore(cfg))
+}
+
+func TestValidateKeyStoreValid(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"signing": {
+				Public:  KeySourceConfig{File: "pub.der"},
+				Private: KeySourceConfig{Value: "base64data"},
+			},
+		},
+	}
+	assert.NoError(t, validateKeyStore(cfg))
+}
+
+func TestValidateKeyStorePublicKeyRequired(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"missing": {
+				Public: KeySourceConfig{},
+			},
+		},
+	}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "key source required")
+}
+
+func TestValidateKeyStoreBothSourcesSet(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"both": {
+				Public: KeySourceConfig{File: "a.der", Value: "also"},
+			},
+		},
+	}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+}
+
+func TestValidateKeyStorePrivateOptional(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"pub-only": {
+				Public: KeySourceConfig{File: "pub.der"},
+			},
+		},
+	}
+	assert.NoError(t, validateKeyStore(cfg))
+}
+
+func TestValidateKeyStoreWiredIntoValidate(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.KeyStore = KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"bad": {
+				Public: KeySourceConfig{File: "a.der", Value: "also"},
+			},
+		},
+	}
+	err := Validate(cfg)
+	assert.ErrorContains(t, err, "keystore config")
+	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+}

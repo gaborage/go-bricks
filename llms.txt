@@ -2215,6 +2215,98 @@ curl -X POST http://localhost:8080/_sys/job/outbox-relay
 SELECT count(*) FROM gobricks_outbox WHERE status = 'pending';
 ```
 
+## KeyStore (Named RSA Key Pairs)
+
+Load DER-encoded RSA keys from files (local dev) or base64-encoded env vars (EKS).
+Keys are loaded once at startup and held in memory — no caching or synchronization needed.
+
+### Configuration
+
+```yaml
+# Local dev (file paths to DER files)
+keystore:
+  keys:
+    signing:
+      public:
+        file: "certs/signing_public.der"
+      private:
+        file: "certs/signing_private.der"
+
+# EKS deployment (base64-encoded DER via env vars)
+keystore:
+  keys:
+    signing:
+      public:
+        value: "${SIGNING_PUBLIC_KEY_BASE64}"
+      private:
+        value: "${SIGNING_PRIVATE_KEY_BASE64}"
+```
+
+### Module Setup
+
+```go
+// Register before modules that need keys
+fw.RegisterModules(
+    keystore.NewKeystoreModule(),
+    &myapp.JWEModule{},
+)
+
+// In your module
+type Module struct {
+    keyStore app.KeyStore
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    m.keyStore = deps.KeyStore  // nil if no KeystoreModule registered
+    return nil
+}
+
+// Use in business logic
+func (s *Service) DecryptJWE(ctx context.Context, token string) ([]byte, error) {
+    privKey, err := s.keyStore.PrivateKey("signing")
+    if err != nil {
+        return nil, fmt.Errorf("get signing key: %w", err)
+    }
+    return DecryptJWECompact(token, privKey)
+}
+```
+
+### Testing
+
+```go
+import kstest "github.com/gaborage/go-bricks/keystore/testing"
+
+func TestServiceDecryption(t *testing.T) {
+    privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+    mock := kstest.NewMockKeyStore().
+        WithPublicKey("signing", &privKey.PublicKey).
+        WithPrivateKey("signing", privKey)
+
+    deps := &app.ModuleDeps{
+        KeyStore: mock,
+    }
+
+    svc := NewService(deps)
+    // ... test decryption logic
+}
+
+// Error injection
+mock := kstest.NewMockKeyStore().
+    WithPrivateKeyError(fmt.Errorf("key unavailable"))
+
+// Assertion helpers
+kstest.AssertPublicKeyAvailable(t, mock, "signing")
+kstest.AssertPrivateKeyAvailable(t, mock, "signing")
+kstest.AssertKeyNotFound(t, mock, "nonexistent")
+```
+
+**Key Points:**
+- Public key required per pair, private key optional (verification-only services)
+- Exactly one source per key: `file` (DER path) or `value` (base64 string)
+- Fails fast at startup if any key cannot be loaded or parsed
+- PKCS8 with PKCS1 fallback for private keys (handles legacy formats)
+
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
 - Resolution strategies: `header`, `host`, or custom store implementing `multitenant.Store`.
