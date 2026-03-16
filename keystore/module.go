@@ -44,12 +44,6 @@ func (m *KeystoreModule) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
-	// Defense-in-depth: config.Validate() also validates keystore config at startup,
-	// but we re-validate here in case Init() is called outside the normal bootstrap path.
-	if err := validateConfig(&cfg); err != nil {
-		return err
-	}
-
 	s, err := newStore(cfg.Keys)
 	if err != nil {
 		return err

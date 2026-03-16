@@ -67,18 +67,18 @@ func TestKeystoreModuleInitWithValidKeys(t *testing.T) {
 	assert.True(t, privKey.PublicKey.Equal(gotPub))
 }
 
-func TestKeystoreModuleInitInvalidConfig(t *testing.T) {
+func TestKeystoreModuleInitFileNotFound(t *testing.T) {
 	deps := newTestDeps(t, config.KeyStoreConfig{
 		Keys: map[string]config.KeyPairConfig{
 			"bad": {
-				Public: config.KeySourceConfig{File: "a.der", Value: "also-set"},
+				Public: config.KeySourceConfig{File: "/nonexistent/pub.der"},
 			},
 		},
 	})
 
 	m := NewKeystoreModule()
 	err := m.Init(deps)
-	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	assert.ErrorContains(t, err, "read file")
 }
 
 func TestKeystoreModuleInitMissingPublicKey(t *testing.T) {
@@ -92,7 +92,7 @@ func TestKeystoreModuleInitMissingPublicKey(t *testing.T) {
 
 	m := NewKeystoreModule()
 	err := m.Init(deps)
-	assert.ErrorContains(t, err, "requires either 'file' or 'value'")
+	assert.ErrorContains(t, err, "public key is required")
 }
 
 func TestKeystoreModuleProviderInterface(t *testing.T) {
