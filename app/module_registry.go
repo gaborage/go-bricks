@@ -63,6 +63,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 			Msg("Scheduler module registered - available to other modules via deps.Scheduler")
 	}
 
+	// Special case: If this module is an OutboxProvider (outbox module),
+	// make it available to other modules via deps.Outbox
+	if outboxProvider, ok := module.(OutboxProvider); ok {
+		r.deps.Outbox = outboxProvider.OutboxPublisher()
+		r.logger.Info().
+			Str("module", moduleName).
+			Msg("Outbox module registered - available to other modules via deps.Outbox")
+	}
+
 	// Add to deduplication map BEFORE appending to modules slice
 	r.registeredNames[moduleName] = module
 

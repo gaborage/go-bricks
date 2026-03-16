@@ -244,6 +244,7 @@ var probe app.Prober = myProbe
 - **server/** - Echo-based HTTP server
 - **migration/** - Flyway integration
 - **observability/** - OpenTelemetry tracing and metrics
+- **outbox/** - Transactional outbox for reliable event publishing (at-least-once delivery)
 
 ### Module System
 Modules implement this interface:
@@ -1105,6 +1106,96 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 - Each worker logs with `worker_id` for debugging
 - OpenTelemetry metrics track per-consumer throughput
 
+### Outbox Architecture
+
+GoBricks provides a built-in **Transactional Outbox** for reliable event publishing. It solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay.
+
+**Core Components:**
+- **Publisher**: Writes events to the outbox table within a database transaction
+- **Relay**: Background poller (scheduler job) that publishes pending events to AMQP
+- **Cleanup**: Scheduled job that removes published events after retention period
+- **Store**: Vendor-agnostic SQL abstraction (PostgreSQL + Oracle)
+
+**Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
+
+**Module Setup:**
+```go
+fw.RegisterModules(
+    scheduler.NewSchedulerModule(),  // Required: relay runs as a scheduled job
+    outbox.NewOutboxModule(),        // Outbox module
+    &myapp.OrderModule{},
+)
+
+// In your module:
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    m.getDB = deps.DB
+    m.outbox = deps.Outbox  // nil if outbox not configured (zero cost)
+    return nil
+}
+```
+
+**Business Logic Pattern (atomic write + event):**
+```go
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
+    db, err := s.getDB(ctx)
+    if err != nil { return err }
+
+    tx, err := db.Begin(ctx)
+    if err != nil { return err }
+    defer tx.Rollback(ctx)
+
+    // 1. Write business data
+    _, err = tx.Exec(ctx, "INSERT INTO orders (id, customer_id) VALUES ($1, $2)",
+        req.ID, req.CustomerID)
+    if err != nil { return fmt.Errorf("insert order: %w", err) }
+
+    // 2. Write event to outbox (SAME transaction — atomic!)
+    payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
+    _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+        EventType:   "order.created",
+        AggregateID: fmt.Sprintf("order-%d", req.ID),
+        Payload:     payload,
+        Exchange:    "order.events",
+    })
+    if err != nil { return fmt.Errorf("outbox publish: %w", err) }
+
+    return tx.Commit(ctx)
+    // Event GUARANTEED to reach the broker eventually
+}
+```
+
+**How It Works:**
+1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction
+2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `poll_interval`
+3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
+4. Successfully published events are marked as `published`
+5. Failed events are retried up to `max_retries` times
+6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retention_period`
+
+**Configuration:**
+```yaml
+outbox:
+  enabled: true
+  table_name: gobricks_outbox       # Default table name
+  auto_create_table: true           # Create table on first use
+  default_exchange: ""              # Fallback if Event.Exchange empty
+  poll_interval: 5s                 # Relay poll frequency
+  batch_size: 100                   # Events per relay cycle
+  max_retries: 5                    # Max attempts before giving up
+  retention_period: 72h             # Keep published events (0=disable cleanup)
+```
+
+**Event Struct:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `EventType` | string | Yes | Event routing key (e.g., "order.created") |
+| `AggregateID` | string | Yes | Entity identifier for idempotency (e.g., "order-123") |
+| `Payload` | any | Yes | `[]byte` stored as-is, otherwise JSON-marshaled |
+| `Headers` | map[string]any | No | Custom AMQP headers propagated to published message |
+| `Exchange` | string | No | Target AMQP exchange (falls back to `default_exchange` config) |
+| `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
+
 ### Observability
 
 **Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod), environment-aware export timeouts (10s dev, 60s prod)
@@ -1422,6 +1513,48 @@ result, err := svc.Process(acmeCtx)  // Uses acme's MockCache
 
 See [cache/testing](cache/testing/) package for full API documentation and the Cache Testing Utilities section in [llms.txt](llms.txt) for comprehensive examples.
 
+### Outbox Testing
+
+GoBricks provides `outbox/testing` package for mocking outbox operations in unit tests.
+
+**Simple Test:**
+```go
+import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+
+func TestOrderServiceCreateOrder(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    tx := db.ExpectTransaction().
+        ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
+
+    mockOutbox := outboxtest.NewMockOutbox()
+
+    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    err := svc.CreateOrder(ctx, order)
+
+    assert.NoError(t, err)
+    dbtest.AssertCommitted(t, tx)
+    outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
+}
+```
+
+**Configurable Failures:**
+```go
+mockOutbox := outboxtest.NewMockOutbox().
+    WithError(fmt.Errorf("outbox unavailable"))
+
+// Service should handle outbox failure (transaction rolls back)
+err := svc.CreateOrder(ctx, order)
+assert.Error(t, err)
+```
+
+**Key Features:**
+- Fluent configuration API (`WithError`)
+- Event tracking (type, aggregate ID, payload, exchange)
+- Assertion helpers (`AssertEventPublished`, `AssertEventCount`, `AssertEventWithAggregate`, `AssertNoEvents`)
+- Thread-safe for concurrent test scenarios
+
+See [outbox/testing](outbox/testing/) package for full API documentation.
+
 ### Integration Testing with Testcontainers
 
 **Prerequisites:** Docker Desktop or Docker Engine running
@@ -1541,6 +1674,28 @@ cache:
     max_size: 200         # Support more tenants
     idle_ttl: 30m         # Keep caches longer
     cleanup_interval: 10m # Less frequent cleanup
+```
+
+### Outbox Defaults
+
+GoBricks applies production-safe outbox defaults when outbox is enabled:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `outbox.table_name` | `gobricks_outbox` | Outbox table name |
+| `outbox.auto_create_table` | `true` | Auto-create table on first use |
+| `outbox.poll_interval` | `5s` | Relay poll frequency |
+| `outbox.batch_size` | `100` | Events per relay cycle |
+| `outbox.max_retries` | `5` | Max publish attempts |
+| `outbox.retention_period` | `72h` | Published event retention |
+
+**Override defaults** in `config.yaml`:
+```yaml
+outbox:
+  enabled: true
+  poll_interval: 2s           # Lower latency
+  batch_size: 200             # Higher throughput
+  retention_period: 168h      # 7-day retention
 ```
 
 ### Startup Timeout Defaults
@@ -1890,6 +2045,27 @@ grep "Multiple consumers registered for same queue" logs/app.log
 grep "Panic recovered in message handler" logs/app.log
 ```
 
+**Outbox Issues:**
+
+```bash
+# "outbox not configured" or deps.Outbox is nil
+# → Register OutboxModule BEFORE your application modules
+# → Set outbox.enabled: true in config
+
+# Events stuck in "pending" status
+# → Check scheduler is running: GET /_sys/job (should list outbox-relay)
+# → Check messaging is connected: verify messaging.broker.url
+# → Manual trigger: POST /_sys/job/outbox-relay
+
+# Duplicate events received by consumers
+# → Expected behavior (at-least-once delivery)
+# → Use x-outbox-event-id header for idempotency in consumer handlers
+
+# Table creation fails
+# → Set outbox.auto_create_table: false and create table manually
+# → DDL provided in outbox/store_postgres.go and outbox/store_oracle.go
+```
+
 **Module Registration Issues:**
 
 ```bash
@@ -1923,6 +2099,8 @@ grep "Panic recovered in message handler" logs/app.log
 - **database/testing/** - Database-specific testing (TestDB, TenantDBMap, fluent expectations)
 - **cache/testing/** - Cache-specific testing (MockCache, assertion helpers)
 - **observability/testing/** - Test utilities for spans, metrics, and logs
+- **outbox/** - Transactional outbox pattern (Publisher, Relay, Store, multi-vendor)
+- **outbox/testing/** - Outbox-specific testing (MockOutbox, assertion helpers)
 - **tools/** - Development tooling (OpenAPI generator)
 - **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
 - **.claude/tasks/** - Development task planning
@@ -1959,6 +2137,13 @@ type Provider interface {
     LoggerProvider() *sdklog.LoggerProvider
     ShouldDisableStdout() bool
     Shutdown(ctx context.Context) error
+}
+```
+
+### Outbox Publisher
+```go
+type OutboxPublisher interface {
+    Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
 }
 ```
 

@@ -23,6 +23,7 @@ type Config struct {
 	Debug       DebugConfig               `koanf:"debug" json:"debug" yaml:"debug" toml:"debug" mapstructure:"debug"`
 	Source      SourceConfig              `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
 	Scheduler   SchedulerConfig           `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
+	Outbox      OutboxConfig              `koanf:"outbox" json:"outbox" yaml:"outbox" toml:"outbox" mapstructure:"outbox"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -407,6 +408,50 @@ const (
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {
 	Type string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // SourceTypeStatic for YAML config, SourceTypeDynamic for external stores
+}
+
+// OutboxConfig holds transactional outbox settings.
+// Production-safe defaults are applied automatically when outbox is enabled:
+//   - TableName: "gobricks_outbox"
+//   - AutoCreateTable: true (create table on first use)
+//   - PollInterval: 5s (relay poll frequency)
+//   - BatchSize: 100 (events per relay cycle)
+//   - MaxRetries: 5 (max publish attempts before giving up)
+//   - RetentionPeriod: 72h (cleanup published events older than this)
+type OutboxConfig struct {
+	// Enabled activates the transactional outbox pattern.
+	// When false, the outbox module is a no-op and deps.Outbox is nil.
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	// TableName is the outbox table name in the database.
+	// Default: "gobricks_outbox".
+	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
+
+	// AutoCreateTable creates the outbox table on first use if it doesn't exist.
+	// Default: true. Set false for production environments with managed migrations.
+	AutoCreateTable bool `koanf:"auto_create_table" json:"auto_create_table" yaml:"auto_create_table" toml:"auto_create_table" mapstructure:"auto_create_table"`
+
+	// DefaultExchange is the fallback AMQP exchange when Event.Exchange is empty.
+	// Default: "" (empty, which publishes to the default exchange).
+	DefaultExchange string `koanf:"default_exchange" json:"default_exchange" yaml:"default_exchange" toml:"default_exchange" mapstructure:"default_exchange"`
+
+	// PollInterval is how often the relay checks for pending events.
+	// Default: 5s. Lower values reduce latency but increase database load.
+	PollInterval time.Duration `koanf:"poll_interval" json:"poll_interval" yaml:"poll_interval" toml:"poll_interval" mapstructure:"poll_interval"`
+
+	// BatchSize is the maximum number of events processed per relay cycle.
+	// Default: 100. Higher values improve throughput but increase memory usage.
+	BatchSize int `koanf:"batch_size" json:"batch_size" yaml:"batch_size" toml:"batch_size" mapstructure:"batch_size"`
+
+	// MaxRetries is the maximum number of publish attempts before giving up.
+	// Events exceeding this count remain in the table with status "pending" but are skipped by the relay.
+	// Default: 5.
+	MaxRetries int `koanf:"max_retries" json:"max_retries" yaml:"max_retries" toml:"max_retries" mapstructure:"max_retries"`
+
+	// RetentionPeriod is how long published events are kept before cleanup.
+	// Set to 0 to disable automatic cleanup.
+	// Default: 72h.
+	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
 }
 
 // SchedulerConfig holds job scheduler settings.

@@ -61,6 +61,12 @@ cache:
   redis:
     host: localhost
     port: 6379
+outbox:
+  enabled: true
+  poll_interval: 5s
+  batch_size: 100
+  max_retries: 5
+  retention_period: 72h
 observability:
   enabled: true
   service:
@@ -78,6 +84,7 @@ Add observability settings as needed (see Observability & Logging).
 ## Core Concepts
 - Framework injects dependencies via `*app.ModuleDeps`; avoid constructing raw `*sql.DB`.
 - Declarative messaging defines exchanges, queues, bindings, publishers, and consumers once; the framework replays per tenant.
+- Transactional outbox guarantees at-least-once event delivery: events written atomically with business data, then reliably published by a background relay.
 - Observability hooks (traces, metrics, structured logs) activate when `observability.enabled=true`.
 - Multi-tenant mode resolves tenants (header/host/custom store) and hands each module tenant-specific resources.
 
@@ -87,6 +94,7 @@ Add observability settings as needed (see Observability & Logging).
 type Module struct {
 	// Function-based injection: works for both single-tenant AND multi-tenant
 	getDB  func(context.Context) (database.Interface, error)
+	outbox app.OutboxPublisher  // nil if outbox not configured (zero cost)
 	logger logger.Logger
 }
 
@@ -96,6 +104,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// Store function reference, NOT database instance
 	// In multi-tenant mode, database is resolved per-request from tenant context
 	m.getDB = deps.DB
+	m.outbox = deps.Outbox  // Transactional outbox (nil if not configured)
 	m.logger = deps.Logger.WithFields(map[string]any{"module": m.Name()})
 	return nil
 }
@@ -2029,6 +2038,182 @@ Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
 - Handler errors do NOT trigger retry. Failed messages are logged (ERROR level) with full context and dropped.
 - **v0.17+**: Handlers MUST be thread-safe (auto-scales to NumCPU*4 workers). Test with `go test -race`.
 - Database pools must be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
+
+## Transactional Outbox
+
+Reliable event publishing: events written atomically with business data, then delivered to the message broker by a background relay. Solves the dual-write problem (DB commit + message publish).
+
+### Basic Usage
+
+```go
+type OrderModule struct {
+    getDB  func(context.Context) (database.Interface, error)
+    outbox app.OutboxPublisher
+    logger logger.Logger
+}
+
+func (m *OrderModule) Init(deps *app.ModuleDeps) error {
+    m.getDB = deps.DB
+    m.outbox = deps.Outbox  // nil if outbox not configured
+    m.logger = deps.Logger
+    return nil
+}
+
+// Atomic write: order + event in same transaction
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
+    db, err := s.getDB(ctx)
+    if err != nil { return err }
+
+    tx, err := db.Begin(ctx)
+    if err != nil { return err }
+    defer tx.Rollback(ctx)
+
+    // Business data
+    _, err = tx.Exec(ctx, "INSERT INTO orders (id, customer_id, total) VALUES ($1, $2, $3)",
+        req.ID, req.CustomerID, req.Total)
+    if err != nil { return fmt.Errorf("insert order: %w", err) }
+
+    // Outbox event (same transaction)
+    payload, _ := json.Marshal(OrderCreatedEvent{
+        OrderID: req.ID, CustomerID: req.CustomerID, Total: req.Total,
+    })
+    _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+        EventType:   "order.created",
+        AggregateID: fmt.Sprintf("order-%d", req.ID),
+        Payload:     payload,
+        Exchange:    "order.events",
+        RoutingKey:  "order.created",
+    })
+    if err != nil { return fmt.Errorf("outbox publish: %w", err) }
+
+    return tx.Commit(ctx)
+}
+```
+
+### Event with Custom Headers
+
+```go
+_, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType:   "payment.processed",
+    AggregateID: fmt.Sprintf("payment-%s", paymentID),
+    Payload:     paymentPayload,
+    Exchange:    "payment.events",
+    Headers: map[string]any{
+        "x-priority":    "high",
+        "x-idempotency": idempotencyKey,
+    },
+})
+```
+
+### Multiple Events in One Transaction
+
+```go
+tx, _ := db.Begin(ctx)
+defer tx.Rollback(ctx)
+
+tx.Exec(ctx, "INSERT INTO orders ...", args...)
+tx.Exec(ctx, "UPDATE inventory SET stock = stock - $1 WHERE product_id = $2", qty, productID)
+
+// Multiple events — all atomic with the business writes
+s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType: "order.created", AggregateID: orderID, Payload: orderPayload,
+    Exchange: "order.events",
+})
+s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType: "inventory.reserved", AggregateID: productID, Payload: inventoryPayload,
+    Exchange: "inventory.events",
+})
+
+tx.Commit(ctx) // Both events guaranteed to be published
+```
+
+### Consumer Idempotency (Required)
+
+```go
+func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+    // Safely extract outbox event ID for deduplication
+    raw, ok := delivery.Headers["x-outbox-event-id"]
+    if !ok {
+        return fmt.Errorf("missing x-outbox-event-id header")
+    }
+    eventID, ok := raw.(string)
+    if !ok {
+        eventID = fmt.Sprint(raw) // Handle []byte or other types
+    }
+    if eventID == "" {
+        return fmt.Errorf("empty x-outbox-event-id header")
+    }
+
+    if h.isProcessed(ctx, eventID) {
+        return nil // Skip duplicate
+    }
+
+    if err := h.processOrder(ctx, delivery.Body); err != nil {
+        return err
+    }
+
+    h.markProcessed(ctx, eventID)
+    return nil
+}
+```
+
+### Configuration
+
+```yaml
+outbox:
+  enabled: true
+  table_name: gobricks_outbox       # Custom table name
+  auto_create_table: true           # DDL on first use
+  default_exchange: ""              # Fallback exchange
+  poll_interval: 5s                 # Relay frequency
+  batch_size: 100                   # Events per cycle
+  max_retries: 5                    # Before giving up
+  retention_period: 72h             # Cleanup threshold
+```
+
+### Testing
+
+```go
+import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
+
+func TestOrderServiceCreateOrder(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
+    tx := db.ExpectTransaction().
+        ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
+
+    mockOutbox := outboxtest.NewMockOutbox()
+
+    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    err := svc.CreateOrder(ctx, order)
+
+    assert.NoError(t, err)
+    dbtest.AssertCommitted(t, tx)
+    outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
+    outboxtest.AssertEventWithAggregate(t, mockOutbox, "order.created", "order-123")
+    outboxtest.AssertEventCount(t, mockOutbox, 1)
+}
+
+// Test outbox failure (transaction should roll back)
+func TestOrderServiceOutboxFailure(t *testing.T) {
+    mockOutbox := outboxtest.NewMockOutbox().WithError(fmt.Errorf("outbox down"))
+    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    err := svc.CreateOrder(ctx, order)
+    assert.Error(t, err)
+}
+```
+
+### Relay Monitoring
+
+```bash
+# List scheduled jobs (includes outbox-relay and outbox-cleanup)
+curl http://localhost:8080/_sys/job
+
+# Manually trigger relay (useful for debugging)
+curl -X POST http://localhost:8080/_sys/job/outbox-relay
+
+# Check pending events
+SELECT count(*) FROM gobricks_outbox WHERE status = 'pending';
+```
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
