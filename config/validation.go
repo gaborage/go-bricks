@@ -102,6 +102,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 
+	if err := validateKeyStore(&cfg.KeyStore); err != nil {
+		return fmt.Errorf("keystore config: %w", err)
+	}
+
 	return nil
 }
 
@@ -661,6 +665,40 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// validateKeyStore validates keystore configuration.
+// Returns nil if no keys are configured. Each key pair must have a public key
+// with exactly one source (file or value). Private keys are optional.
+func validateKeyStore(cfg *KeyStoreConfig) error {
+	if len(cfg.Keys) == 0 {
+		return nil
+	}
+
+	for name, kp := range cfg.Keys {
+		if err := validateKeySource(kp.Public, name, "public", true); err != nil {
+			return err
+		}
+		if err := validateKeySource(kp.Private, name, "private", false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateKeySource checks that a key source has exactly one of file or value set.
+// If required is true, at least one source must be configured.
+func validateKeySource(src KeySourceConfig, keyName, keyType string, required bool) error {
+	hasFile := src.File != ""
+	hasValue := src.Value != ""
+
+	if hasFile && hasValue {
+		return fmt.Errorf("key %q %s: both 'file' and 'value' set (use exactly one)", keyName, keyType)
+	}
+	if required && !hasFile && !hasValue {
+		return fmt.Errorf("key %q %s: requires either 'file' or 'value'", keyName, keyType)
+	}
 	return nil
 }
 
