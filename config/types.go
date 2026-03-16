@@ -24,6 +24,7 @@ type Config struct {
 	Source      SourceConfig              `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
 	Scheduler   SchedulerConfig           `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
 	Outbox      OutboxConfig              `koanf:"outbox" json:"outbox" yaml:"outbox" toml:"outbox" mapstructure:"outbox"`
+	KeyStore    KeyStoreConfig            `koanf:"keystore" json:"keystore" yaml:"keystore" toml:"keystore" mapstructure:"keystore"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
 	k *koanf.Koanf `json:"-" yaml:"-" toml:"-" mapstructure:"-"`
@@ -483,4 +484,28 @@ type SchedulerTimeoutConfig struct {
 	// Jobs exceeding this duration are logged with result_code="WARN" even if successful.
 	// Zero or negative = disabled. Default: 30s.
 	SlowJob time.Duration `koanf:"slowjob" json:"slowjob" yaml:"slowjob" toml:"slowjob" mapstructure:"slowjob"`
+}
+
+// KeyStoreConfig holds named RSA key pair configuration.
+// Keys can be loaded from DER files (local dev) or base64-encoded values (EKS deployment).
+type KeyStoreConfig struct {
+	// Keys maps logical names to key pair configurations.
+	// Example names: "signing", "encryption", "legacy".
+	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
+}
+
+// KeyPairConfig holds a public/private RSA key pair configuration.
+// Public key is required; private key is optional (e.g., verification-only services).
+type KeyPairConfig struct {
+	Public  KeySourceConfig `koanf:"public" json:"public" yaml:"public" toml:"public" mapstructure:"public"`
+	Private KeySourceConfig `koanf:"private" json:"private" yaml:"private" toml:"private" mapstructure:"private"`
+}
+
+// KeySourceConfig specifies where to load a DER-encoded RSA key from.
+// Exactly one of File or Value must be set.
+//   - File: path to a .der file (local development)
+//   - Value: base64-encoded DER bytes (EKS deployment via env vars)
+type KeySourceConfig struct {
+	File  string `koanf:"file" json:"file" yaml:"file" toml:"file" mapstructure:"file"`
+	Value string `koanf:"value" json:"value" yaml:"value" toml:"value" mapstructure:"value"`
 }

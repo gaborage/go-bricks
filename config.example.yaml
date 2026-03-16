@@ -88,6 +88,23 @@ cache:
     minretrybackoff: 8ms             # Minimum backoff between retries
     maxretrybackoff: 512ms           # Maximum backoff between retries
 
+# KeyStore (OPTIONAL - named RSA key pairs for encryption/signing)
+# Load DER-encoded keys from files (local dev) or base64 env vars (EKS)
+keystore:
+  keys:
+    signing:
+      public:
+        file: "certs/signing_public.der"        # Local dev: path to DER file
+        # value: "${SIGNING_PUBLIC_KEY_BASE64}"  # EKS: base64-encoded DER via env var
+      private:
+        file: "certs/signing_private.der"
+        # value: "${SIGNING_PRIVATE_KEY_BASE64}"
+    # encryption:                                # Add more named key pairs as needed
+    #   public:
+    #     value: "${ENCRYPTION_PUBLIC_KEY_BASE64}"
+    #   private:
+    #     value: "${ENCRYPTION_PRIVATE_KEY_BASE64}"
+
 # Transactional Outbox (OPTIONAL - reliable event publishing)
 # Requires: database + messaging + scheduler modules
 outbox:

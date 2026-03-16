@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/rsa"
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
@@ -91,6 +92,28 @@ type OutboxProvider interface {
 	OutboxPublisher() OutboxPublisher
 }
 
+// KeyStore provides access to named RSA key pairs loaded at startup.
+// Keys are loaded from DER files or base64-encoded values during module initialization.
+// All methods are safe for concurrent use (the store is read-only after init).
+// This interface is defined here to avoid circular imports between app and keystore packages.
+type KeyStore interface {
+	// PublicKey returns the parsed RSA public key for the given certificate name.
+	// Returns an error if the name is not configured.
+	PublicKey(name string) (*rsa.PublicKey, error)
+
+	// PrivateKey returns the parsed RSA private key for the given certificate name.
+	// Returns an error if the name is not configured or no private key was provided.
+	PrivateKey(name string) (*rsa.PrivateKey, error)
+}
+
+// KeyStoreProvider is an optional interface that modules can implement to provide
+// a KeyStore for dependency injection into other modules.
+// When a module implements this interface, the ModuleRegistry automatically
+// wires its KeyStore into ModuleDeps.KeyStore.
+type KeyStoreProvider interface {
+	KeyStore() KeyStore
+}
+
 // JobProvider is an optional interface that modules can implement to register scheduled jobs.
 // Modules implementing this interface will have RegisterJobs() called automatically after
 // all module Init() methods have completed, making module registration order irrelevant.
@@ -140,6 +163,12 @@ type ModuleDeps struct {
 	// This field is nil if no OutboxModule is registered or outbox.enabled is false.
 	// Example: deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{EventType: "order.created", ...})
 	Outbox OutboxPublisher
+
+	// KeyStore provides access to named RSA key pairs for encryption/signing.
+	// Keys are loaded at startup from DER files or base64-encoded values.
+	// This field is nil if no KeyStoreModule is registered or no keys are configured.
+	// Example: key, err := deps.KeyStore.PrivateKey("signing")
+	KeyStore KeyStore
 
 	// DB returns a database interface for the current context.
 	// In single-tenant mode, returns the global database instance.

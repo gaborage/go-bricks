@@ -72,6 +72,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 			Msg("Outbox module registered - available to other modules via deps.Outbox")
 	}
 
+	// Special case: If this module is a KeyStoreProvider (keystore module),
+	// make it available to other modules via deps.KeyStore
+	if ksProvider, ok := module.(KeyStoreProvider); ok {
+		r.deps.KeyStore = ksProvider.KeyStore()
+		r.logger.Info().
+			Str("module", moduleName).
+			Msg("KeyStore module registered - available to other modules via deps.KeyStore")
+	}
+
 	// Add to deduplication map BEFORE appending to modules slice
 	r.registeredNames[moduleName] = module
 

@@ -245,6 +245,7 @@ var probe app.Prober = myProbe
 - **migration/** - Flyway integration
 - **observability/** - OpenTelemetry tracing and metrics
 - **outbox/** - Transactional outbox for reliable event publishing (at-least-once delivery)
+- **keystore/** - Named RSA key pair management from DER files or base64 env vars
 
 ### Module System
 Modules implement this interface:
@@ -2101,6 +2102,8 @@ grep "Panic recovered in message handler" logs/app.log
 - **observability/testing/** - Test utilities for spans, metrics, and logs
 - **outbox/** - Transactional outbox pattern (Publisher, Relay, Store, multi-vendor)
 - **outbox/testing/** - Outbox-specific testing (MockOutbox, assertion helpers)
+- **keystore/** - Named RSA key pair management (DER files + base64 env vars)
+- **keystore/testing/** - KeyStore-specific testing (MockKeyStore, assertion helpers)
 - **tools/** - Development tooling (OpenAPI generator)
 - **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
 - **.claude/tasks/** - Development task planning
@@ -2144,6 +2147,14 @@ type Provider interface {
 ```go
 type OutboxPublisher interface {
     Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
+}
+```
+
+### KeyStore
+```go
+type KeyStore interface {
+    PublicKey(name string) (*rsa.PublicKey, error)
+    PrivateKey(name string) (*rsa.PrivateKey, error)
 }
 ```
 
