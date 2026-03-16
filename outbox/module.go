@@ -95,15 +95,10 @@ func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
 // Uses double-check locking (mutex, not sync.Once) because initialization
 // can fail and should be retried — matching the scheduler module pattern.
 func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
-	// Fast path: already initialized (no lock needed)
-	if m.store != nil {
-		return nil
-	}
-
 	m.initMu.Lock()
 	defer m.initMu.Unlock()
 
-	// Double-check after acquiring lock
+	// Already initialized
 	if m.store != nil {
 		return nil
 	}
@@ -218,9 +213,10 @@ func (m *OutboxModule) Shutdown() error {
 }
 
 // lazyPublisher wraps app.OutboxPublisher to lazily initialize the store on first use.
-// Caches the publisher instance after first successful initialization.
+// Caches the publisher instance after first successful initialization via sync.Once.
 type lazyPublisher struct {
 	module    *OutboxModule
+	once      sync.Once
 	cachedPub app.OutboxPublisher
 }
 
@@ -229,9 +225,9 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 		return "", err
 	}
 
-	if p.cachedPub == nil {
+	p.once.Do(func() {
 		p.cachedPub = newPublisher(p.module.store, p.module.cfg.DefaultExchange)
-	}
+	})
 	return p.cachedPub.Publish(ctx, tx, event)
 }
 
