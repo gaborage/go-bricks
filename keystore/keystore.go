@@ -25,9 +25,12 @@
 //	    &myapp.JWEModule{},
 //	)
 //
-// Access keys via ModuleDeps:
+// Access keys via ModuleDeps (nil-check for fail-fast if keys are required):
 //
 //	func (m *Module) Init(deps *app.ModuleDeps) error {
+//	    if deps.KeyStore == nil {
+//	        return fmt.Errorf("KeyStore required but not configured")
+//	    }
 //	    m.keyStore = deps.KeyStore
 //	    return nil
 //	}
