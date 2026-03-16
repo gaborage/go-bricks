@@ -244,6 +244,24 @@ func TestNewStorePublicKeyRequired(t *testing.T) {
 	assert.ErrorContains(t, err, "public key is required")
 }
 
+func TestNewStoreMismatchedKeyPair(t *testing.T) {
+	// Generate two separate key pairs — use pub from one, priv from the other
+	_, pub1 := generateTestKeys(t)
+	priv2, _ := generateTestKeys(t)
+
+	pub1B64 := base64.StdEncoding.EncodeToString(marshalPublicKeyDER(t, pub1))
+	priv2B64 := base64.StdEncoding.EncodeToString(marshalPrivateKeyDER(t, priv2))
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"mismatched": {
+			Public:  config.KeySourceConfig{Value: pub1B64},
+			Private: config.KeySourceConfig{Value: priv2B64},
+		},
+	})
+
+	assert.ErrorContains(t, err, "public and private keys do not match")
+}
+
 func TestLoadDERBytesFromFile(t *testing.T) {
 	dir := t.TempDir()
 	expected := []byte("test-der-content")

@@ -112,6 +112,10 @@ func newStore(keys map[string]config.KeyPairConfig) (*store, error) {
 			if err != nil {
 				return nil, err
 			}
+			// Fail fast if public and private keys don't match
+			if kp.private.E != kp.public.E || kp.private.N.Cmp(kp.public.N) != 0 {
+				return nil, fmt.Errorf("keystore: key %q: public and private keys do not match", name)
+			}
 		}
 
 		parsed[name] = kp
