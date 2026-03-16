@@ -272,7 +272,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 
 // Test helpers
 
-// newTestRegistrar creates a test JobRegistrar using the real SchedulerModule
+// newTestRegistrar creates a test JobRegistrar using the real scheduler Module
 func newTestRegistrar() app.JobRegistrar {
 	module := NewModule()
 
