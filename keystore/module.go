@@ -75,6 +75,8 @@ func (m *KeystoreModule) DeclareMessaging(_ *messaging.Declarations) {}
 
 // Shutdown implements app.Module.
 func (m *KeystoreModule) Shutdown() error {
-	m.logger.Info().Msg("KeyStore module shut down")
+	if m.logger != nil {
+		m.logger.Info().Msg("KeyStore module shut down")
+	}
 	return nil
 }

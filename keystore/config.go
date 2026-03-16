@@ -2,6 +2,7 @@ package keystore
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/gaborage/go-bricks/config"
 )
@@ -10,7 +11,19 @@ import (
 // Each key pair must have a public key with exactly one source (file or value).
 // Private keys are optional but must also have exactly one source if configured.
 func validateConfig(cfg *config.KeyStoreConfig) error {
-	for name, kp := range cfg.Keys {
+	if cfg == nil {
+		return fmt.Errorf("keystore: config is nil")
+	}
+
+	// Sort keys for deterministic error ordering
+	names := make([]string, 0, len(cfg.Keys))
+	for name := range cfg.Keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		kp := cfg.Keys[name]
 		if err := validateKeySource(kp.Public, name, "public", true); err != nil {
 			return err
 		}

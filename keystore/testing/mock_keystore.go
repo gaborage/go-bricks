@@ -54,23 +54,27 @@ func (m *MockKeyStore) WithPrivateKey(name string, key *rsa.PrivateKey) *MockKey
 
 // WithPublicKeyError configures all PublicKey calls to return this error.
 func (m *MockKeyStore) WithPublicKeyError(err error) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.publicErr = err
 	return m
 }
 
 // WithPrivateKeyError configures all PrivateKey calls to return this error.
 func (m *MockKeyStore) WithPrivateKeyError(err error) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.privateErr = err
 	return m
 }
 
 // PublicKey implements app.KeyStore.
 func (m *MockKeyStore) PublicKey(name string) (*rsa.PublicKey, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.publicErr != nil {
 		return nil, m.publicErr
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	key, ok := m.publicKeys[name]
 	if !ok {
 		return nil, fmt.Errorf("mock keystore: public key %q not found", name)
@@ -80,11 +84,11 @@ func (m *MockKeyStore) PublicKey(name string) (*rsa.PublicKey, error) {
 
 // PrivateKey implements app.KeyStore.
 func (m *MockKeyStore) PrivateKey(name string) (*rsa.PrivateKey, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if m.privateErr != nil {
 		return nil, m.privateErr
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	key, ok := m.privateKeys[name]
 	if !ok {
 		return nil, fmt.Errorf("mock keystore: private key %q not found", name)

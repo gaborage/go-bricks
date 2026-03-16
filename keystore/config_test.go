@@ -74,3 +74,8 @@ func TestValidateConfigEmptyKeys(t *testing.T) {
 	}
 	assert.NoError(t, validateConfig(cfg))
 }
+
+func TestValidateConfigNilConfig(t *testing.T) {
+	err := validateConfig(nil)
+	assert.ErrorContains(t, err, "config is nil")
+}

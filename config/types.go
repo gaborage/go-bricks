@@ -502,7 +502,8 @@ type KeyPairConfig struct {
 }
 
 // KeySourceConfig specifies where to load a DER-encoded RSA key from.
-// Exactly one of File or Value must be set.
+// For required keys (e.g., public), exactly one of File or Value must be set.
+// For optional keys (e.g., private in verification-only services), both may be empty.
 //   - File: path to a .der file (local development)
 //   - Value: base64-encoded DER bytes (EKS deployment via env vars)
 type KeySourceConfig struct {

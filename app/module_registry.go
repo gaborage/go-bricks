@@ -75,6 +75,12 @@ func (r *ModuleRegistry) Register(module Module) error {
 	// Special case: If this module is a KeyStoreProvider (keystore module),
 	// make it available to other modules via deps.KeyStore
 	if ksProvider, ok := module.(KeyStoreProvider); ok {
+		if r.deps.KeyStore != nil {
+			return fmt.Errorf(
+				"module registry: multiple KeyStore providers detected (module %q attempted to override existing provider)",
+				moduleName,
+			)
+		}
 		r.deps.KeyStore = ksProvider.KeyStore()
 		r.logger.Info().
 			Str("module", moduleName).
