@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -370,6 +371,53 @@ func (m *MockJobProviderModule) RegisterJobs(registrar JobRegistrar) error {
 
 var _ Module = (*MockJobProviderModule)(nil)
 var _ JobProvider = (*MockJobProviderModule)(nil)
+
+// MockKeyStoreModule implements Module + KeyStoreProvider for testing keystore wiring
+type MockKeyStoreModule struct {
+	mock.Mock
+	name     string
+	keyStore KeyStore
+}
+
+func (m *MockKeyStoreModule) Name() string {
+	if m.name != "" {
+		return m.name
+	}
+	return m.Called().String(0)
+}
+
+func (m *MockKeyStoreModule) Init(deps *ModuleDeps) error {
+	return m.Called(deps).Error(0)
+}
+
+func (m *MockKeyStoreModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
+}
+
+func (m *MockKeyStoreModule) DeclareMessaging(_ *messaging.Declarations) {
+}
+
+func (m *MockKeyStoreModule) Shutdown() error {
+	return nil
+}
+
+// KeyStoreProvider interface implementation
+func (m *MockKeyStoreModule) KeyStore() KeyStore {
+	return m.keyStore
+}
+
+var _ Module = (*MockKeyStoreModule)(nil)
+var _ KeyStoreProvider = (*MockKeyStoreModule)(nil)
+
+// stubKeyStore is a minimal KeyStore implementation for testing wiring only
+type stubKeyStore struct{}
+
+func (s *stubKeyStore) PublicKey(_ string) (*rsa.PublicKey, error) {
+	return nil, fmt.Errorf("stub")
+}
+
+func (s *stubKeyStore) PrivateKey(_ string) (*rsa.PrivateKey, error) {
+	return nil, fmt.Errorf("stub")
+}
 
 type testAppFixture struct {
 	t         *testing.T
