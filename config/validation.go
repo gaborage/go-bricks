@@ -702,10 +702,20 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 	hasValue := src.Value != ""
 
 	if hasFile && hasValue {
-		return fmt.Errorf("key %q %s: both 'file' and 'value' set (use exactly one)", keyName, keyType)
+		return &ConfigError{
+			Category: "invalid",
+			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),
+			Message:  "both 'file' and 'value' set",
+			Action:   "use exactly one of 'file' or 'value'",
+		}
 	}
 	if required && !hasFile && !hasValue {
-		return fmt.Errorf("key %q %s: requires either 'file' or 'value'", keyName, keyType)
+		return &ConfigError{
+			Category: "missing",
+			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),
+			Message:  "key source required",
+			Action:   "set either 'file' (path) or 'value' (base64)",
+		}
 	}
 	return nil
 }

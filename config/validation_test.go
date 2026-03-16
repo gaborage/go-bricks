@@ -3340,7 +3340,7 @@ func TestValidateKeyStorePublicKeyRequired(t *testing.T) {
 		},
 	}
 	err := validateKeyStore(cfg)
-	assert.ErrorContains(t, err, "requires either 'file' or 'value'")
+	assert.ErrorContains(t, err, "key source required")
 }
 
 func TestValidateKeyStoreBothSourcesSet(t *testing.T) {
