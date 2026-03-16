@@ -524,3 +524,36 @@ func TestModuleRegistryRegisterNonKeyStoreModule(t *testing.T) {
 
 	module.AssertExpectations(t)
 }
+
+// TestModuleRegistryKeyStoreAvailableDuringInit verifies that deps.KeyStore is available
+// to modules that register after the KeyStoreProvider. This is order-dependent by design:
+// the keystore module must be registered before modules that consume it.
+func TestModuleRegistryKeyStoreAvailableDuringInit(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+
+	registry := NewModuleRegistry(deps)
+
+	// Register KeyStoreProvider first
+	ks := &stubKeyStore{}
+	ksModule := &MockKeyStoreModule{name: "keystore", keyStore: ks}
+	ksModule.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(ksModule))
+
+	// Register a consumer module that checks KeyStore is available during Init
+	consumer := &MockModule{name: "consumer"}
+	consumer.On("Init", deps).Run(func(args mock.Arguments) {
+		initDeps := args.Get(0).(*ModuleDeps)
+		assert.NotNil(t, initDeps.KeyStore, "KeyStore should be available during Init of subsequent modules")
+		assert.Equal(t, ks, initDeps.KeyStore, "KeyStore should match the provider's store")
+	}).Return(nil)
+
+	err := registry.Register(consumer)
+	assert.NoError(t, err)
+
+	ksModule.AssertExpectations(t)
+	consumer.AssertExpectations(t)
+}
