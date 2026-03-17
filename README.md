@@ -22,14 +22,17 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 6. [Error Handling and Diagnostics](#error-handling-and-diagnostics)
 7. [Modules and Application Structure](#modules-and-application-structure)
 8. [HTTP Server](#http-server)
-9. [Messaging](#messaging)
-10. [Database](#database)
-11. [Cache](#cache)
-12. [Multi-Tenant Implementation](#multi-tenant-implementation)
-13. [Observability and Operations](#observability-and-operations)
-14. [Examples](#examples)
-15. [Contributing](#contributing)
-16. [License](#license)
+9. [HTTP Client](#http-client)
+10. [Messaging](#messaging)
+11. [Database](#database)
+12. [Cache](#cache)
+13. [Scheduler and Outbox](#scheduler-and-outbox)
+14. [KeyStore](#keystore)
+15. [Multi-Tenant Implementation](#multi-tenant-implementation)
+16. [Observability and Operations](#observability-and-operations)
+17. [Examples](#examples)
+18. [Contributing](#contributing)
+19. [License](#license)
 
 ---
 
@@ -37,7 +40,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 - **Production-ready defaults** for the boring-but-essential pieces (server, logging, configuration, tracing).
 - **Composable module system** that keeps HTTP, database, and messaging concerns organized.
 - **Mission-critical integrations** (PostgreSQL, Oracle, RabbitMQ, Flyway) with unified ergonomics.
-- **Modern Go practices** with type safety, performance optimizations, and Go 1.18+ features.
+- **Modern Go practices** with type safety, performance optimizations, and Go 1.25 features.
 - **Extensible design** that works with modern Go idioms and the wider ecosystem.
 
 ---
@@ -47,7 +50,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 **For Contributors & Framework Developers:**
 - **[CLAUDE.md](CLAUDE.md)** - Comprehensive development guide with architecture, commands, testing, and workflows
 - **[llms.txt](llms.txt)** - Quick code examples optimized for LLMs and copy-paste development
-- **[.specify/memory/constitution.md](.specify/memory/constitution.md)** - Project governance and non-negotiable principles
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Coding standards, tooling, and contribution workflow
 
 **For Application Developers:**
 - **[go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project)** - Complete working examples and patterns
@@ -65,14 +68,19 @@ go test -run TestName   # Run specific test
 
 ## Feature Overview
 - **Modular architecture** with explicit dependencies and lifecycle hooks
-- **Echo-based HTTP server** with typed handlers and standardized response envelopes
-- **AMQP messaging** with validate-once, replay-many pattern for multi-tenant isolation
-- **Configuration loader** merging defaults, YAML, and environment variables
-- **Multi-database support** for PostgreSQL and Oracle with type-safe query builders
+- **Echo-based HTTP server** with typed handlers, standardized response envelopes, and raw response mode for legacy API migration
+- **Production-ready HTTP client** with retries, exponential backoff, W3C trace propagation, and interceptor chains
+- **AMQP messaging** with validate-once, replay-many pattern, auto-scaling consumer concurrency, and panic recovery
+- **Configuration loader** merging defaults, YAML, and environment variables with struct-based injection (`config:` tags)
+- **Multi-database support** for PostgreSQL and Oracle with struct-based column extraction and type-safe query builders
+- **Named databases** for accessing multiple databases (including mixed vendors) in single-tenant mode
 - **Redis cache integration** with type-safe serialization, multi-tenant isolation, and automatic lifecycle management
+- **Transactional outbox** for reliable at-least-once event publishing (dual-write problem solved)
+- **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
+- **Named RSA key pair management** from DER files or base64 environment variables
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
-- **Observability** with W3C trace propagation, metrics, and health endpoints
+- **Observability** with W3C trace propagation, custom metrics, dual-mode logs, and health endpoints
 - **Enterprise-grade quality** with comprehensive linting, 80%+ test coverage, and security scanning
 
 ---
@@ -113,7 +121,10 @@ func main() {
         log.Fatal(err)
     }
 
-    // Register modules here: framework.RegisterModule(newExampleModule())
+    // Register modules here
+    if err := framework.RegisterModule(&users.Module{}); err != nil {
+        log.Fatal(err)
+    }
 
     if err := framework.Run(); err != nil {
         log.Fatal(err)
@@ -168,11 +179,11 @@ GoBricks uses Koanf for configuration management with layered loading: defaults 
 cfg, _ := config.Load()
 
 // Simple values with defaults
-host := cfg.GetString("server.host", "0.0.0.0")
-port := cfg.GetInt("server.port", 8080)
+host := cfg.String("server.host", "0.0.0.0")
+port := cfg.Int("server.port", 8080)
 
 // Required values with validation
-apiKey, err := cfg.GetRequiredString("custom.api.key")
+apiKey, err := cfg.RequiredString("custom.api.key")
 if err != nil {
     return fmt.Errorf("missing api key: %w", err)
 }
@@ -184,6 +195,30 @@ var custom struct {
 }
 _ = cfg.Unmarshal("custom", &custom)
 ```
+
+### Config Injection
+
+Inject configuration directly into structs using `config:` tags with automatic validation:
+
+```go
+type ServiceConfig struct {
+    APIKey   string        `config:"custom.api.key" required:"true"`
+    Timeout  time.Duration `config:"custom.api.timeout" default:"30s"`
+    Retries  int           `config:"custom.api.retries" default:"3"`
+}
+
+func (m *Module) Init(deps *ModuleDeps) error {
+    var cfg ServiceConfig
+    if err := deps.Config.InjectInto(&cfg); err != nil {
+        return err // Fails fast if required keys are missing
+    }
+    m.service = NewService(cfg)
+    return nil
+}
+```
+
+**Supported tags:** `config:"key.path"` (required), `required:"true"` (fail if missing), `default:"value"` (fallback).
+**Supported types:** string, int, int64, float64, bool, time.Duration.
 
 ### Environment Variables
 Environment variables use uppercase with underscores and automatically map to dot notation:
@@ -246,13 +281,20 @@ type MessagingDeclarer interface {
 }
 ```
 
-`ModuleDeps` injects shared services:
+`ModuleDeps` injects shared services into every module:
 ```go
 type ModuleDeps struct {
-    DB        database.Interface
-    Logger    logger.Logger
-    Messaging messaging.Client
-    Config    *config.Config
+    Logger        logger.Logger                                          // Structured logging
+    Config        *config.Config                                         // Configuration access
+    Tracer        trace.Tracer                                           // Distributed tracing (no-op if disabled)
+    MeterProvider metric.MeterProvider                                   // Custom metrics (no-op if disabled)
+    Scheduler     JobRegistrar                                           // Job scheduling (nil if no scheduler module)
+    Outbox        OutboxPublisher                                        // Transactional event publishing (nil if disabled)
+    KeyStore      KeyStore                                               // Named RSA key pairs (nil if not configured)
+    DB            func(ctx context.Context) (database.Interface, error)  // Tenant-aware database
+    DBByName      func(ctx context.Context, name string) (database.Interface, error) // Named databases
+    Messaging     func(ctx context.Context) (messaging.AMQPClient, error) // Tenant-aware messaging
+    Cache         func(ctx context.Context) (cache.Cache, error)         // Tenant-aware cache
 }
 ```
 
@@ -279,7 +321,7 @@ func (h *Handler) createUser(req CreateReq, ctx server.HandlerContext) (server.R
 }
 ```
 
-Request structs use tags for binding/validation (`path`, `query`, `header`, `validate`). Responses follow consistent `{data:…, meta:…}` envelope structure.
+Request structs use tags for binding/validation (`path`, `query`, `header`, `validate`). Responses follow consistent `{data:…, meta:…}` envelope structure. Use `server.WithRawResponse()` to bypass the envelope for legacy API migration (Strangler Fig pattern).
 
 ### Routing Configuration
 ```yaml
@@ -296,6 +338,29 @@ Override with environment variables: `SERVER_BASE_PATH`, `SERVER_HEALTH_ROUTE`, 
 
 ---
 
+## HTTP Client
+
+Production-ready HTTP client with built-in observability and resilience.
+
+```go
+client := httpclient.NewBuilder(logger).
+    WithTimeout(10 * time.Second).
+    WithRetries(3, 500 * time.Millisecond).
+    WithDefaultHeader("Accept", "application/json").
+    WithW3CTrace(true).
+    Build()
+
+resp, err := client.Get(ctx, &httpclient.Request{
+    URL: "https://api.example.com/users",
+})
+```
+
+**Features:** Builder pattern, W3C trace propagation, exponential backoff with full jitter, request/response interceptor chains, structured logging. Methods: `Get`, `Post`, `Put`, `Patch`, `Delete`, `Do`.
+
+See [llms.txt](llms.txt) for more examples and [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) for working demos.
+
+---
+
 ## Messaging
 
 AMQP/RabbitMQ support with validate-once, replay-many declaration pattern:
@@ -304,6 +369,7 @@ AMQP/RabbitMQ support with validate-once, replay-many declaration pattern:
 - **Multi-Tenant Isolation**: Declarations replayed to tenant-specific registries for complete separation
 - **Auto-Reconnection**: Exponential backoff for resilient operations
 - **Context Propagation**: Tenant IDs and trace information flow automatically through messaging
+- **Consumer Concurrency**: Auto-scaling workers (`NumCPU * 4`) with configurable overrides and resource safeguards
 
 ---
 
@@ -345,19 +411,43 @@ query := qb.Select("u.name", "p.bio").
 
 **Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
 
-**JoinFilter Methods**: `EqColumn`, `NotEqColumn`, `LtColumn`, `LteColumn`, `GtColumn`, `GteColumn`, `And`, `Or`, `Raw`
+**JoinFilter Methods**: `EqColumn`, `NotEqColumn`, `LtColumn`, `LteColumn`, `GtColumn`, `GteColumn`, `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Between`, `Like`, `Null`, `NotNull`, `And`, `Or`, `Raw`
 
 All methods automatically handle:
 - **Vendor-specific quoting** (Oracle reserved words like `NUMBER`, `DATE`)
 - **Placeholder formatting** (`$1` for PostgreSQL, `:1` for Oracle)
 - **Type safety** at compile time with refactor-friendly interfaces
 
+### Struct-Based Column Extraction
+
+Eliminate column repetition using `db:"column_name"` struct tags. Columns are extracted once via reflection and cached forever (~26ns access):
+
+```go
+type User struct {
+    ID    int64  `db:"id"`
+    Name  string `db:"name"`
+    Level int    `db:"level"` // Oracle reserved word — auto-quoted
+}
+
+cols := qb.Columns(&User{})
+f := qb.Filter()
+
+query := qb.Select(cols.Fields("ID", "Name")...).
+    From("users").
+    Where(f.Eq(cols.Col("Level"), 5))
+// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// PostgreSQL: SELECT id, name FROM users WHERE level = $1
+```
+
+**Benefits:** DRY (define columns once), type-safe (panics on typos), vendor-aware (auto-quotes Oracle reserved words), refactor-friendly, zero overhead after first use. See [CLAUDE.md](CLAUDE.md) for table aliases, INSERT patterns, and advanced examples.
+
 ### Database Support
 - **PostgreSQL**: `$1, $2` placeholders, pgx driver, advanced features
-- **Oracle**: `:1, :2` placeholders, reserved word quoting, service name/SID support
+- **Oracle**: `:1, :2` placeholders, reserved word quoting, service name/SID support, SEQUENCE objects, UDT registration
 
 ### Features
-- Connection pooling and health monitoring
+- Connection pooling with production-safe defaults and health monitoring
+- Named databases for multi-database single-tenant setups (`deps.DBByName(ctx, "legacy")`)
 - Flyway integration for schema migrations
 - Performance tracking via OpenTelemetry
 - Type-safe query builders prevent runtime SQL errors
@@ -467,6 +557,94 @@ func TestMyService(t *testing.T) {
 
 ---
 
+## Scheduler and Outbox
+
+### Job Scheduler
+
+gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention (mutex per job), automatic panic recovery with stack trace logging, and system APIs (`GET /_sys/jobs`, `POST /_sys/job/:jobId`).
+
+```go
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+}
+
+// Implement the Executor interface
+type CleanupJob struct{}
+func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
+    // ctx provides: JobID(), TriggerType(), Logger(), DB(), Messaging(), Config()
+    return nil
+}
+```
+
+**Schedule types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`.
+
+### Transactional Outbox
+
+Solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay. Delivery guarantee: **at-least-once** (consumers must be idempotent).
+
+```go
+func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
+    db, _ := s.getDB(ctx)
+    tx, _ := db.Begin(ctx)
+    defer tx.Rollback(ctx)
+
+    // 1. Write business data
+    _, err := tx.Exec(ctx, "INSERT INTO orders (id, customer_id) VALUES ($1, $2)",
+        req.ID, req.CustomerID)
+    if err != nil { return err }
+
+    // 2. Write event to outbox (SAME transaction — atomic!)
+    payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
+    _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+        EventType:   "order.created",
+        AggregateID: fmt.Sprintf("order-%d", req.ID),
+        Payload:     payload,
+        Exchange:    "order.events",
+    })
+    if err != nil { return err }
+
+    return tx.Commit(ctx) // Event GUARANTEED to reach the broker eventually
+}
+```
+
+The relay job polls for pending events every `poll_interval` (default 5s), publishes them to AMQP with an `x-outbox-event-id` header for deduplication, and a cleanup job removes published events after `retention_period` (default 72h). See [CLAUDE.md](CLAUDE.md) for full configuration options.
+
+---
+
+## KeyStore
+
+Named RSA key pair management for encryption and signing. Keys are loaded at startup from DER files or base64-encoded environment variables.
+
+```go
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    // Sign a JWT
+    privateKey, err := deps.KeyStore.PrivateKey("signing")
+    if err != nil { return err }
+
+    // Verify a signature
+    publicKey, err := deps.KeyStore.PublicKey("signing")
+    if err != nil { return err }
+
+    return nil
+}
+```
+
+**Configuration:**
+```yaml
+keystore:
+  keys:
+    signing:
+      private_key_file: /secrets/signing.der     # DER file path
+      public_key_file: /secrets/signing_pub.der
+    encryption:
+      private_key: ${ENCRYPTION_PRIVATE_KEY}      # Base64-encoded DER
+      public_key: ${ENCRYPTION_PUBLIC_KEY}
+```
+
+See [keystore/](keystore/) package for full API documentation.
+
+---
+
 ## Multi-Tenant Implementation
 
 Complete resource isolation with per-tenant database and messaging connections.
@@ -504,7 +682,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
 - **OpenTelemetry first**: native traces, metrics, and dual-mode logs.
 - **Structured logging** via Zerolog with OTLP export for action + trace streams.
 - **Tracing** propagates W3C `traceparent` headers.
-- **Metrics** capture HTTP/messaging/database timings.
+- **Metrics** capture HTTP/messaging/database timings plus custom application metrics via `deps.MeterProvider`.
 - **Health endpoints**: `/health` (liveness) and `/ready` (readiness with DB/messaging checks).
 - **Graceful shutdown** coordinates servers, consumers, and background workers.
 
@@ -543,7 +721,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
            size: 512
    ```
 
-   - All application logs default to `log.type="trace"` and only WARN+ severities are exported (≈95 % volume reduction).
+   - All application logs default to `log.type="trace"` and only WARN+ severities are exported (≈95 % volume reduction).
    - Middleware writes synthesized request summaries with `log.type="action"` for every healthy request; they keep INFO-level retention.
 
 2. **Initialize the OpenTelemetry provider and hook the logger**
@@ -601,12 +779,17 @@ Explore the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-
 ### Quick Code Reference
 See **[llms.txt](llms.txt)** for copy-paste-ready code snippets covering:
 - Module system patterns
-- HTTP handlers (POST, GET, PUT, DELETE)
+- HTTP handlers (POST, GET, PUT, DELETE) and raw response mode
+- HTTP client with retries, interceptors, and W3C traces
 - Database queries (SELECT, UPDATE, DELETE, JOINs, subqueries)
+- Struct-based column extraction and named databases
 - Messaging (AMQP declarations, publishers, consumers)
+- Transactional outbox and job scheduler
+- Configuration injection with struct tags
+- Custom errors and middleware
+- KeyStore for RSA key management
 - Multi-tenant configuration
-- Observability setup
-- Configuration injection
+- Observability setup and custom metrics
 
 ---
 
@@ -617,7 +800,6 @@ Issues and pull requests are welcome!
 **Getting Started:**
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Coding standards, tooling, and workflow
 - **[CLAUDE.md](CLAUDE.md)** - Comprehensive development guide with architecture details, commands, and testing guidelines
-- **[.specify/memory/constitution.md](.specify/memory/constitution.md)** - Project governance and non-negotiable principles (80% test coverage, security-first, etc.)
 
 **Quick Setup:**
 ```bash
