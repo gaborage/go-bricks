@@ -232,9 +232,17 @@ config_not_configured: messaging.broker.url (optional) to enable: set MESSAGING_
 type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
-    RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
-    DeclareMessaging(decls *messaging.Declarations)
     Shutdown() error
+}
+
+// Optional — implement to register HTTP routes (detected via duck-typing at startup)
+type RouteRegisterer interface {
+    RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
+}
+
+// Optional — implement to declare AMQP exchanges, queues, and consumers
+type MessagingDeclarer interface {
+    DeclareMessaging(decls *messaging.Declarations)
 }
 ```
 
@@ -255,7 +263,7 @@ func register(framework *app.App) error {
 }
 ```
 
-`Init` is called once to capture dependencies, `RegisterRoutes` attaches HTTP handlers, `DeclareMessaging` declares AMQP infrastructure (validated once, replayed per-tenant), and `Shutdown` releases resources. The framework ensures proper lifecycle ordering and error handling across all module hooks.
+`Init` is called once to capture dependencies and `Shutdown` releases resources. Route registration and messaging are opt-in: if your module implements `RouteRegisterer`, the framework calls `RegisterRoutes` to attach HTTP handlers; if it implements `MessagingDeclarer`, `DeclareMessaging` is called to declare AMQP infrastructure (validated once, replayed per-tenant). Modules that don't need HTTP or AMQP simply omit the interface. The framework ensures proper lifecycle ordering and error handling across all module hooks.
 
 ---
 
@@ -439,7 +447,7 @@ func TestMyService(t *testing.T) {
 
     // Inject into service
     deps := &app.ModuleDeps{
-        GetCache: func(ctx context.Context) (cache.Cache, error) {
+        Cache: func(ctx context.Context) (cache.Cache, error) {
             return mockCache, nil
         },
     }
@@ -482,7 +490,7 @@ multitenant:
       messaging: { url: "..." }
 ```
 
-Modules access tenant resources via `ModuleDeps.GetDB(ctx)` and `ModuleDeps.GetMessaging(ctx)`.
+Modules access tenant resources via `deps.DB(ctx)` and `deps.Messaging(ctx)`.
 
 ### Custom Integration
 Implement `app.TenantStore` to integrate with AWS Secrets Manager, HashiCorp Vault, or custom backends.
