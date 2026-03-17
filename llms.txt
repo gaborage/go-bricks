@@ -119,7 +119,27 @@ func (m *Module) Shutdown() error { return nil }
 
 ## Database Connection & Queries
 
+Configure PostgreSQL in `config.yaml` (see Config Snapshot above):
+```yaml
+database:
+  type: postgres
+  host: localhost
+  port: 5432
+  database: myapp_db
+  username: myapp_user
+  password: ${DATABASE_PASSWORD}
+```
+
 ```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/logger"
+)
+
 // Step 1: Module receives database access via dependency injection
 type UserModule struct {
 	getDB  func(context.Context) (database.Interface, error)
@@ -132,15 +152,30 @@ func (m *UserModule) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// Step 2: Use getDB(ctx) in service/handler methods to obtain a connection
+// Step 2: Raw SQL — use getDB(ctx) to obtain a connection, then Query/QueryRow/Exec
+func (m *UserModule) CountActiveUsers(ctx context.Context) (int, error) {
+	db, err := m.getDB(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("database unavailable: %w", err)
+	}
+
+	// Simple query — raw SQL with vendor-specific placeholders (PostgreSQL: $1, $2)
+	var count int
+	err = db.QueryRow(ctx, "SELECT COUNT(*) FROM users WHERE status = $1", "active").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count query failed: %w", err)
+	}
+	return count, nil
+}
+
+// Step 3: Type-safe query builder — vendor-agnostic, auto-handles placeholders and Oracle quoting
 func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
 	db, err := m.getDB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("database unavailable: %w", err)
 	}
 
-	// Step 3: Build type-safe query
-	qb := builder.NewQueryBuilder(db.DatabaseType())
+	qb := database.NewQueryBuilder(db.DatabaseType())
 	cols := qb.Columns(&User{})
 	f := qb.Filter()
 
@@ -148,15 +183,15 @@ func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
 		From("users").
 		Where(f.Eq(cols.Col("Status"), "active")).
 		ToSQL()
+	// PostgreSQL: SELECT id, name, email, status FROM users WHERE status = $1
+	// Oracle:     SELECT "ID", "NAME", "EMAIL", "STATUS" FROM users WHERE "STATUS" = :1
 
-	// Step 4: Execute query via database.Interface (NOT raw *sql.DB)
 	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
 
-	// Step 5: Scan results
 	var users []User
 	for rows.Next() {
 		var u User
@@ -170,10 +205,10 @@ func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
 ```
 
 **Key points:**
-- Framework manages connection pooling, keep-alive, and health checks — never construct `*sql.DB` directly
+- Connection is config-driven (`database:` block in YAML) — framework manages pooling, keep-alive, and health checks
 - `deps.DB` is a function, not an instance — call `getDB(ctx)` each time to support multi-tenant resolution
-- `db.Query()` / `db.Exec()` accept standard `context.Context` for tracing and cancellation
-- Query builder auto-handles vendor differences (PostgreSQL `$1` vs Oracle `:1` placeholders)
+- Use raw SQL (`db.QueryRow`, `db.Query`, `db.Exec`) for simple queries with `context.Context` for tracing
+- Use `database.NewQueryBuilder(vendor)` for type-safe, vendor-agnostic queries (auto-handles placeholders and Oracle reserved word quoting)
 
 ## Typed HTTP Handlers
 
@@ -571,7 +606,7 @@ if err != nil {
     return nil, err
 }
 
-qb := builder.NewQueryBuilder(db.DatabaseType())
+qb := database.NewQueryBuilder(db.DatabaseType())
 f := qb.Filter()
 cols := qb.Columns(&User{})
 
@@ -2505,7 +2540,7 @@ func (s *UserService) FindByEmail(ctx context.Context, email string) (*User, err
         return nil, err
     }
 
-    qb := builder.NewQueryBuilder(db.DatabaseType())
+    qb := database.NewQueryBuilder(db.DatabaseType())
     cols := qb.Columns(&User{})
     f := qb.Filter()
 
@@ -2533,7 +2568,7 @@ func (s *UserService) Create(ctx context.Context, email, name string) (*User, er
     }
 
     db, _ := s.getDB(ctx)
-    qb := builder.NewQueryBuilder(db.DatabaseType())
+    qb := database.NewQueryBuilder(db.DatabaseType())
     cols := qb.Columns(&User{})
 
     // Always include tenant_id in INSERT
@@ -2561,7 +2596,7 @@ func (s *UserService) List(ctx context.Context, status string) ([]User, error) {
         return nil, fmt.Errorf("database unavailable: %w", err)
     }
 
-    qb := builder.NewQueryBuilder(db.DatabaseType())
+    qb := database.NewQueryBuilder(db.DatabaseType())
     cols := qb.Columns(&User{})
     f := qb.Filter()
 
