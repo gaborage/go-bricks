@@ -109,13 +109,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
-func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	handler := NewHandler(m.getDB, m.logger)
-	server.POST(hr, e, "/users", handler.Create)
-}
-
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-	// optional
+	server.POST(hr, r, "/users", handler.Create)
 }
 
 func (m *Module) Shutdown() error { return nil }
