@@ -12,10 +12,9 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/scheduler"
-	"github.com/gaborage/go-bricks/server"
 )
 
-// OutboxModule implements the GoBricks Module interface for transactional outbox.
+// Module implements the GoBricks Module interface for transactional outbox.
 // It provides reliable event publishing by writing events to a database table
 // within the caller's transaction, then publishing them to the message broker
 // via a background relay job.
@@ -23,13 +22,11 @@ import (
 // The module is registered like any other GoBricks module:
 //
 //	fw.RegisterModules(
-//	    scheduler.NewSchedulerModule(),  // Required: relay runs as a scheduled job
-//	    outbox.NewOutboxModule(),        // Outbox module
+//	    scheduler.NewModule(),  // Required: relay runs as a scheduled job
+//	    outbox.NewModule(),     // Outbox module
 //	    &myapp.OrderModule{},
 //	)
-//
-//nolint:revive // Intentional stutter for clarity - follows GoBricks naming pattern (e.g., scheduler.SchedulerModule)
-type OutboxModule struct {
+type Module struct {
 	logger logger.Logger
 	config *config.Config
 	getDB  func(context.Context) (dbtypes.Interface, error)
@@ -43,19 +40,19 @@ type OutboxModule struct {
 	tableCreated bool
 }
 
-// NewOutboxModule creates a new OutboxModule instance.
-func NewOutboxModule() *OutboxModule {
-	return &OutboxModule{}
+// NewModule creates a new Module instance.
+func NewModule() *Module {
+	return &Module{}
 }
 
 // Name implements app.Module.
-func (m *OutboxModule) Name() string {
+func (m *Module) Name() string {
 	return "outbox"
 }
 
 // Init implements app.Module.
 // Stores dependencies, creates the vendor-specific store, and initializes the publisher.
-func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
+func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.config = deps.Config
 	m.getDB = deps.DB
@@ -76,6 +73,15 @@ func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
+	// Fail fast: when outbox is enabled, DB and Messaging resolvers are required.
+	// Without them, the relay job would panic on first poll instead of failing at startup.
+	if m.getDB == nil {
+		return fmt.Errorf("outbox: database resolver (deps.DB) is required when outbox is enabled")
+	}
+	if m.getMsg == nil {
+		return fmt.Errorf("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
+	}
+
 	// Store creation is deferred until first use (lazy init like scheduler)
 	// because we need to know the database vendor type, which requires a DB connection.
 	// The publisher wraps the store and handles lazy initialization.
@@ -94,7 +100,7 @@ func (m *OutboxModule) Init(deps *app.ModuleDeps) error {
 // This is lazy because the database vendor type is only known at runtime.
 // Uses double-check locking (mutex, not sync.Once) because initialization
 // can fail and should be retried — matching the scheduler module pattern.
-func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
+func (m *Module) ensureStoreInitialized(ctx context.Context) error {
 	m.initMu.Lock()
 	defer m.initMu.Unlock()
 
@@ -144,23 +150,13 @@ func (m *OutboxModule) ensureStoreInitialized(ctx context.Context) error {
 }
 
 // OutboxPublisher implements app.OutboxProvider — returns the Publisher for ModuleDeps wiring.
-func (m *OutboxModule) OutboxPublisher() app.OutboxPublisher {
+func (m *Module) OutboxPublisher() app.OutboxPublisher {
 	return m.publisher
-}
-
-// RegisterRoutes implements app.Module. Outbox has no HTTP routes.
-func (m *OutboxModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
-	// No-op: outbox doesn't expose HTTP endpoints
-}
-
-// DeclareMessaging implements app.Module. Outbox doesn't declare its own messaging infrastructure.
-func (m *OutboxModule) DeclareMessaging(_ *messaging.Declarations) {
-	// No-op: outbox publishes to exchanges declared by other modules
 }
 
 // RegisterJobs implements app.JobProvider.
 // Registers the relay and cleanup jobs with the scheduler.
-func (m *OutboxModule) RegisterJobs(registrar app.JobRegistrar) error {
+func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	if !m.cfg.Enabled {
 		return nil
 	}
@@ -207,7 +203,7 @@ func (m *OutboxModule) RegisterJobs(registrar app.JobRegistrar) error {
 }
 
 // Shutdown implements app.Module.
-func (m *OutboxModule) Shutdown() error {
+func (m *Module) Shutdown() error {
 	m.logger.Info().Msg("Outbox module shut down")
 	return nil
 }
@@ -215,7 +211,7 @@ func (m *OutboxModule) Shutdown() error {
 // lazyPublisher wraps app.OutboxPublisher to lazily initialize the store on first use.
 // Caches the publisher instance after first successful initialization via sync.Once.
 type lazyPublisher struct {
-	module    *OutboxModule
+	module    *Module
 	once      sync.Once
 	cachedPub app.OutboxPublisher
 }
@@ -234,7 +230,7 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 // lazyStore wraps Store to lazily initialize via the module.
 // Used by relay and cleanup jobs that start after Init().
 type lazyStore struct {
-	module *OutboxModule
+	module *Module
 }
 
 func (s *lazyStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {

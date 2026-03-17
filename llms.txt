@@ -2247,7 +2247,7 @@ keystore:
 ```go
 // Register before modules that need keys
 fw.RegisterModules(
-    keystore.NewKeystoreModule(),
+    keystore.NewModule(),
     &myapp.JWEModule{},
 )
 
@@ -2257,7 +2257,7 @@ type Module struct {
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.keyStore = deps.KeyStore  // nil if no KeystoreModule registered
+    m.keyStore = deps.KeyStore  // nil if no keystore module registered
     return nil
 }
 

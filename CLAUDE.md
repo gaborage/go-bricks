@@ -248,16 +248,29 @@ var probe app.Prober = myProbe
 - **keystore/** - Named RSA key pair management from DER files or base64 env vars
 
 ### Module System
-Modules implement this interface:
+Modules implement this core interface. Route registration and messaging are opt-in via duck-typing: if your module implements `RouteRegisterer` or `MessagingDeclarer`, the framework detects this at startup and calls the corresponding method automatically. Modules that don't need HTTP or AMQP simply omit the interface.
+
 ```go
 type Module interface {
     Name() string
     Init(deps *ModuleDeps) error
-    RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo)
-    DeclareMessaging(decls *messaging.Declarations)
     Shutdown() error
 }
 
+// Optional: implement to register HTTP routes during startup.
+// hr tracks metadata (route count, tags); r is the Echo RouteRegistrar for binding handlers.
+type RouteRegisterer interface {
+    RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
+}
+
+// Optional: implement to declare AMQP exchanges, queues, bindings, publishers, and consumers.
+// Declarations are validated once at startup and replayed per-tenant for isolation.
+type MessagingDeclarer interface {
+    DeclareMessaging(decls *messaging.Declarations)
+}
+
+// Simplified — see app/module.go for the full struct (~12 fields including
+// Scheduler, Outbox, Tracer, MeterProvider, DBByName, etc.)
 type ModuleDeps struct {
     DB        database.Interface
     Logger    logger.Logger
@@ -1122,8 +1135,8 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 **Module Setup:**
 ```go
 fw.RegisterModules(
-    scheduler.NewSchedulerModule(),  // Required: relay runs as a scheduled job
-    outbox.NewOutboxModule(),        // Outbox module
+    scheduler.NewModule(),  // Required: relay runs as a scheduled job
+    outbox.NewModule(),     // Outbox module
     &myapp.OrderModule{},
 )
 
@@ -2050,7 +2063,8 @@ grep "Panic recovered in message handler" logs/app.log
 
 ```bash
 # "outbox not configured" or deps.Outbox is nil
-# → Register OutboxModule BEFORE your application modules
+# → Register outbox module BEFORE your application modules (its Init wires
+#   OutboxPublisher into deps.Outbox; downstream modules see nil if it runs later)
 # → Set outbox.enabled: true in config
 
 # Events stuck in "pending" status

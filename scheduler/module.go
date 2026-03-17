@@ -37,7 +37,7 @@ const (
 	errJobInterfaceMsg = "must implement scheduler.Executor interface, got %T"
 )
 
-// SchedulerModule implements the GoBricks Module interface for job scheduling.
+// Module implements the GoBricks app.Module interface for job scheduling.
 // It provides lazy initialization per FR-016: scheduler created only when first job is registered.
 //
 // Example usage:
@@ -45,9 +45,7 @@ const (
 //	func (m *MyModule) Init(deps *app.ModuleDeps) error {
 //	    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
 //	}
-//
-//nolint:revive // Intentional stutter for clarity - follows GoBricks naming pattern (e.g., server.Server)
-type SchedulerModule struct {
+type Module struct {
 	// GoBricks dependencies
 	logger        logger.Logger
 	config        *config.Config
@@ -73,12 +71,12 @@ type SchedulerModule struct {
 	wg             sync.WaitGroup // Tracks in-flight job executions
 }
 
-// NewSchedulerModule creates a new SchedulerModule instance.
+// NewModule creates a new Module instance.
 // Per FR-016: The scheduler itself is lazy-initialized on first job registration.
-func NewSchedulerModule() *SchedulerModule {
+func NewModule() *Module {
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in struct field, called in Shutdown()
 
-	return &SchedulerModule{
+	return &Module{
 		jobs:           make(map[string]*jobEntry),
 		shutdownCtx:    shutdownCtx,
 		shutdownCancel: shutdownCancel,
@@ -86,13 +84,13 @@ func NewSchedulerModule() *SchedulerModule {
 }
 
 // Name implements app.Module
-func (m *SchedulerModule) Name() string {
+func (m *Module) Name() string {
 	return "scheduler"
 }
 
 // Init implements app.Module
 // Stores dependencies and makes the module available as a JobRegistrar via deps.
-func (m *SchedulerModule) Init(deps *app.ModuleDeps) error {
+func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.config = deps.Config
 	m.tracer = deps.Tracer
@@ -146,7 +144,7 @@ func (m *SchedulerModule) Init(deps *app.ModuleDeps) error {
 
 // RegisterRoutes implements app.Module
 // Registers system API routes for job listing and manual triggering
-func (m *SchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Skip route registration if parameters are nil (e.g., in tests)
 	if hr == nil || r == nil {
 		return
@@ -170,15 +168,9 @@ func (m *SchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.Ro
 	server.POST(hr, sysGroup, "/job/:jobId", m.triggerJobHandler)
 }
 
-// DeclareMessaging implements app.Module
-// Scheduler does not declare any messaging exchanges/queues
-func (m *SchedulerModule) DeclareMessaging(_ *messaging.Declarations) {
-	// No-op: scheduler doesn't use messaging for infrastructure
-}
-
 // Shutdown implements app.Module
 // Gracefully shuts down the scheduler per FR-013, FR-014, FR-015.
-func (m *SchedulerModule) Shutdown() error {
+func (m *Module) Shutdown() error {
 	m.mu.Lock()
 	// Signal shutdown to all job wrappers
 	m.shutdownCancel()
@@ -229,7 +221,7 @@ func (m *SchedulerModule) Shutdown() error {
 // ensureSchedulerInitialized creates the gocron scheduler on first job registration.
 // Per FR-016: Lazy initialization for zero overhead when no jobs are registered.
 // Must be called with m.mu write lock held.
-func (m *SchedulerModule) ensureSchedulerInitialized() error {
+func (m *Module) ensureSchedulerInitialized() error {
 	if m.scheduler != nil {
 		return nil // Already initialized
 	}
@@ -265,7 +257,7 @@ func validateExecutor(job any) (Executor, error) {
 }
 
 // FixedRate implements JobRegistrar per FR-003
-func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duration) error {
+func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
 		return err
@@ -286,7 +278,7 @@ func (m *SchedulerModule) FixedRate(jobID string, job any, interval time.Duratio
 }
 
 // DailyAt implements JobRegistrar per FR-004
-func (m *SchedulerModule) DailyAt(jobID string, job any, localTime time.Time) error {
+func (m *Module) DailyAt(jobID string, job any, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
 		return err
@@ -302,7 +294,7 @@ func (m *SchedulerModule) DailyAt(jobID string, job any, localTime time.Time) er
 }
 
 // WeeklyAt implements JobRegistrar per FR-005
-func (m *SchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
+func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
 		return err
@@ -319,7 +311,7 @@ func (m *SchedulerModule) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday
 }
 
 // HourlyAt implements JobRegistrar per FR-006
-func (m *SchedulerModule) HourlyAt(jobID string, job any, minute int) error {
+func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
 		return err
@@ -340,7 +332,7 @@ func (m *SchedulerModule) HourlyAt(jobID string, job any, minute int) error {
 }
 
 // MonthlyAt implements JobRegistrar per FR-007
-func (m *SchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
+func (m *Module) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
 		return err
@@ -367,7 +359,7 @@ func (m *SchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, local
 // registerJob is the internal method that handles job registration and scheduler setup.
 // Per FR-022: Validates unique job IDs.
 // Per FR-016: Lazy-initializes scheduler on first job registration.
-func (m *SchedulerModule) registerJob(jobID string, job Executor, schedule ScheduleConfiguration) error {
+func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfiguration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -431,7 +423,7 @@ func (m *SchedulerModule) registerJob(jobID string, job Executor, schedule Sched
 
 // scheduleWithGocron creates a gocron job based on the schedule configuration.
 // Must be called with m.mu lock held.
-func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
+func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 	// Create job wrapper that will be executed by gocron
 	jobFunc := m.createJobWrapper(entry)
 
@@ -489,7 +481,7 @@ func (m *SchedulerModule) scheduleWithGocron(entry *jobEntry) (gocron.Job, error
 // - Panic recovery per FR-021
 // - Observability (traces, metrics, logs) per FR-017-FR-020
 // - Graceful shutdown handling per FR-024
-func (m *SchedulerModule) createJobWrapper(entry *jobEntry) func() {
+func (m *Module) createJobWrapper(entry *jobEntry) func() {
 	return func() {
 		// Check for shutdown
 		select {
@@ -557,11 +549,14 @@ func (m *SchedulerModule) createJobWrapper(entry *jobEntry) func() {
 // executeJob executes the job with panic recovery, metadata updates, and observability instrumentation.
 // Per FR-021: Recover panics, log with stack trace, mark as failed.
 // Per FR-017 to FR-020: Create spans, record metrics, propagate trace context.
-func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
-	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured
+func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
+	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured.
+	// Propagate the traced context so child spans and WithContext(ctx) logs
+	// nest under this "job.execute" span.
 	var span trace.Span
 	if m.tracer != nil {
-		_, span = m.tracer.Start(
+		var tracedCtx context.Context
+		tracedCtx, span = m.tracer.Start(
 			ctx,
 			"job.execute",
 			trace.WithAttributes(
@@ -570,6 +565,7 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 			),
 		)
 		defer span.End()
+		ctx = ctx.(*jobContextImpl).withContext(tracedCtx)
 	}
 
 	start := time.Now()
@@ -649,7 +645,7 @@ func (m *SchedulerModule) executeJob(entry *jobEntry, ctx JobContext) {
 // - job.panic.total (Counter) - Singular "panic" for consistency
 //
 // Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
-func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
+func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
 	// Record job execution counter
 	if m.executionCounter != nil {
 		m.executionCounter.Add(context.Background(), 1,
@@ -685,7 +681,7 @@ func (m *SchedulerModule) recordMetrics(jobID, status, scheduleType string, dura
 
 // logJobResultSummary emits a structured action log for job execution with OpenTelemetry conventions.
 // Similar to HTTP request logging, this provides 100% sampling of job executions with operational counters.
-func (m *SchedulerModule) logJobResultSummary(
+func (m *Module) logJobResultSummary(
 	ctx JobContext,
 	jobID, scheduleType, trigger string,
 	duration time.Duration,
@@ -744,7 +740,7 @@ func (m *SchedulerModule) logJobResultSummary(
 }
 
 // determineJobSeverity calculates log severity and result_code based on execution result and duration.
-func (m *SchedulerModule) determineJobSeverity(duration time.Duration, err error) (logLevel, resultCode string) {
+func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLevel, resultCode string) {
 	// ERROR: Job failed
 	if err != nil {
 		return "error", "ERROR"

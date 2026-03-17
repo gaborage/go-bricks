@@ -120,6 +120,24 @@ Complete removal of MongoDB support to focus exclusively on PostgreSQL and Oracl
 
 ---
 
+### [ADR-013: Interface Naming Conventions (S8196)](adr-013-interface-naming-conventions.md)
+**Date:** 2026-02-19 | **Status:** Accepted
+
+Renames interfaces to follow Go's idiomatic naming per SonarCloud rule S8196. Interfaces renamed for clarity across scheduler, app, database, messaging, server, and cache packages.
+
+**Key Benefits:** Idiomatic Go naming, improved readability, SonarCloud compliance
+
+---
+
+### [ADR-014: Slim Module Interface + Remove Stutter](adr-014-slim-module-interface.md)
+**Date:** 2026-03-16 | **Status:** Accepted
+
+Slims the `app.Module` interface from 5 methods to 3, making `RegisterRoutes` and `DeclareMessaging` optional via `RouteRegisterer` and `MessagingDeclarer` interfaces. Removes stuttered framework module names (`OutboxModule` → `Module`, etc.).
+
+**Key Benefits:** Interface Segregation, eliminates no-op methods, removes `//nolint:revive` suppression
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented

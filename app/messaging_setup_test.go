@@ -11,7 +11,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/server"
 )
 
 func TestCollectDeclarations(t *testing.T) {
@@ -91,13 +90,7 @@ type simpleTestModule struct{}
 
 func (m *simpleTestModule) Name() string             { return "simple-test-module" }
 func (m *simpleTestModule) Init(_ *ModuleDeps) error { return nil }
-func (m *simpleTestModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
-	// no-op
-}
-func (m *simpleTestModule) DeclareMessaging(_ *messaging.Declarations) {
-	// no-op
-}
-func (m *simpleTestModule) Shutdown() error { return nil }
+func (m *simpleTestModule) Shutdown() error          { return nil }
 
 func TestSetupLazyConsumerInit(t *testing.T) {
 	t.Run("returns error when manager is nil", func(t *testing.T) {

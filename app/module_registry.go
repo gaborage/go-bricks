@@ -103,34 +103,38 @@ func (r *ModuleRegistry) Register(module Module) error {
 	return nil
 }
 
-// RegisterRoutes calls RegisterRoutes on all registered modules.
-// It should be called after all modules have been registered.
+// RegisterRoutes calls RegisterRoutes on modules that implement RouteRegisterer.
+// Modules without routes are silently skipped.
 func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	// Create handler registry
 	handlerRegistry := server.NewHandlerRegistry(r.deps.Config)
 
 	for _, module := range r.modules {
-		r.logger.Info().
-			Str("module", module.Name()).
-			Msg("Registering module routes")
+		if rr, ok := module.(RouteRegisterer); ok {
+			r.logger.Info().
+				Str("module", module.Name()).
+				Msg("Registering module routes")
 
-		module.RegisterRoutes(handlerRegistry, registrar)
+			rr.RegisterRoutes(handlerRegistry, registrar)
+		}
 	}
 }
 
-// DeclareMessaging calls DeclareMessaging on all registered modules to populate a shared declarations store.
-// This method builds the declaration store that will be used for all tenant registries.
+// DeclareMessaging calls DeclareMessaging on modules that implement MessagingDeclarer.
+// Modules without messaging declarations are silently skipped.
 func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 	if decls == nil {
 		return fmt.Errorf("declarations store is nil")
 	}
 
 	for _, module := range r.modules {
-		r.logger.Info().
-			Str("module", module.Name()).
-			Msg("Collecting module messaging declarations")
+		if md, ok := module.(MessagingDeclarer); ok {
+			r.logger.Info().
+				Str("module", module.Name()).
+				Msg("Collecting module messaging declarations")
 
-		module.DeclareMessaging(decls)
+			md.DeclareMessaging(decls)
+		}
 	}
 
 	// Validate all declarations after collection

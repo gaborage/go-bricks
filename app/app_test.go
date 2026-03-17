@@ -299,14 +299,6 @@ func (m *MockSchedulerModule) Init(deps *ModuleDeps) error {
 	return m.Called(deps).Error(0)
 }
 
-func (m *MockSchedulerModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	m.Called(hr, r)
-}
-
-func (m *MockSchedulerModule) DeclareMessaging(decls *messaging.Declarations) {
-	m.Called(decls)
-}
-
 func (m *MockSchedulerModule) Shutdown() error {
 	return m.Called().Error(0)
 }
@@ -352,14 +344,6 @@ func (m *MockJobProviderModule) Init(deps *ModuleDeps) error {
 	return m.Called(deps).Error(0)
 }
 
-func (m *MockJobProviderModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	m.Called(hr, r)
-}
-
-func (m *MockJobProviderModule) DeclareMessaging(decls *messaging.Declarations) {
-	m.Called(decls)
-}
-
 func (m *MockJobProviderModule) Shutdown() error {
 	return m.Called().Error(0)
 }
@@ -388,12 +372,6 @@ func (m *MockKeyStoreModule) Name() string {
 
 func (m *MockKeyStoreModule) Init(deps *ModuleDeps) error {
 	return m.Called(deps).Error(0)
-}
-
-func (m *MockKeyStoreModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
-}
-
-func (m *MockKeyStoreModule) DeclareMessaging(_ *messaging.Declarations) {
 }
 
 func (m *MockKeyStoreModule) Shutdown() error {
@@ -947,9 +925,6 @@ type declarationCounterModule struct {
 
 func (m *declarationCounterModule) Name() string             { return "counter-module" }
 func (m *declarationCounterModule) Init(_ *ModuleDeps) error { return nil }
-func (m *declarationCounterModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
-	// no-op
-}
 func (m *declarationCounterModule) DeclareMessaging(_ *messaging.Declarations) {
 	m.callCount++
 }
@@ -1372,13 +1347,7 @@ type describerModule struct{}
 
 func (m *describerModule) Name() string             { return "describer-module" }
 func (m *describerModule) Init(_ *ModuleDeps) error { return nil }
-func (m *describerModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRegistrar) {
-	// no-op
-}
-func (m *describerModule) DeclareMessaging(_ *messaging.Declarations) {
-	// no-op
-}
-func (m *describerModule) Shutdown() error { return nil }
+func (m *describerModule) Shutdown() error          { return nil }
 func (m *describerModule) DescribeModule() ModuleDescriptor {
 	return ModuleDescriptor{
 		Description: "A test module that implements Describer",
