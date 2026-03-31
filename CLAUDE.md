@@ -10,6 +10,20 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 - **Go 1.25** required
 - Docker Desktop or Docker Engine (integration tests only)
 
+## Workflow Rules
+
+- Always run `make check` (or `make check-all` for API changes) before committing and pushing. Never commit or push without a passing build.
+- When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
+- After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
+
+## Git Rules
+
+- Always confirm the current Git branch before committing or pushing. Never push directly to `main` unless explicitly instructed.
+
+## PR Review Workflow
+
+- For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
+
 ## Quick Reference
 
 **Most Common Commands:**
@@ -39,6 +53,11 @@ go test -bench=.        # Run benchmarks
 - [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) - Code quality metrics
 
 ## Table of Contents
+
+**Rules (MUST READ):**
+- [Workflow Rules](#workflow-rules) - Build verification, auto-commit
+- [Git Rules](#git-rules) - Branch safety
+- [PR Review Workflow](#pr-review-workflow) - Review fix sessions
 
 **Getting Started:**
 - [Quick Reference](#quick-reference) - Commands, files, resources
@@ -1823,13 +1842,6 @@ cd tools/openapi && make check    # Validates tool against current framework
 - Changing struct tags or validation logic
 - Refactoring shared types or error handling
 - Before creating PRs that touch framework APIs
-
-### Claude Code Workflow Rules
-- Always run `make check` (or `make check-all` for API changes) before committing. Never commit or push without a passing build.
-- Confirm current Git branch before committing or pushing. Never push directly to `main` unless explicitly instructed.
-- When fixing lint/build errors, run `make check` after each fix cycle. Common issues: import ordering, trailing newlines, type errors.
-- For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
-- After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
 
 ### CI Workflow Testing
 The unified CI workflow (`ci-v2.yml`) intelligently runs only necessary jobs:
