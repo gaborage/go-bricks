@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // CIDRMiddleware creates middleware that restricts access based on CIDR allowlist.
@@ -65,7 +65,7 @@ func parseTrustedProxies(trustedProxies []string) []*net.IPNet {
 
 // createIPCheckHandler creates the handler function that validates IP addresses
 func createIPCheckHandler(next echo.HandlerFunc, allowedNets, trustedNets []*net.IPNet, localhostOnly bool) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		ip, err := parseRemoteIP(c.Request(), trustedNets)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusForbidden, "Invalid IP address")

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // handleGoroutines provides detailed goroutine information
-func (d *DebugHandlers) handleGoroutines(c echo.Context) error {
+func (d *DebugHandlers) handleGoroutines(c *echo.Context) error {
 	start := time.Now()
 
 	// Query parameters
@@ -37,7 +37,7 @@ func (d *DebugHandlers) handleGoroutines(c echo.Context) error {
 }
 
 // handleGoroutinesText returns raw goroutine stacks as text
-func (d *DebugHandlers) handleGoroutinesText(c echo.Context) error {
+func (d *DebugHandlers) handleGoroutinesText(c *echo.Context) error {
 	var buf strings.Builder
 	if pprof.Lookup("goroutine").WriteTo(&buf, 1) != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get goroutine dump")
@@ -309,7 +309,7 @@ func (d *DebugHandlers) checkNetworkIO(stack GoroutineStack) *PotentialLeak {
 }
 
 // handleGC provides garbage collection information
-func (d *DebugHandlers) handleGC(c echo.Context) error {
+func (d *DebugHandlers) handleGC(c *echo.Context) error {
 	start := time.Now()
 
 	var memBefore runtime.MemStats
@@ -331,7 +331,7 @@ func (d *DebugHandlers) handleGC(c echo.Context) error {
 }
 
 // handleForceGC forces garbage collection and reports before/after memory
-func (d *DebugHandlers) handleForceGC(c echo.Context) error {
+func (d *DebugHandlers) handleForceGC(c *echo.Context) error {
 	start := time.Now()
 
 	var memBefore runtime.MemStats

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // Timeout returns middleware that adds a request-scoped deadline without swapping
@@ -26,7 +26,7 @@ func Timeout(duration time.Duration) echo.MiddlewareFunc {
 	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			parent := c.Request().Context()
 
 			// Short-circuit if the upstream context is already cancelled.

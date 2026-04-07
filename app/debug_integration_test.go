@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
@@ -65,10 +65,10 @@ func TestDebugEndpointsIntegration(t *testing.T) {
 func TestDebugEndpointsIPRestriction(t *testing.T) {
 	// Create test configuration with debug enabled but restricted IPs
 	debugConfig := &config.DebugConfig{
-		Enabled:     true,
-		PathPrefix:  debugPath,
-		AllowedIPs:  []string{"192.168.1.1"}, // Different IP
-		BearerToken: "",
+		Enabled:    true,
+		PathPrefix: debugPath,
+		AllowedIPs: []string{"192.168.1.1"}, // Different IP
+		Endpoints:  config.DebugEndpointsConfig{Info: true},
 	}
 
 	testLogger := logger.New("info", false)

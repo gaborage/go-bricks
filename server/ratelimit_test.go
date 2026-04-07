@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +59,7 @@ func TestRateLimit(t *testing.T) {
 			e := echo.New()
 			e.Use(RateLimit(tt.requestsPerSec))
 
-			e.GET("/test", func(c echo.Context) error {
+			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 			})
 
@@ -97,7 +97,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 	e := echo.New()
 	e.Use(RateLimit(2)) // Very low limit to trigger easily
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -137,7 +137,7 @@ func TestRateLimitErrorResponse(t *testing.T) {
 	e := echo.New()
 	e.Use(RateLimit(1)) // Very restrictive limit
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -177,9 +177,10 @@ func TestRateLimitErrorResponse(t *testing.T) {
 
 func TestRateLimitIPExtraction(t *testing.T) {
 	e := echo.New()
+	e.IPExtractor = echo.LegacyIPExtractor() // Restore v4-compatible header-based IP extraction
 	e.Use(RateLimit(2))
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -264,7 +265,7 @@ func TestRateLimitDisabled(t *testing.T) {
 			e.Use(RateLimit(0))
 
 			callCount := 0
-			handler := func(c echo.Context) error {
+			handler := func(c *echo.Context) error {
 				if tt.trackCalls {
 					callCount++
 					return c.NoContent(tt.expectedStatus)
@@ -301,7 +302,7 @@ func TestRateLimitReset(t *testing.T) {
 	e := echo.New()
 	e.Use(RateLimit(2)) // 2 requests per second
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 

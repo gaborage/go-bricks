@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
@@ -26,7 +26,7 @@ func TestAuthMiddleware(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
 	// Create a test handler that returns success if auth passes
-	testHandler := func(c echo.Context) error {
+	testHandler := func(c *echo.Context) error {
 		return c.String(http.StatusOK, "success")
 	}
 
@@ -128,7 +128,7 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 	}
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
-	testHandler := func(c echo.Context) error {
+	testHandler := func(c *echo.Context) error {
 		return c.String(http.StatusOK, "success")
 	}
 

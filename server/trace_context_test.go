@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,7 +24,7 @@ func TestTraceContext(t *testing.T) {
 
 	var capturedContext context.Context
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		capturedContext = c.Request().Context()
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -136,7 +136,7 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 
 	var capturedContext context.Context
 
-	e.GET("/error", func(c echo.Context) error {
+	e.GET("/error", func(c *echo.Context) error {
 		capturedContext = c.Request().Context()
 		return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 	})
@@ -170,7 +170,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 
 	// Middleware before trace context
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			preTraceContext = c.Request().Context()
 			return next(c)
 		}
@@ -180,13 +180,13 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 
 	// Middleware after trace context
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			postTraceContext = c.Request().Context()
 			return next(c)
 		}
 	})
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -220,7 +220,7 @@ func TestTraceContextInvalidHeaders(t *testing.T) {
 
 	var capturedContext context.Context
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		capturedContext = c.Request().Context()
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -307,7 +307,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 
 	results := make(chan requestResult, 10)
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		ctx := c.Request().Context()
 
 		traceID, _ := gobrickshttp.TraceIDFromContext(ctx)

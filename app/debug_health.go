@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const (
@@ -52,7 +52,7 @@ type Info struct {
 }
 
 // handleHealthDebug provides comprehensive health debugging information
-func (d *DebugHandlers) handleHealthDebug(c echo.Context) error {
+func (d *DebugHandlers) handleHealthDebug(c *echo.Context) error {
 	start := time.Now()
 
 	healthInfo := &HealthDebugInfo{

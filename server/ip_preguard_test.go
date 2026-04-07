@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,7 +75,7 @@ func TestIPPreGuard(t *testing.T) {
 			e := echo.New()
 			e.Use(IPPreGuard(tt.requestsPerSec))
 
-			e.GET("/test", func(c echo.Context) error {
+			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 			})
 
@@ -113,7 +113,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 	e := echo.New()
 	e.Use(IPPreGuard(2)) // Very low limit to trigger easily
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -153,7 +153,7 @@ func TestIPPreGuardErrorResponse(t *testing.T) {
 	e := echo.New()
 	e.Use(IPPreGuard(1)) // Very restrictive limit
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -196,14 +196,14 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 
 	// Test that IPPreGuard works correctly when combined with other middleware
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			c.Response().Header().Set(headerTestMiddleware, "present")
 			return next(c)
 		}
 	})
 	e.Use(IPPreGuard(3))
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 

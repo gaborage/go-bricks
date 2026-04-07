@@ -2,7 +2,7 @@ package server
 
 import (
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // TraceContext injects the resolved trace ID and W3C trace context headers
@@ -10,7 +10,7 @@ import (
 // HTTP clients can propagate them without depending on Echo.
 func TraceContext() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			req := c.Request()
 
 			// SAFETY: Check if the request context has already been cancelled (e.g., by timeout).

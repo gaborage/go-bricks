@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -80,7 +80,7 @@ func TestOTelMiddlewareSpanCreation(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
 	// Register test route
-	e.GET(testUserAPIEndpoint, func(c echo.Context) error {
+	e.GET(testUserAPIEndpoint, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -105,7 +105,7 @@ func TestOTelMiddlewareSpanAttributes(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
 	// Register test route
-	e.POST("/api/resources", func(c echo.Context) error {
+	e.POST("/api/resources", func(c *echo.Context) error {
 		return c.JSON(http.StatusCreated, map[string]string{"id": "new-resource"})
 	})
 
@@ -144,7 +144,7 @@ func TestOTelMiddlewareSpanAttributes(t *testing.T) {
 func TestOTelMiddlewareTraceContextPropagation(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
-	e.GET(testAPIEndpoint, func(c echo.Context) error {
+	e.GET(testAPIEndpoint, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -211,7 +211,7 @@ func TestOTelMiddlewareErrorRecording(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e, exporter := setupTestServerWithTracing(t)
 
-			e.GET(testAPIEndpoint, func(c echo.Context) error {
+			e.GET(testAPIEndpoint, func(c *echo.Context) error {
 				return c.JSON(tt.statusCode, map[string]string{"status": "test"})
 			})
 
@@ -245,15 +245,15 @@ func TestOTelMiddlewareHealthProbeExclusion(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
 	// Register health and ready endpoints (done by server.New in real usage)
-	e.GET(testHealthPath, func(c echo.Context) error {
+	e.GET(testHealthPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
-	e.GET(testReadyPath, func(c echo.Context) error {
+	e.GET(testReadyPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
 	// Also register a normal endpoint
-	e.GET("/api/data", func(c echo.Context) error {
+	e.GET("/api/data", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"data": "test"})
 	})
 
@@ -317,7 +317,7 @@ func TestOTelMiddlewareSpanNaming(t *testing.T) {
 	}
 
 	for _, route := range routes {
-		e.Add(route.method, route.path, func(c echo.Context) error {
+		e.Add(route.method, route.path, func(c *echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		})
 	}
@@ -351,7 +351,7 @@ func TestOTelMiddlewareSpanNaming(t *testing.T) {
 func TestOTelMiddlewareConcurrentRequests(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
-	e.GET(testAPIEndpoint, func(c echo.Context) error {
+	e.GET(testAPIEndpoint, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -393,7 +393,7 @@ func TestOTelMiddlewareIntegrationWithTraceContext(t *testing.T) {
 
 	var capturedContext context.Context
 
-	e.GET(testAPIEndpoint, func(c echo.Context) error {
+	e.GET(testAPIEndpoint, func(c *echo.Context) error {
 		capturedContext = c.Request().Context()
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -475,7 +475,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 
 	// Register route under base path
 	group := e.Group("/api/v1")
-	group.GET("/users/:id", func(c echo.Context) error {
+	group.GET("/users/:id", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 

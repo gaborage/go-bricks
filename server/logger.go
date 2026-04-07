@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
@@ -80,7 +80,7 @@ func newRequestLogger(log logger.Logger, cfg LoggerConfig) *requestLogger {
 // Handle returns the middleware handler function for request logging.
 // This method replaces the nested closure pattern with a struct-based approach.
 func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		// Initialize request logging context
 		reqCtx := newRequestLogContext()
 		c.Set(RequestLogContextKey, reqCtx)
@@ -118,7 +118,7 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 
 // shouldSkipPath checks if the request path should be excluded from logging.
 // Returns true for health and readiness probe endpoints.
-func (rl *requestLogger) shouldSkipPath(c echo.Context) bool {
+func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
 	path := c.Path()
 	if path == "" {
 		path = c.Request().URL.Path
@@ -128,14 +128,14 @@ func (rl *requestLogger) shouldSkipPath(c echo.Context) bool {
 
 // extractStatus extracts HTTP status code from error or response.
 // Prioritizes error status (for unmatched routes) over response status.
-func (rl *requestLogger) extractStatus(c echo.Context, err error) int {
+func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
 	// Try error first (handles Echo's default 404 for unmatched routes)
 	if status := extractStatusFromError(err); status != 0 {
 		return status
 	}
 
 	// Fallback to response status (handles explicit c.JSON(status, ...))
-	if resp := c.Response(); resp != nil {
+	if resp, unwrapErr := echo.UnwrapResponse(c.Response()); unwrapErr == nil {
 		return resp.Status
 	}
 
@@ -168,7 +168,7 @@ func updateSeverityFromStatus(reqCtx *requestLogContext, status int, err error) 
 // logActionSummary emits a synthesized action log with OpenTelemetry semantic conventions.
 // This provides a high-level request summary (100% sampling) for healthy requests.
 func logActionSummary(
-	c echo.Context,
+	c *echo.Context,
 	log logger.Logger,
 	cfg LoggerConfig,
 	latency time.Duration,
@@ -307,7 +307,7 @@ func formatStatusForMessage(status int) string {
 
 // extractRequestMetadata extracts HTTP request metadata from Echo context.
 // Handles nil response and empty headers safely by falling back to request headers.
-func extractRequestMetadata(c echo.Context) requestMetadata {
+func extractRequestMetadata(c *echo.Context) requestMetadata {
 	var requestID, traceparent string
 
 	// SAFETY: Try response headers first (may be transformed by middleware),
@@ -373,6 +373,11 @@ func extractStatusFromError(err error) int {
 	var he *echo.HTTPError
 	if goerrors.As(err, &he) {
 		return he.Code
+	}
+	// In v5, sentinel errors (ErrNotFound, ErrMethodNotAllowed, etc.) are httpError
+	// (lowercase) which implements HTTPStatusCoder but not *HTTPError.
+	if sc := echo.StatusCode(err); sc != 0 {
+		return sc
 	}
 	return 0
 }

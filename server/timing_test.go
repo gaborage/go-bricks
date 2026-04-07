@@ -9,16 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 func TestTiming(t *testing.T) {
-	e := echo.New()
-	e.Use(Timing())
-
 	tests := []struct {
 		name         string
 		handlerDelay time.Duration
@@ -43,7 +40,10 @@ func TestTiming(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e.GET("/test", func(c echo.Context) error {
+			e := echo.New()
+			e.Use(Timing())
+
+			e.GET("/test", func(c *echo.Context) error {
 				if tt.handlerDelay > 0 {
 					time.Sleep(tt.handlerDelay)
 				}
@@ -92,7 +92,7 @@ func TestTimingErrorHandler(t *testing.T) {
 	e.Use(Timing())
 
 	// Handler that returns an error
-	e.GET("/error", func(_ echo.Context) error {
+	e.GET("/error", func(_ *echo.Context) error {
 		time.Sleep(50 * time.Millisecond)
 		return echo.NewHTTPError(http.StatusBadRequest, testutil.TestError)
 	})
@@ -123,7 +123,7 @@ func TestTimingPanicHandler(t *testing.T) {
 
 	// Add recovery middleware AFTER timing to handle panics gracefully
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			defer func() {
 				if recover() != nil {
 					// Convert panic to HTTP error
@@ -135,7 +135,7 @@ func TestTimingPanicHandler(t *testing.T) {
 	})
 
 	// Handler that panics
-	e.GET("/panic", func(_ echo.Context) error {
+	e.GET("/panic", func(_ *echo.Context) error {
 		time.Sleep(30 * time.Millisecond)
 		panic("test panic")
 	})
@@ -161,7 +161,7 @@ func TestTimingConcurrentRequests(t *testing.T) {
 	e := echo.New()
 	e.Use(Timing())
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		// Simulate different processing times based on query parameter
 		delayStr := c.QueryParam("delay")
 		if delayStr != "" {
@@ -223,7 +223,7 @@ func TestTimingHeaderFormat(t *testing.T) {
 	e := echo.New()
 	e.Use(Timing())
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -257,7 +257,7 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 
 	// Add timing with other middleware to test interaction
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			c.Response().Header().Set("X-Custom-Header", "test")
 			return next(c)
 		}
@@ -266,13 +266,13 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 	e.Use(Timing())
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			time.Sleep(25 * time.Millisecond) // Add processing time in middleware
 			return next(c)
 		}
 	})
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		time.Sleep(25 * time.Millisecond) // Add processing time in handler
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})

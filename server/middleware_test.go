@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
@@ -82,7 +82,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			SetupMiddlewares(e, log, tt.config, testHealthPath, testReadyPath)
 
 			// Create test handler
-			e.GET("/test", func(c echo.Context) error {
+			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 			})
 
@@ -193,7 +193,7 @@ func TestMiddlewareOrder(t *testing.T) {
 
 	// Add tracking middleware to verify order
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			middlewareOrder = append(middlewareOrder, preSetupMarker)
 			return next(c)
 		}
@@ -202,13 +202,13 @@ func TestMiddlewareOrder(t *testing.T) {
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			middlewareOrder = append(middlewareOrder, postSetupMarker)
 			return next(c)
 		}
 	})
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		middlewareOrder = append(middlewareOrder, "handler")
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -259,7 +259,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
-	e.POST("/test", func(c echo.Context) error {
+	e.POST("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -305,7 +305,7 @@ func TestGzipMiddleware(t *testing.T) {
 
 	// Create handler that returns large response
 	largeResponse := strings.Repeat("This is a test response that should be compressed. ", 100)
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.String(http.StatusOK, largeResponse)
 	})
 
@@ -354,7 +354,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	// Handler that panics
-	e.GET("/panic", func(_ echo.Context) error {
+	e.GET("/panic", func(_ *echo.Context) error {
 		panic("test panic")
 	})
 
@@ -385,7 +385,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 

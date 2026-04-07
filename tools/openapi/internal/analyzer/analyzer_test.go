@@ -1888,7 +1888,7 @@ func TestDiscoverModulesDeduplication(t *testing.T) {
 import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type Module struct {
@@ -1918,7 +1918,7 @@ func (m *Module) Shutdown() error {
 import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type Module struct {
@@ -1999,7 +1999,7 @@ func TestConstantsNoLeakageBetweenPackages(t *testing.T) {
 import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const PackageConstant = "/package1/path"
@@ -2039,7 +2039,7 @@ func (m *Module) Shutdown() error {
 import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 const PackageConstant = "/package2/path"

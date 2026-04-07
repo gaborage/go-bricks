@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,7 +23,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	require.True(t, ok)
 
 	var hits int
-	rg.Add(http.MethodGet, usersRoute, func(c echo.Context) error {
+	rg.Add(http.MethodGet, usersRoute, func(c *echo.Context) error {
 		hits++
 		return c.NoContent(http.StatusOK)
 	})
@@ -35,7 +35,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 1, hits)
 
-	rg.Add(http.MethodGet, "/api/orders", func(c echo.Context) error {
+	rg.Add(http.MethodGet, "/api/orders", func(c *echo.Context) error {
 		hits++
 		return c.NoContent(http.StatusOK)
 	})
@@ -47,7 +47,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 2, hits)
 
-	rg.Add(http.MethodGet, "/", func(c echo.Context) error {
+	rg.Add(http.MethodGet, "/", func(c *echo.Context) error {
 		hits++
 		return c.NoContent(http.StatusOK)
 	})
@@ -71,12 +71,12 @@ func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
 	assert.Equal(t, "/api/v1", childGroup.prefix)
 
 	var hits int
-	childGroup.Add(http.MethodGet, "/widgets", func(c echo.Context) error {
+	childGroup.Add(http.MethodGet, "/widgets", func(c *echo.Context) error {
 		hits++
 		return c.String(http.StatusOK, "widgets")
 	})
 
-	childGroup.Add(http.MethodGet, "/api/v1/analytics", func(c echo.Context) error {
+	childGroup.Add(http.MethodGet, "/api/v1/analytics", func(c *echo.Context) error {
 		hits++
 		return c.String(http.StatusOK, "analytics")
 	})
@@ -102,13 +102,13 @@ func TestRouteGroupUseAppliesMiddleware(t *testing.T) {
 
 	var called bool
 	rg.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			called = true
 			return next(c)
 		}
 	})
 
-	rg.Add(http.MethodGet, "/ping", func(c echo.Context) error {
+	rg.Add(http.MethodGet, "/ping", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "pong")
 	})
 

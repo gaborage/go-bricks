@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
@@ -46,7 +46,7 @@ type HandlerFunc[T any, R any] func(request T, ctx HandlerContext) (R, IAPIError
 
 // HandlerContext provides access to Echo context and additional utilities when needed.
 type HandlerContext struct {
-	Echo   echo.Context
+	Echo   *echo.Context
 	Config *config.Config
 }
 
@@ -68,7 +68,7 @@ func newContextChecker(cfg *config.Config) *contextChecker {
 
 // checkCancellation checks if the request context has been cancelled or timed out.
 // Returns an API error if cancelled, nil otherwise.
-func (cc *contextChecker) checkCancellation(c echo.Context, stage string) IAPIError {
+func (cc *contextChecker) checkCancellation(c *echo.Context, stage string) IAPIError {
 	if c.Request().Context().Err() != nil {
 		msg := fmt.Sprintf("Request timeout %s", stage)
 		return NewServiceUnavailableError(msg)
@@ -134,7 +134,7 @@ func newResponseHandler(cfg *config.Config) *responseHandler {
 // 1. API error: formats error response with appropriate status code
 // 2. ResultMetaProvider interface: custom status/headers response
 // 3. Default: standard 200 OK response
-func (rh *responseHandler) handleResponse(c echo.Context, response any, apiErr IAPIError) error {
+func (rh *responseHandler) handleResponse(c *echo.Context, response any, apiErr IAPIError) error {
 	if apiErr != nil {
 		return formatErrorResponse(c, apiErr, rh.cfg)
 	}
@@ -166,7 +166,7 @@ func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requ
 
 // process executes the full request processing pipeline and returns the bound, validated request.
 // Returns an API error if any step fails (allocation, binding, nil check, validation).
-func (rp *requestProcessor[T]) process(c echo.Context) (T, IAPIError) {
+func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 	var empty T
 
 	// Allocate request instance
@@ -229,7 +229,7 @@ func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawR
 // wrap converts a business logic handler into an Echo-compatible handler function.
 // This is the high-level orchestration that delegates to specialized components.
 func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		// Stamp raw response mode early so customErrorHandler can detect it even on panics
 		if hw.rawResponse {
 			c.Set(rawResponseContextKey, true)
@@ -303,7 +303,7 @@ func wrapHandler[T any, R any](
 }
 
 // bindRequest binds request data from various sources to the target struct.
-func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
+func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
 
@@ -317,7 +317,7 @@ func (rb *RequestBinder) bindRequest(c echo.Context, target any) error {
 }
 
 // bindJSONBody binds JSON request body if Content-Type indicates JSON
-func (rb *RequestBinder) bindJSONBody(c echo.Context, target any) error {
+func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any) error {
 	ct := c.Request().Header.Get(echo.HeaderContentType)
 	if ct == "" {
 		return nil
@@ -333,7 +333,7 @@ func (rb *RequestBinder) bindJSONBody(c echo.Context, target any) error {
 }
 
 // bindStructFields binds path parameters, query parameters, and headers using struct tags
-func (rb *RequestBinder) bindStructFields(c echo.Context, targetType reflect.Type, targetValue reflect.Value) error {
+func (rb *RequestBinder) bindStructFields(c *echo.Context, targetType reflect.Type, targetValue reflect.Value) error {
 	for i := 0; i < targetType.NumField(); i++ {
 		field := targetType.Field(i)
 		fieldValue := targetValue.Field(i)
@@ -350,7 +350,7 @@ func (rb *RequestBinder) bindStructFields(c echo.Context, targetType reflect.Typ
 }
 
 // bindFieldFromTags binds a single field from various tag sources
-func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindFieldFromTags(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	if err := rb.bindParamTag(c, field, fieldValue); err != nil {
 		return err
 	}
@@ -364,7 +364,7 @@ func (rb *RequestBinder) bindFieldFromTags(c echo.Context, field *reflect.Struct
 }
 
 // bindParamTag binds path parameters using the "param" tag
-func (rb *RequestBinder) bindParamTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindParamTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	paramName := field.Tag.Get("param")
 	if paramName == "" {
 		return nil
@@ -380,7 +380,7 @@ func (rb *RequestBinder) bindParamTag(c echo.Context, field *reflect.StructField
 }
 
 // bindQueryTag binds query parameters using the "query" tag
-func (rb *RequestBinder) bindQueryTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindQueryTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	queryName := field.Tag.Get("query")
 	if queryName == "" {
 		return nil
@@ -401,7 +401,7 @@ func (rb *RequestBinder) bindQueryTag(c echo.Context, field *reflect.StructField
 }
 
 // bindQueryStringSlice binds repeated query parameters to a []string field
-func (rb *RequestBinder) bindQueryStringSlice(c echo.Context, queryName string, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string, fieldValue reflect.Value) error {
 	values := c.QueryParams()[queryName]
 	if len(values) > 0 {
 		slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
@@ -414,7 +414,7 @@ func (rb *RequestBinder) bindQueryStringSlice(c echo.Context, queryName string, 
 }
 
 // bindHeaderTag binds headers using the "header" tag
-func (rb *RequestBinder) bindHeaderTag(c echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindHeaderTag(c *echo.Context, field *reflect.StructField, fieldValue reflect.Value) error {
 	headerName := field.Tag.Get("header")
 	if headerName == "" {
 		return nil
@@ -606,7 +606,7 @@ func parseTime(s string) (time.Time, error) {
 }
 
 // formatSuccessResponse formats a successful response with standardized structure.
-func formatSuccessResponse(c echo.Context, data any) error {
+func formatSuccessResponse(c *echo.Context, data any) error {
 	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
@@ -620,7 +620,7 @@ func formatSuccessResponse(c echo.Context, data any) error {
 }
 
 // formatSuccessResponseWithStatus formats a successful response with a custom status and headers.
-func formatSuccessResponseWithStatus(c echo.Context, data any, status int, headers http.Header) error {
+func formatSuccessResponseWithStatus(c *echo.Context, data any, status int, headers http.Header) error {
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -649,10 +649,10 @@ func formatSuccessResponseWithStatus(c echo.Context, data any, status int, heade
 }
 
 // formatErrorResponse formats an error response with standardized structure.
-func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) error {
+func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) error {
 	// SAFETY: Prevent double-writes if response already committed.
 	// Defense in depth - primary check is in customErrorHandler.
-	if c.Response().Committed {
+	if isResponseCommitted(c) {
 		return nil
 	}
 
@@ -682,7 +682,7 @@ func formatErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) e
 
 // handleRawResponse formats and sends the HTTP response without the APIResponse envelope.
 // Mirrors handleResponse logic but writes the response data directly as JSON.
-func (rh *responseHandler) handleRawResponse(c echo.Context, response any, apiErr IAPIError) error {
+func (rh *responseHandler) handleRawResponse(c *echo.Context, response any, apiErr IAPIError) error {
 	if apiErr != nil {
 		return formatRawErrorResponse(c, apiErr, rh.cfg)
 	}
@@ -696,13 +696,13 @@ func (rh *responseHandler) handleRawResponse(c echo.Context, response any, apiEr
 }
 
 // formatRawSuccessResponse writes the response data directly as JSON without the APIResponse envelope.
-func formatRawSuccessResponse(c echo.Context, data any) error {
+func formatRawSuccessResponse(c *echo.Context, data any) error {
 	ensureTraceParentHeader(c)
 	return c.JSON(http.StatusOK, data)
 }
 
 // formatRawSuccessResponseWithStatus writes the response data directly with a custom status and headers.
-func formatRawSuccessResponseWithStatus(c echo.Context, data any, status int, headers http.Header) error {
+func formatRawSuccessResponseWithStatus(c *echo.Context, data any, status int, headers http.Header) error {
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -731,8 +731,8 @@ type rawErrorPayload struct {
 
 // formatRawErrorResponse formats an error without the APIResponse envelope.
 // Produces minimal JSON: {"code": "...", "message": "..."} with optional details in development.
-func formatRawErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config) error {
-	if c.Response().Committed {
+func formatRawErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) error {
+	if isResponseCommitted(c) {
 		return nil
 	}
 
@@ -752,7 +752,7 @@ func formatRawErrorResponse(c echo.Context, apiErr IAPIError, cfg *config.Config
 }
 
 // getTraceID extracts or generates a trace ID for the request.
-func getTraceID(c echo.Context) string {
+func getTraceID(c *echo.Context) string {
 	// Prefer incoming request header set by upstream/proxy/middleware
 	if requestID := c.Request().Header.Get(echo.HeaderXRequestID); requestID != "" {
 		return requestID
@@ -776,7 +776,7 @@ func getTraceID(c echo.Context) string {
 
 // ensureTraceParentHeader ensures the response contains a W3C traceparent header.
 // It propagates the inbound header when present, otherwise generates a new one.
-func ensureTraceParentHeader(c echo.Context) {
+func ensureTraceParentHeader(c *echo.Context) {
 	// SAFETY: Check if response is still valid (may be nil after timeout)
 	resp := c.Response()
 	if resp == nil {
@@ -799,7 +799,7 @@ func ensureTraceParentHeader(c echo.Context) {
 // while allowing the server to enforce common behavior such as base-path handling.
 // Implementations may wrap Echo groups to ensure routes are consistently registered.
 type RouteRegistrar interface {
-	Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) *echo.Route
+	Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo
 	Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar
 	Use(middleware ...echo.MiddlewareFunc)
 	FullPath(path string) string
