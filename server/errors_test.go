@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -411,10 +412,16 @@ func TestErrorResponseFormatting(t *testing.T) {
 	assert.Contains(t, response.Meta, "timestamp")
 }
 
-// logCapture is a slog.Handler that records whether any log was emitted.
+// logCaptureEntry stores a single slog record with its message and attributes.
+type logCaptureEntry struct {
+	message string
+	attrs   map[string]any
+}
+
+// logCapture is a slog.Handler that records log messages and their attributes.
 type logCapture struct {
 	mu      sync.Mutex
-	entries []string
+	entries []logCaptureEntry
 }
 
 func (h *logCapture) Enabled(_ context.Context, _ slog.Level) bool { return true }
@@ -422,7 +429,12 @@ func (h *logCapture) Enabled(_ context.Context, _ slog.Level) bool { return true
 func (h *logCapture) Handle(_ context.Context, r slog.Record) error { //nolint:gocritic // slog.Handler interface requires value receiver
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.entries = append(h.entries, r.Message)
+	attrs := make(map[string]any)
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.entries = append(h.entries, logCaptureEntry{message: r.Message, attrs: attrs})
 	return nil
 }
 
@@ -589,4 +601,53 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), `"error"`)
 		assert.Contains(t, rec.Body.String(), `"UNAUTHORIZED"`)
 	})
+}
+
+func TestPanicRecoveryStructuredLogging(t *testing.T) {
+	// Build a server via New() so the HTTPErrorHandler closure captures the logger
+	// and includes PanicStackError detection with structured fields.
+	log := &testLogger{}
+	cfg := newTestConfig("", "", "")
+	srv := New(cfg, log)
+
+	// Register a handler that panics — the Recover middleware wraps the panic
+	// in a middleware.PanicStackError which is then passed to HTTPErrorHandler.
+	srv.Echo().Add(http.MethodGet, "/panic", func(_ *echo.Context) error {
+		panic("test panic")
+	})
+
+	// Manually invoke the error handler with a PanicStackError to verify
+	// structured field logging without depending on the full middleware chain.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "req-42")
+	rec := httptest.NewRecorder()
+	c := srv.Echo().NewContext(req, rec)
+	c.Response().Header().Set(echo.HeaderXRequestID, "req-42")
+
+	panicErr := &middleware.PanicStackError{
+		Err:   fmt.Errorf("test panic"),
+		Stack: []byte("goroutine 1 [running]:\nmain.handler()"),
+	}
+
+	srv.Echo().HTTPErrorHandler(c, panicErr)
+
+	// Verify structured log fields
+	entries := log.logEntries()
+	require.NotEmpty(t, entries, "expected at least one log entry for panic recovery")
+
+	var found bool
+	for _, entry := range entries {
+		if entry.msg != "Panic recovered" {
+			continue
+		}
+		found = true
+		assert.Contains(t, entry.fields, "error", "panic log should include err field")
+		assert.Contains(t, entry.fields, "stack", "panic log should include stack field")
+		assert.Contains(t, entry.fields, "request_id", "panic log should include request_id field")
+		break
+	}
+	assert.True(t, found, "expected 'Panic recovered' log entry")
+
+	// Verify response is a 500 error (PanicStackError → classifyError → internal error)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
