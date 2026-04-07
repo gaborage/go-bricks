@@ -99,9 +99,9 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		customErrorHandler(c, err, cfg)
 	}
 
-	// Restore v4-compatible IP extraction behavior for RealIP() calls.
+	// LegacyIPExtractor restores v4-compatible IP extraction behavior for RealIP() calls.
 	// Without this, v5.1.0+ only returns request.RemoteAddr.
-	// TODO: Replace with trusted-proxy-aware extractors (see ADR-015).
+	// Trusted-proxy-aware extractors are a follow-up item documented in ADR-015.
 	e.IPExtractor = echo.LegacyIPExtractor()
 	if v := NewValidator(); v != nil {
 		e.Validator = v

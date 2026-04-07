@@ -610,16 +610,9 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 	cfg := newTestConfig("", "", "")
 	srv := New(cfg, log)
 
-	// Register a handler that panics — the Recover middleware wraps the panic
-	// in a middleware.PanicStackError which is then passed to HTTPErrorHandler.
-	srv.Echo().Add(http.MethodGet, "/panic", func(_ *echo.Context) error {
-		panic("test panic")
-	})
-
 	// Manually invoke the error handler with a PanicStackError to verify
 	// structured field logging without depending on the full middleware chain.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", http.NoBody)
-	req.Header.Set(echo.HeaderXRequestID, "req-42")
 	rec := httptest.NewRecorder()
 	c := srv.Echo().NewContext(req, rec)
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-42")

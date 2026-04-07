@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
@@ -2181,50 +2184,40 @@ func test(param ` + tt.typeExpr + `) {}`
 			// Parse the code
 			fset := token.NewFileSet()
 			astFile, err := parser.ParseFile(fset, testFileName, code, 0)
-			if err != nil {
-				t.Fatalf("Failed to parse code: %v", err)
-			}
+			require.NoError(t, err, "Failed to parse code")
 
 			// Find the function and extract the parameter type
 			var expr ast.Expr
 			for _, decl := range astFile.Decls {
-				if funcDecl, ok := decl.(*ast.FuncDecl); ok {
-					if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) > 0 {
-						expr = funcDecl.Type.Params.List[0].Type
-						break
-					}
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				if funcDecl.Type.Params != nil && len(funcDecl.Type.Params.List) > 0 {
+					expr = funcDecl.Type.Params.List[0].Type
+					break
 				}
 			}
+			require.NotNil(t, expr, "Failed to find parameter type expression")
 
-			if expr == nil {
-				t.Fatal("Failed to find parameter type expression")
-			}
-
-			// Test the typeInfoFromExpr function
 			result := analyzer.typeInfoFromExpr(expr, "test")
 
-			// Verify the result
-			if tt.expected == nil {
-				if result != nil {
-					t.Errorf("%s: expected nil, got %+v", tt.description, result)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("%s: expected %+v, got nil", tt.description, tt.expected)
-				} else {
-					if result.Name != tt.expected.Name {
-						t.Errorf("%s: expected name %q, got %q", tt.description, tt.expected.Name, result.Name)
-					}
-					if result.Package != tt.expected.Package {
-						t.Errorf("%s: expected package %q, got %q", tt.description, tt.expected.Package, result.Package)
-					}
-					if result.IsPointer != tt.expected.IsPointer {
-						t.Errorf("%s: expected IsPointer %v, got %v", tt.description, tt.expected.IsPointer, result.IsPointer)
-					}
-				}
-			}
+			assertTypeInfo(t, tt.description, tt.expected, result)
 		})
 	}
+}
+
+// assertTypeInfo compares an expected and actual *models.TypeInfo, handling nil cases.
+func assertTypeInfo(t *testing.T, description string, expected, actual *models.TypeInfo) {
+	t.Helper()
+	if expected == nil {
+		assert.Nil(t, actual, "%s: expected nil", description)
+		return
+	}
+	require.NotNil(t, actual, "%s: expected non-nil", description)
+	assert.Equal(t, expected.Name, actual.Name, "%s: Name", description)
+	assert.Equal(t, expected.Package, actual.Package, "%s: Package", description)
+	assert.Equal(t, expected.IsPointer, actual.IsPointer, "%s: IsPointer", description)
 }
 
 // TestExtractHandlerSignature tests handler signature extraction
@@ -2353,73 +2346,24 @@ func (h *Handler) actualHandler() {}`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a temporary directory
-			tempDir, err := os.MkdirTemp("", "openapi-test-*")
-			if err != nil {
-				t.Fatalf("Failed to create temp dir: %v", err)
-			}
-			defer os.RemoveAll(tempDir)
+			tempDir := t.TempDir()
 
-			// Write the test file
 			testFilePath := filepath.Join(tempDir, "handler.go")
-			if err := os.WriteFile(testFilePath, []byte(tt.handlerCode), 0600); err != nil {
-				t.Fatalf("Failed to write test file: %v", err)
-			}
+			require.NoError(t, os.WriteFile(testFilePath, []byte(tt.handlerCode), 0600), "Failed to write test file")
 
-			// Parse the file
 			fset := token.NewFileSet()
 			astFile, err := parser.ParseFile(fset, testFilePath, nil, parser.ParseComments)
-			if err != nil {
-				t.Fatalf("Failed to parse file: %v", err)
-			}
+			require.NoError(t, err, "Failed to parse file")
 
-			// Create analyzer and extract handler signature
 			analyzer := New(tempDir)
 			reqType, respType, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, tt.handlerName)
 
-			// Verify results
 			if tt.shouldFindHandler {
-				if err != nil {
-					t.Errorf("%s: unexpected error: %v", tt.description, err)
-				}
-
-				// Check request type
-				if tt.expectedRequest == nil {
-					if reqType != nil {
-						t.Errorf("%s: expected nil request type, got %+v", tt.description, reqType)
-					}
-				} else {
-					if reqType == nil {
-						t.Errorf("%s: expected request type %+v, got nil", tt.description, tt.expectedRequest)
-					} else {
-						if reqType.Name != tt.expectedRequest.Name {
-							t.Errorf("%s: expected request name %q, got %q", tt.description, tt.expectedRequest.Name, reqType.Name)
-						}
-						if reqType.IsPointer != tt.expectedRequest.IsPointer {
-							t.Errorf("%s: expected request IsPointer %v, got %v", tt.description, tt.expectedRequest.IsPointer, reqType.IsPointer)
-						}
-					}
-				}
-
-				// Check response type
-				if tt.expectedResponse == nil {
-					if respType != nil {
-						t.Errorf("%s: expected nil response type, got %+v", tt.description, respType)
-					}
-				} else {
-					if respType == nil {
-						t.Errorf("%s: expected response type %+v, got nil", tt.description, tt.expectedResponse)
-					} else {
-						if respType.Name != tt.expectedResponse.Name {
-							t.Errorf("%s: expected response name %q, got %q", tt.description, tt.expectedResponse.Name, respType.Name)
-						}
-						if respType.IsPointer != tt.expectedResponse.IsPointer {
-							t.Errorf("%s: expected response IsPointer %v, got %v", tt.description, tt.expectedResponse.IsPointer, respType.IsPointer)
-						}
-					}
-				}
-			} else if err == nil {
-				t.Errorf("%s: expected error for missing handler, got nil", tt.description)
+				require.NoError(t, err, tt.description)
+				assertTypeInfo(t, tt.description+" request", tt.expectedRequest, reqType)
+				assertTypeInfo(t, tt.description+" response", tt.expectedResponse, respType)
+			} else {
+				assert.Error(t, err, "%s: expected error for missing handler", tt.description)
 			}
 		})
 	}
@@ -2481,35 +2425,16 @@ func (h *Handler) list(ctx server.HandlerContext) {}`,
 		t.Run(tt.name, func(t *testing.T) {
 			fset := token.NewFileSet()
 			astFile, err := parser.ParseFile(fset, "test.go", tt.code, parser.ParseComments)
-			if err != nil {
-				t.Fatalf("%s: failed to parse code: %v", tt.description, err)
-			}
+			require.NoError(t, err, "%s: failed to parse code", tt.description)
 
-			// Find the function declaration
+			// Find the function declaration and extract request type
 			for _, decl := range astFile.Decls {
 				funcDecl, ok := decl.(*ast.FuncDecl)
 				if !ok {
 					continue
 				}
-
 				reqType := analyzer.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
-
-				if tt.expectedReq == nil {
-					if reqType != nil {
-						t.Errorf("%s: expected nil request type, got %+v", tt.description, reqType)
-					}
-				} else {
-					if reqType == nil {
-						t.Errorf("%s: expected request type %+v, got nil", tt.description, tt.expectedReq)
-					} else {
-						if reqType.Name != tt.expectedReq.Name {
-							t.Errorf("%s: expected request name %q, got %q", tt.description, tt.expectedReq.Name, reqType.Name)
-						}
-						if reqType.IsPointer != tt.expectedReq.IsPointer {
-							t.Errorf("%s: expected IsPointer %v, got %v", tt.description, tt.expectedReq.IsPointer, reqType.IsPointer)
-						}
-					}
-				}
+				assertTypeInfo(t, tt.description, tt.expectedReq, reqType)
 			}
 		})
 	}
@@ -2685,24 +2610,12 @@ func TestParseStructTagsComprehensive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tags := analyzer.parseStructTags(tt.tag)
 
-			if tags.jsonName != tt.expectedJSONName {
-				t.Errorf("expected JSONName %q, got %q", tt.expectedJSONName, tags.jsonName)
-			}
-			if tags.paramType != tt.expectedParamType {
-				t.Errorf("expected ParamType %q, got %q", tt.expectedParamType, tags.paramType)
-			}
-			if tags.paramName != tt.expectedParamName {
-				t.Errorf("expected ParamName %q, got %q", tt.expectedParamName, tags.paramName)
-			}
-			if tags.description != tt.expectedDesc {
-				t.Errorf("expected Description %q, got %q", tt.expectedDesc, tags.description)
-			}
-			if tags.example != tt.expectedExample {
-				t.Errorf("expected Example %q, got %q", tt.expectedExample, tags.example)
-			}
-			if tags.rawValidation != tt.expectedValidate {
-				t.Errorf("expected RawValidation %q, got %q", tt.expectedValidate, tags.rawValidation)
-			}
+			assert.Equal(t, tt.expectedJSONName, tags.jsonName, "JSONName")
+			assert.Equal(t, tt.expectedParamType, tags.paramType, "ParamType")
+			assert.Equal(t, tt.expectedParamName, tags.paramName, "ParamName")
+			assert.Equal(t, tt.expectedDesc, tags.description, "Description")
+			assert.Equal(t, tt.expectedExample, tags.example, "Example")
+			assert.Equal(t, tt.expectedValidate, tags.rawValidation, "RawValidation")
 		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -121,54 +122,49 @@ func TestBuildTenantResolver(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "header"}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.ValidatingResolver{}, resolver) {
-			vr := resolver.(*multitenant.ValidatingResolver)
-			assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
-			if assert.IsType(t, &multitenant.HeaderResolver{}, vr.Resolver) {
-				hr := vr.Resolver.(*multitenant.HeaderResolver)
-				assert.Equal(t, defaultTenantHeader, hr.HeaderName)
-			}
-		}
+		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
+		vr := resolver.(*multitenant.ValidatingResolver)
+		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		require.IsType(t, &multitenant.HeaderResolver{}, vr.Resolver)
+		hr := vr.Resolver.(*multitenant.HeaderResolver)
+		assert.Equal(t, defaultTenantHeader, hr.HeaderName)
 	})
 
 	t.Run("subdomain resolver wraps validation", func(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "subdomain", Domain: testDomain}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.ValidatingResolver{}, resolver) {
-			vr := resolver.(*multitenant.ValidatingResolver)
-			assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
-			if assert.IsType(t, &multitenant.SubdomainResolver{}, vr.Resolver) {
-				sr := vr.Resolver.(*multitenant.SubdomainResolver)
-				assert.Equal(t, testDomain, sr.RootDomain)
-			}
-		}
+		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
+		vr := resolver.(*multitenant.ValidatingResolver)
+		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		require.IsType(t, &multitenant.SubdomainResolver{}, vr.Resolver)
+		sr := vr.Resolver.(*multitenant.SubdomainResolver)
+		assert.Equal(t, testDomain, sr.RootDomain)
 	})
 
 	t.Run("composite resolver builds header and subdomain", func(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "composite", Header: defaultTenantHeader, Domain: testDomain}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.CompositeResolver{}, resolver) {
-			cr := resolver.(*multitenant.CompositeResolver)
-			assert.Equal(t, defaultTenantIDRegex, cr.TenantRegex)
-			assert.Len(t, cr.Resolvers, 2)
+		require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+		cr := resolver.(*multitenant.CompositeResolver)
+		assert.Equal(t, defaultTenantIDRegex, cr.TenantRegex)
+		assert.Len(t, cr.Resolvers, 2)
 
-			hasHeader := false
-			hasSubdomain := false
-			for _, r := range cr.Resolvers {
-				switch typed := r.(type) {
-				case *multitenant.HeaderResolver:
-					hasHeader = true
-					assert.Equal(t, defaultTenantHeader, typed.HeaderName)
-				case *multitenant.SubdomainResolver:
-					hasSubdomain = true
-					assert.Equal(t, testDomain, typed.RootDomain)
-				}
+		hasHeader := false
+		hasSubdomain := false
+		for _, r := range cr.Resolvers {
+			switch typed := r.(type) {
+			case *multitenant.HeaderResolver:
+				hasHeader = true
+				assert.Equal(t, defaultTenantHeader, typed.HeaderName)
+			case *multitenant.SubdomainResolver:
+				hasSubdomain = true
+				assert.Equal(t, testDomain, typed.RootDomain)
 			}
-			assert.True(t, hasHeader)
-			assert.True(t, hasSubdomain)
 		}
+		assert.True(t, hasHeader)
+		assert.True(t, hasSubdomain)
 	})
 
 	t.Run("invalid resolver type returns nil", func(t *testing.T) {
