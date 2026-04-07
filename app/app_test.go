@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -232,8 +232,8 @@ func (m *mockServer) shutdownCount() int {
 
 type noopRouteRegistrar struct{}
 
-func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) *echo.Route {
-	return nil
+func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) echo.RouteInfo {
+	return echo.RouteInfo{}
 }
 
 func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
@@ -534,11 +534,12 @@ func defaultTestConfig() *config.Config {
 	}
 }
 
-func (f *testAppFixture) newReadyContext() (echo.Context, *httptest.ResponseRecorder) {
+func (f *testAppFixture) newReadyContext() (*echo.Context, *httptest.ResponseRecorder) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
-	return e.NewContext(req, rec), rec
+	c := e.NewContext(req, rec)
+	return c, rec
 }
 
 type closerMock struct {

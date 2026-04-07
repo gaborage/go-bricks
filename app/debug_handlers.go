@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -184,7 +184,7 @@ func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
 	if len(d.config.AllowedIPs) == 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
-			return func(c echo.Context) error {
+			return func(c *echo.Context) error {
 				return next(c)
 			}
 		}
@@ -195,7 +195,7 @@ func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 // createIPCheckHandler creates the middleware handler with IP validation
 func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			clientIP := c.RealIP()
 			if allowed, err := d.isIPAllowed(clientIP, whitelist); err != nil {
 				return d.handleAccessDenied(clientIP, "invalid IP")
@@ -226,7 +226,7 @@ func (d *DebugHandlers) handleAccessDenied(clientIP, reason string) error {
 // authMiddleware provides bearer token authentication
 func (d *DebugHandlers) authMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Bearer token required")
@@ -257,7 +257,7 @@ func (d *DebugHandlers) newDebugResponse(start time.Time, data any, err error) *
 }
 
 // handleInfo returns basic system information
-func (d *DebugHandlers) handleInfo(c echo.Context) error {
+func (d *DebugHandlers) handleInfo(c *echo.Context) error {
 	start := time.Now()
 
 	info := map[string]any{

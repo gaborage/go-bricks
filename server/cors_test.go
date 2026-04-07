@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +30,7 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a simple handler
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -46,8 +46,8 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	err := handler(c)
 	require.NoError(t, err)
 
-	// Verify CORS headers allow all origins in development
-	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	// Verify CORS headers allow origin in development (echoed back via UnsafeAllowOriginFunc)
+	assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin))
 	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 	assert.Equal(t, "86400", rec.Header().Get(HeaderAccessControlMaxAge))
 
@@ -79,7 +79,7 @@ func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a simple handler
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -156,7 +156,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a simple handler
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -171,8 +171,8 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	err := handler(c)
 	require.NoError(t, err)
 
-	// Should still allow * when no CORS_ORIGINS is set in production
-	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	// Should echo origin back when no CORS_ORIGINS is set (via UnsafeAllowOriginFunc)
+	assert.Equal(t, "https://somesite.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
 }
 
 func TestCORSAllowedHeaders(t *testing.T) {
@@ -189,7 +189,7 @@ func TestCORSAllowedHeaders(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a simple handler
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -228,7 +228,7 @@ func TestCORSExposedHeaders(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a simple handler that sets response headers
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		c.Response().Header().Set("X-Request-ID", "test-123")
 		c.Response().Header().Set(HeaderXResponseTime, "50ms")
 		return c.String(http.StatusOK, "test")
@@ -264,7 +264,7 @@ func TestCORSActualRequestHandling(t *testing.T) {
 	corsMiddleware := CORS()
 
 	// Create a handler that returns JSON
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "success"})
 	})
 
@@ -288,8 +288,8 @@ func TestCORSActualRequestHandling(t *testing.T) {
 			err := handler(c)
 			require.NoError(t, err)
 
-			// Verify CORS headers are set for actual requests
-			assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+			// Verify CORS headers are set for actual requests (origin echoed back)
+			assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin))
 			assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 
 			// Verify handler was executed
@@ -312,7 +312,7 @@ func TestCORSMaxAge(t *testing.T) {
 	e := echo.New()
 	corsMiddleware := CORS()
 
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -344,7 +344,7 @@ func TestCORSCredentialsEnabled(t *testing.T) {
 	e := echo.New()
 	corsMiddleware := CORS()
 
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -380,7 +380,7 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 	e := echo.New()
 	corsMiddleware := CORS()
 
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -394,8 +394,8 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 	err := handler(c)
 	require.NoError(t, err)
 
-	// When CORS_ORIGINS is empty string, should still allow all
-	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	// When CORS_ORIGINS is empty string, should echo origin back (via UnsafeAllowOriginFunc)
+	assert.Equal(t, "https://test.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
 }
 
 func TestCORSSingleOrigin(t *testing.T) {
@@ -415,7 +415,7 @@ func TestCORSSingleOrigin(t *testing.T) {
 	e := echo.New()
 	corsMiddleware := CORS()
 
-	handler := corsMiddleware(func(c echo.Context) error {
+	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -471,7 +471,7 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	e.Use(CORS())
 
 	// Add a route
-	e.GET("/api/test", func(c echo.Context) error {
+	e.GET("/api/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -486,7 +486,7 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ok")
 
-	// Verify CORS headers
-	assert.Equal(t, "*", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	// Verify CORS headers (origin echoed back via UnsafeAllowOriginFunc)
+	assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin))
 	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 }

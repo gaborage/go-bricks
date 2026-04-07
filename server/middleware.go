@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
+	echootel "github.com/labstack/echo-opentelemetry"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 
@@ -26,22 +26,20 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 
 	// OpenTelemetry instrumentation - creates spans AND metrics for HTTP requests
 	// Skip health/ready probes to avoid noisy traces/metrics
-	// IMPORTANT: We explicitly pass WithTracerProvider(otel.GetTracerProvider()) to capture
-	// the global provider at middleware setup time. The otelecho.Middleware() function caches
-	// the tracer provider when called, NOT at request time.
+	// IMPORTANT: We explicitly pass TracerProvider(otel.GetTracerProvider()) to capture
+	// the global provider at middleware setup time. The middleware caches the tracer
+	// provider when called, NOT at request time.
 	//
-	// In the standard bootstrap flow (app.NewWithConfig), observability is initialized BEFORE
-	// the server is created, so the real provider is captured here. However, explicit wiring
-	// makes this dependency clear and ensures correct behavior if SetupMiddlewares is called
-	// directly (e.g., in tests or custom server initialization scenarios).
-	//
-	// Custom attributes (url.scheme, error.type) are added via WithEchoMetricAttributeFn to
-	// enhance otelecho's built-in metrics without duplicating metric collection.
+	// Custom attributes (url.scheme, error.type) are added via MetricAttributes to
+	// enhance the built-in metrics without duplicating metric collection.
 	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
-	e.Use(otelecho.Middleware(
-		cfg.App.Name,
-		otelecho.WithTracerProvider(otel.GetTracerProvider()),
-		otelecho.WithEchoMetricAttributeFn(func(c echo.Context) []attribute.KeyValue {
+	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
+		ServerName:     cfg.App.Name,
+		TracerProvider: otel.GetTracerProvider(),
+		Skipper: func(c *echo.Context) bool {
+			return probeSkipper(c)
+		},
+		MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
 			attrs := []attribute.KeyValue{}
 
 			// Add url.scheme (proxy-aware)
@@ -52,17 +50,13 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 			attrs = append(attrs, attribute.String("url.scheme", scheme))
 
 			// Add error.type for 4xx/5xx responses
-			status := c.Response().Status
-			if status >= 400 {
-				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(status)))
+			if v.HTTPResponseStatusCode >= 400 {
+				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
 			}
 
 			return attrs
-		}),
-		otelecho.WithSkipper(func(c echo.Context) bool {
-			return probeSkipper(c)
-		}),
-	))
+		},
+	}))
 
 	// Inject trace context into request context for outbound propagation
 	e.Use(TraceContext())
@@ -98,24 +92,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	}))
 
 	// Recovery
-	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
-		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
-			logEvent := log.Error().
-				Err(err).
-				Bytes("stack", stack)
-
-			// SAFETY: Response may be nil after timeout, safely extract request ID
-			if resp := c.Response(); resp != nil {
-				logEvent.Str("request_id", resp.Header().Get(echo.HeaderXRequestID))
-			} else {
-				// Fallback to request header if response is unavailable
-				logEvent.Str("request_id", c.Request().Header.Get(echo.HeaderXRequestID))
-			}
-
-			logEvent.Msg("Panic recovered")
-			return err
-		},
-	}))
+	e.Use(middleware.Recover())
 
 	// Security headers
 	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
@@ -131,7 +108,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	e.Use(Timeout(cfg.Server.Timeout.Middleware))
 
 	// Body limit
-	e.Use(middleware.BodyLimit("10M"))
+	e.Use(middleware.BodyLimit(10 * 1024 * 1024)) // 10 MB
 
 	// Gzip
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{

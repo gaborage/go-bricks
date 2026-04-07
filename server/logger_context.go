@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 )
 
@@ -38,7 +38,7 @@ func newRequestLogContext() *requestLogContext {
 
 // getRequestLogContext retrieves the request logging context from Echo's context.
 // Returns nil if not found (e.g., request not tracked).
-func getRequestLogContext(c echo.Context) *requestLogContext {
+func getRequestLogContext(c *echo.Context) *requestLogContext {
 	if ctx := c.Get(RequestLogContextKey); ctx != nil {
 		if reqCtx, ok := ctx.(*requestLogContext); ok {
 			return reqCtx
@@ -104,7 +104,7 @@ func (r *requestLogContext) hadExplicitWarningOccurred() bool {
 //	}
 //
 // Thread-safe: Can be called from multiple goroutines concurrently.
-func EscalateSeverity(c echo.Context, level zerolog.Level) {
+func EscalateSeverity(c *echo.Context, level zerolog.Level) {
 	if reqCtx := getRequestLogContext(c); reqCtx != nil {
 		reqCtx.escalateSeverity(level)
 	}

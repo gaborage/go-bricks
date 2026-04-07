@@ -3,7 +3,7 @@ package server
 import (
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type routeGroup struct {
@@ -18,7 +18,7 @@ func newRouteGroup(group *echo.Group, prefix string) RouteRegistrar {
 	}
 }
 
-func (rg *routeGroup) Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) *echo.Route {
+func (rg *routeGroup) Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo {
 	normalized := rg.relativePath(path)
 	return rg.group.Add(method, normalized, handler, middleware...)
 }

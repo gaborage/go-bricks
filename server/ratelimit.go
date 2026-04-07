@@ -4,9 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"golang.org/x/time/rate"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -31,18 +30,18 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 		Skipper: middleware.DefaultSkipper,
 		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 			middleware.RateLimiterMemoryStoreConfig{
-				Rate:      rate.Limit(requestsPerSecond),
+				Rate:      float64(requestsPerSecond),
 				Burst:     requestsPerSecond * BurstMultiplier,
 				ExpiresIn: RateLimitCleanup,
 			},
 		),
-		IdentifierExtractor: func(ctx echo.Context) (string, error) {
+		IdentifierExtractor: func(ctx *echo.Context) (string, error) {
 			if tenantID, ok := multitenant.GetTenant(ctx.Request().Context()); ok {
 				return tenantID, nil
 			}
 			return ctx.RealIP(), nil
 		},
-		ErrorHandler: func(context echo.Context, _ error) error {
+		ErrorHandler: func(context *echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
 				"error": map[string]any{
 					"message":    "Rate limit exceeded",
@@ -51,7 +50,7 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 				},
 			})
 		},
-		DenyHandler: func(context echo.Context, _ string, _ error) error {
+		DenyHandler: func(context *echo.Context, _ string, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
 				"error": map[string]any{
 					"message":    "Too many requests",

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,7 +102,7 @@ func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 	}))
 
 	// Simple handler that emits a success envelope (adds meta with traceId)
-	e.GET("/t", func(c echo.Context) error {
+	e.GET("/t", func(c *echo.Context) error {
 		return formatSuccessResponse(c, map[string]string{"ok": "yes"})
 	})
 
@@ -136,7 +136,7 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	}))
 
 	// Handler emits success envelope which sets/propagates traceparent on response
-	e.GET("/tp", func(c echo.Context) error {
+	e.GET("/tp", func(c *echo.Context) error {
 		return formatSuccessResponse(c, map[string]string{"ok": "yes"})
 	})
 
@@ -162,18 +162,18 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 		SlowRequestThreshold: 1 * time.Second,
 	}))
 
-	e.GET(testHealthPath, func(c echo.Context) error {
+	e.GET(testHealthPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
-	e.GET(testReadyPath, func(c echo.Context) error {
+	e.GET(testReadyPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
 	api := e.Group("/api")
-	api.GET("/health", func(c echo.Context) error {
+	api.GET("/health", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
-	api.GET("/ready", func(c echo.Context) error {
+	api.GET("/ready", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
@@ -216,12 +216,12 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 	}))
 
 	// Handler returns 404 without emitting any explicit logs
-	e.GET("/notfound", func(c echo.Context) error {
+	e.GET("/notfound", func(c *echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
 	})
 
 	// Handler returns 500 without emitting any explicit logs
-	e.GET("/error", func(c echo.Context) error {
+	e.GET("/error", func(c *echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "server error"})
 	})
 
@@ -273,7 +273,7 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 	}))
 
 	// Handler explicitly logs a warning, then returns 200
-	e.GET("/explicit-warn", func(c echo.Context) error {
+	e.GET("/explicit-warn", func(c *echo.Context) error {
 		reqCtx := getRequestLogContext(c)
 		// Simulate an explicit WARN log being emitted during request
 		reqCtx.escalateSeverity(zerolog.WarnLevel)
@@ -314,8 +314,8 @@ func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
 
 	// Set a custom error handler to ensure we're testing the middleware behavior
 	// before the error handler runs (this is where the bug manifested)
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		customErrorHandler(err, c, &config.Config{
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		customErrorHandler(c, err, &config.Config{
 			App: config.AppConfig{
 				Debug: true,
 				Env:   "development",
@@ -405,7 +405,7 @@ func TestEscalateSeverityConcurrency(t *testing.T) {
 	}))
 
 	// Handler that spawns multiple goroutines calling EscalateSeverity
-	e.GET("/concurrent", func(c echo.Context) error {
+	e.GET("/concurrent", func(c *echo.Context) error {
 		const numGoroutines = 20
 		done := make(chan struct{})
 
@@ -1215,7 +1215,7 @@ func TestRequestLoggerHandleFullFlow(t *testing.T) {
 	e := echo.New()
 	e.Use(rl.Handle)
 
-	e.GET(testAPITestPath, func(c echo.Context) error {
+	e.GET(testAPITestPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -1243,10 +1243,10 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 	e := echo.New()
 	e.Use(rl.Handle)
 
-	e.GET(testHealthPath, func(c echo.Context) error {
+	e.GET(testHealthPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "healthy"})
 	})
-	e.GET(testReadyPath, func(c echo.Context) error {
+	e.GET(testReadyPath, func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 

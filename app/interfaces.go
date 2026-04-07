@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"

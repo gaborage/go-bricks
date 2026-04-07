@@ -12,7 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -83,12 +84,25 @@ func (s *Server) buildFullPath(route string) string {
 // It initializes Echo with middlewares, error handling, and health check endpoints.
 func New(cfg *config.Config, log logger.Logger) *Server {
 	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
-	// Use an error handler that emits standardized APIResponse envelopes
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		customErrorHandler(err, c, cfg)
+	// Use an error handler that emits standardized APIResponse envelopes.
+	// Echo v5's Recover middleware wraps panics in middleware.PanicStackError;
+	// we log them here with structured zerolog fields before normal error handling.
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		var panicErr *middleware.PanicStackError
+		if goerrors.As(err, &panicErr) {
+			log.Error().
+				Err(panicErr.Unwrap()).
+				Bytes("stack", panicErr.Stack).
+				Str("request_id", safeGetRequestID(c)).
+				Msg("Panic recovered")
+		}
+		customErrorHandler(c, err, cfg)
 	}
+
+	// LegacyIPExtractor restores v4-compatible IP extraction behavior for RealIP() calls.
+	// Without this, v5.1.0+ only returns request.RemoteAddr.
+	// Trusted-proxy-aware extractors are a follow-up item documented in ADR-015.
+	e.IPExtractor = echo.LegacyIPExtractor()
 	if v := NewValidator(); v != nil {
 		e.Validator = v
 	} else {
@@ -160,7 +174,7 @@ func (s *Server) RegisterReadyHandler(handler echo.HandlerFunc) {
 }
 
 // dispatchReady executes the currently registered ready handler.
-func (s *Server) dispatchReady(c echo.Context) error {
+func (s *Server) dispatchReady(c *echo.Context) error {
 	s.readyMu.RLock()
 	handler := s.readyHandler
 	s.readyMu.RUnlock()
@@ -180,48 +194,46 @@ func (s *Server) Start() error {
 		Str("address", addr).
 		Msg("Starting server...")
 
-	server := &http.Server{
-		Addr:              addr,
-		ReadTimeout:       s.cfg.Server.Timeout.Read,
-		WriteTimeout:      s.cfg.Server.Timeout.Write,
-		IdleTimeout:       s.cfg.Server.Timeout.Idle,
-		ReadHeaderTimeout: s.cfg.Server.Timeout.Read,
+	sc := echo.StartConfig{
+		Address:    addr,
+		HideBanner: true,
+		HidePort:   true,
+		BeforeServeFunc: func(srv *http.Server) error {
+			// Configure timeouts on the http.Server (StartConfig doesn't expose these)
+			srv.ReadTimeout = s.cfg.Server.Timeout.Read
+			srv.WriteTimeout = s.cfg.Server.Timeout.Write
+			srv.IdleTimeout = s.cfg.Server.Timeout.Idle
+			srv.ReadHeaderTimeout = s.cfg.Server.Timeout.Read
+			// Capture the server instance for proper shutdown
+			s.httpServer.Store(srv)
+			return nil
+		},
 	}
 
-	// Store the server instance for proper shutdown using atomic operation
-	s.httpServer.Store(server)
-
-	return s.echo.StartServer(server)
+	return sc.Start(context.Background(), s.echo)
 }
 
 // Shutdown gracefully shuts down the HTTP server with the given context.
 // It waits for existing connections to finish within the context timeout.
 func (s *Server) Shutdown(ctx context.Context) error {
-	// First try Echo's shutdown (for compatibility)
-	err := s.echo.Shutdown(ctx)
-
-	// Then ensure our actual http.Server instance is shut down using atomic load
-	// This fixes the issue where Echo's StartServer doesn't store the server properly
+	// In v5, Echo no longer has a Shutdown method. Shut down the http.Server directly.
 	if srv := s.httpServer.Load(); srv != nil {
-		if httpErr := srv.Shutdown(ctx); httpErr != nil && !goerrors.Is(httpErr, http.ErrServerClosed) {
-			return httpErr
+		if err := srv.Shutdown(ctx); err != nil && !goerrors.Is(err, http.ErrServerClosed) {
+			return err
 		}
 	}
-	if goerrors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	return nil
 }
 
 // healthCheck is the default health probe handler.
-func (s *Server) healthCheck(c echo.Context) error {
+func (s *Server) healthCheck(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }
 
 // readyCheck is the default readiness probe handler.
-func (s *Server) readyCheck(c echo.Context) error {
+func (s *Server) readyCheck(c *echo.Context) error {
 	// This will be extended in App to check DB connection
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "ready",
@@ -233,11 +245,11 @@ func (s *Server) readyCheck(c echo.Context) error {
 // into standardized APIResponse envelopes based on error type and server configuration.
 // When the request context carries the raw response flag (set by handlerWrapper.wrap),
 // it uses formatRawErrorResponse which writes minimal JSON without the envelope.
-func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
+func customErrorHandler(c *echo.Context, err error, cfg *config.Config) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
 	// This can happen with certain middleware combinations (e.g., otelecho).
 	// Matches Echo's default error handler behavior.
-	if c.Response().Committed {
+	if isResponseCommitted(c) {
 		return
 	}
 
@@ -254,7 +266,7 @@ func customErrorHandler(err error, c echo.Context, cfg *config.Config) {
 // classifyError converts an arbitrary error into a structured IAPIError.
 // It handles context.DeadlineExceeded, IAPIError, echo.HTTPError, and
 // untyped errors, applying production sanitization and server-error logging.
-func classifyError(err error, c echo.Context, cfg *config.Config) IAPIError {
+func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
 	// Context deadline exceeded (timeout errors)
 	if goerrors.Is(err, context.DeadlineExceeded) {
 		return NewServiceUnavailableError("Request processing timed out")
@@ -266,20 +278,22 @@ func classifyError(err error, c echo.Context, cfg *config.Config) IAPIError {
 		return apiErr
 	}
 
-	// Map echo.HTTPError and untyped errors
+	// Map echo.HTTPError, echo.HTTPStatusCoder, and untyped errors.
+	// In v5, sentinel errors like ErrNotFound are httpError (lowercase) which
+	// implements HTTPStatusCoder but NOT *HTTPError, so we check both interfaces.
 	status := http.StatusInternalServerError
 	msg := "Internal server error"
 	var he *echo.HTTPError
 	if goerrors.As(err, &he) {
 		status = he.Code
-		switch m := he.Message.(type) {
-		case string:
-			msg = m
-		case error:
-			msg = m.Error()
-		default:
-			// keep default
+		// In v5, HTTPError.Message is always a string
+		if he.Message != "" {
+			msg = he.Message
 		}
+	} else if sc := echo.StatusCode(err); sc != 0 {
+		// Handles httpError sentinels (ErrNotFound, ErrMethodNotAllowed, etc.)
+		status = sc
+		msg = http.StatusText(sc)
 	}
 
 	// In non-debug (production) hide internal details for 500s
@@ -288,7 +302,7 @@ func classifyError(err error, c echo.Context, cfg *config.Config) IAPIError {
 	}
 
 	if status >= http.StatusInternalServerError {
-		c.Echo().Logger.Errorf("unhandled error: %v", err)
+		c.Echo().Logger.Error("unhandled error", "error", err)
 	}
 
 	code := statusToErrorCode(status)

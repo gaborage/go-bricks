@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -168,8 +168,9 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 	req.Header.Set("X-Items", "a, b , c")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("id")
-	c.SetParamValues("5")
+	c.SetPathValues(echo.PathValues{
+		{Name: "id", Value: "5"},
+	})
 
 	err := h(c)
 	require.NoError(t, err)
@@ -210,8 +211,9 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/accounts/7?limit=42&ratio=3.5", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("accountID")
-	c.SetParamValues("7")
+	c.SetPathValues(echo.PathValues{
+		{Name: "accountID", Value: "7"},
+	})
 
 	err := h(c)
 	require.NoError(t, err)
@@ -248,8 +250,9 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/accounts/7?limit=42&ratio=not-a-number", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("accountID")
-	c.SetParamValues("7")
+	c.SetPathValues(echo.PathValues{
+		{Name: "accountID", Value: "7"},
+	})
 
 	err := h(c)
 	require.NoError(t, err)
@@ -614,7 +617,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	OPTIONS(hr, registrar, "/options", handler)
 
 	routes := make(map[string]struct{})
-	for _, route := range e.Routes() {
+	for _, route := range e.Router().Routes() {
 		routes[route.Method+" "+route.Path] = struct{}{}
 	}
 

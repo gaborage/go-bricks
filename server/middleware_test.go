@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -82,7 +83,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			SetupMiddlewares(e, log, tt.config, testHealthPath, testReadyPath)
 
 			// Create test handler
-			e.GET("/test", func(c echo.Context) error {
+			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 			})
 
@@ -121,54 +122,49 @@ func TestBuildTenantResolver(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "header"}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.ValidatingResolver{}, resolver) {
-			vr := resolver.(*multitenant.ValidatingResolver)
-			assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
-			if assert.IsType(t, &multitenant.HeaderResolver{}, vr.Resolver) {
-				hr := vr.Resolver.(*multitenant.HeaderResolver)
-				assert.Equal(t, defaultTenantHeader, hr.HeaderName)
-			}
-		}
+		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
+		vr := resolver.(*multitenant.ValidatingResolver)
+		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		require.IsType(t, &multitenant.HeaderResolver{}, vr.Resolver)
+		hr := vr.Resolver.(*multitenant.HeaderResolver)
+		assert.Equal(t, defaultTenantHeader, hr.HeaderName)
 	})
 
 	t.Run("subdomain resolver wraps validation", func(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "subdomain", Domain: testDomain}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.ValidatingResolver{}, resolver) {
-			vr := resolver.(*multitenant.ValidatingResolver)
-			assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
-			if assert.IsType(t, &multitenant.SubdomainResolver{}, vr.Resolver) {
-				sr := vr.Resolver.(*multitenant.SubdomainResolver)
-				assert.Equal(t, testDomain, sr.RootDomain)
-			}
-		}
+		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
+		vr := resolver.(*multitenant.ValidatingResolver)
+		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		require.IsType(t, &multitenant.SubdomainResolver{}, vr.Resolver)
+		sr := vr.Resolver.(*multitenant.SubdomainResolver)
+		assert.Equal(t, testDomain, sr.RootDomain)
 	})
 
 	t.Run("composite resolver builds header and subdomain", func(t *testing.T) {
 		cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{Type: "composite", Header: defaultTenantHeader, Domain: testDomain}}}
 
 		resolver := buildTenantResolver(cfg)
-		if assert.IsType(t, &multitenant.CompositeResolver{}, resolver) {
-			cr := resolver.(*multitenant.CompositeResolver)
-			assert.Equal(t, defaultTenantIDRegex, cr.TenantRegex)
-			assert.Len(t, cr.Resolvers, 2)
+		require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+		cr := resolver.(*multitenant.CompositeResolver)
+		assert.Equal(t, defaultTenantIDRegex, cr.TenantRegex)
+		assert.Len(t, cr.Resolvers, 2)
 
-			hasHeader := false
-			hasSubdomain := false
-			for _, r := range cr.Resolvers {
-				switch typed := r.(type) {
-				case *multitenant.HeaderResolver:
-					hasHeader = true
-					assert.Equal(t, defaultTenantHeader, typed.HeaderName)
-				case *multitenant.SubdomainResolver:
-					hasSubdomain = true
-					assert.Equal(t, testDomain, typed.RootDomain)
-				}
+		hasHeader := false
+		hasSubdomain := false
+		for _, r := range cr.Resolvers {
+			switch typed := r.(type) {
+			case *multitenant.HeaderResolver:
+				hasHeader = true
+				assert.Equal(t, defaultTenantHeader, typed.HeaderName)
+			case *multitenant.SubdomainResolver:
+				hasSubdomain = true
+				assert.Equal(t, testDomain, typed.RootDomain)
 			}
-			assert.True(t, hasHeader)
-			assert.True(t, hasSubdomain)
 		}
+		assert.True(t, hasHeader)
+		assert.True(t, hasSubdomain)
 	})
 
 	t.Run("invalid resolver type returns nil", func(t *testing.T) {
@@ -193,7 +189,7 @@ func TestMiddlewareOrder(t *testing.T) {
 
 	// Add tracking middleware to verify order
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			middlewareOrder = append(middlewareOrder, preSetupMarker)
 			return next(c)
 		}
@@ -202,13 +198,13 @@ func TestMiddlewareOrder(t *testing.T) {
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			middlewareOrder = append(middlewareOrder, postSetupMarker)
 			return next(c)
 		}
 	})
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		middlewareOrder = append(middlewareOrder, "handler")
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -259,7 +255,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
-	e.POST("/test", func(c echo.Context) error {
+	e.POST("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -305,7 +301,7 @@ func TestGzipMiddleware(t *testing.T) {
 
 	// Create handler that returns large response
 	largeResponse := strings.Repeat("This is a test response that should be compressed. ", 100)
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.String(http.StatusOK, largeResponse)
 	})
 
@@ -354,7 +350,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
 	// Handler that panics
-	e.GET("/panic", func(_ echo.Context) error {
+	e.GET("/panic", func(_ *echo.Context) error {
 		panic("test panic")
 	})
 
@@ -385,7 +381,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
 
-	e.GET("/test", func(c echo.Context) error {
+	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 

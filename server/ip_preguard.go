@@ -4,9 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
-	"golang.org/x/time/rate"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 )
 
 const (
@@ -30,16 +29,16 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 		Skipper: middleware.DefaultSkipper,
 		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 			middleware.RateLimiterMemoryStoreConfig{
-				Rate:      rate.Limit(threshold),
+				Rate:      float64(threshold),
 				Burst:     threshold * 2, // Allow small bursts
 				ExpiresIn: IPPreGuardCleanup,
 			},
 		),
-		IdentifierExtractor: func(ctx echo.Context) (string, error) {
+		IdentifierExtractor: func(ctx *echo.Context) (string, error) {
 			// Simple IP-based limiting only
 			return ctx.RealIP(), nil
 		},
-		ErrorHandler: func(context echo.Context, _ error) error {
+		ErrorHandler: func(context *echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
 				"error": map[string]any{
 					"message":    "IP rate limit exceeded",
@@ -48,7 +47,7 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 				},
 			})
 		},
-		DenyHandler: func(context echo.Context, _ string, _ error) error {
+		DenyHandler: func(context *echo.Context, _ string, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
 				"error": map[string]any{
 					"message":    "Too many requests from this IP",

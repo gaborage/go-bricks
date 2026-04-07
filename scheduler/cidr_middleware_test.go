@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -53,7 +53,7 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 			e := echo.New()
 			middleware := CIDRMiddleware([]string{}, []string{}) // Empty allowlist = localhost-only, no trusted proxies
 
-			handler := middleware(func(c echo.Context) error {
+			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
 			})
 
@@ -122,7 +122,7 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 			e := echo.New()
 			middleware := CIDRMiddleware(tt.allowlist, []string{}) // No trusted proxies in basic tests
 
-			handler := middleware(func(c echo.Context) error {
+			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
 			})
 
@@ -198,7 +198,7 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 			e := echo.New()
 			middleware := CIDRMiddleware(tt.allowlist, tt.trustedProxies)
 
-			handler := middleware(func(c echo.Context) error {
+			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
 			})
 
@@ -301,7 +301,7 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 			e := echo.New()
 			middleware := CIDRMiddleware(tt.allowlist, tt.trustedProxies)
 
-			handler := middleware(func(c echo.Context) error {
+			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
 			})
 
@@ -337,7 +337,7 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	// Invalid CIDR should fall back to localhost-only
 	middleware := CIDRMiddleware([]string{"not-a-valid-cidr", "also invalid"}, []string{})
 
-	handler := middleware(func(c echo.Context) error {
+	handler := middleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,12 +17,12 @@ import (
 func TestPerformanceStats(t *testing.T) {
 	tests := []struct {
 		name        string
-		handler     func(c echo.Context) error
+		handler     func(c *echo.Context) error
 		expectError bool
 	}{
 		{
 			name: "success_case_with_counters",
-			handler: func(c echo.Context) error {
+			handler: func(c *echo.Context) error {
 				ctx := c.Request().Context()
 
 				// Simulate AMQP operations
@@ -44,7 +44,7 @@ func TestPerformanceStats(t *testing.T) {
 		},
 		{
 			name: "handler_returns_error",
-			handler: func(c echo.Context) error {
+			handler: func(c *echo.Context) error {
 				ctx := c.Request().Context()
 				logger.IncrementAMQPCounter(ctx)
 				logger.IncrementDBCounter(ctx)
@@ -54,14 +54,14 @@ func TestPerformanceStats(t *testing.T) {
 		},
 		{
 			name: "no_operations_performed",
-			handler: func(c echo.Context) error {
+			handler: func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "no-ops"})
 			},
 			expectError: false,
 		},
 		{
 			name: "only_amqp_operations",
-			handler: func(c echo.Context) error {
+			handler: func(c *echo.Context) error {
 				ctx := c.Request().Context()
 				logger.IncrementAMQPCounter(ctx)
 				logger.AddAMQPElapsed(ctx, 750000) // 0.75ms in nanoseconds
@@ -71,7 +71,7 @@ func TestPerformanceStats(t *testing.T) {
 		},
 		{
 			name: "only_db_operations",
-			handler: func(c echo.Context) error {
+			handler: func(c *echo.Context) error {
 				ctx := c.Request().Context()
 				logger.IncrementDBCounter(ctx)
 				logger.AddDBElapsed(ctx, 1250000) // 1.25ms in nanoseconds
@@ -157,7 +157,7 @@ func TestPerformanceStatsContextInitialization(t *testing.T) {
 	assert.Equal(t, int64(0), logger.GetDBElapsed(originalCtx))
 
 	middleware := PerformanceStats()
-	handler := middleware(func(c echo.Context) error {
+	handler := middleware(func(c *echo.Context) error {
 		// After middleware, context should have performance tracking initialized
 		ctx := c.Request().Context()
 
@@ -194,7 +194,7 @@ func TestPerformanceStatsConcurrentAccess(t *testing.T) {
 	middleware := PerformanceStats()
 
 	// Test concurrent increments to verify atomic operations work correctly
-	handler := middleware(func(c echo.Context) error {
+	handler := middleware(func(c *echo.Context) error {
 		ctx := c.Request().Context()
 
 		// Use goroutines to simulate concurrent access
@@ -255,7 +255,7 @@ func TestPerformanceStatsMiddlewareChaining(t *testing.T) {
 	customKey := customContextKey("custom_key")
 
 	customMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			ctx := context.WithValue(c.Request().Context(), customKey, "custom_value")
 			c.SetRequest(c.Request().WithContext(ctx))
 			return next(c)
@@ -263,7 +263,7 @@ func TestPerformanceStatsMiddlewareChaining(t *testing.T) {
 	}
 
 	// Chain middlewares: custom -> performance -> handler
-	chainedHandler := customMiddleware(performanceMiddleware(func(c echo.Context) error {
+	chainedHandler := customMiddleware(performanceMiddleware(func(c *echo.Context) error {
 		ctx := c.Request().Context()
 
 		// Verify custom middleware value is still present

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 // startMaintenanceLoops starts background cleanup processes for managers
@@ -375,7 +375,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 // readyCheck handles the health check endpoint
-func (a *App) readyCheck(c echo.Context) error {
+func (a *App) readyCheck(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	componentStatus := make(map[string]HealthStatus, len(a.healthProbes))

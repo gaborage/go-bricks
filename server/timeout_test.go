@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -150,12 +150,12 @@ func TestCustomErrorHandlerTimeoutDetection(t *testing.T) {
 	}
 
 	// Configure custom error handler
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		customErrorHandler(err, c, cfg)
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		customErrorHandler(c, err, cfg)
 	}
 
 	// Create a handler that returns context.DeadlineExceeded
-	e.GET("/timeout", func(_ echo.Context) error {
+	e.GET("/timeout", func(_ *echo.Context) error {
 		return context.DeadlineExceeded
 	})
 
@@ -288,8 +288,8 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 	}
 
 	// Set up custom error handler
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		customErrorHandler(err, c, cfg)
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		customErrorHandler(c, err, cfg)
 	}
 
 	// Apply timeout middleware
@@ -305,7 +305,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 	}))
 
 	// Slow handler that exceeds timeout and respects context cancellation
-	e.GET("/slow", func(c echo.Context) error {
+	e.GET("/slow", func(c *echo.Context) error {
 		// Simulate slow operation that checks context
 		select {
 		case <-time.After(100 * time.Millisecond): // Exceeds 50ms timeout
@@ -348,8 +348,8 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 		},
 	}
 
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		customErrorHandler(err, c, cfg)
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		customErrorHandler(c, err, cfg)
 	}
 
 	e.Use(Timeout(cfg.Server.Timeout.Middleware))
@@ -360,7 +360,7 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 		SlowRequestThreshold: 1 * time.Second,
 	}))
 
-	e.GET("/endpoint", func(c echo.Context) error {
+	e.GET("/endpoint", func(c *echo.Context) error {
 		// Simulate slow operation that checks context.
 		// Handler delay (200ms) is 10x the timeout (20ms) to ensure
 		// the context is always cancelled first, even under CI load.

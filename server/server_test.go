@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,41 +31,23 @@ const (
 	statusRoute       = "/status"
 )
 
+// testLogEntry captures a single log emission with its level, message, and structured field keys.
+type testLogEntry struct {
+	level  string
+	msg    string
+	fields []string
+}
+
 type testLogger struct {
 	mu      sync.Mutex
 	entries []string
+	logs    []testLogEntry
 }
 
 type testLogEvent struct {
 	logger *testLogger
 	level  string
-}
-
-type stubListener struct {
-	ch   chan struct{}
-	once sync.Once
-}
-
-func newStubListener() *stubListener {
-	return &stubListener{ch: make(chan struct{})}
-}
-
-func (l *stubListener) Accept() (net.Conn, error) {
-	if _, ok := <-l.ch; !ok {
-		return nil, net.ErrClosed
-	}
-	return nil, nil
-}
-
-func (l *stubListener) Close() error {
-	l.once.Do(func() {
-		close(l.ch)
-	})
-	return nil
-}
-
-func (l *stubListener) Addr() net.Addr {
-	return &net.TCPAddr{IP: net.IPv4zero, Port: 0}
+	fields []string
 }
 
 func (l *testLogger) Info() logger.LogEvent  { return &testLogEvent{logger: l, level: "info"} }
@@ -80,22 +62,59 @@ func (l *testLogger) WithFields(map[string]any) logger.Logger {
 	return l
 }
 
+// logEntries returns a copy of all captured log entries.
+func (l *testLogger) logEntries() []testLogEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cp := make([]testLogEntry, len(l.logs))
+	copy(cp, l.logs)
+	return cp
+}
+
 func (e *testLogEvent) Msg(msg string) {
 	e.logger.mu.Lock()
 	defer e.logger.mu.Unlock()
 	e.logger.entries = append(e.logger.entries, fmt.Sprintf("%s:%s", e.level, msg))
+	e.logger.logs = append(e.logger.logs, testLogEntry{level: e.level, msg: msg, fields: e.fields})
 }
 
-func (e *testLogEvent) Msgf(format string, args ...any)           { e.Msg(fmt.Sprintf(format, args...)) }
-func (e *testLogEvent) Err(error) logger.LogEvent                 { return e }
-func (e *testLogEvent) Str(string, string) logger.LogEvent        { return e }
-func (e *testLogEvent) Int(string, int) logger.LogEvent           { return e }
-func (e *testLogEvent) Int64(string, int64) logger.LogEvent       { return e }
-func (e *testLogEvent) Uint64(string, uint64) logger.LogEvent     { return e }
-func (e *testLogEvent) Dur(string, time.Duration) logger.LogEvent { return e }
-func (e *testLogEvent) Interface(string, any) logger.LogEvent     { return e }
-func (e *testLogEvent) Bytes(string, []byte) logger.LogEvent      { return e }
-func (e *testLogEvent) Bool(string, bool) logger.LogEvent         { return e }
+func (e *testLogEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *testLogEvent) Err(error) logger.LogEvent {
+	e.fields = append(e.fields, "error")
+	return e
+}
+func (e *testLogEvent) Str(key, _ string) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Int(key string, _ int) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Int64(key string, _ int64) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Uint64(key string, _ uint64) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Dur(key string, _ time.Duration) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Interface(key string, _ any) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Bytes(key string, _ []byte) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
+func (e *testLogEvent) Bool(key string, _ bool) logger.LogEvent {
+	e.fields = append(e.fields, key)
+	return e
+}
 
 // Test helpers for common setup patterns
 func newTestConfig(basePath, healthRoute, readyRoute string) *config.Config {
@@ -163,8 +182,7 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 
 	e := srv.Echo()
 	require.NotNil(t, e)
-	assert.True(t, e.HideBanner)
-	assert.True(t, e.HidePort)
+	// HideBanner/HidePort moved to StartConfig in Echo v5
 	require.NotNil(t, e.Validator)
 
 	// Test default health endpoints
@@ -174,8 +192,6 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 func TestServerStartAndShutdown(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)
-	listener := newStubListener()
-	srv.echo.Listener = listener
 
 	errCh := make(chan error, 1)
 
@@ -183,12 +199,20 @@ func TestServerStartAndShutdown(t *testing.T) {
 		errCh <- srv.Start()
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait until BeforeServeFunc stores the *http.Server, which fires
+	// immediately before the server starts accepting connections. This
+	// replaces a fragile time.Sleep with a deterministic readiness check.
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.httpServer.Load() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("server did not become ready within timeout")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
 
-	require.NoError(t, listener.Close())
 	require.NoError(t, srv.Shutdown(ctx))
 
 	select {
@@ -196,7 +220,7 @@ func TestServerStartAndShutdown(t *testing.T) {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("unexpected error from server: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("server did not shut down in time")
 	}
 }
@@ -414,7 +438,7 @@ func TestModuleGroupBehavior(t *testing.T) {
 				server := newTestServer(tt.basePath, "", "")
 				group := server.ModuleGroup()
 
-				group.Add(http.MethodGet, tt.registerPath, func(c echo.Context) error {
+				group.Add(http.MethodGet, tt.registerPath, func(c *echo.Context) error {
 					return c.NoContent(http.StatusNoContent)
 				})
 
@@ -434,13 +458,13 @@ func TestModuleGroupBehavior(t *testing.T) {
 		assert.True(t, isRouteGroup, "nested group should use wrapper")
 
 		// Add route to nested group
-		nested.Add(http.MethodGet, "/resource", func(c echo.Context) error {
+		nested.Add(http.MethodGet, "/resource", func(c *echo.Context) error {
 			return c.String(http.StatusOK, "nested")
 		})
 		assertHTTPGetResponse(t, server, testAPIV1Path+"/resource", http.StatusOK, "nested")
 
 		// Test deduplication - path with base prefix shouldn't duplicate
-		nested.Add(http.MethodGet, testAPIV1Path+"/dedup", func(c echo.Context) error {
+		nested.Add(http.MethodGet, testAPIV1Path+"/dedup", func(c *echo.Context) error {
 			return c.String(http.StatusOK, "dedup")
 		})
 		assertHTTPGetResponse(t, server, testAPIV1Path+"/dedup", http.StatusOK, "dedup")
@@ -466,7 +490,7 @@ func TestCustomErrorHandlerRawMode(t *testing.T) {
 
 	// Simulate an IAPIError
 	apiErr := NewNotFoundError("Resource")
-	customErrorHandler(apiErr, c, cfg)
+	customErrorHandler(c, apiErr, cfg)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
@@ -492,7 +516,7 @@ func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
 
 	c.Set(rawResponseContextKey, true)
 
-	customErrorHandler(context.DeadlineExceeded, c, cfg)
+	customErrorHandler(c, context.DeadlineExceeded, cfg)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
@@ -516,7 +540,7 @@ func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
 	c.Set(rawResponseContextKey, true)
 
 	echoErr := echo.NewHTTPError(http.StatusForbidden, "access denied")
-	customErrorHandler(echoErr, c, cfg)
+	customErrorHandler(c, echoErr, cfg)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
