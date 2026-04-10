@@ -39,15 +39,6 @@ func (e *ValidationError) Unwrap() error {
 	return e.Err
 }
 
-// NewValidationError creates a new ValidationError with the specified field, message, and action
-func NewValidationError(field, message, action string) *ValidationError {
-	return &ValidationError{
-		Field:   field,
-		Message: message,
-		Action:  action,
-	}
-}
-
 // NewRangeError creates a ValidationError for values outside valid ranges
 func NewRangeError(field string, minVal, maxVal, actual any) *ValidationError {
 	return &ValidationError{
