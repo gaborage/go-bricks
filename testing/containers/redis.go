@@ -84,7 +84,7 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 		return nil, fmt.Errorf("failed to get Redis port: %w", err)
 	}
 
-	port := mappedPort.Int()
+	port := int(mappedPort.Num())
 
 	t.Logf("Redis container started successfully at %s:%d", host, port)
 

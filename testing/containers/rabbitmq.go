@@ -102,7 +102,7 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 		return nil, fmt.Errorf("failed to get RabbitMQ port: %w", err)
 	}
 
-	port := mappedPort.Int()
+	port := int(mappedPort.Num())
 
 	t.Logf("RabbitMQ container started successfully at %s:%d", host, port)
 

@@ -112,7 +112,7 @@ func StartOracleContainer(ctx context.Context, t *testing.T, cfg *OracleContaine
 		return nil, fmt.Errorf("failed to get Oracle container port: %w", err)
 	}
 
-	port := mappedPort.Int()
+	port := int(mappedPort.Num())
 
 	// Build connection string for go-ora driver
 	// Format: oracle://user:password@host:port/service
