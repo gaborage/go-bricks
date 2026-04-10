@@ -130,7 +130,7 @@ func (p *PostgreSQLContainer) MappedPort(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return mappedPort.Int(), nil
+	return int(mappedPort.Num()), nil
 }
 
 // MustStartPostgreSQLContainer starts a PostgreSQL test container and fails the test if startup fails.
