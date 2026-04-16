@@ -43,3 +43,6 @@
 
 # ...even if they are in subdirectories
 !*/
+
+# Explicit ignores (override !*/ above)
+.claude/worktrees/
