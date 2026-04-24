@@ -263,6 +263,136 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 	require.NoError(t, conn.Close())
 }
 
+func TestConnectionInjectsTimezoneRuntimeParam(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	var captured *pgx.ConnConfig
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(c *pgx.ConnConfig) *sql.DB {
+		captured = c
+		return db
+	}
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "user",
+		Password: "pass",
+		Database: "db",
+		Timezone: "Asia/Tokyo",
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 15 * time.Second},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Second},
+		},
+	}
+
+	mock.ExpectClose()
+	conn, err := NewConnection(cfg, newTestLogger())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	require.NotNil(t, captured)
+
+	assert.Equal(t, "Asia/Tokyo", captured.RuntimeParams["timezone"],
+		"pgx RuntimeParams must carry the configured timezone so every new connection inherits it")
+
+	require.NoError(t, conn.Close())
+}
+
+func TestConnectionSkipsTimezoneOnDashSentinel(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	var captured *pgx.ConnConfig
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(c *pgx.ConnConfig) *sql.DB {
+		captured = c
+		return db
+	}
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     5432,
+		Username: "user",
+		Password: "pass",
+		Database: "db",
+		Timezone: "-", // explicit opt-out
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 15 * time.Second},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Second},
+		},
+	}
+
+	mock.ExpectClose()
+	conn, err := NewConnection(cfg, newTestLogger())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	require.NotNil(t, captured)
+
+	_, present := captured.RuntimeParams["timezone"]
+	assert.False(t, present, "RuntimeParams must NOT carry timezone when opted out via '-'")
+
+	require.NoError(t, conn.Close())
+}
+
+func TestConnectionTimezoneOverridesDSNValue(t *testing.T) {
+	// When the user sets timezone in both the connection string AND cfg.Timezone,
+	// cfg.Timezone wins (config is the declared source of truth).
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	var captured *pgx.ConnConfig
+	originalOpen := openPostgresDB
+	originalPing := pingPostgresDB
+	openPostgresDB = func(c *pgx.ConnConfig) *sql.DB {
+		captured = c
+		return db
+	}
+	pingPostgresDB = func(context.Context, *sql.DB) error { return nil }
+	t.Cleanup(func() {
+		openPostgresDB = originalOpen
+		pingPostgresDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		ConnectionString: "host=localhost port=5432 dbname=db user=u password=p options='-c timezone=America/New_York'",
+		Timezone:         "UTC",
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 15 * time.Second},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Second},
+		},
+	}
+
+	mock.ExpectClose()
+	conn, err := NewConnection(cfg, newTestLogger())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	require.NotNil(t, captured)
+
+	assert.Equal(t, "UTC", captured.RuntimeParams["timezone"],
+		"cfg.Timezone must override any timezone embedded in the connection string")
+
+	require.NoError(t, conn.Close())
+}
+
 func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 	// Test with invalid configuration that causes parsing to fail
 	cfg := &config.DatabaseConfig{

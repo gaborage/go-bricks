@@ -18,6 +18,17 @@ const (
 	defaultPoolIdleConnections = int32(2)         // Maintain minimal warm connections
 )
 
+// Database session defaults
+const (
+	// defaultDatabaseTimezone is the IANA timezone applied to every new database
+	// session when DatabaseConfig.Timezone is unset. UTC is opinionated to keep
+	// app-side time handling consistent with stored timestamps.
+	defaultDatabaseTimezone = "UTC"
+	// timezoneDisabledSentinel opts out of session-level timezone enforcement,
+	// preserving the database server's default timezone (legacy behavior).
+	timezoneDisabledSentinel = "-"
+)
+
 // Messaging reconnection defaults
 const (
 	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
@@ -305,9 +316,10 @@ func validateRequiredDatabasePort(port int) error {
 	return nil
 }
 
-// applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query settings.
+// applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
 //
 // It modifies cfg in-place:
+// - Timezone: if empty, sets to "UTC"; validates with time.LoadLocation unless set to "-".
 // - Pool.Max.Connections: if 0, sets to 25; if negative, returns an error.
 // - Pool.Idle.Connections: if 0, sets to 2 (minimal warm connections); if negative, returns an error.
 // - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
@@ -319,6 +331,10 @@ func validateRequiredDatabasePort(port int) error {
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	if err := applyDatabaseTimezoneDefault(cfg); err != nil {
+		return err
+	}
+
 	if cfg.Pool.Max.Connections == 0 {
 		cfg.Pool.Max.Connections = 25
 	} else if cfg.Pool.Max.Connections < 0 {
@@ -369,6 +385,27 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		cfg.Query.Slow.Threshold = defaultSlowQueryThreshold
 	}
 
+	return nil
+}
+
+// applyDatabaseTimezoneDefault sets cfg.Timezone to the default ("UTC") when unset
+// and validates the configured value as a loadable IANA timezone. The opt-out
+// sentinel "-" skips validation and tells the connection layer to leave session
+// timezone untouched.
+func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
+	if cfg.Timezone == "" {
+		cfg.Timezone = defaultDatabaseTimezone
+	}
+	if cfg.Timezone == timezoneDisabledSentinel {
+		return nil
+	}
+	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
+		return NewInvalidFieldError(
+			"database.timezone",
+			fmt.Sprintf("invalid IANA timezone %q: %v", cfg.Timezone, err),
+			[]string{`a valid IANA timezone (e.g. "UTC", "America/New_York") or "-" to disable`},
+		)
+	}
 	return nil
 }
 

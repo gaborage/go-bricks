@@ -4,6 +4,7 @@ package oracle
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -1063,4 +1064,108 @@ func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
 	// Verify connection works
 	err = conn.Health(ctx)
 	assert.NoError(t, err, "Health check should succeed with zero keep-alive interval")
+}
+
+// =============================================================================
+// Session Timezone Tests
+// =============================================================================
+
+// queryOracleSessionTimezone returns the value Oracle reports for the current
+// session timezone via SESSIONTIMEZONE.
+func queryOracleSessionTimezone(t *testing.T, ctx context.Context, conn *Connection) string {
+	t.Helper()
+	var tz string
+	row := conn.db.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual")
+	require.NoError(t, row.Scan(&tz))
+	return tz
+}
+
+// newOracleConnectionWithTimezone boots an Oracle container and connects with
+// the given session timezone setting.
+func newOracleConnectionWithTimezone(t *testing.T, timezone string) (*Connection, context.Context) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	t.Cleanup(cancel)
+
+	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	cfg := &config.DatabaseConfig{
+		Host:     oracleContainer.Host(),
+		Port:     oracleContainer.Port(),
+		Username: oracleContainer.Username(),
+		Password: oracleContainer.Password(),
+		Timezone: timezone,
+		Oracle: config.OracleConfig{
+			Service: config.ServiceConfig{Name: oracleContainer.Database()},
+		},
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},
+			Lifetime: config.LifetimeConfig{Max: time.Hour},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection should succeed with timezone=%q", timezone)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return conn.(*Connection), ctx
+}
+
+func TestConnectionSessionTimezoneAppliedAsiaTokyo(t *testing.T) {
+	conn, ctx := newOracleConnectionWithTimezone(t, "Asia/Tokyo")
+	tz := queryOracleSessionTimezone(t, ctx, conn)
+	assert.Equal(t, "Asia/Tokyo", tz,
+		"Oracle SESSIONTIMEZONE must equal cfg.Timezone (the tzConnector wrapper must run ALTER SESSION on every new connection)")
+}
+
+func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
+	conn, ctx := newOracleConnectionWithTimezone(t, "UTC")
+	tz := queryOracleSessionTimezone(t, ctx, conn)
+	assert.Equal(t, "UTC", tz)
+}
+
+func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
+	// With "-", the tzConnector wrapper is bypassed and Oracle uses its
+	// session-timezone default. We don't hard-code the expected value (it
+	// depends on the container/server) — just confirm it's non-empty and
+	// that we did NOT enforce a specific value.
+	conn, ctx := newOracleConnectionWithTimezone(t, "-")
+	tz := queryOracleSessionTimezone(t, ctx, conn)
+	assert.NotEmpty(t, tz, "session must report some timezone (server default)")
+	t.Logf("server-default Oracle SESSIONTIMEZONE in container: %q (we did NOT override it)", tz)
+}
+
+func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
+	// Regression guard for the wrapper-vs-one-shot trap (Oracle edition).
+	// Pin multiple sql.Conn handles concurrently to force the pool to grow
+	// to multiple distinct physical connections, then verify each one
+	// reports the configured timezone. If the wrapper isn't fired per
+	// physical connection, later pool members will fall back to the
+	// container's server default.
+	conn, ctx := newOracleConnectionWithTimezone(t, "Asia/Tokyo")
+
+	const concurrency = 5
+	pinned := make([]*sql.Conn, 0, concurrency)
+	defer func() {
+		for _, c := range pinned {
+			_ = c.Close()
+		}
+	}()
+
+	for i := 0; i < concurrency; i++ {
+		c, err := conn.db.Conn(ctx)
+		require.NoError(t, err, "should obtain pool connection #%d", i)
+		pinned = append(pinned, c)
+	}
+
+	for i, c := range pinned {
+		var tz string
+		row := c.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual")
+		require.NoError(t, row.Scan(&tz))
+		assert.Equal(t, "Asia/Tokyo", tz,
+			"pool member #%d must report the configured timezone — a regression here means later pool members did NOT receive ALTER SESSION", i)
+	}
 }

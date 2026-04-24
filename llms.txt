@@ -55,6 +55,7 @@ database:
   database: myapp_db
   username: myapp_user
   password: ${DATABASE_PASSWORD}  # From environment variable
+  timezone: UTC                   # IANA name; default UTC; "-" disables (use DB server default)
 cache:
   enabled: true
   type: redis
