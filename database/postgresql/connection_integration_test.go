@@ -749,7 +749,11 @@ func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
 	// simultaneously, which makes the pool spawn additional physical connections.
 	conn, ctx := newConnectionWithTimezone(t, "Asia/Tokyo")
 
-	const concurrency = 5
+	// Stay strictly below newConnectionWithTimezone's Pool.Max.Connections (5)
+	// so the test exercises pool growth without ever blocking on the limit.
+	// 3 still proves "many distinct pool members" — 1 wouldn't, 5 risks deadlock
+	// if a future change shrinks the helper's pool size.
+	const concurrency = 3
 
 	// Pin multiple sql.Conn handles simultaneously to force the pool to grow
 	// to 'concurrency' distinct physical connections.

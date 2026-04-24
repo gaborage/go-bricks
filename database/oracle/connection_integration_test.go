@@ -1185,7 +1185,11 @@ func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
 	// container's server default.
 	conn, ctx := newOracleConnectionWithTimezone(t, "Asia/Tokyo")
 
-	const concurrency = 5
+	// Stay strictly below newOracleConnectionWithTimezone's Pool.Max.Connections (5)
+	// so the test exercises pool growth without ever blocking on the limit.
+	// 3 still proves "many distinct pool members" — 1 wouldn't, 5 risks deadlock
+	// if a future change shrinks the helper's pool size.
+	const concurrency = 3
 	pinned := make([]*sql.Conn, 0, concurrency)
 	defer func() {
 		for _, c := range pinned {
