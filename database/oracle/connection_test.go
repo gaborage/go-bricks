@@ -257,6 +257,7 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 		Port:     1521,
 		Username: "stub",
 		Password: "secret",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
 				Name: "XEPDB1",
@@ -722,6 +723,7 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 		Port:     1521,
 		Username: "testuser",
 		Password: "testpass",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{Name: "XEPDB1"},
 		},
@@ -789,6 +791,7 @@ func TestNewConnectionWithKeepAliveFallback(t *testing.T) {
 		Port:     1521,
 		Username: "testuser",
 		Password: "testpass",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{Name: "XEPDB1"},
 		},
@@ -852,6 +855,7 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 		Port:     1521,
 		Username: "testuser",
 		Password: "testpass",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{Name: "XEPDB1"},
 		},
@@ -919,6 +923,7 @@ func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
 		Port:     1521,
 		Username: "testuser",
 		Password: "testpass",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{SID: "XE"}, // Using SID instead of service name
 		},
@@ -1250,6 +1255,7 @@ func TestLogConnectionSuccessWithSID(t *testing.T) {
 		Port:     1521,
 		Username: "stub",
 		Password: "secret",
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
 				SID: "ORCL", // SID path (not Service.Name)
@@ -1300,7 +1306,8 @@ func TestLogConnectionSuccessWithDatabaseFallback(t *testing.T) {
 		Port:     1521,
 		Username: "stub",
 		Password: "secret",
-		Database: "testdb", // Database fallback path
+		Timezone: config.TimezoneDisabledSentinel, // legacy path: no per-connection ALTER SESSION
+		Database: "testdb",                        // Database fallback path
 		Pool: config.PoolConfig{
 			Max: config.PoolMaxConfig{
 				Connections: 4,

@@ -128,16 +128,25 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	return conn, nil
 }
 
-// openOracleConnection dispatches to the timezone-aware connector path when
-// cfg.Timezone is set, falling back to the legacy DSN-based open paths otherwise.
-// The legacy paths are preserved so existing tests that stub openOracleDB /
-// openOracleDBWithDialer continue to exercise the dispatch logic for the
-// no-timezone and opt-out configurations.
+// openOracleConnection dispatches to the timezone-aware connector path for any
+// non-opt-out configuration, falling back to the legacy DSN-based open paths
+// only when the caller has explicitly opted out via the disabled sentinel.
+// An empty Timezone is normalized to config.DefaultDatabaseTimezone here so
+// callers that bypass config.Validate (e.g. tests, internal helpers) still
+// receive the documented default-UTC behavior. The legacy paths are preserved
+// so existing tests that stub openOracleDB / openOracleDBWithDialer can opt in
+// to the no-timezone path explicitly via Timezone == TimezoneDisabledSentinel.
 func openOracleConnection(dsn string, cfg *config.DatabaseConfig, log logger.Logger) (*sql.DB, error) {
-	if cfg.Timezone != "" && cfg.Timezone != config.TimezoneDisabledSentinel {
-		return openTimezoneAwareOracleDB(dsn, cfg, log), nil
+	if cfg.Timezone == config.TimezoneDisabledSentinel {
+		return openLegacyOracleDB(dsn, cfg, log)
 	}
-	return openLegacyOracleDB(dsn, cfg, log)
+	timezone := cfg.Timezone
+	if timezone == "" {
+		timezone = config.DefaultDatabaseTimezone
+	}
+	cfgCopy := *cfg
+	cfgCopy.Timezone = timezone
+	return openTimezoneAwareOracleDB(dsn, &cfgCopy, log), nil
 }
 
 // openTimezoneAwareOracleDB builds a connector wrapped with tzConnector so every

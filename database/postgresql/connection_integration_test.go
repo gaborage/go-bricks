@@ -5,6 +5,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -690,14 +691,55 @@ func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
 }
 
 func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
-	// With "-", we don't set RuntimeParams at all — the session timezone falls
-	// back to the server default. Don't hard-code the expected value (it depends
-	// on the container image), just verify it's something non-empty and that we
-	// did NOT enforce a specific timezone.
-	conn, ctx := newConnectionWithTimezone(t, "-")
-	tz := queryPostgresTimezone(t, ctx, conn)
-	assert.NotEmpty(t, tz, "session must report some timezone (server default)")
-	t.Logf("server-default timezone in container: %q (we did NOT override it)", tz)
+	// Strong assertion: opt-out ("-") must produce the SAME session timezone as
+	// a raw connection that bypasses our framework entirely. Otherwise a
+	// regression that forces UTC on the opt-out path would silently pass when
+	// the container's server default also happens to be UTC.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, containerHostErr)
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, containerPortErr)
+	defaults := containers.DefaultPostgreSQLConfig()
+
+	// Baseline: open a connection through database/sql directly using the pgx
+	// driver — no framework involvement, no RuntimeParams injection. Whatever
+	// session timezone this reports is what the unmodified server would give us.
+	baselineDSN := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		host, port, defaults.Username, defaults.Password, defaults.Database)
+	rawDB, err := sql.Open("pgx", baselineDSN)
+	require.NoError(t, err)
+	defer rawDB.Close()
+	var baselineTZ string
+	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT current_setting('timezone')").Scan(&baselineTZ))
+	t.Logf("server-default timezone in container: %q", baselineTZ)
+
+	// Opt-out via our framework: must match the baseline exactly.
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaults.Username,
+		Password: defaults.Password,
+		Database: defaults.Database,
+		Timezone: "-",
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},
+			Lifetime: config.LifetimeConfig{Max: time.Hour},
+		},
+	}
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	optOutTZ := queryPostgresTimezone(t, ctx, conn.(*Connection))
+	assert.Equal(t, baselineTZ, optOutTZ,
+		`opt-out ("-") must report the same session timezone as a raw connection — a regression that forces UTC on the opt-out path would fail this assertion when baseline differs`)
 }
 
 func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {

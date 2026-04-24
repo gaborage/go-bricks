@@ -1731,29 +1731,66 @@ func TestApplyDatabaseTimezoneAppliesViaConnectionString(t *testing.T) {
 }
 
 func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
-	// Each named database is independently defaulted/validated.
-	rootCfg := &DatabaseConfig{
-		Type:     PostgreSQL,
-		Host:     "localhost",
-		Port:     5432,
-		Database: "main",
-		Username: "user",
-		Timezone: "America/New_York",
-	}
-	namedCfg := &DatabaseConfig{
-		Type:     Oracle,
-		Host:     "legacy.host",
-		Port:     1521,
-		Username: "legacy",
-		Oracle:   OracleConfig{Service: ServiceConfig{Name: "LEGACY"}},
-		// Timezone unset — should default to UTC independently of root.
-	}
+	// Exercises real propagation through the top-level Validate(*Config) wiring,
+	// not the standalone validateDatabase shortcut. Split into two scenarios
+	// because the framework forbids a root Database alongside static tenants.
+	// Either scenario regressing (e.g. validateNamedDatabases or
+	// validateMultitenantTenants dropping their validateDatabase call) would
+	// fail this test.
+	t.Run("root_explicit_named_defaults", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		cfg.Database.Timezone = "America/New_York"
+		cfg.Databases = map[string]DatabaseConfig{
+			"legacy": {
+				Type:     Oracle,
+				Host:     "legacy.db",
+				Port:     1521,
+				Username: "legacy",
+				Oracle:   OracleConfig{Service: ServiceConfig{Name: "LEGACY"}},
+				// Timezone unset — Validate must default it to UTC.
+			},
+		}
 
-	require.NoError(t, validateDatabase(rootCfg))
-	require.NoError(t, validateDatabase(namedCfg))
+		require.NoError(t, Validate(cfg))
 
-	assert.Equal(t, "America/New_York", rootCfg.Timezone, "root timezone preserved")
-	assert.Equal(t, "UTC", namedCfg.Timezone, "named DB defaults to UTC independently")
+		assert.Equal(t, "America/New_York", cfg.Database.Timezone, "root timezone explicitly set must be preserved")
+		assert.Equal(t, "UTC", cfg.Databases["legacy"].Timezone, "named DB without explicit timezone must default to UTC via Validate wiring")
+	})
+
+	t.Run("tenant_database_defaults", func(t *testing.T) {
+		// Multitenant mode forbids a root Database, so build from the helpers
+		// without one and add static tenants.
+		cfg := &Config{
+			App:    createValidAppConfig(),
+			Server: createValidServerConfig(),
+			Log:    createValidLogConfig(),
+			Multitenant: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: "X-Tenant-ID",
+				},
+				Tenants: map[string]TenantEntry{
+					"acme": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "acme.db",
+							Port:     5432,
+							Database: "acme",
+							Username: "acme_user",
+							// Timezone unset — Validate must default it to UTC.
+						},
+					},
+				},
+			},
+			Source: SourceConfig{Type: SourceTypeStatic},
+		}
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Equal(t, "UTC", cfg.Multitenant.Tenants["acme"].Database.Timezone,
+			"tenant DB without explicit timezone must default to UTC via Validate wiring")
+	})
 }
 
 func TestApplyMessagingDefaults(t *testing.T) {

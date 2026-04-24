@@ -427,6 +427,11 @@ func validateNamedDatabases(databases map[string]DatabaseConfig, mt *Multitenant
 		if err := validateNamedDatabaseEntry(name, &dbCfg, mt); err != nil {
 			return err
 		}
+		// Persist defaults back to the map. validateNamedDatabaseEntry → validateDatabase
+		// → applyDatabasePoolDefaults mutates the local copy; without this write-back the
+		// defaults (timezone, pool sizes, etc.) never reach downstream consumers like
+		// TenantStore.
+		databases[name] = dbCfg
 	}
 
 	return nil
@@ -983,6 +988,8 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
+		// Persist defaults back to the map (see validateNamedDatabases for rationale).
+		tenants[tenantID] = tenant
 	}
 
 	return nil

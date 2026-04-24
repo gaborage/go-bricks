@@ -68,9 +68,14 @@ database:
   timezone: "-"
 ```
 
-### IANA-only contract
+### Accepted timezone identifiers
 
-Validation uses `time.LoadLocation`, which accepts IANA names (`UTC`, `America/New_York`) and the special `Local`, but **rejects numeric offsets** like `+00:00` and `-05:00`. Oracle natively accepts those formats, but go-bricks does not — users needing offsets should use the IANA `Etc/GMT±N` form (note the inverted sign per the IANA spec: `Etc/GMT+5` ≡ UTC−5).
+Validation uses `time.LoadLocation`, which accepts:
+
+- IANA timezone names (`UTC`, `America/New_York`, `Asia/Tokyo`, `Europe/London`, etc.)
+- The special name `Local` (resolves to the host process's timezone — useful for development, fragile for production)
+
+It **rejects** numeric offsets like `+00:00` or `-05:00`. Oracle natively accepts those formats, but go-bricks does not — users needing fixed offsets should use the IANA `Etc/GMT±N` form (note the inverted sign per the IANA spec: `Etc/GMT+5` ≡ UTC−5).
 
 ### Pool consistency guarantees
 

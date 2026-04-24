@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	go_ora "github.com/sijms/go-ora/v2"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/testing/containers"
 	"github.com/stretchr/testify/assert"
@@ -1128,14 +1130,50 @@ func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
 }
 
 func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
-	// With "-", the tzConnector wrapper is bypassed and Oracle uses its
-	// session-timezone default. We don't hard-code the expected value (it
-	// depends on the container/server) — just confirm it's non-empty and
-	// that we did NOT enforce a specific value.
-	conn, ctx := newOracleConnectionWithTimezone(t, "-")
-	tz := queryOracleSessionTimezone(t, ctx, conn)
-	assert.NotEmpty(t, tz, "session must report some timezone (server default)")
-	t.Logf("server-default Oracle SESSIONTIMEZONE in container: %q (we did NOT override it)", tz)
+	// Strong assertion: opt-out ("-") must produce the SAME SESSIONTIMEZONE as
+	// a raw connection that bypasses our framework entirely. Oracle Free
+	// containers inherit the host's TZ as their session-timezone default
+	// (typically NOT "UTC"), so a regression that incorrectly forces UTC on
+	// the opt-out path would fail this assertion.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	t.Cleanup(cancel)
+
+	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	// Baseline: open a connection through database/sql directly using the
+	// Oracle driver — no framework involvement, no tzConnector wrapper. The
+	// reported SESSIONTIMEZONE is the unmodified server default.
+	dsn := go_ora.BuildUrl(oracleContainer.Host(), oracleContainer.Port(),
+		oracleContainer.Database(), oracleContainer.Username(), oracleContainer.Password(), nil)
+	rawDB, err := sql.Open("oracle", dsn)
+	require.NoError(t, err)
+	defer rawDB.Close()
+	var baselineTZ string
+	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual").Scan(&baselineTZ))
+	t.Logf("server-default Oracle SESSIONTIMEZONE in container: %q", baselineTZ)
+
+	// Opt-out via our framework: must match the baseline exactly.
+	cfg := &config.DatabaseConfig{
+		Host:     oracleContainer.Host(),
+		Port:     oracleContainer.Port(),
+		Username: oracleContainer.Username(),
+		Password: oracleContainer.Password(),
+		Timezone: "-",
+		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: oracleContainer.Database()}},
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},
+			Lifetime: config.LifetimeConfig{Max: time.Hour},
+		},
+	}
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	optOutTZ := queryOracleSessionTimezone(t, ctx, conn.(*Connection))
+	assert.Equal(t, baselineTZ, optOutTZ,
+		`opt-out ("-") must report the same SESSIONTIMEZONE as a raw connection — a regression that forces UTC on the opt-out path would fail this assertion`)
 }
 
 func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
