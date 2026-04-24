@@ -127,12 +127,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
 	}
 
-	// Apply session-level timezone via pgx RuntimeParams. RuntimeParams are sent
-	// in the StartupMessage on every new connection, so this propagates to every
-	// pool member including ones spawned later for pool growth or after drops.
-	// Config wins over any timezone embedded in the DSN — the explicit
-	// database.timezone setting is the source of truth.
-	if cfg.Timezone != "" && cfg.Timezone != "-" {
+	// Apply session-level timezone via pgx RuntimeParams. Config wins over any
+	// timezone embedded in the DSN — the explicit database.timezone setting is
+	// the source of truth.
+	if cfg.Timezone != "" && cfg.Timezone != config.TimezoneDisabledSentinel {
 		if pgxConfig.RuntimeParams == nil {
 			pgxConfig.RuntimeParams = make(map[string]string)
 		}

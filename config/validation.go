@@ -20,13 +20,16 @@ const (
 
 // Database session defaults
 const (
-	// defaultDatabaseTimezone is the IANA timezone applied to every new database
+	// DefaultDatabaseTimezone is the IANA timezone applied to every new database
 	// session when DatabaseConfig.Timezone is unset. UTC is opinionated to keep
-	// app-side time handling consistent with stored timestamps.
-	defaultDatabaseTimezone = "UTC"
-	// timezoneDisabledSentinel opts out of session-level timezone enforcement,
+	// app-side time handling consistent with stored timestamps. Exported so
+	// connection layers can reference the same value without redefining it.
+	DefaultDatabaseTimezone = "UTC"
+	// TimezoneDisabledSentinel opts out of session-level timezone enforcement,
 	// preserving the database server's default timezone (legacy behavior).
-	timezoneDisabledSentinel = "-"
+	// Connection layers compare against this constant to decide whether to
+	// apply per-connection timezone setup.
+	TimezoneDisabledSentinel = "-"
 )
 
 // Messaging reconnection defaults
@@ -394,9 +397,9 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 // timezone untouched.
 func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
 	if cfg.Timezone == "" {
-		cfg.Timezone = defaultDatabaseTimezone
+		cfg.Timezone = DefaultDatabaseTimezone
 	}
-	if cfg.Timezone == timezoneDisabledSentinel {
+	if cfg.Timezone == TimezoneDisabledSentinel {
 		return nil
 	}
 	if _, err := time.LoadLocation(cfg.Timezone); err != nil {

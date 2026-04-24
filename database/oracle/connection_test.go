@@ -1323,3 +1323,124 @@ func TestLogConnectionSuccessWithDatabaseFallback(t *testing.T) {
 	mock.ExpectClose()
 	require.NoError(t, conn.Close())
 }
+
+func TestNewConnectionRoutesThroughTimezoneAwarePathWhenSet(t *testing.T) {
+	// Verify NewConnection dispatches through openOracleDBWithConnector (the
+	// timezone-aware seam) when cfg.Timezone is set. Legacy paths (openOracleDB,
+	// openOracleDBWithDialer) must NOT be used.
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	var connectorPathUsed bool
+	var legacyPathUsed bool
+
+	originalConnector := openOracleDBWithConnector
+	originalOpen := openOracleDB
+	originalOpenWithDialer := openOracleDBWithDialer
+	originalPing := pingOracleDB
+
+	openOracleDBWithConnector = func(c driver.Connector) *sql.DB {
+		connectorPathUsed = true
+		// The connector passed in MUST be a tzConnector wrapping the go-ora connector,
+		// otherwise the per-pool-member ALTER SESSION guarantee is broken.
+		_, ok := c.(*tzConnector)
+		assert.True(t, ok, "connector handed to openOracleDBWithConnector must be a *tzConnector wrapper")
+		return db
+	}
+	openOracleDB = func(string) (*sql.DB, error) {
+		legacyPathUsed = true
+		return db, nil
+	}
+	openOracleDBWithDialer = func(string, configurations.DialerContext) *sql.DB {
+		// Should never be invoked when timezone is set.
+		return db
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithConnector = originalConnector
+		openOracleDB = originalOpen
+		openOracleDBWithDialer = originalOpenWithDialer
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "u",
+		Password: "p",
+		Timezone: "Asia/Tokyo",
+		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: "XEPDB1"}},
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: time.Minute},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+		},
+	}
+
+	mock.ExpectClose()
+	conn, err := NewConnection(cfg, newTestLogger())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	assert.True(t, connectorPathUsed, "timezone-set config must route through openOracleDBWithConnector")
+	assert.False(t, legacyPathUsed, "legacy openOracleDB must NOT be called when timezone is set")
+
+	require.NoError(t, conn.Close())
+}
+
+func TestNewConnectionUsesLegacyPathOnDashSentinel(t *testing.T) {
+	// When timezone is opted out via "-", legacy paths must be used so existing
+	// tests and behaviors stay backward compatible.
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mock.ExpectationsWereMet()) })
+
+	var connectorPathUsed bool
+	var legacyPathUsed bool
+
+	originalConnector := openOracleDBWithConnector
+	originalOpen := openOracleDB
+	originalPing := pingOracleDB
+
+	openOracleDBWithConnector = func(driver.Connector) *sql.DB {
+		connectorPathUsed = true
+		return db
+	}
+	openOracleDB = func(string) (*sql.DB, error) {
+		legacyPathUsed = true
+		return db, nil
+	}
+	pingOracleDB = func(context.Context, *sql.DB) error { return nil }
+
+	t.Cleanup(func() {
+		openOracleDBWithConnector = originalConnector
+		openOracleDB = originalOpen
+		pingOracleDB = originalPing
+	})
+
+	cfg := &config.DatabaseConfig{
+		Host:     "localhost",
+		Port:     1521,
+		Username: "u",
+		Password: "p",
+		Timezone: "-",
+		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: "XEPDB1"}},
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: time.Minute},
+			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
+		},
+	}
+
+	mock.ExpectClose()
+	conn, err := NewConnection(cfg, newTestLogger())
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+
+	assert.False(t, connectorPathUsed, "dash sentinel must skip the timezone-aware connector path")
+	assert.True(t, legacyPathUsed, "dash sentinel must route through legacy openOracleDB")
+
+	require.NoError(t, conn.Close())
+}
