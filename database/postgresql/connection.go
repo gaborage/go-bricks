@@ -127,6 +127,22 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
 	}
 
+	// Apply session-level timezone via pgx RuntimeParams. Empty Timezone is
+	// normalized to config.DefaultDatabaseTimezone here so callers that bypass
+	// config.Validate (tests, internal helpers) still receive the documented
+	// default-UTC behavior. Only the explicit opt-out sentinel skips injection.
+	// Config wins over any timezone embedded in the DSN.
+	if cfg.Timezone != config.TimezoneDisabledSentinel {
+		timezone := cfg.Timezone
+		if timezone == "" {
+			timezone = config.DefaultDatabaseTimezone
+		}
+		if pgxConfig.RuntimeParams == nil {
+			pgxConfig.RuntimeParams = make(map[string]string)
+		}
+		pgxConfig.RuntimeParams["timezone"] = timezone
+	}
+
 	// Configure TCP keep-alive if enabled (prevents NAT/LB idle connection drops)
 	if cfg.Pool.KeepAlive.Enabled {
 		pgxConfig.DialFunc = makeKeepAliveDialer(cfg.Pool.KeepAlive, log)

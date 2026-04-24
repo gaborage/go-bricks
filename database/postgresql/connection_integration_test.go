@@ -5,6 +5,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -624,4 +625,157 @@ func TestConnectionWithTLSMode(t *testing.T) {
 	// Verify connection works
 	err = conn.Health(ctx)
 	assert.NoError(t, err, "Health check should succeed with TLS mode")
+}
+
+// =============================================================================
+// Session Timezone Tests
+// =============================================================================
+
+// queryPostgresTimezone returns the value PostgreSQL reports for the current
+// session's timezone setting via current_setting('timezone').
+func queryPostgresTimezone(t *testing.T, ctx context.Context, conn *Connection) string {
+	t.Helper()
+	var tz string
+	row := conn.db.QueryRowContext(ctx, "SELECT current_setting('timezone')")
+	require.NoError(t, row.Scan(&tz))
+	return tz
+}
+
+// newConnectionWithTimezone is a helper for the timezone tests that boots a
+// Postgres container, then opens a connection with the given timezone setting.
+func newConnectionWithTimezone(t *testing.T, timezone string) (*Connection, context.Context) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, containerHostErr)
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, containerPortErr)
+
+	defaults := containers.DefaultPostgreSQLConfig()
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaults.Username,
+		Password: defaults.Password,
+		Database: defaults.Database,
+		Timezone: timezone,
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},
+			Lifetime: config.LifetimeConfig{Max: time.Hour},
+		},
+	}
+
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err, "Connection should succeed with timezone=%q", timezone)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return conn.(*Connection), ctx
+}
+
+func TestConnectionSessionTimezoneAppliedAsiaTokyo(t *testing.T) {
+	conn, ctx := newConnectionWithTimezone(t, "Asia/Tokyo")
+	assert.Equal(t, "Asia/Tokyo", queryPostgresTimezone(t, ctx, conn),
+		"PostgreSQL session timezone must equal cfg.Timezone (RuntimeParams must be sent on every new connection)")
+}
+
+func TestConnectionSessionTimezoneAppliedUTC(t *testing.T) {
+	conn, ctx := newConnectionWithTimezone(t, "UTC")
+	assert.Equal(t, "UTC", queryPostgresTimezone(t, ctx, conn))
+}
+
+func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
+	// Strong assertion: opt-out ("-") must produce the SAME session timezone as
+	// a raw connection that bypasses our framework entirely. Otherwise a
+	// regression that forces UTC on the opt-out path would silently pass when
+	// the container's server default also happens to be UTC.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+
+	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	log := newDisabledTestLogger()
+
+	host, err := pgContainer.Host(ctx)
+	require.NoError(t, err, containerHostErr)
+	port, err := pgContainer.MappedPort(ctx)
+	require.NoError(t, err, containerPortErr)
+	defaults := containers.DefaultPostgreSQLConfig()
+
+	// Baseline: open a connection through database/sql directly using the pgx
+	// driver — no framework involvement, no RuntimeParams injection. Whatever
+	// session timezone this reports is what the unmodified server would give us.
+	baselineDSN := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		host, port, defaults.Username, defaults.Password, defaults.Database)
+	rawDB, err := sql.Open("pgx", baselineDSN)
+	require.NoError(t, err)
+	defer rawDB.Close()
+	var baselineTZ string
+	require.NoError(t, rawDB.QueryRowContext(ctx, "SELECT current_setting('timezone')").Scan(&baselineTZ))
+	t.Logf("server-default timezone in container: %q", baselineTZ)
+
+	// Opt-out via our framework: must match the baseline exactly.
+	cfg := &config.DatabaseConfig{
+		Host:     host,
+		Port:     port,
+		Username: defaults.Username,
+		Password: defaults.Password,
+		Database: defaults.Database,
+		Timezone: "-",
+		Pool: config.PoolConfig{
+			Max:      config.PoolMaxConfig{Connections: 5},
+			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},
+			Lifetime: config.LifetimeConfig{Max: time.Hour},
+		},
+	}
+	conn, err := NewConnection(cfg, log)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	optOutTZ := queryPostgresTimezone(t, ctx, conn.(*Connection))
+	assert.Equal(t, baselineTZ, optOutTZ,
+		`opt-out ("-") must report the same session timezone as a raw connection — a regression that forces UTC on the opt-out path would fail this assertion when baseline differs`)
+}
+
+func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
+	// Regression guard for the wrapper-vs-one-shot trap: confirm that ALL
+	// pool members report the configured timezone, not just the first one.
+	// We force concurrent acquisition by holding multiple connections open
+	// simultaneously, which makes the pool spawn additional physical connections.
+	conn, ctx := newConnectionWithTimezone(t, "Asia/Tokyo")
+
+	// Stay strictly below newConnectionWithTimezone's Pool.Max.Connections (5)
+	// so the test exercises pool growth without ever blocking on the limit.
+	// 3 still proves "many distinct pool members" — 1 wouldn't, 5 risks deadlock
+	// if a future change shrinks the helper's pool size.
+	const concurrency = 3
+
+	// Pin multiple sql.Conn handles simultaneously to force the pool to grow
+	// to 'concurrency' distinct physical connections.
+	pinned := make([]*sql.Conn, 0, concurrency)
+	defer func() {
+		for _, c := range pinned {
+			_ = c.Close()
+		}
+	}()
+
+	for i := 0; i < concurrency; i++ {
+		c, err := conn.db.Conn(ctx)
+		require.NoError(t, err, "should obtain pool connection #%d", i)
+		pinned = append(pinned, c)
+	}
+
+	// Verify each pinned connection reports the configured timezone.
+	for i, c := range pinned {
+		var tz string
+		row := c.QueryRowContext(ctx, "SELECT current_setting('timezone')")
+		require.NoError(t, row.Scan(&tz))
+		assert.Equal(t, "Asia/Tokyo", tz,
+			"pool member #%d must report the configured timezone — a regression here means later pool members fell back to the server default", i)
+	}
 }

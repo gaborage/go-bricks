@@ -3,6 +3,7 @@ package oracle
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"net"
 	"time"
@@ -38,7 +39,11 @@ var (
 		oracleConn.Dialer(dialer)
 		return sql.OpenDB(connector)
 	}
-	pingOracleDB = func(ctx context.Context, db *sql.DB) error {
+	// openOracleDBWithConnector opens a *sql.DB from an arbitrary driver.Connector.
+	// Used by the timezone-aware path so a tzConnector wrapper can intercept every
+	// new physical connection. Test seam: override to return a fake *sql.DB.
+	openOracleDBWithConnector = sql.OpenDB
+	pingOracleDB              = func(ctx context.Context, db *sql.DB) error {
 		return db.PingContext(ctx)
 	}
 )
@@ -89,6 +94,8 @@ func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDia
 // The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
 // configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
 // When cfg.Pool.KeepAlive.Enabled is true, a custom TCP dialer is used to enable keep-alive probes.
+// When cfg.Timezone is set (non-empty and not "-"), every new physical connection runs
+// ALTER SESSION SET TIME_ZONE before being handed to the pool, guaranteeing pool-wide consistency.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
@@ -96,30 +103,9 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 
 	dsn := buildOracleDSN(cfg)
 
-	var db *sql.DB
-	var err error
-
-	if cfg.Pool.KeepAlive.Enabled {
-		// Use connector with custom keep-alive dialer
-		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
-		db = openOracleDBWithDialer(dsn, dialer)
-		if db == nil {
-			// Graceful fallback: go-ora connector type changed, use standard connection
-			log.Warn().Msg("Keep-alive dialer setup failed (go-ora API change?), falling back to standard connection")
-			db, err = openOracleDB(dsn)
-			if err != nil {
-				return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
-			}
-		} else {
-			log.Debug().
-				Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
-				Msg("TCP keep-alive enabled for Oracle connections")
-		}
-	} else {
-		db, err = openOracleDB(dsn)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
-		}
+	db, err := openOracleConnection(dsn, cfg, log)
+	if err != nil {
+		return nil, err
 	}
 
 	configureConnectionPool(db, cfg)
@@ -140,6 +126,84 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "oracle", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
+}
+
+// openOracleConnection dispatches to the timezone-aware connector path for any
+// non-opt-out configuration, falling back to the legacy DSN-based open paths
+// only when the caller has explicitly opted out via the disabled sentinel.
+// An empty Timezone is normalized to config.DefaultDatabaseTimezone here so
+// callers that bypass config.Validate (e.g. tests, internal helpers) still
+// receive the documented default-UTC behavior. The legacy paths are preserved
+// so existing tests that stub openOracleDB / openOracleDBWithDialer can opt in
+// to the no-timezone path explicitly via Timezone == TimezoneDisabledSentinel.
+func openOracleConnection(dsn string, cfg *config.DatabaseConfig, log logger.Logger) (*sql.DB, error) {
+	if cfg.Timezone == config.TimezoneDisabledSentinel {
+		return openLegacyOracleDB(dsn, cfg, log)
+	}
+	timezone := cfg.Timezone
+	if timezone == "" {
+		timezone = config.DefaultDatabaseTimezone
+	}
+	cfgCopy := *cfg
+	cfgCopy.Timezone = timezone
+	return openTimezoneAwareOracleDB(dsn, &cfgCopy, log), nil
+}
+
+// openTimezoneAwareOracleDB builds a connector wrapped with tzConnector so every
+// new physical connection runs ALTER SESSION SET TIME_ZONE. Optional keep-alive
+// is applied to the underlying connector before wrapping.
+func openTimezoneAwareOracleDB(dsn string, cfg *config.DatabaseConfig, log logger.Logger) *sql.DB {
+	base := go_ora.NewConnector(dsn)
+	applyOracleKeepAlive(base, cfg, log)
+	return openOracleDBWithConnector(newTzConnector(base, cfg.Timezone))
+}
+
+// applyOracleKeepAlive installs the TCP keep-alive dialer on the go-ora connector
+// when enabled. If the go-ora connector type changes (API drift), the assertion
+// fails and we log a warning rather than abort — the connector is still usable
+// without keep-alive.
+func applyOracleKeepAlive(connector driver.Connector, cfg *config.DatabaseConfig, log logger.Logger) {
+	if !cfg.Pool.KeepAlive.Enabled {
+		return
+	}
+	oc, ok := connector.(*go_ora.OracleConnector)
+	if !ok {
+		log.Warn().Msg("Keep-alive dialer setup failed (go-ora API change?), continuing without keep-alive")
+		return
+	}
+	oc.Dialer(newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log))
+	log.Debug().
+		Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+		Msg("TCP keep-alive enabled for Oracle connections")
+}
+
+// openLegacyOracleDB preserves the original DSN-based open paths for the
+// no-timezone and timezone-opt-out cases. Routes through openOracleDBWithDialer
+// when keep-alive is enabled (with graceful fallback to openOracleDB on go-ora
+// API changes), or through openOracleDB directly when keep-alive is disabled.
+func openLegacyOracleDB(dsn string, cfg *config.DatabaseConfig, log logger.Logger) (*sql.DB, error) {
+	if cfg.Pool.KeepAlive.Enabled {
+		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
+		db := openOracleDBWithDialer(dsn, dialer)
+		if db == nil {
+			log.Warn().Msg("Keep-alive dialer setup failed (go-ora API change?), falling back to standard connection")
+			fallback, err := openOracleDB(dsn)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+			}
+			return fallback, nil
+		}
+		log.Debug().
+			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).
+			Msg("TCP keep-alive enabled for Oracle connections")
+		return db, nil
+	}
+
+	db, err := openOracleDB(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open Oracle connection: %w", err)
+	}
+	return db, nil
 }
 
 // buildURLOptions constructs the URL options map for Oracle connection.

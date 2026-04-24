@@ -1665,6 +1665,34 @@ database:
       interval: 30s     # More frequent probes
 ```
 
+### Session Timezone (Breaking Change)
+
+GoBricks applies an opinionated session timezone to every database connection. See [ADR-016](wiki/adr-016-database-session-timezone.md) for full rationale.
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `database.timezone` | `UTC` | IANA timezone applied per session (PostgreSQL via pgx `RuntimeParams`, Oracle via `ALTER SESSION SET TIME_ZONE` on every new physical connection) |
+
+**Behavior:**
+- **Unset / empty** → defaulted to `UTC` at config validation.
+- **IANA name** (e.g., `Asia/Tokyo`, `America/New_York`) → validated via `time.LoadLocation`, applied per-connection.
+- **`-` sentinel** → opt-out; sessions inherit the database server's default (legacy behavior).
+- **Numeric offsets like `+05:30`** → rejected by validation. Use IANA `Etc/GMT±N` (note inverted sign).
+
+**Why per-connection (not one-shot)?** A single `SET TIME ZONE` after `sql.Open` only fixes the first borrowed connection — later pool members revert to the server default. The implementation routes through `pgx.RuntimeParams` (PostgreSQL) and a `driver.Connector` wrapper (Oracle) so every new physical connection inherits the configured timezone.
+
+**Override / opt-out** in `config.yaml`:
+```yaml
+database:
+  timezone: Asia/Tokyo   # Apply Tokyo time to every session
+
+# Or preserve legacy behavior (sessions inherit DB server default):
+database:
+  timezone: "-"
+```
+
+**Migration**: applications upgrading from earlier versions will see session timezone shift from "DB server default" to `UTC` unless they explicitly opt out with `"-"`. If your code relied on the implicit server timezone (e.g., for `CURRENT_TIMESTAMP` in legacy stored procedures), set `database.timezone: "-"` to preserve old behavior.
+
 ### Messaging Reconnection Defaults
 
 GoBricks applies production-safe AMQP reconnection defaults when messaging is configured:

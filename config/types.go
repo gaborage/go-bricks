@@ -118,6 +118,14 @@ type DatabaseConfig struct {
 
 	ConnectionString string `koanf:"connectionstring" json:"connectionstring" yaml:"connectionstring" toml:"connectionstring" mapstructure:"connectionstring"`
 
+	// Timezone is the IANA timezone name applied to every new database session.
+	// Validated via time.LoadLocation at startup (fail-fast on invalid names).
+	// Default: "UTC". Set to "-" to disable session-level timezone enforcement
+	// (sessions then inherit the database server's default timezone).
+	// Applies to both PostgreSQL (via pgx RuntimeParams) and Oracle (via
+	// ALTER SESSION SET TIME_ZONE on every new physical connection).
+	Timezone string `koanf:"timezone" json:"timezone" yaml:"timezone" toml:"timezone" mapstructure:"timezone"`
+
 	Pool  PoolConfig  `koanf:"pool" json:"pool" yaml:"pool" toml:"pool" mapstructure:"pool"`
 	Query QueryConfig `koanf:"query" json:"query" yaml:"query" toml:"query" mapstructure:"query"`
 	TLS   TLSConfig   `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`

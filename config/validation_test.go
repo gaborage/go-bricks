@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -1659,6 +1660,137 @@ func TestApplyDatabasePoolDefaultsNegativeValues(t *testing.T) {
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
+}
+
+func TestApplyDatabaseTimezoneDefault(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		expectedTimezone string
+	}{
+		{name: "empty_defaults_to_utc", input: "", expectedTimezone: "UTC"},
+		{name: "explicit_utc_preserved", input: "UTC", expectedTimezone: "UTC"},
+		{name: "iana_name_preserved", input: "America/New_York", expectedTimezone: "America/New_York"},
+		{name: "asia_iana_preserved", input: "Asia/Tokyo", expectedTimezone: "Asia/Tokyo"},
+		{name: "europe_iana_preserved", input: "Europe/London", expectedTimezone: "Europe/London"},
+		{name: "dash_sentinel_preserved", input: "-", expectedTimezone: "-"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Timezone: tt.input,
+			}
+			err := validateDatabase(cfg)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
+		})
+	}
+}
+
+func TestApplyDatabaseTimezoneRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "unknown_iana_name", input: "Not/AZone"},
+		{name: "garbage_string", input: "xyz"},
+		{name: "numeric_offset_not_iana", input: "+05:30"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Timezone: tt.input,
+			}
+			err := validateDatabase(cfg)
+			assertValidationError(t, err, "database.timezone")
+		})
+	}
+}
+
+func TestApplyDatabaseTimezoneAppliesViaConnectionString(t *testing.T) {
+	// Connection-string path goes through validateDatabaseWithConnectionString,
+	// which must also default Timezone to UTC and validate it.
+	cfg := &DatabaseConfig{
+		ConnectionString: "host=localhost port=5432 dbname=testdb user=testuser",
+	}
+	err := validateDatabase(cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, "UTC", cfg.Timezone)
+}
+
+func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
+	// Exercises real propagation through the top-level Validate(*Config) wiring,
+	// not the standalone validateDatabase shortcut. Split into two scenarios
+	// because the framework forbids a root Database alongside static tenants.
+	// Either scenario regressing (e.g. validateNamedDatabases or
+	// validateMultitenantTenants dropping their validateDatabase call) would
+	// fail this test.
+	t.Run("root_explicit_named_defaults", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		cfg.Database.Timezone = "America/New_York"
+		cfg.Databases = map[string]DatabaseConfig{
+			"legacy": {
+				Type:     Oracle,
+				Host:     "legacy.db",
+				Port:     1521,
+				Username: "legacy",
+				Oracle:   OracleConfig{Service: ServiceConfig{Name: "LEGACY"}},
+				// Timezone unset — Validate must default it to UTC.
+			},
+		}
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Equal(t, "America/New_York", cfg.Database.Timezone, "root timezone explicitly set must be preserved")
+		assert.Equal(t, "UTC", cfg.Databases["legacy"].Timezone, "named DB without explicit timezone must default to UTC via Validate wiring")
+	})
+
+	t.Run("tenant_database_defaults", func(t *testing.T) {
+		// Multitenant mode forbids a root Database, so build from the helpers
+		// without one and add static tenants.
+		cfg := &Config{
+			App:    createValidAppConfig(),
+			Server: createValidServerConfig(),
+			Log:    createValidLogConfig(),
+			Multitenant: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "header",
+					Header: "X-Tenant-ID",
+				},
+				Tenants: map[string]TenantEntry{
+					"acme": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "acme.db",
+							Port:     5432,
+							Database: "acme",
+							Username: "acme_user",
+							// Timezone unset — Validate must default it to UTC.
+						},
+					},
+				},
+			},
+			Source: SourceConfig{Type: SourceTypeStatic},
+		}
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Equal(t, "UTC", cfg.Multitenant.Tenants["acme"].Database.Timezone,
+			"tenant DB without explicit timezone must default to UTC via Validate wiring")
+	})
 }
 
 func TestApplyMessagingDefaults(t *testing.T) {
