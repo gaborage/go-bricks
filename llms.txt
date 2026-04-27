@@ -89,34 +89,200 @@ Add observability settings as needed (see Observability & Logging).
 - Observability hooks (traces, metrics, structured logs) activate when `observability.enabled=true`.
 - Multi-tenant mode resolves tenants (header/host/custom store) and hands each module tenant-specific resources.
 
-## Module Skeleton
+## Module Skeleton & Composition
+
+A GoBricks module is a *composition unit*: it bundles HTTP routes, business
+services, and infrastructure access (DB/cache/messaging) under one name.
+For testability and reuse, separate the layers:
+
+- **Module** (`module.go`) — implements `app.Module` (+ optional
+  `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`). Owns wiring only:
+  no business logic, no HTTP parsing, no SQL.
+- **Handler** (`handler.go`) — HTTP boundary. Translates request DTOs ↔
+  service calls and maps domain errors to `server.IAPIError`. Imports
+  `server`, never `database`/`messaging`.
+- **Service** (`service.go`) — pure business logic on `context.Context` +
+  domain types, returning domain errors. No `echo`, no `IAPIError`, no
+  `server.*`. This is what other modules depend on (via an interface).
+
+### File layout
+
+```
+modules/users/
+  module.go     // wiring + RegisterRoutes
+  handler.go    // HTTP layer (DTOs, error mapping)
+  service.go    // business logic + UserService interface
+  errors.go     // domain errors (ErrUserExists, ErrUserNotFound)
+  user.go       // domain model
+```
+
+### Module wiring (module.go)
 
 ```go
+package users
+
 type Module struct {
-	// Function-based injection: works for both single-tenant AND multi-tenant
-	getDB  func(context.Context) (database.Interface, error)
-	outbox app.OutboxPublisher  // nil if outbox not configured (zero cost)
-	logger logger.Logger
+	svc *Service
+	h   *Handler
 }
 
-func (m *Module) Name() string { return "mymodule" }
+func (m *Module) Name() string { return "users" }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-	// Store function reference, NOT database instance
-	// In multi-tenant mode, database is resolved per-request from tenant context
-	m.getDB = deps.DB
-	m.outbox = deps.Outbox  // Transactional outbox (nil if not configured)
-	m.logger = deps.Logger.WithFields(map[string]any{"module": m.Name()})
+	log := deps.Logger.WithFields(map[string]any{"module": m.Name()})
+	m.svc = NewService(deps.DB, deps.Outbox, log) // deps.Outbox may be nil
+	m.h   = NewHandler(m.svc)
 	return nil
 }
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	handler := NewHandler(m.getDB, m.logger)
-	server.POST(hr, r, "/users", handler.Create)
+	g := r.Group("/users")
+	server.POST(hr, g, "",       m.h.Create)
+	server.GET (hr, g, "/:id",   m.h.Get)
+	server.GET (hr, g, "",       m.h.List)
 }
 
 func (m *Module) Shutdown() error { return nil }
+
+// Service exposes the public API consumed by sibling modules.
+// Returning an interface keeps the module composable & mockable.
+func (m *Module) Service() UserService { return m.svc }
 ```
+
+### HTTP handler (handler.go) — pure transport
+
+```go
+type Handler struct{ svc UserService }
+
+func NewHandler(svc UserService) *Handler { return &Handler{svc: svc} }
+
+type CreateUserReq struct {
+	Name  string `json:"name"  validate:"required"`
+	Email string `json:"email" validate:"required,email"`
+}
+
+func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+	user, err := h.svc.Create(ctx.Echo.Request().Context(), req.Name, req.Email)
+	switch {
+	case errors.Is(err, ErrUserExists):
+		return server.Result[User]{}, server.Conflict(err)
+	case err != nil:
+		return server.Result[User]{}, server.InternalServerError(err)
+	}
+	return server.Created(user), nil
+}
+```
+
+### Service (service.go) — pure business logic
+
+```go
+// UserService is what handlers AND other modules depend on.
+// Defining it here (not in handler.go) keeps consumers free of HTTP imports.
+type UserService interface {
+	Create(ctx context.Context, name, email string) (User, error)
+	Get(ctx context.Context, id string) (User, error)
+	List(ctx context.Context, status string, limit int) ([]User, error)
+}
+
+type Service struct {
+	getDB  func(context.Context) (database.Interface, error)
+	outbox app.OutboxPublisher
+	log    logger.Logger
+}
+
+func NewService(
+	getDB func(context.Context) (database.Interface, error),
+	outbox app.OutboxPublisher,
+	log logger.Logger,
+) *Service {
+	return &Service{getDB: getDB, outbox: outbox, log: log}
+}
+
+func (s *Service) Create(ctx context.Context, name, email string) (User, error) {
+	db, err := s.getDB(ctx)
+	if err != nil {
+		return User{}, fmt.Errorf("database unavailable: %w", err)
+	}
+	// ... pure business logic. No Echo, no IAPIError, no HTTP types.
+	_ = db
+	return User{}, nil
+}
+```
+
+### Composing modules (main.go)
+
+`Init()` is called in **registration order**, so provider modules
+(`keystore`, `scheduler`, `outbox`) MUST be registered before any module
+that uses their services via `deps.*`.
+
+```go
+func main() {
+	cfg, err := config.Load()
+	if err != nil { log.Fatal(err) }
+
+	fw, err := app.NewWithConfig(cfg, nil)
+	if err != nil { log.Fatal(err) }
+
+	usersMod  := &users.Module{}
+	ordersMod := &orders.Module{
+		Users: usersMod, // see "Cross-module dependencies" below
+	}
+
+	// Order matters: providers first, then domain modules in dependency order.
+	if err := fw.RegisterModules(
+		keystore.NewModule(),   // wires deps.KeyStore for downstream modules
+		scheduler.NewModule(),  // wires deps.Scheduler
+		outbox.NewModule(),     // wires deps.Outbox (needs scheduler)
+		usersMod,               // independent domain module
+		ordersMod,              // depends on users.UserService
+	); err != nil {
+		log.Fatal(err) // duplicate module / Init() failures are unrecoverable
+	}
+
+	log.Fatal(fw.Run())
+}
+```
+
+### Cross-module dependencies
+
+Two patterns, picked by *what* you're sharing:
+
+**1. Domain service → direct interface injection.** For module-to-module
+business logic (e.g., `orders` calling `users`), pass the producing module
+into the consumer's struct in `main.go`, then resolve via its `Service()`
+getter inside `Init()`. The framework guarantees `Init()` runs in
+registration order, so the producer is fully wired by the time the
+consumer's `Init()` runs.
+
+```go
+// modules/orders/module.go
+type Module struct {
+	Users *users.Module        // injected by main(); the producing module
+	svc   *Service
+	h     *Handler
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	if m.Users == nil {
+		return errors.New("orders: users module is required")
+	}
+	m.svc = NewService(m.Users.Service(), deps.DB, deps.Logger)
+	m.h   = NewHandler(m.svc)
+	return nil
+}
+```
+
+**2. Cross-cutting infrastructure → provider interface.** For
+framework-managed services (outbox, keystore, scheduler), implement a
+provider interface (`app.OutboxProvider`, `app.KeyStoreProvider`,
+`app.JobRegistrar`). The registry auto-wires the provider's output into
+`ModuleDeps` (`deps.Outbox`, `deps.KeyStore`, `deps.Scheduler`) for
+*subsequent* modules — no manual passing needed. Don't use this for
+domain services; reserve it for cross-cutting concerns.
+
+**Always depend on interfaces** (`UserService`), not concrete types
+(`*users.Service`). Each module stays independently testable: swap the
+real `users.Module` for a mock `UserService` in unit tests of `orders`.
 
 ## Database Connection & Queries
 
