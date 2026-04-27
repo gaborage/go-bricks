@@ -280,6 +280,18 @@ provider interface (`app.OutboxProvider`, `app.KeyStoreProvider`,
 *subsequent* modules — no manual passing needed. Don't use this for
 domain services; reserve it for cross-cutting concerns.
 
+**Naming caveat — `JobRegistrar` vs `JobProvider`.** The scheduler
+module exposes itself by satisfying `app.JobRegistrar` directly (no
+separate `*Provider` wrapper, unlike outbox/keystore). That is what
+populates `deps.Scheduler` — `JobRegistrar` is therefore *both* the
+provider hook (scheduler module side) *and* the consumer interface
+(other modules calling `deps.Scheduler.DailyAt(...)`). Don't confuse it
+with `app.JobProvider`: a separate, optional post-`Init()` callback
+interface (`RegisterJobs(JobRegistrar) error`) that any module can
+implement to declare scheduled jobs in an order-independent phase —
+peer to `RouteRegisterer` / `MessagingDeclarer` from the Module
+skeleton above.
+
 **Always depend on interfaces** (`UserService`), not concrete types
 (`*users.Service`). Each module stays independently testable: swap the
 real `users.Module` for a mock `UserService` in unit tests of `orders`.
