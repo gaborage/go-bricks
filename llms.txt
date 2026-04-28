@@ -2517,6 +2517,126 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 - Fails fast at startup if any key cannot be loaded or parsed
 - PKCS8 with PKCS1 fallback for private keys (handles legacy formats)
 
+## JOSE Middleware (Nested JWE-of-JWS)
+
+The `jose` package wraps HTTP request and response bodies in nested JOSE protection (sign-then-encrypt outbound, decrypt-then-verify inbound). Routes opt in by adding a `jose:` tag to a sentinel field on their request and response types — both or neither, enforced at registration. Designed for Visa Token Services and similar partner APIs.
+
+**End-to-end module example:**
+
+```go
+package payments
+
+import (
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/server"
+)
+
+type Module struct{}
+
+func (m *Module) Name() string                 { return "payments" }
+func (m *Module) Init(_ *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error              { return nil }
+
+// Both types declare matching jose tags. Asymmetric declaration (only one tagged)
+// panics at startup.
+type CreateTokenRequest struct {
+    _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
+    PAN string   `json:"pan" validate:"required,len=16"`
+}
+
+type CreateTokenResponse struct {
+    _     struct{} `jose:"sign=our-signing,encrypt=visa-vts-encrypt"`
+    Token string   `json:"token"`
+}
+
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+    server.POST(hr, r, "/v1/tokens", m.createToken)
+}
+
+func (m *Module) createToken(req CreateTokenRequest, _ server.HandlerContext) (CreateTokenResponse, server.IAPIError) {
+    // The framework has already decrypted the JWE, verified the JWS, and bound the
+    // plaintext into req. Application code sees ordinary structs.
+    return CreateTokenResponse{Token: "tok-" + req.PAN[12:]}, nil
+}
+```
+
+**App wiring** — register the keystore module BEFORE the JOSE-using module so the resolver is wired to `HandlerRegistry`:
+
+```go
+func main() {
+    fw := app.New(app.Config{...})
+    fw.RegisterModules(
+        keystore.NewModule(),    // populates deps.KeyStore
+        &payments.Module{},      // declares jose-tagged routes; resolver auto-wired
+    )
+    fw.Run()
+}
+```
+
+**Inspecting verified claims** (apps enforce iat/exp/jti per their threat model):
+
+```go
+import "github.com/gaborage/go-bricks/jose"
+
+func (m *Module) createToken(req CreateTokenRequest, ctx server.HandlerContext) (CreateTokenResponse, server.IAPIError) {
+    claims := jose.ClaimsFromContext(ctx.Echo.Request().Context())
+    if claims == nil {
+        return CreateTokenResponse{}, server.NewInternalServerError("expected verified claims")
+    }
+    if time.Since(claims.IssuedAt) > 5*time.Minute {
+        return CreateTokenResponse{}, server.NewUnauthorizedError("payload too old")
+    }
+    // ... business logic ...
+}
+```
+
+**Test pattern** with `jose/testing`:
+
+```go
+import (
+    "github.com/gaborage/go-bricks/jose"
+    jositest "github.com/gaborage/go-bricks/jose/testing"
+)
+
+func TestTokenHandler(t *testing.T) {
+    ourPriv, _ := jositest.GenerateTestKeyPair(t)
+    peerPriv, _ := jositest.GenerateTestKeyPair(t)
+
+    resolver := jositest.NewTestResolver(map[string]any{
+        "our-signing":      ourPriv,   // we sign + decrypt with this
+        "visa-vts-verify":  peerPriv,  // we verify peer's signature with the public side
+        "visa-vts-encrypt": ourPriv,   // peer encrypts to us with the public side
+    })
+
+    // Peer's outbound = our inbound's reverse: peer signs with peer-key, encrypts to our-key.
+    peerOutbound := &jose.Policy{
+        Direction:  jose.DirectionOutbound,
+        SignKid:    "visa-vts-verify",
+        EncryptKid: "visa-vts-encrypt",
+        SigAlg:     jose.DefaultSigAlg,
+        KeyAlg:     jose.DefaultKeyAlg,
+        Enc:        jose.DefaultEnc,
+        Cty:        jose.DefaultCty,
+    }
+
+    encryptedReq := jositest.SealForTest(t, []byte(`{"pan":"4111111111111111"}`), peerOutbound, resolver)
+    // POST encryptedReq with Content-Type: application/jose to your handler...
+}
+```
+
+**Tag syntax cheatsheet:**
+
+| Direction | Required keys | Default algorithms |
+|---|---|---|
+| Request type | `decrypt=<our-private-kid>,verify=<peer-public-kid>` | `sig_alg=RS256, key_alg=RSA-OAEP-256, enc=A256GCM` |
+| Response type | `sign=<our-private-kid>,encrypt=<peer-public-kid>` | (same defaults) |
+
+**Failure handling** — pre-trust failures (decrypt/verify failed) emit a plaintext minimal `{code,message}` envelope; post-trust failures (handler errors after successful decrypt) emit a JOSE-encrypted standard `APIResponse`. Test the security invariant by tampering one byte of ciphertext and asserting `Content-Type: application/json` (NOT `application/jose`) on the failure response.
+
+**Common error codes:** `JOSE_DECRYPT_FAILED` (401), `JOSE_SIGNATURE_INVALID` (401), `JOSE_KID_UNKNOWN` (401), `JOSE_PLAINTEXT_REJECTED` (415), `JOSE_MALFORMED` (400). See CLAUDE.md JOSE Middleware section for the full table.
+
+**Observability** — when `deps.MeterProvider` and `deps.Tracer` are wired, the framework auto-emits `jose.failures.total` (counter by code/direction/route), `jose.operation.duration` (histogram by operation), and spans `jose.decode_request` / `jose.encode_response`. Failures also produce structured ERROR logs (when `deps.Logger` is wired) with code/direction/route fields — never plaintext bodies or key material.
+
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
 - Resolution strategies: `header`, `host`, or custom store implementing `multitenant.Store`.
