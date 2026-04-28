@@ -44,6 +44,9 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		return nil, nil, OpenHeader{}, err
 	}
 
+	// Policy.Cty is intentionally not enforced against the inbound protected header:
+	// it's advisory metadata used by the outbound encoder, not an inbound gate. The
+	// strict alg/enc allowlist already prevents algorithm confusion.
 	jwsCompact, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
 		AllowedKeyAlgs:    AllowedKeyAlgs(),

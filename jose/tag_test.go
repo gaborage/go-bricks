@@ -34,6 +34,15 @@ func TestParseTagAlgorithmOverrides(t *testing.T) {
 	assert.Equal(t, jose.PS256, p.SigAlg)
 }
 
+func TestParseTagAllOptionalKeys(t *testing.T) {
+	// Exercise applyTagPair branches that the happy-path test misses: key_alg, enc, cty.
+	p, err := ParseTag("decrypt=ours,verify=peer,key_alg=RSA-OAEP-256,enc=A256GCM,cty=application/jwt", DirectionInbound)
+	require.NoError(t, err)
+	assert.Equal(t, jose.RSA_OAEP_256, p.KeyAlg)
+	assert.Equal(t, jose.A256GCM, p.Enc)
+	assert.Equal(t, "application/jwt", p.Cty)
+}
+
 func TestParseTagInvalid(t *testing.T) {
 	tests := []struct {
 		name     string

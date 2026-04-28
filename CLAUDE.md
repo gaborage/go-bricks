@@ -14,6 +14,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 - Always run `make check` (or `make check-all` for API changes) before committing and pushing. Never commit or push without a passing build.
 - When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
+- **Before pushing code, run the `/simplify` command** to catch reuse, quality, and efficiency issues earlier than CodeRabbit / SonarCloud would. Apply the findings, then push. This avoids review-cycle ping-pong.
 - After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
 
 ## Git Rules

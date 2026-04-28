@@ -85,3 +85,25 @@ func TestResolvePolicyNil(t *testing.T) {
 	r := &fixtureResolver{}
 	require.NoError(t, ResolvePolicy(r, nil))
 }
+
+func TestParseUnixSecsAllArms(t *testing.T) {
+	// JSON decoded numbers are float64, but parseUnixSecs accepts int64/int too for
+	// callers that pre-parse the claim map. Cover all type-switch arms.
+	tests := []struct {
+		name string
+		in   any
+		zero bool
+	}{
+		{name: "float64", in: float64(1700000000), zero: false},
+		{name: "int64", in: int64(1700000000), zero: false},
+		{name: "int", in: int(1700000000), zero: false},
+		{name: "string_value", in: "not-a-number", zero: true},
+		{name: "nil_value", in: nil, zero: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseUnixSecs(tt.in)
+			assert.Equal(t, tt.zero, got.IsZero())
+		})
+	}
+}
