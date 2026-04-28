@@ -1,8 +1,6 @@
 package jose
 
 import (
-	"errors"
-
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
@@ -70,6 +68,3 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 
 	return jweCompact, nil
 }
-
-// errorIs is a small helper to keep the call sites tidy when checking sentinels.
-func errorIs(err, target error) bool { return errors.Is(err, target) }

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
@@ -34,9 +33,11 @@ type joseObservability struct {
 	durationHist metric.Float64Histogram
 }
 
+var defaultNoopTracer = tracenoop.NewTracerProvider().Tracer("jose")
+
 func (o *joseObservability) tracerOrNoop() trace.Tracer {
 	if o == nil || o.tracer == nil {
-		return tracenoop.NewTracerProvider().Tracer("jose")
+		return defaultNoopTracer
 	}
 	return o.tracer
 }
@@ -260,7 +261,7 @@ func panicJOSERegistration(d *RouteDescriptor, msg string, cause error) {
 // On failure: returns an IAPIError with the JOSE-specific code; the caller invokes
 // obs.recordFailure() before forwarding to the plaintext error formatter.
 func joseDecodeRequestWithObs(c *echo.Context, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) IAPIError {
-	ctx, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.decode_request",
+	_, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.decode_request",
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(attribute.String("jose.direction", "inbound")),
 	)
@@ -271,7 +272,6 @@ func joseDecodeRequestWithObs(c *echo.Context, p *jose.Policy, r jose.KeyResolve
 	if apiErr != nil {
 		span.SetStatus(codes.Error, apiErr.ErrorCode())
 		span.SetAttributes(attribute.String("jose.error.code", apiErr.ErrorCode()))
-		_ = ctx
 		return apiErr
 	}
 	obs.recordDuration(c.Request().Context(), "decode_request", time.Since(start))
@@ -460,7 +460,7 @@ func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, _ *config.Config) map
 		},
 		"meta": map[string]any{
 			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"traceId":   c.Response().Header().Get(echo.HeaderXRequestID),
+			"traceId":   getTraceID(c),
 		},
 	}
 	if details := apiErr.Details(); len(details) > 0 {
@@ -468,22 +468,3 @@ func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, _ *config.Config) map
 	}
 	return out
 }
-
-// reflectTypeName returns a human-readable type name for panic messages, including
-// the package path so registration errors are unambiguous.
-func reflectTypeName(t reflect.Type) string {
-	if t == nil {
-		return "<nil>"
-	}
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	if t.PkgPath() == "" {
-		return t.Name()
-	}
-	return t.PkgPath() + "." + t.Name()
-}
-
-// _ silences unused-symbol warnings during incremental development; these helpers may
-// be referenced by tests/observability in subsequent phases.
-var _ = reflectTypeName

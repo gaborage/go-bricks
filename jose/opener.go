@@ -2,6 +2,7 @@ package jose
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
@@ -80,7 +81,7 @@ func cryptoHeaderToOpen(h cryptoadapter.Header) Header {
 
 func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 	switch {
-	case errorIs(err, cryptoadapter.ErrParseEncrypted):
+	case errors.Is(err, cryptoadapter.ErrParseEncrypted):
 		return &Error{
 			Sentinel: ErrMalformed,
 			Code:     "JOSE_MALFORMED",
@@ -88,7 +89,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Message:  "Malformed JOSE payload",
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrKidMissing):
+	case errors.Is(err, cryptoadapter.ErrKidMissing):
 		return &Error{
 			Sentinel: ErrKidMissing,
 			Code:     "JOSE_KID_MISSING",
@@ -96,7 +97,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Message:  "Missing kid header",
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrKidMismatch):
+	case errors.Is(err, cryptoadapter.ErrKidMismatch):
 		return &Error{
 			Sentinel: ErrKidUnknown,
 			Code:     "JOSE_KID_UNKNOWN",
@@ -105,7 +106,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Kid:      hdr.Kid,
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrTypRejected):
+	case errors.Is(err, cryptoadapter.ErrTypRejected):
 		return &Error{
 			Sentinel: ErrTypRejected,
 			Code:     "JOSE_TYP_REJECTED",
@@ -113,7 +114,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Message:  "Disallowed typ header",
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrDecryptFailed):
+	case errors.Is(err, cryptoadapter.ErrDecryptFailed):
 		return &Error{
 			Sentinel: ErrDecryptFailed,
 			Code:     "JOSE_DECRYPT_FAILED",
@@ -137,7 +138,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 
 func mapVerifyError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 	switch {
-	case errorIs(err, cryptoadapter.ErrParseSigned):
+	case errors.Is(err, cryptoadapter.ErrParseSigned):
 		return &Error{
 			Sentinel: ErrInnerNotJWS,
 			Code:     "JOSE_INNER_NOT_JWS",
@@ -145,7 +146,7 @@ func mapVerifyError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Message:  "Decrypted payload is not a JWS",
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrKidMissing):
+	case errors.Is(err, cryptoadapter.ErrKidMissing):
 		return &Error{
 			Sentinel: ErrKidMissing,
 			Code:     "JOSE_KID_MISSING",
@@ -153,7 +154,7 @@ func mapVerifyError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Message:  "Missing JWS kid header",
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrKidMismatch):
+	case errors.Is(err, cryptoadapter.ErrKidMismatch):
 		return &Error{
 			Sentinel: ErrKidUnknown,
 			Code:     "JOSE_KID_UNKNOWN",
@@ -162,7 +163,7 @@ func mapVerifyError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 			Kid:      hdr.Kid,
 			Cause:    err,
 		}
-	case errorIs(err, cryptoadapter.ErrVerifyFailed):
+	case errors.Is(err, cryptoadapter.ErrVerifyFailed):
 		return &Error{
 			Sentinel: ErrSignatureInvalid,
 			Code:     "JOSE_SIGNATURE_INVALID",
