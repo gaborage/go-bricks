@@ -14,15 +14,21 @@
 //	    "peer-key": pub,  // verify key
 //	})
 //
-//	policy := &jose.Policy{
-//	    Direction: jose.DirectionInbound,
+//	inboundPolicy := &jose.Policy{
+//	    Direction:  jose.DirectionInbound,
 //	    DecryptKid: "our-key", VerifyKid: "peer-key",
 //	    SigAlg: jose.DefaultSigAlg, KeyAlg: jose.DefaultKeyAlg,
-//	    Enc: jose.DefaultEnc, Cty: jose.DefaultCty,
+//	    Enc:    jose.DefaultEnc, Cty:       jose.DefaultCty,
+//	}
+//	outboundPolicy := &jose.Policy{
+//	    Direction:  jose.DirectionOutbound,
+//	    SignKid:    "peer-key", EncryptKid: "our-key",
+//	    SigAlg: jose.DefaultSigAlg, KeyAlg: jose.DefaultKeyAlg,
+//	    Enc:    jose.DefaultEnc, Cty:       jose.DefaultCty,
 //	}
 //
-//	compact := jositest.SealForTest(t, []byte(`{"pan":"..."}`), &outboundPolicy, resolver)
-//	plaintext, claims := jositest.OpenForTest(t, compact, &policy, resolver)
+//	compact := jositest.SealForTest(t, []byte(`{"pan":"..."}`), outboundPolicy, resolver)
+//	plaintext, claims := jositest.OpenForTest(t, compact, inboundPolicy, resolver)
 //
 // # Why a separate package
 //

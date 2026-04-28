@@ -328,26 +328,17 @@ func isJOSEContentType(ct string) bool {
 // implementation) for testability and so the rh.handleResponse-style signature is
 // preserved for any future direct callers.
 func (rh *responseHandler) joseHandleResponseWithObs(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) error {
-	ctx, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.encode_response",
+	_, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.encode_response",
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes(attribute.String("jose.direction", "outbound")),
 	)
 	defer span.End()
 	start := time.Now()
 
-	err := rh.joseHandleResponse(c, response, apiErr, p, r)
-	if err != nil || apiErr != nil {
-		// We can't easily distinguish encryption failure from a normal post-trust error
-		// after the fact; use the apiErr code if present, otherwise generic.
-		code := "JOSE_OUTBOUND_OK"
-		if apiErr != nil {
-			code = apiErr.ErrorCode()
-			obs.recordFailure(ctx, c, "outbound", apiErr)
-		}
-		if err != nil {
-			span.SetStatus(codes.Error, code)
-			span.SetAttributes(attribute.String("jose.error.code", code))
-		}
+	err := rh.joseHandleResponse(c, response, apiErr, p, r, obs)
+	if err != nil {
+		span.SetStatus(codes.Error, "JOSE_OUTBOUND_FAILED")
+		span.SetAttributes(attribute.String("jose.error.code", "JOSE_OUTBOUND_FAILED"))
 		return err
 	}
 	obs.recordDuration(c.Request().Context(), "encode_response", time.Since(start))
@@ -357,7 +348,12 @@ func (rh *responseHandler) joseHandleResponseWithObs(c *echo.Context, response a
 // joseHandleResponse routes the post-handler success or error path through the JOSE
 // outbound encoder. Enforces the security invariant: refuses to produce an encrypted
 // response if inbound was not verified, even if the outbound policy is set.
-func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver) error {
+//
+// obs is non-nil at production call sites (joseHandleResponseWithObs); only actual JOSE
+// crypto failures (seal/encrypt errors) call obs.recordFailure here. Normal post-trust
+// handler IAPIErrors (validation/business) are encrypted successfully and DO NOT count
+// toward jose.failures.total — keeping that metric a pure crypto-failure signal.
+func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) error {
 	if !jose.IsInboundVerified(c.Request().Context()) {
 		// Defense in depth: if the wrapper somehow skipped inbound verification but
 		// still routed through joseHandleResponse, refuse to emit ciphertext to a peer
@@ -368,7 +364,7 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 	}
 
 	if apiErr != nil {
-		return formatJOSEPostTrustError(c, apiErr, p, r, rh.cfg)
+		return formatJOSEPostTrustError(c, apiErr, p, r, rh.cfg, obs)
 	}
 
 	status := http.StatusOK
@@ -381,22 +377,35 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 		}
 	}
 
-	payload, err := json.Marshal(data)
-	if err != nil {
-		return formatJOSEPlaintextError(c,
-			&joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal response", status: http.StatusInternalServerError})
-	}
-
-	compact, err := jose.Seal(payload, p, r)
-	if err != nil {
-		return formatJOSEPlaintextError(c, newJOSEAPIError(err))
-	}
-
 	for k, vals := range headers {
 		for _, v := range vals {
 			c.Response().Header().Add(k, v)
 		}
 	}
+
+	// 204 No Content (and 304 Not Modified) MUST NOT carry a body per RFC 7230 §3.3.3.
+	// Mirror formatSuccessResponseWithStatus's behavior: write the status and no body,
+	// skipping the seal entirely. Sealing nil and returning ciphertext on a 204 would be
+	// invalid HTTP and divergent from the standard envelope path.
+	if status == http.StatusNoContent || status == http.StatusNotModified {
+		c.Response().WriteHeader(status)
+		return nil
+	}
+
+	payload, err := json.Marshal(data)
+	if err != nil {
+		marshalErr := &joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal response", status: http.StatusInternalServerError}
+		obs.recordFailure(c.Request().Context(), c, "outbound", marshalErr)
+		return formatJOSEPlaintextError(c, marshalErr)
+	}
+
+	compact, err := jose.Seal(payload, p, r)
+	if err != nil {
+		sealErr := newJOSEAPIError(err)
+		obs.recordFailure(c.Request().Context(), c, "outbound", sealErr)
+		return formatJOSEPlaintextError(c, sealErr)
+	}
+
 	c.Response().Header().Set(echo.HeaderContentType, joseContentType)
 	c.Response().WriteHeader(status)
 	_, writeErr := c.Response().Write([]byte(compact))
@@ -428,12 +437,13 @@ func formatJOSEPlaintextError(c *echo.Context, apiErr IAPIError) error {
 // If the encryption itself fails, falls back to the plaintext minimal envelope so
 // the peer at least gets *something*. The fallback is logged via the underlying
 // jose.Error so operators can investigate.
-func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, cfg *config.Config) error {
+func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, cfg *config.Config, obs *joseObservability) error {
 	envelope := buildErrorEnvelope(c, apiErr, cfg)
 	payload, err := json.Marshal(envelope)
 	if err != nil {
-		return formatJOSEPlaintextError(c,
-			&joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal error envelope", status: http.StatusInternalServerError})
+		marshalErr := &joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal error envelope", status: http.StatusInternalServerError}
+		obs.recordFailure(c.Request().Context(), c, "outbound", marshalErr)
+		return formatJOSEPlaintextError(c, marshalErr)
 	}
 
 	compact, err := jose.Seal(payload, p, r)
@@ -441,7 +451,9 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 		// Falling back to plaintext on seal failure is the safest available response —
 		// the peer is authenticated so leakage cost is low; the alternative is no
 		// response at all, which forces a timeout-induced retry storm.
-		return formatJOSEPlaintextError(c, newJOSEAPIError(err))
+		sealErr := newJOSEAPIError(err)
+		obs.recordFailure(c.Request().Context(), c, "outbound", sealErr)
+		return formatJOSEPlaintextError(c, sealErr)
 	}
 
 	c.Response().Header().Set(echo.HeaderContentType, joseContentType)

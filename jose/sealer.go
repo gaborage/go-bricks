@@ -20,6 +20,14 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 			Message:  "Seal requires an outbound policy",
 		}
 	}
+	if r == nil {
+		return "", &Error{
+			Sentinel: ErrKeyResolution,
+			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Status:   500,
+			Message:  "Seal called without a KeyResolver",
+		}
+	}
 
 	signKey, err := r.PrivateKey(p.SignKid)
 	if err != nil {

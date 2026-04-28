@@ -212,93 +212,119 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 // to customErrorHandler can detect it.
 const rawResponseContextKey = "_raw_response"
 
+// joseRouteConfig bundles the per-route JOSE state. Threaded as a single nil-safe pointer
+// through the wrapper so non-JOSE routes pay zero state cost and the constructor signature
+// stays compact.
+type joseRouteConfig struct {
+	Inbound  *jose.Policy
+	Outbound *jose.Policy
+	Resolver jose.KeyResolver
+	Obs      *joseObservability
+}
+
+func (j *joseRouteConfig) inbound() *jose.Policy {
+	if j == nil {
+		return nil
+	}
+	return j.Inbound
+}
+func (j *joseRouteConfig) outbound() *jose.Policy {
+	if j == nil {
+		return nil
+	}
+	return j.Outbound
+}
+func (j *joseRouteConfig) resolver() jose.KeyResolver {
+	if j == nil {
+		return nil
+	}
+	return j.Resolver
+}
+func (j *joseRouteConfig) obs() *joseObservability {
+	if j == nil {
+		return nil
+	}
+	return j.Obs
+}
+
 // handlerWrapper composes all request processing components to create an Echo-compatible handler.
 // It orchestrates: context checking, request processing, business logic execution, and response handling.
 type handlerWrapper[T any, R any] struct {
-	processor    *requestProcessor[T]
-	responder    *responseHandler
-	checker      *contextChecker
-	rawResponse  bool
-	inboundJOSE  *jose.Policy
-	outboundJOSE *jose.Policy
-	joseResolver jose.KeyResolver
-	joseObs      *joseObservability
+	processor   *requestProcessor[T]
+	responder   *responseHandler
+	checker     *contextChecker
+	rawResponse bool
+	jose        *joseRouteConfig
 }
 
 // newHandlerWrapper creates a new handler wrapper with all processing components initialized.
-func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool,
-	inboundJOSE, outboundJOSE *jose.Policy, joseResolver jose.KeyResolver, joseObs *joseObservability) *handlerWrapper[T, R] {
+func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool, joseCfg *joseRouteConfig) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
-		processor:    newRequestProcessor[T](binder, cfg),
-		responder:    newResponseHandler(cfg),
-		checker:      newContextChecker(cfg),
-		rawResponse:  rawResponse,
-		inboundJOSE:  inboundJOSE,
-		outboundJOSE: outboundJOSE,
-		joseResolver: joseResolver,
-		joseObs:      joseObs,
+		processor:   newRequestProcessor[T](binder, cfg),
+		responder:   newResponseHandler(cfg),
+		checker:     newContextChecker(cfg),
+		rawResponse: rawResponse,
+		jose:        joseCfg,
 	}
 }
 
 // wrap converts a business logic handler into an Echo-compatible handler function.
-// This is the high-level orchestration that delegates to specialized components.
+// Orchestration is broken into helper methods to keep cognitive complexity manageable
+// (SonarCloud S3776) and so each phase of the pipeline reads in isolation.
 func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.HandlerFunc {
 	return func(c *echo.Context) error {
-		// Stamp raw response mode early so customErrorHandler can detect it even on panics
 		if hw.rawResponse {
 			c.Set(rawResponseContextKey, true)
 		}
-
-		// Select an error formatter that respects the security invariant: when there's an
-		// outbound JOSE policy AND the inbound side verified successfully, errors are
-		// returned as encrypted standard envelopes; otherwise they go out as plaintext
-		// minimal envelopes (pre-trust) or the framework's standard/raw shape.
 		formatErr := hw.selectErrorFormatter()
 
-		// Pre-processing context check
 		if apiErr := hw.checker.checkCancellation(c, "or cancelled"); apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
 		}
-
-		// JOSE inbound decode: replace c.Request().Body with the verified plaintext so the
-		// existing binder runs unchanged. Pre-trust failures bypass the dispatcher because
-		// the peer is unauthenticated by definition — we always emit the minimal envelope.
-		if hw.inboundJOSE != nil {
-			if apiErr := joseDecodeRequestWithObs(c, hw.inboundJOSE, hw.joseResolver, hw.joseObs); apiErr != nil {
-				hw.joseObs.recordFailure(c.Request().Context(), c, "inbound", apiErr)
-				return formatJOSEPlaintextError(c, apiErr)
-			}
+		if apiErr := hw.runJOSEInbound(c); apiErr != nil {
+			return formatJOSEPlaintextError(c, apiErr)
 		}
 
-		// Process request (allocate, bind, validate)
 		request, apiErr := hw.processor.process(c)
 		if apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
 		}
-
-		// Post-validation context check
 		if apiErr := hw.checker.checkCancellation(c, "during validation"); apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
 		}
 
-		// Execute business logic
-		handlerCtx := HandlerContext{Echo: c, Config: hw.responder.cfg}
-		response, apiErr := handlerFunc(request, handlerCtx)
-
-		// Check context after handler execution
+		response, apiErr := handlerFunc(request, HandlerContext{Echo: c, Config: hw.responder.cfg})
 		if c.Request().Context().Err() != nil {
 			return formatErr(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
 		}
-
-		// Handle response
-		if hw.outboundJOSE != nil {
-			return hw.responder.joseHandleResponseWithObs(c, response, apiErr, hw.outboundJOSE, hw.joseResolver, hw.joseObs)
-		}
-		if hw.rawResponse {
-			return hw.responder.handleRawResponse(c, response, apiErr)
-		}
-		return hw.responder.handleResponse(c, response, apiErr)
+		return hw.dispatchResponse(c, response, apiErr)
 	}
+}
+
+// runJOSEInbound runs the JOSE decrypt+verify step when the route has an inbound policy,
+// recording the failure and returning the IAPIError so the caller can emit the plaintext
+// minimal envelope. Returns nil for non-JOSE routes or successful decode.
+func (hw *handlerWrapper[T, R]) runJOSEInbound(c *echo.Context) IAPIError {
+	policy := hw.jose.inbound()
+	if policy == nil {
+		return nil
+	}
+	apiErr := joseDecodeRequestWithObs(c, policy, hw.jose.resolver(), hw.jose.obs())
+	if apiErr != nil {
+		hw.jose.obs().recordFailure(c.Request().Context(), c, "inbound", apiErr)
+	}
+	return apiErr
+}
+
+// dispatchResponse picks the correct response writer based on JOSE / raw configuration.
+func (hw *handlerWrapper[T, R]) dispatchResponse(c *echo.Context, response any, apiErr IAPIError) error {
+	if outbound := hw.jose.outbound(); outbound != nil {
+		return hw.responder.joseHandleResponseWithObs(c, response, apiErr, outbound, hw.jose.resolver(), hw.jose.obs())
+	}
+	if hw.rawResponse {
+		return hw.responder.handleRawResponse(c, response, apiErr)
+	}
+	return hw.responder.handleResponse(c, response, apiErr)
 }
 
 // selectErrorFormatter returns the appropriate error formatter for this wrapper's
@@ -307,10 +333,13 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 // and post-trust JOSE failure paths correctly.
 func (hw *handlerWrapper[T, R]) selectErrorFormatter() func(*echo.Context, IAPIError, *config.Config) error {
 	switch {
-	case hw.outboundJOSE != nil:
+	case hw.jose.outbound() != nil:
+		outbound := hw.jose.outbound()
+		resolver := hw.jose.resolver()
+		obs := hw.jose.obs()
 		return func(c *echo.Context, apiErr IAPIError, cfg *config.Config) error {
 			if jose.IsInboundVerified(c.Request().Context()) {
-				return formatJOSEPostTrustError(c, apiErr, hw.outboundJOSE, hw.joseResolver, cfg)
+				return formatJOSEPostTrustError(c, apiErr, outbound, resolver, cfg, obs)
 			}
 			return formatJOSEPlaintextError(c, apiErr)
 		}
@@ -346,23 +375,22 @@ func wrapHandler[T any, R any](
 	cfg *config.Config,
 	rawResponse bool,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil, nil, nil, nil)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil)
 	return wrapper.wrap(handlerFunc)
 }
 
 // wrapHandlerWithJOSE is the JOSE-aware variant invoked from RegisterHandler when a
-// route has resolved JOSE policies. It threads the policies, resolver, and the
-// shared observability bundle through to the wrapper.
+// route has resolved JOSE policies. The joseRouteConfig bundle keeps the constructor
+// signature small (SonarCloud S107) and lets future JOSE fields land without further
+// signature changes.
 func wrapHandlerWithJOSE[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
 	cfg *config.Config,
 	rawResponse bool,
-	inboundJOSE, outboundJOSE *jose.Policy,
-	resolver jose.KeyResolver,
-	obs *joseObservability,
+	joseCfg *joseRouteConfig,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, inboundJOSE, outboundJOSE, resolver, obs)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, joseCfg)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -940,8 +968,16 @@ func RegisterHandler[T any, R any](
 	}
 
 	// Register with route registrar (works with both Echo instances and Groups)
-	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, descriptor.RawResponse,
-		descriptor.InboundJOSE, descriptor.OutboundJOSE, hr.joseResolver, hr.joseObs)
+	var joseCfg *joseRouteConfig
+	if descriptor.InboundJOSE != nil {
+		joseCfg = &joseRouteConfig{
+			Inbound:  descriptor.InboundJOSE,
+			Outbound: descriptor.OutboundJOSE,
+			Resolver: hr.joseResolver,
+			Obs:      hr.joseObs,
+		}
+	}
+	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, descriptor.RawResponse, joseCfg)
 	r.Add(method, path, wrappedHandler)
 }
 

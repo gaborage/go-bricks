@@ -81,7 +81,7 @@ func TestJOSEHandleResponseRefusesWithoutInboundVerification(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	err := rh.joseHandleResponse(c, "anything", nil, nil, nil)
+	err := rh.joseHandleResponse(c, "anything", nil, nil, nil, nil)
 	require.NoError(t, err)
 	// Response is plaintext error envelope, NOT JOSE — exact invariant we want.
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)

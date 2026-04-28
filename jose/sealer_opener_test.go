@@ -205,6 +205,24 @@ func TestOpenExtractsClaims(t *testing.T) {
 	assert.Equal(t, time.Unix(now+300, 0).UTC(), claims.ExpiresAt)
 }
 
+func TestSealRejectsNilResolver(t *testing.T) {
+	f := newTestFixture(t)
+	_, err := Seal([]byte("x"), f.outbound, nil)
+	require.Error(t, err)
+	var jerr *Error
+	require.True(t, errors.As(err, &jerr))
+	assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
+}
+
+func TestOpenRejectsNilResolver(t *testing.T) {
+	f := newTestFixture(t)
+	err := openErr("not-used", f.inbound, nil)
+	require.Error(t, err)
+	var jerr *Error
+	require.True(t, errors.As(err, &jerr))
+	assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
+}
+
 func TestSealMissingKid(t *testing.T) {
 	f := newTestFixture(t)
 	bad := *f.outbound

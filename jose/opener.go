@@ -26,6 +26,14 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 			Message:  "Open requires an inbound policy",
 		}
 	}
+	if r == nil {
+		return nil, nil, OpenHeader{}, &Error{
+			Sentinel: ErrKeyResolution,
+			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Status:   500,
+			Message:  "Open called without a KeyResolver",
+		}
+	}
 
 	decKey, err := r.PrivateKey(p.DecryptKid)
 	if err != nil {

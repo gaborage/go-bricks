@@ -137,17 +137,19 @@ func TestDecryptRejectsKidMissing(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrKidMissing))
 }
 
-func TestVerifyAcceptsAllowedTyp(t *testing.T) {
+func TestVerifyAcceptsEmptyTypInAllowlist(t *testing.T) {
+	// Sign() does not set a typ header, so the verified header has typ="". This test
+	// exercises the AllowedTyps != nil branch with empty being explicitly permitted —
+	// covers the contains() helper without requiring the upstream library to support
+	// emitting a typ header at sign time.
 	key := newKey(t)
 	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "k", SigAlg: jose.RS256, Cty: "JWT"})
 	require.NoError(t, err)
 
-	// "JWT" must be in AllowedTyps even though it's a cty not a typ — covers
-	// contains() and the AllowedTyps != nil branch.
 	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
 		ExpectedKid:    "k",
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
-		AllowedTyps:    []string{"", "JWT"}, // accept empty (no typ set) plus JWT
+		AllowedTyps:    []string{"", "JWT"},
 	})
 	require.NoError(t, err)
 }

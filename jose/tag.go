@@ -49,11 +49,20 @@ func ParseTag(tagValue string, dir Direction) (*Policy, error) {
 		}
 	}
 
+	seen := map[string]bool{}
 	for _, raw := range strings.Split(tagValue, ",") {
 		key, val, err := splitKV(raw)
 		if err != nil {
 			return nil, err
 		}
+		if seen[key] {
+			return nil, &Error{
+				Sentinel: ErrTagInvalid,
+				Code:     "JOSE_TAG_DUPLICATE_KEY",
+				Message:  fmt.Sprintf("jose tag key %q specified more than once", key),
+			}
+		}
+		seen[key] = true
 		if err := applyTagPair(policy, key, val); err != nil {
 			return nil, err
 		}

@@ -54,6 +54,8 @@ func TestParseTagInvalid(t *testing.T) {
 		{name: "outbound_missing_sign", tag: "encrypt=peer", dir: DirectionOutbound, wantCode: "JOSE_POLICY_INCOMPLETE"},
 		{name: "inbound_with_outbound_keys", tag: "decrypt=ours,verify=peer,sign=oops", dir: DirectionInbound, wantCode: "JOSE_POLICY_DIRECTION_MISMATCH"},
 		{name: "outbound_with_inbound_keys", tag: "sign=ours,encrypt=peer,decrypt=oops", dir: DirectionOutbound, wantCode: "JOSE_POLICY_DIRECTION_MISMATCH"},
+		{name: "duplicate_verify_key", tag: "decrypt=ours,verify=a,verify=b", dir: DirectionInbound, wantCode: "JOSE_TAG_DUPLICATE_KEY"},
+		{name: "duplicate_decrypt_key", tag: "decrypt=ours,decrypt=other,verify=peer", dir: DirectionInbound, wantCode: "JOSE_TAG_DUPLICATE_KEY"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
