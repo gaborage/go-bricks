@@ -183,7 +183,7 @@ func TestOpenMalformedInputFails(t *testing.T) {
 func TestOpenExtractsClaims(t *testing.T) {
 	f := newTestFixture(t)
 	now := time.Now().Unix()
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"iss": "visa",
 		"sub": "merchant-1",
 		"aud": []string{"acceptor-1", "acceptor-2"},
@@ -191,6 +191,7 @@ func TestOpenExtractsClaims(t *testing.T) {
 		"iat": now,
 		"exp": now + 300,
 	})
+	require.NoError(t, err)
 
 	compact, err := Seal(payload, f.outbound, f.resolver)
 	require.NoError(t, err)
