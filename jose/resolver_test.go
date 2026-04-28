@@ -3,7 +3,6 @@ package jose_test
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -41,15 +40,13 @@ func TestKeyStoreResolverUnknownKid(t *testing.T) {
 	})
 
 	_, err := r.PrivateKey("unknown")
-	require.Error(t, err)
 	var jerr *jose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 	assert.Equal(t, "unknown", jerr.Kid)
 
 	_, err = r.PublicKey("unknown")
-	require.Error(t, err)
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }
 
@@ -74,9 +71,8 @@ func TestKeyStoreResolverFindsRegisteredKey(t *testing.T) {
 func TestKeyStoreResolverNilKeyStore(t *testing.T) {
 	r := jose.NewKeyStoreResolver(nil)
 	_, err := r.PrivateKey("any")
-	require.Error(t, err)
 	var jerr *jose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
 }
 
@@ -103,8 +99,7 @@ func TestResolvePolicyMissingKey(t *testing.T) {
 	p := &jose.Policy{Direction: jose.DirectionInbound, DecryptKid: "ours", VerifyKid: "missing-peer"}
 
 	err = jose.ResolvePolicy(r, p)
-	require.Error(t, err)
 	var jerr *jose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }

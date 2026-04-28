@@ -8,6 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// requireJOSEErrorCode unwraps err to *Error via errors.As and asserts its Code.
+// require.ErrorAs is preferred over require.True+errors.As because it produces a
+// failure message naming the expected target type if unwrapping fails.
+func requireJOSEErrorCode(t *testing.T, err error, wantCode string) {
+	t.Helper()
+	var jerr *Error
+	require.ErrorAs(t, err, &jerr)
+	assert.Equal(t, wantCode, jerr.Code)
+}
+
 func TestDirectionString(t *testing.T) {
 	assert.Equal(t, "inbound", DirectionInbound.String())
 	assert.Equal(t, "outbound", DirectionOutbound.String())
@@ -16,9 +26,7 @@ func TestDirectionString(t *testing.T) {
 
 func TestPolicyValidateNil(t *testing.T) {
 	var p *Policy
-	err := p.Validate()
-	require.Error(t, err)
-	assert.Equal(t, "JOSE_POLICY_NIL", err.(*Error).Code)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_POLICY_NIL")
 }
 
 func TestPolicyValidateUnknownDirection(t *testing.T) {
@@ -28,9 +36,7 @@ func TestPolicyValidateUnknownDirection(t *testing.T) {
 		KeyAlg:    DefaultKeyAlg,
 		Enc:       DefaultEnc,
 	}
-	err := p.Validate()
-	require.Error(t, err)
-	assert.Equal(t, "JOSE_POLICY_DIRECTION_UNKNOWN", err.(*Error).Code)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_POLICY_DIRECTION_UNKNOWN")
 }
 
 func TestPolicyValidateBadKeyAlg(t *testing.T) {
@@ -41,9 +47,7 @@ func TestPolicyValidateBadKeyAlg(t *testing.T) {
 		KeyAlg: "RSA1_5", // disallowed
 		Enc:    DefaultEnc,
 	}
-	err := p.Validate()
-	require.Error(t, err)
-	assert.Equal(t, "JOSE_ALGORITHM_DISALLOWED", err.(*Error).Code)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_ALGORITHM_DISALLOWED")
 }
 
 func TestPolicyValidateBadEnc(t *testing.T) {
@@ -54,9 +58,7 @@ func TestPolicyValidateBadEnc(t *testing.T) {
 		KeyAlg: DefaultKeyAlg,
 		Enc:    "A128CBC-HS256", // disallowed
 	}
-	err := p.Validate()
-	require.Error(t, err)
-	assert.Equal(t, "JOSE_ALGORITHM_DISALLOWED", err.(*Error).Code)
+	requireJOSEErrorCode(t, p.Validate(), "JOSE_ALGORITHM_DISALLOWED")
 }
 
 func TestResolvePolicyOutbound(t *testing.T) {
@@ -76,9 +78,7 @@ func TestResolvePolicyOutboundMissingEncrypt(t *testing.T) {
 		pub:  map[string]*rsa.PublicKey{},
 	}
 	p := &Policy{Direction: DirectionOutbound, SignKid: "sign-kid", EncryptKid: "missing-enc"}
-	err := ResolvePolicy(r, p)
-	require.Error(t, err)
-	assert.Equal(t, "JOSE_KID_UNKNOWN", err.(*Error).Code)
+	requireJOSEErrorCode(t, ResolvePolicy(r, p), "JOSE_KID_UNKNOWN")
 }
 
 func TestResolvePolicyNil(t *testing.T) {

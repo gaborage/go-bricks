@@ -13,6 +13,8 @@ import (
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/jose"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -43,6 +45,27 @@ func TestJOSEAPIErrorContract(t *testing.T) {
 	// WithDetails MUST be a no-op to preserve constant-time-generic guarantee.
 	assert.Same(t, e, e.WithDetails("anything", "value"))
 	assert.Nil(t, e.Details())
+}
+
+// joseRouteConfig accessors must be nil-safe — wrap() relies on it for non-JOSE routes
+// that still flow through the JOSE-aware code paths (e.g., the error formatter switch).
+func TestJOSERouteConfigNilSafe(t *testing.T) {
+	var j *joseRouteConfig
+	assert.Nil(t, j.inbound())
+	assert.Nil(t, j.outbound())
+	assert.Nil(t, j.resolver())
+	assert.Nil(t, j.obs())
+}
+
+func TestJOSERouteConfigPopulated(t *testing.T) {
+	p := &jose.Policy{Direction: jose.DirectionInbound, DecryptKid: "k", VerifyKid: "p"}
+	r := jositest.NewTestResolver(map[string]any{})
+	obs := newJOSEObservability(nil, nil, nil)
+	j := &joseRouteConfig{Inbound: p, Outbound: nil, Resolver: r, Obs: obs}
+	assert.Same(t, p, j.inbound())
+	assert.Nil(t, j.outbound())
+	assert.NotNil(t, j.resolver())
+	assert.Same(t, obs, j.obs())
 }
 
 func TestNewJOSEAPIErrorFromNonJOSEError(t *testing.T) {

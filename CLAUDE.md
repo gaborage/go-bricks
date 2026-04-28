@@ -1237,7 +1237,8 @@ The `jose` package provides nested JWE-of-JWS protection on HTTP request and res
 **Key Features:**
 - **Struct-tag opt-in**: Add a `jose:` tag to a sentinel field on the request/response type — no per-route plumbing
 - **Bidirectional symmetry enforced**: both request and response must carry tags or neither (registration-time check)
-- **Strict algorithm allowlist**: `RS256`/`PS256`/`ES256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, and `RSA1_5` are rejected at parse time
+- **Strict algorithm allowlist**: `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, and `RSA1_5` are rejected at parse time
+- **ES256 caveat**: present in the parser allowlist for forward compatibility, but unusable with the default `keystore.NewModule()` (which returns `*rsa.PrivateKey`/`*rsa.PublicKey`). Selecting `ES256` requires a custom `jose.KeyResolver` that returns ECDSA keys — out of scope for v1; the keystore module is RSA-only
 - **Hybrid error envelope**: pre-trust failures (decrypt failed, signature invalid) emit a plaintext minimal `{code,message}` envelope to leak nothing to unauthenticated peers; post-trust handler errors emit the standard `APIResponse` envelope, encrypted with the route's outbound policy
 - **Fail-Fast at startup**: every `kid` is resolved against the keystore at `RegisterHandler` time. Missing keys, asymmetric tags, and `WithRawResponse()` conflicts panic at startup, never at runtime
 - **Observability**: spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`)
