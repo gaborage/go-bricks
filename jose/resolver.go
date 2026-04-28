@@ -2,8 +2,6 @@ package jose
 
 import (
 	"crypto/rsa"
-
-	"github.com/gaborage/go-bricks/app"
 )
 
 // KeyResolver abstracts key lookup so the jose package does not depend directly on
@@ -22,14 +20,22 @@ type KeyResolver interface {
 	PublicKey(kid string) (*rsa.PublicKey, error)
 }
 
-// KeyStoreResolver adapts the framework's app.KeyStore (process-wide RSA key registry)
-// to the KeyResolver interface. It is the default resolver wired into the server when
-// a keystore module is registered.
-type KeyStoreResolver struct {
-	ks app.KeyStore
+// KeyStoreLike is the minimal subset of app.KeyStore that the resolver consumes.
+// Defining it locally lets jose/ wrap any compatible store without importing app/,
+// which would create an app → server → jose → app cycle once the server module wires
+// the resolver via app/module_registry.go.
+type KeyStoreLike interface {
+	PrivateKey(name string) (*rsa.PrivateKey, error)
+	PublicKey(name string) (*rsa.PublicKey, error)
 }
 
-func NewKeyStoreResolver(ks app.KeyStore) *KeyStoreResolver {
+// KeyStoreResolver adapts a KeyStoreLike (typically an app.KeyStore) to KeyResolver.
+// It is the default resolver wired into the server when a keystore module is registered.
+type KeyStoreResolver struct {
+	ks KeyStoreLike
+}
+
+func NewKeyStoreResolver(ks KeyStoreLike) *KeyStoreResolver {
 	return &KeyStoreResolver{ks: ks}
 }
 

@@ -4,6 +4,8 @@ package server
 import (
 	"reflect"
 	"sync"
+
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // RouteDescriptor captures metadata about a registered route
@@ -21,6 +23,8 @@ type RouteDescriptor struct {
 	Summary      string       // Optional summary from comments
 	Description  string       // Optional description from comments
 	RawResponse  bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
+	InboundJOSE  *jose.Policy // Resolved at registration time from request type's jose: tag
+	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag
 }
 
 // RouteRegistry maintains discovered routes for introspection
@@ -168,7 +172,9 @@ func (r *RouteRegistry) RoutesByModule(moduleName string) []RouteDescriptor {
 	return r.ByModule(moduleName)
 }
 
-// cloneDescriptor deep-copies slice fields to prevent external mutation
+// cloneDescriptor deep-copies slice fields to prevent external mutation.
+// JOSE policy pointers are shared by reference: policies are immutable after
+// registration-time validation, so callers cannot mutate them through a clone.
 func cloneDescriptor(d *RouteDescriptor) RouteDescriptor {
 	if d == nil {
 		return RouteDescriptor{}

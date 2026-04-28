@@ -17,6 +17,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // IAPIError defines the interface for API errors with structured information.
@@ -210,19 +211,26 @@ const rawResponseContextKey = "_raw_response"
 // handlerWrapper composes all request processing components to create an Echo-compatible handler.
 // It orchestrates: context checking, request processing, business logic execution, and response handling.
 type handlerWrapper[T any, R any] struct {
-	processor   *requestProcessor[T]
-	responder   *responseHandler
-	checker     *contextChecker
-	rawResponse bool
+	processor    *requestProcessor[T]
+	responder    *responseHandler
+	checker      *contextChecker
+	rawResponse  bool
+	inboundJOSE  *jose.Policy
+	outboundJOSE *jose.Policy
+	joseResolver jose.KeyResolver
 }
 
 // newHandlerWrapper creates a new handler wrapper with all processing components initialized.
-func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool) *handlerWrapper[T, R] {
+func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool,
+	inboundJOSE, outboundJOSE *jose.Policy, joseResolver jose.KeyResolver) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
-		processor:   newRequestProcessor[T](binder, cfg),
-		responder:   newResponseHandler(cfg),
-		checker:     newContextChecker(cfg),
-		rawResponse: rawResponse,
+		processor:    newRequestProcessor[T](binder, cfg),
+		responder:    newResponseHandler(cfg),
+		checker:      newContextChecker(cfg),
+		rawResponse:  rawResponse,
+		inboundJOSE:  inboundJOSE,
+		outboundJOSE: outboundJOSE,
+		joseResolver: joseResolver,
 	}
 }
 
@@ -235,14 +243,24 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 			c.Set(rawResponseContextKey, true)
 		}
 
-		formatErr := formatErrorResponse
-		if hw.rawResponse {
-			formatErr = formatRawErrorResponse
-		}
+		// Select an error formatter that respects the security invariant: when there's an
+		// outbound JOSE policy AND the inbound side verified successfully, errors are
+		// returned as encrypted standard envelopes; otherwise they go out as plaintext
+		// minimal envelopes (pre-trust) or the framework's standard/raw shape.
+		formatErr := hw.selectErrorFormatter()
 
 		// Pre-processing context check
 		if apiErr := hw.checker.checkCancellation(c, "or cancelled"); apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
+		}
+
+		// JOSE inbound decode: replace c.Request().Body with the verified plaintext so the
+		// existing binder runs unchanged. Pre-trust failures bypass the dispatcher because
+		// the peer is unauthenticated by definition — we always emit the minimal envelope.
+		if hw.inboundJOSE != nil {
+			if apiErr := joseDecodeRequest(c, hw.inboundJOSE, hw.joseResolver); apiErr != nil {
+				return formatJOSEPlaintextError(c, apiErr)
+			}
 		}
 
 		// Process request (allocate, bind, validate)
@@ -266,10 +284,33 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		}
 
 		// Handle response
+		if hw.outboundJOSE != nil {
+			return hw.responder.joseHandleResponse(c, response, apiErr, hw.outboundJOSE, hw.joseResolver)
+		}
 		if hw.rawResponse {
 			return hw.responder.handleRawResponse(c, response, apiErr)
 		}
 		return hw.responder.handleResponse(c, response, apiErr)
+	}
+}
+
+// selectErrorFormatter returns the appropriate error formatter for this wrapper's
+// JOSE / raw configuration. The returned closure inspects per-request context state
+// (inbound-verified flag) at call time so a single formatter handles both pre-trust
+// and post-trust JOSE failure paths correctly.
+func (hw *handlerWrapper[T, R]) selectErrorFormatter() func(*echo.Context, IAPIError, *config.Config) error {
+	switch {
+	case hw.outboundJOSE != nil:
+		return func(c *echo.Context, apiErr IAPIError, cfg *config.Config) error {
+			if jose.IsInboundVerified(c.Request().Context()) {
+				return formatJOSEPostTrustError(c, apiErr, hw.outboundJOSE, hw.joseResolver, cfg)
+			}
+			return formatJOSEPlaintextError(c, apiErr)
+		}
+	case hw.rawResponse:
+		return formatRawErrorResponse
+	default:
+		return formatErrorResponse
 	}
 }
 
@@ -298,7 +339,23 @@ func wrapHandler[T any, R any](
 	cfg *config.Config,
 	rawResponse bool,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil, nil, nil)
+	return wrapper.wrap(handlerFunc)
+}
+
+// wrapHandlerWithJOSE is the JOSE-aware variant invoked from RegisterHandler when a
+// route has resolved JOSE policies. It threads the policies and resolver through to
+// the wrapper, which then handles inbound decode, outbound encode, and the hybrid
+// error envelope per the security invariant.
+func wrapHandlerWithJOSE[T any, R any](
+	handlerFunc HandlerFunc[T, R],
+	binder *RequestBinder,
+	cfg *config.Config,
+	rawResponse bool,
+	inboundJOSE, outboundJOSE *jose.Policy,
+	resolver jose.KeyResolver,
+) echo.HandlerFunc {
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, inboundJOSE, outboundJOSE, resolver)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -807,16 +864,23 @@ type RouteRegistrar interface {
 
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
 type HandlerRegistry struct {
-	binder *RequestBinder
-	cfg    *config.Config
+	binder       *RequestBinder
+	cfg          *config.Config
+	joseResolver jose.KeyResolver
 }
 
 // NewHandlerRegistry creates a new handler registry with the given validator and config.
-func NewHandlerRegistry(cfg *config.Config) *HandlerRegistry {
-	return &HandlerRegistry{
+// Optional HandlerRegistryOption values (e.g., WithJOSEResolver) configure additional
+// behaviors. Existing callers passing only cfg are unaffected.
+func NewHandlerRegistry(cfg *config.Config, opts ...HandlerRegistryOption) *HandlerRegistry {
+	hr := &HandlerRegistry{
 		binder: NewRequestBinder(),
 		cfg:    cfg,
 	}
+	for _, opt := range opts {
+		opt(hr)
+	}
+	return hr
 }
 
 // RegisterHandler registers a typed handler with the route registrar and captures metadata.
@@ -850,11 +914,16 @@ func RegisterHandler[T any, R any](
 		opt(&descriptor)
 	}
 
+	// Scan request/response types for jose: tags and resolve every kid against the
+	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
+	scanRouteJOSE(&descriptor, hr.joseResolver)
+
 	// Register with global registry
 	DefaultRouteRegistry.Register(&descriptor)
 
 	// Register with route registrar (works with both Echo instances and Groups)
-	wrappedHandler := wrapHandler(handler, hr.binder, hr.cfg, descriptor.RawResponse)
+	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, descriptor.RawResponse,
+		descriptor.InboundJOSE, descriptor.OutboundJOSE, hr.joseResolver)
 	r.Add(method, path, wrappedHandler)
 }
 
