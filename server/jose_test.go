@@ -108,7 +108,8 @@ func newJOSETestServer(t *testing.T, f *joseFixture, handler HandlerFunc[joseTok
 	e.Validator = NewValidator()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 
-	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, false, f.inbound, f.outbound, f.resolver)
+	obs := newJOSEObservability(nil, nil, nil)
+	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, false, f.inbound, f.outbound, f.resolver, obs)
 	return e, wrapped
 }
 

@@ -109,12 +109,22 @@ func (r *ModuleRegistry) Register(module Module) error {
 //
 // If a KeyStore-providing module has registered (and r.deps.KeyStore is therefore
 // populated), a jose.KeyStoreResolver is wired into the handler registry so any route
-// declaring jose: tags can resolve its kids at registration time. Routes without
-// jose tags are unaffected.
+// declaring jose: tags can resolve its kids at registration time. Logger, tracer, and
+// meter from deps are also threaded into the registry so JOSE failures get audit-grade
+// structured logs and OTEL telemetry. Routes without jose tags are unaffected.
 func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	opts := []server.HandlerRegistryOption{}
 	if r.deps.KeyStore != nil {
 		opts = append(opts, server.WithJOSEResolver(jose.NewKeyStoreResolver(r.deps.KeyStore)))
+	}
+	if r.deps.Logger != nil {
+		opts = append(opts, server.WithJOSELogger(r.deps.Logger))
+	}
+	if r.deps.Tracer != nil {
+		opts = append(opts, server.WithJOSETracer(r.deps.Tracer))
+	}
+	if r.deps.MeterProvider != nil {
+		opts = append(opts, server.WithJOSEMeterProvider(r.deps.MeterProvider))
 	}
 	handlerRegistry := server.NewHandlerRegistry(r.deps.Config, opts...)
 

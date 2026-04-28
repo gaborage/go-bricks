@@ -15,9 +15,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // IAPIError defines the interface for API errors with structured information.
@@ -218,11 +222,12 @@ type handlerWrapper[T any, R any] struct {
 	inboundJOSE  *jose.Policy
 	outboundJOSE *jose.Policy
 	joseResolver jose.KeyResolver
+	joseObs      *joseObservability
 }
 
 // newHandlerWrapper creates a new handler wrapper with all processing components initialized.
 func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool,
-	inboundJOSE, outboundJOSE *jose.Policy, joseResolver jose.KeyResolver) *handlerWrapper[T, R] {
+	inboundJOSE, outboundJOSE *jose.Policy, joseResolver jose.KeyResolver, joseObs *joseObservability) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
 		processor:    newRequestProcessor[T](binder, cfg),
 		responder:    newResponseHandler(cfg),
@@ -231,6 +236,7 @@ func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawR
 		inboundJOSE:  inboundJOSE,
 		outboundJOSE: outboundJOSE,
 		joseResolver: joseResolver,
+		joseObs:      joseObs,
 	}
 }
 
@@ -258,7 +264,8 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		// existing binder runs unchanged. Pre-trust failures bypass the dispatcher because
 		// the peer is unauthenticated by definition — we always emit the minimal envelope.
 		if hw.inboundJOSE != nil {
-			if apiErr := joseDecodeRequest(c, hw.inboundJOSE, hw.joseResolver); apiErr != nil {
+			if apiErr := joseDecodeRequestWithObs(c, hw.inboundJOSE, hw.joseResolver, hw.joseObs); apiErr != nil {
+				hw.joseObs.recordFailure(c.Request().Context(), c, "inbound", apiErr)
 				return formatJOSEPlaintextError(c, apiErr)
 			}
 		}
@@ -285,7 +292,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 
 		// Handle response
 		if hw.outboundJOSE != nil {
-			return hw.responder.joseHandleResponse(c, response, apiErr, hw.outboundJOSE, hw.joseResolver)
+			return hw.responder.joseHandleResponseWithObs(c, response, apiErr, hw.outboundJOSE, hw.joseResolver, hw.joseObs)
 		}
 		if hw.rawResponse {
 			return hw.responder.handleRawResponse(c, response, apiErr)
@@ -339,14 +346,13 @@ func wrapHandler[T any, R any](
 	cfg *config.Config,
 	rawResponse bool,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil, nil, nil)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil, nil, nil, nil)
 	return wrapper.wrap(handlerFunc)
 }
 
 // wrapHandlerWithJOSE is the JOSE-aware variant invoked from RegisterHandler when a
-// route has resolved JOSE policies. It threads the policies and resolver through to
-// the wrapper, which then handles inbound decode, outbound encode, and the hybrid
-// error envelope per the security invariant.
+// route has resolved JOSE policies. It threads the policies, resolver, and the
+// shared observability bundle through to the wrapper.
 func wrapHandlerWithJOSE[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
@@ -354,8 +360,9 @@ func wrapHandlerWithJOSE[T any, R any](
 	rawResponse bool,
 	inboundJOSE, outboundJOSE *jose.Policy,
 	resolver jose.KeyResolver,
+	obs *joseObservability,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, inboundJOSE, outboundJOSE, resolver)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, inboundJOSE, outboundJOSE, resolver, obs)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -864,9 +871,13 @@ type RouteRegistrar interface {
 
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
 type HandlerRegistry struct {
-	binder       *RequestBinder
-	cfg          *config.Config
-	joseResolver jose.KeyResolver
+	binder            *RequestBinder
+	cfg               *config.Config
+	joseResolver      jose.KeyResolver
+	joseLogger        logger.Logger
+	joseTracer        trace.Tracer
+	joseMeterProvider metric.MeterProvider
+	joseObs           *joseObservability // computed lazily on first JOSE registration
 }
 
 // NewHandlerRegistry creates a new handler registry with the given validator and config.
@@ -921,9 +932,16 @@ func RegisterHandler[T any, R any](
 	// Register with global registry
 	DefaultRouteRegistry.Register(&descriptor)
 
+	// Lazy-init observability bundle on the first JOSE-tagged route registration so
+	// non-JOSE deployments pay zero cost for instrument creation. Subsequent JOSE
+	// registrations reuse the same bundle (counters and histograms are process-global).
+	if descriptor.InboundJOSE != nil && hr.joseObs == nil {
+		hr.joseObs = newJOSEObservability(hr.joseLogger, hr.joseTracer, hr.joseMeterProvider)
+	}
+
 	// Register with route registrar (works with both Echo instances and Groups)
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, descriptor.RawResponse,
-		descriptor.InboundJOSE, descriptor.OutboundJOSE, hr.joseResolver)
+		descriptor.InboundJOSE, descriptor.OutboundJOSE, hr.joseResolver, hr.joseObs)
 	r.Add(method, path, wrappedHandler)
 }
 

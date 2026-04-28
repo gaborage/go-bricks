@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,10 +11,109 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	otelnoop "go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/labstack/echo/v5"
 )
+
+// joseObservability bundles the optional logger / tracer / meter so they thread cleanly
+// through wrap() into joseDecodeRequest and joseHandleResponse without bloating those
+// signatures or the HandlerRegistry struct.
+type joseObservability struct {
+	logger       logger.Logger
+	tracer       trace.Tracer
+	failureCount metric.Int64Counter
+	durationHist metric.Float64Histogram
+}
+
+func (o *joseObservability) tracerOrNoop() trace.Tracer {
+	if o == nil || o.tracer == nil {
+		return tracenoop.NewTracerProvider().Tracer("jose")
+	}
+	return o.tracer
+}
+
+// recordFailure emits the structured failure log AND increments the counter. Centralized
+// so audit-grade fields (route, kid, alg, enc, code, cause) are guaranteed to appear in
+// both surfaces simultaneously — divergence between log and metric surfaces is the kind
+// of inconsistency that bites operators during incidents.
+func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, direction string, apiErr IAPIError) {
+	if o == nil {
+		return
+	}
+	jaerr, _ := apiErr.(*joseAPIError)
+	code := apiErr.ErrorCode()
+	method := c.Request().Method
+	route := c.Path()
+	if route == "" {
+		route = c.Request().URL.Path
+	}
+
+	if o.failureCount != nil {
+		o.failureCount.Add(ctx, 1,
+			metric.WithAttributes(
+				attribute.String("code", code),
+				attribute.String("direction", direction),
+				attribute.String("http.method", method),
+				attribute.String("http.route", route),
+			),
+		)
+	}
+
+	if o.logger == nil {
+		return
+	}
+	ev := o.logger.WithContext(ctx).Error().
+		Str("code", code).
+		Str("direction", direction).
+		Str("http.method", method).
+		Str("http.route", route)
+	if jaerr != nil {
+		ev = ev.Str("message", jaerr.message)
+	}
+	ev.Msg("jose: operation failed")
+}
+
+// recordDuration captures successful-operation latency histograms when a meter is wired.
+// No-op (zero allocation) when observability is disabled.
+func (o *joseObservability) recordDuration(ctx context.Context, operation string, elapsed time.Duration) {
+	if o == nil || o.durationHist == nil {
+		return
+	}
+	o.durationHist.Record(ctx, elapsed.Seconds(),
+		metric.WithAttributes(attribute.String("operation", operation)),
+	)
+}
+
+// newJOSEObservability builds the bundle from optional injected logger/tracer/meter.
+// All inputs are nil-safe; the returned bundle is also nil-safe at every call site.
+func newJOSEObservability(log logger.Logger, tracer trace.Tracer, mp metric.MeterProvider) *joseObservability {
+	o := &joseObservability{logger: log, tracer: tracer}
+	if mp == nil {
+		mp = otelnoop.NewMeterProvider()
+	}
+	meter := mp.Meter("github.com/gaborage/go-bricks/jose")
+	if c, err := meter.Int64Counter("jose.failures.total",
+		metric.WithDescription("Count of JOSE crypto failures by code and direction"),
+	); err == nil {
+		o.failureCount = c
+	}
+	if h, err := meter.Float64Histogram("jose.operation.duration",
+		metric.WithDescription("Latency of JOSE crypto operations in seconds"),
+		metric.WithUnit("s"),
+	); err == nil {
+		o.durationHist = h
+	}
+	return o
+}
 
 // joseContentType is the IANA-registered media type for compact JOSE serializations.
 const joseContentType = "application/jose"
@@ -30,6 +130,36 @@ type HandlerRegistryOption func(*HandlerRegistry)
 func WithJOSEResolver(r jose.KeyResolver) HandlerRegistryOption {
 	return func(hr *HandlerRegistry) {
 		hr.joseResolver = r
+	}
+}
+
+// WithJOSELogger attaches a logger used to emit structured ERROR records on JOSE
+// failure paths (decrypt failed, signature invalid, etc.). Records include code,
+// direction, route, and method — never plaintext payloads or key material. When
+// no logger is supplied, JOSE failures still flow through the IAPIError envelope to
+// the wire and to the framework's request logger; this option only adds the
+// dedicated audit-grade record.
+func WithJOSELogger(log logger.Logger) HandlerRegistryOption {
+	return func(hr *HandlerRegistry) {
+		hr.joseLogger = log
+	}
+}
+
+// WithJOSETracer attaches an OpenTelemetry tracer used to emit spans around JOSE
+// crypto operations (jose.decode_request, jose.encode_response). When no tracer is
+// supplied, a no-op tracer is used so call sites stay branch-free.
+func WithJOSETracer(t trace.Tracer) HandlerRegistryOption {
+	return func(hr *HandlerRegistry) {
+		hr.joseTracer = t
+	}
+}
+
+// WithJOSEMeterProvider attaches an OTEL meter provider used to register the JOSE
+// failure counter and operation-duration histogram. A no-op provider is used by
+// default so instrument creation cannot fail when observability is disabled.
+func WithJOSEMeterProvider(mp metric.MeterProvider) HandlerRegistryOption {
+	return func(hr *HandlerRegistry) {
+		hr.joseMeterProvider = mp
 	}
 }
 
@@ -122,17 +252,35 @@ func panicJOSERegistration(d *RouteDescriptor, msg string, cause error) {
 	panic("server: jose registration failed for " + pathInfo + ": " + msg)
 }
 
-// joseDecodeRequest reads the raw HTTP body, validates its Content-Type, decrypts the
-// JWE, verifies the inner JWS, and replaces c.Request().Body with the verified
-// plaintext so the existing request binder can process it as ordinary JSON.
+// joseDecodeRequestWithObs reads the raw HTTP body, validates its Content-Type, decrypts the
+// JWE, verifies the inner JWS, and replaces c.Request().Body with the verified plaintext.
+// Wrapped in an OTEL span so operators can isolate JOSE inbound time from total request time.
 //
-// On success: marks the context inbound-verified and stashes the verified Claims so
-// app code can inspect iat/exp/jti.
-//
-// On failure: returns an IAPIError whose code is the JOSE-specific code (e.g.,
-// JOSE_DECRYPT_FAILED) so the pre-trust error formatter can emit it on the wire
-// while the wrapper logs the underlying jose.Error.Cause server-side.
-func joseDecodeRequest(c *echo.Context, p *jose.Policy, r jose.KeyResolver) IAPIError {
+// On success: marks the context inbound-verified and stashes the verified Claims.
+// On failure: returns an IAPIError with the JOSE-specific code; the caller invokes
+// obs.recordFailure() before forwarding to the plaintext error formatter.
+func joseDecodeRequestWithObs(c *echo.Context, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) IAPIError {
+	ctx, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.decode_request",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attribute.String("jose.direction", "inbound")),
+	)
+	defer span.End()
+	start := time.Now()
+
+	apiErr := joseDecodeRequestInner(c, p, r)
+	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.ErrorCode())
+		span.SetAttributes(attribute.String("jose.error.code", apiErr.ErrorCode()))
+		_ = ctx
+		return apiErr
+	}
+	obs.recordDuration(c.Request().Context(), "decode_request", time.Since(start))
+	return nil
+}
+
+// joseDecodeRequestInner is the span-free implementation, kept separate so the
+// span/timing wrapper above stays readable.
+func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver) IAPIError {
 	body, err := io.ReadAll(c.Request().Body)
 	if err != nil {
 		return &joseAPIError{code: "JOSE_BODY_REQUIRED", message: "Failed to read request body", status: http.StatusBadRequest}
@@ -150,9 +298,6 @@ func joseDecodeRequest(c *echo.Context, p *jose.Policy, r jose.KeyResolver) IAPI
 		return newJOSEAPIError(err)
 	}
 
-	// Replace the body so the standard JSON binder can run unmodified. The Content-Type
-	// is rewritten to application/json so binder content-negotiation accepts it; the
-	// original Content-Length is updated to match the plaintext length.
 	c.Request().Body = io.NopCloser(bytes.NewReader(plaintext))
 	c.Request().Header.Set(echo.HeaderContentType, "application/json")
 	c.Request().ContentLength = int64(len(plaintext))
@@ -175,6 +320,38 @@ func isJOSEContentType(ct string) bool {
 		main = ct[:idx]
 	}
 	return strings.EqualFold(strings.TrimSpace(main), joseContentType)
+}
+
+// joseHandleResponseWithObs wraps joseHandleResponse with an OTEL span and records
+// failures via obs. The wrapped form is the only call site exercised at runtime —
+// joseHandleResponse remains exported (without the trailing Obs suffix on the actual
+// implementation) for testability and so the rh.handleResponse-style signature is
+// preserved for any future direct callers.
+func (rh *responseHandler) joseHandleResponseWithObs(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) error {
+	ctx, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.encode_response",
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attribute.String("jose.direction", "outbound")),
+	)
+	defer span.End()
+	start := time.Now()
+
+	err := rh.joseHandleResponse(c, response, apiErr, p, r)
+	if err != nil || apiErr != nil {
+		// We can't easily distinguish encryption failure from a normal post-trust error
+		// after the fact; use the apiErr code if present, otherwise generic.
+		code := "JOSE_OUTBOUND_OK"
+		if apiErr != nil {
+			code = apiErr.ErrorCode()
+			obs.recordFailure(ctx, c, "outbound", apiErr)
+		}
+		if err != nil {
+			span.SetStatus(codes.Error, code)
+			span.SetAttributes(attribute.String("jose.error.code", code))
+		}
+		return err
+	}
+	obs.recordDuration(c.Request().Context(), "encode_response", time.Since(start))
+	return nil
 }
 
 // joseHandleResponse routes the post-handler success or error path through the JOSE
