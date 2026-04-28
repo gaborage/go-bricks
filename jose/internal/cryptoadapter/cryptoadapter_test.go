@@ -107,6 +107,66 @@ func TestVerifyRejectsDisallowedAlg(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrParseSigned))
 }
 
+func TestVerifyRejectsKidMissing(t *testing.T) {
+	key := newKey(t)
+	// Sign with empty kid — Verify must reject because policy requires a kid.
+	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "", SigAlg: jose.RS256})
+	require.NoError(t, err)
+
+	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
+		ExpectedKid:    "anything",
+		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrKidMissing))
+}
+
+func TestDecryptRejectsKidMissing(t *testing.T) {
+	key := newKey(t)
+	compact, err := Encrypt([]byte("x"), &key.PublicKey, &EncryptOptions{
+		Kid: "", KeyAlg: jose.RSA_OAEP_256, Enc: jose.A256GCM,
+	})
+	require.NoError(t, err)
+
+	_, _, err = Decrypt(compact, key, &DecryptOptions{
+		ExpectedKid:       "anything",
+		AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrKidMissing))
+}
+
+func TestVerifyAcceptsAllowedTyp(t *testing.T) {
+	key := newKey(t)
+	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "k", SigAlg: jose.RS256, Cty: "JWT"})
+	require.NoError(t, err)
+
+	// "JWT" must be in AllowedTyps even though it's a cty not a typ — covers
+	// contains() and the AllowedTyps != nil branch.
+	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
+		ExpectedKid:    "k",
+		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
+		AllowedTyps:    []string{"", "JWT"}, // accept empty (no typ set) plus JWT
+	})
+	require.NoError(t, err)
+}
+
+func TestVerifyRejectsTypNotInAllowlist(t *testing.T) {
+	key := newKey(t)
+	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "k", SigAlg: jose.RS256})
+	require.NoError(t, err)
+
+	// Empty typ not in allowlist => ErrTypRejected.
+	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
+		ExpectedKid:    "k",
+		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
+		AllowedTyps:    []string{"strict-only"},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrTypRejected))
+}
+
 func TestDecryptRejectsDisallowedKeyAlg(t *testing.T) {
 	key := newKey(t)
 	compact, err := Encrypt([]byte("x"), &key.PublicKey, &EncryptOptions{
