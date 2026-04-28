@@ -87,7 +87,7 @@ func TestIsJOSEContentTypeVariants(t *testing.T) {
 		{"application/jose+json", false},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.expected, isJOSEContentType(tt.ct), "Content-Type=%q", tt.ct)
+		assert.Equal(t, tt.expected, jose.IsContentType(tt.ct), "Content-Type=%q", tt.ct)
 	}
 }
 
