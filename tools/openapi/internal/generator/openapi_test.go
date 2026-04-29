@@ -2102,6 +2102,32 @@ func TestWriteResponsesJOSEPath(t *testing.T) {
 	}
 }
 
+func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
+	// The runtime enforces bidirectional symmetry (request and response must both
+	// carry jose tags or neither). The analyzer runs statically against source —
+	// it can encounter asymmetric setups that a developer is in the middle of
+	// writing. In any such case the pre-trust failure path on the request side is
+	// still routed through the JOSE plaintext-minimal envelope by the runtime, so
+	// the OpenAPI 4xx schema must reference JOSEErrorEnvelope, NOT the standard
+	// ErrorResponse (which would leak traceId/meta).
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/tokens",
+		Request:  &models.TypeInfo{Name: "TokenRequest", JOSE: true},
+		Response: &models.TypeInfo{Name: "TokenResponse", JOSE: false},
+	})
+	out := sb.String()
+
+	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
+		t.Error("4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
+	}
+	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("4xx path on JOSE-request route must NOT reference ErrorResponse — leaks traceId/meta to unauthenticated peers")
+	}
+}
+
 func TestWriteResponsesNonJOSEUnchanged(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	var sb strings.Builder

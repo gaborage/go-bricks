@@ -250,8 +250,15 @@ func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route)
 // pre-trust failure path always uses application/json (peer is unauthenticated, so
 // the framework returns a plaintext minimal envelope, never JOSE-wrapped — see the
 // hybrid envelope contract in CLAUDE.md JOSE Middleware).
+//
+// 4xx schema selection is driven by EITHER side carrying jose tags. The runtime
+// enforces bidirectional symmetry at registration, but the analyzer runs statically
+// against source so we can encounter asymmetric setups; in any such case the
+// pre-trust failure path is still routed through the JOSE plaintext-minimal
+// envelope by the runtime, so the OpenAPI spec must reflect that.
 func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Route) {
 	joseResponse := route.Response != nil && route.Response.JOSE
+	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 
 	sb.WriteString("      responses:\n")
 	sb.WriteString("        '200':\n")
@@ -272,7 +279,7 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	sb.WriteString("          content:\n")
 	fmt.Fprintf(sb, "            %s:\n", mediaJSON)
 	sb.WriteString("              schema:\n")
-	if joseResponse {
+	if joseRoute {
 		// Pre-trust failures are plaintext minimal envelopes per the JOSE security model:
 		// when decrypt/verify fails the peer is unauthenticated and the server leaks
 		// nothing beyond {code,message}.

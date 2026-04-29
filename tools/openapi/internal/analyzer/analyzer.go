@@ -1154,11 +1154,17 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 	typeInfo.JOSE = hasJOSESentinelTag(structType)
 }
 
-// hasJOSESentinelTag reports whether any field on the struct carries a `jose:"..."`
-// struct tag. Uses reflect.StructTag.Lookup rather than a substring match — the latter
-// would false-positive on tag values that happen to contain the literal `jose:"` (e.g.,
-// a description tag escaping a quoted reference to the jose namespace). Importing the
-// runtime jose package is not an option because the openapi tool is in its own go.mod.
+// hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field
+// convention — a blank-identifier field (`_`) carrying a `jose:"..."` struct tag.
+// Restricting to the sentinel pattern matches the documented convention and avoids
+// false-positives where a regular field happens to use the same tag namespace for
+// something else (the runtime jose.ScanType *would* try to parse such a tag and fail,
+// so the OpenAPI spec for that struct should not pre-emptively claim JOSE wrapping).
+//
+// reflect.StructTag.Lookup is used rather than a substring match on Tag.Value because
+// substring matching false-positives on tag values that contain the literal `jose:"`
+// (e.g., a description tag escaping a quoted reference). Importing the runtime jose
+// package is not an option because the openapi tool is in its own go.mod.
 func hasJOSESentinelTag(s *ast.StructType) bool {
 	if s == nil || s.Fields == nil {
 		return false
@@ -1167,7 +1173,11 @@ func hasJOSESentinelTag(s *ast.StructType) bool {
 		if field.Tag == nil {
 			continue
 		}
-		// Tag.Value carries the surrounding backticks; trim them so reflect parses correctly.
+		// Sentinel field: exactly one blank-identifier name. Embedded fields have
+		// len(Names) == 0 — those don't match the convention.
+		if len(field.Names) != 1 || field.Names[0].Name != "_" {
+			continue
+		}
 		raw := strings.Trim(field.Tag.Value, "`")
 		if _, ok := reflect.StructTag(raw).Lookup("jose"); ok {
 			return true

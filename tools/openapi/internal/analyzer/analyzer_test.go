@@ -2787,9 +2787,16 @@ func TestHasJOSESentinelTag(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:   "jose_tag_on_named_field",
+			// Per the documented convention, only the sentinel `_ struct{}` field
+			// counts. A non-sentinel field with a jose tag must NOT opt the struct in.
+			name:   "jose_tag_on_named_field_must_not_match",
 			source: "type R struct { Inner string `jose:\"sign=k\"` }",
-			want:   true,
+			want:   false,
+		},
+		{
+			name:   "blank_field_without_jose_tag",
+			source: "type R struct { _ struct{} `unrelated:\"x\"`; PAN string }",
+			want:   false,
 		},
 		{
 			name:   "empty_struct",
