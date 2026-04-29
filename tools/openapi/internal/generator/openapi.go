@@ -29,6 +29,13 @@ const (
 	mediaJOSE = "application/jose"
 )
 
+// YAML indent depths reused across emitter call sites (S1192). Named by depth
+// because the same depth occurs at multiple structural positions.
+const (
+	indent10 = "          "   // 10 spaces
+	indent12 = "            " // 12 spaces
+)
+
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
 	title       string
@@ -263,13 +270,6 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	joseResponse := route.Response != nil && route.Response.JOSE
 	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 
-	// YAML indent constants for the responses subtree. Centralised so SonarCloud
-	// S1192 doesn't flag the indent literals each time a Response Object is added.
-	const (
-		responseIndent = "          "   // 10 spaces — under '200':/'400':
-		mediaIndent    = "            " // 12 spaces — under content.<contentType>:
-	)
-
 	sb.WriteString("      responses:\n")
 	sb.WriteString("        '200':\n")
 	if joseResponse {
@@ -277,17 +277,17 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 		// description is a fixed field on Response, but NOT on Media Type Object.
 		// The Media Type schema describes the WIRE shape (a string token); the
 		// plaintext component schema is referenced from the description text.
-		writeJOSEDescription(sb, responseIndent, "SuccessResponse")
-		fmt.Fprintf(sb, "%scontent:\n", responseIndent)
-		writeMediaSchemaJOSE(sb, mediaIndent)
+		writeJOSEDescription(sb, indent10, "SuccessResponse")
+		writeContentLine(sb, indent10)
+		writeMediaSchemaJOSE(sb, indent12)
 	} else {
-		fmt.Fprintf(sb, "%sdescription: %s\n", responseIndent, g.getResponseDescription(route.Method))
-		fmt.Fprintf(sb, "%scontent:\n", responseIndent)
-		writeMediaSchemaRef(sb, mediaIndent, mediaJSON, "SuccessResponse")
+		fmt.Fprintf(sb, "%sdescription: %s\n", indent10, g.getResponseDescription(route.Method))
+		writeContentLine(sb, indent10)
+		writeMediaSchemaRef(sb, indent12, mediaJSON, "SuccessResponse")
 	}
 	sb.WriteString("        '400':\n")
-	fmt.Fprintf(sb, "%sdescription: Bad Request\n", responseIndent)
-	fmt.Fprintf(sb, "%scontent:\n", responseIndent)
+	fmt.Fprintf(sb, "%sdescription: Bad Request\n", indent10)
+	writeContentLine(sb, indent10)
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and the
 	// server leaks nothing beyond {code,message}.
@@ -295,7 +295,7 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	if joseRoute {
 		errorSchema = "JOSEErrorEnvelope"
 	}
-	writeMediaSchemaRef(sb, mediaIndent, mediaJSON, errorSchema)
+	writeMediaSchemaRef(sb, indent12, mediaJSON, errorSchema)
 }
 
 // writeJOSEDescription emits the canonical "JOSE compact serialization" description
@@ -339,6 +339,12 @@ func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%s  schema:\n", indent)
 	fmt.Fprintf(sb, "%s    type: string\n", indent)
 	fmt.Fprintf(sb, "%s    format: jose\n", indent)
+}
+
+// writeContentLine emits "<indent>content:\n" — the YAML key that opens a Media Type
+// map under either a Response Object or a RequestBody Object.
+func writeContentLine(sb *strings.Builder, indent string) {
+	fmt.Fprintf(sb, "%scontent:\n", indent)
 }
 
 // getOperationID generates an operation ID for a route
@@ -750,7 +756,7 @@ func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Paramet
 
 		// Write schema
 		sb.WriteString("          schema:\n")
-		g.writePropertySchema(sb, param.Schema, "            ")
+		g.writePropertySchema(sb, param.Schema, indent12)
 
 		if param.Example != nil {
 			// Marshal example value to YAML-compatible format
@@ -783,18 +789,18 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models
 		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
 		writeJOSEDescription(sb, "        ", schemaName)
 	}
-	sb.WriteString("        content:\n")
+	writeContentLine(sb, "        ")
 
 	switch {
 	case isJOSE:
 		// JOSE wire payload is a string token, not the plaintext schema. The plaintext
 		// component schema is referenced from the description text above.
-		writeMediaSchemaJOSE(sb, "          ")
+		writeMediaSchemaJOSE(sb, indent10)
 	case schemaName != "":
-		writeMediaSchemaRef(sb, "          ", contentType, schemaName)
+		writeMediaSchemaRef(sb, indent10, contentType, schemaName)
 	default:
 		// Inline schema (fallback — shouldn't happen with proper type extraction).
-		fmt.Fprintf(sb, "          %s:\n", contentType)
+		fmt.Fprintf(sb, "%s%s:\n", indent10, contentType)
 		sb.WriteString("            schema:\n")
 		sb.WriteString("              type: object\n")
 	}
