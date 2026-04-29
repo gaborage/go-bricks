@@ -2743,3 +2743,88 @@ func TestParseParameterTags(t *testing.T) {
 		})
 	}
 }
+
+func TestHasJOSESentinelTag(t *testing.T) {
+	// parse uses ast.Inspect to find the first struct type literal in src — a single
+	// callback collapses what would otherwise be a nested decl→spec→type-assertion
+	// loop, keeping cognitive complexity well below the project's 15-statement cap.
+	parse := func(t *testing.T, src string) *ast.StructType {
+		t.Helper()
+		f, err := parser.ParseFile(token.NewFileSet(), "test.go", "package x\n"+src, 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		var found *ast.StructType
+		ast.Inspect(f, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+			if st, ok := n.(*ast.StructType); ok {
+				found = st
+				return false
+			}
+			return true
+		})
+		if found == nil {
+			t.Fatal("no struct found")
+		}
+		return found
+	}
+
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{
+			name:   "tagged_sentinel_field",
+			source: "type R struct { _ struct{} `jose:\"decrypt=k,verify=p\"`; PAN string `json:\"pan\"` }",
+			want:   true,
+		},
+		{
+			name:   "no_jose_tag",
+			source: "type R struct { PAN string `json:\"pan\" validate:\"required\"` }",
+			want:   false,
+		},
+		{
+			// Per the documented convention, only the sentinel `_ struct{}` field
+			// counts. A non-sentinel field with a jose tag must NOT opt the struct in.
+			name:   "jose_tag_on_named_field_must_not_match",
+			source: "type R struct { Inner string `jose:\"sign=k\"` }",
+			want:   false,
+		},
+		{
+			name:   "blank_field_without_jose_tag",
+			source: "type R struct { _ struct{} `unrelated:\"x\"`; PAN string }",
+			want:   false,
+		},
+		{
+			name:   "empty_struct",
+			source: "type R struct {}",
+			want:   false,
+		},
+		{
+			name:   "jose_substring_in_other_tag_must_not_match",
+			source: "type R struct { Field string `description:\"prejose:\\\"x\\\"\"` }",
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasJOSESentinelTag(parse(t, tt.source))
+			if got != tt.want {
+				t.Errorf("hasJOSESentinelTag = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Lock in the nil-safety contract — the function's signature implies it tolerates
+	// these inputs (defense-in-depth in the analyzer pipeline), so without explicit
+	// tests a future refactor could silently regress the guards.
+	t.Run("nil_struct", func(t *testing.T) {
+		assert.False(t, hasJOSESentinelTag(nil), "hasJOSESentinelTag(nil)")
+	})
+	t.Run("nil_fields", func(t *testing.T) {
+		assert.False(t, hasJOSESentinelTag(&ast.StructType{}), "hasJOSESentinelTag(empty struct)")
+	})
+}
