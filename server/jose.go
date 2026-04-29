@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -115,9 +114,6 @@ func newJOSEObservability(log logger.Logger, tracer trace.Tracer, mp metric.Mete
 	}
 	return o
 }
-
-// joseContentType is the IANA-registered media type for compact JOSE serializations.
-const joseContentType = "application/jose"
 
 // HandlerRegistryOption configures a HandlerRegistry at construction time.
 // Existing call sites that don't need JOSE pass no options and behave unchanged.
@@ -289,7 +285,7 @@ func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver)
 		return &joseAPIError{code: "JOSE_BODY_REQUIRED", message: "Request body required", status: http.StatusBadRequest}
 	}
 
-	if !isJOSEContentType(c.Request().Header.Get(echo.HeaderContentType)) {
+	if !jose.IsContentType(c.Request().Header.Get(echo.HeaderContentType)) {
 		return &joseAPIError{code: "JOSE_PLAINTEXT_REJECTED", message: "Request must be application/jose", status: http.StatusUnsupportedMediaType}
 	}
 
@@ -306,20 +302,6 @@ func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver)
 	ctx = jose.WithClaims(ctx, claims)
 	c.SetRequest(c.Request().WithContext(ctx))
 	return nil
-}
-
-func isJOSEContentType(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	// Match application/jose with optional parameters (charset, etc.) and case-insensitively
-	// per RFC 7231 §3.1.1.1.
-	idx := strings.Index(ct, ";")
-	main := ct
-	if idx >= 0 {
-		main = ct[:idx]
-	}
-	return strings.EqualFold(strings.TrimSpace(main), joseContentType)
 }
 
 // joseHandleResponseWithObs wraps joseHandleResponse with an OTEL span and records
@@ -406,7 +388,7 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 		return formatJOSEPlaintextError(c, sealErr)
 	}
 
-	c.Response().Header().Set(echo.HeaderContentType, joseContentType)
+	c.Response().Header().Set(echo.HeaderContentType, jose.ContentType)
 	c.Response().WriteHeader(status)
 	_, writeErr := c.Response().Write([]byte(compact))
 	return writeErr
@@ -456,7 +438,7 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 		return formatJOSEPlaintextError(c, sealErr)
 	}
 
-	c.Response().Header().Set(echo.HeaderContentType, joseContentType)
+	c.Response().Header().Set(echo.HeaderContentType, jose.ContentType)
 	c.Response().WriteHeader(apiErr.HTTPStatus())
 	_, writeErr := c.Response().Write([]byte(compact))
 	return writeErr

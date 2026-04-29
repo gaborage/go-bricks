@@ -71,3 +71,22 @@ func TestNewTestResolverPanicsOnUnsupportedType(t *testing.T) {
 		},
 	)
 }
+
+func TestNewBidirectionalFixtureRoundtrip(t *testing.T) {
+	// Smoke test: seal with the client outbound, open with the peer inbound — both
+	// halves of the kid namespace must agree. Reverse direction also covered.
+	f := jositest.NewBidirectionalFixture(t)
+	require.NotNil(t, f.ClientPrivate)
+	require.NotNil(t, f.PeerPrivate)
+	require.NotNil(t, f.Resolver)
+
+	payload := []byte(`{"hello":"world"}`)
+
+	compact := jositest.SealForTest(t, payload, f.ClientOutbound, f.Resolver)
+	got, _ := jositest.OpenForTest(t, compact, f.PeerInbound, f.Resolver)
+	assert.Equal(t, payload, got)
+
+	compact = jositest.SealForTest(t, payload, f.PeerOutbound, f.Resolver)
+	got, _ = jositest.OpenForTest(t, compact, f.ClientInbound, f.Resolver)
+	assert.Equal(t, payload, got)
+}
