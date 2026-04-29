@@ -263,7 +263,13 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	joseResponse := route.Response != nil && route.Response.JOSE
 	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 
-	const contentIndent = "            "
+	// YAML indent constants for the responses subtree. Centralised so SonarCloud
+	// S1192 doesn't flag the indent literals each time a Response Object is added.
+	const (
+		responseIndent = "          "   // 10 spaces — under '200':/'400':
+		mediaIndent    = "            " // 12 spaces — under content.<contentType>:
+	)
+
 	sb.WriteString("      responses:\n")
 	sb.WriteString("        '200':\n")
 	if joseResponse {
@@ -271,17 +277,17 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 		// description is a fixed field on Response, but NOT on Media Type Object.
 		// The Media Type schema describes the WIRE shape (a string token); the
 		// plaintext component schema is referenced from the description text.
-		writeJOSEDescription(sb, "          ", "SuccessResponse")
-		sb.WriteString("          content:\n")
-		writeMediaSchemaJOSE(sb, contentIndent)
+		writeJOSEDescription(sb, responseIndent, "SuccessResponse")
+		fmt.Fprintf(sb, "%scontent:\n", responseIndent)
+		writeMediaSchemaJOSE(sb, mediaIndent)
 	} else {
-		fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
-		sb.WriteString("          content:\n")
-		writeMediaSchemaRef(sb, contentIndent, mediaJSON, "SuccessResponse")
+		fmt.Fprintf(sb, "%sdescription: %s\n", responseIndent, g.getResponseDescription(route.Method))
+		fmt.Fprintf(sb, "%scontent:\n", responseIndent)
+		writeMediaSchemaRef(sb, mediaIndent, mediaJSON, "SuccessResponse")
 	}
 	sb.WriteString("        '400':\n")
-	sb.WriteString("          description: Bad Request\n")
-	sb.WriteString("          content:\n")
+	fmt.Fprintf(sb, "%sdescription: Bad Request\n", responseIndent)
+	fmt.Fprintf(sb, "%scontent:\n", responseIndent)
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and the
 	// server leaks nothing beyond {code,message}.
@@ -289,7 +295,7 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	if joseRoute {
 		errorSchema = "JOSEErrorEnvelope"
 	}
-	writeMediaSchemaRef(sb, contentIndent, mediaJSON, errorSchema)
+	writeMediaSchemaRef(sb, mediaIndent, mediaJSON, errorSchema)
 }
 
 // writeJOSEDescription emits the canonical "JOSE compact serialization" description
