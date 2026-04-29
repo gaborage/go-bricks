@@ -44,26 +44,40 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 		return nil, nil, OpenHeader{}, err
 	}
 
-	// Policy.Cty is intentionally not enforced against the inbound protected header:
-	// it's advisory metadata used by the outbound encoder, not an inbound gate. The
-	// strict alg/enc allowlist already prevents algorithm confusion.
 	jwsCompact, jweHdr, err := cryptoadapter.Decrypt(compact, decKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid:       p.DecryptKid,
 		AllowedKeyAlgs:    AllowedKeyAlgs(),
 		AllowedContentEnc: AllowedContentEncs(),
 	})
-	hdr.JWE = cryptoHeaderToOpen(jweHdr)
+	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
-		return nil, nil, hdr, mapDecryptError(err, p, jweHdr)
+		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
 	}
 
 	innerPayload, jwsHdr, err := cryptoadapter.Verify(string(jwsCompact), verKey, &cryptoadapter.VerifyOptions{
 		ExpectedKid:    p.VerifyKid,
 		AllowedSigAlgs: AllowedSigAlgs(),
 	})
-	hdr.JWS = cryptoHeaderToOpen(jwsHdr)
+	hdr.JWS = cryptoHeaderToOpen(&jwsHdr)
 	if err != nil {
-		return nil, nil, hdr, mapVerifyError(err, p, jwsHdr)
+		return nil, nil, hdr, mapVerifyError(err, p, &jwsHdr)
+	}
+
+	// Inner JWS cty enforcement (defense-in-depth, post-verify).
+	// Permissive: only reject when peer explicitly declares a cty AND it disagrees
+	// with the policy. A peer that omits cty entirely is accepted, since cty is an
+	// optional header per RFC 7515 §4.1.10. This catches content-type confusion
+	// (peer signs cty=text/csv while we parse the bytes as JSON) without breaking
+	// peers that don't bother to set cty.
+	if p.Cty != "" && jwsHdr.Cty != "" && jwsHdr.Cty != p.Cty {
+		return nil, nil, hdr, &Error{
+			Sentinel: ErrCtyRejected,
+			Code:     "JOSE_CTY_REJECTED",
+			Status:   400,
+			Message:  "Disallowed cty header",
+			Kid:      jwsHdr.Kid,
+			Alg:      jwsHdr.Alg,
+		}
 	}
 
 	claims = parseClaims(innerPayload)
@@ -84,13 +98,14 @@ type Header struct {
 	Alg string
 	Enc string
 	Typ string
+	Cty string
 }
 
-func cryptoHeaderToOpen(h cryptoadapter.Header) Header {
-	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Typ: h.Typ}
+func cryptoHeaderToOpen(h *cryptoadapter.Header) Header {
+	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Typ: h.Typ, Cty: h.Cty}
 }
 
-func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
+func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	switch {
 	case errors.Is(err, cryptoadapter.ErrParseEncrypted):
 		return &Error{
@@ -147,7 +162,7 @@ func mapDecryptError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
 	}
 }
 
-func mapVerifyError(err error, _ *Policy, hdr cryptoadapter.Header) *Error {
+func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	switch {
 	case errors.Is(err, cryptoadapter.ErrParseSigned):
 		return &Error{

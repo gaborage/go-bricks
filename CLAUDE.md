@@ -1298,6 +1298,7 @@ fw.RegisterModules(
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |
 | Inner payload not a JWS | 400 | `JOSE_INNER_NOT_JWS` |
 | JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` |
+| Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` |
 | Outbound seal failed (server-side) | 500 | `JOSE_OUTBOUND_FAILED` |
 
 **Security invariant** (asserted by tests): a response is JOSE-encrypted iff inbound was successfully verified AND the route has an outbound policy. Tampered-byte negative tests must produce *plaintext* error responses; observing `Content-Type: application/jose` on the failure path is a security regression.
