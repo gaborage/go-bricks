@@ -2745,30 +2745,30 @@ func TestParseParameterTags(t *testing.T) {
 }
 
 func TestHasJOSESentinelTag(t *testing.T) {
+	// parse uses ast.Inspect to find the first struct type literal in src — a single
+	// callback collapses what would otherwise be a nested decl→spec→type-assertion
+	// loop, keeping cognitive complexity well below the project's 15-statement cap.
 	parse := func(t *testing.T, src string) *ast.StructType {
 		t.Helper()
 		f, err := parser.ParseFile(token.NewFileSet(), "test.go", "package x\n"+src, 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		for _, decl := range f.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
+		var found *ast.StructType
+		ast.Inspect(f, func(n ast.Node) bool {
+			if found != nil {
+				return false
 			}
-			for _, spec := range gen.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				st, ok := ts.Type.(*ast.StructType)
-				if ok {
-					return st
-				}
+			if st, ok := n.(*ast.StructType); ok {
+				found = st
+				return false
 			}
+			return true
+		})
+		if found == nil {
+			t.Fatal("no struct found")
 		}
-		t.Fatal("no struct found")
-		return nil
+		return found
 	}
 
 	tests := []struct {

@@ -265,28 +265,22 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
 	sb.WriteString("          content:\n")
 	if joseResponse {
-		fmt.Fprintf(sb, "            %s:\n", mediaJOSE)
-		sb.WriteString("              schema:\n")
-		sb.WriteString("                $ref: '#/components/schemas/SuccessResponse'\n")
+		writeMediaSchemaRef(sb, "            ", mediaJOSE, "SuccessResponse")
 		writeJOSEDescription(sb, "              ")
 	} else {
-		fmt.Fprintf(sb, "            %s:\n", mediaJSON)
-		sb.WriteString("              schema:\n")
-		sb.WriteString("                $ref: '#/components/schemas/SuccessResponse'\n")
+		writeMediaSchemaRef(sb, "            ", mediaJSON, "SuccessResponse")
 	}
 	sb.WriteString("        '400':\n")
 	sb.WriteString("          description: Bad Request\n")
 	sb.WriteString("          content:\n")
-	fmt.Fprintf(sb, "            %s:\n", mediaJSON)
-	sb.WriteString("              schema:\n")
+	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
+	// security model: when decrypt/verify fails the peer is unauthenticated and the
+	// server leaks nothing beyond {code,message}.
+	errorSchema := "ErrorResponse"
 	if joseRoute {
-		// Pre-trust failures are plaintext minimal envelopes per the JOSE security model:
-		// when decrypt/verify fails the peer is unauthenticated and the server leaks
-		// nothing beyond {code,message}.
-		sb.WriteString("                $ref: '#/components/schemas/JOSEErrorEnvelope'\n")
-	} else {
-		sb.WriteString("                $ref: '#/components/schemas/ErrorResponse'\n")
+		errorSchema = "JOSEErrorEnvelope"
 	}
+	writeMediaSchemaRef(sb, "            ", mediaJSON, errorSchema)
 }
 
 // writeJOSEDescription emits the canonical "JOSE compact serialization" block used by
@@ -298,6 +292,21 @@ func writeJOSEDescription(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The referenced\n", indent)
 	fmt.Fprintf(sb, "%s  schema documents the verified plaintext shape — wire payload is the\n", indent)
 	fmt.Fprintf(sb, "%s  JWE compact form whose plaintext, after decrypt+verify, conforms to it.\n", indent)
+}
+
+// writeMediaSchemaRef emits the canonical 3-line YAML block:
+//
+//	<indent><contentType>:
+//	<indent>  schema:
+//	<indent>    $ref: '#/components/schemas/<ref>'
+//
+// Centralised because the same shape appears in writeRequestBody and in both arms of
+// writeResponses; SonarCloud S1192 flags the literal duplication, but the deeper win
+// is a single edit point if we ever change the components/schemas path layout.
+func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
+	fmt.Fprintf(sb, "%s%s:\n", indent, contentType)
+	fmt.Fprintf(sb, "%s  schema:\n", indent)
+	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
 }
 
 // getOperationID generates an operation ID for a route
@@ -730,22 +739,21 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, _ []models.Fiel
 		schemaName = reqType.Name
 		isJOSE = reqType.JOSE
 	}
+	contentType := mediaJSON
+	if isJOSE {
+		contentType = mediaJOSE
+	}
 
 	sb.WriteString("      requestBody:\n")
 	sb.WriteString("        required: true\n")
 	sb.WriteString("        content:\n")
-	if isJOSE {
-		fmt.Fprintf(sb, "          %s:\n", mediaJOSE)
-	} else {
-		fmt.Fprintf(sb, "          %s:\n", mediaJSON)
-	}
-	sb.WriteString("            schema:\n")
 
-	// Reference the schema if it has a name, otherwise inline it
 	if schemaName != "" {
-		fmt.Fprintf(sb, "              $ref: '#/components/schemas/%s'\n", schemaName)
+		writeMediaSchemaRef(sb, "          ", contentType, schemaName)
 	} else {
-		// Inline schema (fallback - shouldn't happen with proper type extraction)
+		// Inline schema (fallback — shouldn't happen with proper type extraction).
+		fmt.Fprintf(sb, "          %s:\n", contentType)
+		sb.WriteString("            schema:\n")
 		sb.WriteString("              type: object\n")
 	}
 	if isJOSE {
