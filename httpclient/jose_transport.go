@@ -10,6 +10,11 @@ import (
 	"github.com/gaborage/go-bricks/jose"
 )
 
+// headerContentType is the canonical HTTP Content-Type header name. Extracted to a
+// const so it isn't repeated as a string literal at every Get/Set call site (SonarCloud
+// S1192). net/http does not provide a stdlib constant for header field names.
+const headerContentType = "Content-Type"
+
 // JOSETransport is an http.RoundTripper that signs+encrypts outbound request bodies
 // (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
 // pair of policies and a single KeyResolver.
@@ -102,7 +107,7 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 	clone.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(strings.NewReader(compact)), nil
 	}
-	clone.Header.Set("Content-Type", jose.ContentType)
+	clone.Header.Set(headerContentType, jose.ContentType)
 	return clone, nil
 }
 
@@ -113,7 +118,7 @@ func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
 	if t.Inbound == nil || resp == nil || resp.Body == nil {
 		return nil
 	}
-	if !jose.IsContentType(resp.Header.Get("Content-Type")) {
+	if !jose.IsContentType(resp.Header.Get(headerContentType)) {
 		return nil
 	}
 	if t.Resolver == nil {
@@ -132,7 +137,7 @@ func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
 
 	resp.Body = io.NopCloser(bytes.NewReader(plaintext))
 	resp.ContentLength = int64(len(plaintext))
-	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set(headerContentType, "application/json")
 	return nil
 }
 

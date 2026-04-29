@@ -20,6 +20,11 @@ import (
 
 // joseEchoServer simulates a JOSE-aware partner: it decrypts the request, echoes the
 // plaintext back inside an encrypted response.
+//
+// Handler runs in a goroutine spawned by httptest.NewServer, distinct from the test
+// goroutine. Per the testing package docs, require.* (which calls FailNow → Goexit)
+// must NOT be called from a non-test goroutine — it produces undefined behavior.
+// The handler uses t.Errorf + early return for diagnostics that survive that boundary.
 func joseEchoServer(t *testing.T, f *jositest.BidirectionalFixture) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +33,11 @@ func joseEchoServer(t *testing.T, f *jositest.BidirectionalFixture) *httptest.Se
 			return
 		}
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if err != nil {
+			t.Errorf("echo handler: read request body failed: %v", err)
+			http.Error(w, `{"code":"JOSE_READ_FAILED","message":"could not read body"}`, http.StatusBadRequest)
+			return
+		}
 		plaintext, _, _, err := jose.Open(string(body), f.PeerInbound, f.Resolver)
 		if err != nil {
 			http.Error(w, `{"code":"JOSE_DECRYPT_FAILED","message":"could not decrypt"}`, http.StatusUnauthorized)
@@ -36,7 +45,11 @@ func joseEchoServer(t *testing.T, f *jositest.BidirectionalFixture) *httptest.Se
 		}
 		respPayload := []byte(`{"echo":` + string(plaintext) + `}`)
 		compact, err := jose.Seal(respPayload, f.PeerOutbound, f.Resolver)
-		require.NoError(t, err)
+		if err != nil {
+			t.Errorf("echo handler: seal response failed: %v", err)
+			http.Error(w, `{"code":"JOSE_SEAL_FAILED","message":"could not seal response"}`, http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", jose.ContentType)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(compact))
@@ -164,7 +177,12 @@ func TestJOSETransportPassthroughWhenOutboundNil(t *testing.T) {
 	// JOSETransport safely composable inside a builder chain that may conditionally
 	// enable JOSE.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("passthrough handler: read request body failed: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
