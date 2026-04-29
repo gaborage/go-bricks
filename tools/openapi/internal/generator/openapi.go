@@ -324,7 +324,7 @@ func writeJOSEDescription(sb *strings.Builder, indent, plaintextSchema string) {
 //
 // Used for application/json bodies where the wire shape IS the documented schema.
 func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
-	fmt.Fprintf(sb, "%s%s:\n", indent, contentType)
+	writeMediaTypeKey(sb, indent, contentType)
 	fmt.Fprintf(sb, "%s  schema:\n", indent)
 	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
 }
@@ -335,7 +335,7 @@ func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
 // shape). The plaintext schema is still emitted as a component and referenced from
 // the parent RequestBody/Response description text via writeJOSEDescription.
 func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
-	fmt.Fprintf(sb, "%s%s:\n", indent, mediaJOSE)
+	writeMediaTypeKey(sb, indent, mediaJOSE)
 	fmt.Fprintf(sb, "%s  schema:\n", indent)
 	fmt.Fprintf(sb, "%s    type: string\n", indent)
 	fmt.Fprintf(sb, "%s    format: jose\n", indent)
@@ -345,6 +345,12 @@ func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
 // map under either a Response Object or a RequestBody Object.
 func writeContentLine(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%scontent:\n", indent)
+}
+
+// writeMediaTypeKey emits "<indent><mediaType>:\n" — the YAML key that opens a single
+// Media Type Object inside a content map (e.g. "application/json:" or "application/jose:").
+func writeMediaTypeKey(sb *strings.Builder, indent, mediaType string) {
+	fmt.Fprintf(sb, "%s%s:\n", indent, mediaType)
 }
 
 // getOperationID generates an operation ID for a route
@@ -800,7 +806,7 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models
 		writeMediaSchemaRef(sb, indent10, contentType, schemaName)
 	default:
 		// Inline schema (fallback — shouldn't happen with proper type extraction).
-		fmt.Fprintf(sb, "%s%s:\n", indent10, contentType)
+		writeMediaTypeKey(sb, indent10, contentType)
 		sb.WriteString("            schema:\n")
 		sb.WriteString("              type: object\n")
 	}
