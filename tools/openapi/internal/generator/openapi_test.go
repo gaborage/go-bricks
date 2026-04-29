@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
+	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
 
@@ -2062,20 +2063,51 @@ func TestWriteRequestBodyJOSEContentType(t *testing.T) {
 	gen.writeRequestBody(&sb, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
 	out := sb.String()
 
-	if !strings.Contains(out, "application/jose:") {
-		t.Error("JOSE-flagged request body must use Content-Type application/jose")
-	}
-	if strings.Contains(out, "application/json:") {
-		t.Error("JOSE-flagged request body must NOT also emit application/json")
-	}
-	// Plaintext schema is preserved as the source of truth — wire format is the JOSE
-	// compact serialization wrapping a payload that conforms to this schema.
-	if !strings.Contains(out, "$ref: '#/components/schemas/CreateTokenRequest'") {
-		t.Error("JOSE-flagged request body must reference the plaintext schema")
-	}
-	if !strings.Contains(out, "JOSE compact serialization") {
-		t.Error("JOSE-flagged request body must include the descriptive note")
-	}
+	// Wire format: per OpenAPI 3.0.1, application/jose Media Type schema MUST describe
+	// the on-the-wire payload (a string token), not the decrypted plaintext shape.
+	assert.Contains(t, out, "application/jose:")
+	assert.NotContains(t, out, "application/json:")
+	assert.Contains(t, out, "type: string")
+	assert.Contains(t, out, "format: jose")
+
+	// Plaintext schema MUST NOT appear under content.application/jose — the spec
+	// reserves Media Type Object schema for the wire shape only. The plaintext
+	// component schema is still emitted (via generateSchemasFromTypes) and is
+	// referenced from the description text.
+	assert.NotContains(t, out, "application/jose:\n            schema:\n              $ref:")
+
+	// Description on the parent RequestBody Object (spec-compliant location) names
+	// the plaintext schema so consumers know what to expect after decrypt+verify.
+	assert.Contains(t, out, "JOSE compact serialization")
+	assert.Contains(t, out, "CreateTokenRequest schema")
+	assert.Contains(t, out, "#/components/schemas/CreateTokenRequest")
+}
+
+func TestWriteMethodEmitsRequestBodyForJOSEEvenWithEmptyBodyFields(t *testing.T) {
+	// Real bug caught by CodeRabbit: a JOSE-tagged request type whose plaintext
+	// fields all live in path/query/header params (or are absent entirely) would
+	// have produced no requestBody at all, even though the route still expects an
+	// application/jose payload on the wire. The fix drives the requestBody emission
+	// from `route.Request.JOSE || len(bodyFields) > 0`.
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	spec, err := gen.Generate(&models.Project{
+		Name:    "JOSEOnlyApp",
+		Version: "1.0.0",
+		Modules: []models.Module{{
+			Name:    "vts",
+			Package: "vts",
+			Routes: []models.Route{{
+				Method:      "POST",
+				Path:        "/v1/tokens",
+				HandlerName: "createToken",
+				Request:     &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true},
+				Response:    &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
+			}},
+		}},
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, spec, "requestBody:", "JOSE-only routes must still emit a requestBody")
+	assert.Contains(t, spec, "application/jose:", "the JOSE requestBody must be present even with no plaintext body fields")
 }
 
 func TestWriteResponsesJOSEPath(t *testing.T) {

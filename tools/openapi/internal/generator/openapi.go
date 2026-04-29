@@ -236,8 +236,11 @@ func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route)
 		g.writeParameters(sb, params)
 	}
 
-	// Write request body if there are body fields
-	if len(bodyFields) > 0 && route.Request != nil {
+	// Write request body if there are body fields, OR if the route is JOSE-tagged
+	// (a JOSE request type may have only the sentinel field, with all "plaintext"
+	// fields filtered into header/path/query params or simply absent — but the route
+	// still expects an application/jose payload on the wire).
+	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
 		g.writeRequestBody(sb, route.Request)
 	}
 
@@ -266,9 +269,11 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	if joseResponse {
 		// Description on the Response Object (spec-compliant) — per OpenAPI 3.0.1,
 		// description is a fixed field on Response, but NOT on Media Type Object.
-		writeJOSEDescription(sb, "          ")
+		// The Media Type schema describes the WIRE shape (a string token); the
+		// plaintext component schema is referenced from the description text.
+		writeJOSEDescription(sb, "          ", "SuccessResponse")
 		sb.WriteString("          content:\n")
-		writeMediaSchemaRef(sb, contentIndent, mediaJOSE, "SuccessResponse")
+		writeMediaSchemaJOSE(sb, contentIndent)
 	} else {
 		fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
 		sb.WriteString("          content:\n")
@@ -294,28 +299,40 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 // invoked at the parent level (under requestBody: or under '200':), not nested inside
 // the content/media-type block.
 //
-// indent is the YAML depth of the description: line itself (e.g., "        " for a
-// requestBody, "          " for a response).
-func writeJOSEDescription(sb *strings.Builder, indent string) {
+// indent is the YAML depth of the description: line itself. plaintextSchema is the
+// component schema name to reference from the description so consumers know what
+// shape the decrypted payload conforms to.
+func writeJOSEDescription(sb *strings.Builder, indent, plaintextSchema string) {
 	fmt.Fprintf(sb, "%sdescription: |\n", indent)
-	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The referenced\n", indent)
-	fmt.Fprintf(sb, "%s  schema documents the verified plaintext shape — wire payload is the\n", indent)
-	fmt.Fprintf(sb, "%s  JWE compact form whose plaintext, after decrypt+verify, conforms to it.\n", indent)
+	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The wire payload\n", indent)
+	fmt.Fprintf(sb, "%s  is a base64url-encoded JWE compact form whose plaintext, after\n", indent)
+	fmt.Fprintf(sb, "%s  decrypt+verify, conforms to the %s schema —\n", indent, plaintextSchema)
+	fmt.Fprintf(sb, "%s  see #/components/schemas/%s.\n", indent, plaintextSchema)
 }
 
-// writeMediaSchemaRef emits the canonical 3-line YAML block:
+// writeMediaSchemaRef emits a Media Type entry whose schema is a $ref to a component:
 //
 //	<indent><contentType>:
 //	<indent>  schema:
 //	<indent>    $ref: '#/components/schemas/<ref>'
 //
-// Centralised because the same shape appears in writeRequestBody and in both arms of
-// writeResponses; SonarCloud S1192 flags the literal duplication, but the deeper win
-// is a single edit point if we ever change the components/schemas path layout.
+// Used for application/json bodies where the wire shape IS the documented schema.
 func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
 	fmt.Fprintf(sb, "%s%s:\n", indent, contentType)
 	fmt.Fprintf(sb, "%s  schema:\n", indent)
 	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
+}
+
+// writeMediaSchemaJOSE emits a Media Type entry for application/jose where the schema
+// describes the on-the-wire payload as a string token (per OpenAPI 3.0.1 — the JOSE
+// compact serialization is a base64url-encoded string, NOT the decrypted plaintext
+// shape). The plaintext schema is still emitted as a component and referenced from
+// the parent RequestBody/Response description text via writeJOSEDescription.
+func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
+	fmt.Fprintf(sb, "%s%s:\n", indent, mediaJOSE)
+	fmt.Fprintf(sb, "%s  schema:\n", indent)
+	fmt.Fprintf(sb, "%s    type: string\n", indent)
+	fmt.Fprintf(sb, "%s    format: jose\n", indent)
 }
 
 // getOperationID generates an operation ID for a route
@@ -758,13 +775,18 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models
 	if isJOSE {
 		// Description on the RequestBody Object (spec-compliant) — sibling of content,
 		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
-		writeJOSEDescription(sb, "        ")
+		writeJOSEDescription(sb, "        ", schemaName)
 	}
 	sb.WriteString("        content:\n")
 
-	if schemaName != "" {
+	switch {
+	case isJOSE:
+		// JOSE wire payload is a string token, not the plaintext schema. The plaintext
+		// component schema is referenced from the description text above.
+		writeMediaSchemaJOSE(sb, "          ")
+	case schemaName != "":
 		writeMediaSchemaRef(sb, "          ", contentType, schemaName)
-	} else {
+	default:
 		// Inline schema (fallback — shouldn't happen with proper type extraction).
 		fmt.Fprintf(sb, "          %s:\n", contentType)
 		sb.WriteString("            schema:\n")
