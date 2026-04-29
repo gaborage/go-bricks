@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	nethttp "net/http"
@@ -14,6 +15,13 @@ import (
 // const so it isn't repeated as a string literal at every Get/Set call site (SonarCloud
 // S1192). net/http does not provide a stdlib constant for header field names.
 const headerContentType = "Content-Type"
+
+// DefaultMaxJOSEBodyBytes caps the size of an inbound JOSE response body when no
+// explicit MaxResponseBytes is set on JOSETransport. 10 MiB is comfortably larger than
+// any expected VTS-style payload (token responses are typically <2 KiB) but small
+// enough to bound peak memory if a counterparty (or attacker) sends a malicious
+// response. Defense-in-depth against memory exhaustion.
+const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 
 // JOSETransport is an http.RoundTripper that signs+encrypts outbound request bodies
 // (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
@@ -45,6 +53,11 @@ type JOSETransport struct {
 	// Resolver supplies keys for both Outbound (sign/encrypt) and Inbound (decrypt/verify).
 	// Required when either policy is set.
 	Resolver jose.KeyResolver
+
+	// MaxResponseBytes bounds the response body read when Inbound is set. Zero means
+	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely (NOT
+	// recommended for untrusted counterparties).
+	MaxResponseBytes int64
 }
 
 // RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
@@ -88,7 +101,9 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
 	}
 
-	plaintext, err := readAndCloseBody(req.Body)
+	// Outbound body is from this application — trusted size — so no cap.
+	// The OOM concern is for untrusted inbound responses (handled in unwrapResponse).
+	plaintext, err := readAndCloseBody(req.Body, -1)
 	if err != nil {
 		return nil, fmt.Errorf("httpclient: read request body: %w", err)
 	}
@@ -125,7 +140,11 @@ func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
 		return fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
 
-	compact, err := readAndCloseBody(resp.Body)
+	maxBytes := t.MaxResponseBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxJOSEBodyBytes
+	}
+	compact, err := readAndCloseBody(resp.Body, maxBytes)
 	if err != nil {
 		return fmt.Errorf("httpclient: read response body: %w", err)
 	}
@@ -141,12 +160,33 @@ func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
 	return nil
 }
 
-func readAndCloseBody(body io.ReadCloser) ([]byte, error) {
+// readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.
+// Uses http.MaxBytesReader rather than io.LimitReader+length-check so an oversize
+// payload errors mid-stream — without that, up to maxBytes of memory would be
+// materialized on the heap before the overflow is detected.
+//
+// The overflow is mapped to a typed httpclient.ClientError (ValidationError) so
+// callers can distinguish it from network/IO errors via IsErrorType.
+func readAndCloseBody(body io.ReadCloser, maxBytes int64) ([]byte, error) {
 	if body == nil {
 		return nil, nil
 	}
 	defer body.Close()
-	return io.ReadAll(body)
+	if maxBytes < 0 {
+		return io.ReadAll(body)
+	}
+	b, err := io.ReadAll(nethttp.MaxBytesReader(nil, body, maxBytes))
+	if err != nil {
+		var maxErr *nethttp.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, NewValidationError(
+				fmt.Sprintf("JOSE response body exceeds %d bytes", maxBytes),
+				"response_body",
+			)
+		}
+		return nil, err
+	}
+	return b, nil
 }
 
 // IsJOSEError reports whether err is a JOSE crypto failure — kept as a thin re-export

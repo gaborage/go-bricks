@@ -202,6 +202,39 @@ func TestJOSETransportPassthroughWhenOutboundNil(t *testing.T) {
 	assert.JSONEq(t, `{"untouched":true}`, string(body))
 }
 
+func TestJOSETransportRespectsMaxResponseBytes(t *testing.T) {
+	// Defense-in-depth: a JOSE-aware peer (or attacker) returning a Content-Type:
+	// application/jose body larger than MaxResponseBytes must produce an error before
+	// the body is buffered into memory in full.
+	f := jositest.NewBidirectionalFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jose")
+		w.WriteHeader(http.StatusOK)
+		// Write a body larger than the cap. The transport should reject it without
+		// attempting to decrypt — io.LimitReader caps the read at maxBytes+1.
+		_, _ = w.Write(bytes.Repeat([]byte("A"), 1024))
+	}))
+	defer server.Close()
+
+	transport := &httpclient.JOSETransport{
+		Outbound:         f.ClientOutbound,
+		Inbound:          f.ClientInbound,
+		Resolver:         f.Resolver,
+		MaxResponseBytes: 256, // 256 bytes — well under the 1024-byte payload
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
+	require.NoError(t, err)
+
+	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
+	require.Error(t, err)
+	assert.Nil(t, resp, "response exceeding MaxResponseBytes must not be returned to the caller")
+	assert.Contains(t, err.Error(), "exceeds")
+	// The overflow surfaces as a typed ClientError of category ValidationError so
+	// callers can distinguish policy failures from I/O errors via IsErrorType.
+	assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
+		"oversize response must be a typed ValidationError, got %T: %v", err, err)
+}
+
 func TestJOSETransportOutboundRequiresResolver(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
 	transport := &httpclient.JOSETransport{Outbound: f.ClientOutbound, Resolver: nil}
