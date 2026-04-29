@@ -260,15 +260,19 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	joseResponse := route.Response != nil && route.Response.JOSE
 	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 
+	const contentIndent = "            "
 	sb.WriteString("      responses:\n")
 	sb.WriteString("        '200':\n")
-	fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
-	sb.WriteString("          content:\n")
 	if joseResponse {
-		writeMediaSchemaRef(sb, "            ", mediaJOSE, "SuccessResponse")
-		writeJOSEDescription(sb, "              ")
+		// Description on the Response Object (spec-compliant) — per OpenAPI 3.0.1,
+		// description is a fixed field on Response, but NOT on Media Type Object.
+		writeJOSEDescription(sb, "          ")
+		sb.WriteString("          content:\n")
+		writeMediaSchemaRef(sb, contentIndent, mediaJOSE, "SuccessResponse")
 	} else {
-		writeMediaSchemaRef(sb, "            ", mediaJSON, "SuccessResponse")
+		fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
+		sb.WriteString("          content:\n")
+		writeMediaSchemaRef(sb, contentIndent, mediaJSON, "SuccessResponse")
 	}
 	sb.WriteString("        '400':\n")
 	sb.WriteString("          description: Bad Request\n")
@@ -280,13 +284,18 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	if joseRoute {
 		errorSchema = "JOSEErrorEnvelope"
 	}
-	writeMediaSchemaRef(sb, "            ", mediaJSON, errorSchema)
+	writeMediaSchemaRef(sb, contentIndent, mediaJSON, errorSchema)
 }
 
-// writeJOSEDescription emits the canonical "JOSE compact serialization" block used by
-// both the request-body and response sections. Centralized so the wording stays
-// consistent across the spec; indent controls the YAML depth (request body and
-// response.content live at different levels).
+// writeJOSEDescription emits the canonical "JOSE compact serialization" description
+// block. Per OpenAPI 3.0.1, Media Type Objects (under content.<contentType>:) do NOT
+// allow a description field — fixed fields are limited to schema, example, examples,
+// encoding. RequestBody and Response objects DO allow description, so the helper is
+// invoked at the parent level (under requestBody: or under '200':), not nested inside
+// the content/media-type block.
+//
+// indent is the YAML depth of the description: line itself (e.g., "        " for a
+// requestBody, "          " for a response).
 func writeJOSEDescription(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%sdescription: |\n", indent)
 	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The referenced\n", indent)
@@ -746,6 +755,11 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, _ []models.Fiel
 
 	sb.WriteString("      requestBody:\n")
 	sb.WriteString("        required: true\n")
+	if isJOSE {
+		// Description on the RequestBody Object (spec-compliant) — sibling of content,
+		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
+		writeJOSEDescription(sb, "        ")
+	}
 	sb.WriteString("        content:\n")
 
 	if schemaName != "" {
@@ -755,9 +769,6 @@ func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, _ []models.Fiel
 		fmt.Fprintf(sb, "          %s:\n", contentType)
 		sb.WriteString("            schema:\n")
 		sb.WriteString("              type: object\n")
-	}
-	if isJOSE {
-		writeJOSEDescription(sb, "            ")
 	}
 }
 
