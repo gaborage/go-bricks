@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -1147,6 +1148,32 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 
 	// Extract fields from struct
 	typeInfo.Fields = a.extractStructFields(structType, typeInfo.Package)
+	// Scan for the JOSE sentinel field — the standard `_ struct{} `jose:"..."` ` pattern
+	// is filtered out of Fields by the unexported-name check, so JOSE detection runs as
+	// a separate pre-pass over raw struct fields.
+	typeInfo.JOSE = hasJOSESentinelTag(structType)
+}
+
+// hasJOSESentinelTag reports whether any field on the struct carries a `jose:"..."`
+// struct tag. Uses reflect.StructTag.Lookup rather than a substring match — the latter
+// would false-positive on tag values that happen to contain the literal `jose:"` (e.g.,
+// a description tag escaping a quoted reference to the jose namespace). Importing the
+// runtime jose package is not an option because the openapi tool is in its own go.mod.
+func hasJOSESentinelTag(s *ast.StructType) bool {
+	if s == nil || s.Fields == nil {
+		return false
+	}
+	for _, field := range s.Fields.List {
+		if field.Tag == nil {
+			continue
+		}
+		// Tag.Value carries the surrounding backticks; trim them so reflect parses correctly.
+		raw := strings.Trim(field.Tag.Value, "`")
+		if _, ok := reflect.StructTag(raw).Lookup("jose"); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // findStructDefinition searches for a struct type definition by name

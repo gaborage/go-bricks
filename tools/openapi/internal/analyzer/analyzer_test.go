@@ -2743,3 +2743,71 @@ func TestParseParameterTags(t *testing.T) {
 		})
 	}
 }
+
+func TestHasJOSESentinelTag(t *testing.T) {
+	parse := func(t *testing.T, src string) *ast.StructType {
+		t.Helper()
+		f, err := parser.ParseFile(token.NewFileSet(), "test.go", "package x\n"+src, 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if ok {
+					return st
+				}
+			}
+		}
+		t.Fatal("no struct found")
+		return nil
+	}
+
+	tests := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{
+			name:   "tagged_sentinel_field",
+			source: "type R struct { _ struct{} `jose:\"decrypt=k,verify=p\"`; PAN string `json:\"pan\"` }",
+			want:   true,
+		},
+		{
+			name:   "no_jose_tag",
+			source: "type R struct { PAN string `json:\"pan\" validate:\"required\"` }",
+			want:   false,
+		},
+		{
+			name:   "jose_tag_on_named_field",
+			source: "type R struct { Inner string `jose:\"sign=k\"` }",
+			want:   true,
+		},
+		{
+			name:   "empty_struct",
+			source: "type R struct {}",
+			want:   false,
+		},
+		{
+			name:   "jose_substring_in_other_tag_must_not_match",
+			source: "type R struct { Field string `description:\"prejose:\\\"x\\\"\"` }",
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasJOSESentinelTag(parse(t, tt.source))
+			if got != tt.want {
+				t.Errorf("hasJOSESentinelTag = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

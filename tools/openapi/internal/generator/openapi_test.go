@@ -652,12 +652,30 @@ func TestCreateStandardSchemas(t *testing.T) {
 	schemas := gen.createStandardSchemas()
 
 	// Test that standard schemas are created correctly
-	if len(schemas) != 2 {
-		t.Errorf("Expected 2 schemas, got %d", len(schemas))
+	if len(schemas) != 3 {
+		t.Errorf("Expected 3 schemas, got %d", len(schemas))
 	}
 
 	t.Run("SuccessResponse schema", func(t *testing.T) {
 		validateSuccessResponseSchema(t, schemas)
+	})
+
+	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
+		schema, ok := schemas["JOSEErrorEnvelope"]
+		if !ok {
+			t.Fatal("JOSEErrorEnvelope schema missing — pre-trust JOSE failures need a documented envelope distinct from ErrorResponse")
+		}
+		// The envelope MUST NOT include framework metadata fields (meta, traceId)
+		// — that's the whole security argument for having it as a separate schema.
+		if _, hasMeta := schema.Properties["meta"]; hasMeta {
+			t.Error("JOSEErrorEnvelope must NOT carry meta — peer is unauthenticated, leak nothing")
+		}
+		if _, hasCode := schema.Properties["code"]; !hasCode {
+			t.Error("JOSEErrorEnvelope must include 'code' property")
+		}
+		if _, hasMsg := schema.Properties["message"]; !hasMsg {
+			t.Error("JOSEErrorEnvelope must include 'message' property")
+		}
 	})
 
 	t.Run("ErrorResponse schema", func(t *testing.T) {
@@ -1729,7 +1747,7 @@ func TestWriteRequestBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var sb strings.Builder
-			gen.writeRequestBody(&sb, tt.bodyFields, tt.schemaName)
+			gen.writeRequestBody(&sb, tt.bodyFields, &models.TypeInfo{Name: tt.schemaName})
 			output := sb.String()
 
 			for _, expected := range tt.expectedOutput {
@@ -2035,5 +2053,69 @@ func TestGenerateWithParameters(t *testing.T) {
 	err = yaml.Unmarshal([]byte(spec), &parsed)
 	if err != nil {
 		t.Fatalf(yamlParsingFailedMsg, err)
+	}
+}
+
+func TestWriteRequestBodyJOSEContentType(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeRequestBody(&sb, nil, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
+	out := sb.String()
+
+	if !strings.Contains(out, "application/jose:") {
+		t.Error("JOSE-flagged request body must use Content-Type application/jose")
+	}
+	if strings.Contains(out, "application/json:") {
+		t.Error("JOSE-flagged request body must NOT also emit application/json")
+	}
+	// Plaintext schema is preserved as the source of truth — wire format is the JOSE
+	// compact serialization wrapping a payload that conforms to this schema.
+	if !strings.Contains(out, "$ref: '#/components/schemas/CreateTokenRequest'") {
+		t.Error("JOSE-flagged request body must reference the plaintext schema")
+	}
+	if !strings.Contains(out, "JOSE compact serialization") {
+		t.Error("JOSE-flagged request body must include the descriptive note")
+	}
+}
+
+func TestWriteResponsesJOSEPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/tokens",
+		Response: &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
+	})
+	out := sb.String()
+
+	if !strings.Contains(out, "'200':") || !strings.Contains(out, "application/jose:") {
+		t.Error("JOSE-flagged 200 response must use application/jose")
+	}
+	// Pre-trust failure path: peer is unauthenticated so the envelope must be the
+	// minimal JOSEErrorEnvelope, NOT the framework's standard ErrorResponse (which
+	// carries traceId/meta and would leak fingerprint information).
+	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
+		t.Error("JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
+	}
+	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("JOSE 4xx response must NOT reference ErrorResponse — leaks framework metadata to unauthenticated peers")
+	}
+}
+
+func TestWriteResponsesNonJOSEUnchanged(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/users",
+		Response: &models.TypeInfo{Name: "User", JOSE: false},
+	})
+	out := sb.String()
+
+	if strings.Contains(out, "application/jose:") {
+		t.Error("non-JOSE response must NOT use application/jose")
+	}
+	if !strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("non-JOSE 4xx must reference standard ErrorResponse")
 	}
 }
