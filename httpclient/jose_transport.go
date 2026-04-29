@@ -1,0 +1,198 @@
+package httpclient
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	nethttp "net/http"
+	"strings"
+
+	"github.com/gaborage/go-bricks/jose"
+)
+
+// headerContentType is the canonical HTTP Content-Type header name. Extracted to a
+// const so it isn't repeated as a string literal at every Get/Set call site (SonarCloud
+// S1192). net/http does not provide a stdlib constant for header field names.
+const headerContentType = "Content-Type"
+
+// DefaultMaxJOSEBodyBytes caps the size of an inbound JOSE response body when no
+// explicit MaxResponseBytes is set on JOSETransport. 10 MiB is comfortably larger than
+// any expected VTS-style payload (token responses are typically <2 KiB) but small
+// enough to bound peak memory if a counterparty (or attacker) sends a malicious
+// response. Defense-in-depth against memory exhaustion.
+const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
+
+// JOSETransport is an http.RoundTripper that signs+encrypts outbound request bodies
+// (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
+// pair of policies and a single KeyResolver.
+//
+// Architectural placement: JOSETransport sits below the httpclient retry loop, so each
+// retry attempt produces a freshly-sealed request — important for protocols that
+// require unique iat/jti claims per attempt (Visa Token Services and similar).
+//
+// Response Content-Type discrimination: only application/jose responses are unwrapped;
+// other Content-Types pass through untouched. This mirrors the GoBricks server's hybrid
+// error envelope — pre-trust failures from the counterparty come back as plaintext
+// minimal JSON because the peer was never authenticated, and the transport must not
+// attempt to decrypt those.
+type JOSETransport struct {
+	// Inner is the underlying RoundTripper that performs the actual HTTP exchange.
+	// Nil defaults to nethttp.DefaultTransport.
+	Inner nethttp.RoundTripper
+
+	// Outbound is required: the policy used to sign+encrypt every outbound request body.
+	// A nil Outbound disables outbound wrapping entirely (the transport delegates to Inner).
+	Outbound *jose.Policy
+
+	// Inbound is optional: when set, application/jose responses are decrypted+verified.
+	// Other response Content-Types pass through unmodified so plaintext error envelopes
+	// from JOSE-aware counterparties (e.g., GoBricks pre-trust failures) remain readable.
+	Inbound *jose.Policy
+
+	// Resolver supplies keys for both Outbound (sign/encrypt) and Inbound (decrypt/verify).
+	// Required when either policy is set.
+	Resolver jose.KeyResolver
+
+	// MaxResponseBytes bounds the response body read when Inbound is set. Zero means
+	// use DefaultMaxJOSEBodyBytes. A negative value disables the cap entirely (NOT
+	// recommended for untrusted counterparties).
+	MaxResponseBytes int64
+}
+
+// RoundTrip wraps the request body with JOSE (when Outbound is set), forwards to the
+// inner transport, and unwraps the response body (when Inbound is set AND the response
+// Content-Type matches application/jose).
+func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	inner := t.Inner
+	if inner == nil {
+		inner = nethttp.DefaultTransport
+	}
+
+	wrapped, err := t.wrapRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := inner.RoundTrip(wrapped)
+	if err != nil {
+		return resp, err
+	}
+
+	if err := t.unwrapResponse(resp); err != nil {
+		// Close body to prevent leak, then return the error so the caller sees the
+		// crypto failure instead of stale-but-readable ciphertext.
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+// wrapRequest reads req.Body, seals it with the Outbound policy, and returns a clone
+// of req with the sealed body and updated Content-Type / Content-Length headers.
+// If Outbound is nil, returns req unchanged.
+func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, error) {
+	if t.Outbound == nil {
+		return req, nil
+	}
+	if t.Resolver == nil {
+		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
+	}
+
+	// Outbound body is from this application — trusted size — so no cap.
+	// The OOM concern is for untrusted inbound responses (handled in unwrapResponse).
+	plaintext, err := readAndCloseBody(req.Body, -1)
+	if err != nil {
+		return nil, fmt.Errorf("httpclient: read request body: %w", err)
+	}
+
+	compact, err := jose.Seal(plaintext, t.Outbound, t.Resolver)
+	if err != nil {
+		return nil, err
+	}
+
+	clone := req.Clone(req.Context())
+	clone.Body = io.NopCloser(strings.NewReader(compact))
+	clone.ContentLength = int64(len(compact))
+	// GetBody enables stdlib-driven request replay: it's invoked on redirect-following,
+	// connection retry, and HTTP/2 retry-on-RST_STREAM. Without it those paths see an
+	// already-drained body and silently send an empty payload.
+	clone.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(compact)), nil
+	}
+	clone.Header.Set(headerContentType, jose.ContentType)
+	return clone, nil
+}
+
+// unwrapResponse decrypts+verifies resp.Body when Inbound is set AND the response's
+// Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
+// from a JOSE-aware peer) pass through unmodified.
+func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
+	if t.Inbound == nil || resp == nil || resp.Body == nil {
+		return nil
+	}
+	if !jose.IsContentType(resp.Header.Get(headerContentType)) {
+		return nil
+	}
+	if t.Resolver == nil {
+		return fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
+	}
+
+	maxBytes := t.MaxResponseBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultMaxJOSEBodyBytes
+	}
+	compact, err := readAndCloseBody(resp.Body, maxBytes)
+	if err != nil {
+		return fmt.Errorf("httpclient: read response body: %w", err)
+	}
+
+	plaintext, _, _, err := jose.Open(string(compact), t.Inbound, t.Resolver)
+	if err != nil {
+		return err
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(plaintext))
+	resp.ContentLength = int64(len(plaintext))
+	resp.Header.Set(headerContentType, "application/json")
+	return nil
+}
+
+// readAndCloseBody drains body up to maxBytes (negative = unbounded) and closes it.
+// Uses http.MaxBytesReader rather than io.LimitReader+length-check so an oversize
+// payload errors mid-stream — without that, up to maxBytes of memory would be
+// materialized on the heap before the overflow is detected.
+//
+// The overflow is mapped to a typed httpclient.ClientError (ValidationError) so
+// callers can distinguish it from network/IO errors via IsErrorType.
+func readAndCloseBody(body io.ReadCloser, maxBytes int64) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	defer body.Close()
+	if maxBytes < 0 {
+		return io.ReadAll(body)
+	}
+	b, err := io.ReadAll(nethttp.MaxBytesReader(nil, body, maxBytes))
+	if err != nil {
+		var maxErr *nethttp.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, NewValidationError(
+				fmt.Sprintf("JOSE response body exceeds %d bytes", maxBytes),
+				"response_body",
+			)
+		}
+		return nil, err
+	}
+	return b, nil
+}
+
+// IsJOSEError reports whether err is a JOSE crypto failure — kept as a thin re-export
+// of jose.IsError for discoverability from the httpclient package, since transport
+// callers typically already import httpclient and may not realize the canonical helper
+// lives in jose.
+func IsJOSEError(err error) bool {
+	return jose.IsError(err)
+}

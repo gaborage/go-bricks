@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -141,6 +142,43 @@ func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 // WithTransport sets a custom RoundTripper while still letting the builder manage other client settings.
 func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 	b.transport = transport
+	return b
+}
+
+// JOSEConfig groups the JOSE policy and resolver passed to Builder.WithJOSE.
+// A struct is used (rather than positional parameters) so future fields — clock
+// override, replay-cache hook, per-call policy resolver — can be added without
+// changing the WithJOSE signature.
+type JOSEConfig struct {
+	// Outbound is required: the policy used to sign+encrypt every outbound request body.
+	Outbound *jose.Policy
+	// Inbound is optional: when set, application/jose response bodies are decrypted+verified.
+	// Plaintext responses (e.g., pre-trust error envelopes from the counterparty) pass
+	// through unmodified.
+	Inbound *jose.Policy
+	// Resolver supplies keys for both Outbound and Inbound directions.
+	Resolver jose.KeyResolver
+}
+
+// WithJOSE configures a JOSETransport that signs+encrypts every outbound request body
+// and decrypts+verifies application/jose response bodies. Pass cfg.Inbound = nil when
+// the counterparty does not return JOSE-wrapped responses.
+//
+// Composition: WithJOSE wraps whatever transport is currently configured (set by an
+// earlier WithTransport or WithHTTPClient call) — so existing transport customizations
+// remain in the chain below the JOSE layer. Calling WithTransport AFTER WithJOSE
+// replaces the JOSE transport entirely.
+//
+// Per-attempt freshness: because httpclient retries by re-running the request build
+// loop, each retry produces a freshly-sealed payload — useful for protocols that
+// require unique iat/jti claims per attempt.
+func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
+	b.transport = &JOSETransport{
+		Inner:    b.transport,
+		Outbound: cfg.Outbound,
+		Inbound:  cfg.Inbound,
+		Resolver: cfg.Resolver,
+	}
 	return b
 }
 
