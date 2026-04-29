@@ -238,7 +238,7 @@ func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route)
 
 	// Write request body if there are body fields
 	if len(bodyFields) > 0 && route.Request != nil {
-		g.writeRequestBody(sb, bodyFields, route.Request)
+		g.writeRequestBody(sb, route.Request)
 	}
 
 	// Responses
@@ -741,7 +741,7 @@ func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Paramet
 // points at the documented plaintext shape — the wire payload is the compact JOSE
 // serialization that wraps that plaintext on decrypt+verify. Takes the full TypeInfo
 // (rather than a positional bool) so future flags compose without signature churn.
-func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, _ []models.FieldInfo, reqType *models.TypeInfo) {
+func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models.TypeInfo) {
 	schemaName := ""
 	isJOSE := false
 	if reqType != nil {

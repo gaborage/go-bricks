@@ -2817,4 +2817,18 @@ func TestHasJOSESentinelTag(t *testing.T) {
 			}
 		})
 	}
+
+	// Lock in the nil-safety contract — the function's signature implies it tolerates
+	// these inputs (defense-in-depth in the analyzer pipeline), so without explicit
+	// tests a future refactor could silently regress the guards.
+	t.Run("nil_struct", func(t *testing.T) {
+		if hasJOSESentinelTag(nil) {
+			t.Error("hasJOSESentinelTag(nil) = true, want false")
+		}
+	})
+	t.Run("nil_fields", func(t *testing.T) {
+		if hasJOSESentinelTag(&ast.StructType{}) {
+			t.Error("hasJOSESentinelTag(&ast.StructType{}) = true, want false")
+		}
+	})
 }

@@ -1747,7 +1747,7 @@ func TestWriteRequestBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var sb strings.Builder
-			gen.writeRequestBody(&sb, tt.bodyFields, &models.TypeInfo{Name: tt.schemaName})
+			gen.writeRequestBody(&sb, &models.TypeInfo{Name: tt.schemaName})
 			output := sb.String()
 
 			for _, expected := range tt.expectedOutput {
@@ -2059,7 +2059,7 @@ func TestGenerateWithParameters(t *testing.T) {
 func TestWriteRequestBodyJOSEContentType(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	var sb strings.Builder
-	gen.writeRequestBody(&sb, nil, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
+	gen.writeRequestBody(&sb, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
 	out := sb.String()
 
 	if !strings.Contains(out, "application/jose:") {
