@@ -1,7 +1,6 @@
 package jose
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
@@ -72,6 +71,6 @@ func TestScanTypeBadKidPropagatesError(t *testing.T) {
 	_, err := ScanType(reflect.TypeOf(taggedRequestWithBadKid{}), DirectionInbound)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_TAG_KID_INVALID", jerr.Code)
 }

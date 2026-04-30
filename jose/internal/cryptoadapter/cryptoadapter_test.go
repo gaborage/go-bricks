@@ -3,7 +3,6 @@ package cryptoadapter
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"errors"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -72,7 +71,7 @@ func TestVerifyRejectsKidMismatch(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMismatch))
+	assert.ErrorIs(t, err, ErrKidMismatch)
 }
 
 func TestDecryptRejectsKidMismatch(t *testing.T) {
@@ -90,7 +89,7 @@ func TestDecryptRejectsKidMismatch(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMismatch))
+	assert.ErrorIs(t, err, ErrKidMismatch)
 }
 
 func TestVerifyRejectsDisallowedAlg(t *testing.T) {
@@ -104,7 +103,7 @@ func TestVerifyRejectsDisallowedAlg(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.PS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrParseSigned))
+	assert.ErrorIs(t, err, ErrParseSigned)
 }
 
 func TestVerifyRejectsKidMissing(t *testing.T) {
@@ -118,7 +117,7 @@ func TestVerifyRejectsKidMissing(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMissing))
+	assert.ErrorIs(t, err, ErrKidMissing)
 }
 
 func TestDecryptRejectsKidMissing(t *testing.T) {
@@ -134,7 +133,7 @@ func TestDecryptRejectsKidMissing(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMissing))
+	assert.ErrorIs(t, err, ErrKidMissing)
 }
 
 func TestDecryptRejectsDisallowedKeyAlg(t *testing.T) {
@@ -153,5 +152,5 @@ func TestDecryptRejectsDisallowedKeyAlg(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrParseEncrypted))
+	assert.ErrorIs(t, err, ErrParseEncrypted)
 }

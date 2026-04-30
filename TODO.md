@@ -320,32 +320,6 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 
 ---
 
-### JOSE: Normalize `errors.As` → `require.ErrorAs` in Tests
-**Status:** Cleanup / Planned
-**Context:** Mix of older `require.True(t, errors.As(err, &jerr))` and newer `require.ErrorAs(t, err, &jerr)` across the JOSE test suite (~11 sites in `jose/sealer_opener_test.go`, `jose/tag_test.go`, `jose/scanner_test.go`, `jose/testing/helpers_test.go`). `require.ErrorAs` is the preferred testify idiom: better failure messages on type mismatch, one line shorter, and already used by newer test files (e.g. `jose/policy_test.go`, `jose/resolver_test.go`).
-
-**Implementation:** Mechanical conversion. Each occurrence:
-```go
-// Before
-var jerr *Error
-require.True(t, errors.As(err, &jerr))
-// After
-var jerr *Error
-require.ErrorAs(t, err, &jerr)
-```
-
-**Trade-offs:**
-- Better test ergonomics (PRO)
-- Pure churn in git history (CON — minor)
-
-**Decision:** Bundle into a single low-risk cleanup PR; don't drip individual conversions across feature PRs.
-
-**Related:**
-- [jose/sealer_opener_test.go](jose/sealer_opener_test.go), [jose/tag_test.go](jose/tag_test.go), [jose/scanner_test.go](jose/scanner_test.go)
-- [jose/testing/helpers_test.go](jose/testing/helpers_test.go)
-
----
-
 ## Completed / Won't Do
 
 ### ~~Raw String WHERE Clauses~~
@@ -438,6 +412,23 @@ require.ErrorAs(t, err, &jerr)
 - [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go)
 - [jose/opener.go](jose/opener.go) — `mapDecryptError` (typ arm removed)
 - [jose/errors.go](jose/errors.go) — `ErrTypRejected` sentinel removed
+
+---
+
+### ~~JOSE: Normalize `errors.As`/`errors.Is` → `require.ErrorAs`/`assert.ErrorIs` in Tests~~
+**Status:** ✅ Completed
+**Context:** The JOSE test suite mixed `require.True(t, errors.As(err, &jerr))` and `assert.True(t, errors.Is(err, X))` with the preferred testify idioms `require.ErrorAs(t, err, &jerr)` and `assert.ErrorIs(t, err, X)`. The newer style produces better failure messages on mismatch and saves a line per call site. Newer test files (e.g. `jose/policy_test.go`, `jose/resolver_test.go`) already used the upgraded idiom.
+
+**Resolution:**
+- Converted all 11 `errors.As` sites in `jose/sealer_opener_test.go` (8), `jose/tag_test.go` (1), `jose/scanner_test.go` (1), `jose/testing/helpers_test.go` (1)
+- Converted all 8 `errors.Is` sites in `jose/errors_test.go` (2 — including one `assert.False` → `assert.NotErrorIs`) and `jose/internal/cryptoadapter/cryptoadapter_test.go` (6)
+- Dropped the now-unused `errors` import from 5 files (kept in `jose/errors_test.go` because `errors.New` is still used to construct fixture errors)
+- Bundled `errors.Is` conversions in via `/simplify` agent surfaced them as the same idiom upgrade — saved a follow-up PR
+
+**Related:**
+- [jose/sealer_opener_test.go](jose/sealer_opener_test.go), [jose/tag_test.go](jose/tag_test.go), [jose/scanner_test.go](jose/scanner_test.go)
+- [jose/testing/helpers_test.go](jose/testing/helpers_test.go)
+- [jose/errors_test.go](jose/errors_test.go), [jose/internal/cryptoadapter/cryptoadapter_test.go](jose/internal/cryptoadapter/cryptoadapter_test.go)
 
 ---
 

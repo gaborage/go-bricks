@@ -9,8 +9,8 @@ import (
 
 func TestErrorIsMatchesSentinel(t *testing.T) {
 	e := &Error{Sentinel: ErrDecryptFailed, Code: "JOSE_DECRYPT_FAILED"}
-	assert.True(t, errors.Is(e, ErrDecryptFailed))
-	assert.False(t, errors.Is(e, ErrSignatureInvalid))
+	assert.ErrorIs(t, e, ErrDecryptFailed)
+	assert.NotErrorIs(t, e, ErrSignatureInvalid)
 }
 
 func TestErrorErrorIncludesCodeAndCause(t *testing.T) {
