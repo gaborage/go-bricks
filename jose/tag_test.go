@@ -1,7 +1,6 @@
 package jose
 
 import (
-	"errors"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -71,7 +70,7 @@ func TestParseTagInvalid(t *testing.T) {
 			_, err := ParseTag(tt.tag, tt.dir)
 			require.Error(t, err)
 			var jerr *Error
-			require.True(t, errors.As(err, &jerr))
+			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tt.wantCode, jerr.Code, "expected code %q, got %q", tt.wantCode, jerr.Code)
 		})
 	}
