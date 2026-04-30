@@ -302,22 +302,21 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 
 ---
 
-### JOSE: Drop or Wire `cryptoadapter.AllowedTyps`
-**Status:** Cleanup / Planned
-**Context:** `cryptoadapter.{Decrypt,Verify}Options.AllowedTyps` was added speculatively at the time of the original JOSE design as a list-allowlist for the `typ` JOSE header. The field is exercised only by cryptoadapter's own unit tests — no production caller (jose package, server middleware, httpclient transport) ever sets it. Discovered during `/simplify` review of PR #332.
+### JOSE: Wire `Header.Typ` Into Observability or Drop
+**Status:** Conditional / Idea Stage
+**Context:** Both `cryptoadapter.Header.Typ` and the public `jose.Header.Typ` (returned from `Open()` as part of `OpenHeader{JWE, JWS}`) are populated on every JOSE request via `extractStringExtra(..., jose.HeaderType)`, but no caller reads either value. Server middleware discards the `OpenHeader` return at `server/jose.go`, and no observability span/log uses the field. Surfaced during `/simplify` review of the `AllowedTyps` cleanup PR — the same dormant-surface argument applies, with one asymmetry: `Typ` is part of a public return type, so dropping it is a (minor) API break, whereas `AllowedTyps` was an unused input flag.
 
-**The two states are both honest; the current half-loaded state is not:**
+**Two paths (pick one when this is taken up):**
 
-1. **Drop entirely:** remove `AllowedTyps` field, the corresponding `if len(opts.AllowedTyps) > 0` branches in `Decrypt`/`Verify`, the `ErrTypRejected` sentinel, and the `mapDecryptError`/`mapVerifyError` arms producing `JOSE_TYP_REJECTED`. Also drop the `JOSE_TYP_REJECTED` row from the CLAUDE.md failure-mode table (it would no longer be triggerable).
-2. **Wire it up:** add `Policy.AllowedTyps []string`, plumb it from the parser → opener → cryptoadapter, document configurable typ allowlists in the JOSE tag grammar (e.g. `typ=JOSE,JWS`).
+1. **Wire it up** — add `jwe.typ`/`jws.typ` attributes to the `jose.decode_request` span and to the request-log fields in `server/jose.go`. Cheap, makes the field actually load-bearing for diagnostics, and aligns with the reason the field was added in the first place.
+2. **Drop it** — remove from both `cryptoadapter.Header` and `jose.Header`, plus the two `extractStringExtra` calls. Minor break since `OpenHeader` is exposed by the public `Open()` API.
 
-**Recommendation:** Path 1. Visa Token Services and similar partners don't use the `typ` header for security gating, so the option is unlikely to ever be wired up. Removing dead surface area reduces reader confusion (the `/simplify` agent flagged it as "dormant API surface, not a live pattern to mirror").
+**Decision criteria:** Pick Path 1 if anyone hits a JOSE issue where knowing the peer's `typ` header would have helped triage. Pick Path 2 at the next opportunistic cleanup if nobody touches it.
 
 **Related:**
-- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go)
-- [jose/opener.go](jose/opener.go) — `mapDecryptError`/`mapVerifyError` `typ_rejected` arms
-- [jose/errors.go](jose/errors.go) — `ErrTypRejected`
-- [CLAUDE.md](CLAUDE.md) — JOSE failure-mode table
+- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go) — `Header.Typ` field + extractor calls in `Decrypt`/`Verify`
+- [jose/opener.go](jose/opener.go) — `Header.Typ` in the public diagnostic struct
+- [server/jose.go](server/jose.go) — current consumer that discards the return
 
 ---
 
@@ -414,6 +413,31 @@ require.ErrorAs(t, err, &jerr)
 - [jose/algorithms.go](jose/algorithms.go) — `allowedSigAlgs` declaration + comment block
 - [jose/algorithms_test.go](jose/algorithms_test.go) — `TestAllowlistRejectsES256` guard
 - [CLAUDE.md](CLAUDE.md) — JOSE Middleware → "Strict algorithm allowlist"
+
+---
+
+### ~~JOSE: Drop `cryptoadapter.AllowedTyps`~~
+**Status:** ✅ Completed
+**Context:** `cryptoadapter.{Decrypt,Verify}Options.AllowedTyps` was a list-allowlist for the JWE/JWS `typ` header added speculatively in the original JOSE design. The field had test coverage in cryptoadapter's own unit tests but no production caller (jose package, server middleware, httpclient transport) ever set it. Discovered during `/simplify` review of PR #332.
+
+**Resolution (Path 1 of two options — drop, not wire):**
+- Removed `AllowedTyps` field from both `DecryptOptions` and `VerifyOptions`
+- Removed the `if len(opts.AllowedTyps) > 0` branches in `Decrypt` and `Verify`
+- Removed the `ErrTypRejected` sentinel from cryptoadapter and the parent jose package
+- Removed the `mapDecryptError` arm producing `JOSE_TYP_REJECTED` (the verify mapper never had one)
+- Removed the dead `contains()` helper that only the typ check used
+- Removed two cryptoadapter tests (`TestVerifyAcceptsEmptyTypInAllowlist`, `TestVerifyRejectsTypNotInAllowlist`)
+- Removed the `typ_rejected` case from the `TestMapDecryptErrorAllArms` table
+- Kept `Header.Typ` field and its extraction from `ExtraHeaders` — still useful for diagnostic logging on every request
+
+**Why Path 1 over Path 2 (add `Policy.AllowedTyps` + tag grammar):** No production code path read or set `AllowedTyps`. Visa Token Services and similar partners don't use the `typ` header for security gating. Removing the dead surface area is cheaper than continuing to maintain it as half-loaded API.
+
+**Note on CLAUDE.md:** the `JOSE_TYP_REJECTED` row was never actually in the failure-mode table on `main` — it was only in an early plan-file draft. Confirmed via grep before resolving.
+
+**Related:**
+- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go)
+- [jose/opener.go](jose/opener.go) — `mapDecryptError` (typ arm removed)
+- [jose/errors.go](jose/errors.go) — `ErrTypRejected` sentinel removed
 
 ---
 
