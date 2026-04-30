@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
+	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
 
@@ -652,12 +653,30 @@ func TestCreateStandardSchemas(t *testing.T) {
 	schemas := gen.createStandardSchemas()
 
 	// Test that standard schemas are created correctly
-	if len(schemas) != 2 {
-		t.Errorf("Expected 2 schemas, got %d", len(schemas))
+	if len(schemas) != 3 {
+		t.Errorf("Expected 3 schemas, got %d", len(schemas))
 	}
 
 	t.Run("SuccessResponse schema", func(t *testing.T) {
 		validateSuccessResponseSchema(t, schemas)
+	})
+
+	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
+		schema, ok := schemas["JOSEErrorEnvelope"]
+		if !ok {
+			t.Fatal("JOSEErrorEnvelope schema missing — pre-trust JOSE failures need a documented envelope distinct from ErrorResponse")
+		}
+		// The envelope MUST NOT include framework metadata fields (meta, traceId)
+		// — that's the whole security argument for having it as a separate schema.
+		if _, hasMeta := schema.Properties["meta"]; hasMeta {
+			t.Error("JOSEErrorEnvelope must NOT carry meta — peer is unauthenticated, leak nothing")
+		}
+		if _, hasCode := schema.Properties["code"]; !hasCode {
+			t.Error("JOSEErrorEnvelope must include 'code' property")
+		}
+		if _, hasMsg := schema.Properties["message"]; !hasMsg {
+			t.Error("JOSEErrorEnvelope must include 'message' property")
+		}
 	})
 
 	t.Run("ErrorResponse schema", func(t *testing.T) {
@@ -1729,7 +1748,7 @@ func TestWriteRequestBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var sb strings.Builder
-			gen.writeRequestBody(&sb, tt.bodyFields, tt.schemaName)
+			gen.writeRequestBody(&sb, &models.TypeInfo{Name: tt.schemaName})
 			output := sb.String()
 
 			for _, expected := range tt.expectedOutput {
@@ -2035,5 +2054,126 @@ func TestGenerateWithParameters(t *testing.T) {
 	err = yaml.Unmarshal([]byte(spec), &parsed)
 	if err != nil {
 		t.Fatalf(yamlParsingFailedMsg, err)
+	}
+}
+
+func TestWriteRequestBodyJOSEContentType(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeRequestBody(&sb, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
+	out := sb.String()
+
+	// Wire format: per OpenAPI 3.0.1, application/jose Media Type schema MUST describe
+	// the on-the-wire payload (a string token), not the decrypted plaintext shape.
+	assert.Contains(t, out, "application/jose:")
+	assert.NotContains(t, out, "application/json:")
+	assert.Contains(t, out, "type: string")
+	assert.Contains(t, out, "format: jose")
+
+	// Plaintext schema MUST NOT appear under content.application/jose — the spec
+	// reserves Media Type Object schema for the wire shape only. The plaintext
+	// component schema is still emitted (via generateSchemasFromTypes) and is
+	// referenced from the description text.
+	assert.NotContains(t, out, "application/jose:\n            schema:\n              $ref:")
+
+	// Description on the parent RequestBody Object (spec-compliant location) names
+	// the plaintext schema so consumers know what to expect after decrypt+verify.
+	assert.Contains(t, out, "JOSE compact serialization")
+	assert.Contains(t, out, "CreateTokenRequest schema")
+	assert.Contains(t, out, "#/components/schemas/CreateTokenRequest")
+}
+
+func TestWriteMethodEmitsRequestBodyForJOSEEvenWithEmptyBodyFields(t *testing.T) {
+	// Real bug caught by CodeRabbit: a JOSE-tagged request type whose plaintext
+	// fields all live in path/query/header params (or are absent entirely) would
+	// have produced no requestBody at all, even though the route still expects an
+	// application/jose payload on the wire. The fix drives the requestBody emission
+	// from `route.Request.JOSE || len(bodyFields) > 0`.
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	spec, err := gen.Generate(&models.Project{
+		Name:    "JOSEOnlyApp",
+		Version: "1.0.0",
+		Modules: []models.Module{{
+			Name:    "vts",
+			Package: "vts",
+			Routes: []models.Route{{
+				Method:      "POST",
+				Path:        "/v1/tokens",
+				HandlerName: "createToken",
+				Request:     &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true},
+				Response:    &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
+			}},
+		}},
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, spec, "requestBody:", "JOSE-only routes must still emit a requestBody")
+	assert.Contains(t, spec, "application/jose:", "the JOSE requestBody must be present even with no plaintext body fields")
+}
+
+func TestWriteResponsesJOSEPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/tokens",
+		Response: &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
+	})
+	out := sb.String()
+
+	if !strings.Contains(out, "'200':") || !strings.Contains(out, "application/jose:") {
+		t.Error("JOSE-flagged 200 response must use application/jose")
+	}
+	// Pre-trust failure path: peer is unauthenticated so the envelope must be the
+	// minimal JOSEErrorEnvelope, NOT the framework's standard ErrorResponse (which
+	// carries traceId/meta and would leak fingerprint information).
+	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
+		t.Error("JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
+	}
+	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("JOSE 4xx response must NOT reference ErrorResponse — leaks framework metadata to unauthenticated peers")
+	}
+}
+
+func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
+	// The runtime enforces bidirectional symmetry (request and response must both
+	// carry jose tags or neither). The analyzer runs statically against source —
+	// it can encounter asymmetric setups that a developer is in the middle of
+	// writing. In any such case the pre-trust failure path on the request side is
+	// still routed through the JOSE plaintext-minimal envelope by the runtime, so
+	// the OpenAPI 4xx schema must reference JOSEErrorEnvelope, NOT the standard
+	// ErrorResponse (which would leak traceId/meta).
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/tokens",
+		Request:  &models.TypeInfo{Name: "TokenRequest", JOSE: true},
+		Response: &models.TypeInfo{Name: "TokenResponse", JOSE: false},
+	})
+	out := sb.String()
+
+	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
+		t.Error("4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
+	}
+	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("4xx path on JOSE-request route must NOT reference ErrorResponse — leaks traceId/meta to unauthenticated peers")
+	}
+}
+
+func TestWriteResponsesNonJOSEUnchanged(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	var sb strings.Builder
+	gen.writeResponses(&sb, &models.Route{
+		Method:   "POST",
+		Path:     "/v1/users",
+		Response: &models.TypeInfo{Name: "User", JOSE: false},
+	})
+	out := sb.String()
+
+	if strings.Contains(out, "application/jose:") {
+		t.Error("non-JOSE response must NOT use application/jose")
+	}
+	if !strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
+		t.Error("non-JOSE 4xx must reference standard ErrorResponse")
 	}
 }

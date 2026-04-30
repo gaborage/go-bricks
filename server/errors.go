@@ -4,7 +4,38 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"runtime"
+	"sync/atomic"
 )
+
+// stackFrameDepth caps the number of stack frames captured per error.
+// Deep enough to span typical handler → service → repository chains; shallow
+// enough that capture stays in the low-microsecond range.
+const stackFrameDepth = 32
+
+// captureStackTraces is process-global because BaseAPIError construction
+// sites are scattered throughout user code and have no access to *config.Config.
+var captureStackTraces atomic.Bool
+
+// stackTraceDetailKey is the JSON key under APIErrorResponse.Details where
+// captured frames are exposed in development. Tests assert against this name,
+// and downstream tooling (dev consoles, IDE plugins) can match on it.
+const stackTraceDetailKey = "stackTrace"
+
+// SetCaptureStackTraces toggles stack-trace capture for all subsequently
+// created errors. Intended for the framework bootstrap (server.New) and tests.
+// Safe for concurrent use.
+func SetCaptureStackTraces(enabled bool) {
+	captureStackTraces.Store(enabled)
+}
+
+// StackTracer is implemented by errors that carry a captured stack trace.
+// The formatter uses this interface to surface frames in the response when
+// running in development. *BaseAPIError satisfies it, and every wrapper type
+// (NotFoundError, BadRequestError, …) inherits it via method promotion.
+type StackTracer interface {
+	StackTrace() []string
+}
 
 // BaseAPIError provides a basic implementation of IAPIError.
 type BaseAPIError struct {
@@ -12,16 +43,38 @@ type BaseAPIError struct {
 	message    string
 	httpStatus int
 	details    map[string]any
+	// stackPCs holds raw program counters captured at construction when
+	// SetCaptureStackTraces(true) is in effect. Resolving them to file:line
+	// strings is deferred to StackTrace() so production paths skip the
+	// symbol-lookup cost entirely.
+	stackPCs []uintptr
 }
 
 // NewBaseAPIError creates a new base API error.
 func NewBaseAPIError(code, message string, httpStatus int) *BaseAPIError {
-	return &BaseAPIError{
+	e := &BaseAPIError{
 		code:       code,
 		message:    message,
 		httpStatus: httpStatus,
 		details:    make(map[string]any),
 	}
+	if captureStackTraces.Load() {
+		e.stackPCs = captureStack(3) // skip runtime.Callers, captureStack, NewBaseAPIError
+	}
+	return e
+}
+
+// captureStack returns the call-site PCs above the caller. The skip value
+// must account for runtime.Callers itself, captureStack, and the API
+// constructor that invokes it; a wrong skip leaks framework internals into
+// the user-visible top frame.
+func captureStack(skip int) []uintptr {
+	pcs := make([]uintptr, stackFrameDepth)
+	n := runtime.Callers(skip, pcs)
+	if n == 0 {
+		return nil
+	}
+	return pcs[:n]
 }
 
 // ErrorCode returns the error code.
@@ -65,6 +118,26 @@ func (e *BaseAPIError) Error() string {
 		return e.message
 	}
 	return e.code + ": " + e.message
+}
+
+// StackTrace resolves the captured program counters into readable
+// "file:line funcName" strings. Returns nil when no stack was captured —
+// either because SetCaptureStackTraces was off at construction time, or
+// because the error was built without NewBaseAPIError.
+func (e *BaseAPIError) StackTrace() []string {
+	if e == nil || len(e.stackPCs) == 0 {
+		return nil
+	}
+	frames := runtime.CallersFrames(e.stackPCs)
+	out := make([]string, 0, len(e.stackPCs))
+	for {
+		frame, more := frames.Next()
+		out = append(out, fmt.Sprintf("%s:%d %s", frame.File, frame.Line, frame.Function))
+		if !more {
+			break
+		}
+	}
+	return out
 }
 
 // NotFoundError represents resource not found errors.
@@ -237,4 +310,7 @@ func NewBusinessLogicError(code, message string) *BusinessLogicError {
 }
 
 // Compile-time interface assertions
-var _ IAPIError = (*BaseAPIError)(nil)
+var (
+	_ IAPIError   = (*BaseAPIError)(nil)
+	_ StackTracer = (*BaseAPIError)(nil)
+)

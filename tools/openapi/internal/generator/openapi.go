@@ -21,6 +21,21 @@ const (
 	formatInt64 = "int64"
 )
 
+// Media type constants for the OpenAPI content map. Centralized so a future rename
+// (e.g., to application/jose+json) is a one-line edit and so call sites in the spec
+// emitter can be statically searched by const reference, not by string literal.
+const (
+	mediaJSON = "application/json"
+	mediaJOSE = "application/jose"
+)
+
+// YAML indent depths reused across emitter call sites (S1192). Named by depth
+// because the same depth occurs at multiple structural positions.
+const (
+	indent10 = "          "   // 10 spaces
+	indent12 = "            " // 12 spaces
+)
+
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
 	title       string
@@ -228,25 +243,114 @@ func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route)
 		g.writeParameters(sb, params)
 	}
 
-	// Write request body if there are body fields
-	if len(bodyFields) > 0 && route.Request != nil {
-		g.writeRequestBody(sb, bodyFields, route.Request.Name)
+	// Write request body if there are body fields, OR if the route is JOSE-tagged
+	// (a JOSE request type may have only the sentinel field, with all "plaintext"
+	// fields filtered into header/path/query params or simply absent — but the route
+	// still expects an application/jose payload on the wire).
+	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
+		g.writeRequestBody(sb, route.Request)
 	}
 
 	// Responses
+	g.writeResponses(sb, route)
+}
+
+// writeResponses emits the responses section. When the route's response carries a
+// jose: tag the success response uses Content-Type: application/jose; the 4xx
+// pre-trust failure path always uses application/json (peer is unauthenticated, so
+// the framework returns a plaintext minimal envelope, never JOSE-wrapped — see the
+// hybrid envelope contract in CLAUDE.md JOSE Middleware).
+//
+// 4xx schema selection is driven by EITHER side carrying jose tags. The runtime
+// enforces bidirectional symmetry at registration, but the analyzer runs statically
+// against source so we can encounter asymmetric setups; in any such case the
+// pre-trust failure path is still routed through the JOSE plaintext-minimal
+// envelope by the runtime, so the OpenAPI spec must reflect that.
+func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Route) {
+	joseResponse := route.Response != nil && route.Response.JOSE
+	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
+
 	sb.WriteString("      responses:\n")
 	sb.WriteString("        '200':\n")
-	fmt.Fprintf(sb, "          description: %s\n", g.getResponseDescription(route.Method))
-	sb.WriteString("          content:\n")
-	sb.WriteString("            application/json:\n")
-	sb.WriteString("              schema:\n")
-	sb.WriteString("                $ref: '#/components/schemas/SuccessResponse'\n")
+	if joseResponse {
+		// Description on the Response Object (spec-compliant) — per OpenAPI 3.0.1,
+		// description is a fixed field on Response, but NOT on Media Type Object.
+		// The Media Type schema describes the WIRE shape (a string token); the
+		// plaintext component schema is referenced from the description text.
+		writeJOSEDescription(sb, indent10, "SuccessResponse")
+		writeContentLine(sb, indent10)
+		writeMediaSchemaJOSE(sb, indent12)
+	} else {
+		fmt.Fprintf(sb, "%sdescription: %s\n", indent10, g.getResponseDescription(route.Method))
+		writeContentLine(sb, indent10)
+		writeMediaSchemaRef(sb, indent12, mediaJSON, "SuccessResponse")
+	}
 	sb.WriteString("        '400':\n")
-	sb.WriteString("          description: Bad Request\n")
-	sb.WriteString("          content:\n")
-	sb.WriteString("            application/json:\n")
-	sb.WriteString("              schema:\n")
-	sb.WriteString("                $ref: '#/components/schemas/ErrorResponse'\n")
+	fmt.Fprintf(sb, "%sdescription: Bad Request\n", indent10)
+	writeContentLine(sb, indent10)
+	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
+	// security model: when decrypt/verify fails the peer is unauthenticated and the
+	// server leaks nothing beyond {code,message}.
+	errorSchema := "ErrorResponse"
+	if joseRoute {
+		errorSchema = "JOSEErrorEnvelope"
+	}
+	writeMediaSchemaRef(sb, indent12, mediaJSON, errorSchema)
+}
+
+// writeJOSEDescription emits the canonical "JOSE compact serialization" description
+// block. Per OpenAPI 3.0.1, Media Type Objects (under content.<contentType>:) do NOT
+// allow a description field — fixed fields are limited to schema, example, examples,
+// encoding. RequestBody and Response objects DO allow description, so the helper is
+// invoked at the parent level (under requestBody: or under '200':), not nested inside
+// the content/media-type block.
+//
+// indent is the YAML depth of the description: line itself. plaintextSchema is the
+// component schema name to reference from the description so consumers know what
+// shape the decrypted payload conforms to.
+func writeJOSEDescription(sb *strings.Builder, indent, plaintextSchema string) {
+	fmt.Fprintf(sb, "%sdescription: |\n", indent)
+	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The wire payload\n", indent)
+	fmt.Fprintf(sb, "%s  is a base64url-encoded JWE compact form whose plaintext, after\n", indent)
+	fmt.Fprintf(sb, "%s  decrypt+verify, conforms to the %s schema —\n", indent, plaintextSchema)
+	fmt.Fprintf(sb, "%s  see #/components/schemas/%s.\n", indent, plaintextSchema)
+}
+
+// writeMediaSchemaRef emits a Media Type entry whose schema is a $ref to a component:
+//
+//	<indent><contentType>:
+//	<indent>  schema:
+//	<indent>    $ref: '#/components/schemas/<ref>'
+//
+// Used for application/json bodies where the wire shape IS the documented schema.
+func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
+	writeMediaTypeKey(sb, indent, contentType)
+	fmt.Fprintf(sb, "%s  schema:\n", indent)
+	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
+}
+
+// writeMediaSchemaJOSE emits a Media Type entry for application/jose where the schema
+// describes the on-the-wire payload as a string token (per OpenAPI 3.0.1 — the JOSE
+// compact serialization is a base64url-encoded string, NOT the decrypted plaintext
+// shape). The plaintext schema is still emitted as a component and referenced from
+// the parent RequestBody/Response description text via writeJOSEDescription.
+func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
+	writeMediaTypeKey(sb, indent, mediaJOSE)
+	fmt.Fprintf(sb, "%s  schema:\n", indent)
+	fmt.Fprintf(sb, "%s    type: string\n", indent)
+	fmt.Fprintf(sb, "%s    format: jose\n", indent)
+}
+
+// writeContentLine emits "<indent>content:\n" — the YAML key that opens a Media Type
+// map under either a Response Object or a RequestBody Object.
+func writeContentLine(sb *strings.Builder, indent string) {
+	fmt.Fprintf(sb, "%scontent:\n", indent)
+}
+
+// writeMediaTypeKey emits "<indent><mediaType>:\n" — the YAML key that opens a single
+// Media Type Object inside a content map (e.g. "application/json:" or "application/jose:").
+func writeMediaTypeKey(sb *strings.Builder, indent, mediaType string) {
+	fmt.Fprintf(sb, "%s%s:\n", indent, mediaType)
 }
 
 // getOperationID generates an operation ID for a route
@@ -339,6 +443,25 @@ func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 				},
 			},
 			Required: []string{"error"},
+		},
+		// JOSEErrorEnvelope is the minimal plaintext error envelope returned for
+		// pre-trust JOSE failures (decrypt failed, signature invalid, kid unknown,
+		// etc.). The framework intentionally omits traceId/timestamp/framework
+		// metadata here — peer is unauthenticated and the envelope must leak
+		// nothing beyond the canonical {code,message} pair.
+		"JOSEErrorEnvelope": {
+			Type: "object",
+			Properties: map[string]*OpenAPIProperty{
+				"code": {
+					Type:        "string",
+					Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)",
+				},
+				"message": {
+					Type:        "string",
+					Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure",
+				},
+			},
+			Required: []string{"code", "message"},
 		},
 	}
 }
@@ -639,7 +762,7 @@ func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Paramet
 
 		// Write schema
 		sb.WriteString("          schema:\n")
-		g.writePropertySchema(sb, param.Schema, "            ")
+		g.writePropertySchema(sb, param.Schema, indent12)
 
 		if param.Example != nil {
 			// Marshal example value to YAML-compatible format
@@ -648,19 +771,43 @@ func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Paramet
 	}
 }
 
-// writeRequestBody writes the request body for an operation with only body fields
-func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, _ []models.FieldInfo, schemaName string) {
+// writeRequestBody writes the request body for an operation. When the request type
+// carries a jose: tag the Content-Type is application/jose and the schema $ref still
+// points at the documented plaintext shape — the wire payload is the compact JOSE
+// serialization that wraps that plaintext on decrypt+verify. Takes the full TypeInfo
+// (rather than a positional bool) so future flags compose without signature churn.
+func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models.TypeInfo) {
+	schemaName := ""
+	isJOSE := false
+	if reqType != nil {
+		schemaName = reqType.Name
+		isJOSE = reqType.JOSE
+	}
+	contentType := mediaJSON
+	if isJOSE {
+		contentType = mediaJOSE
+	}
+
 	sb.WriteString("      requestBody:\n")
 	sb.WriteString("        required: true\n")
-	sb.WriteString("        content:\n")
-	sb.WriteString("          application/json:\n")
-	sb.WriteString("            schema:\n")
+	if isJOSE {
+		// Description on the RequestBody Object (spec-compliant) — sibling of content,
+		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
+		writeJOSEDescription(sb, "        ", schemaName)
+	}
+	writeContentLine(sb, "        ")
 
-	// Reference the schema if it has a name, otherwise inline it
-	if schemaName != "" {
-		fmt.Fprintf(sb, "              $ref: '#/components/schemas/%s'\n", schemaName)
-	} else {
-		// Inline schema (fallback - shouldn't happen with proper type extraction)
+	switch {
+	case isJOSE:
+		// JOSE wire payload is a string token, not the plaintext schema. The plaintext
+		// component schema is referenced from the description text above.
+		writeMediaSchemaJOSE(sb, indent10)
+	case schemaName != "":
+		writeMediaSchemaRef(sb, indent10, contentType, schemaName)
+	default:
+		// Inline schema (fallback — shouldn't happen with proper type extraction).
+		writeMediaTypeKey(sb, indent10, contentType)
+		sb.WriteString("            schema:\n")
 		sb.WriteString("              type: object\n")
 	}
 }

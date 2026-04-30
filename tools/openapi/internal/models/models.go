@@ -34,6 +34,12 @@ type TypeInfo struct {
 	Package   string
 	IsPointer bool
 	Fields    []FieldInfo
+	// JOSE is true when the struct carries a `jose:"..."` tag on any field — typically
+	// a sentinel `_ struct{}` field. Routes whose request or response type is JOSE-tagged
+	// emit Content-Type: application/jose in the OpenAPI spec while keeping the documented
+	// plaintext schema as the source of truth (the on-the-wire compact JOSE serialization
+	// wraps that plaintext after decrypt-and-verify).
+	JOSE bool
 }
 
 // FieldInfo represents a struct field with validation metadata
