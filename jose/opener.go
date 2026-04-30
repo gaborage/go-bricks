@@ -132,14 +132,6 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 			Kid:      hdr.Kid,
 			Cause:    err,
 		}
-	case errors.Is(err, cryptoadapter.ErrTypRejected):
-		return &Error{
-			Sentinel: ErrTypRejected,
-			Code:     "JOSE_TYP_REJECTED",
-			Status:   400,
-			Message:  "Disallowed typ header",
-			Cause:    err,
-		}
 	case errors.Is(err, cryptoadapter.ErrDecryptFailed):
 		return &Error{
 			Sentinel: ErrDecryptFailed,
