@@ -391,6 +391,22 @@ require.ErrorAs(t, err, &jerr)
 
 ---
 
+### ~~Slim Module Interface + Remove Stutter from Framework Modules~~
+**Status:** ✅ Completed (ADR-014, 2026-03-16)
+**Context:** The framework modules `outbox`, `scheduler`, and `keystore` previously stuttered (`OutboxModule`, `SchedulerModule`, `KeystoreModule`) with `//nolint:revive` suppressions, and were forced to provide no-op `RegisterRoutes` / `DeclareMessaging` implementations because the core `app.Module` interface required all five methods. This violated Interface Segregation and made the no-op stubs look like missing implementations rather than intentional opt-outs.
+
+**Resolution:**
+- **Stutter removed**: `outbox.OutboxModule` → `outbox.Module`, `scheduler.SchedulerModule` → `scheduler.Module`, `keystore.KeystoreModule` → `keystore.Module`. All `//nolint:revive` suppressions deleted. Constructors are now `outbox.NewModule()`, `scheduler.NewModule()`, `keystore.NewModule()`.
+- **`app.Module` slimmed to three methods**: `Name()`, `Init(*ModuleDeps) error`, `Shutdown() error`. Modules that don't serve HTTP or AMQP no longer implement no-op stubs.
+- **Optional capabilities are duck-typed at registration**: `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`, `OutboxProvider`, and `KeyStoreProvider` live in [app/module.go](app/module.go). `ModuleRegistry` type-asserts each module before invoking the optional method — same pattern Go's standard library uses (e.g., `io.ReaderFrom` is opportunistically detected by `io.Copy`). This is the Go-idiomatic answer to Java's "implement just the interfaces you need" — composition at the **call site**, not at the **type definition**.
+
+**Related:**
+- [wiki/adr-014-slim-module-interface.md](wiki/adr-014-slim-module-interface.md)
+- [app/module.go](app/module.go) — core + optional interface declarations
+- [app/module_registry.go](app/module_registry.go) — type-assertion dispatch
+
+---
+
 ## Contributing to This Backlog
 
 When adding items to this backlog:
