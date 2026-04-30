@@ -33,6 +33,7 @@ type Header struct {
 	Alg string
 	Enc string
 	Typ string
+	Cty string
 }
 
 // DecryptOptions controls strict header validation during JWE decrypt.
@@ -56,6 +57,7 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 		Alg: jwe.Header.Algorithm,
 		Enc: extractStringExtra(jwe.Header.ExtraHeaders, "enc"),
 		Typ: extractStringExtra(jwe.Header.ExtraHeaders, jose.HeaderType),
+		Cty: extractStringExtra(jwe.Header.ExtraHeaders, jose.HeaderContentType),
 	}
 
 	if hdr.Kid == "" {
@@ -99,6 +101,7 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 		Kid: sig.Protected.KeyID,
 		Alg: sig.Protected.Algorithm,
 		Typ: extractStringExtra(sig.Protected.ExtraHeaders, jose.HeaderType),
+		Cty: extractStringExtra(sig.Protected.ExtraHeaders, jose.HeaderContentType),
 	}
 
 	if hdr.Kid == "" {

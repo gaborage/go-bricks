@@ -235,3 +235,61 @@ func TestSealMissingKid(t *testing.T) {
 	require.True(t, errors.As(err, &jerr))
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }
+
+// TestOpenAcceptsMissingInnerCty verifies the permissive cty enforcement: a peer
+// who omits the optional cty header per RFC 7515 §4.1.10 is still accepted, even
+// when the policy declares an expected Cty. The framework only catches *mismatches*,
+// not absences, so peers that don't bother to set cty don't break.
+func TestOpenAcceptsMissingInnerCty(t *testing.T) {
+	f := newTestFixture(t)
+	noCty := *f.outbound
+	noCty.Cty = "" // peer signs without cty
+
+	compact, err := Seal([]byte(`{"x":1}`), &noCty, f.resolver)
+	require.NoError(t, err)
+
+	_, _, hdr, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Empty(t, hdr.JWS.Cty, "peer omitted cty so opener should see empty Cty")
+}
+
+// TestOpenRejectsCtyMismatch is the core defense-in-depth assertion: an authenticated
+// peer who signs cty=text/csv while the policy expects application/json is rejected
+// with JOSE_CTY_REJECTED — content-type confusion would otherwise let a peer have
+// the bytes interpreted as JSON despite signing them as something else.
+func TestOpenRejectsCtyMismatch(t *testing.T) {
+	f := newTestFixture(t)
+	csvOut := *f.outbound
+	csvOut.Cty = "text/csv"
+
+	compact, err := Seal([]byte("col1,col2\n1,2\n"), &csvOut, f.resolver)
+	require.NoError(t, err)
+
+	err = openErr(compact, f.inbound, f.resolver)
+	require.Error(t, err)
+	var jerr *Error
+	require.ErrorAs(t, err, &jerr)
+	assert.Equal(t, "JOSE_CTY_REJECTED", jerr.Code)
+	assert.Equal(t, 400, jerr.Status)
+	assert.ErrorIs(t, err, ErrCtyRejected)
+}
+
+// TestOpenAcceptsMatchingCty confirms the happy path with an explicit non-default cty
+// on both sides, exercising the value-equality branch that DefaultCty round-trips
+// hide behind defaults.
+func TestOpenAcceptsMatchingCty(t *testing.T) {
+	f := newTestFixture(t)
+	custom := "application/x-vts-token+json"
+
+	out := *f.outbound
+	out.Cty = custom
+	in := *f.inbound
+	in.Cty = custom
+
+	compact, err := Seal([]byte(`{"token":"abc"}`), &out, f.resolver)
+	require.NoError(t, err)
+
+	_, _, hdr, err := Open(compact, &in, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, custom, hdr.JWS.Cty)
+}
