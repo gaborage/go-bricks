@@ -64,6 +64,10 @@ func NewBaseAPIError(code, message string, httpStatus int) *BaseAPIError {
 	return e
 }
 
+// captureStack returns the call-site PCs above the caller. The skip value
+// must account for runtime.Callers itself, captureStack, and the API
+// constructor that invokes it; a wrong skip leaks framework internals into
+// the user-visible top frame.
 func captureStack(skip int) []uintptr {
 	pcs := make([]uintptr, stackFrameDepth)
 	n := runtime.Callers(skip, pcs)

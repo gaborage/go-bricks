@@ -183,6 +183,31 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 			"expected stack to include test file, got: %v", frames)
 	})
 
+	t.Run("does_not_mutate_caller_details_map", func(t *testing.T) {
+		// Regression guard: devDetails must never write into the map returned
+		// by IAPIError.Details(). User-defined error types may return their
+		// internal map directly (the IAPIError contract doesn't pin down
+		// ownership), and silently mutating it is the kind of bug that
+		// surfaces only in production under concurrent access.
+		err := NewBadRequestError("trace + caller details")
+		err.WithDetails("requestId", "abc-123")
+
+		// Snapshot the user-visible details before render.
+		before := err.Details()
+		require.NotContains(t, before, stackTraceDetailKey,
+			"precondition: caller details should not contain stackTrace yet")
+
+		out := devDetails(err)
+		require.NotNil(t, out)
+		require.Contains(t, out, stackTraceDetailKey, "render output should include stackTrace")
+
+		after := err.Details()
+		assert.NotContains(t, after, stackTraceDetailKey,
+			"caller-visible details must remain free of stackTrace after devDetails runs")
+		assert.Equal(t, before, after,
+			"caller-visible details must be unchanged across devDetails calls")
+	})
+
 	t.Run("omitted_in_production", func(t *testing.T) {
 		e := echo.New()
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {

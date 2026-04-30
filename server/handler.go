@@ -773,20 +773,29 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 // with a "stackTrace" entry if the error implements StackTracer and a stack
 // was captured. Returns nil when nothing would be rendered, so callers can rely
 // on json `omitempty` to drop the field cleanly.
+//
+// The IAPIError interface does not guarantee Details() returns a copy
+// (BaseAPIError happens to, but user-defined error types may not), so we always
+// copy before injecting stackTrace to avoid mutating caller-owned state.
 func devDetails(apiErr IAPIError) map[string]any {
-	details := apiErr.Details()
-	if st, ok := apiErr.(StackTracer); ok {
-		if frames := st.StackTrace(); len(frames) > 0 {
-			if details == nil {
-				details = make(map[string]any, 1)
-			}
-			details[stackTraceDetailKey] = frames
-		}
+	src := apiErr.Details()
+	st, hasStack := apiErr.(StackTracer)
+	var frames []string
+	if hasStack {
+		frames = st.StackTrace()
 	}
-	if len(details) == 0 {
+	if len(src) == 0 && len(frames) == 0 {
 		return nil
 	}
-	return details
+
+	out := make(map[string]any, len(src)+1)
+	for k, v := range src {
+		out[k] = v
+	}
+	if len(frames) > 0 {
+		out[stackTraceDetailKey] = frames
+	}
+	return out
 }
 
 // handleRawResponse formats and sends the HTTP response without the APIResponse envelope.
