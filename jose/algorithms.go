@@ -13,10 +13,14 @@ const (
 // payloads and selectable for outbound. Symmetric algorithms (HS*) are forbidden because
 // the framework's key model is asymmetric (RSA keypairs in keystore). alg=none is forbidden
 // at the parser level by passing this allowlist into go-jose's ParseSigned.
+//
+// ES256 is intentionally absent: the keystore module returns *rsa.PrivateKey/PublicKey
+// only, so an ES256 selection would crash at runtime when the cryptoadapter passes the
+// RSA key into go-jose's ECDSA signer. Re-add only after extending keystore.KeyStore to
+// surface ECDSA keys (see TODO.md "JOSE: ECDSA Keystore Support").
 var allowedSigAlgs = []jose.SignatureAlgorithm{
 	jose.RS256,
 	jose.PS256,
-	jose.ES256,
 }
 
 // allowedKeyAlgs are the JWE key-wrapping algorithms. Only RSA-OAEP variants are accepted;

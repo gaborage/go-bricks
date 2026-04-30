@@ -64,28 +64,6 @@ query := qb.Select("id", "number").
 
 ---
 
-### JOSE: ECDSA Keystore Support or Drop ES256
-**Status:** Planned
-**Context:** `ES256` is in the JOSE signature-algorithm allowlist (`jose/algorithms.go:19`) but `keystore.NewModule()` only returns `*rsa.PrivateKey`/`*rsa.PublicKey`. A user who picks `sig_alg=ES256` in a `jose:` tag passes registration (the algorithm is in the allowlist), then crashes at runtime when the sealer/opener tries to use an ECDSA algorithm against an RSA key. Documented as a "v1 limitation" in CLAUDE.md but currently unenforced — a real footgun.
-
-**Two paths (pick one):**
-
-1. **Drop ES256** — remove `jose.ES256` from `allowedSigAlgs` until ECDSA support lands. One-line change, eliminates the footgun, no API breakage (no production code can be using ES256 today since it would crash).
-2. **Add ECDSA support** — extend `keystore.KeyStore` to return `crypto.Signer`/`crypto.PublicKey` (interface generalization), update `cryptoadapter.{Sign,Verify,Encrypt,Decrypt}` signatures to accept the broader types, dispatch by algorithm. Significant API change.
-
-**Trade-offs:**
-- Path 1 is safe and immediate; only removes a non-functional option.
-- Path 2 is the "right" answer architecturally but expands surface area without confirmed demand. Visa Token Services uses RS256/PS256 today; ES256 is forward-looking.
-
-**Recommendation:** Path 1 now, Path 2 only when a real partner requires ES256.
-
-**Related:**
-- [jose/algorithms.go](jose/algorithms.go)
-- [keystore/keystore.go](keystore/keystore.go)
-- [CLAUDE.md](CLAUDE.md) — JOSE Middleware → "ES256 caveat"
-
----
-
 ### Context Timeout Defaults
 **Status:** Planned
 **Context:** Framework requires `context.Context` everywhere but doesn't enforce timeout best practices.
@@ -276,6 +254,30 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 
 ---
 
+### JOSE: ECDSA Keystore Support
+**Status:** Conditional / Idea Stage
+**Context:** `ES256` was removed from the JOSE signature-algorithm allowlist because `keystore.NewModule()` returns only `*rsa.PrivateKey`/`*rsa.PublicKey` — selecting `sig_alg=ES256` would crash at runtime. To re-enable ES256 (or future ECDSA-family algorithms like `ES384`/`ES512`), the keystore needs to surface ECDSA keys.
+
+**Implementation outline:**
+- Generalize `keystore.KeyStore` from RSA-only to `crypto.Signer` / `crypto.PublicKey` (Go's standard interfaces) — a non-trivial API change since `*rsa.PrivateKey` callers currently rely on the concrete type
+- Update `cryptoadapter.{Sign,Verify,Encrypt,Decrypt}` to accept the broader interfaces and dispatch by algorithm class (RSA vs ECDSA)
+- Re-add `jose.ES256` to `allowedSigAlgs` in `jose/algorithms.go`
+- Remove the guard test `TestAllowlistRejectsES256` in `jose/algorithms_test.go`
+- Update CLAUDE.md JOSE Middleware allowlist line
+
+**Decision criteria:** Implement only when a real partner integration requires ES256/ECDSA. Visa Token Services uses RS256/PS256 today. Speculative API expansion now would lock the framework into a `crypto.Signer` shape before we know how a real ECDSA caller wants to interact with the keystore (file-based DER? PKCS#8? raw point coordinates? per-tenant rotation?).
+
+**Trade-offs:**
+- Keeps keystore API focused on the actual production case (PRO)
+- Defers a known feature gap (CON, but documented and guard-tested)
+
+**Related:**
+- [jose/algorithms.go](jose/algorithms.go) — `allowedSigAlgs` + comment block citing this entry
+- [jose/algorithms_test.go](jose/algorithms_test.go) — `TestAllowlistRejectsES256` guard test
+- [keystore/keystore.go](keystore/keystore.go)
+
+---
+
 ### JOSE: Replay Cache Interface (`jose.ReplayCache`)
 **Status:** Conditional / Idea Stage
 **Context:** Today the JOSE middleware verifies the JWS signature and exposes verified JWT claims via `jose.ClaimsFromContext(ctx)`, but does *not* enforce `iat`/`exp`/`jti` policies — applications must implement skew windows and replay detection themselves. The original plan noted this as a follow-up: *"if apps consistently re-implement skew/jti checks, lift them into a pluggable interface"*.
@@ -393,6 +395,25 @@ require.ErrorAs(t, err, &jerr)
 - [wiki/adr-014-slim-module-interface.md](wiki/adr-014-slim-module-interface.md)
 - [app/module.go](app/module.go) — core + optional interface declarations
 - [app/module_registry.go](app/module_registry.go) — type-assertion dispatch
+
+---
+
+### ~~JOSE: Drop ES256 from Algorithm Allowlist~~
+**Status:** ✅ Completed
+**Context:** `jose.ES256` was in the JOSE signature-algorithm allowlist but `keystore.NewModule()` returned RSA keys only — selecting `sig_alg=ES256` in a `jose:` tag passed registration but crashed at runtime when the cryptoadapter passed an `*rsa.PrivateKey` into go-jose's ECDSA signer path. Documented as a "v1 limitation" in CLAUDE.md but unenforced — a runtime footgun.
+
+**Resolution (Path 1 of two options):**
+- Removed `jose.ES256` from `allowedSigAlgs` in [jose/algorithms.go](jose/algorithms.go); added a comment citing the keystore RSA-only constraint
+- Added `TestAllowlistRejectsES256` as a guard test so the algorithm cannot be silently re-added without also extending keystore support
+- Updated CLAUDE.md JOSE Middleware allowlist line: now reads `RS256`/`PS256` only, `ES256` listed alongside `alg=none`/`HS*`/`RSA1_5` as parse-time rejected
+- Future ECDSA support tracked separately as P3 conditional work (see "JOSE: ECDSA Keystore Support" entry)
+
+**Why Path 1 over Path 2 (add ECDSA support):** No real partner integration currently requires ES256; Visa Token Services uses RS256/PS256. Adding `crypto.Signer`/`crypto.PublicKey` plumbing speculatively would lock the framework into an interface shape before observing how a real ECDSA caller wants to interact with the keystore.
+
+**Related:**
+- [jose/algorithms.go](jose/algorithms.go) — `allowedSigAlgs` declaration + comment block
+- [jose/algorithms_test.go](jose/algorithms_test.go) — `TestAllowlistRejectsES256` guard
+- [CLAUDE.md](CLAUDE.md) — JOSE Middleware → "Strict algorithm allowlist"
 
 ---
 

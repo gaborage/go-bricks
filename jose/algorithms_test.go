@@ -34,9 +34,19 @@ func TestAllowlistRejectsRsa15(t *testing.T) {
 func TestAllowlistAllowsExpectedAlgs(t *testing.T) {
 	assert.True(t, IsAllowedSigAlg(jose.RS256))
 	assert.True(t, IsAllowedSigAlg(jose.PS256))
-	assert.True(t, IsAllowedSigAlg(jose.ES256))
 	assert.True(t, IsAllowedKeyAlg(jose.RSA_OAEP_256))
 	assert.True(t, IsAllowedEnc(jose.A256GCM))
+}
+
+// TestAllowlistRejectsES256 guards against re-adding ES256 to the allowlist
+// before keystore.KeyStore is extended to return ECDSA keys. See the comment
+// on allowedSigAlgs in algorithms.go and TODO.md "JOSE: ECDSA Keystore Support".
+// Mirrors TestAllowlistRejectsRsa15's loop-and-NotEqual pattern so the security
+// guard cluster reads as a set.
+func TestAllowlistRejectsES256(t *testing.T) {
+	for _, alg := range AllowedSigAlgs() {
+		assert.NotEqual(t, jose.ES256, alg)
+	}
 }
 
 func TestAllowedSigAlgsReturnsCopy(t *testing.T) {
