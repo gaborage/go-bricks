@@ -753,11 +753,8 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 		Message: apiErr.Message(),
 	}
 
-	// Include details only in development environment
 	if isDevelopmentEnv(cfg.App.Env) {
-		if details := apiErr.Details(); details != nil {
-			errorResp.Details = details
-		}
+		errorResp.Details = devDetails(apiErr)
 	}
 
 	response := APIResponse{
@@ -770,6 +767,26 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 
 	ensureTraceParentHeader(c)
 	return c.JSON(apiErr.HTTPStatus(), response)
+}
+
+// devDetails returns the dev-only details payload: caller-supplied details merged
+// with a "stackTrace" entry if the error implements StackTracer and a stack
+// was captured. Returns nil when nothing would be rendered, so callers can rely
+// on json `omitempty` to drop the field cleanly.
+func devDetails(apiErr IAPIError) map[string]any {
+	details := apiErr.Details()
+	if st, ok := apiErr.(StackTracer); ok {
+		if frames := st.StackTrace(); len(frames) > 0 {
+			if details == nil {
+				details = make(map[string]any, 1)
+			}
+			details[stackTraceDetailKey] = frames
+		}
+	}
+	if len(details) == 0 {
+		return nil
+	}
+	return details
 }
 
 // handleRawResponse formats and sends the HTTP response without the APIResponse envelope.
@@ -834,9 +851,7 @@ func formatRawErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Confi
 	}
 
 	if isDevelopmentEnv(cfg.App.Env) {
-		if details := apiErr.Details(); details != nil {
-			payload.Details = details
-		}
+		payload.Details = devDetails(apiErr)
 	}
 
 	ensureTraceParentHeader(c)

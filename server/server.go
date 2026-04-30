@@ -83,6 +83,8 @@ func (s *Server) buildFullPath(route string) string {
 // New creates a new HTTP server instance with the given configuration and logger.
 // It initializes Echo with middlewares, error handling, and health check endpoints.
 func New(cfg *config.Config, log logger.Logger) *Server {
+	SetCaptureStackTraces(isDevelopmentEnv(cfg.App.Env))
+
 	e := echo.New()
 	// Use an error handler that emits standardized APIResponse envelopes.
 	// Echo v5's Recover middleware wraps panics in middleware.PanicStackError;
