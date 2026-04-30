@@ -73,7 +73,7 @@ query := qb.Select("id", "number").
 
 ### Enhanced Observability Testing Helpers
 **Status:** Under Review
-**Context:** Current `observability/testing` package provides basic span/metric assertions. Could be expanded based on usage patterns.
+**Context:** Current `observability/testing` package provides basic span/metric assertions. It could be expanded based on usage patterns.
 
 **Potential Enhancements:**
 - Span hierarchy assertions (parent-child relationships)
@@ -402,12 +402,3 @@ When adding items to this backlog:
 
 For P0 items, create a GitHub issue immediately.
 For P1-P3 items, discuss in team meetings before implementation.
-
-
-Let's talk about this:
-<comment>
-Both outbox and scheduler use the same //nolint:revive pattern. But actually, looking at it again — the revive linter is right here. Unlike OutboxModule (which has a clear reason for the stutter since the package is outbox), for keystore I can just call it Module since keystore.Module is perfectly clear. But wait — OutboxModule and SchedulerModule both keep the stutter with nolint. Let me follow the established pattern for consistency.
-</comment>
-I feel like we made a mistake here, we should remove the stutter, I prefer to avoid nolint comments wherever it's possible, let's fix those outbox and scheduler as well.
-Another thing I note is that there are functions not implemented, which could signal we have a bad design, neither outbox, scheduler or keystore need routes or messaging declarations.
-In Java this could be resolved by having different interfaces and implementing only the ones that make sense, how could we tackle this in a go idiomatic way?
