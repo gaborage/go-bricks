@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -70,6 +71,164 @@ func TestBaseAPIError(t *testing.T) {
 	t.Run("details_nil_returns_nil", func(t *testing.T) {
 		err := &BaseAPIError{details: nil}
 		assert.Nil(t, err.Details())
+	})
+}
+
+// withStackCapture flips the process-global stack-capture flag for the duration
+// of a single test and restores it on cleanup. Tests that depend on the flag
+// must use this helper so they don't leak state into siblings.
+func withStackCapture(t *testing.T, enabled bool) {
+	t.Helper()
+	prev := captureStackTraces.Load()
+	SetCaptureStackTraces(enabled)
+	t.Cleanup(func() { SetCaptureStackTraces(prev) })
+}
+
+// containsFrame returns true if any frame string in the JSON-decoded slice
+// contains the given substring. JSON arrays decode as []any, so each element
+// is type-asserted back to string.
+func containsFrame(frames []any, substr string) bool {
+	for _, f := range frames {
+		if s, ok := f.(string); ok && strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBaseAPIErrorStackTraceCapture(t *testing.T) {
+	t.Run("disabled_by_default", func(t *testing.T) {
+		// Snapshot+restore even though we don't toggle, in case prior test left
+		// the flag flipped.
+		withStackCapture(t, false)
+
+		err := NewBaseAPIError("X", "no stack here", http.StatusBadRequest)
+		assert.Nil(t, err.StackTrace(), "no frames should be captured when flag is off")
+	})
+
+	t.Run("captured_when_enabled", func(t *testing.T) {
+		withStackCapture(t, true)
+
+		err := NewBaseAPIError("X", "with stack", http.StatusBadRequest)
+		frames := err.StackTrace()
+		require.NotEmpty(t, frames, "frames should be captured when flag is on")
+
+		// The top frame should point at this test file/function so a developer
+		// reading the response can immediately locate the origin.
+		assert.Contains(t, frames[0], "errors_test.go")
+		assert.Contains(t, frames[0], "TestBaseAPIErrorStackTraceCapture")
+	})
+
+	t.Run("specific_error_types_inherit_stack", func(t *testing.T) {
+		withStackCapture(t, true)
+
+		// Wrapper types (NotFoundError, BadRequestError, …) embed *BaseAPIError,
+		// so the StackTrace method is promoted and the StackTracer assertion
+		// succeeds without per-type plumbing.
+		bad := NewBadRequestError("missing field")
+		var st StackTracer = bad
+		assert.NotEmpty(t, st.StackTrace())
+	})
+
+	t.Run("nil_receiver_safe", func(t *testing.T) {
+		var err *BaseAPIError
+		assert.Nil(t, err.StackTrace())
+	})
+
+	t.Run("toggle_only_affects_subsequent_errors", func(t *testing.T) {
+		withStackCapture(t, false)
+		off := NewBaseAPIError("X", "off", http.StatusBadRequest)
+
+		SetCaptureStackTraces(true)
+		on := NewBaseAPIError("X", "on", http.StatusBadRequest)
+
+		assert.Nil(t, off.StackTrace(), "errors built before flip stay clean")
+		assert.NotEmpty(t, on.StackTrace(), "errors built after flip carry frames")
+	})
+}
+
+func TestStackTraceInErrorResponse(t *testing.T) {
+	withStackCapture(t, true)
+
+	t.Run("included_in_dev", func(t *testing.T) {
+		e := echo.New()
+		e.HTTPErrorHandler = func(c *echo.Context, err error) {
+			customErrorHandler(c, err, &config.Config{
+				App: config.AppConfig{Env: config.EnvDevelopment},
+			})
+		}
+		e.GET("/boom", func(_ *echo.Context) error {
+			return NewBadRequestError("with trace")
+		})
+
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Error)
+		require.NotNil(t, resp.Error.Details)
+
+		raw, ok := resp.Error.Details[stackTraceDetailKey]
+		require.True(t, ok, "%s key should be present in dev", stackTraceDetailKey)
+		frames, ok := raw.([]any)
+		require.True(t, ok, "stackTrace should marshal as a JSON array")
+		require.NotEmpty(t, frames)
+		// The wrapper constructor (NewBadRequestError) sits at the top of the
+		// chain because it called NewBaseAPIError; the test handler closure
+		// shows up further down. Scanning the slice avoids coupling the test
+		// to the exact wrapper-skip depth.
+		assert.True(t, containsFrame(frames, "errors_test.go"),
+			"expected stack to include test file, got: %v", frames)
+	})
+
+	t.Run("does_not_mutate_caller_details_map", func(t *testing.T) {
+		// Regression guard: devDetails must never write into the map returned
+		// by IAPIError.Details(). User-defined error types may return their
+		// internal map directly (the IAPIError contract doesn't pin down
+		// ownership), and silently mutating it is the kind of bug that
+		// surfaces only in production under concurrent access.
+		err := NewBadRequestError("trace + caller details")
+		err.WithDetails("requestId", "abc-123")
+
+		// Snapshot the user-visible details before render.
+		before := err.Details()
+		require.NotContains(t, before, stackTraceDetailKey,
+			"precondition: caller details should not contain stackTrace yet")
+
+		out := devDetails(err)
+		require.NotNil(t, out)
+		require.Contains(t, out, stackTraceDetailKey, "render output should include stackTrace")
+
+		after := err.Details()
+		assert.NotContains(t, after, stackTraceDetailKey,
+			"caller-visible details must remain free of stackTrace after devDetails runs")
+		assert.Equal(t, before, after,
+			"caller-visible details must be unchanged across devDetails calls")
+	})
+
+	t.Run("omitted_in_production", func(t *testing.T) {
+		e := echo.New()
+		e.HTTPErrorHandler = func(c *echo.Context, err error) {
+			customErrorHandler(c, err, &config.Config{
+				App: config.AppConfig{Env: config.EnvProduction},
+			})
+		}
+		e.GET("/boom", func(_ *echo.Context) error {
+			// Capture flag is on (from outer Run), but the prod env must still
+			// strip the frames at render time.
+			return NewBadRequestError("trace must not leak")
+		})
+
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Error)
+		assert.Nil(t, resp.Error.Details, "production responses must not expose stack traces")
 	})
 }
 

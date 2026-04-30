@@ -12,34 +12,6 @@ This document tracks future enhancements, technical improvements, and nice-to-ha
 
 ## P0 - Critical
 
-### Stack Traces in Development Mode
-**Status:** Planned
-**Context:** Currently, errors return messages without stack traces. In development mode, stack traces would significantly improve debugging.
-
-**Requirements:**
-- Add stack trace capture to `BaseAPIError` when `app.env = development`
-- Include file:line information in error details
-- Ensure zero performance impact in production mode
-- Consider using existing libraries (e.g., `github.com/pkg/errors` or custom implementation)
-
-**Implementation Notes:**
-```go
-// Potential approach in server/errors.go
-type BaseAPIError struct {
-    code       string
-    message    string
-    httpStatus int
-    details    map[string]any
-    stackTrace []string // nil in production
-}
-```
-
-**Related:**
-- ADR-001: Enhanced Handler System (error handling section)
-- [server/errors.go](server/errors.go)
-
----
-
 ### Security Audit Annotations for WhereRaw()
 **Status:** Planned
 **Context:** `WhereRaw()` bypasses SQL safety mechanisms. All usage should require explicit security review annotation.
@@ -388,6 +360,39 @@ require.ErrorAs(t, err, &jerr)
 **Implementation:**
 - [database/postgresql/connection.go](database/postgresql/connection.go)
 - [database/oracle/connection.go](database/oracle/connection.go)
+
+---
+
+### ~~Stack Traces in Development Mode~~
+**Status:** ✅ Completed
+**Context:** `BaseAPIError` now captures the call-site stack on construction when running in `app.env = development` (or `dev`), and the response formatter renders the resolved frames under `error.details.stackTrace` for both the standard `APIResponse` envelope and raw-response routes.
+
+**Resolution:**
+- **Process-global capture flag** in [server/errors.go](server/errors.go) (`captureStackTraces atomic.Bool`) flipped by [server.New()](server/server.go) based on `cfg.App.Env`. Production paths pay one `atomic.Bool.Load()` per error and never invoke `runtime.Callers`.
+- **Lazy resolution**: PCs are stored as `[]uintptr` at construction; the expensive `runtime.CallersFrames` symbol resolution runs only when the formatter calls `StackTrace()` (which only happens in dev).
+- **`StackTracer` interface** mirrors the well-known `pkg/errors` convention. All built-in wrapper types (`NotFoundError`, `BadRequestError`, …) inherit it via method promotion since they embed `*BaseAPIError`. User-defined error types can implement it independently.
+- **Capture depth** capped at 32 frames; render key is `stackTrace`.
+
+**Related:**
+- [server/errors.go](server/errors.go) — `SetCaptureStackTraces`, `StackTracer`, `(*BaseAPIError).StackTrace`
+- [server/handler.go](server/handler.go) — `devDetails` helper used by both `formatErrorResponse` and `formatRawErrorResponse`
+- [server/server.go](server/server.go) — bootstrap wiring
+
+---
+
+### ~~Slim Module Interface + Remove Stutter from Framework Modules~~
+**Status:** ✅ Completed (ADR-014, 2026-03-16)
+**Context:** The framework modules `outbox`, `scheduler`, and `keystore` previously stuttered (`OutboxModule`, `SchedulerModule`, `KeystoreModule`) with `//nolint:revive` suppressions, and were forced to provide no-op `RegisterRoutes` / `DeclareMessaging` implementations because the core `app.Module` interface required all five methods. This violated Interface Segregation and made the no-op stubs look like missing implementations rather than intentional opt-outs.
+
+**Resolution:**
+- **Stutter removed**: `outbox.OutboxModule` → `outbox.Module`, `scheduler.SchedulerModule` → `scheduler.Module`, `keystore.KeystoreModule` → `keystore.Module`. All `//nolint:revive` suppressions deleted. Constructors are now `outbox.NewModule()`, `scheduler.NewModule()`, `keystore.NewModule()`.
+- **`app.Module` slimmed to three methods**: `Name()`, `Init(*ModuleDeps) error`, `Shutdown() error`. Modules that don't serve HTTP or AMQP no longer implement no-op stubs.
+- **Optional capabilities are duck-typed at registration**: `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`, `OutboxProvider`, and `KeyStoreProvider` live in [app/module.go](app/module.go). `ModuleRegistry` type-asserts each module before invoking the optional method — same pattern Go's standard library uses (e.g., `io.ReaderFrom` is opportunistically detected by `io.Copy`). This is the Go-idiomatic answer to Java's "implement just the interfaces you need" — composition at the **call site**, not at the **type definition**.
+
+**Related:**
+- [wiki/adr-014-slim-module-interface.md](wiki/adr-014-slim-module-interface.md)
+- [app/module.go](app/module.go) — core + optional interface declarations
+- [app/module_registry.go](app/module_registry.go) — type-assertion dispatch
 
 ---
 
