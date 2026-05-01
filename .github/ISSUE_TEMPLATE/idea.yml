@@ -8,7 +8,7 @@ body:
       value: |
         Use this template if you're **proposing a direction** rather than a concrete change — typical for external feature requests, ecosystem additions, or framework-level explorations. If you already know exactly what to build, use the **Enhancement** template instead.
 
-        **Title format:** `<package>: <verb-led summary>` when a package is targeted; otherwise a descriptive summary is fine. **Do not** prefix titles with `[P1]`/`[P2]`/`[P3]` — maintainers gauge priority from usage signals over time, not at filing time.
+        **Title format:** `<package>: <verb-led summary>`. Use the closest affected package at the repo root, even for cross-cutting ideas. **Do not** prefix titles with `[P1]`/`[P2]`/`[P3]` — maintainers gauge priority from usage signals over time, not at filing time.
   - type: textarea
     id: problem
     attributes:
