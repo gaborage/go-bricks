@@ -291,14 +291,24 @@ func (ff *FilterFactory) Not(filter dbtypes.Filter) dbtypes.Filter {
 //   - Ensure the SQL fragment is valid for the target database
 //   - Never concatenate user input directly into the condition string
 //
+// REQUIRED: Every call site MUST carry an inline annotation of the form
+// `// SECURITY: Manual SQL review completed - <rationale>` documenting the
+// specific safety property checked (e.g. identifier quoting for vendor reserved
+// words, parameterization of value sides, absence of user input). The annotation
+// is a forcing function for review and makes call sites grep-discoverable via
+// `git grep -E 'f\.Raw\(|jf\.Raw\('`. See CLAUDE.md "Detailed Security Guidelines".
+//
 // Use this method ONLY when the type-safe methods cannot express your condition.
 // For Oracle, remember to quote reserved words: Raw(`"number" = ?`, value)
 //
 // Examples:
 //
-//	f.Raw(`"number" = ?`, accountNumber)  // Oracle reserved word
-//	f.Raw(`ROWNUM <= ?`, 10)              // Oracle-specific syntax
-//	f.Raw(`ST_Distance(location, ?) < ?`, point, radius) // Spatial queries
+//	// SECURITY: Manual SQL review completed - "number" pre-quoted for Oracle, value parameterized
+//	f.Raw(`"number" = ?`, accountNumber)
+//	// SECURITY: Manual SQL review completed - ROWNUM is a pseudo-column, value parameterized
+//	f.Raw(`ROWNUM <= ?`, 10)
+//	// SECURITY: Manual SQL review completed - both args parameterized; spatial fn is a built-in
+//	f.Raw(`ST_Distance(location, ?) < ?`, point, radius)
 func (ff *FilterFactory) Raw(condition string, args ...any) dbtypes.Filter {
 	return Filter{sqlizer: squirrel.Expr(condition, args...)}
 }

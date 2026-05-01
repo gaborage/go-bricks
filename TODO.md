@@ -12,32 +12,7 @@ This document tracks future enhancements, technical improvements, and nice-to-ha
 
 ## P0 - Critical
 
-### Security Audit Annotations for WhereRaw()
-**Status:** Planned
-**Context:** `WhereRaw()` bypasses SQL safety mechanisms. All usage should require explicit security review annotation.
-
-**Requirements:**
-- Audit all existing `WhereRaw()` usage in codebase
-- Add linting rule or pre-commit hook to require annotation
-- Document annotation format in CLAUDE.md
-
-**Annotation Format:**
-```go
-// SECURITY: Manual SQL review completed - identifier quoting verified for Oracle
-query := qb.Select("id", "number").
-    From("accounts").
-    WhereRaw(`"number" = ? AND ROWNUM <= ?`, value, 10)
-```
-
-**Tasks:**
-- [ ] Search codebase for all `WhereRaw()` usage
-- [ ] Add annotations to existing usage
-- [ ] Document in CLAUDE.md security section
-- [ ] Consider custom linter rule (optional)
-
-**Related:**
-- ADR-005: Type-Safe WHERE Clause Construction
-- [database/internal/builder/](database/internal/builder/)
+_(no open P0 items)_
 
 ---
 
@@ -321,6 +296,31 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 ---
 
 ## Completed / Won't Do
+
+### ~~Security Audit Annotations for Raw-SQL Escape Hatches~~
+**Status:** ✅ Completed (2026-04-30)
+**Context:** Originally filed against `WhereRaw()`, the pre-v0.15.0 escape hatch on the query builder. The struct-based column work in v0.15.0+ (ADR-007) shifted the escape hatch onto the filter factories: `f.Raw()` (on `FilterFactory`) and `jf.Raw()` (on `JoinFilterFactory`). The audit and policy landed against the current API; documentation references to `WhereRaw()` in CLAUDE.md and llms.txt were also a stale-doc bug — fixed in the same change.
+
+**Audit findings:**
+- **Zero production usage** of any raw-SQL escape hatch in the framework. All callers use the type-safe filter methods (`f.Eq`, `f.In`, `f.Between`, etc.).
+- **9 call sites total**, all in `_test.go` files under `database/internal/builder/`: `filter_test.go` (4), `oracle_test.go` (table-driven, 1 annotation covering both branches), `join_filter_test.go` (2), `query_builder_test.go` (3 in one test).
+- One additional documentation example in `llms.txt` (a tenant-isolation `f.Raw("1 = 0")` safety fallback).
+
+**Resolution:**
+- Added `// SECURITY: Manual SQL review completed - <rationale>` annotations to every call site, with the rationale tailored to each site's risk profile (literal column comparison, parameterized values, Oracle reserved-word quoting, etc.). For the Oracle table-driven test, a single annotation above the dispatch documents the safety property of the entire fixture.
+- Codified the annotation requirement in CLAUDE.md "Detailed Security Guidelines" — the comment is a forcing function for review even on "obviously safe" literal SQL, and makes call sites grep-discoverable via `git grep -E 'f\.Raw\(|jf\.Raw\('`.
+- Added an "Escape hatch" row to the API quick-reference table in `llms.txt` so LLM-generated code picks up the annotation requirement.
+- Skipped the optional custom linter: with zero production usage and the API being short and grep-able, a linter would be YAGNI. If raw escape-hatch usage starts appearing in production code, revisit at that point.
+
+**Why the API drift mattered for this work:** The TODO entry, CLAUDE.md, and llms.txt were all referencing `WhereRaw()` as if it still existed on the query builder. It does not — only `f.Raw()` and `jf.Raw()` on the filter factories. Fixing the doc references alongside the annotation work prevents future contributors (human or LLM) from looking for a method that doesn't exist.
+
+**Related:**
+- ADR-005: Type-Safe WHERE Clause Construction
+- ADR-007: Struct-Based Column Extraction (introduced the FilterFactory split)
+- [database/internal/builder/filter.go](database/internal/builder/filter.go), [database/internal/builder/join_filter.go](database/internal/builder/join_filter.go) — `Raw()` method definitions
+- [CLAUDE.md](CLAUDE.md) — Detailed Security Guidelines, Escape Hatch reference, Database Issues troubleshooting
+
+---
 
 ### ~~Raw String WHERE Clauses~~
 **Status:** ❌ Won't Do

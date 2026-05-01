@@ -144,6 +144,7 @@ func TestJoinFilterRaw(t *testing.T) {
 	jf := qb.JoinFilter()
 
 	t.Run("Raw without args", func(t *testing.T) {
+		// SECURITY: Manual SQL review completed - test fixture string is a literal column-to-column comparison, no user input
 		filter := jf.Raw(testExpectedJoinSQL)
 		sql, args, err := filter.ToSQL()
 		require.NoError(t, err)
@@ -152,6 +153,7 @@ func TestJoinFilterRaw(t *testing.T) {
 	})
 
 	t.Run("Raw with args (mixed column comparison + value)", func(t *testing.T) {
+		// SECURITY: Manual SQL review completed - column comparison uses literal qualified identifiers; value side is parameterized via ?
 		filter := jf.Raw(`users.id = profiles.user_id AND profiles.type = ?`, "primary")
 		sql, args, err := filter.ToSQL()
 		require.NoError(t, err)
