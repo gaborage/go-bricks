@@ -28,11 +28,12 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 12. [Cache](#cache)
 13. [Scheduler and Outbox](#scheduler-and-outbox)
 14. [KeyStore](#keystore)
-15. [Multi-Tenant Implementation](#multi-tenant-implementation)
-16. [Observability and Operations](#observability-and-operations)
-17. [Examples](#examples)
-18. [Contributing](#contributing)
-19. [License](#license)
+15. [JOSE (Sign-then-Encrypt Bodies)](#jose-sign-then-encrypt-bodies)
+16. [Multi-Tenant Implementation](#multi-tenant-implementation)
+17. [Observability and Operations](#observability-and-operations)
+18. [Examples](#examples)
+19. [Contributing](#contributing)
+20. [License](#license)
 
 ---
 
@@ -78,6 +79,7 @@ go test -run TestName   # Run specific test
 - **Transactional outbox** for reliable at-least-once event publishing (dual-write problem solved)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
 - **Named RSA key pair management** from DER files or base64 environment variables
+- **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies (Visa-style integrations)
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
 - **Observability** with W3C trace propagation, custom metrics, dual-mode logs, and health endpoints
@@ -409,7 +411,7 @@ query := qb.Select("u.name", "p.bio").
     Where(f.NotNull("p.bio"))
 ```
 
-**Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `And`, `Or`, `Not`, `Raw`
+**Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `Exists`, `NotExists`, `InSubquery`, `And`, `Or`, `Not`, `Raw`
 
 **JoinFilter Methods**: `EqColumn`, `NotEqColumn`, `LtColumn`, `LteColumn`, `GtColumn`, `GteColumn`, `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Between`, `Like`, `Null`, `NotNull`, `And`, `Or`, `Raw`
 
@@ -448,9 +450,22 @@ query := qb.Select(cols.Fields("ID", "Name")...).
 ### Features
 - Connection pooling with production-safe defaults and health monitoring
 - Named databases for multi-database single-tenant setups (`deps.DBByName(ctx, "legacy")`)
-- Flyway integration for schema migrations
+- Flyway integration for schema migrations (see below)
 - Performance tracking via OpenTelemetry
 - Type-safe query builders prevent runtime SQL errors
+
+### Schema Migrations (Flyway)
+
+The `migration` package wraps the Flyway CLI for repeatable schema versioning. It auto-selects the per-vendor migration scripts and config (`flyway/flyway-<vendor>.conf`, `migrations/<vendor>/`) and surfaces `Migrate`, `Info`, and `Validate` commands plus `RunMigrationsAtStartup` for opt-in startup migrations:
+
+```go
+m := migration.NewFlywayMigrator(cfg, logger)
+if err := m.Migrate(ctx, nil); err != nil {     // nil → use vendor-aware defaults
+    log.Fatal(err)
+}
+```
+
+Flyway must be installed and on `PATH` (the path is validated against a safe-path allowlist). Defaults can be overridden via a `*migration.Config` struct (FlywayPath, ConfigPath, MigrationPath, Timeout, DryRun).
 
 ---
 
@@ -508,6 +523,26 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
 - **Observability**: OpenTelemetry spans, metrics, and health checks
+
+### Configuration
+
+```yaml
+cache:
+  enabled: true
+  type: redis
+  manager:
+    max_size: 100              # Max tenant cache instances (LRU-evicted)
+    idle_ttl: 15m              # Close caches idle longer than this
+    cleanup_interval: 5m       # How often the cleanup goroutine runs
+  redis:
+    host: localhost
+    port: 6379
+    password: ${CACHE_REDIS_PASSWORD}   # From environment
+    database: 0
+    pool_size: 10              # Defaults to NumCPU * 2 if unset
+```
+
+The `manager.*` keys tune the per-tenant lifecycle; tune them up if you serve many tenants or want connections to live longer between bursts.
 
 ### Operations
 
@@ -594,14 +629,17 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
     if err != nil { return err }
 
     // 2. Write event to outbox (SAME transaction — atomic!)
+    // Publish returns the event UUID — propagated as the x-outbox-event-id
+    // AMQP header so downstream consumers can deduplicate.
     payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
-    _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    eventID, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
         EventType:   "order.created",
         AggregateID: fmt.Sprintf("order-%d", req.ID),
         Payload:     payload,
         Exchange:    "order.events",
     })
     if err != nil { return err }
+    s.logger.Info().Str("event_id", eventID).Msg("order.created enqueued")
 
     return tx.Commit(ctx) // Event GUARANTEED to reach the broker eventually
 }
@@ -634,14 +672,49 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 keystore:
   keys:
     signing:
-      private_key_file: /secrets/signing.der     # DER file path
-      public_key_file: /secrets/signing_pub.der
+      public:
+        file: certs/signing_public.der            # Local dev: path to DER file
+      private:
+        file: certs/signing_private.der
     encryption:
-      private_key: ${ENCRYPTION_PRIVATE_KEY}      # Base64-encoded DER
-      public_key: ${ENCRYPTION_PUBLIC_KEY}
+      public:
+        value: ${ENCRYPTION_PUBLIC_KEY_BASE64}    # Cloud/EKS: base64-encoded DER via env var
+      private:
+        value: ${ENCRYPTION_PRIVATE_KEY_BASE64}
 ```
 
+Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted.
+
 See [keystore/](keystore/) package for full API documentation.
+
+---
+
+## JOSE (Sign-then-Encrypt Bodies)
+
+> ⚠️ **Production requirement:** JOSE protects request/response *bodies*, not the transport. Routes using JOSE middleware must still be served over **HTTPS** in production — TLS continues to protect URLs, headers, traffic patterns, and the trust handshake itself.
+
+The `jose` package adds nested **JWE-of-JWS** protection on HTTP request and response bodies — designed for **Visa Token Services**-style integrations and any partner API that requires sign-then-encrypt outbound and decrypt-then-verify inbound on every payload. It's struct-tag opt-in: the framework discovers JOSE-protected routes at registration time, validates every `kid` against the keystore, and panics fast if anything is misconfigured rather than failing per-request.
+
+```go
+type CreateTokenRequest struct {
+    _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
+    PAN string   `json:"pan" validate:"required"`
+}
+
+type CreateTokenResponse struct {
+    _     struct{} `jose:"sign=our-signing,encrypt=visa-vts-encrypt"`
+    Token string   `json:"token"`
+}
+```
+
+**Key properties:**
+- **Bidirectional symmetry enforced** — request and response must both carry tags, or neither (registration-time check).
+- **Strict algorithm allowlist** — `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, and `RSA1_5` are rejected at parse time.
+- **Hybrid error envelope** — pre-trust failures (decrypt failed, signature invalid) emit a plaintext minimal `{code,message}` envelope so nothing leaks to unauthenticated peers; post-trust handler errors emit the standard `APIResponse` envelope, encrypted with the route's outbound policy.
+- **Fail-fast at startup** — every `kid` is resolved against the keystore at `RegisterHandler` time. Missing keys, asymmetric tags, and `WithRawResponse()` conflicts panic at startup, never at runtime.
+- **Observability** — spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`).
+
+Wire it by registering `keystore.NewModule()` **before** any module that declares JOSE-tagged routes — `app/module_registry.go` then auto-injects `KeyStore`, logger, tracer, and meter into the middleware. See [CLAUDE.md](CLAUDE.md#jose-middleware) for the complete failure-mode → `IAPIError` table and [llms.txt](llms.txt) for end-to-end examples.
 
 ---
 
