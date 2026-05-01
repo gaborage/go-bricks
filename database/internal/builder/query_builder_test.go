@@ -287,7 +287,9 @@ func TestInsertSelectPreservesPagination(t *testing.T) {
 // fallback when squirrel's InsertBuilder.Select cannot accept the type directly.
 type foreignSelect struct{ dbtypes.SelectQueryBuilder }
 
-func (foreignSelect) ToSQL() (string, []any, error) { return "SELECT 1", nil, nil }
+func (foreignSelect) ToSQL() (sql string, args []any, err error) {
+	return "SELECT 1", nil, nil
+}
 
 func TestInsertSelectForeignImplDefersError(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
