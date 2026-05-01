@@ -261,7 +261,7 @@ func TestInsertWithColumns(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 	builder := qb.InsertWithColumns(tableUsers, colName, colEmail).Values(testJohn, testEmail)
-	sql, _, err := builder.ToSql()
+	sql, _, err := builder.ToSQL()
 	require.NoError(t, err)
 	assert.Contains(t, sql, `INSERT INTO users (name,email)`)
 	assert.Contains(t, sql, `VALUES ($1,$2)`)
@@ -1397,7 +1397,7 @@ func TestColumnsInsert(t *testing.T) {
 		query := qb.InsertWithColumns(tableUsers, cols.Cols(fieldName, fieldEmail, fieldStatus)...).
 			Values("John Doe", testEmail, statusActive)
 
-		sql, args, err := query.ToSql()
+		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Equal(t, "INSERT INTO users (name,email,status) VALUES ($1,$2,$3)", sql)
 		assert.Equal(t, []any{"John Doe", testEmail, statusActive}, args)
@@ -1413,7 +1413,7 @@ func TestColumnsInsert(t *testing.T) {
 		query := qb.InsertWithColumns(tableAccounts, cols.Cols(fieldNumber, fieldLevel, "Size")...).
 			Values(testAccountID, 3, "large")
 
-		sql, args, err := query.ToSql()
+		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
 		// Oracle should quote reserved words in column list
 		assert.Contains(t, sql, `"number"`)
@@ -1432,7 +1432,7 @@ func TestColumnsInsert(t *testing.T) {
 		query := qb.InsertWithColumns(tableProducts, cols.All()...).
 			Values(1, "Widget", "9.99")
 
-		sql, args, err := query.ToSql()
+		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
 		assert.Equal(t, "INSERT INTO products (id,name,price) VALUES ($1,$2,$3)", sql)
 		assert.Equal(t, []any{1, "Widget", "9.99"}, args)
@@ -1762,7 +1762,7 @@ func TestInsertStructAllFields(t *testing.T) {
 	}
 
 	query := qb.InsertStruct(tableUsers, &user)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "INSERT INTO users")
@@ -1786,7 +1786,7 @@ func TestInsertStructWithNonZeroID(t *testing.T) {
 	}
 
 	query := qb.InsertStruct(tableUsers, &user)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, colID) // Non-zero ID included
@@ -1876,7 +1876,7 @@ func TestInsertStructColumnsWithIDSubstring(t *testing.T) {
 	}
 
 	query := qb.InsertStruct("payments", &payment)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "INSERT INTO payments")
@@ -1910,7 +1910,7 @@ func TestInsertFieldsSelectiveFields(t *testing.T) {
 
 	// Insert only Name and Email
 	query := qb.InsertFields(tableUsers, &user, fieldName, fieldEmail)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	assert.Contains(t, sql, "INSERT INTO users")
@@ -1941,7 +1941,7 @@ func TestInsertStructOracleReservedWords(t *testing.T) {
 	}
 
 	query := qb.InsertStruct(tableAccounts, &account)
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
 	// Oracle should quote reserved words

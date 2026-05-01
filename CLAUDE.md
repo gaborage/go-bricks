@@ -251,6 +251,28 @@ var job scheduler.Executor = &MyJob{}
 var probe app.Prober = myProbe
 ```
 
+### Breaking Change: Standardized `ToSQL()` Across Query Builders (S8179)
+
+Per [ADR-017](wiki/adr-017-insert-query-builder.md), `qb.Insert*` constructors now return `types.InsertQueryBuilder` (a go-bricks-owned interface) instead of `squirrel.InsertBuilder` directly. The render method is renamed from `ToSql()` (squirrel-style) to `ToSQL()` (idiomatic Go, S8179) — matching `Select`/`Update`/`Delete`.
+
+| Constructor | Old return | New return | Render method |
+|---|---|---|---|
+| `qb.Insert(table)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertWithColumns(table, cols...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertStruct(table, instance)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertFields(table, instance, fields...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+
+**Example Migration:**
+```go
+// ❌ OLD
+sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSql()
+
+// ✅ NEW
+sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSQL()
+```
+
+The new interface preserves all common chaining methods (`Columns`, `Values`, `SetMap`, `Options`, `Prefix`, `Suffix`, `Select`). For specialized squirrel-only methods (e.g., `RunWith`, `PlaceholderFormat`), keep the rendered SQL via `ToSQL()` and execute with `db.Exec(ctx, sql, args...)`.
+
 ## Architecture
 
 ### Core Components

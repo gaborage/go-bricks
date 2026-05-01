@@ -38,6 +38,18 @@ type SelectQueryBuilder struct {
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
 var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
 
+// InsertQueryBuilder wraps squirrel.InsertBuilder so the public API exposes
+// idiomatic ToSQL() (uppercase, per S8179) instead of squirrel's ToSql().
+//
+// All chaining methods return the dbtypes.InsertQueryBuilder interface so users
+// see a consistent ToSQL()-based surface across SELECT/INSERT/UPDATE/DELETE.
+type InsertQueryBuilder struct {
+	insertBuilder squirrel.InsertBuilder
+}
+
+// check if InsertQueryBuilder implements dbtypes.InsertQueryBuilder
+var _ dbtypes.InsertQueryBuilder = (*InsertQueryBuilder)(nil)
+
 // UpdateQueryBuilder provides a type-safe interface for building UPDATE queries
 // with Filter API support and vendor-specific column quoting.
 type UpdateQueryBuilder struct {
@@ -222,15 +234,19 @@ func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 	}
 }
 
-// Insert creates an INSERT query builder for the specified table
-func (qb *QueryBuilder) Insert(table string) squirrel.InsertBuilder {
-	return qb.statementBuilder.Insert(table)
+// Insert creates an INSERT query builder for the specified table.
+// The returned InsertQueryBuilder exposes ToSQL() (idiomatic Go, per S8179)
+// consistent with Select/Update/Delete builders.
+func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
+	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(table)}
 }
 
 // InsertWithColumns creates an INSERT query builder with pre-specified columns.
 // It applies vendor-specific column quoting to the provided column list.
-func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
-	return qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...)
+func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtypes.InsertQueryBuilder {
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...),
+	}
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
@@ -250,7 +266,7 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squir
 //	// INSERT INTO users (name, email) VALUES (?, ?)
 //
 // Panics if instance is not a struct or pointer to struct with db tags.
-func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.InsertBuilder {
+func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQueryBuilder {
 	cols := qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
 
@@ -267,9 +283,11 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.Insert
 		values = append(values, val)
 	}
 
-	return qb.statementBuilder.Insert(table).
-		Columns(qb.quoteColumnsForDML(columns...)...).
-		Values(values...)
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).
+			Columns(qb.quoteColumnsForDML(columns...)...).
+			Values(values...),
+	}
 }
 
 // InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
@@ -282,7 +300,7 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.Insert
 //	// INSERT INTO users (name, email) VALUES (?, ?)
 //
 // Panics if instance is not a struct or any field name is invalid.
-func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder {
+func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...string) dbtypes.InsertQueryBuilder {
 	cols := qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
 
@@ -300,9 +318,11 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 		}
 	}
 
-	return qb.statementBuilder.Insert(table).
-		Columns(qb.quoteColumnsForDML(columns...)...).
-		Values(values...)
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).
+			Columns(qb.quoteColumnsForDML(columns...)...).
+			Values(values...),
+	}
 }
 
 // extractTerminalIdentifier extracts the final identifier from a column name,
@@ -977,4 +997,51 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 // ToSQL generates the final SQL query and arguments.
 func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	return dqb.deleteBuilder.ToSql()
+}
+
+// ========== InsertQueryBuilder Methods ==========
+
+func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Columns(columns...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Values(values...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.SetMap(clauses)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Options(options ...string) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Options(options...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Prefix(sql string, args ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Prefix(sql, args...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Suffix(sql string, args ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Suffix(sql, args...)
+	return iqb
+}
+
+// Select panics if sb is not the concrete *SelectQueryBuilder from this package —
+// silent fall-through would produce a malformed INSERT...SELECT at runtime.
+func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.InsertQueryBuilder {
+	concrete, ok := sb.(*SelectQueryBuilder)
+	if !ok {
+		panic(fmt.Sprintf("InsertQueryBuilder.Select: expected *SelectQueryBuilder, got %T", sb))
+	}
+	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.selectBuilder)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	return iqb.insertBuilder.ToSql()
 }
