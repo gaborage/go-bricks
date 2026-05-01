@@ -360,16 +360,16 @@ func TestJobExecutionWithTracer(t *testing.T) {
 	require.NoError(t, err)
 	defer module.Shutdown()
 
-	// Create a simple job
+	// Create a simple job. Use a 1s interval so a second tick cannot race the
+	// assertion window, and stop the scheduler before counting spans.
 	job := &slowJob{duration: 10 * time.Millisecond}
-	err = module.FixedRate("traced-job", job, 100*time.Millisecond)
+	err = module.FixedRate("traced-job", job, 1*time.Second)
 	require.NoError(t, err)
 
-	// Wait for job to execute
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool { return job.count() >= 1 },
+		2*time.Second, 10*time.Millisecond, "Job should execute at least once")
 
-	// Verify job executed
-	assert.Greater(t, job.count(), 0, "Job should execute")
+	require.NoError(t, module.Shutdown())
 
 	// Verify span was created
 	collector := obtest.NewSpanCollector(t, tp.Exporter)
@@ -412,15 +412,18 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 	require.NoError(t, err)
 	defer module.Shutdown()
 
-	// Job that creates a child span to verify context propagation
+	// Job that creates a child span to verify context propagation. Use a 1s
+	// interval so a second tick cannot race the assertion window, and stop the
+	// scheduler before counting spans.
 	tracer := tp.Tracer("test-child")
 	job := &spanCapturingJob{tracer: tracer}
-	err = module.FixedRate("ctx-propagation-job", job, 100*time.Millisecond)
+	err = module.FixedRate("ctx-propagation-job", job, 1*time.Second)
 	require.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool { return job.count() >= 1 },
+		2*time.Second, 10*time.Millisecond, "Job should execute at least once")
 
-	assert.Greater(t, job.count(), 0, "Job should execute")
+	require.NoError(t, module.Shutdown())
 
 	// Verify both parent and child spans exist
 	collector := obtest.NewSpanCollector(t, tp.Exporter)
