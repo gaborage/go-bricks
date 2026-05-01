@@ -92,7 +92,7 @@ type requestAllocator[T any] struct {
 func newRequestAllocator[T any]() *requestAllocator[T] {
 	rt := reflect.TypeOf((*T)(nil)).Elem()
 	return &requestAllocator[T]{
-		isPointer: rt.Kind() == reflect.Ptr,
+		isPointer: rt.Kind() == reflect.Pointer,
 		elemType:  rt,
 	}
 }
@@ -573,7 +573,7 @@ var (
 // setFieldValue sets a reflect.Value from a string value, handling type conversion.
 func setFieldValue(fieldValue reflect.Value, value string) error {
 	// Handle pointers by allocating and setting the underlying value
-	if fieldValue.Kind() == reflect.Ptr {
+	if fieldValue.Kind() == reflect.Pointer {
 		if fieldValue.IsNil() {
 			fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
 		}
@@ -703,8 +703,8 @@ func formatSuccessResponse(c *echo.Context, data any) error {
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"traceId":   getTraceID(c),
+			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
+			fieldTraceID:   getTraceID(c),
 		},
 	}
 
@@ -733,8 +733,8 @@ func formatSuccessResponseWithStatus(c *echo.Context, data any, status int, head
 	response := APIResponse{
 		Data: data,
 		Meta: map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"traceId":   getTraceID(c),
+			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
+			fieldTraceID:   getTraceID(c),
 		},
 	}
 	return c.JSON(status, response)
@@ -760,8 +760,8 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 	response := APIResponse{
 		Error: errorResp,
 		Meta: map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"traceId":   getTraceID(c),
+			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
+			fieldTraceID:   getTraceID(c),
 		},
 	}
 

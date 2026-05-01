@@ -62,7 +62,7 @@ func (p *Policy) Validate() error {
 	if !IsAllowedSigAlg(p.SigAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
-			Code:     "JOSE_ALGORITHM_DISALLOWED",
+			Code:     codeAlgorithmDisallowed,
 			Message:  "signature algorithm not in allowlist",
 			Alg:      string(p.SigAlg),
 		}
@@ -70,7 +70,7 @@ func (p *Policy) Validate() error {
 	if !IsAllowedKeyAlg(p.KeyAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
-			Code:     "JOSE_ALGORITHM_DISALLOWED",
+			Code:     codeAlgorithmDisallowed,
 			Message:  "key-wrapping algorithm not in allowlist",
 			Alg:      string(p.KeyAlg),
 		}
@@ -78,7 +78,7 @@ func (p *Policy) Validate() error {
 	if !IsAllowedEnc(p.Enc) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
-			Code:     "JOSE_ALGORITHM_DISALLOWED",
+			Code:     codeAlgorithmDisallowed,
 			Message:  "content encryption not in allowlist",
 			Enc:      string(p.Enc),
 		}
@@ -89,14 +89,14 @@ func (p *Policy) Validate() error {
 		if p.DecryptKid == "" || p.VerifyKid == "" {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
-				Code:     "JOSE_POLICY_INCOMPLETE",
+				Code:     codePolicyIncomplete,
 				Message:  "inbound policy requires both decrypt and verify kids",
 			}
 		}
 		if p.SignKid != "" || p.EncryptKid != "" {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
-				Code:     "JOSE_POLICY_DIRECTION_MISMATCH",
+				Code:     codePolicyDirectionMismatch,
 				Message:  "inbound policy must not declare sign/encrypt kids",
 			}
 		}
@@ -104,14 +104,14 @@ func (p *Policy) Validate() error {
 		if p.SignKid == "" || p.EncryptKid == "" {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
-				Code:     "JOSE_POLICY_INCOMPLETE",
+				Code:     codePolicyIncomplete,
 				Message:  "outbound policy requires both sign and encrypt kids",
 			}
 		}
 		if p.DecryptKid != "" || p.VerifyKid != "" {
 			return &Error{
 				Sentinel: ErrPolicyMismatch,
-				Code:     "JOSE_POLICY_DIRECTION_MISMATCH",
+				Code:     codePolicyDirectionMismatch,
 				Message:  "outbound policy must not declare decrypt/verify kids",
 			}
 		}

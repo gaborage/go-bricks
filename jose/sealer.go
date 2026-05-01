@@ -15,7 +15,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	if p == nil || p.Direction != DirectionOutbound {
 		return "", &Error{
 			Sentinel: ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_DIRECTION_MISMATCH",
+			Code:     codePolicyDirectionMismatch,
 			Status:   500,
 			Message:  "Seal requires an outbound policy",
 		}
@@ -23,7 +23,7 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	if r == nil {
 		return "", &Error{
 			Sentinel: ErrKeyResolution,
-			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Code:     codeKeystoreUnavailable,
 			Status:   500,
 			Message:  "Seal called without a KeyResolver",
 		}

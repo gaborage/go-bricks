@@ -48,15 +48,15 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) Prober {
 	if dbManager == nil {
 		return healthProbeFunc{
-			name: "database",
+			name: componentDatabase,
 			fn: func(context.Context) (string, map[string]any, error) {
-				return disabledStatus, map[string]any{"status": disabledStatus}, nil
+				return disabledStatus, map[string]any{statusKey: disabledStatus}, nil
 			},
 		}
 	}
 
 	return healthProbeFunc{
-		name:     "database",
+		name:     componentDatabase,
 		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			return checkDatabaseHealth(ctx, dbManager)
@@ -73,12 +73,12 @@ func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (st
 
 	if err := conn.Health(ctx); err != nil {
 		dbStats := getStatsOrEmpty(dbManager.Stats())
-		dbStats["status"] = "unhealthy"
+		dbStats[statusKey] = unhealthyStatus
 		return unhealthyStatus, dbStats, err
 	}
 
 	dbStats := getStatsOrEmpty(dbManager.Stats())
-	dbStats["status"] = "healthy"
+	dbStats[statusKey] = healthyStatus
 	return healthyStatus, dbStats, nil
 }
 
@@ -88,12 +88,12 @@ func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (st
 
 	// Check if database is not configured (not a critical failure)
 	if config.IsNotConfigured(err) {
-		dbStats["status"] = notConfiguredStatus
+		dbStats[statusKey] = notConfiguredStatus
 		return notConfiguredStatus, dbStats, nil
 	}
 
 	// Other errors mean connection issues
-	dbStats["status"] = "no_active_connections"
+	dbStats[statusKey] = "no_active_connections"
 	return unhealthyStatus, dbStats, err
 }
 
@@ -109,15 +109,15 @@ func getStatsOrEmpty(stats map[string]any) map[string]any {
 func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) Prober {
 	if msgManager == nil {
 		return healthProbeFunc{
-			name: "messaging",
+			name: componentMessaging,
 			fn: func(context.Context) (string, map[string]any, error) {
-				return "disabled", map[string]any{}, nil
+				return disabledStatus, map[string]any{}, nil
 			},
 		}
 	}
 
 	return healthProbeFunc{
-		name: "messaging",
+		name: componentMessaging,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			// Get manager stats
 			stats := msgManager.Stats()
@@ -130,24 +130,24 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			if err != nil {
 				// Check if messaging is not configured (not a failure)
 				if config.IsNotConfigured(err) {
-					stats["status"] = notConfiguredStatus
+					stats[statusKey] = notConfiguredStatus
 					return notConfiguredStatus, stats, nil
 				}
 				// Other errors are actual failures
-				stats["status"] = "connection_failed"
+				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
 
 			// Check if client is ready
 			if !client.IsReady() {
-				stats["status"] = "not_ready"
+				stats[statusKey] = "not_ready"
 				return unhealthyStatus, stats, nil
 			}
 
 			if active, ok := stats["active_publishers"].(int); ok && active == 0 {
-				stats["status"] = "no_active_publishers"
+				stats[statusKey] = "no_active_publishers"
 			} else {
-				stats["status"] = healthyStatus
+				stats[statusKey] = healthyStatus
 			}
 			return healthyStatus, stats, nil
 		},
@@ -158,15 +158,15 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) Prober {
 	if cacheManager == nil {
 		return healthProbeFunc{
-			name: "cache",
+			name: componentCache,
 			fn: func(context.Context) (string, map[string]any, error) {
-				return disabledStatus, map[string]any{"status": disabledStatus}, nil
+				return disabledStatus, map[string]any{statusKey: disabledStatus}, nil
 			},
 		}
 	}
 
 	return healthProbeFunc{
-		name: "cache",
+		name: componentCache,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			// Get manager stats and convert to map
 			stats := convertCacheStatsToMap(cacheManager.Stats())
@@ -176,16 +176,16 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 			if err != nil {
 				// Check if cache is not configured (not a failure)
 				if config.IsNotConfigured(err) {
-					stats["status"] = notConfiguredStatus
+					stats[statusKey] = notConfiguredStatus
 					return notConfiguredStatus, stats, nil
 				}
 				// Other errors are actual failures
-				stats["status"] = "connection_failed"
+				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
 
 			// Cache manager is healthy if we can get an instance
-			stats["status"] = healthyStatus
+			stats[statusKey] = healthyStatus
 			return healthyStatus, stats, nil
 		},
 	}

@@ -33,7 +33,7 @@ linters:
     exhaustive:
       default-signifies-exhaustive: true
     goconst:
-      min-len: 2
+      min-len: 4
       min-occurrences: 3
     gocritic:
       disabled-checks:
@@ -87,6 +87,7 @@ linters:
       - linters:
           - dupl
           - errcheck
+          - goconst
           - gocyclo
           - gosec
           - ineffassign

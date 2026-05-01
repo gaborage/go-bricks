@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const tagValueTrue = "true"
+
 // InjectInto populates a struct with configuration values based on struct tags.
 // It supports the following struct tags:
 //   - `config:"key.path"` - specifies the configuration key to use
@@ -17,7 +19,7 @@ import (
 func (c *Config) InjectInto(target any) error {
 	if c == nil || c.k == nil {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "config",
 			Message:  "not initialized",
 			Action:   "ensure config is loaded before injection",
@@ -27,7 +29,7 @@ func (c *Config) InjectInto(target any) error {
 	rv := reflect.ValueOf(target)
 	if rv.Kind() != reflect.Pointer || rv.Elem().Kind() != reflect.Struct {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "injection target",
 			Message:  fmt.Sprintf("must be pointer to struct, got %T", target),
 			Action:   "pass &yourStruct to InjectInto()",
@@ -52,7 +54,7 @@ func (c *Config) InjectInto(target any) error {
 			continue // Skip fields without config tag
 		}
 
-		required := fieldType.Tag.Get("required") == "true"
+		required := fieldType.Tag.Get("required") == tagValueTrue
 		defaultValue, hasDefault := fieldType.Tag.Lookup("default")
 
 		// Set field value based on config
@@ -100,9 +102,9 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 		// Convert config key to env var format (e.g., "custom.api.key" -> "CUSTOM_API_KEY")
 		envVar := strings.ToUpper(strings.ReplaceAll(configKey, ".", "_"))
 		return nil, false, &ConfigError{
-			Category: "missing",
+			Category: errCategoryMissing,
 			Field:    configKey,
-			Message:  "required",
+			Message:  errMessageRequired,
 			Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, configKey),
 		}
 	}
@@ -126,7 +128,7 @@ func (c *Config) assignFieldValue(field reflect.Value, configKey string, require
 		return c.assignBoolField(field, configKey, value)
 	default:
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    configKey,
 			Message:  fmt.Sprintf("unsupported type %s", field.Type()),
 			Action:   "use string, int, int64, float64, bool, or time.Duration",
@@ -153,7 +155,7 @@ func (c *Config) assignIntegerField(field reflect.Value, configKey string, value
 	if field.Kind() == reflect.Int {
 		if intVal > int64(maxInt) || intVal < int64(minInt) {
 			return &ConfigError{
-				Category: "invalid",
+				Category: errCategoryInvalid,
 				Field:    configKey,
 				Message:  fmt.Sprintf("value %d overflows int", intVal),
 				Action:   "use int64 type or reduce value",
@@ -191,7 +193,7 @@ func (c *Config) convertToString(value any, key string, required bool) (string, 
 		if required && trimmed == "" {
 			envVar := strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
 			return "", &ConfigError{
-				Category: "missing",
+				Category: errCategoryMissing,
 				Field:    key,
 				Message:  "cannot be empty",
 				Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, key),
@@ -207,7 +209,7 @@ func (c *Config) convertToInt64(value any, key string) (int64, error) {
 	result, err := toInt64(value)
 	if err != nil {
 		return 0, &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    key,
 			Message:  fmt.Sprintf("'%v' is not a valid integer", value),
 			Action:   "provide integer value",
@@ -220,7 +222,7 @@ func (c *Config) convertToFloat64(value any, key string) (float64, error) {
 	result, err := toFloat64(value)
 	if err != nil {
 		return 0, &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    key,
 			Message:  fmt.Sprintf("'%v' is not a valid float", value),
 			Action:   "provide numeric value",
@@ -233,7 +235,7 @@ func (c *Config) convertToBool(value any, key string) (bool, error) {
 	result, err := toBool(value)
 	if err != nil {
 		return false, &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    key,
 			Message:  fmt.Sprintf("'%v' is not a valid boolean", value),
 			Action:   "use true/false, 1/0, yes/no",
@@ -248,7 +250,7 @@ func (c *Config) convertToDuration(value any, key string) (time.Duration, error)
 		duration, err := time.ParseDuration(strings.TrimSpace(v))
 		if err != nil {
 			return 0, &ConfigError{
-				Category: "invalid",
+				Category: errCategoryInvalid,
 				Field:    key,
 				Message:  fmt.Sprintf("'%v' is not a valid duration", value),
 				Action:   "use format like '30s', '5m', '2h'",
@@ -259,7 +261,7 @@ func (c *Config) convertToDuration(value any, key string) (time.Duration, error)
 		return v, nil
 	default:
 		return 0, &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    key,
 			Message:  fmt.Sprintf("unsupported type %T for duration", value),
 			Action:   "provide string duration like '30s', '5m', '2h'",

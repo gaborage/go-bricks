@@ -50,6 +50,12 @@ const (
 	OpHealth        = "ping"
 )
 
+// Error classification labels emitted as metric attributes.
+const (
+	errClassConnection = "connection_error"
+	errClassNotFound   = "not_found"
+)
+
 // isLookupOperation returns true if the operation is a cache lookup (get or getorset).
 // These operations track hit/miss statistics.
 func isLookupOperation(operation string) bool {
@@ -179,13 +185,13 @@ func classifyError(err error) string {
 	// Common cache error patterns
 	switch {
 	case contains(errStr, "connection"):
-		return "connection_error"
+		return errClassConnection
 	case contains(errStr, "timeout"):
 		return "timeout"
 	case contains(errStr, "closed"):
 		return "closed"
 	case contains(errStr, "not found"):
-		return "not_found"
+		return errClassNotFound
 	default:
 		return "error"
 	}

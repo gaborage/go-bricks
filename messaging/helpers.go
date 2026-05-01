@@ -2,6 +2,8 @@ package messaging
 
 import "runtime"
 
+const exchangeTypeTopic = "topic"
+
 // NewTopicExchange creates a topic exchange with production-safe defaults.
 // Topic exchanges route messages based on routing key patterns (e.g., "order.*", "user.#").
 //
@@ -13,7 +15,7 @@ import "runtime"
 func NewTopicExchange(name string) *ExchangeDeclaration {
 	return &ExchangeDeclaration{
 		Name:       name,
-		Type:       "topic",
+		Type:       exchangeTypeTopic,
 		Durable:    true,
 		AutoDelete: false,
 		Internal:   false,

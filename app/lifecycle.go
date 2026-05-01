@@ -384,24 +384,24 @@ func (a *App) readyCheck(c *echo.Context) error {
 		componentStatus[result.Name] = result
 		if result.Err != nil && result.Critical {
 			return c.JSON(http.StatusServiceUnavailable, map[string]any{
-				"status":    "not ready",
+				statusKey:   "not ready",
 				result.Name: result.Status,
-				"error":     result.Err.Error(),
+				errorKey:    result.Err.Error(),
 			})
 		}
 	}
 
-	dbStatus := componentStatus["database"]
+	dbStatus := componentStatus[componentDatabase]
 	if dbStatus.Status == "" {
 		dbStatus.Status = disabledStatus
-		dbStatus.Details = map[string]any{"status": disabledStatus}
+		dbStatus.Details = map[string]any{statusKey: disabledStatus}
 	}
 	dbStats := dbStatus.Details
 	if dbStats == nil {
 		dbStats = map[string]any{}
 	}
 
-	messagingStatus := componentStatus["messaging"]
+	messagingStatus := componentStatus[componentMessaging]
 	if messagingStatus.Status == "" {
 		messagingStatus.Status = disabledStatus
 	}
@@ -411,12 +411,12 @@ func (a *App) readyCheck(c *echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"status":          "ready",
-		"time":            time.Now().Unix(),
-		"database":        dbStatus.Status,
-		"db_stats":        dbStats,
-		"messaging":       messagingStatus.Status,
-		"messaging_stats": messagingStats,
+		statusKey:          readyStatus,
+		"time":             time.Now().Unix(),
+		componentDatabase:  dbStatus.Status,
+		"db_stats":         dbStats,
+		componentMessaging: messagingStatus.Status,
+		"messaging_stats":  messagingStats,
 		"app": map[string]any{
 			"name":        a.cfg.App.Name,
 			"environment": a.cfg.App.Env,

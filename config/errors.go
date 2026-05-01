@@ -12,6 +12,15 @@ var (
 	ErrNotConfigured = errors.New("not configured")
 )
 
+// Error category and message constants for ConfigError.
+const (
+	errCategoryMissing       = "missing"
+	errCategoryInvalid       = "invalid"
+	errCategoryNotConfigured = "not_configured"
+	errCategoryConnection    = "connection"
+	errMessageRequired       = "required"
+)
+
 // ConfigError represents a configuration error with actionable guidance.
 // All error messages are lowercase following Go conventions.
 //
@@ -66,9 +75,9 @@ func (e *ConfigError) Unwrap() error {
 func NewMissingFieldError(field, envVar, yamlPath string) *ConfigError {
 	action := fmt.Sprintf("set %s env var or add %s to config.yaml", envVar, yamlPath)
 	return &ConfigError{
-		Category: "missing",
+		Category: errCategoryMissing,
 		Field:    field,
-		Message:  "required",
+		Message:  errMessageRequired,
 		Action:   action,
 	}
 }
@@ -76,7 +85,7 @@ func NewMissingFieldError(field, envVar, yamlPath string) *ConfigError {
 // NewInvalidFieldError creates an error for an invalid configuration value.
 func NewInvalidFieldError(field, message string, validOptions []string) *ConfigError {
 	err := &ConfigError{
-		Category: "invalid",
+		Category: errCategoryInvalid,
 		Field:    field,
 		Message:  message,
 	}
@@ -93,7 +102,7 @@ func NewInvalidFieldError(field, message string, validOptions []string) *ConfigE
 func NewNotConfiguredError(feature, envVar, yamlPath string) *ConfigError {
 	action := fmt.Sprintf("to enable: set %s env var or add %s to config.yaml", envVar, yamlPath)
 	return &ConfigError{
-		Category: "not_configured",
+		Category: errCategoryNotConfigured,
 		Field:    feature,
 		Message:  "(optional)",
 		Action:   action,
@@ -103,7 +112,7 @@ func NewNotConfiguredError(feature, envVar, yamlPath string) *ConfigError {
 // NewConnectionError creates an error for connection failures with configured resources.
 func NewConnectionError(resource, message string, troubleshooting []string) *ConfigError {
 	return &ConfigError{
-		Category: "connection",
+		Category: errCategoryConnection,
 		Field:    resource,
 		Message:  message,
 		Details:  troubleshooting,
@@ -125,7 +134,7 @@ func IsNotConfigured(err error) bool {
 	// Check for ConfigError with not_configured category
 	var configErr *ConfigError
 	if errors.As(err, &configErr) {
-		return configErr.Category == "not_configured"
+		return configErr.Category == errCategoryNotConfigured
 	}
 
 	return false
@@ -135,7 +144,7 @@ func IsNotConfigured(err error) bool {
 func NewMultiTenantError(tenantID, field, message, action string) *ConfigError {
 	fullField := fmt.Sprintf("tenant '%s' %s", tenantID, field)
 	return &ConfigError{
-		Category: "missing",
+		Category: errCategoryMissing,
 		Field:    fullField,
 		Message:  message,
 		Action:   action,
@@ -145,7 +154,7 @@ func NewMultiTenantError(tenantID, field, message, action string) *ConfigError {
 // NewValidationError creates a general validation error with custom message.
 func NewValidationError(field, message string) *ConfigError {
 	return &ConfigError{
-		Category: "invalid",
+		Category: errCategoryInvalid,
 		Field:    field,
 		Message:  message,
 	}
@@ -156,7 +165,7 @@ func NewValidationError(field, message string) *ConfigError {
 // databases config section.
 func NewNamedDatabaseError(name string) *ConfigError {
 	return &ConfigError{
-		Category: "missing",
+		Category: errCategoryMissing,
 		Field:    fmt.Sprintf("databases.%s", name),
 		Message:  fmt.Sprintf("named database '%s' not found", name),
 		Action:   fmt.Sprintf("add databases.%s section to config.yaml", name),

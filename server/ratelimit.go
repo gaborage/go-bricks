@@ -43,19 +43,19 @@ func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
 		},
 		ErrorHandler: func(context *echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"message":    "Rate limit exceeded",
-					"status":     http.StatusTooManyRequests,
-					"request_id": safeGetRequestID(context),
+				fieldError: map[string]any{
+					fieldMessage:   msgRateLimitExceeded,
+					fieldStatus:    http.StatusTooManyRequests,
+					fieldRequestID: safeGetRequestID(context),
 				},
 			})
 		},
 		DenyHandler: func(context *echo.Context, _ string, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"message":    "Too many requests",
-					"status":     http.StatusTooManyRequests,
-					"request_id": safeGetRequestID(context),
+				fieldError: map[string]any{
+					fieldMessage:   "Too many requests",
+					fieldStatus:    http.StatusTooManyRequests,
+					fieldRequestID: safeGetRequestID(context),
 				},
 			})
 		},

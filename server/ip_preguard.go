@@ -40,19 +40,19 @@ func IPPreGuard(threshold int) echo.MiddlewareFunc {
 		},
 		ErrorHandler: func(context *echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"message":    "IP rate limit exceeded",
-					"status":     http.StatusTooManyRequests,
-					"request_id": safeGetRequestID(context),
+				fieldError: map[string]any{
+					fieldMessage:   "IP rate limit exceeded",
+					fieldStatus:    http.StatusTooManyRequests,
+					fieldRequestID: safeGetRequestID(context),
 				},
 			})
 		},
 		DenyHandler: func(context *echo.Context, _ string, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{
-				"error": map[string]any{
-					"message":    "Too many requests from this IP",
-					"status":     http.StatusTooManyRequests,
-					"request_id": safeGetRequestID(context),
+				fieldError: map[string]any{
+					fieldMessage:   "Too many requests from this IP",
+					fieldStatus:    http.StatusTooManyRequests,
+					fieldRequestID: safeGetRequestID(context),
 				},
 			})
 		},

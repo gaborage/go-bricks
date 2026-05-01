@@ -2,6 +2,12 @@ package sqllex
 
 import "strings"
 
+const (
+	oracleReservedLevel  = "LEVEL"
+	oracleReservedNumber = "NUMBER"
+	oracleReservedSize   = "SIZE"
+)
+
 // OracleReservedWords contains all Oracle SQL reserved keywords that require double-quote quoting
 // when used as identifiers (column names, table names, etc.).
 //
@@ -18,9 +24,9 @@ var OracleReservedWords = map[string]struct{}{
 	"CONNECT": {}, "CREATE": {}, "CURRENT": {}, "DELETE": {}, "DESC": {}, "DISTINCT": {},
 	"DROP": {}, "ELSE": {}, "EXCLUDE": {}, "EXISTS": {}, "FOR": {}, "FROM": {}, "GRANT": {},
 	"GROUP": {}, "HAVING": {}, "IN": {}, "INDEX": {}, "INSERT": {}, "INTERSECT": {}, "INTO": {},
-	"IS": {}, "LEVEL": {}, "LIKE": {}, "LOCK": {}, "MINUS": {}, "MODE": {}, "NOCOMPRESS": {},
-	"NOT": {}, "NULL": {}, "NUMBER": {}, "OF": {}, "ON": {}, "OPTION": {}, "OR": {}, "ORDER": {},
-	"ROW": {}, "ROWNUM": {}, "SELECT": {}, "SET": {}, "SHARE": {}, "SIZE": {}, "START": {},
+	"IS": {}, oracleReservedLevel: {}, "LIKE": {}, "LOCK": {}, "MINUS": {}, "MODE": {}, "NOCOMPRESS": {},
+	"NOT": {}, "NULL": {}, oracleReservedNumber: {}, "OF": {}, "ON": {}, "OPTION": {}, "OR": {}, "ORDER": {},
+	"ROW": {}, "ROWNUM": {}, "SELECT": {}, "SET": {}, "SHARE": {}, oracleReservedSize: {}, "START": {},
 	"TABLE": {}, "THEN": {}, "TO": {}, "TRIGGER": {}, "UNION": {}, "UNIQUE": {}, "UPDATE": {},
 	"VALUES": {}, "VIEW": {}, "WHEN": {}, "WHERE": {}, "WITH": {},
 }

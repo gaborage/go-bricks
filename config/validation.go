@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // Database pool defaults
@@ -72,15 +74,28 @@ const (
 	EnvProduction  = "production"
 )
 
+// Cache type constants
+const (
+	CacheTypeRedis = "redis"
+)
+
 // Validation error message constants
 const (
 	errMustBeNonNegative = "must be non-negative"
 	errMustBePositive    = "must be positive"
 	errNotSupportedFmt   = "'%s' is not supported"
 	portRange            = "1-65535"
+	fieldDatabase        = "database"
 	fieldDatabasePort    = "database.port"
+	fieldMessaging       = "messaging"
+	fieldServerPort      = "server.port"
+	fieldLogLevel        = "log.level"
+	fieldAppRateLimit    = "app.rate.limit"
+	fieldCacheRedisDB    = "cache.redis.database"
+	fieldCacheRedisPool  = "cache.redis.poolsize"
 	errInvalidField      = "invalid value: %v"
 	databasesFieldPrefix = "databases.%s"
+	defaultHost          = "localhost"
 )
 
 func Validate(cfg *Config) error {
@@ -153,7 +168,7 @@ func validateApp(cfg *AppConfig) error {
 	}
 
 	if cfg.Rate.Limit < 0 {
-		return NewValidationError("app.rate.limit", errMustBeNonNegative)
+		return NewValidationError(fieldAppRateLimit, errMustBeNonNegative)
 	}
 
 	if cfg.Rate.Burst < 0 {
@@ -170,7 +185,7 @@ func validateApp(cfg *AppConfig) error {
 
 func validateServer(cfg *ServerConfig) error {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return NewInvalidFieldError("server.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
+		return NewInvalidFieldError(fieldServerPort, fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 
 	if cfg.Timeout.Read <= 0 {
@@ -189,7 +204,7 @@ func validateServer(cfg *ServerConfig) error {
 	// Otherwise the write timeout will trigger first, causing connection drops
 	if cfg.Timeout.Middleware >= cfg.Timeout.Write {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "server.timeout.middleware",
 			Message:  fmt.Sprintf("must be less than server.timeout.write (%v)", cfg.Timeout.Write),
 			Action:   "reduce server.timeout.middleware or increase server.timeout.write",
@@ -441,7 +456,7 @@ func validateNamedDatabases(databases map[string]DatabaseConfig, mt *Multitenant
 func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "databases",
 			Message:  "database name cannot be empty",
 			Action:   "provide a non-empty key for each entry in databases section",
@@ -450,7 +465,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 
 	if strings.HasPrefix(name, NamedDatabasePrefix) {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    fmt.Sprintf(databasesFieldPrefix, name),
 			Message:  fmt.Sprintf("name cannot start with reserved prefix '%s'", NamedDatabasePrefix),
 			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
@@ -460,7 +475,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 	if mt.Enabled && mt.Tenants != nil {
 		if _, exists := mt.Tenants[name]; exists {
 			return &ConfigError{
-				Category: "invalid",
+				Category: errCategoryInvalid,
 				Field:    fmt.Sprintf(databasesFieldPrefix, name),
 				Message:  fmt.Sprintf("name conflicts with tenant ID '%s'", name),
 				Action:   fmt.Sprintf("rename databases.%s or multitenant.tenants.%s to avoid conflict", name, name),
@@ -470,7 +485,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 
 	if !IsDatabaseConfigured(dbCfg) {
 		return &ConfigError{
-			Category: "missing",
+			Category: errCategoryMissing,
 			Field:    fmt.Sprintf(databasesFieldPrefix, name),
 			Message:  "database configuration incomplete",
 			Action:   fmt.Sprintf("add host/type or connectionstring to databases.%s", name),
@@ -684,7 +699,7 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 
 	if count == 0 {
 		return &ConfigError{
-			Category: "missing",
+			Category: errCategoryMissing,
 			Field:    "oracle connection identifier",
 			Message:  "exactly one required",
 			Action:   "set database.oracle.service.name, database.oracle.service.sid, or database.database",
@@ -703,7 +718,7 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 			configured = append(configured, "database name")
 		}
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "oracle connection identifier",
 			Message:  "multiple identifiers configured",
 			Action:   fmt.Sprintf("remove all but one of: %s", strings.Join(configured, ", ")),
@@ -748,7 +763,7 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 
 	if hasFile && hasValue {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),
 			Message:  "both 'file' and 'value' set",
 			Action:   "use exactly one of 'file' or 'value'",
@@ -756,7 +771,7 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 	}
 	if required && !hasFile && !hasValue {
 		return &ConfigError{
-			Category: "missing",
+			Category: errCategoryMissing,
 			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),
 			Message:  "key source required",
 			Action:   "set either 'file' (path) or 'value' (base64)",
@@ -768,9 +783,9 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 // validateLog validates that cfg.Level is one of the supported log levels.
 // It returns an error listing the allowed values if the level is invalid.
 func validateLog(cfg *LogConfig) error {
-	validLevels := []string{"trace", "debug", "info", "warn", "error", "fatal", "panic"}
+	validLevels := []string{logger.LevelTrace, logger.LevelDebug, logger.LevelInfo, logger.LevelWarn, logger.LevelError, logger.LevelFatal, logger.LevelPanic}
 	if !slices.Contains(validLevels, cfg.Level) {
-		return NewInvalidFieldError("log.level", fmt.Sprintf(errNotSupportedFmt, cfg.Level), validLevels)
+		return NewInvalidFieldError(fieldLogLevel, fmt.Sprintf(errNotSupportedFmt, cfg.Level), validLevels)
 	}
 
 	return nil
@@ -789,13 +804,13 @@ func validateCache(cfg *CacheConfig) error {
 	}
 
 	// Validate cache type
-	validTypes := []string{"redis"}
+	validTypes := []string{CacheTypeRedis}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("cache.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
 
 	// Validate Redis-specific settings
-	if cfg.Type == "redis" {
+	if cfg.Type == CacheTypeRedis {
 		return validateRedisCache(&cfg.Redis)
 	}
 
@@ -813,11 +828,11 @@ func validateRedisCache(cfg *RedisConfig) error {
 	}
 
 	if cfg.Database < 0 || cfg.Database > 15 {
-		return NewValidationError("cache.redis.database", "must be between 0 and 15")
+		return NewValidationError(fieldCacheRedisDB, "must be between 0 and 15")
 	}
 
 	if cfg.PoolSize <= 0 {
-		return NewValidationError("cache.redis.poolsize", errMustBePositive)
+		return NewValidationError(fieldCacheRedisPool, errMustBePositive)
 	}
 
 	if cfg.DialTimeout < 0 {
@@ -891,16 +906,16 @@ func validateStaticTenantConfig(source *SourceConfig, mt *MultitenantConfig, db 
 func validateNoSingleTenantConflict(db *DatabaseConfig, msg *MessagingConfig) error {
 	if IsDatabaseConfigured(db) {
 		return &ConfigError{
-			Category: "invalid",
-			Field:    "database",
+			Category: errCategoryInvalid,
+			Field:    fieldDatabase,
 			Message:  "not allowed when static tenants are configured",
 			Action:   "remove database section from root config or move to multitenant.tenants.<tenant_id>.database",
 		}
 	}
 	if IsMessagingConfigured(msg) {
 		return &ConfigError{
-			Category: "invalid",
-			Field:    "messaging",
+			Category: errCategoryInvalid,
+			Field:    fieldMessaging,
 			Message:  "not allowed when static tenants are configured",
 			Action:   "remove messaging section from root config or move to multitenant.tenants.<tenant_id>.messaging",
 		}
@@ -910,7 +925,7 @@ func validateNoSingleTenantConflict(db *DatabaseConfig, msg *MessagingConfig) er
 
 // validateMultitenantResolver validates tenant resolver configuration
 func validateMultitenantResolver(cfg *ResolverConfig) error {
-	validTypes := []string{"header", "subdomain", "composite"}
+	validTypes := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypeComposite}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("multitenant.resolver.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
@@ -921,7 +936,7 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 	}
 
 	// Validate subdomain-specific configuration
-	if cfg.Type == "subdomain" || cfg.Type == "composite" {
+	if cfg.Type == ResolverTypeSubdomain || cfg.Type == ResolverTypeComposite {
 		if strings.TrimSpace(cfg.Domain) == "" {
 			return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
 		}
@@ -968,7 +983,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 	// Enforce all-or-nothing messaging configuration for consistency
 	if hasAnyMessaging && hasNoMessaging {
 		return &ConfigError{
-			Category: "invalid",
+			Category: errCategoryInvalid,
 			Field:    "multitenant.tenants messaging",
 			Message:  "inconsistent configuration",
 			Action:   "either all tenants must have messaging configured or none should",
@@ -983,7 +998,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 
 		// Validate tenant database configuration
 		if !IsDatabaseConfigured(&tenant.Database) {
-			return NewMultiTenantError(tenantID, "database", "configuration required", fmt.Sprintf("add multitenant.tenants.%s.database section", tenantID))
+			return NewMultiTenantError(tenantID, fieldDatabase, "configuration required", fmt.Sprintf("add multitenant.tenants.%s.database section", tenantID))
 		}
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)

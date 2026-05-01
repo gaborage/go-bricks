@@ -107,7 +107,7 @@ func (r *MetadataRegistry) Count() int {
 func getModulePackage(module Module) string {
 	// Use reflection to get the package path
 	moduleType := reflect.TypeOf(module)
-	if moduleType.Kind() == reflect.Ptr {
+	if moduleType.Kind() == reflect.Pointer {
 		moduleType = moduleType.Elem()
 	}
 	return moduleType.PkgPath()

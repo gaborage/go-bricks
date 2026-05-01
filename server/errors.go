@@ -154,7 +154,7 @@ func (e *NotFoundError) Error() string {
 func NewNotFoundError(resource string) *NotFoundError {
 	message := fmt.Sprintf("%s not found", resource)
 	return &NotFoundError{
-		BaseAPIError: NewBaseAPIError("NOT_FOUND", message, http.StatusNotFound),
+		BaseAPIError: NewBaseAPIError(errCodeNotFound, message, http.StatusNotFound),
 	}
 }
 
@@ -191,7 +191,7 @@ func NewUnauthorizedError(message string) *UnauthorizedError {
 		message = "Authentication required"
 	}
 	return &UnauthorizedError{
-		BaseAPIError: NewBaseAPIError("UNAUTHORIZED", message, http.StatusUnauthorized),
+		BaseAPIError: NewBaseAPIError(errCodeUnauthorized, message, http.StatusUnauthorized),
 	}
 }
 
@@ -211,7 +211,7 @@ func NewForbiddenError(message string) *ForbiddenError {
 		message = "Access denied"
 	}
 	return &ForbiddenError{
-		BaseAPIError: NewBaseAPIError("FORBIDDEN", message, http.StatusForbidden),
+		BaseAPIError: NewBaseAPIError(errCodeForbidden, message, http.StatusForbidden),
 	}
 }
 
@@ -231,7 +231,7 @@ func NewInternalServerError(message string) *InternalServerError {
 		message = "An internal error occurred"
 	}
 	return &InternalServerError{
-		BaseAPIError: NewBaseAPIError("INTERNAL_ERROR", message, http.StatusInternalServerError),
+		BaseAPIError: NewBaseAPIError(errCodeInternalError, message, http.StatusInternalServerError),
 	}
 }
 
@@ -248,7 +248,7 @@ func (e *BadRequestError) Error() string {
 // NewBadRequestError creates a new bad request error.
 func NewBadRequestError(message string) *BadRequestError {
 	return &BadRequestError{
-		BaseAPIError: NewBaseAPIError("BAD_REQUEST", message, http.StatusBadRequest),
+		BaseAPIError: NewBaseAPIError(errCodeBadRequest, message, http.StatusBadRequest),
 	}
 }
 
@@ -268,7 +268,7 @@ func NewServiceUnavailableError(message string) *ServiceUnavailableError {
 		message = "Service temporarily unavailable"
 	}
 	return &ServiceUnavailableError{
-		BaseAPIError: NewBaseAPIError("SERVICE_UNAVAILABLE", message, http.StatusServiceUnavailable),
+		BaseAPIError: NewBaseAPIError(errCodeServiceUnavailable, message, http.StatusServiceUnavailable),
 	}
 }
 
@@ -285,10 +285,10 @@ func (e *TooManyRequestsError) Error() string {
 // NewTooManyRequestsError creates a new too many requests error.
 func NewTooManyRequestsError(message string) *TooManyRequestsError {
 	if message == "" {
-		message = "Rate limit exceeded"
+		message = msgRateLimitExceeded
 	}
 	return &TooManyRequestsError{
-		BaseAPIError: NewBaseAPIError("TOO_MANY_REQUESTS", message, http.StatusTooManyRequests),
+		BaseAPIError: NewBaseAPIError(errCodeTooManyRequests, message, http.StatusTooManyRequests),
 	}
 }
 

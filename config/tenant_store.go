@@ -74,7 +74,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	// Single-tenant default case
 	if key == "" {
 		if s.defaultDB == nil {
-			return nil, NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
+			return nil, NewNotConfiguredError(fieldDatabase, "DATABASE_HOST", "database.host")
 		}
 		return s.defaultDB, nil
 	}
@@ -96,7 +96,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, NewMultiTenantError(key, "database", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
+		return nil, NewMultiTenantError(key, fieldDatabase, configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
 	}
 
 	return &tenant.Database, nil

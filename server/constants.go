@@ -2,6 +2,36 @@ package server
 
 import "time"
 
+// Standardized API error codes used in APIErrorResponse envelopes.
+const (
+	errCodeBadRequest         = "BAD_REQUEST"
+	errCodeUnauthorized       = "UNAUTHORIZED"
+	errCodeForbidden          = "FORBIDDEN"
+	errCodeNotFound           = "NOT_FOUND"
+	errCodeConflict           = "CONFLICT"
+	errCodeTooManyRequests    = "TOO_MANY_REQUESTS"
+	errCodeServiceUnavailable = "SERVICE_UNAVAILABLE"
+	errCodeInternalError      = "INTERNAL_ERROR"
+)
+
+// Common user-facing error messages.
+const (
+	msgRateLimitExceeded = "Rate limit exceeded"
+)
+
+// Standard log/JSON field key constants used in handlers and middleware.
+const (
+	fieldStatus    = "status"
+	fieldError     = "error"
+	fieldMessage   = "message"
+	fieldRequestID = "request_id"
+	fieldTimestamp = "timestamp"
+	fieldTraceID   = "traceId"
+
+	statusOK    = "ok"
+	statusReady = "ready"
+)
+
 // HTTP Server Default Timeouts
 //
 // These constants define default timeout values for the Echo HTTP server.

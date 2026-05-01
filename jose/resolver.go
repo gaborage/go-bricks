@@ -43,7 +43,7 @@ func (r *KeyStoreResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	if r == nil || r.ks == nil {
 		return nil, &Error{
 			Sentinel: ErrKeyResolution,
-			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Code:     codeKeystoreUnavailable,
 			Message:  "no keystore configured; register a KeyStore module before declaring jose-tagged routes",
 			Kid:      kid,
 		}
@@ -52,7 +52,7 @@ func (r *KeyStoreResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, &Error{
 			Sentinel: ErrKidUnknown,
-			Code:     "JOSE_KID_UNKNOWN",
+			Code:     codeKidUnknown,
 			Message:  "private key not registered",
 			Kid:      kid,
 			Cause:    err,
@@ -65,7 +65,7 @@ func (r *KeyStoreResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
 	if r == nil || r.ks == nil {
 		return nil, &Error{
 			Sentinel: ErrKeyResolution,
-			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Code:     codeKeystoreUnavailable,
 			Message:  "no keystore configured; register a KeyStore module before declaring jose-tagged routes",
 			Kid:      kid,
 		}
@@ -74,7 +74,7 @@ func (r *KeyStoreResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
 	if err != nil {
 		return nil, &Error{
 			Sentinel: ErrKidUnknown,
-			Code:     "JOSE_KID_UNKNOWN",
+			Code:     codeKidUnknown,
 			Message:  "public key not registered",
 			Kid:      kid,
 			Cause:    err,

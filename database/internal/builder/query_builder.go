@@ -14,6 +14,7 @@ import (
 
 const (
 	joinOnPlaceholder = "%s ON %s"
+	sqlFuncNow        = "NOW()"
 )
 
 // QueryBuilder provides vendor-specific SQL query building.
@@ -409,11 +410,11 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 func (qb *QueryBuilder) BuildCurrentTimestamp() string {
 	switch qb.vendor {
 	case dbtypes.PostgreSQL:
-		return "NOW()"
+		return sqlFuncNow
 	case dbtypes.Oracle:
 		return "SYSDATE"
 	default:
-		return "NOW()"
+		return sqlFuncNow
 	}
 }
 

@@ -11,6 +11,11 @@ import (
 	"github.com/gaborage/go-bricks/tools/openapi/internal/generator"
 )
 
+const (
+	cmdNameGenerate = "generate"
+	extYAML         = ".yaml"
+)
+
 // GenerateOptions holds options for the generate command
 type GenerateOptions struct {
 	ProjectRoot string
@@ -23,7 +28,7 @@ func NewGenerateCommand() *cobra.Command {
 	opts := &GenerateOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "generate",
+		Use:   cmdNameGenerate,
 		Short: "Generate OpenAPI specification from go-bricks service",
 		Long: `Analyzes a go-bricks service and generates an OpenAPI 3.0.1 specification.
 
@@ -99,7 +104,7 @@ func validateGenerateOptions(opts *GenerateOptions) error {
 	// Ensure output file has .yaml extension
 	ext := filepath.Ext(opts.OutputFile)
 	if ext == "" {
-		opts.OutputFile += ".yaml"
+		opts.OutputFile += extYAML
 	}
 
 	return nil

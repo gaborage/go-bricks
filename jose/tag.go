@@ -15,16 +15,28 @@ var kidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 const TagName = "jose"
 
+// JOSE struct-tag keys.
+const (
+	tagKeyDecrypt = "decrypt"
+	tagKeyVerify  = "verify"
+	tagKeySign    = "sign"
+	tagKeyEncrypt = "encrypt"
+	tagKeySigAlg  = "sig_alg"
+	tagKeyKeyAlg  = "key_alg"
+	tagKeyEnc     = "enc"
+	tagKeyCty     = "cty"
+)
+
 // known tag keys; anything else is a registration error (typo guard).
 var knownTagKeys = map[string]bool{
-	"decrypt": true,
-	"verify":  true,
-	"sign":    true,
-	"encrypt": true,
-	"sig_alg": true,
-	"key_alg": true,
-	"enc":     true,
-	"cty":     true,
+	tagKeyDecrypt: true,
+	tagKeyVerify:  true,
+	tagKeySign:    true,
+	tagKeyEncrypt: true,
+	tagKeySigAlg:  true,
+	tagKeyKeyAlg:  true,
+	tagKeyEnc:     true,
+	tagKeyCty:     true,
 }
 
 // ParseTag parses a `jose:` struct tag value into a Policy with the given direction.
@@ -58,7 +70,7 @@ func ParseTag(tagValue string, dir Direction) (*Policy, error) {
 		if seen[key] {
 			return nil, &Error{
 				Sentinel: ErrTagInvalid,
-				Code:     "JOSE_TAG_DUPLICATE_KEY",
+				Code:     codeTagDuplicateKey,
 				Message:  fmt.Sprintf("jose tag key %q specified more than once", key),
 			}
 		}
@@ -104,27 +116,27 @@ func splitKV(raw string) (key, val string, err error) {
 
 func applyTagPair(p *Policy, key, val string) error {
 	switch key {
-	case "decrypt", "verify", "sign", "encrypt":
+	case tagKeyDecrypt, tagKeyVerify, tagKeySign, tagKeyEncrypt:
 		return applyKid(p, key, val)
-	case "sig_alg":
+	case tagKeySigAlg:
 		alg := jose.SignatureAlgorithm(val)
 		if !IsAllowedSigAlg(alg) {
 			return algorithmDisallowed("signature algorithm", val, "")
 		}
 		p.SigAlg = alg
-	case "key_alg":
+	case tagKeyKeyAlg:
 		alg := jose.KeyAlgorithm(val)
 		if !IsAllowedKeyAlg(alg) {
 			return algorithmDisallowed("key algorithm", val, "")
 		}
 		p.KeyAlg = alg
-	case "enc":
+	case tagKeyEnc:
 		enc := jose.ContentEncryption(val)
 		if !IsAllowedEnc(enc) {
 			return algorithmDisallowed("content encryption", "", val)
 		}
 		p.Enc = enc
-	case "cty":
+	case tagKeyCty:
 		p.Cty = val
 	}
 	return nil
@@ -134,19 +146,19 @@ func applyKid(p *Policy, key, val string) error {
 	if !kidPattern.MatchString(val) {
 		return &Error{
 			Sentinel: ErrTagInvalid,
-			Code:     "JOSE_TAG_KID_INVALID",
+			Code:     codeTagKidInvalid,
 			Message:  fmt.Sprintf("kid %q contains disallowed characters", val),
 			Kid:      val,
 		}
 	}
 	switch key {
-	case "decrypt":
+	case tagKeyDecrypt:
 		p.DecryptKid = val
-	case "verify":
+	case tagKeyVerify:
 		p.VerifyKid = val
-	case "sign":
+	case tagKeySign:
 		p.SignKid = val
-	case "encrypt":
+	case tagKeyEncrypt:
 		p.EncryptKid = val
 	}
 	return nil
@@ -159,7 +171,7 @@ func algorithmDisallowed(kind, alg, enc string) *Error {
 	}
 	return &Error{
 		Sentinel: ErrAlgorithmDisallowed,
-		Code:     "JOSE_ALGORITHM_DISALLOWED",
+		Code:     codeAlgorithmDisallowed,
 		Message:  fmt.Sprintf("%s %q not in allowlist", kind, target),
 		Alg:      alg,
 		Enc:      enc,

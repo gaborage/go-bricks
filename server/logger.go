@@ -244,43 +244,40 @@ func determineSeverity(
 	err error,
 ) (logLevel, resultCode string) {
 	const (
-		levelError = "error"
-		levelWarn  = "warn"
-		levelInfo  = "info"
-		codeError  = "ERROR"
-		codeWarn   = "WARN"
-		codeInfo   = "INFO"
+		codeError = "ERROR"
+		codeWarn  = "WARN"
+		codeInfo  = "INFO"
 	)
 
 	// ERROR: 5xx status or unhandled error
 	if status >= 500 || (err != nil && status == 0) {
-		return levelError, codeError
+		return logger.LevelError, codeError
 	}
 
 	// WARN: 4xx status
 	if status >= 400 {
-		return levelWarn, codeWarn
+		return logger.LevelWarn, codeWarn
 	}
 
 	// WARN (result_code): Slow request (latency exceeds threshold)
 	// Log level stays INFO, but result_code is WARN for filtering slow requests
 	// Only check if threshold is positive (zero or negative disables slow request detection)
 	if threshold > 0 && latency > threshold {
-		return levelInfo, codeWarn
+		return logger.LevelInfo, codeWarn
 	}
 
 	// INFO: Normal successful request
-	return levelInfo, codeInfo
+	return logger.LevelInfo, codeInfo
 }
 
 // createLogEvent creates a log event with the specified severity level.
 func createLogEvent(log logger.Logger, level string) logger.LogEvent {
 	switch level {
-	case "error":
+	case logger.LevelError:
 		return log.Error()
-	case "warn":
+	case logger.LevelWarn:
 		return log.Warn()
-	case "info":
+	case logger.LevelInfo:
 		return log.Info()
 	default:
 		return log.Info()

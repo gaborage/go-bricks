@@ -24,6 +24,20 @@ const (
 	frameworkTypeAPIError       = "IAPIError"
 	frameworkTypeError          = "error"
 	frameworkPkgServer          = "server"
+	frameworkPkgApp             = "app"
+	frameworkTypeModuleDeps     = "ModuleDeps"
+
+	// Module interface method names
+	moduleMethodName           = "Name"
+	moduleMethodInit           = "Init"
+	moduleMethodRegisterRoutes = "RegisterRoutes"
+	moduleMethodShutdown       = "Shutdown"
+
+	// Go primitive type names used in AST inspection
+	goTypeString = "string"
+
+	// HTTP method names
+	httpMethodPost = "POST"
 
 	// File and directory names
 	goFileExt     = ".go"
@@ -283,10 +297,10 @@ func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) s
 // hasModuleMethods checks if the struct has methods indicating it's a go-bricks module
 func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePath string) bool {
 	requiredMethods := map[string]bool{
-		"Name":           false,
-		"Init":           false,
-		"RegisterRoutes": false,
-		"Shutdown":       false,
+		moduleMethodName:           false,
+		moduleMethodInit:           false,
+		moduleMethodRegisterRoutes: false,
+		moduleMethodShutdown:       false,
 	}
 
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
@@ -303,7 +317,7 @@ func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePa
 	}
 
 	// Check if we have at least the core methods with valid signatures
-	return requiredMethods["Name"] && requiredMethods["Init"] && requiredMethods["RegisterRoutes"]
+	return requiredMethods[moduleMethodName] && requiredMethods[moduleMethodInit] && requiredMethods[moduleMethodRegisterRoutes]
 }
 
 // isMethodOnStruct checks if a function is a method on the specified struct
@@ -342,14 +356,14 @@ func (a *ProjectAnalyzer) isModuleDepsField(field *ast.Field) bool {
 		return false
 	}
 
-	return pkgIdent.Name == "app" && selExpr.Sel.Name == "ModuleDeps"
+	return pkgIdent.Name == frameworkPkgApp && selExpr.Sel.Name == frameworkTypeModuleDeps
 }
 
 // extractRoutesFromPackage extracts route registrations for the module across the entire package
 func (a *ProjectAnalyzer) extractRoutesFromPackage(astFile *ast.File, filePath, structName string) []models.Route {
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		return a.collectRoutesFromFile(astFile, filePath, structName, map[string]struct{}{"server": {}})
+		return a.collectRoutesFromFile(astFile, filePath, structName, map[string]struct{}{frameworkPkgServer: {}})
 	}
 
 	var routes []models.Route
@@ -379,7 +393,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 
 	for _, decl := range astFile.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
-		if !ok || funcDecl.Name.Name != "RegisterRoutes" || funcDecl.Body == nil {
+		if !ok || funcDecl.Name.Name != moduleMethodRegisterRoutes || funcDecl.Body == nil {
 			continue
 		}
 
@@ -399,7 +413,7 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 
 // extractRoutesFromFuncBody extracts route registrations from function statements
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", map[string]struct{}{"server": {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", map[string]struct{}{frameworkPkgServer: {}})
 }
 
 // extractRoutesFromFuncBodyWithAliases extracts route registrations with explicit server aliases
@@ -434,7 +448,7 @@ func (a *ProjectAnalyzer) validateServerCall(stmt ast.Stmt, serverAliases map[st
 	}
 
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
-	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, "server") {
+	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, frameworkPkgServer) {
 		return nil, "", false
 	}
 
@@ -513,7 +527,7 @@ func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, astFile *ast.
 
 // isHTTPMethod checks if the method name is a valid HTTP method
 func (a *ProjectAnalyzer) isHTTPMethod(method string) bool {
-	httpMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+	httpMethods := []string{"GET", httpMethodPost, "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 	methodUpper := strings.ToUpper(method)
 	return slices.Contains(httpMethods, methodUpper)
 }
@@ -531,7 +545,7 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 	}
 
 	pkg, ok := selExpr.X.(*ast.Ident)
-	if !ok || !a.aliasContains(serverAliases, pkg.Name, "server") {
+	if !ok || !a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) {
 		return
 	}
 
@@ -758,21 +772,21 @@ func (a *ProjectAnalyzer) collectMethodFlagsFromFile(astFile *ast.File, structNa
 // checkMethodSignature checks a single method's signature and updates flags
 func (a *ProjectAnalyzer) checkMethodSignature(funcDecl *ast.FuncDecl, flags map[string]bool, serverAliases, appAliases map[string]struct{}) {
 	switch funcDecl.Name.Name {
-	case "Name":
+	case moduleMethodName:
 		if a.isValidNameSignature(funcDecl) {
-			flags["Name"] = true
+			flags[moduleMethodName] = true
 		}
-	case "Init":
+	case moduleMethodInit:
 		if a.isValidInitSignature(funcDecl, appAliases) {
-			flags["Init"] = true
+			flags[moduleMethodInit] = true
 		}
-	case "RegisterRoutes":
+	case moduleMethodRegisterRoutes:
 		if a.isValidRegisterRoutesSignature(funcDecl, serverAliases) {
-			flags["RegisterRoutes"] = true
+			flags[moduleMethodRegisterRoutes] = true
 		}
-	case "Shutdown":
+	case moduleMethodShutdown:
 		if a.isValidShutdownSignature(funcDecl) {
-			flags["Shutdown"] = true
+			flags[moduleMethodShutdown] = true
 		}
 	}
 }
@@ -785,7 +799,7 @@ func (a *ProjectAnalyzer) isValidNameSignature(funcDecl *ast.FuncDecl) bool {
 		return false
 	}
 	if ident, ok := funcDecl.Type.Results.List[0].Type.(*ast.Ident); ok {
-		return ident.Name == "string"
+		return ident.Name == goTypeString
 	}
 	return false
 }
@@ -807,11 +821,11 @@ func (a *ProjectAnalyzer) isValidInitSignature(funcDecl *ast.FuncDecl, appAliase
 	}
 
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
-	if !ok || !a.aliasContains(appAliases, pkgIdent.Name, "app") {
+	if !ok || !a.aliasContains(appAliases, pkgIdent.Name, frameworkPkgApp) {
 		return false
 	}
 
-	if selExpr.Sel.Name != "ModuleDeps" {
+	if selExpr.Sel.Name != frameworkTypeModuleDeps {
 		return false
 	}
 
@@ -820,7 +834,7 @@ func (a *ProjectAnalyzer) isValidInitSignature(funcDecl *ast.FuncDecl, appAliase
 	}
 
 	if ident, ok := funcDecl.Type.Results.List[0].Type.(*ast.Ident); ok {
-		return ident.Name == "error"
+		return ident.Name == frameworkTypeError
 	}
 
 	return false
@@ -843,7 +857,7 @@ func (a *ProjectAnalyzer) isValidRegisterRoutesSignature(funcDecl *ast.FuncDecl,
 	}
 
 	firstPkg, ok := firstSel.X.(*ast.Ident)
-	if !ok || !a.aliasContains(serverAliases, firstPkg.Name, "server") {
+	if !ok || !a.aliasContains(serverAliases, firstPkg.Name, frameworkPkgServer) {
 		return false
 	}
 
@@ -858,7 +872,7 @@ func (a *ProjectAnalyzer) isValidRegisterRoutesSignature(funcDecl *ast.FuncDecl,
 	}
 
 	secondPkg, ok := secondSel.X.(*ast.Ident)
-	if !ok || !a.aliasContains(serverAliases, secondPkg.Name, "server") {
+	if !ok || !a.aliasContains(serverAliases, secondPkg.Name, frameworkPkgServer) {
 		return false
 	}
 
@@ -880,7 +894,7 @@ func (a *ProjectAnalyzer) isValidShutdownSignature(funcDecl *ast.FuncDecl) bool 
 	}
 
 	if ident, ok := funcDecl.Type.Results.List[0].Type.(*ast.Ident); ok {
-		return ident.Name == "error"
+		return ident.Name == frameworkTypeError
 	}
 
 	return false

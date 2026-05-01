@@ -52,10 +52,8 @@ const (
 	localHost      = "localhost"
 	amqpBrokerURL  = "amqp://broker"
 
-	// Component names
-	componentDatabase  = "database"
-	componentMessaging = "messaging"
-	messagingStatsKey  = "messaging_stats"
+	// Component names (componentDatabase, componentMessaging defined in app.go)
+	messagingStatsKey = "messaging_stats"
 
 	// Error scenarios
 	errorDBDown      = "db down"

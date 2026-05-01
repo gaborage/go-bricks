@@ -414,6 +414,13 @@ const (
 	SourceTypeDynamic = "dynamic"
 )
 
+// Tenant resolver type constants
+const (
+	ResolverTypeHeader    = "header"
+	ResolverTypeSubdomain = "subdomain"
+	ResolverTypeComposite = "composite"
+)
+
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {
 	Type string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"` // SourceTypeStatic for YAML config, SourceTypeDynamic for external stores

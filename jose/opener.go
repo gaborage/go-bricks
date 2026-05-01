@@ -21,7 +21,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	if p == nil || p.Direction != DirectionInbound {
 		return nil, nil, OpenHeader{}, &Error{
 			Sentinel: ErrPolicyMismatch,
-			Code:     "JOSE_POLICY_DIRECTION_MISMATCH",
+			Code:     codePolicyDirectionMismatch,
 			Status:   500,
 			Message:  "Open requires an inbound policy",
 		}
@@ -29,7 +29,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	if r == nil {
 		return nil, nil, OpenHeader{}, &Error{
 			Sentinel: ErrKeyResolution,
-			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Code:     codeKeystoreUnavailable,
 			Status:   500,
 			Message:  "Open called without a KeyResolver",
 		}
@@ -110,7 +110,7 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrParseEncrypted):
 		return &Error{
 			Sentinel: ErrMalformed,
-			Code:     "JOSE_MALFORMED",
+			Code:     codeMalformed,
 			Status:   400,
 			Message:  "Malformed JOSE payload",
 			Cause:    err,
@@ -118,7 +118,7 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrKidMissing):
 		return &Error{
 			Sentinel: ErrKidMissing,
-			Code:     "JOSE_KID_MISSING",
+			Code:     codeKidMissing,
 			Status:   401,
 			Message:  "Missing kid header",
 			Cause:    err,
@@ -126,7 +126,7 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrKidMismatch):
 		return &Error{
 			Sentinel: ErrKidUnknown,
-			Code:     "JOSE_KID_UNKNOWN",
+			Code:     codeKidUnknown,
 			Status:   401,
 			Message:  "Unknown kid",
 			Kid:      hdr.Kid,
@@ -135,9 +135,9 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrDecryptFailed):
 		return &Error{
 			Sentinel: ErrDecryptFailed,
-			Code:     "JOSE_DECRYPT_FAILED",
+			Code:     codeDecryptFailed,
 			Status:   401,
-			Message:  "Failed to decrypt request payload",
+			Message:  msgFailedToDecryptRequestPayload,
 			Kid:      hdr.Kid,
 			Alg:      hdr.Alg,
 			Enc:      hdr.Enc,
@@ -146,9 +146,9 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	default:
 		return &Error{
 			Sentinel: ErrDecryptFailed,
-			Code:     "JOSE_DECRYPT_FAILED",
+			Code:     codeDecryptFailed,
 			Status:   401,
-			Message:  "Failed to decrypt request payload",
+			Message:  msgFailedToDecryptRequestPayload,
 			Cause:    err,
 		}
 	}
@@ -167,7 +167,7 @@ func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrKidMissing):
 		return &Error{
 			Sentinel: ErrKidMissing,
-			Code:     "JOSE_KID_MISSING",
+			Code:     codeKidMissing,
 			Status:   401,
 			Message:  "Missing JWS kid header",
 			Cause:    err,
@@ -175,7 +175,7 @@ func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrKidMismatch):
 		return &Error{
 			Sentinel: ErrKidUnknown,
-			Code:     "JOSE_KID_UNKNOWN",
+			Code:     codeKidUnknown,
 			Status:   401,
 			Message:  "Unknown JWS kid",
 			Kid:      hdr.Kid,
@@ -184,7 +184,7 @@ func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	case errors.Is(err, cryptoadapter.ErrVerifyFailed):
 		return &Error{
 			Sentinel: ErrSignatureInvalid,
-			Code:     "JOSE_SIGNATURE_INVALID",
+			Code:     codeSignatureInvalid,
 			Status:   401,
 			Message:  "Invalid signature",
 			Kid:      hdr.Kid,
@@ -194,7 +194,7 @@ func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	default:
 		return &Error{
 			Sentinel: ErrSignatureInvalid,
-			Code:     "JOSE_SIGNATURE_INVALID",
+			Code:     codeSignatureInvalid,
 			Status:   401,
 			Message:  "Invalid signature",
 			Cause:    err,

@@ -26,6 +26,26 @@ var (
 	ErrKeyResolution       = errors.New("jose: key resolution failed")
 )
 
+// Wire-protocol error codes returned in JOSE error envelopes.
+const (
+	codePolicyDirectionMismatch = "JOSE_POLICY_DIRECTION_MISMATCH"
+	codeKidUnknown              = "JOSE_KID_UNKNOWN"
+	codeDecryptFailed           = "JOSE_DECRYPT_FAILED"
+	codeSignatureInvalid        = "JOSE_SIGNATURE_INVALID"
+	codeAlgorithmDisallowed     = "JOSE_ALGORITHM_DISALLOWED"
+	codePolicyIncomplete        = "JOSE_POLICY_INCOMPLETE"
+	codeKeystoreUnavailable     = "JOSE_KEYSTORE_UNAVAILABLE"
+	codeMalformed               = "JOSE_MALFORMED"
+	codeKidMissing              = "JOSE_KID_MISSING"
+	codeTagDuplicateKey         = "JOSE_TAG_DUPLICATE_KEY"
+	codeTagKidInvalid           = "JOSE_TAG_KID_INVALID"
+)
+
+// Common error message strings used across JOSE error envelopes.
+const (
+	msgFailedToDecryptRequestPayload = "Failed to decrypt request payload"
+)
+
 // Error is the structured value returned by every jose package operation that fails.
 // It carries diagnostic fields (Kid, Alg, Enc) for logging and an HTTP-mapped Code/Status
 // for response shaping. Use errors.Is(err, ErrDecryptFailed) for sentinel comparisons.
