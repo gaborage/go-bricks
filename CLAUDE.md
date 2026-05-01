@@ -45,7 +45,7 @@ go test -bench=.        # Run benchmarks
 **Additional Documentation:**
 - [TESTING.md](TESTING.md) - Testing strategy deep-dive
 - [METRICS.md](METRICS.md) - Observability metrics reference
-- [GitHub Issues](https://github.com/gaborage/go-bricks/issues) - Technical backlog (filter `is:open label:enhancement` for active items; titles use `[P1]`/`[P2]`/`[P3]` and `[JOSE]`/area prefixes for filtering)
+- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Aenhancement) - Technical backlog (active enhancement items; titles use `[P1]`/`[P2]`/`[P3]` and `[JOSE]`/area prefixes for filtering)
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [config.example.yaml](config.example.yaml) - Full configuration template
 
