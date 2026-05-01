@@ -691,6 +691,8 @@ See [keystore/](keystore/) package for full API documentation.
 
 ## JOSE (Sign-then-Encrypt Bodies)
 
+> ⚠️ **Production requirement:** JOSE protects request/response *bodies*, not the transport. Routes using JOSE middleware must still be served over **HTTPS** in production — TLS continues to protect URLs, headers, traffic patterns, and the trust handshake itself.
+
 The `jose` package adds nested **JWE-of-JWS** protection on HTTP request and response bodies — designed for **Visa Token Services**-style integrations and any partner API that requires sign-then-encrypt outbound and decrypt-then-verify inbound on every payload. It's struct-tag opt-in: the framework discovers JOSE-protected routes at registration time, validates every `kid` against the keystore, and panics fast if anything is misconfigured rather than failing per-request.
 
 ```go
