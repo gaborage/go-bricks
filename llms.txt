@@ -658,11 +658,14 @@ func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.R
     reqCtx := ctx.Echo.Request().Context()  // already has the 5s deadline
 
     // No wrapping needed — every call below observes the inherited deadline:
-    cached, _ := h.cache.Get(reqCtx, key)
+    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
     order, err := h.svc.FindByID(reqCtx, req.ID)
-    pricing, err := h.pricing.Get(reqCtx, order.SKU)
+    if err != nil {
+        return server.Result[Order]{}, server.NewInternalServerError(err.Error())
+    }
+    _, _ = h.pricing.Get(reqCtx, order.SKU)
 
-    return server.OK(order), nil
+    return server.NewResult(http.StatusOK, order), nil
 }
 
 // === SHORTEN: cap one sub-operation so a slow path doesn't burn the budget ===

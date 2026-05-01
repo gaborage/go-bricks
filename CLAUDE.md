@@ -1477,12 +1477,15 @@ Inside a handler, the request context already carries a 5-second deadline (the c
 func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
     reqCtx := ctx.Echo.Request().Context()  // inherits the 5s deadline
 
-    // All of these inherit the deadline — no manual wrapping needed:
-    cached, _ := h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
-    order, err := h.svc.FindByID(reqCtx, req.ID)            // DB query
-    pricing, err := h.pricingClient.Get(reqCtx, order.SKU)  // outbound HTTP
+    // Each call below observes the inherited deadline — no manual wrapping needed:
+    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))  // Redis dial/read/write
+    order, err := h.svc.FindByID(reqCtx, req.ID)                 // DB query
+    if err != nil {
+        return server.Result[Order]{}, server.NewInternalServerError(err.Error())
+    }
+    _, _ = h.pricingClient.Get(reqCtx, order.SKU)                // outbound HTTP
 
-    return server.OK(order), nil
+    return server.NewResult(http.StatusOK, order), nil
 }
 ```
 
