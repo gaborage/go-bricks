@@ -4,6 +4,8 @@
 **Status:** Accepted
 **Context:** Oracle identifier quoting reliability and SQL injection prevention
 
+> **API Drift Note (2026-04-30):** The original implementation placed the type-safe methods (`WhereEq`, `WhereLt`, …) and the escape hatch (`WhereRaw`) directly on `SelectQueryBuilder`. ADR-007 (Struct-Based Column Extraction) refactored these onto two filter factories: `FilterFactory` (`f.Eq`, `f.Lt`, …, `f.Raw`) returned by `qb.Filter()`, and `JoinFilterFactory` (`jf.Raw`, `jf.EqColumn`, …) returned by `qb.JoinFilter()`. The body below documents the original v0.x design intent and remains accurate as a historical record. When applying this ADR to current code, mentally substitute `f.Raw` / `jf.Raw` for `WhereRaw`, and the type-safe methods now live on `f.*` rather than `*SelectQueryBuilder`. The annotation policy (`// SECURITY: Manual SQL review completed - <rationale>` at every escape-hatch call site) applies to both `f.Raw` and `jf.Raw`; see CLAUDE.md "Detailed Security Guidelines".
+
 ## Problem Statement
 
 The framework's query builder allowed raw string WHERE clauses that could bypass Oracle identifier quoting, leading to runtime SQL errors when reserved words were used unquoted:

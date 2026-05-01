@@ -820,6 +820,7 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		jf := qb.JoinFilter()
 		f := qb.Filter()
 
+		// SECURITY: Manual SQL review completed - all jf.Raw conditions below use literal qualified column identifiers and Oracle's TO_NUMBER built-in; the only value side ("p.status = ?") is parameterized
 		query := qb.Select(selectAll).
 			From(dbtypes.MustTable(tableOrders).MustAs("o")).
 			JoinOn(dbtypes.MustTable("customers").MustAs("c"),

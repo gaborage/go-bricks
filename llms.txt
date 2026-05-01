@@ -807,6 +807,7 @@ rows, err := db.Query(ctx, sql, args...)
 | Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
+| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` — REQUIRES `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
 | Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work */; if err := tx.Commit(ctx); err != nil { return err }` |
 
 **Mutation Examples (INSERT/UPDATE/DELETE):**
@@ -2956,6 +2957,7 @@ func WithTenantFilter(ctx context.Context, f *builder.Filter, cols dbtypes.Colum
     if !ok || tenantID == "" {
         // Return always-false condition to prevent returning any data
         // This is a safety fallback - callers should validate tenant first
+        // SECURITY: Manual SQL review completed - literal constant "1 = 0" with no identifiers, parameters, or user input; risk-free by construction but annotated to comply with the f.Raw audit policy
         return f.Raw("1 = 0")  // No rows will match
     }
     return f.Eq(cols.Col("TenantID"), tenantID)

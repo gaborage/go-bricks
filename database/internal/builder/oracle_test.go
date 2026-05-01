@@ -511,6 +511,9 @@ func TestWhereRawForComplexOracleQueries(t *testing.T) {
 		},
 	}
 
+	// SECURITY: Manual SQL review completed - all `tt.condition` values are literal strings from the
+	// static fixture above; identifier quoting verified for Oracle reserved words ("number", "level",
+	// "size", "name") and ROWNUM is a pseudo-column; placeholders are parameterized.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var query dbtypes.SelectQueryBuilder

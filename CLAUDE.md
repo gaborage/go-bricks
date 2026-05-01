@@ -111,14 +111,14 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **Composition > Inheritance** → Flexible, simple structures. Use interfaces and embedding over inheritance.
 - **Robustness** → Handle errors idiomatically, wrap once at boundaries. No silent failures.
 - **Patterns, not Over-Design** → Use them only when they solve real problems. Justify abstractions.
-- **Security First** → Input validation mandatory, secrets from env/vault, audit `WhereRaw()` usage.
+- **Security First** → Input validation mandatory, secrets from env/vault, audit raw-SQL escape hatches (see Detailed Security Guidelines below).
 - **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines.
 - **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`).
 - **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks).
 
 #### Detailed Security Guidelines
 - Input validation is **mandatory** at all boundaries (HTTP, messaging, database)
-- `WhereRaw()` requires annotation: `// SECURITY: Manual SQL review completed - identifier quoting verified`
+- Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()` on `FilterFactory` / `JoinFilterFactory`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review — even on "obviously safe" literal SQL — and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
 - Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault)
 - No hardcoded credentials, no secrets in logs or error messages
 - Audit logging for sensitive operations (access control, data modifications)
@@ -591,7 +591,7 @@ query := qb.Select(cols.Fields("ID", "Number")...).
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Null/NotNull`, `f.Between`
 
-**Escape Hatch:** `WhereRaw(condition, args...)` - user must manually quote Oracle reserved words
+**Escape Hatch:** `f.Raw(condition, args...)` (and `jf.Raw(...)` for JOIN conditions) — user must manually quote Oracle reserved words and parameterize all value sides. Every call site MUST carry a `// SECURITY: Manual SQL review completed - <rationale>` comment (see Detailed Security Guidelines).
 
 #### Table Aliases
 
@@ -2007,7 +2007,7 @@ golangci-lint run
 
 ```bash
 # Oracle: ORA-00936 "missing expression"
-# → Use type-safe WHERE methods (.WhereEq) instead of .WhereRaw() for auto-quoting
+# → Use type-safe filter methods (f.Eq, f.Lt, f.In, etc.) instead of f.Raw() for auto-quoting
 
 # PostgreSQL: "syntax error at or near $1"
 # → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
