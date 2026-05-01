@@ -31,7 +31,6 @@ type Header struct {
 	Kid string
 	Alg string
 	Enc string
-	Typ string
 	Cty string
 }
 
@@ -54,7 +53,6 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 		Kid: jwe.Header.KeyID,
 		Alg: jwe.Header.Algorithm,
 		Enc: extractStringExtra(jwe.Header.ExtraHeaders, "enc"),
-		Typ: extractStringExtra(jwe.Header.ExtraHeaders, jose.HeaderType),
 		Cty: extractStringExtra(jwe.Header.ExtraHeaders, jose.HeaderContentType),
 	}
 
@@ -94,7 +92,6 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 	hdr := Header{
 		Kid: sig.Protected.KeyID,
 		Alg: sig.Protected.Algorithm,
-		Typ: extractStringExtra(sig.Protected.ExtraHeaders, jose.HeaderType),
 		Cty: extractStringExtra(sig.Protected.ExtraHeaders, jose.HeaderContentType),
 	}
 
