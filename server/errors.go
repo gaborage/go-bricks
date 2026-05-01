@@ -171,7 +171,7 @@ func (e *ConflictError) Error() string {
 // NewConflictError creates a new conflict error.
 func NewConflictError(message string) *ConflictError {
 	return &ConflictError{
-		BaseAPIError: NewBaseAPIError("CONFLICT", message, http.StatusConflict),
+		BaseAPIError: NewBaseAPIError(errCodeConflict, message, http.StatusConflict),
 	}
 }
 

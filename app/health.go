@@ -111,7 +111,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 		return healthProbeFunc{
 			name: componentMessaging,
 			fn: func(context.Context) (string, map[string]any, error) {
-				return disabledStatus, map[string]any{}, nil
+				return disabledStatus, map[string]any{statusKey: disabledStatus}, nil
 			},
 		}
 	}
