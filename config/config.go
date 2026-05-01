@@ -11,6 +11,8 @@ import (
 	envprovider "github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // Load loads configuration from multiple sources with priority:
@@ -99,14 +101,14 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.env":                       EnvDevelopment,
 		"app.debug":                     false,
 		"app.namespace":                 "default",
-		"app.rate.limit":                100,
+		fieldAppRateLimit:               100,
 		"app.rate.burst":                200,
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
 		"app.startup.timeout":           "10s",
 
 		"server.host":               "0.0.0.0",
-		"server.port":               8080,
+		fieldServerPort:             8080,
 		"server.timeout.read":       "15s",
 		"server.timeout.write":      "30s",
 		"server.timeout.idle":       "60s",
@@ -121,12 +123,12 @@ func loadDefaults(k *koanf.Koanf) error {
 
 		// Cache defaults
 		"cache.enabled":               false,
-		"cache.type":                  "redis",
-		"cache.redis.host":            "localhost",
+		"cache.type":                  CacheTypeRedis,
+		"cache.redis.host":            defaultHost,
 		"cache.redis.port":            6379,
 		"cache.redis.password":        "",
-		"cache.redis.database":        0,
-		"cache.redis.poolsize":        10,
+		fieldCacheRedisDB:             0,
+		fieldCacheRedisPool:           10,
 		"cache.redis.dialtimeout":     "5s",
 		"cache.redis.readtimeout":     "3s",
 		"cache.redis.writetimeout":    "3s",
@@ -134,7 +136,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"cache.redis.minretrybackoff": "8ms",
 		"cache.redis.maxretrybackoff": "512ms",
 
-		"log.level":         "info",
+		fieldLogLevel:       logger.LevelInfo,
 		"log.pretty":        false,
 		"log.output.format": "json",
 		"log.output.file":   "",

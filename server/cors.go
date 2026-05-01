@@ -7,6 +7,8 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
+
+	"github.com/gaborage/go-bricks/config"
 )
 
 // CORS returns a CORS middleware configured for the application.
@@ -38,7 +40,7 @@ func CORS() echo.MiddlewareFunc {
 
 	// Determine allowed origins based on environment
 	useWildcard := true
-	if os.Getenv("APP_ENV") == "production" {
+	if os.Getenv("APP_ENV") == config.EnvProduction {
 		origins := os.Getenv("CORS_ORIGINS")
 		if origins != "" {
 			cfg.AllowOrigins = strings.Split(origins, ",")

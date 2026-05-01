@@ -157,11 +157,11 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	}
 
 	switch resolverCfg.Type {
-	case "header":
+	case config.ResolverTypeHeader:
 		return wrap(newHeaderResolver())
-	case "subdomain":
+	case config.ResolverTypeSubdomain:
 		return wrap(newSubdomainResolver())
-	case "composite":
+	case config.ResolverTypeComposite:
 		resolvers := []multitenant.TenantResolver{}
 		if header := newHeaderResolver(); header != nil {
 			resolvers = append(resolvers, header)

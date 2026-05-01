@@ -230,7 +230,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // healthCheck is the default health probe handler.
 func (s *Server) healthCheck(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
-		"status": "ok",
+		fieldStatus: statusOK,
 	})
 }
 
@@ -238,8 +238,8 @@ func (s *Server) healthCheck(c *echo.Context) error {
 func (s *Server) readyCheck(c *echo.Context) error {
 	// This will be extended in App to check DB connection
 	return c.JSON(http.StatusOK, map[string]any{
-		"status": "ready",
-		"time":   time.Now().Unix(),
+		fieldStatus: statusReady,
+		"time":      time.Now().Unix(),
 	})
 }
 
@@ -321,20 +321,20 @@ func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
 func statusToErrorCode(status int) string {
 	switch status {
 	case http.StatusBadRequest:
-		return "BAD_REQUEST"
+		return errCodeBadRequest
 	case http.StatusUnauthorized:
-		return "UNAUTHORIZED"
+		return errCodeUnauthorized
 	case http.StatusForbidden:
-		return "FORBIDDEN"
+		return errCodeForbidden
 	case http.StatusNotFound:
-		return "NOT_FOUND"
+		return errCodeNotFound
 	case http.StatusConflict:
-		return "CONFLICT"
+		return errCodeConflict
 	case http.StatusTooManyRequests:
-		return "TOO_MANY_REQUESTS"
+		return errCodeTooManyRequests
 	case http.StatusServiceUnavailable:
-		return "SERVICE_UNAVAILABLE"
+		return errCodeServiceUnavailable
 	default:
-		return "INTERNAL_ERROR"
+		return errCodeInternalError
 	}
 }

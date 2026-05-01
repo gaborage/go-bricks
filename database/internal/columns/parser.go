@@ -42,7 +42,7 @@ func oracleQuoteIdentifier(column string) string {
 func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 	// Validate input type
 	rv := reflect.ValueOf(structPtr)
-	if rv.Kind() != reflect.Ptr {
+	if rv.Kind() != reflect.Pointer {
 		return nil, fmt.Errorf("parseStruct expects a pointer to struct, got %T", structPtr)
 	}
 

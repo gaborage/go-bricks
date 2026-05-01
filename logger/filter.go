@@ -15,6 +15,14 @@ const (
 	DefaultMaxDepth = 8
 )
 
+// Common sensitive field names used in DefaultFilterConfig.
+const (
+	sensitiveFieldPassword = "password"
+	sensitiveFieldAPIKey   = "api_key"
+	sensitiveFieldToken    = "token"
+	sensitiveFieldSecret   = "secret"
+)
+
 // FilterConfig defines the configuration for sensitive data filtering
 type FilterConfig struct {
 	// SensitiveFields contains field names that should be masked in logs
@@ -27,9 +35,9 @@ type FilterConfig struct {
 func DefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
 		SensitiveFields: []string{
-			"password", "passwd", "pwd",
-			"secret", "key", "api_key", "apikey",
-			"token", "access_token", "refresh_token",
+			sensitiveFieldPassword, "passwd", "pwd",
+			sensitiveFieldSecret, "key", sensitiveFieldAPIKey, "apikey",
+			sensitiveFieldToken, "access_token", "refresh_token",
 			"auth", "authorization",
 			"credential", "credentials",
 			"broker_url", "database_url", "db_url",

@@ -249,7 +249,7 @@ func (cm *ColumnMetadata) extractStructValue(instance any) reflect.Value {
 	}
 
 	// Dereference pointer if necessary
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			panic(fmt.Sprintf("cannot extract fields from nil pointer (type: %s)", cm.TypeName))
 		}

@@ -67,7 +67,7 @@ func (cr *ColumnRegistry) Get(vendor string, structPtr any) *ColumnMetadata {
 
 	// Extract reflect.Type for cache key
 	t := reflect.TypeOf(structPtr)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 

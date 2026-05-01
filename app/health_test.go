@@ -106,7 +106,7 @@ func TestMessagingManagerHealthProbe(t *testing.T) {
 
 		assert.Equal(t, "messaging", result.Name)
 		assert.Equal(t, "disabled", result.Status)
-		assert.Empty(t, result.Details)
+		assert.Equal(t, map[string]any{"status": "disabled"}, result.Details)
 		assert.NoError(t, result.Err)
 		assert.False(t, result.Critical)
 	})

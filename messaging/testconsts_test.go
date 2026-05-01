@@ -28,8 +28,7 @@ const (
 	testValue2 = "value2"
 	testArg    = "arg"
 
-	// Exchange types
-	exchangeTypeTopic  = "topic"
+	// Exchange types (exchangeTypeTopic defined in helpers.go)
 	exchangeTypeDirect = "direct"
 
 	// Map keys (commonly used in Args/Headers)

@@ -124,10 +124,10 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 		}
 
 		// Validate cache type is "redis" (or empty for backward compatibility)
-		if cacheCfg.Type != "" && cacheCfg.Type != "redis" {
+		if cacheCfg.Type != "" && cacheCfg.Type != config.CacheTypeRedis {
 			err := config.NewInvalidFieldError("cache.type",
 				fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
-				[]string{"redis"})
+				[]string{config.CacheTypeRedis})
 			log.Error().
 				Str("key", key).
 				Str("type", cacheCfg.Type).

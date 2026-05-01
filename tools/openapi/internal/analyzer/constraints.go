@@ -12,6 +12,28 @@ type OpenAPIConstraint struct {
 	Value any    // Constraint value (string, int, bool, []string for enum)
 }
 
+const (
+	// OpenAPI constraint property names
+	constraintFormat    = "format"
+	constraintMinLength = "minLength"
+	constraintMaxLength = "maxLength"
+	constraintMinimum   = "minimum"
+	constraintMaximum   = "maximum"
+	constraintEnum      = "enum"
+
+	// Validator tag values
+	validatorOneOf = "oneof"
+
+	// OpenAPI format values
+	formatEmail = "email"
+	formatUUID  = "uuid"
+	formatDate  = "date"
+
+	// Go primitive type names referenced for type discrimination
+	goTypeInt64   = "int64"
+	goTypeFloat64 = "float64"
+)
+
 // MapConstraintToOpenAPI converts validation constraints to OpenAPI schema properties
 // Takes the field type and constraints map, returns OpenAPI-compatible constraints
 func MapConstraintToOpenAPI(fieldType string, constraints map[string]string) []OpenAPIConstraint {
@@ -22,7 +44,7 @@ func MapConstraintToOpenAPI(fieldType string, constraints map[string]string) []O
 
 	for key, value := range constraints {
 		// Skip required - handled at schema level
-		if key == "required" {
+		if key == constraintRequired {
 			continue
 		}
 
@@ -58,17 +80,17 @@ func MapConstraintToOpenAPI(fieldType string, constraints map[string]string) []O
 // handleFormatConstraint maps format validation tags to OpenAPI format constraints
 func handleFormatConstraint(key string) []OpenAPIConstraint {
 	formatMap := map[string]string{
-		"email":    "email",
-		"url":      "uri",
-		"uri":      "uri",
-		"uuid":     "uuid",
-		"uuid4":    "uuid",
-		"date":     "date",
-		"datetime": "date-time",
+		formatEmail: formatEmail,
+		"url":       "uri",
+		"uri":       "uri",
+		formatUUID:  formatUUID,
+		"uuid4":     formatUUID,
+		formatDate:  formatDate,
+		"datetime":  "date-time",
 	}
 
 	if format, ok := formatMap[key]; ok {
-		return []OpenAPIConstraint{{Name: "format", Value: format}}
+		return []OpenAPIConstraint{{Name: constraintFormat, Value: format}}
 	}
 	return nil
 }
@@ -81,12 +103,12 @@ func handleMinConstraint(key, value, baseType string) []OpenAPIConstraint {
 
 	if isStringType(baseType) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []OpenAPIConstraint{{Name: "minLength", Value: length}}
+			return []OpenAPIConstraint{{Name: constraintMinLength, Value: length}}
 		}
 	} else if isNumericType(baseType) {
 		//nolint:S8148 // NOSONAR: Parse errors intentionally ignored - invalid validation tag values are silently skipped
 		if minVal, err := parseNumeric(value); err == nil {
-			return []OpenAPIConstraint{{Name: "minimum", Value: minVal}}
+			return []OpenAPIConstraint{{Name: constraintMinimum, Value: minVal}}
 		}
 	}
 
@@ -101,12 +123,12 @@ func handleMaxConstraint(key, value, baseType string) []OpenAPIConstraint {
 
 	if isStringType(baseType) {
 		if length, err := strconv.Atoi(value); err == nil {
-			return []OpenAPIConstraint{{Name: "maxLength", Value: length}}
+			return []OpenAPIConstraint{{Name: constraintMaxLength, Value: length}}
 		}
 	} else if isNumericType(baseType) {
 		//nolint:S8148 // NOSONAR: Parse errors intentionally ignored - invalid validation tag values are silently skipped
 		if maxVal, err := parseNumeric(value); err == nil {
-			return []OpenAPIConstraint{{Name: "maximum", Value: maxVal}}
+			return []OpenAPIConstraint{{Name: constraintMaximum, Value: maxVal}}
 		}
 	}
 
@@ -125,8 +147,8 @@ func handleLenConstraint(key, value, baseType string) []OpenAPIConstraint {
 	}
 
 	return []OpenAPIConstraint{
-		{Name: "minLength", Value: length},
-		{Name: "maxLength", Value: length},
+		{Name: constraintMinLength, Value: length},
+		{Name: constraintMaxLength, Value: length},
 	}
 }
 
@@ -145,19 +167,19 @@ func handleNumericComparison(key, value, baseType string) []OpenAPIConstraint {
 	case "gt":
 		// gt (greater than) becomes minimum with exclusiveMinimum
 		return []OpenAPIConstraint{
-			{Name: "minimum", Value: numVal},
+			{Name: constraintMinimum, Value: numVal},
 			{Name: "exclusiveMinimum", Value: true},
 		}
 	case "gte":
-		return []OpenAPIConstraint{{Name: "minimum", Value: numVal}}
+		return []OpenAPIConstraint{{Name: constraintMinimum, Value: numVal}}
 	case "lt":
 		// lt (less than) becomes maximum with exclusiveMaximum
 		return []OpenAPIConstraint{
-			{Name: "maximum", Value: numVal},
+			{Name: constraintMaximum, Value: numVal},
 			{Name: "exclusiveMaximum", Value: true},
 		}
 	case "lte":
-		return []OpenAPIConstraint{{Name: "maximum", Value: numVal}}
+		return []OpenAPIConstraint{{Name: constraintMaximum, Value: numVal}}
 	}
 
 	return nil
@@ -166,7 +188,7 @@ func handleNumericComparison(key, value, baseType string) []OpenAPIConstraint {
 // handleEnumConstraint maps 'oneof' constraint to OpenAPI enum array
 // For numeric types, parses values as numbers; otherwise treats as strings
 func handleEnumConstraint(key, value, baseType string) []OpenAPIConstraint {
-	if key != "oneof" {
+	if key != validatorOneOf {
 		return nil
 	}
 
@@ -194,7 +216,7 @@ func handleEnumConstraint(key, value, baseType string) []OpenAPIConstraint {
 		}
 	}
 
-	return []OpenAPIConstraint{{Name: "enum", Value: enumArray}}
+	return []OpenAPIConstraint{{Name: constraintEnum, Value: enumArray}}
 }
 
 // handlePatternConstraint maps 'regexp' constraint to OpenAPI pattern
@@ -207,15 +229,15 @@ func handlePatternConstraint(key, value string) []OpenAPIConstraint {
 
 // isStringType checks if the type is a string type
 func isStringType(typeName string) bool {
-	return typeName == "string"
+	return typeName == goTypeString
 }
 
 // isNumericType checks if the type is a numeric type
 func isNumericType(typeName string) bool {
 	numericTypes := []string{
-		"int", "int8", "int16", "int32", "int64",
+		"int", "int8", "int16", "int32", goTypeInt64,
 		"uint", "uint8", "uint16", "uint32", "uint64",
-		"float32", "float64",
+		"float32", goTypeFloat64,
 	}
 
 	return slices.Contains(numericTypes, typeName)

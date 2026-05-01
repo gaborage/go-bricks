@@ -21,11 +21,35 @@ const (
 	// Default operation type for unidentified queries
 	defaultOperation = "query"
 
+	// Log field key for the SQL query string.
+	logFieldQuery = "query"
+
 	// Database vendor normalization constants matching OTel semantic conventions
 	dbVendorPostgreSQL = "postgresql"
 	dbVendorOracle     = "oracle.db" // OTel spec requires "oracle.db" not "oracle"
 	dbVendorMySQL      = "mysql"
 	dbVendorSQLite     = "sqlite"
+
+	// Vendor input alias for Oracle (before normalization to dbVendorOracle).
+	dbVendorOracleAlias = "oracle"
+
+	// Vendor input alias for PostgreSQL (before normalization to dbVendorPostgreSQL).
+	dbVendorPostgresAlias = "postgres"
+
+	// SQL operation literals shared between extractDBOperation and tests.
+	sqlOpBegin    = "BEGIN"
+	sqlOpCommit   = "COMMIT"
+	sqlOpRollback = "ROLLBACK"
+	tableUnknown  = "unknown"
+
+	// Lowercase SQL operation labels returned by extractDBOperation.
+	sqlOpLowerBegin       = "begin"
+	sqlOpLowerCommit      = "commit"
+	sqlOpLowerSelect      = "select"
+	sqlOpLowerInsert      = "insert"
+	sqlOpLowerUpdate      = "update"
+	sqlOpLowerDelete      = "delete"
+	sqlOpLowerCreateTable = "create_table"
 
 	// OpenTelemetry instrumentation constants
 	dbTracerName      = "go-bricks/database" // Tracer name for database operations
@@ -81,7 +105,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		"vendor":      tc.Vendor,
 		"duration_ms": elapsed.Milliseconds(),
 		"duration_ns": elapsed.Nanoseconds(),
-		"query":       truncatedQuery,
+		logFieldQuery: truncatedQuery,
 	})
 
 	if tc.Settings.LogQueryParameters() && len(args) > 0 {
@@ -209,7 +233,7 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 	}
 
 	// Add collection/table name if identified
-	if table != "" && table != "unknown" {
+	if table != "" && table != tableUnknown {
 		attrs = append(attrs, semconv.DBCollectionName(table)) // db.collection.name (recommended)
 	}
 
@@ -265,14 +289,14 @@ func extractDBOperation(query string) string {
 	}
 
 	switch upper {
-	case "BEGIN", "BEGIN_TX":
-		return "begin"
-	case "COMMIT":
-		return "commit"
-	case "ROLLBACK":
+	case sqlOpBegin, "BEGIN_TX":
+		return sqlOpLowerBegin
+	case sqlOpCommit:
+		return sqlOpLowerCommit
+	case sqlOpRollback:
 		return "rollback"
 	case "CREATE_MIGRATION_TABLE":
-		return "create_table"
+		return sqlOpLowerCreateTable
 	}
 
 	// Extract first word (SQL command)
@@ -291,7 +315,7 @@ func extractDBOperation(query string) string {
 
 	operation := strings.ToLower(parts[0])
 	switch operation {
-	case "select", "insert", "update", "delete", "create", "drop", "alter", "truncate":
+	case sqlOpLowerSelect, sqlOpLowerInsert, sqlOpLowerUpdate, sqlOpLowerDelete, "create", "drop", "alter", "truncate":
 		return operation
 	default:
 		return defaultOperation
@@ -311,9 +335,9 @@ func extractDBOperation(query string) string {
 func normalizeDBVendor(vendor string) string {
 	vendor = strings.ToLower(vendor)
 	switch vendor {
-	case "postgres", dbVendorPostgreSQL:
+	case dbVendorPostgresAlias, dbVendorPostgreSQL:
 		return dbVendorPostgreSQL
-	case "oracle", dbVendorOracle:
+	case dbVendorOracleAlias, dbVendorOracle:
 		return dbVendorOracle // Returns "oracle.db" per OTel spec
 	case dbVendorMySQL:
 		return dbVendorMySQL

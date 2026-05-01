@@ -18,6 +18,9 @@ const (
 	// Flyway command flag constants
 	flagConfigFiles = "-configFiles="
 	flagLocationsFS = "-locations=filesystem:"
+
+	flywayExecutable  = "flyway"
+	flywayCmdValidate = "validate"
 )
 
 // FlywayMigrator handles database migrations using Flyway
@@ -62,7 +65,7 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 	vendor := fm.config.Database.Type
 
 	return &Config{
-		FlywayPath:    "flyway",
+		FlywayPath:    flywayExecutable,
 		ConfigPath:    fmt.Sprintf("flyway/flyway-%s.conf", vendor),
 		MigrationPath: fmt.Sprintf("migrations/%s", vendor),
 		Timeout:       5 * time.Minute,
@@ -113,7 +116,7 @@ func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 	args := []string{
 		flagConfigFiles + cfg.ConfigPath,
 		flagLocationsFS + cfg.MigrationPath,
-		"validate",
+		flywayCmdValidate,
 	}
 
 	return fm.runFlywayCommand(ctx, cfg, args)
@@ -156,7 +159,7 @@ func (fm *FlywayMigrator) buildEnvironmentVariables() []string {
 	db := fm.config.Database
 
 	switch db.Type {
-	case "postgresql":
+	case config.PostgreSQL:
 		envVars = append(envVars,
 			fmt.Sprintf("DB_HOST=%s", db.Host),
 			fmt.Sprintf("DB_PORT=%v", db.Port),
@@ -164,7 +167,7 @@ func (fm *FlywayMigrator) buildEnvironmentVariables() []string {
 			fmt.Sprintf("DB_PASSWORD=%s", db.Password),
 			fmt.Sprintf("DB_NAME=%s", db.Database),
 		)
-	case "oracle":
+	case config.Oracle:
 		envVars = append(envVars,
 			fmt.Sprintf("ORACLE_HOST=%s", db.Host),
 			fmt.Sprintf("ORACLE_PORT=%v", db.Port),
@@ -210,7 +213,7 @@ func (fm *FlywayMigrator) RunMigrationsAtStartup(ctx context.Context) error {
 	migrationConfig := fm.DefaultMigrationConfig()
 
 	// In development, run migrations automatically
-	if fm.config.App.Env == "development" {
+	if fm.config.App.Env == config.EnvDevelopment {
 		fm.logger.Info().Msg("Running automatic migrations in development environment")
 		return fm.Migrate(ctx, migrationConfig)
 	}

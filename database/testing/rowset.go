@@ -341,7 +341,7 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 	default:
 		// Handle pointer types by dereferencing
 		rv := reflect.ValueOf(v)
-		if rv.Kind() == reflect.Ptr {
+		if rv.Kind() == reflect.Pointer {
 			if rv.IsNil() {
 				return nil, nil
 			}
@@ -360,7 +360,7 @@ func normalizeDriverValue(v any) (driver.Value, error) {
 // Returns values in the same order as the columns parameter.
 func extractStructValues(structPtr any, columns []string) []any {
 	v := reflect.ValueOf(structPtr)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {

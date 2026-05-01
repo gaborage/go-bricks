@@ -25,6 +25,13 @@ const (
 	healthyStatus       = "healthy"
 	unhealthyStatus     = "unhealthy"
 	notConfiguredStatus = "not_configured"
+	readyStatus         = "ready"
+	degradedStatus      = "degraded"
+	statusKey           = "status"
+	componentDatabase   = "database"
+	componentMessaging  = "messaging"
+	componentCache      = "cache"
+	errorKey            = "error"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -146,13 +153,13 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 // This logger is available even when configuration loading fails.
 func createBootstrapLogger() logger.Logger {
 	// Smart defaults: debug in dev, info in prod
-	level := "info"
+	level := logger.LevelInfo
 	pretty := false
 
 	// Check environment for development mode
 	env := strings.TrimSpace(os.Getenv("APP_ENV"))
 	if env == "" || strings.EqualFold(env, "development") || strings.EqualFold(env, "dev") {
-		level = "debug"
+		level = logger.LevelDebug
 		pretty = true
 	}
 

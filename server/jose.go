@@ -404,8 +404,8 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 // to verify pre-trust failures never carry framework metadata.
 func formatJOSEPlaintextError(c *echo.Context, apiErr IAPIError) error {
 	payload := map[string]string{
-		"code":    apiErr.ErrorCode(),
-		"message": apiErr.Message(),
+		"code":       apiErr.ErrorCode(),
+		fieldMessage: apiErr.Message(),
 	}
 	c.Response().Header().Set(echo.HeaderContentType, "application/json")
 	return c.JSON(apiErr.HTTPStatus(), payload)
@@ -448,17 +448,17 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 // jose-local so the standard error formatter in handler.go can stay untouched.
 func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, _ *config.Config) map[string]any {
 	out := map[string]any{
-		"error": map[string]any{
-			"code":    apiErr.ErrorCode(),
-			"message": apiErr.Message(),
+		fieldError: map[string]any{
+			"code":       apiErr.ErrorCode(),
+			fieldMessage: apiErr.Message(),
 		},
 		"meta": map[string]any{
-			"timestamp": time.Now().UTC().Format(time.RFC3339),
-			"traceId":   getTraceID(c),
+			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
+			fieldTraceID:   getTraceID(c),
 		},
 	}
 	if details := apiErr.Details(); len(details) > 0 {
-		out["error"].(map[string]any)["details"] = details
+		out[fieldError].(map[string]any)["details"] = details
 	}
 	return out
 }

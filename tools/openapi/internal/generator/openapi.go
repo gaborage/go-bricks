@@ -15,10 +15,44 @@ import (
 
 // OpenAPI type constants
 const (
-	typeInteger = "integer"
-	typeObject  = "object"
-	formatInt32 = "int32"
-	formatInt64 = "int64"
+	typeInteger  = "integer"
+	typeObject   = "object"
+	typeString   = "string"
+	typeNumber   = "number"
+	typeBoolean  = "boolean"
+	typeArray    = "array"
+	formatInt32  = "int32"
+	formatInt64  = "int64"
+	formatFloat  = "float"
+	formatDouble = "double"
+)
+
+// Schema component names referenced in multiple emitter sites.
+const (
+	schemaErrorResponse = "ErrorResponse"
+)
+
+// HTTP method names used in switch discriminants and operation generation.
+const (
+	httpMethodPost = "POST"
+)
+
+// Go primitive type names matched against Go type identifiers when mapping to
+// OpenAPI types/formats.
+const (
+	goTypeString  = "string"
+	goTypeFloat32 = "float32"
+	goTypeFloat64 = "float64"
+	goTypeBool    = "bool"
+	goTypeUint    = "uint"
+	goTypeUint64  = "uint64"
+)
+
+// Response/parameter description text reused across operations.
+const (
+	respDescSuccess = "Successful response"
+	paramTypePath   = "path"
+	propNameError   = "error"
 )
 
 // Media type constants for the OpenAPI content map. Centralized so a future rename
@@ -291,7 +325,7 @@ func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Rou
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and the
 	// server leaks nothing beyond {code,message}.
-	errorSchema := "ErrorResponse"
+	errorSchema := schemaErrorResponse
 	if joseRoute {
 		errorSchema = "JOSEErrorEnvelope"
 	}
@@ -376,8 +410,8 @@ func (g *OpenAPIGenerator) getSummary(route *models.Route) string {
 func (g *OpenAPIGenerator) getResponseDescription(method string) string {
 	switch method {
 	case "GET":
-		return "Successful response"
-	case "POST":
+		return respDescSuccess
+	case httpMethodPost:
 		return "Resource created successfully"
 	case "PUT":
 		return "Resource updated successfully"
@@ -386,7 +420,7 @@ func (g *OpenAPIGenerator) getResponseDescription(method string) string {
 	case "PATCH":
 		return "Resource partially updated"
 	default:
-		return "Successful response"
+		return respDescSuccess
 	}
 }
 
@@ -417,32 +451,32 @@ func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (str
 func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 	return map[string]*OpenAPISchema{
 		"SuccessResponse": {
-			Type: "object",
+			Type: typeObject,
 			Properties: map[string]*OpenAPIProperty{
 				"data": {
-					Type:        "object",
+					Type:        typeObject,
 					Description: "Response data",
 				},
 				"meta": {
-					Type:        "object",
+					Type:        typeObject,
 					Description: "Response metadata",
 				},
 			},
 		},
-		"ErrorResponse": {
-			Type: "object",
+		schemaErrorResponse: {
+			Type: typeObject,
 			Properties: map[string]*OpenAPIProperty{
-				"error": {
-					Type: "object",
+				propNameError: {
+					Type: typeObject,
 					// Note: nested properties would need recursive handling for full OpenAPI spec
 					Description: "Error details with code and message",
 				},
 				"meta": {
-					Type:        "object",
+					Type:        typeObject,
 					Description: "Response metadata",
 				},
 			},
-			Required: []string{"error"},
+			Required: []string{propNameError},
 		},
 		// JOSEErrorEnvelope is the minimal plaintext error envelope returned for
 		// pre-trust JOSE failures (decrypt failed, signature invalid, kid unknown,
@@ -450,14 +484,14 @@ func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 		// metadata here — peer is unauthenticated and the envelope must leak
 		// nothing beyond the canonical {code,message} pair.
 		"JOSEErrorEnvelope": {
-			Type: "object",
+			Type: typeObject,
 			Properties: map[string]*OpenAPIProperty{
 				"code": {
-					Type:        "string",
+					Type:        typeString,
 					Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)",
 				},
 				"message": {
-					Type:        "string",
+					Type:        typeString,
 					Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure",
 				},
 			},
@@ -501,7 +535,7 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	}
 
 	schema := &OpenAPISchema{
-		Type:       "object",
+		Type:       typeObject,
 		Properties: make(map[string]*OpenAPIProperty),
 		Required:   []string{},
 	}
@@ -562,7 +596,7 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 
 	// Handle arrays
 	if strings.HasPrefix(goType, "[]") {
-		prop.Type = "array"
+		prop.Type = typeArray
 		elementType := strings.TrimPrefix(goType, "[]")
 		prop.Items = &OpenAPIProperty{}
 		g.setTypeAndFormat(prop.Items, elementType)
@@ -571,22 +605,22 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 
 	// Handle basic types
 	switch goType {
-	case "string":
-		prop.Type = "string"
-	case "int", "int8", "int16", "int32", "uint", "uint8", "uint16", "uint32":
+	case goTypeString:
+		prop.Type = typeString
+	case "int", "int8", "int16", formatInt32, goTypeUint, "uint8", "uint16", "uint32":
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-	case "int64", "uint64":
+	case formatInt64, goTypeUint64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
-	case "float32":
-		prop.Type = "number"
-		prop.Format = "float"
-	case "float64":
-		prop.Type = "number"
-		prop.Format = "double"
-	case "bool":
-		prop.Type = "boolean"
+	case goTypeFloat32:
+		prop.Type = typeNumber
+		prop.Format = formatFloat
+	case goTypeFloat64:
+		prop.Type = typeNumber
+		prop.Format = formatDouble
+	case goTypeBool:
+		prop.Type = typeBoolean
 	default:
 		// Complex types (structs, maps, etc.) - use object or reference
 		// Both maps and structs are represented as "object" in OpenAPI
@@ -727,7 +761,7 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 			param := Parameter{
 				Name:        field.ParamName,
 				In:          field.ParamType,
-				Required:    field.Required || field.ParamType == "path", // Path params always required
+				Required:    field.Required || field.ParamType == paramTypePath, // Path params always required
 				Description: field.Description,
 				Schema:      g.fieldInfoToProperty(field),
 			}

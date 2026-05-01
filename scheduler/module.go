@@ -74,7 +74,7 @@ type Module struct {
 // NewModule creates a new Module instance.
 // Per FR-016: The scheduler itself is lazy-initialized on first job registration.
 func NewModule() *Module {
-	shutdownCtx, shutdownCancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in struct field, called in Shutdown()
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 
 	return &Module{
 		jobs:           make(map[string]*jobEntry),
@@ -440,7 +440,7 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 	case ScheduleTypeDaily:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.DailyJob(1, gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115 - validated by ScheduleConfiguration.Validate()
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)
@@ -448,7 +448,7 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 	case ScheduleTypeWeekly:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.WeeklyJob(1, gocron.NewWeekdays(entry.schedule.DayOfWeek), gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115 - validated by ScheduleConfiguration.Validate()
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)
@@ -462,7 +462,7 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 	case ScheduleTypeMonthly:
 		gocronJob, err = m.scheduler.NewJob(
 			gocron.MonthlyJob(1, gocron.NewDaysOfTheMonth(entry.schedule.DayOfMonth), gocron.NewAtTimes(
-				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0), //nolint:gosec // G115 - validated by ScheduleConfiguration.Validate()
+				gocron.NewAtTime(uint(entry.schedule.Hour), uint(entry.schedule.Minute), 0),
 			)),
 			gocron.NewTask(jobFunc),
 		)

@@ -109,7 +109,7 @@ func applyTimestamp(rec *log.Record, entry map[string]any) {
 }
 
 func applySeverity(rec *log.Record, entry map[string]any) {
-	levelStr, ok := entry["level"].(string)
+	levelStr, ok := entry[fieldLevel].(string)
 	if !ok {
 		return
 	}
@@ -131,7 +131,7 @@ func applyAttributes(rec *log.Record, entry map[string]any) {
 	attrs := make([]log.KeyValue, 0, len(entry))
 	for k, v := range entry {
 		// Skip fields handled elsewhere
-		if k == "time" || k == "level" || k == "message" || k == "msg" {
+		if k == "time" || k == fieldLevel || k == fieldMessage || k == "msg" {
 			continue
 		}
 
@@ -264,17 +264,17 @@ func parseTraceParent(value any) (trace.TraceID, trace.SpanID, trace.TraceFlags,
 // mapZerologLevelToOTel maps zerolog log levels to OpenTelemetry severity levels.
 func mapZerologLevelToOTel(level string) log.Severity {
 	switch level {
-	case "trace":
+	case LevelTrace:
 		return log.SeverityTrace // 1
-	case "debug":
+	case LevelDebug:
 		return log.SeverityDebug // 5
-	case "info":
+	case LevelInfo:
 		return log.SeverityInfo // 9
-	case "warn", "warning":
+	case LevelWarn, "warning":
 		return log.SeverityWarn // 13
-	case "error":
+	case LevelError:
 		return log.SeverityError // 17
-	case "fatal", "panic":
+	case LevelFatal, LevelPanic:
 		return log.SeverityFatal // 21
 	default:
 		return log.SeverityInfo // Default to Info for unknown levels

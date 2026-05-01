@@ -52,8 +52,8 @@ func NewSingleTenantResourceProvider(
 func (p *SingleTenantResourceProvider) DB(ctx context.Context) (database.Interface, error) {
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "database",
+			Category: notConfiguredStatus,
+			Field:    componentDatabase,
 			Message:  testMessage,
 			Action:   "to enable: set DATABASE_HOST env var or add database.host to config.yaml",
 		}
@@ -67,8 +67,8 @@ func (p *SingleTenantResourceProvider) DB(ctx context.Context) (database.Interfa
 func (p *SingleTenantResourceProvider) DBByName(ctx context.Context, name string) (database.Interface, error) {
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "database",
+			Category: notConfiguredStatus,
+			Field:    componentDatabase,
 			Message:  testMessage,
 			Action:   "to enable: set DATABASE_HOST env var or add database.host to config.yaml",
 		}
@@ -90,8 +90,8 @@ func (p *SingleTenantResourceProvider) DBByName(ctx context.Context, name string
 func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging.AMQPClient, error) {
 	if p.messagingManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "messaging",
+			Category: notConfiguredStatus,
+			Field:    componentMessaging,
 			Message:  testMessage,
 			Action:   "to enable: set MESSAGING_BROKER_URL env var or add messaging.broker.url to config.yaml",
 		}
@@ -110,8 +110,8 @@ func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging
 func (p *SingleTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, error) {
 	if p.cacheManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "cache",
+			Category: notConfiguredStatus,
+			Field:    componentCache,
 			Message:  testMessage,
 			Action:   "to enable: set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
 		}
@@ -152,8 +152,8 @@ func NewMultiTenantResourceProvider(
 func (p *MultiTenantResourceProvider) DB(ctx context.Context) (database.Interface, error) {
 	if p.dbManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "database",
+			Category: notConfiguredStatus,
+			Field:    componentDatabase,
 			Message:  testMessageMultiTenant,
 			Action:   "configure multitenant.tenants.<tenant_id>.database sections",
 		}
@@ -197,8 +197,8 @@ func (p *MultiTenantResourceProvider) DBByName(ctx context.Context, name string)
 func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.AMQPClient, error) {
 	if p.messagingManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "messaging",
+			Category: notConfiguredStatus,
+			Field:    componentMessaging,
 			Message:  testMessageMultiTenant,
 			Action:   "configure multitenant.tenants.<tenant_id>.messaging sections",
 		}
@@ -223,8 +223,8 @@ func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.
 func (p *MultiTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, error) {
 	if p.cacheManager == nil {
 		return nil, &config.ConfigError{
-			Category: "not_configured",
-			Field:    "cache",
+			Category: notConfiguredStatus,
+			Field:    componentCache,
 			Message:  testMessageMultiTenant,
 			Action:   "configure multitenant.tenants.<tenant_id>.cache sections",
 		}

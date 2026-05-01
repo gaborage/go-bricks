@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// Canonical error.type attribute values for well-known context errors.
+const (
+	errTypeContextCanceled         = "context.Canceled"
+	errTypeContextDeadlineExceeded = "context.DeadlineExceeded"
+)
+
 // formatDestinationName formats the destination name per OpenTelemetry RabbitMQ conventions.
 //
 // For producers (no queue):
@@ -48,9 +54,9 @@ func extractErrorType(err error) string {
 	// Handle well-known context errors
 	switch {
 	case errors.Is(err, context.Canceled):
-		return "context.Canceled"
+		return errTypeContextCanceled
 	case errors.Is(err, context.DeadlineExceeded):
-		return "context.DeadlineExceeded"
+		return errTypeContextDeadlineExceeded
 	default:
 		// Return error type name for other errors
 		return fmt.Sprintf("%T", err)

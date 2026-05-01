@@ -122,7 +122,7 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 
 	for _, component := range components {
 		switch component.Status {
-		case healthyStatus, "ready":
+		case healthyStatus, readyStatus:
 			summary.HealthyCount++
 		default:
 			if component.Critical {
@@ -138,9 +138,9 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 	if summary.CriticalCount > 0 {
 		summary.OverallStatus = "critical"
 	} else if summary.ErrorCount > 0 {
-		summary.OverallStatus = "degraded"
+		summary.OverallStatus = degradedStatus
 	} else if summary.HealthyCount == summary.TotalProbes && summary.TotalProbes > 0 {
-		summary.OverallStatus = "healthy"
+		summary.OverallStatus = healthyStatus
 	} else {
 		summary.OverallStatus = unknownStatus
 	}
@@ -157,7 +157,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 		dbDuration := time.Since(dbStart)
 
 		dbHealth := ComponentHealth{
-			Status:   "healthy",
+			Status:   healthyStatus,
 			Details:  make(map[string]any),
 			LastRun:  dbStart,
 			Duration: dbDuration.String(),
@@ -174,7 +174,7 @@ func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
 		msgDuration := time.Since(msgStart)
 
 		msgHealth := ComponentHealth{
-			Status:   "healthy",
+			Status:   healthyStatus,
 			Details:  make(map[string]any),
 			LastRun:  msgStart,
 			Duration: msgDuration.String(),

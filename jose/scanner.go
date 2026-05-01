@@ -22,7 +22,7 @@ func ScanType(t reflect.Type, dir Direction) (*Policy, error) {
 	if t == nil {
 		return nil, nil
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
