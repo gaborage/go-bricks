@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/app"
-	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -89,34 +87,12 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	mp := obtest.NewTestMeterProvider()
 	defer mp.Shutdown(context.Background())
 
-	// Create scheduler with observability
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        nil,
-		MeterProvider: mp.MeterProvider,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withMeterProvider(mp.MeterProvider))
 	defer module.Shutdown()
 
 	// Register a job that panics
 	job := &panicJob{}
-	err = module.FixedRate("panic-job", job, 100*time.Millisecond)
+	err := module.FixedRate("panic-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait until the job executes (<=1s)
@@ -141,34 +117,13 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 
 // TestJobSkippedDuringShutdown verifies jobs skip execution when shutdown is triggered
 func TestJobSkippedDuringShutdown(t *testing.T) {
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        nil,
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second)
 
 	// Create a job that tracks execution
 	job := &slowJob{duration: 10 * time.Millisecond}
 
 	// Register job with long interval
-	err = module.FixedRate("shutdown-test-job", job, 5*time.Second)
+	err := module.FixedRate("shutdown-test-job", job, 5*time.Second)
 	require.NoError(t, err)
 
 	// Immediately shutdown before job can execute
@@ -181,33 +136,14 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 
 // TestJobExecutionWithDBGetterError verifies error handling when DB getter fails
 func TestJobExecutionWithDBGetterError(t *testing.T) {
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        nil,
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, errors.New("DB connection failed")
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withDB(func(_ context.Context) (types.Interface, error) {
+		return nil, errors.New("DB connection failed")
+	}))
 	defer module.Shutdown()
 
 	// Create a job that checks DB is nil
 	job := &dbCheckJob{}
-	err = module.FixedRate("db-error-job", job, 100*time.Millisecond)
+	err := module.FixedRate("db-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait until the job asserts the expected state (<=1s)
@@ -218,33 +154,14 @@ func TestJobExecutionWithDBGetterError(t *testing.T) {
 
 // TestJobExecutionWithMessagingGetterError verifies error handling when messaging getter fails
 func TestJobExecutionWithMessagingGetterError(t *testing.T) {
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        nil,
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, errors.New("Messaging connection failed")
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withMessaging(func(_ context.Context) (messaging.AMQPClient, error) {
+		return nil, errors.New("Messaging connection failed")
+	}))
 	defer module.Shutdown()
 
 	// Create a job that checks messaging is nil
 	job := &messagingCheckJob{}
-	err = module.FixedRate("msg-error-job", job, 100*time.Millisecond)
+	err := module.FixedRate("msg-error-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait until the job asserts the expected state (<=1s)
@@ -255,34 +172,12 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 
 // TestSlowJobThresholdWarning verifies slow job detection and WARN severity
 func TestSlowJobThresholdWarning(t *testing.T) {
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-					SlowJob:  100 * time.Millisecond, // Set low threshold
-				},
-			},
-		},
-		Tracer:        nil,
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withSlowJobThreshold(100*time.Millisecond))
 	defer module.Shutdown()
 
 	// Create a slow job that exceeds threshold
 	job := &slowJob{duration: 150 * time.Millisecond}
-	err = module.FixedRate("slow-job", job, 100*time.Millisecond)
+	err := module.FixedRate("slow-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait for job to execute (job takes 150ms, so wait longer)
@@ -294,33 +189,12 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 
 // TestJobExecutionWithoutTracer verifies jobs execute successfully when tracer is nil
 func TestJobExecutionWithoutTracer(t *testing.T) {
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        nil, // Explicitly nil tracer
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second)
 	defer module.Shutdown()
 
 	// Create a simple job
 	job := &slowJob{duration: 10 * time.Millisecond}
-	err = module.FixedRate("no-tracer-job", job, 100*time.Millisecond)
+	err := module.FixedRate("no-tracer-job", job, 100*time.Millisecond)
 	require.NoError(t, err)
 
 	// Wait for job to execute
@@ -336,34 +210,13 @@ func TestJobExecutionWithTracer(t *testing.T) {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        tp.Tracer("test-scheduler"),
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
 	defer module.Shutdown()
 
 	// Create a simple job. Use a 1s interval so a second tick cannot race the
 	// assertion window, and stop the scheduler before counting spans.
 	job := &slowJob{duration: 10 * time.Millisecond}
-	err = module.FixedRate("traced-job", job, 1*time.Second)
+	err := module.FixedRate("traced-job", job, 1*time.Second)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return job.count() >= 1 },
@@ -388,28 +241,7 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 	tp := obtest.NewTestTraceProvider()
 	defer tp.Shutdown(context.Background())
 
-	module := NewModule()
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: 5 * time.Second,
-				},
-			},
-		},
-		Tracer:        tp.Tracer("test-scheduler"),
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err)
+	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
 	defer module.Shutdown()
 
 	// Job that creates a child span to verify context propagation. Use a 1s
@@ -417,7 +249,7 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 	// scheduler before counting spans.
 	tracer := tp.Tracer("test-child")
 	job := &spanCapturingJob{tracer: tracer}
-	err = module.FixedRate("ctx-propagation-job", job, 1*time.Second)
+	err := module.FixedRate("ctx-propagation-job", job, 1*time.Second)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return job.count() >= 1 },

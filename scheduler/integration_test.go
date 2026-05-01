@@ -1,17 +1,11 @@
 package scheduler
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/app"
-	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,32 +140,3 @@ func (j *longRunningJob) Completed() bool {
 	return j.completed
 }
 
-// newTestScheduler creates and initializes a scheduler module for testing
-func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*Module, app.JobRegistrar) {
-	module := NewModule()
-
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: shutdownTimeout,
-				},
-			},
-		},
-		Tracer:        nil, // No-op tracer for tests
-		MeterProvider: nil, // No-op meter for tests
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil // No DB for MVP tests
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil // No messaging for MVP tests
-		},
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err, "Module initialization should succeed")
-
-	// Return module and its JobRegistrar interface
-	return module, module
-}
