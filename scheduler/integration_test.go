@@ -14,7 +14,14 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 )
+
+type testSchedulerOption func(*app.ModuleDeps)
+
+func withTracer(tr trace.Tracer) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Tracer = tr }
+}
 
 // TestSchedulerLifecycleMVP verifies the complete scheduler lifecycle per User Story 1 MVP test:
 // Register a simple job, schedule it to run every 5 seconds, wait 15 seconds, verify it executed 3 times.
@@ -146,8 +153,8 @@ func (j *longRunningJob) Completed() bool {
 	return j.completed
 }
 
-// newTestScheduler creates and initializes a scheduler module for testing
-func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*Module, app.JobRegistrar) {
+// newTestScheduler creates and initializes a scheduler module for testing.
+func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testSchedulerOption) (*Module, app.JobRegistrar) {
 	module := NewModule()
 
 	appDeps := &app.ModuleDeps{
@@ -167,6 +174,10 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration) (*Module, app
 		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil // No messaging for MVP tests
 		},
+	}
+
+	for _, o := range opts {
+		o(appDeps)
 	}
 
 	err := module.Init(appDeps)
