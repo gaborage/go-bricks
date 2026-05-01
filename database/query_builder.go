@@ -52,8 +52,10 @@ var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 //
 // - Vendor() string
 // - JoinFilter() types.JoinFilterFactory
-// - Insert(table string) squirrel.InsertBuilder
-// - InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
+// - Insert(table string) types.InsertQueryBuilder
+// - InsertWithColumns(table string, columns ...string) types.InsertQueryBuilder
+// - InsertStruct(table string, instance any) types.InsertQueryBuilder
+// - InsertFields(table string, instance any, fields ...string) types.InsertQueryBuilder
 // - BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
 // - BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 // - BuildCurrentTimestamp() string

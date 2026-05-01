@@ -138,6 +138,15 @@ Slims the `app.Module` interface from 5 methods to 3, making `RegisterRoutes` an
 
 ---
 
+### [ADR-017: Standardize on `ToSQL()` Across All Query Builders](adr-017-insert-query-builder.md)
+**Date:** 2026-05-01 | **Status:** Accepted
+
+Introduces `types.InsertQueryBuilder` so `qb.Insert*` constructors return a go-bricks-owned interface exposing idiomatic `ToSQL()` (S8179) instead of the upstream `squirrel.InsertBuilder` with lowercase `ToSql()`. Aligns the INSERT surface with `Select`/`Update`/`Delete`.
+
+**Key Benefits:** Consistent public API, S8179-compliant naming, removes docs-vs-code drift
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented

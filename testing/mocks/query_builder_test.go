@@ -238,6 +238,67 @@ func (m *MockDeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 
 var _ types.DeleteQueryBuilder = (*MockDeleteQueryBuilder)(nil)
 
+// MockInsertQueryBuilder provides a mock implementation of types.InsertQueryBuilder for testing
+type MockInsertQueryBuilder struct {
+	mock.Mock
+}
+
+func (m *MockInsertQueryBuilder) Columns(columns ...string) types.InsertQueryBuilder {
+	callArgs := make([]any, len(columns))
+	for i, col := range columns {
+		callArgs[i] = col
+	}
+	args := m.MethodCalled("Columns", callArgs...)
+	return args.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) Values(values ...any) types.InsertQueryBuilder {
+	args := m.MethodCalled("Values", values...)
+	return args.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) SetMap(clauses map[string]any) types.InsertQueryBuilder {
+	args := m.MethodCalled("SetMap", clauses)
+	return args.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) Options(options ...string) types.InsertQueryBuilder {
+	callArgs := make([]any, len(options))
+	for i, o := range options {
+		callArgs[i] = o
+	}
+	args := m.MethodCalled("Options", callArgs...)
+	return args.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) Prefix(sql string, args ...any) types.InsertQueryBuilder {
+	callArgs := append([]any{sql}, args...)
+	mockArgs := m.MethodCalled("Prefix", callArgs...)
+	return mockArgs.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) Suffix(sql string, args ...any) types.InsertQueryBuilder {
+	callArgs := append([]any{sql}, args...)
+	mockArgs := m.MethodCalled("Suffix", callArgs...)
+	return mockArgs.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) Select(sb types.SelectQueryBuilder) types.InsertQueryBuilder {
+	args := m.MethodCalled("Select", sb)
+	return args.Get(0).(types.InsertQueryBuilder)
+}
+
+func (m *MockInsertQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	mockArgs := m.MethodCalled("ToSQL")
+	var outArgs []any
+	if v := mockArgs.Get(1); v != nil {
+		outArgs = v.([]any)
+	}
+	return mockArgs.String(0), outArgs, mockArgs.Error(2)
+}
+
+var _ types.InsertQueryBuilder = (*MockInsertQueryBuilder)(nil)
+
 func (m *MockSelectQueryBuilder) From(from ...any) types.SelectQueryBuilder {
 	args := m.MethodCalled("From", from...)
 	return args.Get(0).(types.SelectQueryBuilder)
@@ -406,18 +467,18 @@ func TestMockQueryBuilderEmptySearchTerm(t *testing.T) {
 func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	mockQB := &MockQueryBuilder{}
 	mockSelectBuilder := &MockSelectQueryBuilder{}
+	mockInsertBuilder := &MockInsertQueryBuilder{}
 	mockUpdateBuilder := &MockUpdateQueryBuilder{}
 	mockDeleteBuilder := &MockDeleteQueryBuilder{}
 	defer mockQB.AssertExpectations(t)
 
 	// Test helper methods
-	insertBuilder := squirrel.Insert("users")
 	likeCondition := squirrel.ILike{"name": "%test%"}
 
 	// Use helper methods to set expectations
 	mockQB.ExpectVendor("postgresql")
 	mockQB.ExpectSelect([]string{"*"}, mockSelectBuilder)
-	mockQB.ExpectInsert("users", insertBuilder)
+	mockQB.ExpectInsert("users", mockInsertBuilder)
 	mockQB.ExpectUpdate("users", mockUpdateBuilder)
 	mockQB.ExpectDelete("users", mockDeleteBuilder)
 	mockQB.ExpectCaseInsensitiveLike("name", "test", likeCondition)
@@ -429,7 +490,7 @@ func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	// Call the methods
 	assert.Equal(t, "postgresql", mockQB.Vendor())
 	assert.Equal(t, mockSelectBuilder, mockQB.Select("*"))
-	assert.Equal(t, insertBuilder, mockQB.Insert("users"))
+	assert.Equal(t, mockInsertBuilder, mockQB.Insert("users"))
 	assert.Equal(t, mockUpdateBuilder, mockQB.Update("users"))
 	assert.Equal(t, mockDeleteBuilder, mockQB.Delete("users"))
 	assert.Equal(t, likeCondition, mockQB.BuildCaseInsensitiveLike("name", "test"))
@@ -679,5 +740,45 @@ func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
 		assert.Nil(t, args)
 		assert.Error(t, err)
 		mockSelect.AssertExpectations(t)
+	})
+}
+
+// TestMockInsertQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockInsertQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		mockInsert.On("ToSQL").Return("INSERT INTO users(name) VALUES(?)", nil, nil)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Equal(t, "INSERT INTO users(name) VALUES(?)", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockInsert.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		expectedArgs := []any{"Alice", "alice@example.com"}
+		mockInsert.On("ToSQL").Return("INSERT INTO users(name,email) VALUES(?,?)", expectedArgs, nil)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Equal(t, "INSERT INTO users(name,email) VALUES(?,?)", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockInsert.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		mockInsert.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockInsert.AssertExpectations(t)
 	})
 }

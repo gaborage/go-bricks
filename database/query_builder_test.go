@@ -150,7 +150,7 @@ func TestQueryBuilderInsert(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			query := qb.Insert(tt.table).Columns("name").Values("test")
 
-			sql, _, err := query.ToSql()
+			sql, _, err := query.ToSQL()
 			require.NoError(t, err)
 			assert.Contains(t, sql, tt.expected)
 		})
@@ -195,7 +195,7 @@ func TestQueryBuilderInsertWithColumnsOracleReserved(t *testing.T) {
 
 	// Build an INSERT with a reserved column name for Oracle
 	query := qb.InsertWithColumns("accounts", "id", "number", "name").Values(1, "123", "John")
-	sql, _, err := query.ToSql()
+	sql, _, err := query.ToSQL()
 	require.NoError(t, err)
 
 	// Should quote the reserved column and use Oracle-style placeholders
@@ -805,7 +805,7 @@ func TestQueryBuilderInsertWithSqlmock(t *testing.T) {
 
 	// Build an INSERT query
 	query := qb.Insert("users").Columns("name", "email").Values("John", "john@example.com")
-	sql, args, err := query.ToSql()
+	sql, args, err := query.ToSQL()
 	require.NoError(t, err)
 
 	// Set up mock expectation
