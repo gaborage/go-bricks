@@ -75,30 +75,30 @@ func (m *MockQueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
 }
 
 // Insert implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) Insert(table string) squirrel.InsertBuilder {
+func (m *MockQueryBuilder) Insert(table string) types.InsertQueryBuilder {
 	args := m.MethodCalled("Insert", table)
-	return args.Get(0).(squirrel.InsertBuilder)
+	return args.Get(0).(types.InsertQueryBuilder)
 }
 
 // InsertWithColumns implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
+func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) types.InsertQueryBuilder {
 	callArgs := make([]any, len(columns)+1)
 	callArgs[0] = table
 	for i, col := range columns {
 		callArgs[i+1] = col
 	}
 	args := m.MethodCalled("InsertWithColumns", callArgs...)
-	return args.Get(0).(squirrel.InsertBuilder)
+	return args.Get(0).(types.InsertQueryBuilder)
 }
 
 // InsertStruct implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) InsertStruct(table string, instance any) squirrel.InsertBuilder {
+func (m *MockQueryBuilder) InsertStruct(table string, instance any) types.InsertQueryBuilder {
 	args := m.MethodCalled("InsertStruct", table, instance)
-	return args.Get(0).(squirrel.InsertBuilder)
+	return args.Get(0).(types.InsertQueryBuilder)
 }
 
 // InsertFields implements types.QueryBuilderInterface
-func (m *MockQueryBuilder) InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder {
+func (m *MockQueryBuilder) InsertFields(table string, instance any, fields ...string) types.InsertQueryBuilder {
 	callArgs := make([]any, len(fields)+2)
 	callArgs[0] = table
 	callArgs[1] = instance
@@ -106,7 +106,7 @@ func (m *MockQueryBuilder) InsertFields(table string, instance any, fields ...st
 		callArgs[i+2] = field
 	}
 	args := m.MethodCalled("InsertFields", callArgs...)
-	return args.Get(0).(squirrel.InsertBuilder)
+	return args.Get(0).(types.InsertQueryBuilder)
 }
 
 // Update implements types.QueryBuilderInterface
@@ -178,7 +178,7 @@ func (m *MockQueryBuilder) ExpectSelect(columns []string, builder types.SelectQu
 }
 
 // ExpectInsert sets up an insert expectation with the provided builder
-func (m *MockQueryBuilder) ExpectInsert(table string, builder squirrel.InsertBuilder) *mock.Call {
+func (m *MockQueryBuilder) ExpectInsert(table string, builder types.InsertQueryBuilder) *mock.Call {
 	return m.On("Insert", table).Return(builder)
 }
 

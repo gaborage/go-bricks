@@ -152,6 +152,27 @@ type SelectQueryBuilder interface {
 	ToSQL() (sql string, args []any, err error)
 }
 
+// InsertQueryBuilder defines the interface for INSERT query building.
+// Wraps squirrel.InsertBuilder so the public API exposes ToSQL() (S8179)
+// consistently with SelectQueryBuilder/UpdateQueryBuilder/DeleteQueryBuilder.
+// See ADR-017 for the rationale and migration path.
+type InsertQueryBuilder interface {
+	// Columns passes names through unchanged. For Oracle reserved-word quoting,
+	// use qb.InsertWithColumns or pre-quote via a Columns helper.
+	Columns(columns ...string) InsertQueryBuilder
+
+	Values(values ...any) InsertQueryBuilder
+	SetMap(clauses map[string]any) InsertQueryBuilder
+	Options(options ...string) InsertQueryBuilder
+	Prefix(sql string, args ...any) InsertQueryBuilder
+	Suffix(sql string, args ...any) InsertQueryBuilder
+
+	// Select panics if sb is not the concrete *SelectQueryBuilder from this package.
+	Select(sb SelectQueryBuilder) InsertQueryBuilder
+
+	ToSQL() (sql string, args []any, err error)
+}
+
 // UpdateQueryBuilder defines the interface for UPDATE query building with type-safe filtering.
 // This interface wraps squirrel.UpdateBuilder with Filter API support and vendor-specific quoting.
 type UpdateQueryBuilder interface {
@@ -424,17 +445,17 @@ type QueryBuilderInterface interface {
 
 	// Query builders
 	Select(columns ...any) SelectQueryBuilder
-	Insert(table string) squirrel.InsertBuilder
-	InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder
+	Insert(table string) InsertQueryBuilder
+	InsertWithColumns(table string, columns ...string) InsertQueryBuilder
 
 	// Struct-based INSERT (v2.4+)
 	// InsertStruct extracts all fields from a struct instance and creates an INSERT query.
 	// Zero-value ID fields (int64/string) are automatically excluded to support auto-increment.
-	InsertStruct(table string, instance any) squirrel.InsertBuilder
+	InsertStruct(table string, instance any) InsertQueryBuilder
 
 	// InsertFields extracts only specified fields from a struct instance for INSERT.
 	// Useful for partial inserts or when you need explicit control over included fields.
-	InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder
+	InsertFields(table string, instance any, fields ...string) InsertQueryBuilder
 
 	Update(table string) UpdateQueryBuilder
 	Delete(table string) DeleteQueryBuilder
