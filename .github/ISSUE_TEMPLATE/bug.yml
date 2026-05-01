@@ -1,0 +1,75 @@
+name: Bug report
+description: Something in GoBricks is broken or behaves incorrectly
+title: "<package>: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        **Title format:** `<package>: <verb-led summary>` — for example, `scheduler: panic when Shutdown is called twice`. The `<package>` should match a directory at the repo root (`scheduler`, `database`, `jose`, `messaging`, `cache`, ...). Maintainers will add `area/<package>` and `kind/*` labels during triage. **Do not** prefix the title with `[P1]`/`[P2]`/`[P3]` — priority is decided from usage signals, not assigned at filing time.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear, concise description of the bug.
+      placeholder: When I do X, Y happens, but I expected Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps to reproduce. Code snippets, config excerpts, and small repos welcome.
+      placeholder: |
+        1. Configure module with `...`
+        2. Call `module.Foo(ctx, ...)`
+        3. Observe panic / error / wrong result
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Stack traces, log output, error messages, etc.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: gobricks-version
+    attributes:
+      label: GoBricks version or commit
+      description: Output of `go list -m github.com/gaborage/go-bricks`, a tag, or a commit SHA.
+      placeholder: v0.18.0 or 53e5692
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      placeholder: go1.25.1
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other (specify in Additional context)
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Workarounds tried, related issues, suspicions about root cause, anything else relevant.

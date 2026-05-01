@@ -1,0 +1,41 @@
+name: Enhancement
+description: Internal framework improvement, refactor, or feature where the path forward is clear
+title: "<package>: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for **internal** framework improvements where you already know what should change: refactors, new features, ergonomics, tech-debt cleanup. For exploratory directions or external feature requests where the path forward is unclear, use the **Idea / feature request** template instead.
+
+        **Title format:** `<package>: <verb-led summary>`. Maintainers will add `area/<package>` and `kind/*` labels during triage. **Do not** prefix titles with `[P1]`/`[P2]`/`[P3]` — priority is derived from usage signals (👍 reactions, PR/issue references, demand from the demo project), not assigned at filing time.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Current behavior and why it warrants change. Link to code, prior PRs, or related issues.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change, concretely. Code sketches and API examples welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checklist of what "done" looks like. `make check` green is implicit; list anything beyond that.
+      placeholder: |
+        - [ ] Helper extracted and used by all three call sites
+        - [ ] No behavior change to existing tests
+        - [ ] CHANGELOG entry under "Unreleased"
+    validations:
+      required: true
+  - type: textarea
+    id: deferred
+    attributes:
+      label: Why deferred / open questions
+      description: Optional. If this was surfaced from another PR or issue and split out intentionally, note that here. Same for any open design questions.

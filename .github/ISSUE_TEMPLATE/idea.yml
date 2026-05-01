@@ -1,0 +1,35 @@
+name: Idea / feature request
+description: External feature request or exploratory direction where the path forward is unclear
+title: "<package>: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template if you're **proposing a direction** rather than a concrete change — typical for external feature requests, ecosystem additions, or framework-level explorations. If you already know exactly what to build, use the **Enhancement** template instead.
+
+        **Title format:** `<package>: <verb-led summary>` when a package is targeted; otherwise a descriptive summary is fine. **Do not** prefix titles with `[P1]`/`[P2]`/`[P3]` — maintainers gauge priority from usage signals over time, not at filing time.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do? What's painful or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: direction
+    attributes:
+      label: Proposed direction
+      description: A rough sketch of what the solution might look like. It's OK to be incomplete.
+    validations:
+      required: true
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Design tradeoffs, scope, who else needs this, anything you're unsure about.
+  - type: textarea
+    id: related
+    attributes:
+      label: Related
+      description: Links to other issues, PRs, ADRs, demo-project usage, external libraries.
