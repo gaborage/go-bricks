@@ -742,3 +742,43 @@ func TestMockSelectQueryBuilderNilSafeToSQL(t *testing.T) {
 		mockSelect.AssertExpectations(t)
 	})
 }
+
+// TestMockInsertQueryBuilderNilSafeToSQL tests that ToSQL handles nil args safely
+func TestMockInsertQueryBuilderNilSafeToSQL(t *testing.T) {
+	t.Run(TestToSQLWithNilArgs, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		mockInsert.On("ToSQL").Return("INSERT INTO users(name) VALUES(?)", nil, nil)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Equal(t, "INSERT INTO users(name) VALUES(?)", sql)
+		assert.Nil(t, args)
+		assert.NoError(t, err)
+		mockInsert.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithAnyArgs, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		expectedArgs := []any{"Alice", "alice@example.com"}
+		mockInsert.On("ToSQL").Return("INSERT INTO users(name,email) VALUES(?,?)", expectedArgs, nil)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Equal(t, "INSERT INTO users(name,email) VALUES(?,?)", sql)
+		assert.Equal(t, expectedArgs, args)
+		assert.NoError(t, err)
+		mockInsert.AssertExpectations(t)
+	})
+
+	t.Run(TestToSQLWithErrors, func(t *testing.T) {
+		mockInsert := &MockInsertQueryBuilder{}
+		mockInsert.On("ToSQL").Return("", nil, assert.AnError)
+
+		sql, args, err := mockInsert.ToSQL()
+
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+		assert.Error(t, err)
+		mockInsert.AssertExpectations(t)
+	})
+}

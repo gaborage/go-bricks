@@ -45,6 +45,7 @@ var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
 // see a consistent ToSQL()-based surface across SELECT/INSERT/UPDATE/DELETE.
 type InsertQueryBuilder struct {
 	insertBuilder squirrel.InsertBuilder
+	err           error // deferred error surfaced by ToSQL()
 }
 
 // check if InsertQueryBuilder implements dbtypes.InsertQueryBuilder
@@ -1031,17 +1032,28 @@ func (iqb *InsertQueryBuilder) Suffix(sql string, args ...any) dbtypes.InsertQue
 	return iqb
 }
 
-// Select panics if sb is not the concrete *SelectQueryBuilder from this package —
-// silent fall-through would produce a malformed INSERT...SELECT at runtime.
+// Select uses sb as the source rows for INSERT...SELECT. Squirrel's InsertBuilder.Select
+// requires the concrete *SelectQueryBuilder so pagination state (limit/offset) and captured
+// filter errors are preserved via buildSelectBuilder()/ValidateForSubquery(). Foreign
+// SelectQueryBuilder implementations cannot be plumbed into squirrel's Select clause — for
+// those, the error is deferred to ToSQL() rather than panicking.
 func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.InsertQueryBuilder {
+	if err := dbtypes.ValidateSubquery(sb); err != nil {
+		iqb.err = fmt.Errorf("InsertQueryBuilder.Select: %w", err)
+		return iqb
+	}
 	concrete, ok := sb.(*SelectQueryBuilder)
 	if !ok {
-		panic(fmt.Sprintf("InsertQueryBuilder.Select: expected *SelectQueryBuilder, got %T", sb))
+		iqb.err = fmt.Errorf("InsertQueryBuilder.Select: unsupported subquery type %T", sb)
+		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.selectBuilder)
+	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.buildSelectBuilder())
 	return iqb
 }
 
 func (iqb *InsertQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	if iqb.err != nil {
+		return "", nil, iqb.err
+	}
 	return iqb.insertBuilder.ToSql()
 }

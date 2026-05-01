@@ -267,6 +267,49 @@ func TestInsertWithColumns(t *testing.T) {
 	assert.Contains(t, sql, `VALUES ($1,$2)`)
 }
 
+func TestInsertSelectPreservesPagination(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	source := qb.Select(colName, colEmail).From(tableUsers).Paginate(10, 5)
+
+	sql, args, err := qb.InsertWithColumns("users_archive", colName, colEmail).
+		Select(source).
+		ToSQL()
+
+	require.NoError(t, err)
+	assert.Contains(t, sql, "INSERT INTO users_archive (name,email)")
+	assert.Contains(t, sql, "SELECT name, email FROM users")
+	assert.Contains(t, sql, "LIMIT 10")
+	assert.Contains(t, sql, "OFFSET 5")
+	assert.Empty(t, args)
+}
+
+// foreignSelect is a non-package SelectQueryBuilder used to verify deferred-error
+// fallback when squirrel's InsertBuilder.Select cannot accept the type directly.
+type foreignSelect struct{ dbtypes.SelectQueryBuilder }
+
+func (foreignSelect) ToSQL() (string, []any, error) { return "SELECT 1", nil, nil }
+
+func TestInsertSelectForeignImplDefersError(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Insert("users_archive").Select(foreignSelect{}).ToSQL()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported subquery type")
+	assert.Empty(t, sql)
+	assert.Nil(t, args)
+}
+
+func TestInsertSelectNilSubqueryDefersError(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Insert("users_archive").Select(nil).ToSQL()
+
+	require.Error(t, err)
+	assert.Empty(t, sql)
+	assert.Nil(t, args)
+}
+
 func TestUpdate(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	f := qb.Filter()
