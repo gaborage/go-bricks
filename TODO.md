@@ -39,30 +39,6 @@ _(no open P0 items)_
 
 ---
 
-### Context Timeout Defaults
-**Status:** Planned
-**Context:** Framework requires `context.Context` everywhere but doesn't enforce timeout best practices.
-
-**Requirements:**
-- Document recommended timeout values for common operations
-- Consider helper functions for context creation with sensible defaults
-- Add examples in CLAUDE.md
-
-**Example:**
-```go
-// Potential helpers in a new package: context/defaults.go
-func NewHTTPRequestContext(parent context.Context) (context.Context, context.CancelFunc) {
-    return context.WithTimeout(parent, 30*time.Second)
-}
-
-func NewDatabaseQueryContext(parent context.Context) (context.Context, context.CancelFunc) {
-    return context.WithTimeout(parent, 10*time.Second)
-}
-```
-
-**Related:**
-- Context-First Design principle (to be added to CLAUDE.md)
-
 ---
 
 ### ~~Go Runtime Metrics Export via OTLP~~
@@ -296,6 +272,22 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 ---
 
 ## Completed / Won't Do
+
+### ~~Context Timeout Defaults~~
+**Status:** ✅ Completed (2026-04-30)
+**Context:** Framework already configures timeouts at every external boundary (HTTP server `middleware: 5s`, HTTP client `30s`, Redis `dial 5s / read 3s / write 3s`, AMQP `connection_timeout: 30s`, startup per-component, etc.) and propagates deadlines via `context.Context`. The original TODO proposed wrapper helpers (`NewHTTPRequestContext`, `NewDatabaseQueryContext`); audit revealed the gap was *guidance*, not *helpers* — module authors had no single document explaining how the existing knobs compose into a request budget hierarchy or when to manually apply `context.WithTimeout` inside business logic.
+
+**Resolution (docs-only scope):** Added a new top-level `## Context Deadlines & Timeouts` section to CLAUDE.md (mental model, request-scoped boundary table, default/shorten/detach patterns, recommended-cap budgets, pitfalls), and a matching `## Context Timeouts` snippet section to llms.txt. Cross-referenced from the "Context-First Design" principle line and the Table of Contents.
+
+**Why no helper package:** The proposed `NewDatabaseQueryContext(parent)` / `NewHTTPRequestContext(parent)` wrappers would each save one line of `context.WithTimeout(parent, duration)` over the stdlib form, while introducing a new package the framework would need to maintain. The actual gap was *knowledge of recommended values*, which a docs section solves without an abstraction. If duplicated `context.WithTimeout(...)` magic numbers start appearing across modules, revisit with a tiny `internal/timeouts` constants file (named durations only, no wrapper functions) — but that's YAGNI today.
+
+**Related:**
+- [CLAUDE.md](CLAUDE.md) — "Context Deadlines & Timeouts" section
+- [llms.txt](llms.txt) — "Context Timeouts" section
+- [server/timeout.go](server/timeout.go) — context-only middleware
+- [config/types.go](config/types.go) — `TimeoutConfig`, `StartupConfig`, `RedisConfig`, `ReconnectConfig`
+
+---
 
 ### ~~Security Audit Annotations for Raw-SQL Escape Hatches~~
 **Status:** ✅ Completed (2026-04-30)

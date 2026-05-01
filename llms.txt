@@ -645,6 +645,76 @@ func (h *Handler) updateLegacyUser(req GetUserReq, ctx server.HandlerContext) (s
 
 **When to use:** Strangler Fig migration, third-party API compatibility, webhook callbacks requiring specific shapes.
 
+## Context Timeouts
+
+The framework configures timeouts at every external boundary; **inherited deadlines are usually the right answer** inside a handler. See [CLAUDE.md "Context Deadlines & Timeouts"](CLAUDE.md#context-deadlines--timeouts) for the full guide.
+
+```go
+// === DEFAULT: do nothing, inherit the request deadline ===
+// HTTP middleware applies a 5s deadline (server.timeout.middleware) to every handler.
+// All framework operations (DB, cache, HTTP client, AMQP) propagate it automatically.
+
+func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
+    reqCtx := ctx.Echo.Request().Context()  // already has the 5s deadline
+
+    // No wrapping needed — every call below observes the inherited deadline:
+    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
+    order, err := h.svc.FindByID(reqCtx, req.ID)
+    if err != nil {
+        return server.Result[Order]{}, server.NewInternalServerError(err.Error())
+    }
+    _, _ = h.pricing.Get(reqCtx, order.SKU)
+
+    return server.NewResult(http.StatusOK, order), nil
+}
+
+// === SHORTEN: cap one sub-operation so a slow path doesn't burn the budget ===
+func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
+    // Cap cache lookup at 200ms; fall through to DB on miss/timeout.
+    cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+    defer cancel()
+    if data, err := s.cache.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
+        return cache.Unmarshal[*User](data)
+    }
+    return s.queryDatabase(ctx, id) // keeps remaining ~4.8s of inherited budget
+}
+
+// === DETACH: fire-and-forget background work that must outlive the request ===
+// context.WithoutCancel inherits VALUES (trace ID, tenant, logger fields) but
+// sheds the parent's cancellation/deadline. Always re-apply a fresh budget.
+
+func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
+    reqCtx := ctx.Echo.Request().Context()
+    bgCtx := context.WithoutCancel(reqCtx)
+    bgCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+    go func() {
+        defer cancel()
+        if err := h.worker.Process(bgCtx, req); err != nil {
+            h.logger.WithContext(bgCtx).Error().Err(err).Msg("background job failed")
+        }
+    }()
+    return server.Accepted(Receipt{ID: req.ID}), nil
+}
+// Anti-pattern: context.Background() severs trace/tenant attribution.
+// Use context.WithoutCancel for "outlive the request, keep observability."
+```
+
+**Recommended caps when shortening** (upper bounds, not floors):
+
+| Operation | Cap |
+|---|---|
+| Hot-path cache lookup before DB fallback | 200–500 ms |
+| Idempotency / dedup lookup | 100–300 ms |
+| Optional enrichment (recommendations, flags) | 500 ms – 1 s |
+| Internal RPC to known-fast service | 1–2 s |
+| External partner API | 5–10 s (tune per SLA) |
+
+**Pitfalls:**
+- Forgetting `defer cancel()` → goroutine leaks (lint catches via `lostcancel`)
+- `context.Background()` mid-handler → orphaned trace, missing tenant
+- Wrapping with timeout *longer* than inherited deadline → silently ignored
+- Long loops without `ctx.Err()` checks → wasted work after deadline fires
+
 ## HTTP Middleware
 
 ```go
