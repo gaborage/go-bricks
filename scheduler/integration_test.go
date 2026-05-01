@@ -1,44 +1,14 @@
 package scheduler
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/app"
-	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 )
-
-type testSchedulerOption func(*app.ModuleDeps)
-
-func withTracer(tr trace.Tracer) testSchedulerOption {
-	return func(d *app.ModuleDeps) { d.Tracer = tr }
-}
-
-func withMeterProvider(mp metric.MeterProvider) testSchedulerOption {
-	return func(d *app.ModuleDeps) { d.MeterProvider = mp }
-}
-
-func withDB(fn func(context.Context) (types.Interface, error)) testSchedulerOption {
-	return func(d *app.ModuleDeps) { d.DB = fn }
-}
-
-func withMessaging(fn func(context.Context) (messaging.AMQPClient, error)) testSchedulerOption {
-	return func(d *app.ModuleDeps) { d.Messaging = fn }
-}
-
-func withSlowJobThreshold(threshold time.Duration) testSchedulerOption {
-	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timeout.SlowJob = threshold }
-}
 
 // TestSchedulerLifecycleMVP verifies the complete scheduler lifecycle per User Story 1 MVP test:
 // Register a simple job, schedule it to run every 5 seconds, wait 15 seconds, verify it executed 3 times.
@@ -170,36 +140,3 @@ func (j *longRunningJob) Completed() bool {
 	return j.completed
 }
 
-// newTestScheduler creates and initializes a scheduler module for testing.
-func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testSchedulerOption) (*Module, app.JobRegistrar) {
-	module := NewModule()
-
-	appDeps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Scheduler: config.SchedulerConfig{
-				Timeout: config.SchedulerTimeoutConfig{
-					Shutdown: shutdownTimeout,
-				},
-			},
-		},
-		Tracer:        nil, // No-op tracer for tests
-		MeterProvider: nil, // No-op meter for tests
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil // No DB for MVP tests
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil // No messaging for MVP tests
-		},
-	}
-
-	for _, o := range opts {
-		o(appDeps)
-	}
-
-	err := module.Init(appDeps)
-	require.NoError(t, err, "Module initialization should succeed")
-
-	// Return module and its JobRegistrar interface
-	return module, module
-}
