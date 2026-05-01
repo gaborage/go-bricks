@@ -45,7 +45,7 @@ go test -bench=.        # Run benchmarks
 **Additional Documentation:**
 - [TESTING.md](TESTING.md) - Testing strategy deep-dive
 - [METRICS.md](METRICS.md) - Observability metrics reference
-- [TODO.md](TODO.md) - Technical backlog
+- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Aenhancement) - Technical backlog (active enhancement items; titles use `[P1]`/`[P2]`/`[P3]` and `[JOSE]`/area prefixes for filtering)
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [config.example.yaml](config.example.yaml) - Full configuration template
 
@@ -1238,7 +1238,7 @@ The `jose` package provides nested JWE-of-JWS protection on HTTP request and res
 **Key Features:**
 - **Struct-tag opt-in**: Add a `jose:` tag to a sentinel field on the request/response type — no per-route plumbing
 - **Bidirectional symmetry enforced**: both request and response must carry tags or neither (registration-time check)
-- **Strict algorithm allowlist**: `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5`, and `ES256` are rejected at parse time. ECDSA support is gated on extending `keystore.KeyStore` to return ECDSA keys (tracked in TODO.md)
+- **Strict algorithm allowlist**: `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5`, and `ES256` are rejected at parse time. ECDSA support is gated on extending `keystore.KeyStore` to return ECDSA keys (tracked in [#347](https://github.com/gaborage/go-bricks/issues/347))
 - **Hybrid error envelope**: pre-trust failures (decrypt failed, signature invalid) emit a plaintext minimal `{code,message}` envelope to leak nothing to unauthenticated peers; post-trust handler errors emit the standard `APIResponse` envelope, encrypted with the route's outbound policy
 - **Fail-Fast at startup**: every `kid` is resolved against the keystore at `RegisterHandler` time. Missing keys, asymmetric tags, and `WithRawResponse()` conflicts panic at startup, never at runtime
 - **Observability**: spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`)
