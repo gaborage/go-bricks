@@ -93,10 +93,31 @@ docs: Update README with new configuration options
 
 ## Reporting Issues
 
-- Use GitHub Issues to report bugs or suggest features
-- Include Go version, OS, and relevant configuration
-- Provide minimal reproduction steps for bugs
-- Search existing issues before creating new ones
+GoBricks uses [GitHub Issues](https://github.com/gaborage/go-bricks/issues) with structured templates. When you open a new issue, pick the template that fits and the form will guide you through the required fields:
+
+- **Bug report** — something is broken or behaves incorrectly.
+- **Enhancement** — internal framework improvement, refactor, or feature where you already know what should change.
+- **Idea / feature request** — exploratory direction, external feature request, or anything where the path forward is unclear.
+
+### Title format
+
+Use `<package>: <verb-led summary>`. The `<package>` part should match a directory at the repo root (`scheduler`, `database`, `jose`, `messaging`, `cache`, ...).
+
+Examples:
+
+- `scheduler: extract setup helper for tracer-enabled tests`
+- `jose: wire Header.Typ into observability or drop`
+- `database: support multi-database transactions`
+
+Maintainers will add `area/<package>` and `kind/*` labels during triage.
+
+### No static priority
+
+**Do not** prefix titles with `[P1]`/`[P2]`/`[P3]` or similar. Priority is **derived from usage signals** during triage — 👍 reactions on the issue body, references from PRs and other issues, demand from the [demo project](https://github.com/gaborage/go-bricks-demo-project) and external users — not assigned at filing time. Static priorities go stale; signal-based ranking does not.
+
+### Search before filing
+
+Search both **open and closed** issues before opening a new one. If you find a duplicate, comment on the existing issue (a fresh comment with new context bumps it back into view) instead of opening another.
 
 ## Build Commands
 

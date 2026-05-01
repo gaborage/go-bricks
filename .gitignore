@@ -36,6 +36,7 @@
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
+!.github/ISSUE_TEMPLATE/*.yml
 
 !sonar-project.properties
 
