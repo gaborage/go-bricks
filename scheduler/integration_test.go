@@ -14,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -21,6 +22,22 @@ type testSchedulerOption func(*app.ModuleDeps)
 
 func withTracer(tr trace.Tracer) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Tracer = tr }
+}
+
+func withMeterProvider(mp metric.MeterProvider) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.MeterProvider = mp }
+}
+
+func withDB(fn func(context.Context) (types.Interface, error)) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.DB = fn }
+}
+
+func withMessaging(fn func(context.Context) (messaging.AMQPClient, error)) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Messaging = fn }
+}
+
+func withSlowJobThreshold(threshold time.Duration) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timeout.SlowJob = threshold }
 }
 
 // TestSchedulerLifecycleMVP verifies the complete scheduler lifecycle per User Story 1 MVP test:
