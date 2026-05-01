@@ -17,7 +17,6 @@ var (
 	ErrParseSigned       = errors.New("cryptoadapter: parse signed failed")
 	ErrKidMissing        = errors.New("cryptoadapter: header missing kid")
 	ErrKidMismatch       = errors.New("cryptoadapter: header kid does not match expected")
-	ErrTypRejected       = errors.New("cryptoadapter: header typ not in allowlist")
 	ErrDecryptFailed     = errors.New("cryptoadapter: decrypt failed")
 	ErrVerifyFailed      = errors.New("cryptoadapter: signature verification failed")
 	ErrSignFailed        = errors.New("cryptoadapter: sign failed")
@@ -41,7 +40,6 @@ type DecryptOptions struct {
 	ExpectedKid       string
 	AllowedKeyAlgs    []jose.KeyAlgorithm
 	AllowedContentEnc []jose.ContentEncryption
-	AllowedTyps       []string // empty = no typ enforcement
 }
 
 // Decrypt parses a compact JWE, validates its protected header against the allowlists,
@@ -66,9 +64,6 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 	if opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
 		return nil, hdr, ErrKidMismatch
 	}
-	if len(opts.AllowedTyps) > 0 && !contains(opts.AllowedTyps, hdr.Typ) {
-		return nil, hdr, ErrTypRejected
-	}
 
 	plaintext, err := jwe.Decrypt(key)
 	if err != nil {
@@ -81,7 +76,6 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 type VerifyOptions struct {
 	ExpectedKid    string
 	AllowedSigAlgs []jose.SignatureAlgorithm
-	AllowedTyps    []string
 }
 
 // Verify parses a compact JWS, validates the protected header, and verifies the signature
@@ -109,9 +103,6 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 	}
 	if opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
 		return nil, hdr, ErrKidMismatch
-	}
-	if len(opts.AllowedTyps) > 0 && !contains(opts.AllowedTyps, hdr.Typ) {
-		return nil, hdr, ErrTypRejected
 	}
 
 	payload, err := jws.Verify(key)
@@ -197,13 +188,4 @@ func extractStringExtra(extras map[jose.HeaderKey]interface{}, key jose.HeaderKe
 	}
 	s, _ := v.(string)
 	return s
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }

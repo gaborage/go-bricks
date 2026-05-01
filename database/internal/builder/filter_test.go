@@ -427,6 +427,7 @@ func TestFilterRaw(t *testing.T) {
 	f := qb.Filter()
 
 	// Test Raw filter in a full query to verify placeholder formatting
+	// SECURITY: Manual SQL review completed - test fixture uses literal column "name" and a parameterized value, no user input concatenation
 	query := qb.Select("*").From("users").Where(f.Raw("UPPER(name) = ?", "JOHN"))
 	sql, args, err := query.ToSQL()
 
@@ -440,6 +441,7 @@ func TestFilterRawOracleReservedWord(t *testing.T) {
 	f := qb.Filter()
 
 	// Test Raw filter with Oracle reserved words in a full query
+	// SECURITY: Manual SQL review completed - "number" is double-quoted for Oracle reserved-word handling; ROWNUM is a pseudo-column; both placeholders are parameterized
 	query := qb.Select("*").From("accounts").Where(f.Raw(`"number" = ? AND ROWNUM <= ?`, "12345", 10))
 	sql, args, err := query.ToSQL()
 
@@ -858,6 +860,9 @@ func TestFilterNestedSubqueries(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		f := qb.Filter()
 
+		// SECURITY: Manual SQL review completed - both f.Raw calls below are correlated-subquery
+		// joins on literal qualified column identifiers; no user input, no identifiers requiring
+		// vendor quoting (PostgreSQL fixture).
 		// Inner EXISTS: check for reviews
 		reviewSubquery := qb.Select("1").
 			From("reviews").

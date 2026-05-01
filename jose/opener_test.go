@@ -12,7 +12,7 @@ import (
 // Direct unit tests for mapDecryptError / mapVerifyError. The end-to-end roundtrip
 // covers ErrParseEncrypted, ErrDecryptFailed, ErrParseSigned, and ErrVerifyFailed
 // indirectly; the table tests below cover the remaining sentinels (ErrKidMissing,
-// ErrKidMismatch, ErrTypRejected, default) plus the full mapVerifyError surface.
+// ErrKidMismatch, default) plus the full mapVerifyError surface.
 
 func TestMapDecryptErrorAllArms(t *testing.T) {
 	hdr := cryptoadapter.Header{Kid: "k1", Alg: "RSA-OAEP-256", Enc: "A256GCM"}
@@ -25,7 +25,6 @@ func TestMapDecryptErrorAllArms(t *testing.T) {
 		{name: "parse_failed", in: cryptoadapter.ErrParseEncrypted, wantCode: "JOSE_MALFORMED", wantStat: 400},
 		{name: "kid_missing", in: cryptoadapter.ErrKidMissing, wantCode: "JOSE_KID_MISSING", wantStat: 401},
 		{name: "kid_mismatch", in: cryptoadapter.ErrKidMismatch, wantCode: "JOSE_KID_UNKNOWN", wantStat: 401},
-		{name: "typ_rejected", in: cryptoadapter.ErrTypRejected, wantCode: "JOSE_TYP_REJECTED", wantStat: 400},
 		{name: "decrypt_failed", in: cryptoadapter.ErrDecryptFailed, wantCode: "JOSE_DECRYPT_FAILED", wantStat: 401},
 		{name: "default_unknown", in: errors.New("something else"), wantCode: "JOSE_DECRYPT_FAILED", wantStat: 401},
 	}

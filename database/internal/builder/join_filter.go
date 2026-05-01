@@ -409,12 +409,19 @@ func (jff *JoinFilterFactory) Or(filters ...dbtypes.JoinFilter) dbtypes.JoinFilt
 //   - Ensure the SQL fragment is valid for the target database
 //   - Never concatenate user input directly into the condition string
 //
+// REQUIRED: Every call site MUST carry an inline annotation of the form
+// `// SECURITY: Manual SQL review completed - <rationale>` documenting the
+// specific safety property checked. See FilterFactory.Raw for details and
+// CLAUDE.md "Detailed Security Guidelines".
+//
 // Use this method ONLY when the type-safe methods cannot express your JOIN condition.
 //
 // Examples:
 //
-//	jf.Raw(`users.id = profiles.user_id AND profiles."type" = ?`, "primary")  // Mixed column comparison + value
-//	jf.Raw(`ST_Distance(users.location, stores.location) < 1000`)            // Spatial functions
+//	// SECURITY: Manual SQL review completed - literal qualified identifiers; value side parameterized
+//	jf.Raw(`users.id = profiles.user_id AND profiles."type" = ?`, "primary")
+//	// SECURITY: Manual SQL review completed - column-to-column comparison only, no user input
+//	jf.Raw(`ST_Distance(users.location, stores.location) < 1000`)
 func (jff *JoinFilterFactory) Raw(condition string, args ...any) dbtypes.JoinFilter {
 	return JoinFilter{sqlizer: squirrel.Expr(condition, args...)}
 }

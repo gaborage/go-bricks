@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -125,7 +124,7 @@ func TestOpenTamperedCiphertextFails(t *testing.T) {
 	err = openErr(string(tampered), f.inbound, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.True(t,
 		jerr.Code == "JOSE_DECRYPT_FAILED" || jerr.Code == "JOSE_MALFORMED",
 		"unexpected error code: %s", jerr.Code,
@@ -147,7 +146,7 @@ func TestOpenWrongVerifyKeyFails(t *testing.T) {
 	err = openErr(compact, f.inbound, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_SIGNATURE_INVALID", jerr.Code)
 	assert.Equal(t, 401, jerr.Status)
 }
@@ -157,7 +156,7 @@ func TestSealRequiresOutboundPolicy(t *testing.T) {
 	_, err := Seal([]byte("x"), f.inbound, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_POLICY_DIRECTION_MISMATCH", jerr.Code)
 }
 
@@ -166,7 +165,7 @@ func TestOpenRequiresInboundPolicy(t *testing.T) {
 	err := openErr("x", f.outbound, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_POLICY_DIRECTION_MISMATCH", jerr.Code)
 }
 
@@ -175,7 +174,7 @@ func TestOpenMalformedInputFails(t *testing.T) {
 	err := openErr("not.a.compact.jose", f.inbound, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_MALFORMED", jerr.Code)
 	assert.Equal(t, 400, jerr.Status)
 }
@@ -211,7 +210,7 @@ func TestSealRejectsNilResolver(t *testing.T) {
 	_, err := Seal([]byte("x"), f.outbound, nil)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
 }
 
@@ -220,7 +219,7 @@ func TestOpenRejectsNilResolver(t *testing.T) {
 	err := openErr("not-used", f.inbound, nil)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
 }
 
@@ -232,7 +231,7 @@ func TestSealMissingKid(t *testing.T) {
 	_, err := Seal([]byte("x"), &bad, f.resolver)
 	require.Error(t, err)
 	var jerr *Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }
 

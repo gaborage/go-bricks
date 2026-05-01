@@ -12,32 +12,7 @@ This document tracks future enhancements, technical improvements, and nice-to-ha
 
 ## P0 - Critical
 
-### Security Audit Annotations for WhereRaw()
-**Status:** Planned
-**Context:** `WhereRaw()` bypasses SQL safety mechanisms. All usage should require explicit security review annotation.
-
-**Requirements:**
-- Audit all existing `WhereRaw()` usage in codebase
-- Add linting rule or pre-commit hook to require annotation
-- Document annotation format in CLAUDE.md
-
-**Annotation Format:**
-```go
-// SECURITY: Manual SQL review completed - identifier quoting verified for Oracle
-query := qb.Select("id", "number").
-    From("accounts").
-    WhereRaw(`"number" = ? AND ROWNUM <= ?`, value, 10)
-```
-
-**Tasks:**
-- [ ] Search codebase for all `WhereRaw()` usage
-- [ ] Add annotations to existing usage
-- [ ] Document in CLAUDE.md security section
-- [ ] Consider custom linter rule (optional)
-
-**Related:**
-- ADR-005: Type-Safe WHERE Clause Construction
-- [database/internal/builder/](database/internal/builder/)
+_(no open P0 items)_
 
 ---
 
@@ -63,52 +38,6 @@ query := qb.Select("id", "number").
 - CLAUDE.md: Observability section
 
 ---
-
-### JOSE: ECDSA Keystore Support or Drop ES256
-**Status:** Planned
-**Context:** `ES256` is in the JOSE signature-algorithm allowlist (`jose/algorithms.go:19`) but `keystore.NewModule()` only returns `*rsa.PrivateKey`/`*rsa.PublicKey`. A user who picks `sig_alg=ES256` in a `jose:` tag passes registration (the algorithm is in the allowlist), then crashes at runtime when the sealer/opener tries to use an ECDSA algorithm against an RSA key. Documented as a "v1 limitation" in CLAUDE.md but currently unenforced — a real footgun.
-
-**Two paths (pick one):**
-
-1. **Drop ES256** — remove `jose.ES256` from `allowedSigAlgs` until ECDSA support lands. One-line change, eliminates the footgun, no API breakage (no production code can be using ES256 today since it would crash).
-2. **Add ECDSA support** — extend `keystore.KeyStore` to return `crypto.Signer`/`crypto.PublicKey` (interface generalization), update `cryptoadapter.{Sign,Verify,Encrypt,Decrypt}` signatures to accept the broader types, dispatch by algorithm. Significant API change.
-
-**Trade-offs:**
-- Path 1 is safe and immediate; only removes a non-functional option.
-- Path 2 is the "right" answer architecturally but expands surface area without confirmed demand. Visa Token Services uses RS256/PS256 today; ES256 is forward-looking.
-
-**Recommendation:** Path 1 now, Path 2 only when a real partner requires ES256.
-
-**Related:**
-- [jose/algorithms.go](jose/algorithms.go)
-- [keystore/keystore.go](keystore/keystore.go)
-- [CLAUDE.md](CLAUDE.md) — JOSE Middleware → "ES256 caveat"
-
----
-
-### Context Timeout Defaults
-**Status:** Planned
-**Context:** Framework requires `context.Context` everywhere but doesn't enforce timeout best practices.
-
-**Requirements:**
-- Document recommended timeout values for common operations
-- Consider helper functions for context creation with sensible defaults
-- Add examples in CLAUDE.md
-
-**Example:**
-```go
-// Potential helpers in a new package: context/defaults.go
-func NewHTTPRequestContext(parent context.Context) (context.Context, context.CancelFunc) {
-    return context.WithTimeout(parent, 30*time.Second)
-}
-
-func NewDatabaseQueryContext(parent context.Context) (context.Context, context.CancelFunc) {
-    return context.WithTimeout(parent, 10*time.Second)
-}
-```
-
-**Related:**
-- Context-First Design principle (to be added to CLAUDE.md)
 
 ---
 
@@ -276,6 +205,30 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 
 ---
 
+### JOSE: ECDSA Keystore Support
+**Status:** Conditional / Idea Stage
+**Context:** `ES256` was removed from the JOSE signature-algorithm allowlist because `keystore.NewModule()` returns only `*rsa.PrivateKey`/`*rsa.PublicKey` — selecting `sig_alg=ES256` would crash at runtime. To re-enable ES256 (or future ECDSA-family algorithms like `ES384`/`ES512`), the keystore needs to surface ECDSA keys.
+
+**Implementation outline:**
+- Generalize `keystore.KeyStore` from RSA-only to `crypto.Signer` / `crypto.PublicKey` (Go's standard interfaces) — a non-trivial API change since `*rsa.PrivateKey` callers currently rely on the concrete type
+- Update `cryptoadapter.{Sign,Verify,Encrypt,Decrypt}` to accept the broader interfaces and dispatch by algorithm class (RSA vs ECDSA)
+- Re-add `jose.ES256` to `allowedSigAlgs` in `jose/algorithms.go`
+- Remove the guard test `TestAllowlistRejectsES256` in `jose/algorithms_test.go`
+- Update CLAUDE.md JOSE Middleware allowlist line
+
+**Decision criteria:** Implement only when a real partner integration requires ES256/ECDSA. Visa Token Services uses RS256/PS256 today. Speculative API expansion now would lock the framework into a `crypto.Signer` shape before we know how a real ECDSA caller wants to interact with the keystore (file-based DER? PKCS#8? raw point coordinates? per-tenant rotation?).
+
+**Trade-offs:**
+- Keeps keystore API focused on the actual production case (PRO)
+- Defers a known feature gap (CON, but documented and guard-tested)
+
+**Related:**
+- [jose/algorithms.go](jose/algorithms.go) — `allowedSigAlgs` + comment block citing this entry
+- [jose/algorithms_test.go](jose/algorithms_test.go) — `TestAllowlistRejectsES256` guard test
+- [keystore/keystore.go](keystore/keystore.go)
+
+---
+
 ### JOSE: Replay Cache Interface (`jose.ReplayCache`)
 **Status:** Conditional / Idea Stage
 **Context:** Today the JOSE middleware verifies the JWS signature and exposes verified JWT claims via `jose.ClaimsFromContext(ctx)`, but does *not* enforce `iat`/`exp`/`jti` policies — applications must implement skew windows and replay detection themselves. The original plan noted this as a follow-up: *"if apps consistently re-implement skew/jti checks, lift them into a pluggable interface"*.
@@ -300,52 +253,66 @@ go-bricks generate handler --name CreateUser --method POST --path /users
 
 ---
 
-### JOSE: Drop or Wire `cryptoadapter.AllowedTyps`
-**Status:** Cleanup / Planned
-**Context:** `cryptoadapter.{Decrypt,Verify}Options.AllowedTyps` was added speculatively at the time of the original JOSE design as a list-allowlist for the `typ` JOSE header. The field is exercised only by cryptoadapter's own unit tests — no production caller (jose package, server middleware, httpclient transport) ever sets it. Discovered during `/simplify` review of PR #332.
+### JOSE: Wire `Header.Typ` Into Observability or Drop
+**Status:** Conditional / Idea Stage
+**Context:** Both `cryptoadapter.Header.Typ` and the public `jose.Header.Typ` (returned from `Open()` as part of `OpenHeader{JWE, JWS}`) are populated on every JOSE request via `extractStringExtra(..., jose.HeaderType)`, but no caller reads either value. Server middleware discards the `OpenHeader` return at `server/jose.go`, and no observability span/log uses the field. Surfaced during `/simplify` review of the `AllowedTyps` cleanup PR — the same dormant-surface argument applies, with one asymmetry: `Typ` is part of a public return type, so dropping it is a (minor) API break, whereas `AllowedTyps` was an unused input flag.
 
-**The two states are both honest; the current half-loaded state is not:**
+**Two paths (pick one when this is taken up):**
 
-1. **Drop entirely:** remove `AllowedTyps` field, the corresponding `if len(opts.AllowedTyps) > 0` branches in `Decrypt`/`Verify`, the `ErrTypRejected` sentinel, and the `mapDecryptError`/`mapVerifyError` arms producing `JOSE_TYP_REJECTED`. Also drop the `JOSE_TYP_REJECTED` row from the CLAUDE.md failure-mode table (it would no longer be triggerable).
-2. **Wire it up:** add `Policy.AllowedTyps []string`, plumb it from the parser → opener → cryptoadapter, document configurable typ allowlists in the JOSE tag grammar (e.g. `typ=JOSE,JWS`).
+1. **Wire it up** — add `jwe.typ`/`jws.typ` attributes to the `jose.decode_request` span and to the request-log fields in `server/jose.go`. Cheap, makes the field actually load-bearing for diagnostics, and aligns with the reason the field was added in the first place.
+2. **Drop it** — remove from both `cryptoadapter.Header` and `jose.Header`, plus the two `extractStringExtra` calls. Minor break since `OpenHeader` is exposed by the public `Open()` API.
 
-**Recommendation:** Path 1. Visa Token Services and similar partners don't use the `typ` header for security gating, so the option is unlikely to ever be wired up. Removing dead surface area reduces reader confusion (the `/simplify` agent flagged it as "dormant API surface, not a live pattern to mirror").
-
-**Related:**
-- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go)
-- [jose/opener.go](jose/opener.go) — `mapDecryptError`/`mapVerifyError` `typ_rejected` arms
-- [jose/errors.go](jose/errors.go) — `ErrTypRejected`
-- [CLAUDE.md](CLAUDE.md) — JOSE failure-mode table
-
----
-
-### JOSE: Normalize `errors.As` → `require.ErrorAs` in Tests
-**Status:** Cleanup / Planned
-**Context:** Mix of older `require.True(t, errors.As(err, &jerr))` and newer `require.ErrorAs(t, err, &jerr)` across the JOSE test suite (~11 sites in `jose/sealer_opener_test.go`, `jose/tag_test.go`, `jose/scanner_test.go`, `jose/testing/helpers_test.go`). `require.ErrorAs` is the preferred testify idiom: better failure messages on type mismatch, one line shorter, and already used by newer test files (e.g. `jose/policy_test.go`, `jose/resolver_test.go`).
-
-**Implementation:** Mechanical conversion. Each occurrence:
-```go
-// Before
-var jerr *Error
-require.True(t, errors.As(err, &jerr))
-// After
-var jerr *Error
-require.ErrorAs(t, err, &jerr)
-```
-
-**Trade-offs:**
-- Better test ergonomics (PRO)
-- Pure churn in git history (CON — minor)
-
-**Decision:** Bundle into a single low-risk cleanup PR; don't drip individual conversions across feature PRs.
+**Decision criteria:** Pick Path 1 if anyone hits a JOSE issue where knowing the peer's `typ` header would have helped triage. Pick Path 2 at the next opportunistic cleanup if nobody touches it.
 
 **Related:**
-- [jose/sealer_opener_test.go](jose/sealer_opener_test.go), [jose/tag_test.go](jose/tag_test.go), [jose/scanner_test.go](jose/scanner_test.go)
-- [jose/testing/helpers_test.go](jose/testing/helpers_test.go)
+- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go) — `Header.Typ` field + extractor calls in `Decrypt`/`Verify`
+- [jose/opener.go](jose/opener.go) — `Header.Typ` in the public diagnostic struct
+- [server/jose.go](server/jose.go) — current consumer that discards the return
 
 ---
 
 ## Completed / Won't Do
+
+### ~~Context Timeout Defaults~~
+**Status:** ✅ Completed (2026-04-30)
+**Context:** Framework already configures timeouts at every external boundary (HTTP server `middleware: 5s`, HTTP client `30s`, Redis `dial 5s / read 3s / write 3s`, AMQP `connection_timeout: 30s`, startup per-component, etc.) and propagates deadlines via `context.Context`. The original TODO proposed wrapper helpers (`NewHTTPRequestContext`, `NewDatabaseQueryContext`); audit revealed the gap was *guidance*, not *helpers* — module authors had no single document explaining how the existing knobs compose into a request budget hierarchy or when to manually apply `context.WithTimeout` inside business logic.
+
+**Resolution (docs-only scope):** Added a new top-level `## Context Deadlines & Timeouts` section to CLAUDE.md (mental model, request-scoped boundary table, default/shorten/detach patterns, recommended-cap budgets, pitfalls), and a matching `## Context Timeouts` snippet section to llms.txt. Cross-referenced from the "Context-First Design" principle line and the Table of Contents.
+
+**Why no helper package:** The proposed `NewDatabaseQueryContext(parent)` / `NewHTTPRequestContext(parent)` wrappers would each save one line of `context.WithTimeout(parent, duration)` over the stdlib form, while introducing a new package the framework would need to maintain. The actual gap was *knowledge of recommended values*, which a docs section solves without an abstraction. If duplicated `context.WithTimeout(...)` magic numbers start appearing across modules, revisit with a tiny `internal/timeouts` constants file (named durations only, no wrapper functions) — but that's YAGNI today.
+
+**Related:**
+- [CLAUDE.md](CLAUDE.md) — "Context Deadlines & Timeouts" section
+- [llms.txt](llms.txt) — "Context Timeouts" section
+- [server/timeout.go](server/timeout.go) — context-only middleware
+- [config/types.go](config/types.go) — `TimeoutConfig`, `StartupConfig`, `RedisConfig`, `ReconnectConfig`
+
+---
+
+### ~~Security Audit Annotations for Raw-SQL Escape Hatches~~
+**Status:** ✅ Completed (2026-04-30)
+**Context:** Originally filed against `WhereRaw()`, the pre-v0.15.0 escape hatch on the query builder. The struct-based column work in v0.15.0+ (ADR-007) shifted the escape hatch onto the filter factories: `f.Raw()` (on `FilterFactory`) and `jf.Raw()` (on `JoinFilterFactory`). The audit and policy landed against the current API; documentation references to `WhereRaw()` in CLAUDE.md and llms.txt were also a stale-doc bug — fixed in the same change.
+
+**Audit findings:**
+- **Zero production usage** of any raw-SQL escape hatch in the framework. All callers use the type-safe filter methods (`f.Eq`, `f.In`, `f.Between`, etc.).
+- **9 call sites total**, all in `_test.go` files under `database/internal/builder/`: `filter_test.go` (4), `oracle_test.go` (table-driven, 1 annotation covering both branches), `join_filter_test.go` (2), `query_builder_test.go` (3 in one test).
+- One additional documentation example in `llms.txt` (a tenant-isolation `f.Raw("1 = 0")` safety fallback).
+
+**Resolution:**
+- Added `// SECURITY: Manual SQL review completed - <rationale>` annotations to every call site, with the rationale tailored to each site's risk profile (literal column comparison, parameterized values, Oracle reserved-word quoting, etc.). For the Oracle table-driven test, a single annotation above the dispatch documents the safety property of the entire fixture.
+- Codified the annotation requirement in CLAUDE.md "Detailed Security Guidelines" — the comment is a forcing function for review even on "obviously safe" literal SQL, and makes call sites grep-discoverable via `git grep -E 'f\.Raw\(|jf\.Raw\('`.
+- Added an "Escape hatch" row to the API quick-reference table in `llms.txt` so LLM-generated code picks up the annotation requirement.
+- Skipped the optional custom linter: with zero production usage and the API being short and grep-able, a linter would be YAGNI. If raw escape-hatch usage starts appearing in production code, revisit at that point.
+
+**Why the API drift mattered for this work:** The TODO entry, CLAUDE.md, and llms.txt were all referencing `WhereRaw()` as if it still existed on the query builder. It does not — only `f.Raw()` and `jf.Raw()` on the filter factories. Fixing the doc references alongside the annotation work prevents future contributors (human or LLM) from looking for a method that doesn't exist.
+
+**Related:**
+- ADR-005: Type-Safe WHERE Clause Construction
+- ADR-007: Struct-Based Column Extraction (introduced the FilterFactory split)
+- [database/internal/builder/filter.go](database/internal/builder/filter.go), [database/internal/builder/join_filter.go](database/internal/builder/join_filter.go) — `Raw()` method definitions
+- [CLAUDE.md](CLAUDE.md) — Detailed Security Guidelines, Escape Hatch reference, Database Issues troubleshooting
+
+---
 
 ### ~~Raw String WHERE Clauses~~
 **Status:** ❌ Won't Do
@@ -393,6 +360,67 @@ require.ErrorAs(t, err, &jerr)
 - [wiki/adr-014-slim-module-interface.md](wiki/adr-014-slim-module-interface.md)
 - [app/module.go](app/module.go) — core + optional interface declarations
 - [app/module_registry.go](app/module_registry.go) — type-assertion dispatch
+
+---
+
+### ~~JOSE: Drop ES256 from Algorithm Allowlist~~
+**Status:** ✅ Completed
+**Context:** `jose.ES256` was in the JOSE signature-algorithm allowlist but `keystore.NewModule()` returned RSA keys only — selecting `sig_alg=ES256` in a `jose:` tag passed registration but crashed at runtime when the cryptoadapter passed an `*rsa.PrivateKey` into go-jose's ECDSA signer path. Documented as a "v1 limitation" in CLAUDE.md but unenforced — a runtime footgun.
+
+**Resolution (Path 1 of two options):**
+- Removed `jose.ES256` from `allowedSigAlgs` in [jose/algorithms.go](jose/algorithms.go); added a comment citing the keystore RSA-only constraint
+- Added `TestAllowlistRejectsES256` as a guard test so the algorithm cannot be silently re-added without also extending keystore support
+- Updated CLAUDE.md JOSE Middleware allowlist line: now reads `RS256`/`PS256` only, `ES256` listed alongside `alg=none`/`HS*`/`RSA1_5` as parse-time rejected
+- Future ECDSA support tracked separately as P3 conditional work (see "JOSE: ECDSA Keystore Support" entry)
+
+**Why Path 1 over Path 2 (add ECDSA support):** No real partner integration currently requires ES256; Visa Token Services uses RS256/PS256. Adding `crypto.Signer`/`crypto.PublicKey` plumbing speculatively would lock the framework into an interface shape before observing how a real ECDSA caller wants to interact with the keystore.
+
+**Related:**
+- [jose/algorithms.go](jose/algorithms.go) — `allowedSigAlgs` declaration + comment block
+- [jose/algorithms_test.go](jose/algorithms_test.go) — `TestAllowlistRejectsES256` guard
+- [CLAUDE.md](CLAUDE.md) — JOSE Middleware → "Strict algorithm allowlist"
+
+---
+
+### ~~JOSE: Drop `cryptoadapter.AllowedTyps`~~
+**Status:** ✅ Completed
+**Context:** `cryptoadapter.{Decrypt,Verify}Options.AllowedTyps` was a list-allowlist for the JWE/JWS `typ` header added speculatively in the original JOSE design. The field had test coverage in cryptoadapter's own unit tests but no production caller (jose package, server middleware, httpclient transport) ever set it. Discovered during `/simplify` review of PR #332.
+
+**Resolution (Path 1 of two options — drop, not wire):**
+- Removed `AllowedTyps` field from both `DecryptOptions` and `VerifyOptions`
+- Removed the `if len(opts.AllowedTyps) > 0` branches in `Decrypt` and `Verify`
+- Removed the `ErrTypRejected` sentinel from cryptoadapter and the parent jose package
+- Removed the `mapDecryptError` arm producing `JOSE_TYP_REJECTED` (the verify mapper never had one)
+- Removed the dead `contains()` helper that only the typ check used
+- Removed two cryptoadapter tests (`TestVerifyAcceptsEmptyTypInAllowlist`, `TestVerifyRejectsTypNotInAllowlist`)
+- Removed the `typ_rejected` case from the `TestMapDecryptErrorAllArms` table
+- Kept `Header.Typ` field and its extraction from `ExtraHeaders` — still useful for diagnostic logging on every request
+
+**Why Path 1 over Path 2 (add `Policy.AllowedTyps` + tag grammar):** No production code path read or set `AllowedTyps`. Visa Token Services and similar partners don't use the `typ` header for security gating. Removing the dead surface area is cheaper than continuing to maintain it as half-loaded API.
+
+**Note on CLAUDE.md:** the `JOSE_TYP_REJECTED` row was never actually in the failure-mode table on `main` — it was only in an early plan-file draft. Confirmed via grep before resolving.
+
+**Related:**
+- [jose/internal/cryptoadapter/cryptoadapter.go](jose/internal/cryptoadapter/cryptoadapter.go)
+- [jose/opener.go](jose/opener.go) — `mapDecryptError` (typ arm removed)
+- [jose/errors.go](jose/errors.go) — `ErrTypRejected` sentinel removed
+
+---
+
+### ~~JOSE: Normalize `errors.As`/`errors.Is` → `require.ErrorAs`/`assert.ErrorIs` in Tests~~
+**Status:** ✅ Completed
+**Context:** The JOSE test suite mixed `require.True(t, errors.As(err, &jerr))` and `assert.True(t, errors.Is(err, X))` with the preferred testify idioms `require.ErrorAs(t, err, &jerr)` and `assert.ErrorIs(t, err, X)`. The newer style produces better failure messages on mismatch and saves a line per call site. Newer test files (e.g. `jose/policy_test.go`, `jose/resolver_test.go`) already used the upgraded idiom.
+
+**Resolution:**
+- Converted all 11 `errors.As` sites in `jose/sealer_opener_test.go` (8), `jose/tag_test.go` (1), `jose/scanner_test.go` (1), `jose/testing/helpers_test.go` (1)
+- Converted all 8 `errors.Is` sites in `jose/errors_test.go` (2 — including one `assert.False` → `assert.NotErrorIs`) and `jose/internal/cryptoadapter/cryptoadapter_test.go` (6)
+- Dropped the now-unused `errors` import from 5 files (kept in `jose/errors_test.go` because `errors.New` is still used to construct fixture errors)
+- Bundled `errors.Is` conversions in via `/simplify` agent surfaced them as the same idiom upgrade — saved a follow-up PR
+
+**Related:**
+- [jose/sealer_opener_test.go](jose/sealer_opener_test.go), [jose/tag_test.go](jose/tag_test.go), [jose/scanner_test.go](jose/scanner_test.go)
+- [jose/testing/helpers_test.go](jose/testing/helpers_test.go)
+- [jose/errors_test.go](jose/errors_test.go), [jose/internal/cryptoadapter/cryptoadapter_test.go](jose/internal/cryptoadapter/cryptoadapter_test.go)
 
 ---
 

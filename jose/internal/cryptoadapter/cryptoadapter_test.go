@@ -3,7 +3,6 @@ package cryptoadapter
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"errors"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -72,7 +71,7 @@ func TestVerifyRejectsKidMismatch(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMismatch))
+	assert.ErrorIs(t, err, ErrKidMismatch)
 }
 
 func TestDecryptRejectsKidMismatch(t *testing.T) {
@@ -90,7 +89,7 @@ func TestDecryptRejectsKidMismatch(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMismatch))
+	assert.ErrorIs(t, err, ErrKidMismatch)
 }
 
 func TestVerifyRejectsDisallowedAlg(t *testing.T) {
@@ -104,7 +103,7 @@ func TestVerifyRejectsDisallowedAlg(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.PS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrParseSigned))
+	assert.ErrorIs(t, err, ErrParseSigned)
 }
 
 func TestVerifyRejectsKidMissing(t *testing.T) {
@@ -118,7 +117,7 @@ func TestVerifyRejectsKidMissing(t *testing.T) {
 		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMissing))
+	assert.ErrorIs(t, err, ErrKidMissing)
 }
 
 func TestDecryptRejectsKidMissing(t *testing.T) {
@@ -134,39 +133,7 @@ func TestDecryptRejectsKidMissing(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKidMissing))
-}
-
-func TestVerifyAcceptsEmptyTypInAllowlist(t *testing.T) {
-	// Sign() does not set a typ header, so the verified header has typ="". This test
-	// exercises the AllowedTyps != nil branch with empty being explicitly permitted —
-	// covers the contains() helper without requiring the upstream library to support
-	// emitting a typ header at sign time.
-	key := newKey(t)
-	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "k", SigAlg: jose.RS256, Cty: "JWT"})
-	require.NoError(t, err)
-
-	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
-		ExpectedKid:    "k",
-		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
-		AllowedTyps:    []string{"", "JWT"},
-	})
-	require.NoError(t, err)
-}
-
-func TestVerifyRejectsTypNotInAllowlist(t *testing.T) {
-	key := newKey(t)
-	compact, err := Sign([]byte("x"), key, &SignOptions{Kid: "k", SigAlg: jose.RS256})
-	require.NoError(t, err)
-
-	// Empty typ not in allowlist => ErrTypRejected.
-	_, _, err = Verify(compact, &key.PublicKey, &VerifyOptions{
-		ExpectedKid:    "k",
-		AllowedSigAlgs: []jose.SignatureAlgorithm{jose.RS256},
-		AllowedTyps:    []string{"strict-only"},
-	})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrTypRejected))
+	assert.ErrorIs(t, err, ErrKidMissing)
 }
 
 func TestDecryptRejectsDisallowedKeyAlg(t *testing.T) {
@@ -185,5 +152,5 @@ func TestDecryptRejectsDisallowedKeyAlg(t *testing.T) {
 		AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrParseEncrypted))
+	assert.ErrorIs(t, err, ErrParseEncrypted)
 }

@@ -1,7 +1,6 @@
 package testing_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/gaborage/go-bricks/jose"
@@ -59,7 +58,7 @@ func TestNewTestResolverAcceptsPublicOnly(t *testing.T) {
 	_, err = resolver.PrivateKey("peer-pub")
 	require.Error(t, err)
 	var jerr *jose.Error
-	require.True(t, errors.As(err, &jerr))
+	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, "JOSE_KID_UNKNOWN", jerr.Code)
 }
 

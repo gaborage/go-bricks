@@ -13,7 +13,6 @@ var (
 	ErrNoneAlgRejected     = errors.New("jose: alg=none rejected")
 	ErrKidMissing          = errors.New("jose: header missing kid")
 	ErrCritUnsupported     = errors.New("jose: unrecognized crit header value")
-	ErrTypRejected         = errors.New("jose: header typ not allowed")
 	ErrCtyRejected         = errors.New("jose: inner cty does not match policy")
 	ErrKidUnknown          = errors.New("jose: kid not registered")
 	ErrDecryptFailed       = errors.New("jose: decryption failed")
