@@ -32,8 +32,7 @@ func TestSchedulerModuleRegisterRoutes(_ *testing.T) {
 
 // TestJobExecutionFailure verifies job failures are tracked
 func TestJobExecutionFailure(t *testing.T) {
-	module, registrar := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
+	_, registrar := newTestScheduler(t, 5*time.Second)
 
 	// Create a job that always fails
 	job := &failingJob{err: errors.New("intentional failure")}
@@ -47,8 +46,7 @@ func TestJobExecutionFailure(t *testing.T) {
 
 // TestJobExecutionPanic verifies panic recovery
 func TestJobExecutionPanic(t *testing.T) {
-	module, registrar := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
+	_, registrar := newTestScheduler(t, 5*time.Second)
 
 	// Create a job that panics
 	job := &panicJob{}
@@ -62,8 +60,7 @@ func TestJobExecutionPanic(t *testing.T) {
 
 // TestJobExecutionOverlappingPrevention verifies jobs don't overlap
 func TestJobExecutionOverlappingPrevention(t *testing.T) {
-	module, registrar := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
+	_, registrar := newTestScheduler(t, 5*time.Second)
 
 	// Create a slow job that takes longer than the interval
 	job := &slowJob{duration: 500 * time.Millisecond}
@@ -88,7 +85,6 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 	defer mp.Shutdown(context.Background())
 
 	module, _ := newTestScheduler(t, 5*time.Second, withMeterProvider(mp.MeterProvider))
-	defer module.Shutdown()
 
 	// Register a job that panics
 	job := &panicJob{}
@@ -134,12 +130,27 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 	assert.Equal(t, 0, job.count(), "Job should not execute after shutdown")
 }
 
+// TestShutdownIdempotent verifies that calling Shutdown more than once is a no-op
+// and does not return an error or fail the underlying gocron scheduler. Regression
+// test for the spurious "Error stopping scheduler" log emitted when a deferred
+// Shutdown ran after an explicit Shutdown.
+func TestShutdownIdempotent(t *testing.T) {
+	module, registrar := newTestScheduler(t, 5*time.Second)
+
+	// Register a job so the gocron scheduler is actually initialized.
+	err := registrar.FixedRate("idempotent-shutdown-job", &slowJob{duration: time.Millisecond}, time.Hour)
+	require.NoError(t, err)
+
+	require.NoError(t, module.Shutdown(), "first shutdown should succeed")
+	require.NoError(t, module.Shutdown(), "second shutdown should be a no-op")
+	require.NoError(t, module.Shutdown(), "subsequent shutdowns should remain no-ops")
+}
+
 // TestJobExecutionWithDBGetterError verifies error handling when DB getter fails
 func TestJobExecutionWithDBGetterError(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second, withDB(func(_ context.Context) (types.Interface, error) {
 		return nil, errors.New("DB connection failed")
 	}))
-	defer module.Shutdown()
 
 	// Create a job that checks DB is nil
 	job := &dbCheckJob{}
@@ -157,7 +168,6 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second, withMessaging(func(_ context.Context) (messaging.AMQPClient, error) {
 		return nil, errors.New("Messaging connection failed")
 	}))
-	defer module.Shutdown()
 
 	// Create a job that checks messaging is nil
 	job := &messagingCheckJob{}
@@ -173,7 +183,6 @@ func TestJobExecutionWithMessagingGetterError(t *testing.T) {
 // TestSlowJobThresholdWarning verifies slow job detection and WARN severity
 func TestSlowJobThresholdWarning(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second, withSlowJobThreshold(100*time.Millisecond))
-	defer module.Shutdown()
 
 	// Create a slow job that exceeds threshold
 	job := &slowJob{duration: 150 * time.Millisecond}
@@ -190,7 +199,6 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 // TestJobExecutionWithoutTracer verifies jobs execute successfully when tracer is nil
 func TestJobExecutionWithoutTracer(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
 
 	// Create a simple job
 	job := &slowJob{duration: 10 * time.Millisecond}
@@ -211,7 +219,6 @@ func TestJobExecutionWithTracer(t *testing.T) {
 	defer tp.Shutdown(context.Background())
 
 	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
-	defer module.Shutdown()
 
 	// Create a simple job. Use a 1s interval so a second tick cannot race the
 	// assertion window, and stop the scheduler before counting spans.
@@ -242,7 +249,6 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 	defer tp.Shutdown(context.Background())
 
 	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
-	defer module.Shutdown()
 
 	// Job that creates a child span to verify context propagation. Use a 1s
 	// interval so a second tick cannot race the assertion window, and stop the

@@ -183,6 +183,7 @@ func (m *Module) Shutdown() error {
 	}
 
 	scheduler := m.scheduler
+	m.scheduler = nil
 	m.mu.Unlock()
 
 	m.logger.Info().Msg("Initiating graceful scheduler shutdown")

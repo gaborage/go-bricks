@@ -65,6 +65,11 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testS
 	}
 
 	require.NoError(t, module.Init(appDeps), "Module initialization should succeed")
+	t.Cleanup(func() {
+		if err := module.Shutdown(); err != nil {
+			t.Errorf("module shutdown failed during cleanup: %v", err)
+		}
+	})
 
 	return module, module
 }

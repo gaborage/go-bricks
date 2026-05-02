@@ -1,15 +1,9 @@
 package scheduler
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/app"
-	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +16,7 @@ const (
 // TestJobRegistrarFixedRate tests fixed-rate job scheduling
 func TestJobRegistrarFixedRate(t *testing.T) {
 	t.Run("registers job with valid interval", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, 30*time.Second)
@@ -30,7 +24,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 
@@ -44,7 +38,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run("rejects zero interval", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, 0)
@@ -53,7 +47,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run("rejects negative interval", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, -10*time.Second)
@@ -65,7 +59,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 // TestJobRegistrarDailyAt tests daily job scheduling
 func TestJobRegistrarDailyAt(t *testing.T) {
 	t.Run("registers job with valid time", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("03:00")
 
@@ -74,7 +68,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("03:00")
@@ -88,7 +82,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run("accepts hour 0 (midnight)", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -97,7 +91,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run("accepts hour 23", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("23:59")
 
@@ -109,7 +103,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 // TestJobRegistrarWeeklyAt tests weekly job scheduling
 func TestJobRegistrarWeeklyAt(t *testing.T) {
 	t.Run("registers job with valid day and time", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("09:00")
 
@@ -118,7 +112,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("09:00")
@@ -132,7 +126,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 	})
 
 	t.Run("accepts all weekdays", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		localTime := mustParseTime("09:00")
 
 		weekdays := []time.Weekday{
@@ -151,7 +145,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 // TestJobRegistrarHourlyAt tests hourly job scheduling
 func TestJobRegistrarHourlyAt(t *testing.T) {
 	t.Run("registers job with valid minute", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 15)
@@ -159,7 +153,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 
@@ -172,7 +166,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts minute 0", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 0)
@@ -180,7 +174,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts minute 59", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 59)
@@ -188,7 +182,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects minute 60", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 60)
@@ -197,7 +191,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects negative minute", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, -1)
@@ -209,7 +203,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 // TestJobRegistrarMonthlyAt tests monthly job scheduling
 func TestJobRegistrarMonthlyAt(t *testing.T) {
 	t.Run("registers job with valid day and time", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -218,7 +212,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("00:00")
@@ -232,7 +226,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts day 1", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -241,7 +235,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts day 31", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -250,7 +244,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects day 0", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -260,7 +254,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects day 32", func(t *testing.T) {
-		registrar := newTestRegistrar()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -271,31 +265,6 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 }
 
 // Test helpers
-
-// newTestRegistrar creates a test JobRegistrar using the real scheduler Module
-func newTestRegistrar() app.JobRegistrar {
-	module := NewModule()
-
-	// Initialize with minimal dependencies
-	deps := &app.ModuleDeps{
-		Logger:        logger.New("info", false),
-		Config:        &config.Config{},
-		Tracer:        nil,
-		MeterProvider: nil,
-		DB: func(_ context.Context) (types.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
-	}
-
-	if err := module.Init(deps); err != nil {
-		panic(err) //nolint:S8148 // NOSONAR: Test helper - panic on setup failure is intentional
-	}
-
-	return module
-}
 
 // mustParseTime parses time in "HH:MM" format
 func mustParseTime(s string) time.Time {

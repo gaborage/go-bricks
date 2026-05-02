@@ -139,4 +139,3 @@ func (j *longRunningJob) Completed() bool {
 	defer j.mu.Unlock()
 	return j.completed
 }
-
