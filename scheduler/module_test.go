@@ -134,6 +134,22 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 	assert.Equal(t, 0, job.count(), "Job should not execute after shutdown")
 }
 
+// TestShutdownIdempotent verifies that calling Shutdown more than once is a no-op
+// and does not return an error or fail the underlying gocron scheduler. Regression
+// test for the spurious "Error stopping scheduler" log emitted when a deferred
+// Shutdown ran after an explicit Shutdown.
+func TestShutdownIdempotent(t *testing.T) {
+	module, registrar := newTestScheduler(t, 5*time.Second)
+
+	// Register a job so the gocron scheduler is actually initialized.
+	err := registrar.FixedRate("idempotent-shutdown-job", &slowJob{duration: time.Millisecond}, time.Hour)
+	require.NoError(t, err)
+
+	require.NoError(t, module.Shutdown(), "first shutdown should succeed")
+	require.NoError(t, module.Shutdown(), "second shutdown should be a no-op")
+	require.NoError(t, module.Shutdown(), "subsequent shutdowns should remain no-ops")
+}
+
 // TestJobExecutionWithDBGetterError verifies error handling when DB getter fails
 func TestJobExecutionWithDBGetterError(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second, withDB(func(_ context.Context) (types.Interface, error) {
