@@ -1115,7 +1115,11 @@ func TestFilterJSONContainsPostgreSQL(t *testing.T) {
 		{name: "struct_marshal", value: doc{Role: "admin"}, expectedJSON: `{"role":"admin"}`},
 		{name: "map_marshal", value: map[string]any{"role": "admin"}, expectedJSON: `{"role":"admin"}`},
 		{name: "slice_marshal", value: []string{"a", "b"}, expectedJSON: `["a","b"]`},
-		{name: "nil_value", value: nil, expectedJSON: `null`},
+		{name: "nil_value", value: nil, expectedJSON: jsonLiteralNull},
+		// Typed-nil byte slices map to the JSON literal "null" rather than
+		// silently sending an empty parameter.
+		{name: "nil_bytes", value: []byte(nil), expectedJSON: jsonLiteralNull},
+		{name: "nil_raw_message", value: json.RawMessage(nil), expectedJSON: jsonLiteralNull},
 	}
 
 	for _, tt := range tests {
@@ -1146,6 +1150,29 @@ func TestFilterJSONContainsMarshalError(t *testing.T) {
 	_, _, err := f.JSONContains("metadata", make(chan int)).ToSQL()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "JSONContains:")
+}
+
+func TestFilterJSONContainsRejectsInvalidPreEncodedJSON(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "string_garbage", value: `{not json`},
+		{name: "string_empty", value: ""},
+		{name: "bytes_garbage", value: []byte(`{not json`)},
+		{name: "raw_message_garbage", value: json.RawMessage(`{not json`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := f.JSONContains("metadata", tt.value).ToSQL()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid pre-encoded JSON")
+		})
+	}
 }
 
 func TestFilterJSONContainsInWhereClause(t *testing.T) {

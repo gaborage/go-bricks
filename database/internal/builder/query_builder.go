@@ -16,6 +16,9 @@ import (
 const (
 	joinOnPlaceholder = "%s ON %s"
 	sqlFuncNow        = "NOW()"
+	// jsonLiteralNull is the JSON literal sent for nil/typed-nil JSONContains
+	// payloads, matching encoding/json's representation of nil values.
+	jsonLiteralNull = "null"
 )
 
 // QueryBuilder provides vendor-specific SQL query building.
@@ -494,18 +497,32 @@ func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sql
 }
 
 // jsonContainsPayload converts the caller-supplied value into a JSON string.
-// Strings, []byte, and json.RawMessage are trusted as already-encoded JSON.
-// Everything else routes through encoding/json.
+//
+// Strings, []byte, and json.RawMessage are treated as already-encoded JSON
+// payloads but are still validated via json.Valid so malformed input fails at
+// query-build time rather than at the database. Typed-nil byte slices map to
+// the JSON literal "null" (matching the explicit nil case). Everything else
+// routes through encoding/json.
 func jsonContainsPayload(value any) (string, error) {
+	validateBytes := func(data []byte) (string, error) {
+		if data == nil {
+			return jsonLiteralNull, nil
+		}
+		if !json.Valid(data) {
+			return "", fmt.Errorf("invalid pre-encoded JSON")
+		}
+		return string(data), nil
+	}
+
 	switch v := value.(type) {
 	case nil:
-		return "null", nil
+		return jsonLiteralNull, nil
 	case string:
-		return v, nil
+		return validateBytes([]byte(v))
 	case json.RawMessage:
-		return string(v), nil
+		return validateBytes([]byte(v))
 	case []byte:
-		return string(v), nil
+		return validateBytes(v)
 	default:
 		data, err := json.Marshal(value)
 		if err != nil {
