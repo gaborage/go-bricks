@@ -4,6 +4,7 @@
 package builder
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,9 @@ import (
 const (
 	joinOnPlaceholder = "%s ON %s"
 	sqlFuncNow        = "NOW()"
+	// jsonLiteralNull is the JSON literal sent for nil/typed-nil JSONContains
+	// payloads, matching encoding/json's representation of nil values.
+	jsonLiteralNull = "null"
 )
 
 // QueryBuilder provides vendor-specific SQL query building.
@@ -424,6 +428,107 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 	default:
 		// Default to standard LIKE
 		return squirrel.Like{column: likeValue}
+	}
+}
+
+// BuildRegex creates a vendor-specific regex match expression.
+//
+// PostgreSQL emits the POSIX-regex operators: ~ (CS), ~* (CI), !~ (NOT CS),
+// !~* (NOT CI). Oracle emits REGEXP_LIKE with an optional 'i' match flag,
+// wrapped in NOT(...) when negated.
+//
+// Pattern syntax differs slightly between vendors (POSIX ERE vs Oracle's
+// extended POSIX); callers writing vendor-portable regexes should stick to
+// the common subset (anchors, character classes, quantifiers).
+func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
+	quotedColumn := qb.quoteColumnForQuery(column)
+
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		op := "~"
+		if negated {
+			op = "!~"
+		}
+		if caseInsensitive {
+			op += "*"
+		}
+		return squirrel.Expr(quotedColumn+" "+op+" ?", pattern)
+	case dbtypes.Oracle:
+		expr := "REGEXP_LIKE(" + quotedColumn + ", ?"
+		args := []any{pattern}
+		if caseInsensitive {
+			expr += ", ?"
+			args = append(args, "i")
+		}
+		expr += ")"
+		if negated {
+			expr = "NOT (" + expr + ")"
+		}
+		return squirrel.Expr(expr, args...)
+	default:
+		return errorSqlizer{err: fmt.Errorf("regex matching is not supported for vendor %q", qb.vendor)}
+	}
+}
+
+// BuildJSONContains creates a JSON containment expression.
+//
+// PostgreSQL emits "column @> ?::jsonb" with the value marshalled to JSON.
+// Strings, []byte, and json.RawMessage values are passed through as-is
+// (caller-provided JSON); other values are marshalled via encoding/json so
+// that callers can pass structs, maps, or slices directly.
+//
+// Oracle has no clean equivalent (JSON_EQUAL is exact-equality, JSON_EXISTS
+// requires a path predicate) so it returns an error filter for now. See
+// https://github.com/gaborage/go-bricks/issues/341 for follow-up.
+func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sqlizer {
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		jsonStr, err := jsonContainsPayload(value)
+		if err != nil {
+			return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
+		}
+		quotedColumn := qb.quoteColumnForQuery(column)
+		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
+	case dbtypes.Oracle:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
+	default:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", qb.vendor)}
+	}
+}
+
+// jsonContainsPayload converts the caller-supplied value into a JSON string.
+//
+// Strings, []byte, and json.RawMessage are treated as already-encoded JSON
+// payloads but are still validated via json.Valid so malformed input fails at
+// query-build time rather than at the database. Typed-nil byte slices map to
+// the JSON literal "null" (matching the explicit nil case). Everything else
+// routes through encoding/json.
+func jsonContainsPayload(value any) (string, error) {
+	validateBytes := func(data []byte) (string, error) {
+		if data == nil {
+			return jsonLiteralNull, nil
+		}
+		if !json.Valid(data) {
+			return "", fmt.Errorf("invalid pre-encoded JSON")
+		}
+		return string(data), nil
+	}
+
+	switch v := value.(type) {
+	case nil:
+		return jsonLiteralNull, nil
+	case string:
+		return validateBytes([]byte(v))
+	case json.RawMessage:
+		return validateBytes([]byte(v))
+	case []byte:
+		return validateBytes(v)
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return "", fmt.Errorf("marshal value to JSON: %w", err)
+		}
+		return string(data), nil
 	}
 }
 

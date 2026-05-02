@@ -172,6 +172,50 @@ func (ff *FilterFactory) Like(column, pattern string) dbtypes.Filter {
 	return Filter{sqlizer: ff.qb.BuildCaseInsensitiveLike(column, pattern)}
 }
 
+// Regex creates a case-sensitive regex match filter.
+// PostgreSQL emits "column ~ ?", Oracle emits "REGEXP_LIKE(column, ?)".
+// The pattern syntax is the database's POSIX regex; portable patterns should
+// stick to the common subset (anchors, character classes, quantifiers).
+func (ff *FilterFactory) Regex(column, pattern string) dbtypes.Filter {
+	return Filter{sqlizer: ff.qb.BuildRegex(column, pattern, false, false)}
+}
+
+// RegexI creates a case-insensitive regex match filter.
+// PostgreSQL emits "column ~* ?", Oracle emits "REGEXP_LIKE(column, ?, 'i')".
+func (ff *FilterFactory) RegexI(column, pattern string) dbtypes.Filter {
+	return Filter{sqlizer: ff.qb.BuildRegex(column, pattern, true, false)}
+}
+
+// NotRegex creates a case-sensitive negated regex match filter.
+// PostgreSQL emits "column !~ ?", Oracle emits "NOT (REGEXP_LIKE(column, ?))".
+func (ff *FilterFactory) NotRegex(column, pattern string) dbtypes.Filter {
+	return Filter{sqlizer: ff.qb.BuildRegex(column, pattern, false, true)}
+}
+
+// NotRegexI creates a case-insensitive negated regex match filter.
+// PostgreSQL emits "column !~* ?", Oracle emits "NOT (REGEXP_LIKE(column, ?, 'i'))".
+func (ff *FilterFactory) NotRegexI(column, pattern string) dbtypes.Filter {
+	return Filter{sqlizer: ff.qb.BuildRegex(column, pattern, true, true)}
+}
+
+// JSONContains creates a JSON containment filter (PostgreSQL @> operator).
+//
+// On PostgreSQL emits "column @> ?::jsonb" with the value JSON-encoded.
+// Strings, []byte, and json.RawMessage are passed through as-is (assumed
+// already-valid JSON); everything else is marshalled via encoding/json so
+// callers can pass structs, maps, or slices directly.
+//
+// Oracle is not yet supported and returns a filter that surfaces an error
+// at ToSQL() time. See https://github.com/gaborage/go-bricks/issues/341.
+//
+// Example:
+//
+//	f.JSONContains("metadata", map[string]any{"role": "admin"})
+//	// PostgreSQL: metadata @> $1::jsonb  (with arg `{"role":"admin"}`)
+func (ff *FilterFactory) JSONContains(column string, value any) dbtypes.Filter {
+	return Filter{sqlizer: ff.qb.BuildJSONContains(column, value)}
+}
+
 // Null creates an IS NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Null(column string) dbtypes.Filter {
