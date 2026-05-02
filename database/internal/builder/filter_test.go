@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -973,4 +974,189 @@ func TestFilterSubqueryCombinedWithOtherFilters(t *testing.T) {
 		assert.Contains(t, sql, "override =")
 		assert.Equal(t, []any{true, false}, args)
 	})
+}
+
+// ========== Regex Filter Tests ==========
+
+func TestFilterRegex(t *testing.T) {
+	const pattern = `^[a-z]+@example\.com$`
+
+	tests := []struct {
+		name        string
+		vendor      string
+		method      func(ff dbtypes.FilterFactory) dbtypes.Filter
+		expectedSQL string
+	}{
+		// PostgreSQL: ~, ~*, !~, !~*
+		{
+			name:        "postgresql_regex_cs",
+			vendor:      dbtypes.PostgreSQL,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Regex("email", pattern) },
+			expectedSQL: "email ~ ?",
+		},
+		{
+			name:        "postgresql_regex_ci",
+			vendor:      dbtypes.PostgreSQL,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.RegexI("email", pattern) },
+			expectedSQL: "email ~* ?",
+		},
+		{
+			name:        "postgresql_not_regex_cs",
+			vendor:      dbtypes.PostgreSQL,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotRegex("email", pattern) },
+			expectedSQL: "email !~ ?",
+		},
+		{
+			name:        "postgresql_not_regex_ci",
+			vendor:      dbtypes.PostgreSQL,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotRegexI("email", pattern) },
+			expectedSQL: "email !~* ?",
+		},
+		// Oracle: REGEXP_LIKE, optionally with 'i' flag and NOT prefix
+		{
+			name:        "oracle_regex_cs",
+			vendor:      dbtypes.Oracle,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Regex("email", pattern) },
+			expectedSQL: "REGEXP_LIKE(email, ?)",
+		},
+		{
+			name:        "oracle_regex_ci",
+			vendor:      dbtypes.Oracle,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.RegexI("email", pattern) },
+			expectedSQL: "REGEXP_LIKE(email, ?, ?)",
+		},
+		{
+			name:        "oracle_not_regex_cs",
+			vendor:      dbtypes.Oracle,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotRegex("email", pattern) },
+			expectedSQL: "NOT (REGEXP_LIKE(email, ?))",
+		},
+		{
+			name:        "oracle_not_regex_ci",
+			vendor:      dbtypes.Oracle,
+			method:      func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotRegexI("email", pattern) },
+			expectedSQL: "NOT (REGEXP_LIKE(email, ?, ?))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+
+			sql, args, err := tt.method(f).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql)
+			require.NotEmpty(t, args)
+			assert.Equal(t, pattern, args[0])
+			// Oracle case-insensitive variants pass 'i' as the second arg
+			if len(args) == 2 {
+				assert.Equal(t, "i", args[1])
+			}
+		})
+	}
+}
+
+func TestFilterRegexQuotesOracleReservedWords(t *testing.T) {
+	// "number" is an Oracle reserved word and must be auto-quoted.
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	f := qb.Filter()
+
+	sql, args, err := f.Regex("number", `\d+`).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, `REGEXP_LIKE("number", ?)`, sql)
+	assert.Equal(t, []any{`\d+`}, args)
+}
+
+func TestFilterRegexUnsupportedVendor(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Vendor("mysql"))
+	f := qb.Filter()
+
+	_, _, err := f.Regex("col", "pat").ToSQL()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "regex matching is not supported")
+}
+
+func TestFilterRegexInWhereClause(t *testing.T) {
+	// End-to-end: regex composes with other filters and gets correct placeholders.
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	sql, args, err := qb.Select("id").
+		From("users").
+		Where(f.And(
+			f.Eq("status", "active"),
+			f.RegexI("email", `@example\.com$`),
+		)).
+		ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, "SELECT id FROM users WHERE (status = $1 AND email ~* $2)", sql)
+	assert.Equal(t, []any{"active", `@example\.com$`}, args)
+}
+
+// ========== JSONContains Filter Tests ==========
+
+func TestFilterJSONContainsPostgreSQL(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	type doc struct {
+		Role string `json:"role"`
+	}
+
+	tests := []struct {
+		name         string
+		value        any
+		expectedJSON string
+	}{
+		{name: "string_passthrough", value: `{"role":"admin"}`, expectedJSON: `{"role":"admin"}`},
+		{name: "bytes_passthrough", value: []byte(`{"role":"admin"}`), expectedJSON: `{"role":"admin"}`},
+		{name: "raw_message_passthrough", value: json.RawMessage(`{"role":"admin"}`), expectedJSON: `{"role":"admin"}`},
+		{name: "struct_marshal", value: doc{Role: "admin"}, expectedJSON: `{"role":"admin"}`},
+		{name: "map_marshal", value: map[string]any{"role": "admin"}, expectedJSON: `{"role":"admin"}`},
+		{name: "slice_marshal", value: []string{"a", "b"}, expectedJSON: `["a","b"]`},
+		{name: "nil_value", value: nil, expectedJSON: `null`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := f.JSONContains("metadata", tt.value).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "metadata @> ?::jsonb", sql)
+			require.Len(t, args, 1)
+			assert.Equal(t, tt.expectedJSON, args[0])
+		})
+	}
+}
+
+func TestFilterJSONContainsOracleNotImplemented(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	f := qb.Filter()
+
+	_, _, err := f.JSONContains("metadata", `{"role":"admin"}`).ToSQL()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Oracle support not implemented")
+}
+
+func TestFilterJSONContainsMarshalError(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	// channels are not JSON-marshallable
+	_, _, err := f.JSONContains("metadata", make(chan int)).ToSQL()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "JSONContains:")
+}
+
+func TestFilterJSONContainsInWhereClause(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	sql, args, err := qb.Select("id").
+		From("users").
+		Where(f.JSONContains("metadata", map[string]any{"role": "admin"})).
+		ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, "SELECT id FROM users WHERE metadata @> $1::jsonb", sql)
+	assert.Equal(t, []any{`{"role":"admin"}`}, args)
 }

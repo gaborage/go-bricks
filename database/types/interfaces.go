@@ -46,6 +46,18 @@ type FilterFactory interface {
 	NotNull(column string) Filter
 	Between(column string, lowerBound, upperBound any) Filter
 
+	// Regex matching (vendor-specific):
+	//   PostgreSQL: ~ (CS), ~* (CI), !~ (NOT CS), !~* (NOT CI)
+	//   Oracle:     REGEXP_LIKE(col, pat[, 'i']), optionally negated with NOT
+	Regex(column, pattern string) Filter
+	RegexI(column, pattern string) Filter
+	NotRegex(column, pattern string) Filter
+	NotRegexI(column, pattern string) Filter
+
+	// JSONContains tests JSON containment (PostgreSQL @>). Currently
+	// PostgreSQL-only; calling on Oracle yields an error filter.
+	JSONContains(column string, value any) Filter
+
 	// Logical operators
 	And(filters ...Filter) Filter
 	Or(filters ...Filter) Filter

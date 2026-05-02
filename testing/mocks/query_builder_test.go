@@ -71,6 +71,31 @@ func (m *MockFilterFactory) Like(column, pattern string) types.Filter {
 	return args.Get(0).(types.Filter)
 }
 
+func (m *MockFilterFactory) Regex(column, pattern string) types.Filter {
+	args := m.MethodCalled("Regex", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) RegexI(column, pattern string) types.Filter {
+	args := m.MethodCalled("RegexI", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotRegex(column, pattern string) types.Filter {
+	args := m.MethodCalled("NotRegex", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) NotRegexI(column, pattern string) types.Filter {
+	args := m.MethodCalled("NotRegexI", column, pattern)
+	return args.Get(0).(types.Filter)
+}
+
+func (m *MockFilterFactory) JSONContains(column string, value any) types.Filter {
+	args := m.MethodCalled("JSONContains", column, value)
+	return args.Get(0).(types.Filter)
+}
+
 func (m *MockFilterFactory) Null(column string) types.Filter {
 	args := m.MethodCalled("Null", column)
 	return args.Get(0).(types.Filter)

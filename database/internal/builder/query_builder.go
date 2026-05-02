@@ -4,6 +4,7 @@
 package builder
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -424,6 +425,93 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 	default:
 		// Default to standard LIKE
 		return squirrel.Like{column: likeValue}
+	}
+}
+
+// BuildRegex creates a vendor-specific regex match expression.
+//
+// PostgreSQL emits the POSIX-regex operators: ~ (CS), ~* (CI), !~ (NOT CS),
+// !~* (NOT CI). Oracle emits REGEXP_LIKE with an optional 'i' match flag,
+// wrapped in NOT(...) when negated.
+//
+// Pattern syntax differs slightly between vendors (POSIX ERE vs Oracle's
+// extended POSIX); callers writing vendor-portable regexes should stick to
+// the common subset (anchors, character classes, quantifiers).
+func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
+	quotedColumn := qb.quoteColumnForQuery(column)
+
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		op := "~"
+		if negated {
+			op = "!~"
+		}
+		if caseInsensitive {
+			op += "*"
+		}
+		return squirrel.Expr(quotedColumn+" "+op+" ?", pattern)
+	case dbtypes.Oracle:
+		expr := "REGEXP_LIKE(" + quotedColumn + ", ?"
+		args := []any{pattern}
+		if caseInsensitive {
+			expr += ", ?"
+			args = append(args, "i")
+		}
+		expr += ")"
+		if negated {
+			expr = "NOT (" + expr + ")"
+		}
+		return squirrel.Expr(expr, args...)
+	default:
+		return errorSqlizer{err: fmt.Errorf("regex matching is not supported for vendor %q", qb.vendor)}
+	}
+}
+
+// BuildJSONContains creates a JSON containment expression.
+//
+// PostgreSQL emits "column @> ?::jsonb" with the value marshalled to JSON.
+// Strings, []byte, and json.RawMessage values are passed through as-is
+// (caller-provided JSON); other values are marshalled via encoding/json so
+// that callers can pass structs, maps, or slices directly.
+//
+// Oracle has no clean equivalent (JSON_EQUAL is exact-equality, JSON_EXISTS
+// requires a path predicate) so it returns an error filter for now. See
+// https://github.com/gaborage/go-bricks/issues/341 for follow-up.
+func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sqlizer {
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		jsonStr, err := jsonContainsPayload(value)
+		if err != nil {
+			return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
+		}
+		quotedColumn := qb.quoteColumnForQuery(column)
+		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
+	case dbtypes.Oracle:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
+	default:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", qb.vendor)}
+	}
+}
+
+// jsonContainsPayload converts the caller-supplied value into a JSON string.
+// Strings, []byte, and json.RawMessage are trusted as already-encoded JSON.
+// Everything else routes through encoding/json.
+func jsonContainsPayload(value any) (string, error) {
+	switch v := value.(type) {
+	case nil:
+		return "null", nil
+	case string:
+		return v, nil
+	case json.RawMessage:
+		return string(v), nil
+	case []byte:
+		return string(v), nil
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return "", fmt.Errorf("marshal value to JSON: %w", err)
+		}
+		return string(data), nil
 	}
 }
 

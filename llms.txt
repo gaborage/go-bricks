@@ -873,6 +873,8 @@ rows, err := db.Query(ctx, sql, args...)
 | Need                | Builder call / API usage                                               |
 |---------------------|------------------------------------------------------------------------|
 | Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`                           |
+| Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
+| JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
 | Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.Expr("created_at DESC")).GroupBy("tenant_id")` |
 | Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
@@ -906,6 +908,44 @@ result, err := db.Exec(ctx, sql, args...)
 ```
 
 Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.
+
+**Regex Matching (vendor-aware):**
+
+```go
+f := qb.Filter()
+
+// Case-sensitive: PG "email ~ ?", Oracle "REGEXP_LIKE(email, ?)"
+sql, args := qb.Select("*").From("users").
+    Where(f.Regex("email", `^admin@`)).ToSQL()
+
+// Case-insensitive: PG "email ~* ?", Oracle "REGEXP_LIKE(email, ?, 'i')"
+qb.Select("*").From("users").Where(f.RegexI("email", `@example\.com$`))
+
+// Negation: f.NotRegex / f.NotRegexI
+//   PG: "email !~ ?" / "email !~* ?"
+//   Oracle: "NOT (REGEXP_LIKE(email, ?))" / "NOT (REGEXP_LIKE(email, ?, 'i'))"
+```
+
+Pattern syntax differs slightly (POSIX ERE vs Oracle's extended POSIX); for vendor-portable patterns stick to the common subset (anchors, character classes, quantifiers).
+
+**JSON Containment (PostgreSQL only):**
+
+```go
+f := qb.Filter()
+
+// Pass any JSON-marshallable value; structs/maps/slices auto-encode.
+sql, args := qb.Select("id").From("users").
+    Where(f.JSONContains("metadata", map[string]any{"role": "admin"})).
+    ToSQL()
+// SQL: SELECT id FROM users WHERE metadata @> $1::jsonb
+// args: [`{"role":"admin"}`]
+
+// Pre-encoded JSON (string, []byte, json.RawMessage) is passed through as-is:
+f.JSONContains("metadata", `{"role":"admin"}`)
+f.JSONContains("metadata", json.RawMessage(`{"role":"admin"}`))
+```
+
+Oracle is not yet supported (`@>` has no clean equivalent — `JSON_EXISTS` requires a path predicate, `JSON_EQUAL` is exact-equality). Calling `JSONContains` on an Oracle `QueryBuilder` produces a filter whose `ToSQL()` returns an explanatory error. Track Oracle support in [issue #341](https://github.com/gaborage/go-bricks/issues/341).
 
 **Struct-Based Columns (v0.15.0+):**
 

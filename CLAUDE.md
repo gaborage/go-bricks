@@ -612,7 +612,7 @@ query := qb.Select(cols.Fields("ID", "Number")...).
 // Oracle: SELECT "ID", "NUMBER" FROM accounts WHERE "NUMBER" = :1
 ```
 
-**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Null/NotNull`, `f.Between`
+**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`
 
 **Escape Hatch:** `f.Raw(condition, args...)` (and `jf.Raw(...)` for JOIN conditions) — user must manually quote Oracle reserved words and parameterize all value sides. Every call site MUST carry a `// SECURITY: Manual SQL review completed - <rationale>` comment (see Detailed Security Guidelines).
 
