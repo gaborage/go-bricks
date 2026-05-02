@@ -16,8 +16,7 @@ const (
 // TestJobRegistrarFixedRate tests fixed-rate job scheduling
 func TestJobRegistrarFixedRate(t *testing.T) {
 	t.Run("registers job with valid interval", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, 30*time.Second)
@@ -25,8 +24,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 
@@ -40,8 +38,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run("rejects zero interval", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, 0)
@@ -50,8 +47,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 	})
 
 	t.Run("rejects negative interval", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.FixedRate(testJobID, job, -10*time.Second)
@@ -63,8 +59,7 @@ func TestJobRegistrarFixedRate(t *testing.T) {
 // TestJobRegistrarDailyAt tests daily job scheduling
 func TestJobRegistrarDailyAt(t *testing.T) {
 	t.Run("registers job with valid time", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("03:00")
 
@@ -73,8 +68,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("03:00")
@@ -88,8 +82,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run("accepts hour 0 (midnight)", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -98,8 +91,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 	})
 
 	t.Run("accepts hour 23", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("23:59")
 
@@ -111,8 +103,7 @@ func TestJobRegistrarDailyAt(t *testing.T) {
 // TestJobRegistrarWeeklyAt tests weekly job scheduling
 func TestJobRegistrarWeeklyAt(t *testing.T) {
 	t.Run("registers job with valid day and time", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("09:00")
 
@@ -121,8 +112,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("09:00")
@@ -136,8 +126,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 	})
 
 	t.Run("accepts all weekdays", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		localTime := mustParseTime("09:00")
 
 		weekdays := []time.Weekday{
@@ -156,8 +145,7 @@ func TestJobRegistrarWeeklyAt(t *testing.T) {
 // TestJobRegistrarHourlyAt tests hourly job scheduling
 func TestJobRegistrarHourlyAt(t *testing.T) {
 	t.Run("registers job with valid minute", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 15)
@@ -165,8 +153,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 
@@ -179,8 +166,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts minute 0", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 0)
@@ -188,8 +174,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts minute 59", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 59)
@@ -197,8 +182,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects minute 60", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, 60)
@@ -207,8 +191,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects negative minute", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 
 		err := registrar.HourlyAt(testJobID, job, -1)
@@ -220,8 +203,7 @@ func TestJobRegistrarHourlyAt(t *testing.T) {
 // TestJobRegistrarMonthlyAt tests monthly job scheduling
 func TestJobRegistrarMonthlyAt(t *testing.T) {
 	t.Run("registers job with valid day and time", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -230,8 +212,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run(rejectDuplicateJobIDErrorMsg, func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job1 := &testJob{}
 		job2 := &testJob{}
 		localTime := mustParseTime("00:00")
@@ -245,8 +226,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts day 1", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -255,8 +235,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("accepts day 31", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -265,8 +244,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects day 0", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 
@@ -276,8 +254,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 	})
 
 	t.Run("rejects day 32", func(t *testing.T) {
-		module, registrar := newTestScheduler(t, 5*time.Second)
-		defer module.Shutdown()
+		_, registrar := newTestScheduler(t, 5*time.Second)
 		job := &testJob{}
 		localTime := mustParseTime("00:00")
 

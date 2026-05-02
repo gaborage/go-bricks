@@ -18,7 +18,6 @@ const (
 // TestListJobsHandler verifies GET /_sys/job returns job metadata
 func TestListJobsHandler(t *testing.T) {
 	module, registrar := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
 
 	// Register a test job
 	job := &counterJob{}
@@ -70,7 +69,6 @@ func TestListJobsHandlerEmptyScheduler(t *testing.T) {
 // TestTriggerJobHandler verifies POST /_sys/job/:jobId triggers job
 func TestTriggerJobHandler(t *testing.T) {
 	module, registrar := newTestScheduler(t, 5*time.Second)
-	defer module.Shutdown()
 
 	// Register a test job
 	job := &counterJob{}
