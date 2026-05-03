@@ -4,6 +4,7 @@
 package builder
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,9 @@ import (
 const (
 	joinOnPlaceholder = "%s ON %s"
 	sqlFuncNow        = "NOW()"
+	// jsonLiteralNull is the JSON literal sent for nil/typed-nil JSONContains
+	// payloads, matching encoding/json's representation of nil values.
+	jsonLiteralNull = "null"
 )
 
 // QueryBuilder provides vendor-specific SQL query building.
@@ -37,6 +41,19 @@ type SelectQueryBuilder struct {
 
 // check if SelectQueryBuilder implements dbtypes.SelectQueryBuilder
 var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
+
+// InsertQueryBuilder wraps squirrel.InsertBuilder so the public API exposes
+// idiomatic ToSQL() (uppercase, per S8179) instead of squirrel's ToSql().
+//
+// All chaining methods return the dbtypes.InsertQueryBuilder interface so users
+// see a consistent ToSQL()-based surface across SELECT/INSERT/UPDATE/DELETE.
+type InsertQueryBuilder struct {
+	insertBuilder squirrel.InsertBuilder
+	err           error // deferred error surfaced by ToSQL()
+}
+
+// check if InsertQueryBuilder implements dbtypes.InsertQueryBuilder
+var _ dbtypes.InsertQueryBuilder = (*InsertQueryBuilder)(nil)
 
 // UpdateQueryBuilder provides a type-safe interface for building UPDATE queries
 // with Filter API support and vendor-specific column quoting.
@@ -222,15 +239,19 @@ func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 	}
 }
 
-// Insert creates an INSERT query builder for the specified table
-func (qb *QueryBuilder) Insert(table string) squirrel.InsertBuilder {
-	return qb.statementBuilder.Insert(table)
+// Insert creates an INSERT query builder for the specified table.
+// The returned InsertQueryBuilder exposes ToSQL() (idiomatic Go, per S8179)
+// consistent with Select/Update/Delete builders.
+func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
+	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(table)}
 }
 
 // InsertWithColumns creates an INSERT query builder with pre-specified columns.
 // It applies vendor-specific column quoting to the provided column list.
-func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squirrel.InsertBuilder {
-	return qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...)
+func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtypes.InsertQueryBuilder {
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...),
+	}
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
@@ -250,7 +271,7 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) squir
 //	// INSERT INTO users (name, email) VALUES (?, ?)
 //
 // Panics if instance is not a struct or pointer to struct with db tags.
-func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.InsertBuilder {
+func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQueryBuilder {
 	cols := qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
 
@@ -267,9 +288,11 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.Insert
 		values = append(values, val)
 	}
 
-	return qb.statementBuilder.Insert(table).
-		Columns(qb.quoteColumnsForDML(columns...)...).
-		Values(values...)
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).
+			Columns(qb.quoteColumnsForDML(columns...)...).
+			Values(values...),
+	}
 }
 
 // InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
@@ -282,7 +305,7 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) squirrel.Insert
 //	// INSERT INTO users (name, email) VALUES (?, ?)
 //
 // Panics if instance is not a struct or any field name is invalid.
-func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...string) squirrel.InsertBuilder {
+func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...string) dbtypes.InsertQueryBuilder {
 	cols := qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
 
@@ -300,9 +323,11 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 		}
 	}
 
-	return qb.statementBuilder.Insert(table).
-		Columns(qb.quoteColumnsForDML(columns...)...).
-		Values(values...)
+	return &InsertQueryBuilder{
+		insertBuilder: qb.statementBuilder.Insert(table).
+			Columns(qb.quoteColumnsForDML(columns...)...).
+			Values(values...),
+	}
 }
 
 // extractTerminalIdentifier extracts the final identifier from a column name,
@@ -403,6 +428,107 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 	default:
 		// Default to standard LIKE
 		return squirrel.Like{column: likeValue}
+	}
+}
+
+// BuildRegex creates a vendor-specific regex match expression.
+//
+// PostgreSQL emits the POSIX-regex operators: ~ (CS), ~* (CI), !~ (NOT CS),
+// !~* (NOT CI). Oracle emits REGEXP_LIKE with an optional 'i' match flag,
+// wrapped in NOT(...) when negated.
+//
+// Pattern syntax differs slightly between vendors (POSIX ERE vs Oracle's
+// extended POSIX); callers writing vendor-portable regexes should stick to
+// the common subset (anchors, character classes, quantifiers).
+func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
+	quotedColumn := qb.quoteColumnForQuery(column)
+
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		op := "~"
+		if negated {
+			op = "!~"
+		}
+		if caseInsensitive {
+			op += "*"
+		}
+		return squirrel.Expr(quotedColumn+" "+op+" ?", pattern)
+	case dbtypes.Oracle:
+		expr := "REGEXP_LIKE(" + quotedColumn + ", ?"
+		args := []any{pattern}
+		if caseInsensitive {
+			expr += ", ?"
+			args = append(args, "i")
+		}
+		expr += ")"
+		if negated {
+			expr = "NOT (" + expr + ")"
+		}
+		return squirrel.Expr(expr, args...)
+	default:
+		return errorSqlizer{err: fmt.Errorf("regex matching is not supported for vendor %q", qb.vendor)}
+	}
+}
+
+// BuildJSONContains creates a JSON containment expression.
+//
+// PostgreSQL emits "column @> ?::jsonb" with the value marshalled to JSON.
+// Strings, []byte, and json.RawMessage values are passed through as-is
+// (caller-provided JSON); other values are marshalled via encoding/json so
+// that callers can pass structs, maps, or slices directly.
+//
+// Oracle has no clean equivalent (JSON_EQUAL is exact-equality, JSON_EXISTS
+// requires a path predicate) so it returns an error filter for now. See
+// https://github.com/gaborage/go-bricks/issues/341 for follow-up.
+func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sqlizer {
+	switch qb.vendor {
+	case dbtypes.PostgreSQL:
+		jsonStr, err := jsonContainsPayload(value)
+		if err != nil {
+			return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
+		}
+		quotedColumn := qb.quoteColumnForQuery(column)
+		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
+	case dbtypes.Oracle:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
+	default:
+		return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", qb.vendor)}
+	}
+}
+
+// jsonContainsPayload converts the caller-supplied value into a JSON string.
+//
+// Strings, []byte, and json.RawMessage are treated as already-encoded JSON
+// payloads but are still validated via json.Valid so malformed input fails at
+// query-build time rather than at the database. Typed-nil byte slices map to
+// the JSON literal "null" (matching the explicit nil case). Everything else
+// routes through encoding/json.
+func jsonContainsPayload(value any) (string, error) {
+	validateBytes := func(data []byte) (string, error) {
+		if data == nil {
+			return jsonLiteralNull, nil
+		}
+		if !json.Valid(data) {
+			return "", fmt.Errorf("invalid pre-encoded JSON")
+		}
+		return string(data), nil
+	}
+
+	switch v := value.(type) {
+	case nil:
+		return jsonLiteralNull, nil
+	case string:
+		return validateBytes([]byte(v))
+	case json.RawMessage:
+		return validateBytes([]byte(v))
+	case []byte:
+		return validateBytes(v)
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return "", fmt.Errorf("marshal value to JSON: %w", err)
+		}
+		return string(data), nil
 	}
 }
 
@@ -977,4 +1103,62 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 // ToSQL generates the final SQL query and arguments.
 func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 	return dqb.deleteBuilder.ToSql()
+}
+
+// ========== InsertQueryBuilder Methods ==========
+
+func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Columns(columns...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Values(values...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.SetMap(clauses)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Options(options ...string) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Options(options...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Prefix(sql string, args ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Prefix(sql, args...)
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) Suffix(sql string, args ...any) dbtypes.InsertQueryBuilder {
+	iqb.insertBuilder = iqb.insertBuilder.Suffix(sql, args...)
+	return iqb
+}
+
+// Select uses sb as the source rows for INSERT...SELECT. Squirrel's InsertBuilder.Select
+// requires the concrete *SelectQueryBuilder so pagination state (limit/offset) and captured
+// filter errors are preserved via buildSelectBuilder()/ValidateForSubquery(). Foreign
+// SelectQueryBuilder implementations cannot be plumbed into squirrel's Select clause — for
+// those, the error is deferred to ToSQL() rather than panicking.
+func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.InsertQueryBuilder {
+	if err := dbtypes.ValidateSubquery(sb); err != nil {
+		iqb.err = fmt.Errorf("InsertQueryBuilder.Select: %w", err)
+		return iqb
+	}
+	concrete, ok := sb.(*SelectQueryBuilder)
+	if !ok {
+		iqb.err = fmt.Errorf("InsertQueryBuilder.Select: unsupported subquery type %T", sb)
+		return iqb
+	}
+	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.buildSelectBuilder())
+	return iqb
+}
+
+func (iqb *InsertQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	if iqb.err != nil {
+		return "", nil, iqb.err
+	}
+	return iqb.insertBuilder.ToSql()
 }

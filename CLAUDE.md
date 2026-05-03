@@ -45,7 +45,7 @@ go test -bench=.        # Run benchmarks
 **Additional Documentation:**
 - [TESTING.md](TESTING.md) - Testing strategy deep-dive
 - [METRICS.md](METRICS.md) - Observability metrics reference
-- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Aenhancement) - Technical backlog (active enhancement items; titles use `[P1]`/`[P2]`/`[P3]` and `[JOSE]`/area prefixes for filtering)
+- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Akind%2Ffeature) - Technical backlog. Titles use `<area>: <description>` (lowercase, e.g. `jose: add sample module to demo project`); labels combine `area/<package>` (e.g. `area/messaging`, `area/outbox`) with `kind/<type>` (`feature`, `exploration`, `refactor`, `tech-debt`, `security`) or top-level `bug`/`documentation`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [config.example.yaml](config.example.yaml) - Full configuration template
 
@@ -250,6 +250,28 @@ var probe app.HealthProbe = myProbe
 var job scheduler.Executor = &MyJob{}
 var probe app.Prober = myProbe
 ```
+
+### Breaking Change: Standardized `ToSQL()` Across Query Builders (S8179)
+
+Per [ADR-017](wiki/adr-017-insert-query-builder.md), `qb.Insert*` constructors now return `types.InsertQueryBuilder` (a go-bricks-owned interface) instead of `squirrel.InsertBuilder` directly. The render method is renamed from `ToSql()` (squirrel-style) to `ToSQL()` (idiomatic Go, S8179) — matching `Select`/`Update`/`Delete`.
+
+| Constructor | Old return | New return | Render method |
+|---|---|---|---|
+| `qb.Insert(table)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertWithColumns(table, cols...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertStruct(table, instance)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+| `qb.InsertFields(table, instance, fields...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
+
+**Example Migration:**
+```go
+// ❌ OLD
+sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSql()
+
+// ✅ NEW
+sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSQL()
+```
+
+The new interface preserves all common chaining methods (`Columns`, `Values`, `SetMap`, `Options`, `Prefix`, `Suffix`, `Select`). For specialized squirrel-only methods (e.g., `RunWith`, `PlaceholderFormat`), keep the rendered SQL via `ToSQL()` and execute with `db.Exec(ctx, sql, args...)`.
 
 ## Architecture
 
@@ -590,7 +612,7 @@ query := qb.Select(cols.Fields("ID", "Number")...).
 // Oracle: SELECT "ID", "NUMBER" FROM accounts WHERE "NUMBER" = :1
 ```
 
-**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Null/NotNull`, `f.Between`
+**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`
 
 **Escape Hatch:** `f.Raw(condition, args...)` (and `jf.Raw(...)` for JOIN conditions) — user must manually quote Oracle reserved words and parameterize all value sides. Every call site MUST carry a `// SECURITY: Manual SQL review completed - <rationale>` comment (see Detailed Security Guidelines).
 

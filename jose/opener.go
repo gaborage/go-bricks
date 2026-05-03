@@ -97,12 +97,11 @@ type Header struct {
 	Kid string
 	Alg string
 	Enc string
-	Typ string
 	Cty string
 }
 
 func cryptoHeaderToOpen(h *cryptoadapter.Header) Header {
-	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Typ: h.Typ, Cty: h.Cty}
+	return Header{Kid: h.Kid, Alg: h.Alg, Enc: h.Enc, Cty: h.Cty}
 }
 
 func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
