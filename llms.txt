@@ -4466,7 +4466,7 @@ For application logs, exercise the production logger directly and capture into a
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Startup panics with "cannot use OTLP logs with pretty=true" | `logger.pretty: true` while `observability.logs.enabled: true` — the dual-mode log processor needs structured JSON | Set `logger.pretty: false` whenever logs export to OTLP |
+| Startup panics with "cannot use OTLP logs with pretty=true" | `logger.pretty: true` while `observability.logs.enabled: true` — the dual-mode log processor needs the output to be structured JSON | Set `logger.pretty: false` whenever logs export to OTLP |
 | gRPC error: `frame too large, note that the frame header looked like an HTTP/1.1 header` | gRPC client connecting to an HTTP endpoint (e.g. port `4318` with `protocol: grpc`, or `https://...` scheme with gRPC) | Use `host:port` (no scheme) on port `4317` for gRPC; use `https://host:port/v1/...` on port `4318` for HTTP |
 | Spans appear in console (`endpoint: stdout`) but not in collector | App can't reach collector / TLS misconfiguration / batch hasn't flushed yet | Check connectivity, set `insecure: true` for in-cluster collectors, wait for batch flush (~5s prod) or trigger graceful shutdown |
 | Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.Echo.Request().Context()` |
