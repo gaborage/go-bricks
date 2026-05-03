@@ -918,6 +918,7 @@ func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, exp
 	}
 	if len(schema.Required) != len(expectedReq) {
 		t.Errorf("Expected %d required fields, got %d", len(expectedReq), len(schema.Required))
+		return
 	}
 	for i, req := range expectedReq {
 		if schema.Required[i] != req {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -664,15 +665,18 @@ func assertEnvVarsContain(t *testing.T, envVars, expected []string) {
 	assert.Subset(t, envVars, expected, "envVars missing expected entries")
 }
 
-// assertEnvVarsLackPrefixes asserts no env var contains any of the forbidden
-// prefixes — used to verify e.g. that an Oracle-only config did not leak any
-// generic DB_ entries.
+// assertEnvVarsLackPrefixes asserts no env var key starts with any of the
+// forbidden prefixes — used to verify e.g. that an Oracle-only config did not
+// leak any generic DB_ entries. The check is against the key portion only
+// (everything before the first '='), so values that happen to contain a
+// forbidden substring (e.g. a password "MyDB_Pass") do not false-positive.
 func assertEnvVarsLackPrefixes(t *testing.T, envVars, prefixes []string) {
 	t.Helper()
-	for _, prefix := range prefixes {
-		for _, envVar := range envVars {
-			assert.NotContains(t, envVar, prefix,
-				"Unexpected environment variable prefix '%s' found in '%s'", prefix, envVar)
+	for _, envVar := range envVars {
+		key := strings.SplitN(envVar, "=", 2)[0]
+		for _, prefix := range prefixes {
+			assert.False(t, strings.HasPrefix(key, prefix),
+				"Unexpected environment variable prefix '%s' found in key '%s' of '%s'", prefix, key, envVar)
 		}
 	}
 }

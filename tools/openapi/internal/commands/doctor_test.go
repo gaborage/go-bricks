@@ -854,11 +854,12 @@ require github.com/other/package v1.0.0
 		t.Run(tt.name, func(t *testing.T) {
 			version, isReplace, err := parseGoBricksVersion(tt.goModContent)
 
-			if !tt.expectError {
+			if tt.expectError && err == nil {
+				t.Error(msgExpectedError)
 				return
 			}
-			if err == nil {
-				t.Error(msgExpectedError)
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error, got %v", err)
 				return
 			}
 			if version != tt.expectedVersion {
