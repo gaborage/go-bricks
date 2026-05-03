@@ -280,6 +280,13 @@ func (d *Declarations) Stats() DeclarationStats {
 	}
 }
 
+// IsEmpty reports whether no declarations have been registered.
+func (d *Declarations) IsEmpty() bool {
+	s := d.Stats()
+	return s.Exchanges == 0 && s.Queues == 0 && s.Bindings == 0 &&
+		s.Publishers == 0 && s.Consumers == 0
+}
+
 // Clone creates a deep copy of the declarations.
 // This is useful for creating per-tenant copies during replay.
 func (d *Declarations) Clone() *Declarations {
