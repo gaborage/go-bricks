@@ -82,6 +82,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return fmt.Errorf("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
 	}
 
+	// Fail fast: in single-tenant mode the broker URL must be set at startup,
+	// otherwise the relay job logs "messaging not available" every poll cycle (issue #366).
+	// Multi-tenant resolves messaging per-tenant via the resource source, so a static
+	// check would yield false positives — skip it there.
+	if m.config != nil && !m.config.Multitenant.Enabled && !config.IsMessagingConfigured(&m.config.Messaging) {
+		return fmt.Errorf("outbox: messaging is not configured but outbox.enabled=true; " +
+			"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
+	}
+
 	// Store creation is deferred until first use (lazy init like scheduler)
 	// because we need to know the database vendor type, which requires a DB connection.
 	// The publisher wraps the store and handles lazy initialization.
