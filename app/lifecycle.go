@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 // startMaintenanceLoops starts background cleanup processes for managers
@@ -34,6 +37,10 @@ func (a *App) prepareRuntime() error {
 	}
 
 	decls := a.messagingDeclarations
+
+	if err := a.assertMessagingConfiguredIfDeclared(decls); err != nil {
+		return err
+	}
 
 	if a.messagingInitializer != nil && a.messagingInitializer.IsAvailable() && decls != nil {
 		a.messagingInitializer.LogDeploymentMode()
@@ -68,6 +75,26 @@ func (a *App) prepareRuntime() error {
 	a.startMaintenanceLoops()
 
 	return nil
+}
+
+// assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when
+// a module has declared messaging infrastructure but no broker URL is set —
+// without this check the declarations would be silently dropped (issue #366).
+// Multi-tenant mode resolves messaging per-tenant via the resource source, so
+// the static check is skipped there.
+func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations) error {
+	if a.cfg.Multitenant.Enabled || decls == nil || decls.IsEmpty() {
+		return nil
+	}
+	if config.IsMessagingConfigured(&a.cfg.Messaging) {
+		return nil
+	}
+	s := decls.Stats()
+	return fmt.Errorf("messaging declarations were registered "+
+		"(publishers=%d, consumers=%d, exchanges=%d, queues=%d, bindings=%d) "+
+		"but messaging is not configured; "+
+		"set messaging.broker.url (or env MESSAGING_BROKER_URL)",
+		s.Publishers, s.Consumers, s.Exchanges, s.Queues, s.Bindings)
 }
 
 // registerDebugHandlers sets up debug endpoints if enabled in configuration
