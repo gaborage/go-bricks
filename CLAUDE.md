@@ -1360,8 +1360,12 @@ fw.RegisterModules(
 tp := obtest.NewTestTraceProvider()
 spans := tp.Exporter.GetSpans()
 obtest.AssertSpanName(t, &spans[0], "operation")
-obtest.AssertLogTypeExists(t, tp.LogExporter, "action")
+
+mp := obtest.NewTestMeterProvider()
+rm := mp.Collect(t)
+obtest.AssertMetricExists(t, rm, "my.counter")
 ```
+Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `AssertSpanStatusDescription`, `AssertSpanError`, plus `NewSpanCollector(t, exporter)` for filtering. Metric helpers: `AssertMetricExists`, `AssertMetricValue`, `AssertMetricCount`, `AssertMetricDescription`, `FindMetric`, `GetMetricSumValue`, `GetMetricHistogramCount`. There is no in-memory log exporter today — capture zerolog output via an `io.Writer` sink for action/trace log assertions.
 
 **Debug Mode:** Set `GOBRICKS_DEBUG=true` for `[OBSERVABILITY]` logs (provider init, exporter setup, span lifecycle)
 

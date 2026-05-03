@@ -298,16 +298,45 @@ real `users.Module` for a mock `UserService` in unit tests of `orders`.
 
 ## Database Connection & Queries
 
-Configure PostgreSQL in `config.yaml` (see Config Snapshot above):
+GoBricks manages PostgreSQL and Oracle connections **declaratively via config** — application code never opens a `*sql.DB` and never imports a vendor driver directly. The framework handles driver selection, connection pooling, TCP keep-alive, session timezone, observability, and health checks. Modules receive a function-based accessor (`deps.DB`) that returns the correct `database.Interface` for the current request (single-tenant: the global instance; multi-tenant: tenant-scoped).
+
+### Step 1: Configure the Connection
+
+Standard form — explicit fields (preferred for readability and pool tuning):
+
 ```yaml
 database:
-  type: postgres
+  type: postgres                          # postgres | oracle
   host: localhost
   port: 5432
   database: myapp_db
   username: myapp_user
-  password: ${DATABASE_PASSWORD}
+  password: ${DATABASE_PASSWORD}          # From env var (secrets stay out of git)
+  timezone: UTC                           # Per-session IANA tz (default UTC; "-" disables)
+  pool:
+    max:
+      connections: 25                     # Max open connections (default 25)
+    idle:
+      connections: 2                      # Min warm connections
+      time: 5m                            # Recycle idle connections (NAT/firewall hygiene)
+    lifetime:
+      max: 30m                            # Force periodic reconnect (DNS rotation)
+    keepalive:
+      enabled: true                       # TCP keep-alive probes
+      interval: 60s
 ```
+
+Alternative — pre-built connection string (useful when a secret manager injects the full DSN):
+
+```yaml
+database:
+  type: postgres
+  connection_string: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
+```
+
+Per ADR-003, at least one of `host` *or* `connection_string` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see CLAUDE.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
+
+### Step 2: Access the Connection from a Module
 
 ```go
 import (
@@ -319,7 +348,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Step 1: Module receives database access via dependency injection
 type UserModule struct {
 	getDB  func(context.Context) (database.Interface, error)
 	logger logger.Logger
@@ -330,15 +358,18 @@ func (m *UserModule) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	return nil
 }
+```
 
-// Step 2: Raw SQL — use getDB(ctx) to obtain a connection, then Query/QueryRow/Exec
+### Step 3: Execute a SELECT (raw SQL or type-safe builder)
+
+```go
+// (a) Raw SQL — vendor-specific placeholders (PostgreSQL: $1; Oracle: :1)
 func (m *UserModule) CountActiveUsers(ctx context.Context) (int, error) {
 	db, err := m.getDB(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("database unavailable: %w", err)
 	}
 
-	// Simple query — raw SQL with vendor-specific placeholders (PostgreSQL: $1, $2)
 	var count int
 	err = db.QueryRow(ctx, "SELECT COUNT(*) FROM users WHERE status = $1", "active").Scan(&count)
 	if err != nil {
@@ -347,14 +378,39 @@ func (m *UserModule) CountActiveUsers(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-// Step 3: Type-safe query builder — vendor-agnostic, auto-handles placeholders and Oracle quoting
-func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
+// (b) Multi-row SELECT with rows iteration
+func (m *UserModule) ListActiveUsers(ctx context.Context) ([]User, error) {
 	db, err := m.getDB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("database unavailable: %w", err)
 	}
 
-	qb := database.NewQueryBuilder(db.DatabaseType())
+	rows, err := db.Query(ctx,
+		"SELECT id, name, email, status FROM users WHERE status = $1 ORDER BY id", "active")
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close() // ALWAYS defer — leaks a pooled connection if omitted
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Status); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err() // rows.Err() catches mid-stream errors (network, etc.)
+}
+
+// (c) Type-safe builder — vendor-agnostic, auto-handles placeholders + Oracle reserved-word quoting
+func (m *UserModule) FindActiveUsersBuilder(ctx context.Context) ([]User, error) {
+	db, err := m.getDB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("database unavailable: %w", err)
+	}
+
+	qb := database.NewQueryBuilder(db.DatabaseType()) // pick vendor at runtime
 	cols := qb.Columns(&User{})
 	f := qb.Filter()
 
@@ -383,11 +439,63 @@ func (m *UserModule) FindActiveUsers(ctx context.Context) ([]User, error) {
 }
 ```
 
+### `database.Interface` Method Reference
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `Query(ctx, sql, args...)` | `(*sql.Rows, error)` | Multi-row query — caller MUST `defer rows.Close()` |
+| `QueryRow(ctx, sql, args...)` | `*sql.Row` | Single-row query — call `.Scan(&dst...)` on the result |
+| `Exec(ctx, sql, args...)` | `(sql.Result, error)` | INSERT / UPDATE / DELETE / DDL |
+| `Begin(ctx)` | `(types.Tx, error)` | Start a transaction — `defer tx.Rollback(ctx)`, then `tx.Commit(ctx)` |
+| `Health(ctx)` | `error` | Liveness check — auto-wired into `/health` endpoint |
+| `DatabaseType()` | `string` | `"postgres"` or `"oracle"` — feed into `database.NewQueryBuilder(...)` |
+
+Every method takes `context.Context` as the first argument so deadlines, cancellation, tenant ID, and W3C trace IDs propagate automatically into spans, logs, and metrics.
+
+### Transactions & Health Probe
+
+```go
+// Atomic multi-statement work — defer Rollback is safe even after Commit succeeds
+func (m *UserModule) UpdateBalance(ctx context.Context, userID int64, delta float64) error {
+	db, err := m.getDB(ctx)
+	if err != nil {
+		return fmt.Errorf("database unavailable: %w", err)
+	}
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		"UPDATE users SET balance = balance + $1 WHERE id = $2", delta, userID); err != nil {
+		return fmt.Errorf("update balance: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		"INSERT INTO ledger (user_id, delta) VALUES ($1, $2)", userID, delta); err != nil {
+		return fmt.Errorf("insert ledger: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// Manual health check (the framework already wires DB into /health automatically)
+func (m *UserModule) PingDB(ctx context.Context) error {
+	db, err := m.getDB(ctx)
+	if err != nil {
+		return err
+	}
+	return db.Health(ctx)
+}
+```
+
 **Key points:**
-- Connection is config-driven (`database:` block in YAML) — framework manages pooling, keep-alive, and health checks
-- `deps.DB` is a function, not an instance — call `getDB(ctx)` each time to support multi-tenant resolution
-- Use raw SQL (`db.QueryRow`, `db.Query`, `db.Exec`) for simple queries with `context.Context` for tracing
-- Use `database.NewQueryBuilder(vendor)` for type-safe, vendor-agnostic queries (auto-handles placeholders and Oracle reserved word quoting)
+- Connection is config-driven — never call `sql.Open` or import `pgx`/`go-ora` directly; the framework manages pooling, keep-alive, timezone, and lifecycle
+- `deps.DB` is a **function**, not an instance — call `getDB(ctx)` each time so multi-tenant resolution works
+- Use raw SQL (`db.QueryRow`, `db.Query`, `db.Exec`) for simple, vendor-pinned queries
+- Use `database.NewQueryBuilder(db.DatabaseType())` for type-safe, vendor-agnostic queries (auto-handles placeholders and Oracle reserved-word quoting)
+- Always `defer rows.Close()` after `db.Query` and check `rows.Err()` after the loop
+- For atomicity: `db.Begin(ctx)` → `defer tx.Rollback(ctx)` → `tx.Commit(ctx)` at the end
 
 ## Typed HTTP Handlers
 
@@ -2315,65 +2423,275 @@ mock := cachetest.NewMockCache()
 // All methods implemented, thread-safe, operation tracking included
 ```
 
-## Messaging Snapshot
+## Messaging (RabbitMQ Producer & Consumer)
+
+GoBricks ships a complete AMQP/RabbitMQ stack: **declarative topology** (exchanges, queues, bindings declared once and replayed per tenant), **type-safe consumers** with auto-scaling workers and panic recovery, and **producers** accessed via dependency injection — no connection lifecycle code in your application. Trace context (W3C `traceparent`) propagates across publish/consume automatically.
+
+### Step 1: Configure the Broker
+
+```yaml
+messaging:
+  broker:
+    url: amqp://guest:guest@localhost:5672/
+    virtualhost: /
+  routing:
+    exchange: my-service.events            # Default exchange (used when app code omits it)
+    key: my-service.notifications          # Default routing key
+  headers:
+    x-app-name: my-service                 # Headers added to every published message
+    x-environment: development
+  reconnect:
+    delay: 5s
+    max_delay: 60s                         # Exponential backoff cap
+    connection_timeout: 30s
+  publisher:
+    max_cached: 50                         # Cached publisher channels (per tenant)
+    idle_ttl: 10m
+```
+
+Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured (no silent degradation). For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.
+
+### Step 2: Declare the Topology (`MessagingDeclarer`)
+
+A module implements `MessagingDeclarer` to declare its exchanges, queues, bindings, publishers, and consumers. The framework validates this once at startup, then replays per tenant for isolation.
 
 ```go
+package orders
+
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
+)
+
+type Module struct {
+	svc          *OrderService
+	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	logger       logger.Logger
+}
+
+func (m *Module) Name() string  { return "orders" }
+func (m *Module) Shutdown() error { return nil }
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+	m.logger = deps.Logger
+	m.getMessaging = deps.Messaging                  // function-based: tenant-aware
+	m.svc = NewOrderService(deps.DB, deps.Messaging) // see Step 3
+	return nil
+}
+
+// DeclareMessaging is detected at startup via duck-typing — the framework calls it for you.
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+	// Topology — production-safe defaults: durable=true, auto_delete=false
 	exchange := decls.DeclareTopicExchange("orders.events")
 	queue := decls.DeclareQueue("orders.processing")
 	decls.DeclareBinding(queue.Name, exchange.Name, "order.*")
 
+	// Publisher contract — validates routing-key + event-type pair upfront
 	decls.DeclarePublisher(&messaging.PublisherOptions{
 		Exchange:   exchange.Name,
 		RoutingKey: "order.created",
 		EventType:  "OrderCreated",
 	}, nil)
 
-	// Default consumer (auto-scales to NumCPU*4 workers)
+	// Consumer — auto-scales to NumCPU*4 workers for I/O-bound handlers
 	decls.DeclareConsumer(&messaging.ConsumerOptions{
 		Queue:     queue.Name,
 		Consumer:  "order-processor",
 		EventType: "OrderCreated",
 		Handler:   NewOrderHandler(m.svc, m.logger),
 	}, nil)
-	// 8-core machine: 32 workers, 320 prefetch
-
-	// Sequential consumer (for ordering-sensitive processing)
-	decls.DeclareConsumer(&messaging.ConsumerOptions{
-		Queue:     "account.events",
-		Consumer:  "account-processor",
-		EventType: "AccountUpdated",
-		Workers:   1,  // Sequential processing
-		Handler:   NewAccountHandler(m.svc, m.logger),
-	}, nil)
-
-	// High-concurrency consumer (for batch processing)
-	decls.DeclareConsumer(&messaging.ConsumerOptions{
-		Queue:         "reports.generate",
-		Consumer:      "report-generator",
-		EventType:     "ReportRequested",
-		Workers:       50,           // High concurrency
-		PrefetchCount: 500,          // Large prefetch
-		Handler:       NewReportHandler(m.svc, m.logger),
-	}, nil)
 }
 ```
 
-| Concern            | Built-in support                                  |
-|--------------------|---------------------------------------------------|
-| Idempotent setup   | Declarations validated once, replayed per tenant  |
-| Error handling     | **No automatic retry** - all errors drop message (prevents infinite loops). Rich ERROR logs + metrics for failed messages. DLQ support planned. |
-| **Concurrency (v0.17+)** | **Auto-scales to NumCPU*4 workers** for I/O-bound handlers. Override with `Workers` field. Sequential (`Workers=1`) for ordering. |
-| Publishers         | Typed options ensure routing key + event type     |
-| Consumers          | Handler receives `context.Context`, `amqp.Delivery`; return error drops message |
-| Metrics & tracing  | Automatic OTEL spans + structured logs            |
+### Step 3: Implement the Producer (publish messages)
 
-Use `messaging.Client.Publish(ctx, routingKey, payload)` for runtime sends.
+The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:
 
-**IMPORTANT:**
-- Handler errors do NOT trigger retry. Failed messages are logged (ERROR level) with full context and dropped.
-- **v0.17+**: Handlers MUST be thread-safe (auto-scales to NumCPU*4 workers). Test with `go test -race`.
-- Database pools must be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
+| Method | Use when |
+|---|---|
+| `client.PublishToExchange(ctx, PublishOptions{...}, body)` | Routed publishing through a declared exchange (preferred) |
+| `client.Publish(ctx, destination, body)` | Direct send to a queue via the default exchange `""` (destination becomes routing key) |
+
+```go
+package orders
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
+)
+
+type OrderCreatedEvent struct {
+	OrderID    int64   `json:"order_id"`
+	CustomerID int64   `json:"customer_id"`
+	Total      float64 `json:"total"`
+}
+
+type OrderService struct {
+	getDB        func(context.Context) (database.Interface, error)
+	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	logger       logger.Logger
+}
+
+func NewOrderService(getDB func(context.Context) (database.Interface, error),
+	getMessaging func(context.Context) (messaging.AMQPClient, error)) *OrderService {
+	return &OrderService{getDB: getDB, getMessaging: getMessaging}
+}
+
+// PublishOrderCreated — preferred: routed through the declared topic exchange
+func (s *OrderService) PublishOrderCreated(ctx context.Context, evt OrderCreatedEvent) error {
+	client, err := s.getMessaging(ctx)
+	if err != nil {
+		return fmt.Errorf("messaging unavailable: %w", err)
+	}
+
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+
+	return client.PublishToExchange(ctx, messaging.PublishOptions{
+		Exchange:   "orders.events",   // matches DeclareTopicExchange in Step 2
+		RoutingKey: "order.created",   // matches DeclarePublisher in Step 2
+		Headers: map[string]any{
+			"event_type":     "OrderCreated",
+			"correlation_id": fmt.Sprintf("order-%d", evt.OrderID),
+		},
+	}, payload)
+	// W3C traceparent header is injected automatically; consumers extract it on receive.
+}
+
+// NotifyDirectQueue — fallback: send directly via default exchange "" (destination is the queue name)
+func (s *OrderService) NotifyDirectQueue(ctx context.Context, queueName string, body []byte) error {
+	client, err := s.getMessaging(ctx)
+	if err != nil {
+		return err
+	}
+	return client.Publish(ctx, queueName, body) // default exchange "" + destination as routing key
+}
+```
+
+> When a publish must be **atomic with database changes** (e.g. write order + emit `order.created`), use the **Transactional Outbox** instead — events are written in the same SQL transaction and a relay publishes them reliably (see Transactional Outbox section).
+
+### Step 4: Implement the Consumer Handler
+
+A handler implements `messaging.MessageHandler`. The framework auto-ACKs on `nil`, nacks-without-requeue on `error` (no retry by design — see Error Policy below). Panics are recovered and treated as errors. Handlers MUST be thread-safe — they run on `NumCPU*4` workers concurrently by default.
+
+```go
+package orders
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/gaborage/go-bricks/logger"
+)
+
+type OrderHandler struct {
+	svc    *OrderService
+	logger logger.Logger
+}
+
+func NewOrderHandler(svc *OrderService, log logger.Logger) *OrderHandler {
+	return &OrderHandler{svc: svc, logger: log}
+}
+
+// Handle implements messaging.MessageHandler.
+//   - return nil         → ACK (success)
+//   - return error       → nack-without-requeue (logged + dropped, NO automatic retry)
+//   - panic              → recovered, treated as error
+func (h *OrderHandler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+	var evt OrderCreatedEvent
+	if err := json.Unmarshal(delivery.Body, &evt); err != nil {
+		// Malformed payload → drop (retry won't fix it)
+		return fmt.Errorf("invalid message format: %w", err)
+	}
+
+	if err := h.svc.ProcessOrder(ctx, evt.OrderID); err != nil {
+		// Idempotent-skip pattern: already processed → ACK
+		if errors.Is(err, ErrAlreadyProcessed) {
+			h.logger.Warn().Int64("order_id", evt.OrderID).Msg("order already processed, skipping")
+			return nil
+		}
+		// Unexpected → nack + drop (rich ERROR log emitted by the framework)
+		return fmt.Errorf("process order %d: %w", evt.OrderID, err)
+	}
+	return nil
+}
+
+// EventType — used to route message_type-tagged messages to the right handler
+func (h *OrderHandler) EventType() string { return "OrderCreated" }
+```
+
+### Step 5: Wire the Module into `main`
+
+```go
+func main() {
+	cfg, err := config.Load()
+	if err != nil { log.Fatal(err) }
+
+	fw, err := app.NewWithConfig(cfg, nil)
+	if err != nil { log.Fatal(err) }
+
+	if err := fw.RegisterModules(&orders.Module{}); err != nil {
+		log.Fatal(err) // module registration errors are fatal
+	}
+	log.Fatal(fw.Run())
+}
+```
+
+### Concurrency Tuning Per Consumer
+
+```go
+// Sequential — for strict message ordering (cancels auto-scaling)
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+	Queue: "account.events", Consumer: "account-processor",
+	EventType: "AccountUpdated", Workers: 1,
+	Handler: NewAccountHandler(m.svc, m.logger),
+}, nil)
+
+// High concurrency — explicit override for slow handlers / heavy throughput
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+	Queue: "reports.generate", Consumer: "report-generator",
+	EventType: "ReportRequested",
+	Workers: 50, PrefetchCount: 500,
+	Handler: NewReportHandler(m.svc, m.logger),
+}, nil)
+```
+
+### Producer / Consumer Quick Reference
+
+| Concern | API |
+|---|---|
+| Get client (tenant-aware) | `client, err := deps.Messaging(ctx)` |
+| Publish — routed (preferred) | `client.PublishToExchange(ctx, messaging.PublishOptions{Exchange, RoutingKey, Headers}, body)` |
+| Publish — default exchange | `client.Publish(ctx, queueName, body)` |
+| Atomic publish (with DB) | Use Transactional Outbox — `deps.Outbox.Publish(ctx, tx, event)` |
+| Consumer Handler | `Handle(ctx, *amqp.Delivery) error` + `EventType() string` |
+| ACK | Return `nil` |
+| nack-without-requeue (drop) | Return `error` |
+| Concurrency | Auto = `NumCPU * 4` workers; override via `Workers` field |
+| Trace context | W3C `traceparent` injected on publish, extracted on consume — automatic |
+
+### Error & Retry Policy (IMPORTANT)
+
+| Concern | Behavior |
+|---|---|
+| Handler returns `error` | nack-WITHOUT-requeue — message is **dropped** (prevents poison-message loops) |
+| Handler panics | Recovered with stack trace, treated as error (drop) — service stays up |
+| Built-in retry | **None.** Use the Transactional Outbox for at-least-once delivery, or implement idempotent retry inside the handler (e.g. via a retry queue with TTL) |
+| Observability | Every failure emits a structured ERROR log + OTEL `messaging.errors.total` counter with `error.type` |
+
+**Sizing guidance:** if your handlers hit a database, ensure `database.pool.max.connections >= NumCPU * 4 × number_of_consumers` to avoid pool starvation under load. Test handlers with `go test -race`.
 
 ## Transactional Outbox
 
@@ -2645,12 +2963,105 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 
 ## JOSE Middleware (Nested JWE-of-JWS)
 
-The `jose` package wraps HTTP request and response bodies in nested JOSE protection (sign-then-encrypt outbound, decrypt-then-verify inbound). Routes opt in by adding a `jose:` tag to a sentinel field on their request and response types — both or neither, enforced at registration. Designed for Visa Token Services and similar partner APIs.
+The `jose` package wraps HTTP request and response bodies in **nested JOSE protection**: outbound responses are signed-then-encrypted (JWS inside JWE); inbound requests are decrypted-then-verified. Routes opt in by adding a `jose:` tag to a sentinel field on their request **and** response types — both or neither, enforced at registration time (asymmetric tagging panics at startup, never at runtime). Suitable for any partner integration that mandates sign-and-encrypt on every payload.
 
-**End-to-end module example:**
+### Request Lifecycle
+
+```
+INBOUND  client ──compact JWE──▶ [middleware: decrypt with our private key]
+                                 [middleware: verify JWS with peer public key]
+                                 [middleware: bind JSON into request struct]
+                                 ──▶ handler sees plaintext struct + verified Claims
+OUTBOUND handler returns ──▶ [middleware: marshal response struct to JSON]
+                             [middleware: sign JWS with our private key]
+                             [middleware: encrypt JWE to peer public key]
+                             ◀──compact JWE── client
+```
+
+The handler sees ordinary structs — never raw bytes, never compact JOSE strings. All four key references (our private + peer public, for both directions) come from the `keystore` module.
+
+### Wire Format
+
+Both request bodies and response bodies are sent as **compact-serialized JOSE** (five base64url-encoded segments separated by `.`) with content type `application/jose`. A plaintext request to a JOSE-tagged route is rejected with `415 JOSE_PLAINTEXT_REJECTED`.
+
+```bash
+# Inbound — peer sends a nested JWE-of-JWS to a JOSE-tagged route
+curl -X POST https://api.example.com/v1/tokens \
+  -H "Content-Type: application/jose" \
+  --data-binary 'eyJhbGciOiJSU0EtT0FFUC0yNTYiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoib3VyLXNpZ25pbmcifQ.<encrypted_key>.<iv>.<ciphertext>.<tag>'
+
+# Successful response is also compact JWE — peer must decrypt + verify symmetrically
+HTTP/1.1 200 OK
+Content-Type: application/jose
+
+eyJhbGciOiJSU0EtT0FFUC0yNTYi...
+```
+
+> **Pre-trust failures** (decrypt failed, signature invalid, malformed JWE) emit a *plaintext* minimal envelope — never JOSE — so an unauthenticated peer cannot harvest decryption oracles. **Post-trust failures** (handler errors after a successful decrypt+verify) emit a JOSE-encrypted standard `APIResponse`. The security invariant: `Content-Type: application/jose` on a failure response is a regression, and integration tests should tamper one ciphertext byte and assert plaintext on the response.
+
+### Algorithm Allowlist (strict, enforced at parser level)
+
+| Slot | Allowed | Rejected (and why) |
+|---|---|---|
+| JWS sig (`sig_alg`) | `RS256`, `PS256` | `HS*` (symmetric — keystore is RSA-only); `ES256` (keystore returns `*rsa.*` only — tracked in #347); `none` (rejected by parser allowlist) |
+| JWE key wrap (`key_alg`) | `RSA-OAEP-256` | `RSA1_5` (PKCS#1 v1.5 — padding-oracle risk); other `dir`/`A*KW` variants (key model is asymmetric) |
+| JWE content enc (`enc`) | `A256GCM` | non-AEAD encryptions (`A*CBC-HS*`); larger AES variants not enabled |
+| Content type (`cty`) | `application/json` (default) | mismatched `cty` → `JOSE_CTY_REJECTED` |
+
+The disallowed algorithms produce `JOSE_ALGORITHM_DISALLOWED` (400) at parse time, *before* any key material is touched.
+
+### Tag Grammar (full)
 
 ```go
-package payments
+// Required keys — direction-specific:
+type Req struct { _ struct{} `jose:"decrypt=<our-priv-kid>,verify=<peer-pub-kid>"` }
+type Res struct { _ struct{} `jose:"sign=<our-priv-kid>,encrypt=<peer-pub-kid>"` }
+
+// Optional overrides — apply on either side, comma-separated:
+//   sig_alg=RS256      (default; or PS256)
+//   key_alg=RSA-OAEP-256 (only allowed value)
+//   enc=A256GCM        (only allowed value)
+//   cty=application/json (default; override only if peer requires e.g. application/jwt)
+type Req struct {
+    _ struct{} `jose:"decrypt=our-signing,verify=partner-verify,sig_alg=PS256,cty=application/jwt"`
+    // ...
+}
+```
+
+KIDs are case-sensitive and must match `[A-Za-z0-9_-]+`. Duplicate keys, unknown keys, or empty values panic at startup with a `JOSE_TAG_*` error.
+
+### Configuration: KeyStore + JOSE-tagged Routes
+
+A complete sign-and-encrypt setup needs four KIDs in the keystore — our signing keypair (used as `decrypt` inbound and `sign` outbound) and two peer public keys (one for verifying their signatures, one for encrypting our responses to them):
+
+```yaml
+keystore:
+  keys:
+    # Our keypair — we DECRYPT inbound JWE with our private key, and SIGN outbound JWS with it
+    our-signing:
+      public:  { file: certs/our-signing.pub.der }
+      private: { file: certs/our-signing.key.der }   # PKCS8 with PKCS1 fallback
+    # Peer's signing public key — we VERIFY inbound JWS signatures with this
+    partner-verify:
+      public:  { value: ${PARTNER_VERIFY_PUB_B64} } # base64-encoded DER (EKS-friendly)
+    # Peer's encryption public key — we ENCRYPT outbound JWE to this
+    partner-encrypt:
+      public:  { value: ${PARTNER_ENCRYPT_PUB_B64} }
+```
+
+Wire it in `main.go` — the keystore module **must** be registered before any module declaring jose-tagged routes; the framework wires `deps.KeyStore` + `deps.Logger` + `deps.Tracer` + `deps.MeterProvider` into the JOSE middleware automatically:
+
+```go
+fw.RegisterModules(
+    keystore.NewModule(),    // populates deps.KeyStore — REQUIRED FIRST
+    &secureapi.Module{},     // declares jose-tagged routes; resolver auto-wired
+)
+```
+
+### End-to-end module example
+
+```go
+package secureapi
 
 import (
     "github.com/gaborage/go-bricks/app"
@@ -2659,64 +3070,126 @@ import (
 
 type Module struct{}
 
-func (m *Module) Name() string                 { return "payments" }
+func (m *Module) Name() string                 { return "secureapi" }
 func (m *Module) Init(_ *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error              { return nil }
 
 // Both types declare matching jose tags. Asymmetric declaration (only one tagged)
 // panics at startup.
-type CreateTokenRequest struct {
-    _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
-    PAN string   `json:"pan" validate:"required,len=16"`
+type ExchangeRequest struct {
+    _         struct{} `jose:"decrypt=our-signing,verify=partner-verify"`
+    Reference string   `json:"reference" validate:"required"`
+    Payload   string   `json:"payload"   validate:"required"`
 }
 
-type CreateTokenResponse struct {
-    _     struct{} `jose:"sign=our-signing,encrypt=visa-vts-encrypt"`
-    Token string   `json:"token"`
+type ExchangeResponse struct {
+    _      struct{} `jose:"sign=our-signing,encrypt=partner-encrypt"`
+    Result string   `json:"result"`
 }
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-    server.POST(hr, r, "/v1/tokens", m.createToken)
+    server.POST(hr, r, "/v1/exchange", m.exchange)
 }
 
-func (m *Module) createToken(req CreateTokenRequest, _ server.HandlerContext) (CreateTokenResponse, server.IAPIError) {
+func (m *Module) exchange(req ExchangeRequest, _ server.HandlerContext) (ExchangeResponse, server.IAPIError) {
     // The framework has already decrypted the JWE, verified the JWS, and bound the
     // plaintext into req. Application code sees ordinary structs.
-    return CreateTokenResponse{Token: "tok-" + req.PAN[12:]}, nil
+    return ExchangeResponse{Result: "ok:" + req.Reference}, nil
 }
 ```
 
-**App wiring** — register the keystore module BEFORE the JOSE-using module so the resolver is wired to `HandlerRegistry`:
+### Replay Protection — Enforcing `iat` / `exp` / `jti` Claims
+
+The framework verifies the JWS signature and exposes the verified claim set via `jose.ClaimsFromContext`. **Applications enforce timing and replay rules** because skew tolerances and `iat` freshness windows are partner-specific. The `*jose.Claims` struct exposes promoted fields (`IssuedAt`, `ExpiresAt`, `NotBefore`, `JTI`, `Issuer`, `Subject`, `Audience`) plus `Raw map[string]any` for partner-specific extensions.
 
 ```go
-func main() {
-    fw := app.New(app.Config{...})
-    fw.RegisterModules(
-        keystore.NewModule(),    // populates deps.KeyStore
-        &payments.Module{},      // declares jose-tagged routes; resolver auto-wired
-    )
-    fw.Run()
+import (
+    "time"
+    "github.com/gaborage/go-bricks/jose"
+)
+
+const (
+    maxClockSkew = 5 * time.Second   // peer/our clock drift tolerance
+    maxClaimAge  = 5 * time.Minute   // hard upper bound on iat freshness
+)
+
+// jtiCache is any deduplication store you trust (Redis SETNX, in-memory LRU, DB row).
+// The framework deliberately does NOT ship a JTI cache — distribution semantics
+// depend on your deployment (single-replica vs. fleet vs. multi-region).
+type jtiCache interface {
+    Seen(ctx context.Context, jti string, ttl time.Duration) (bool, error)
 }
-```
 
-**Inspecting verified claims** (apps enforce iat/exp/jti per their threat model):
-
-```go
-import "github.com/gaborage/go-bricks/jose"
-
-func (m *Module) createToken(req CreateTokenRequest, ctx server.HandlerContext) (CreateTokenResponse, server.IAPIError) {
-    claims := jose.ClaimsFromContext(ctx.Echo.Request().Context())
+func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (ExchangeResponse, server.IAPIError) {
+    reqCtx := ctx.Echo.Request().Context()
+    claims := jose.ClaimsFromContext(reqCtx)
     if claims == nil {
-        return CreateTokenResponse{}, server.NewInternalServerError("expected verified claims")
+        // Defensive — this only happens if the route is not actually JOSE-protected
+        return ExchangeResponse{}, server.NewInternalServerError("expected verified claims")
     }
-    if time.Since(claims.IssuedAt) > 5*time.Minute {
-        return CreateTokenResponse{}, server.NewUnauthorizedError("payload too old")
+
+    now := time.Now()
+
+    // 1. iat freshness — reject ancient payloads (replay) and far-future ones (clock attack)
+    if claims.IssuedAt.IsZero() {
+        return ExchangeResponse{}, server.NewUnauthorizedError("missing iat")
     }
-    // ... business logic ...
+    if now.Sub(claims.IssuedAt) > maxClaimAge {
+        return ExchangeResponse{}, server.NewUnauthorizedError("payload too old")
+    }
+    if claims.IssuedAt.Sub(now) > maxClockSkew {
+        return ExchangeResponse{}, server.NewUnauthorizedError("iat in future")
+    }
+
+    // 2. exp / nbf — honor explicit lifetime bounds when set
+    if !claims.ExpiresAt.IsZero() && now.After(claims.ExpiresAt.Add(maxClockSkew)) {
+        return ExchangeResponse{}, server.NewUnauthorizedError("payload expired")
+    }
+    if !claims.NotBefore.IsZero() && now.Add(maxClockSkew).Before(claims.NotBefore) {
+        return ExchangeResponse{}, server.NewUnauthorizedError("payload not yet valid")
+    }
+
+    // 3. jti replay — reject if we've seen this token recently
+    if claims.JTI != "" {
+        seen, err := m.jtiCache.Seen(reqCtx, claims.JTI, maxClaimAge)
+        if err != nil {
+            return ExchangeResponse{}, server.NewInternalServerError("jti check failed")
+        }
+        if seen {
+            return ExchangeResponse{}, server.NewUnauthorizedError("replayed jti")
+        }
+    }
+
+    // 4. Partner-specific extensions live in claims.Raw
+    if userID, ok := claims.Raw["user_id"].(string); ok {
+        _ = userID // ... use userID ...
+    }
+
+    return ExchangeResponse{Result: "ok:" + req.Reference}, nil
 }
 ```
 
-**Test pattern** with `jose/testing`:
+### Failure Mode → Error Code Table (complete, self-contained)
+
+| Failure | HTTP | Error code | Trust state | Response Content-Type |
+|---|---|---|---|---|
+| Body required / empty | 400 | `JOSE_BODY_REQUIRED` | pre-trust | `application/json` (plaintext envelope) |
+| Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` | pre-trust | `application/json` |
+| Compact JWE parse failure | 400 | `JOSE_MALFORMED` | pre-trust | `application/json` |
+| `enc`/`alg` not in allowlist | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
+| `alg=none` (downgrade) | 401 | `JOSE_NONE_ALG_REJECTED` | pre-trust | `application/json` |
+| Header missing `kid` | 401 | `JOSE_KID_MISSING` | pre-trust | `application/json` |
+| Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` | pre-trust | `application/json` |
+| Decryption failed | 401 | `JOSE_DECRYPT_FAILED` | pre-trust | `application/json` |
+| Inner payload not a JWS | 400 | `JOSE_INNER_NOT_JWS` | pre-trust | `application/json` |
+| JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` | pre-trust | `application/json` |
+| Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` | pre-trust | `application/json` |
+| Outbound seal failed (server-side bug) | 500 | `JOSE_OUTBOUND_FAILED` | post-trust | `application/json` (cannot encrypt without trust) |
+| Application returns `IAPIError` | per error | (your code) | post-trust | `application/jose` (encrypted standard envelope) |
+
+**Security invariant** — pre-trust failures *must* return plaintext (so peers can't probe the decryption oracle); post-trust failures *must* return JOSE-encrypted envelopes (so application errors don't leak through). Tampering one ciphertext byte and asserting `Content-Type: application/json` on the response is the canonical regression test.
+
+### Test pattern with `jose/testing`
 
 ```go
 import (
@@ -2724,44 +3197,47 @@ import (
     jositest "github.com/gaborage/go-bricks/jose/testing"
 )
 
-func TestTokenHandler(t *testing.T) {
+func TestProtectedHandler(t *testing.T) {
     ourPriv, _ := jositest.GenerateTestKeyPair(t)
     peerPriv, _ := jositest.GenerateTestKeyPair(t)
 
     resolver := jositest.NewTestResolver(map[string]any{
-        "our-signing":      ourPriv,   // we sign + decrypt with this
-        "visa-vts-verify":  peerPriv,  // we verify peer's signature with the public side
-        "visa-vts-encrypt": ourPriv,   // peer encrypts to us with the public side
+        "our-signing":     ourPriv,  // we sign + decrypt with this
+        "partner-verify":  peerPriv, // we verify peer's signature with the public side
+        "partner-encrypt": ourPriv,  // peer encrypts to us with the public side
     })
 
     // Peer's outbound = our inbound's reverse: peer signs with peer-key, encrypts to our-key.
     peerOutbound := &jose.Policy{
         Direction:  jose.DirectionOutbound,
-        SignKid:    "visa-vts-verify",
-        EncryptKid: "visa-vts-encrypt",
+        SignKid:    "partner-verify",
+        EncryptKid: "partner-encrypt",
         SigAlg:     jose.DefaultSigAlg,
         KeyAlg:     jose.DefaultKeyAlg,
         Enc:        jose.DefaultEnc,
         Cty:        jose.DefaultCty,
     }
 
-    encryptedReq := jositest.SealForTest(t, []byte(`{"pan":"4111111111111111"}`), peerOutbound, resolver)
+    encryptedReq := jositest.SealForTest(t, []byte(`{"reference":"abc-123"}`), peerOutbound, resolver)
     // POST encryptedReq with Content-Type: application/jose to your handler...
 }
 ```
 
-**Tag syntax cheatsheet:**
+### Observability
 
-| Direction | Required keys | Default algorithms |
+When `deps.MeterProvider`, `deps.Tracer`, and `deps.Logger` are wired (default when the keystore module is registered), the JOSE middleware emits:
+
+| Signal | Name | Attributes |
 |---|---|---|
-| Request type | `decrypt=<our-private-kid>,verify=<peer-public-kid>` | `sig_alg=RS256, key_alg=RSA-OAEP-256, enc=A256GCM` |
-| Response type | `sign=<our-private-kid>,encrypt=<peer-public-kid>` | (same defaults) |
+| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `route` |
+| Histogram | `jose.operation.duration` | `operation` (`decode_request`/`encode_response`), `route` |
+| Span | `jose.decode_request` | request body size, kid, alg |
+| Span | `jose.encode_response` | response body size, kid, alg |
+| Log (ERROR) | structured | `code`, `direction`, `route` — **never** plaintext body or key material |
 
-**Failure handling** — pre-trust failures (decrypt/verify failed) emit a plaintext minimal `{code,message}` envelope; post-trust failures (handler errors after successful decrypt) emit a JOSE-encrypted standard `APIResponse`. Test the security invariant by tampering one byte of ciphertext and asserting `Content-Type: application/json` (NOT `application/jose`) on the failure response.
+### Outbound HTTP JOSE (calling a partner from your service)
 
-**Common error codes:** `JOSE_DECRYPT_FAILED` (401), `JOSE_SIGNATURE_INVALID` (401), `JOSE_KID_UNKNOWN` (401), `JOSE_PLAINTEXT_REJECTED` (415), `JOSE_MALFORMED` (400). See CLAUDE.md JOSE Middleware section for the full table.
-
-**Observability** — when `deps.MeterProvider` and `deps.Tracer` are wired, the framework auto-emits `jose.failures.total` (counter by code/direction/route), `jose.operation.duration` (histogram by operation), and spans `jose.decode_request` / `jose.encode_response`. Failures also produce structured ERROR logs (when `deps.Logger` is wired) with code/direction/route fields — never plaintext bodies or key material.
+The httpclient JOSE wrapper for outbound calls (sign-then-encrypt the request body to a partner, decrypt-then-verify their response) is **planned for a follow-up release**. The current scope is server-side in/out only. Until then, services initiating outbound JOSE calls must hand-roll the seal/open step using the `jose` package primitives or the `go-jose/v4` library directly, sourcing keys from `deps.KeyStore`.
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
@@ -3120,210 +3596,183 @@ sql, args := qb.Select(cols.All()...).
 
 ## Observability & Logging
 
-**Basic Configuration:**
+GoBricks ships **OpenTelemetry traces, metrics, and structured logs out of the box** — flip `observability.enabled: true` and the framework auto-instruments every external boundary (HTTP, database, AMQP, cache, outbound HTTP). No application code is required for the auto-instrumentation; custom spans/metrics/logs slot in on top.
+
+### What You Get Out of the Box
+
+When `observability.enabled: true`, the framework auto-emits:
+
+**Auto-emitted spans** (parent for the request, children for each I/O op):
+
+| Component | Span Name | Key Attributes | Trigger |
+|---|---|---|---|
+| HTTP server | `HTTP {method} {route}` | `http.method`, `http.route`, `http.status_code`, `http.request.body_size` | Every incoming request |
+| Database | `db.query` / `db.exec` | `db.system`, `db.statement`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
+| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.routing_key` | Every `Publish`/`PublishToExchange` |
+| AMQP consume | `{destination} consume` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.queue` | Every message received |
+| Cache | `cache.{operation}` | `cache.operation`, `cache.key`, `cache.hit` | Every `Get`/`Set`/`Delete` |
+| Outbound HTTP | propagates `traceparent` | `http.url`, `http.method` | Via `httpclient` package |
+| JOSE | `jose.decode_request` / `jose.encode_response` | `jose.kid`, `jose.alg` | Every JOSE-tagged route |
+
+**Auto-emitted metrics** (OTel semantic conventions; same names work in any backend):
+
+| Family | Metric | Type | Attributes |
+|---|---|---|---|
+| HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
+| Database | `db.client.operation.duration` | Histogram (s) | `db.system`, `db.operation`, `error.type` |
+| Database pool | `db.client.connection.count` | UpDownCounter | `state` (`open`/`idle`) |
+| Database pool | `db.client.connection.max` / `.idle.max` / `.idle.configured` | Gauge | — |
+| Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
+| Database pool | `db.client.connection.pending_count` | UpDownCounter | — |
+| Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `error.type` |
+| Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name` |
+| Messaging | `messaging.client.publish.retries` | Counter | `messaging.destination.name` |
+| Messaging | `messaging.connection.create` / `.close` | Counter | — |
+| Messaging | `messaging.channel.create` / `.close` | Counter | — |
+| Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
+| Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system=redis` |
+| Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
+| Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` | Counter | — |
+| Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
+| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `route` |
+| JOSE | `jose.operation.duration` | Histogram | `operation`, `route` |
+
+**Auto-emitted logs** (zerolog → OTel logs bridge):
+
+| Stream | Marker | Sampling | Use case |
+|---|---|---|---|
+| Action logs | `log.type="action"` | Always 100% | One summary line per HTTP request (status, duration, route) |
+| Trace logs | `log.type="trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.sampling_rate` | Application logs from `logger.Info()/Error()/...` |
+| Trace correlation | `trace_id` / `span_id` fields | — | Auto-injected via `logger.WithContext(ctx)` |
+
+**Auto-wired health endpoints:**
+
+| Path | Returns | Probes |
+|---|---|---|
+| `GET /health` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
+| `GET /ready` | `200` once startup completes; `503` during init | Module init lifecycle |
+
+### Configuration — Layered by Environment
+
+The recommended pattern is **stdout for dev → OTEL Collector for prod → vendor headers as a side concern**. The collector decouples your app from vendor specifics (failover, sampling, transformation, multi-backend export).
+
+**Local dev — stdout traces, no exporter dependency:**
 
 ```yaml
-# config.yaml (base config, committed to git)
 observability:
   enabled: true
   service:
     name: my-service
     version: v1.0.0
   trace:
-    enabled: true
-    endpoint: http://localhost:4318/v1/traces
-    protocol: http
+    endpoint: stdout            # Prints spans to console
   metrics:
-    enabled: true
+    enabled: true               # No endpoint = stdout/disabled by build
   logs:
     enabled: true
     slow_request_threshold: 750ms
 
 logger:
-  pretty: false  # MUST be false when observability.logs.enabled = true
+  pretty: false                 # MUST be false when observability.logs.enabled = true
   level: info
 ```
 
-**New Relic Production Config (Optimized with Compression):**
+**Production — OTEL Collector (recommended):**
 
 ```yaml
-# config.production.yaml (DO NOT commit - add to .gitignore)
 observability:
   enabled: true
   service:
     name: my-service
     version: v1.0.0
-
-  # Traces with gRPC compression
   trace:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
+    endpoint: otel-collector:4317   # Collector on same network
     protocol: grpc
-    compression: gzip  # ~70% bandwidth reduction
-    insecure: false  # TLS required for New Relic
-    headers:
-      api-key: your-new-relic-license-key  # Secret value
-
-  # Metrics with New Relic optimizations
-  metrics:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
-    protocol: grpc
-    compression: gzip
-    temporality: delta  # New Relic recommendation (lower memory)
-    histogram_aggregation: exponential  # Better precision, 10x lower memory
-    headers:
-      api-key: your-new-relic-license-key  # Reuse or separate key
-
-  # Logs with compression and sampling
-  logs:
-    enabled: true
-    endpoint: otlp.nr-data.net:4317  # No https:// for gRPC!
-    protocol: grpc
-    compression: gzip
-    sampling_rate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always sent)
-    headers:
-      api-key: your-new-relic-license-key
-
-logger:
-  pretty: false  # MUST be false when observability.logs.enabled = true
-  level: info
-```
-
-**HTTP Alternative (Port 4318 with Signal Paths):**
-
-```yaml
-observability:
-  enabled: true
-  service:
-    name: my-service
-
-  trace:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/traces  # HTTP requires https:// + path
-    protocol: http
-    compression: gzip
-    headers:
-      api-key: your-license-key
-
-  metrics:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/metrics  # Signal-specific path
-    protocol: http
-    compression: gzip
-    temporality: delta
-    histogram_aggregation: exponential
-    headers:
-      api-key: your-license-key
-
-  logs:
-    enabled: true
-    endpoint: https://otlp.nr-data.net:4318/v1/logs  # Signal-specific path
-    protocol: http
-    compression: gzip
-    headers:
-      api-key: your-license-key
-
-logger:
-  pretty: false
-```
-
-**With OTEL Collector (Recommended for Production):**
-
-```yaml
-# Application config - collector handles vendor specifics
-observability:
-  enabled: true
-  service:
-    name: my-service
-    version: v1.0.0
-
-  trace:
-    endpoint: otel-collector:4317  # Local collector
-    protocol: grpc
-    insecure: true  # Collector on same network (no TLS)
-    compression: gzip  # Reduce app→collector traffic
-
+    insecure: true                  # No TLS inside cluster
+    compression: gzip               # Reduce app→collector traffic
   metrics:
     enabled: true
     endpoint: otel-collector:4317
     protocol: grpc
     compression: gzip
-    temporality: delta
+    temporality: delta              # Lower memory; backend-friendly
     histogram_aggregation: exponential
-
   logs:
     enabled: true
     endpoint: otel-collector:4317
     protocol: grpc
     compression: gzip
-    sampling_rate: 0.2  # 20% trace logs
+    sampling_rate: 0.2              # 20% of INFO/DEBUG; ERROR/WARN always 100%
 
 logger:
   pretty: false
 ```
 
-**Security: Never commit secrets to git**
+**Vendor-direct (no collector)** — point `endpoint` at the vendor's OTLP receiver and add an auth header. Common header names:
+
+| Vendor | Header |
+|---|---|
+| New Relic | `api-key: <license-key>` |
+| Honeycomb | `x-honeycomb-team: <team-key>` |
+| Datadog | `dd-api-key: <api-key>` |
+| Grafana Cloud | `authorization: "Basic <base64>"` |
+| Generic | `authorization: "Bearer <token>"` |
+
+```yaml
+# Example: vendor-direct over gRPC + TLS
+observability:
+  trace:
+    endpoint: otlp.example.com:4317   # gRPC: host:port, NO scheme
+    protocol: grpc
+    insecure: false                   # TLS required for vendor endpoints
+    compression: gzip
+    headers:
+      api-key: ${OTEL_API_KEY}        # From env var — never commit
+```
+
+### Endpoint Format Rules (CRITICAL)
+
+| Protocol | Format | Example | TLS |
+|---|---|---|---|
+| `grpc` | `host:port` (NO scheme) | `otlp.example.com:4317` | Auto |
+| `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Off |
+| `http` | `https://host:port/{v1/traces,v1/metrics,v1/logs}` | `https://otlp.example.com:4318/v1/traces` | On |
+| `http` (insecure) | `http://host:port/<path>` | `http://localhost:4318/v1/traces` | Off |
+
+**Common mistakes:**
+- ❌ `https://otlp.example.com:4317` + `protocol: grpc` → fails ("too many colons" / HTTP/1.1 frame mismatch)
+- ✅ `otlp.example.com:4317` + `protocol: grpc` (no scheme)
+- ❌ `otlp.example.com:4318` + `protocol: http` (missing scheme + path)
+- ✅ `https://otlp.example.com:4318/v1/traces` + `protocol: http`
+
+### Resource Attributes & Export Behavior
+
+The framework attaches the following resource attributes to every signal: `service.name`, `service.version`, `service.instance.id`, plus auto-detected `process.*` and `host.*` per OTel semantic conventions. Override `service.name`/`service.version` via `observability.service.{name,version}`.
+
+**Export timeout** is environment-aware: 10s when `endpoint: stdout`, 60s for production endpoints (accommodates TLS + cross-region latency). Override globally with `observability.trace.export.timeout: 90s` (applies to traces, metrics, and logs).
+
+**Batch behavior:** spans/metrics/logs are buffered and flushed on a schedule (~500ms in dev, ~5s in prod). Graceful shutdown (`fw.Run()` returning) flushes pending batches before exit. Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics (provider init, exporter setup, batch flushes) during local runs.
+
+### Secrets Hygiene
+
+Never commit OTLP auth headers to git. Two patterns:
 
 ```bash
 # .gitignore
 config.production.yaml
-config.staging.yaml
 config.*.local.yaml
 ```
 
-**Alternative: Load secrets from environment in code**
-
 ```go
-// main.go
+// main.go — inject from env at startup
 cfg, _ := config.Load()
-
-// Inject vendor auth headers from env/vault when present
-// (not needed for local collector, Jaeger, or stdout endpoints)
 if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
     headers := map[string]string{"api-key": apiKey}
     cfg.Observability.Trace.Headers = headers
     cfg.Observability.Metrics.Headers = headers
     cfg.Observability.Logs.Headers = headers
 }
-
-app.Run(cfg)
 ```
-
-**Endpoint Format Rules (CRITICAL):**
-
-| Protocol | Format | Example | TLS |
-|----------|--------|---------|-----|
-| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Auto |
-| `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Off |
-| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | On |
-| `http` (insecure) | `http://host:port/path` | `http://localhost:4318/v1/traces` | Off |
-
-**Common Mistakes:**
-- ❌ `https://otlp.nr-data.net:4317` + `protocol: grpc` → ERROR: "too many colons"
-- ✅ `otlp.nr-data.net:4317` + `protocol: grpc` → Correct
-
-**Common Vendor Headers:**
-
-| Vendor | Header Example |
-|--------|----------------|
-| New Relic | `api-key: your-license-key` |
-| Honeycomb | `x-honeycomb-team: your-team-key` |
-| Datadog | `dd-api-key: your-api-key` |
-| Grafana Cloud | `authorization: "Basic base64-creds"` |
-| Generic | `authorization: "Bearer your-token"` |
-
-**Insecure gRPC (localhost testing):**
-```yaml
-observability:
-  enabled: true
-  trace:
-    endpoint: localhost:4317
-    protocol: grpc
-    insecure: true  # Disable TLS
-```
-
-Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics during local runs.
 
 ## Structured Logging with Custom Fields
 
@@ -3449,6 +3898,62 @@ func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (serv
 - `logger.WithContext(ctx)` → Injects trace_id/span_id for correlation
 - `logger.WithFields(map)` → Persistent fields for all subsequent logs
 - Fluent API: chain methods → end with `.Msg("message")`
+
+### Dual-Mode Logging — Action vs Trace Logs
+
+GoBricks separates two log streams to keep volume under control without losing visibility:
+
+| Stream | Marker (`log.type`) | Sampling | Purpose |
+|---|---|---|---|
+| **Action logs** | `"action"` | Always 100% (never sampled) | One synthesized summary per HTTP request (status code, route, latency, severity) |
+| **Trace logs** | `"trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.sampling_rate` | Application logs from `logger.Info()/Error()/...` calls inside handlers/services |
+
+**Why two streams?** A noisy `INFO`-level codebase shouldn't drown out request summaries — and dropping all `INFO` logs would hide context for the 1% you sample. Action logs guarantee you always have one row per request even when trace-log sampling is aggressive.
+
+**Configuration:**
+
+```yaml
+observability:
+  logs:
+    enabled: true
+    sampling_rate: 0.1            # Export 10% of INFO/DEBUG trace logs (default 0.0 drops them all)
+    slow_request_threshold: 750ms # Auto-escalate action log severity to WARN if request slower
+```
+
+**Sampling determinism:** within a single trace, all logs are sampled together (kept or dropped as a unit), so debugging a sampled trace shows the full picture; debugging a dropped trace shows only `ERROR`/`WARN` lines.
+
+### Severity Escalation for HTTP Action Logs
+
+Action logs derive severity automatically:
+- HTTP `2xx`/`3xx` → `INFO`
+- HTTP `4xx` → `WARN`
+- HTTP `5xx` → `ERROR`
+- Slow requests (above `slow_request_threshold`) → `WARN`
+
+**Escalate explicitly** for cross-cutting concerns that aren't reflected in the status code (rate-limit hits, deprecated endpoint usage, suspicious tenant activity):
+
+```go
+import (
+    "github.com/labstack/echo/v4"
+    "github.com/rs/zerolog"
+
+    "github.com/gaborage/go-bricks/server"
+)
+
+// Inside any middleware or handler — escalates the request's action-log severity.
+// Once escalated to WARN+, the action log is emitted at that level even on a 2xx response.
+func RateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c echo.Context) error {
+        if exceededRateLimit(c) {
+            server.EscalateSeverity(&c, zerolog.WarnLevel) // request summary now logs at WARN
+            return c.JSON(429, map[string]string{"error": "rate limited"})
+        }
+        return next(c)
+    }
+}
+```
+
+Severity is monotonic — escalating to `WarnLevel` after something already escalated to `ErrorLevel` is a no-op. Use this when you want the request to surface in dashboards filtered by `level >= warn` even though the response is technically successful.
 
 ## Distributed Tracing Setup
 
@@ -3628,6 +4133,9 @@ func (m *OrderModule) ProcessOrder(ctx context.Context, orderID int64) error {
         attribute.String("order.status", "processing"),
     )
 
+    // Mark a point in time within the span (event = timestamped log line on the span)
+    span.AddEvent("validation_started")
+
     db, err := m.getDB(ctx)
     if err != nil {
         span.RecordError(err)
@@ -3642,6 +4150,11 @@ func (m *OrderModule) ProcessOrder(ctx context.Context, orderID int64) error {
         span.SetStatus(codes.Error, err.Error())
         return err
     }
+
+    // Events can carry attributes too — useful for milestones (cache hit, retry, etc.)
+    span.AddEvent("order_persisted", trace.WithAttributes(
+        attribute.String("order.persistence", "database"),
+    ))
 
     span.SetAttributes(attribute.String("order.status", "completed"))
     return nil
@@ -3877,29 +4390,90 @@ upDown, err := observability.CreateUpDownCounter(meter, "name", "description")
 4. **Nil-check instruments** - Safe when observability disabled
 5. **Use appropriate units** - Seconds for duration, bytes for size (follow UCUM conventions)
 
-**Testing Custom Metrics:**
+### Testing Observability Code
+
+The `observability/testing` package (`obtest`) ships in-memory providers for traces and metrics, plus a curated set of assertion helpers. For metrics whose values you don't need to inspect, OTel's `noop.NewMeterProvider()` is enough — both options are demonstrated below.
 
 ```go
 import (
+    "context"
     "testing"
 
+    obtest "github.com/gaborage/go-bricks/observability/testing"
+    "go.opentelemetry.io/otel/codes"
     "go.opentelemetry.io/otel/metric/noop"
 )
 
-func TestOrderModule(t *testing.T) {
-    // Use no-op meter provider for unit tests
-    deps := &app.ModuleDeps{
-        MeterProvider: noop.NewMeterProvider(),
-    }
+// 1. Spans — assert that a service emits the expected custom span + attributes
+func TestOrderService_emits_processing_span(t *testing.T) {
+    tp := obtest.NewTestTraceProvider() // in-memory exporter + tracer
+    defer tp.Shutdown(context.Background())
+
+    svc := NewOrderService(WithTracer(tp.TestTracer())) // TestTracer() = standard test tracer name
+    _ = svc.ProcessOrder(context.Background(), 42)
+
+    spans := tp.Exporter.GetSpans()
+    obtest.AssertSpanName(t, &spans[0], "ProcessOrder")
+    obtest.AssertSpanAttribute(t, &spans[0], "order.id", int64(42))
+    obtest.AssertSpanStatus(t, &spans[0], codes.Ok)
+}
+
+// 2. Spans — assert that a failure path records an error on the span
+func TestOrderService_records_error_on_db_failure(t *testing.T) {
+    tp := obtest.NewTestTraceProvider()
+    defer tp.Shutdown(context.Background())
+
+    svc := NewOrderService(WithTracer(tp.TestTracer()), WithFailingDB())
+    _ = svc.ProcessOrder(context.Background(), 42)
+
+    spans := tp.Exporter.GetSpans()
+    obtest.AssertSpanError(t, &spans[0], "database unavailable")
+}
+
+// 3. Metrics — read the manual reader and assert recorded values
+func TestOrderService_records_counter(t *testing.T) {
+    mp := obtest.NewTestMeterProvider()
+    defer mp.Shutdown(context.Background())
+
+    counter, _ := mp.Meter("orders").Int64Counter("orders.created.total")
+    counter.Add(context.Background(), 3)
+
+    rm := mp.Collect(t) // synchronous collection from ManualReader
+    obtest.AssertMetricExists(t, rm, "orders.created.total")
+    obtest.AssertMetricValue(t, rm, "orders.created.total", int64(3))
+}
+
+// 4. Modules that don't care to inspect emissions — use no-op meter
+func TestOrderModule_safe_with_noop_meter(t *testing.T) {
+    deps := &app.ModuleDeps{MeterProvider: noop.NewMeterProvider()}
 
     module := &OrderModule{}
-    err := module.Init(deps)
-    assert.NoError(t, err)
+    require.NoError(t, module.Init(deps))
 
-    // Instruments are created but no-ops - safe to call
+    // Instruments resolve to no-ops — safe to call without a real backend
     module.orderCounter.Add(context.Background(), 1)
 }
 ```
+
+**Assertion helpers in `obtest`:**
+- Spans: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `AssertSpanStatusDescription`, `AssertSpanError`
+- Span filtering across many spans: `NewSpanCollector(t, exporter)`
+- Metrics: `AssertMetricExists`, `AssertMetricCount`, `AssertMetricValue`, `AssertMetricDescription`, `FindMetric`, `GetMetricSumValue`, `GetMetricHistogramCount`
+
+For application logs, exercise the production logger directly and capture into a `bytes.Buffer` (zerolog supports an `io.Writer` sink) — there's no in-memory `LogExporter` in `obtest` today.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Startup panics with "cannot use OTLP logs with pretty=true" | `logger.pretty: true` while `observability.logs.enabled: true` — the dual-mode log processor needs structured JSON | Set `logger.pretty: false` whenever logs export to OTLP |
+| gRPC error: `frame too large, note that the frame header looked like an HTTP/1.1 header` | gRPC client connecting to an HTTP endpoint (e.g. port `4318` with `protocol: grpc`, or `https://...` scheme with gRPC) | Use `host:port` (no scheme) on port `4317` for gRPC; use `https://host:port/v1/...` on port `4318` for HTTP |
+| Spans appear in console (`endpoint: stdout`) but not in collector | App can't reach collector / TLS misconfiguration / batch hasn't flushed yet | Check connectivity, set `insecure: true` for in-cluster collectors, wait for batch flush (~5s prod) or trigger graceful shutdown |
+| Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.Echo.Request().Context()` |
+| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slow_request_threshold` or call `server.EscalateSeverity(c, level)` |
+| INFO/DEBUG application logs are dropped | Default `sampling_rate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.sampling_rate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
+| Custom metric is `nil` when recording | `observability.enabled: false` makes `deps.MeterProvider` a no-op, but the helper-returned instruments may still be `nil` if `Meter()` was never called | Always nil-check before recording: `if m.counter != nil { m.counter.Add(...) }` |
+| Noisy `[OBSERVABILITY]` debug output | `GOBRICKS_DEBUG` env var is set | Unset `GOBRICKS_DEBUG` |
 
 ## Custom Application Errors
 
@@ -4094,4 +4668,4 @@ Same domain errors, different boundary handling:
 - **Error handling**: Define domain errors (sentinel + struct), map to `server.New*Error` in HTTP handlers, log + ACK/nack in AMQP consumers. See Custom Application Errors section above.
 - **Graceful shutdown**: close external resources in `Module.Shutdown`; the framework waits on outstanding requests.
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
-- **Testing**: `obtest.NewTestTraceProvider()` captures spans/logs; mock `database.Interface` and `messaging.Client` directly.
+- **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
