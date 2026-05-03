@@ -662,6 +662,13 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 
 func assertEnvVarsContain(t *testing.T, envVars, expected []string) {
 	t.Helper()
+	// When the test pins zero expected vars, also assert envVars is empty —
+	// otherwise assert.Subset(envVars, []) is vacuously true and would let
+	// non-prefixed leakage (e.g. HOST=foo) pass an unsupported-driver test.
+	if len(expected) == 0 {
+		assert.Empty(t, envVars, "envVars should be empty when no entries are expected")
+		return
+	}
 	assert.Subset(t, envVars, expected, "envVars missing expected entries")
 }
 
