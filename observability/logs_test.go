@@ -373,46 +373,16 @@ func TestCreateLogResource(t *testing.T) {
 		checkFunc func(*testing.T, *provider)
 	}{
 		{
-			name:    "action_log_type",
-			logType: "action",
-			wantErr: false,
-			checkFunc: func(t *testing.T, p *provider) {
-				res, err := p.createLogResource("action")
-				require.NoError(t, err)
-				require.NotNil(t, res)
-
-				// Verify resource has log.type attribute
-				attrs := res.Attributes()
-				var foundLogType bool
-				for _, attr := range attrs {
-					if attr.Key == logTypeAttrKey && attr.Value.AsString() == "action" {
-						foundLogType = true
-						break
-					}
-				}
-				assert.True(t, foundLogType, "Resource should have log.type=action attribute")
-			},
+			name:      "action_log_type",
+			logType:   "action",
+			wantErr:   false,
+			checkFunc: checkLogResourceHasType("action"),
 		},
 		{
-			name:    "trace_log_type",
-			logType: "trace",
-			wantErr: false,
-			checkFunc: func(t *testing.T, p *provider) {
-				res, err := p.createLogResource("trace")
-				require.NoError(t, err)
-				require.NotNil(t, res)
-
-				// Verify resource has log.type attribute
-				attrs := res.Attributes()
-				var foundLogType bool
-				for _, attr := range attrs {
-					if attr.Key == logTypeAttrKey && attr.Value.AsString() == "trace" {
-						foundLogType = true
-						break
-					}
-				}
-				assert.True(t, foundLogType, "Resource should have log.type=trace attribute")
-			},
+			name:      "trace_log_type",
+			logType:   "trace",
+			wantErr:   false,
+			checkFunc: checkLogResourceHasType("trace"),
 		},
 	}
 
@@ -432,6 +402,24 @@ func TestCreateLogResource(t *testing.T) {
 				tt.checkFunc(t, p)
 			}
 		})
+	}
+}
+
+// checkLogResourceHasType returns a checker that builds a log resource for the
+// given log type and asserts the produced resource carries a log.type
+// attribute matching expectedType.
+func checkLogResourceHasType(expectedType string) func(*testing.T, *provider) {
+	return func(t *testing.T, p *provider) {
+		res, err := p.createLogResource(expectedType)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		for _, attr := range res.Attributes() {
+			if attr.Key == logTypeAttrKey && attr.Value.AsString() == expectedType {
+				return
+			}
+		}
+		t.Errorf("Resource should have log.type=%s attribute", expectedType)
 	}
 }
 

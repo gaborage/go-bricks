@@ -22,7 +22,6 @@ const (
 	getUserByIDSummary        = "Get user by ID"
 	createNewUserSummary      = "Create a new user"
 	expectedTypeErrorMsg      = "Expected type %q, got %q"
-	expectedFormatErrorMsg    = "Expected format %q, got %q"
 	pageNumberDescription     = "Page number"
 	parametersHeader          = "parameters:"
 	IDHeader                  = "- name: id"
@@ -899,29 +898,31 @@ func TestTypeInfoToSchema(t *testing.T) {
 				}
 				return
 			}
-
-			if schema == nil {
-				t.Fatal("Expected non-nil schema")
-			}
-
-			if schema.Type != tt.expectedType {
-				t.Errorf(expectedTypeErrorMsg, tt.expectedType, schema.Type)
-			}
-
-			if len(schema.Properties) != tt.expectedProps {
-				t.Errorf("Expected %d properties, got %d", tt.expectedProps, len(schema.Properties))
-			}
-
-			if len(schema.Required) != len(tt.expectedReq) {
-				t.Errorf("Expected %d required fields, got %d", len(tt.expectedReq), len(schema.Required))
-			}
-
-			for i, req := range tt.expectedReq {
-				if schema.Required[i] != req {
-					t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
-				}
-			}
+			assertSchemaShape(t, tt.expectedType, tt.expectedProps, tt.expectedReq, schema)
 		})
+	}
+}
+
+// assertSchemaShape validates that an emitted *OpenAPISchema has the expected
+// type, property count, and required-field list (compared in order).
+func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, expectedReq []string, schema *OpenAPISchema) {
+	t.Helper()
+	if schema == nil {
+		t.Fatal("Expected non-nil schema")
+	}
+	if schema.Type != expectedType {
+		t.Errorf(expectedTypeErrorMsg, expectedType, schema.Type)
+	}
+	if len(schema.Properties) != expectedProps {
+		t.Errorf("Expected %d properties, got %d", expectedProps, len(schema.Properties))
+	}
+	if len(schema.Required) != len(expectedReq) {
+		t.Errorf("Expected %d required fields, got %d", len(expectedReq), len(schema.Required))
+	}
+	for i, req := range expectedReq {
+		if schema.Required[i] != req {
+			t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
+		}
 	}
 }
 
@@ -1029,25 +1030,11 @@ func TestFieldInfoToProperty(t *testing.T) {
 			if prop.Type != tt.expectedType {
 				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
 			}
-
-			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
-				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
-			}
-
-			if tt.expectedDesc != "" && prop.Description != tt.expectedDesc {
-				t.Errorf("Expected description %q, got %q", tt.expectedDesc, prop.Description)
-			}
-
-			if tt.expectedExample != nil && prop.Example != tt.expectedExample {
-				t.Errorf("Expected example %v, got %v", tt.expectedExample, prop.Example)
-			}
-
+			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
+			assertOptionalString(t, "description", tt.expectedDesc, prop.Description)
+			assertOptionalAny(t, "example", tt.expectedExample, prop.Example)
 			if tt.hasMinLength {
-				if prop.MinLength == nil {
-					t.Error("Expected MinLength to be set")
-				} else if *prop.MinLength != tt.minLengthValue {
-					t.Errorf("Expected MinLength %d, got %d", tt.minLengthValue, *prop.MinLength)
-				}
+				assertOptionalPtr(t, "MinLength", &tt.minLengthValue, prop.MinLength)
 			}
 		})
 	}
@@ -1088,17 +1075,16 @@ func TestSetTypeAndFormat(t *testing.T) {
 			if prop.Type != tt.expectedType {
 				t.Errorf(expectedTypeErrorMsg, tt.expectedType, prop.Type)
 			}
-
-			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
-				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
+			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
+			if !tt.hasItems {
+				return
 			}
-
-			if tt.hasItems {
-				if prop.Items == nil {
-					t.Error("Expected Items to be set for array type")
-				} else if prop.Items.Type != tt.itemType {
-					t.Errorf("Expected item type %q, got %q", tt.itemType, prop.Items.Type)
-				}
+			if prop.Items == nil {
+				t.Error("Expected Items to be set for array type")
+				return
+			}
+			if prop.Items.Type != tt.itemType {
+				t.Errorf("Expected item type %q, got %q", tt.itemType, prop.Items.Type)
 			}
 		})
 	}
@@ -1184,60 +1170,61 @@ func TestApplyConstraints(t *testing.T) {
 			prop := &OpenAPIProperty{}
 			gen.applyConstraints(prop, tt.field)
 
-			if tt.expectedFormat != "" && prop.Format != tt.expectedFormat {
-				t.Errorf(expectedFormatErrorMsg, tt.expectedFormat, prop.Format)
-			}
-
-			if tt.expectedMinLength != nil {
-				if prop.MinLength == nil {
-					t.Error("Expected MinLength to be set")
-				} else if *prop.MinLength != *tt.expectedMinLength {
-					t.Errorf("Expected MinLength %d, got %d", *tt.expectedMinLength, *prop.MinLength)
-				}
-			}
-
-			if tt.expectedMaxLength != nil {
-				if prop.MaxLength == nil {
-					t.Error("Expected MaxLength to be set")
-				} else if *prop.MaxLength != *tt.expectedMaxLength {
-					t.Errorf("Expected MaxLength %d, got %d", *tt.expectedMaxLength, *prop.MaxLength)
-				}
-			}
-
-			if tt.expectedMinimum != nil {
-				if prop.Minimum == nil {
-					t.Error("Expected Minimum to be set")
-				} else if *prop.Minimum != *tt.expectedMinimum {
-					t.Errorf("Expected Minimum %f, got %f", *tt.expectedMinimum, *prop.Minimum)
-				}
-			}
-
-			if tt.expectedMaximum != nil {
-				if prop.Maximum == nil {
-					t.Error("Expected Maximum to be set")
-				} else if *prop.Maximum != *tt.expectedMaximum {
-					t.Errorf("Expected Maximum %f, got %f", *tt.expectedMaximum, *prop.Maximum)
-				}
-			}
-
-			if tt.expectedExclusiveMin != nil {
-				if prop.ExclusiveMinimum == nil {
-					t.Error("Expected ExclusiveMinimum to be set")
-				} else if *prop.ExclusiveMinimum != *tt.expectedExclusiveMin {
-					t.Errorf("Expected ExclusiveMinimum %v, got %v", *tt.expectedExclusiveMin, *prop.ExclusiveMinimum)
-				}
-			}
-
-			if tt.expectedPattern != "" && prop.Pattern != tt.expectedPattern {
-				t.Errorf("Expected pattern %q, got %q", tt.expectedPattern, prop.Pattern)
-			}
-
-			if tt.expectedEnumCount > 0 {
-				if len(prop.Enum) != tt.expectedEnumCount {
-					t.Errorf("Expected %d enum values, got %d", tt.expectedEnumCount, len(prop.Enum))
-				}
+			assertOptionalString(t, "format", tt.expectedFormat, prop.Format)
+			assertOptionalPtr(t, "MinLength", tt.expectedMinLength, prop.MinLength)
+			assertOptionalPtr(t, "MaxLength", tt.expectedMaxLength, prop.MaxLength)
+			assertOptionalPtr(t, "Minimum", tt.expectedMinimum, prop.Minimum)
+			assertOptionalPtr(t, "Maximum", tt.expectedMaximum, prop.Maximum)
+			assertOptionalPtr(t, "ExclusiveMinimum", tt.expectedExclusiveMin, prop.ExclusiveMinimum)
+			assertOptionalString(t, "pattern", tt.expectedPattern, prop.Pattern)
+			if tt.expectedEnumCount > 0 && len(prop.Enum) != tt.expectedEnumCount {
+				t.Errorf("Expected %d enum values, got %d", tt.expectedEnumCount, len(prop.Enum))
 			}
 		})
+	}
+}
+
+// assertOptionalPtr asserts that an optional pointer field equals the expected
+// value. When the expected pointer is nil, no assertion is performed (the
+// caller didn't pin a value). When set but the actual is nil, or values
+// differ, a t.Errorf is raised that names the field for diagnosis.
+func assertOptionalPtr[T comparable](t *testing.T, name string, expected, actual *T) {
+	t.Helper()
+	if expected == nil {
+		return
+	}
+	if actual == nil {
+		t.Errorf("Expected %s to be set", name)
+		return
+	}
+	if *actual != *expected {
+		t.Errorf("Expected %s %v, got %v", name, *expected, *actual)
+	}
+}
+
+// assertOptionalString asserts equality of a string field only when the
+// expected value is non-empty. The empty-string sentinel mirrors the existing
+// table convention ("" means caller didn't pin a value").
+func assertOptionalString(t *testing.T, name, expected, actual string) {
+	t.Helper()
+	if expected == "" {
+		return
+	}
+	if actual != expected {
+		t.Errorf("Expected %s %q, got %q", name, expected, actual)
+	}
+}
+
+// assertOptionalAny asserts equality of an any-typed field only when expected
+// is non-nil. Both sides must be comparable (strings, numbers, etc.) — this
+// helper preserves the original test's direct == comparison semantics.
+func assertOptionalAny(t *testing.T, name string, expected, actual any) {
+	t.Helper()
+	if expected == nil {
+		return
+	}
+	if actual != expected {
+		t.Errorf("Expected %s %v, got %v", name, expected, actual)
 	}
 }
 
@@ -1402,17 +1389,7 @@ func TestExtractParameters(t *testing.T) {
 			},
 			expectedParams:    1,
 			expectedBodyCount: 0,
-			checkParam: func(t *testing.T, params []Parameter) {
-				if params[0].Name != "id" {
-					t.Errorf("Expected param name 'id', got %q", params[0].Name)
-				}
-				if params[0].In != "path" {
-					t.Errorf("Expected param in 'path', got %q", params[0].In)
-				}
-				if !params[0].Required {
-					t.Error("Path parameter should be required")
-				}
-			},
+			checkParam:        checkPathParameter,
 		},
 		{
 			name: "query parameters",
@@ -1441,14 +1418,7 @@ func TestExtractParameters(t *testing.T) {
 			},
 			expectedParams:    2,
 			expectedBodyCount: 0,
-			checkParam: func(t *testing.T, params []Parameter) {
-				if params[0].Name != "page" {
-					t.Errorf("Expected first param 'page', got %q", params[0].Name)
-				}
-				if params[0].Description != pageNumberDescription {
-					t.Errorf("Expected description 'Page number', got %q", params[0].Description)
-				}
-			},
+			checkParam:        checkQueryParameters,
 		},
 		{
 			name: "header parameter",
@@ -1470,14 +1440,7 @@ func TestExtractParameters(t *testing.T) {
 			},
 			expectedParams:    1,
 			expectedBodyCount: 0,
-			checkParam: func(t *testing.T, params []Parameter) {
-				if params[0].In != "header" {
-					t.Errorf("Expected param in 'header', got %q", params[0].In)
-				}
-				if params[0].Name != "Content-Type" {
-					t.Errorf("Expected param name 'Content-Type', got %q", params[0].Name)
-				}
-			},
+			checkParam:        checkHeaderParameter,
 		},
 		{
 			name: "mixed parameters and body",
@@ -1515,19 +1478,7 @@ func TestExtractParameters(t *testing.T) {
 			},
 			expectedParams:    2,
 			expectedBodyCount: 2,
-			checkParam: func(t *testing.T, params []Parameter) {
-				// Should have path and query params, not body fields
-				paramNames := make(map[string]bool)
-				for _, p := range params {
-					paramNames[p.Name] = true
-				}
-				if !paramNames["id"] {
-					t.Error("Expected 'id' path parameter")
-				}
-				if !paramNames["async"] {
-					t.Error("Expected 'async' query parameter")
-				}
-			},
+			checkParam:        checkMixedParameters,
 		},
 		{
 			name: "all body fields (no parameters)",
@@ -1573,11 +1524,7 @@ func TestExtractParameters(t *testing.T) {
 			},
 			expectedParams:    1,
 			expectedBodyCount: 0,
-			checkParam: func(t *testing.T, params []Parameter) {
-				if params[0].Example == nil {
-					t.Error("Expected parameter to have example")
-				}
-			},
+			checkParam:        checkParameterWithExample,
 		},
 	}
 
@@ -1597,6 +1544,58 @@ func TestExtractParameters(t *testing.T) {
 				tt.checkParam(t, params)
 			}
 		})
+	}
+}
+
+// Per-case parameter verifiers for TestExtractParameters.
+
+func checkPathParameter(t *testing.T, params []Parameter) {
+	if params[0].Name != "id" {
+		t.Errorf("Expected param name 'id', got %q", params[0].Name)
+	}
+	if params[0].In != "path" {
+		t.Errorf("Expected param in 'path', got %q", params[0].In)
+	}
+	if !params[0].Required {
+		t.Error("Path parameter should be required")
+	}
+}
+
+func checkQueryParameters(t *testing.T, params []Parameter) {
+	if params[0].Name != "page" {
+		t.Errorf("Expected first param 'page', got %q", params[0].Name)
+	}
+	if params[0].Description != pageNumberDescription {
+		t.Errorf("Expected description 'Page number', got %q", params[0].Description)
+	}
+}
+
+func checkHeaderParameter(t *testing.T, params []Parameter) {
+	if params[0].In != "header" {
+		t.Errorf("Expected param in 'header', got %q", params[0].In)
+	}
+	if params[0].Name != "Content-Type" {
+		t.Errorf("Expected param name 'Content-Type', got %q", params[0].Name)
+	}
+}
+
+func checkMixedParameters(t *testing.T, params []Parameter) {
+	// Should have path and query params, not body fields
+	paramNames := make(map[string]bool, len(params))
+	for _, p := range params {
+		paramNames[p.Name] = true
+	}
+	if !paramNames["id"] {
+		t.Error("Expected 'id' path parameter")
+	}
+	if !paramNames["async"] {
+		t.Error("Expected 'async' query parameter")
+	}
+}
+
+func checkParameterWithExample(t *testing.T, params []Parameter) {
+	if params[0].Example == nil {
+		t.Error("Expected parameter to have example")
 	}
 }
 

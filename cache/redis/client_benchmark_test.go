@@ -266,22 +266,30 @@ func BenchmarkRealRedisParallelGetSet(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			key := fmt.Sprintf("benchmark:parallel:getset:%d", i%1000)
-
 			// 50% reads, 50% writes
 			if i%2 == 0 {
-				_, err := client.Get(ctx, key)
-				if err != nil && !errors.Is(err, cache.ErrNotFound) {
-					b.Fatalf("Parallel Get failed: %v", err)
-				}
+				benchParallelGet(b, client, ctx, key)
 			} else {
-				err := client.Set(ctx, key, value, time.Minute)
-				if err != nil {
-					b.Fatalf("Parallel Set failed: %v", err)
-				}
+				benchParallelSet(b, client, ctx, key, value)
 			}
 			i++
 		}
 	})
+}
+
+// benchParallelGet treats ErrNotFound as a hit rather than a failure: the
+// keyspace pre-population only covers half the address space the benchmark
+// reads from.
+func benchParallelGet(b *testing.B, client *Client, ctx context.Context, key string) {
+	if _, err := client.Get(ctx, key); err != nil && !errors.Is(err, cache.ErrNotFound) {
+		b.Fatalf("Parallel Get failed: %v", err)
+	}
+}
+
+func benchParallelSet(b *testing.B, client *Client, ctx context.Context, key string, value []byte) {
+	if err := client.Set(ctx, key, value, time.Minute); err != nil {
+		b.Fatalf("Parallel Set failed: %v", err)
+	}
 }
 
 // =============================================================================

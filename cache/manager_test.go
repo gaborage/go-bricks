@@ -718,28 +718,7 @@ func TestCacheManagerThreadSafety(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func(workerID int) {
 			defer wg.Done()
-
-			for j := 0; j < operations; j++ {
-				tenantID := fmt.Sprintf("tenant-%d", j%5) // 5 different tenants
-
-				// Get cache
-				c, err := mgr.Get(ctx, tenantID)
-				if err != nil {
-					t.Errorf("worker %d: Get failed: %v", workerID, err)
-					continue
-				}
-
-				// Use cache
-				_, err = c.Get(ctx, "test-key")
-				if err != nil && err != cache.ErrClosed {
-					t.Errorf("worker %d: cache operation failed: %v", workerID, err)
-				}
-
-				// Occasionally remove cache (ignore error - removal may race with close)
-				if j%20 == 0 {
-					_ = mgr.Remove(tenantID)
-				}
-			}
+			runThreadSafetyWorker(ctx, t, mgr, workerID, operations)
 		}(i)
 	}
 
@@ -754,6 +733,31 @@ func TestCacheManagerThreadSafety(t *testing.T) {
 
 	assert.GreaterOrEqual(t, totalCreated, activeCaches)
 	assert.GreaterOrEqual(t, totalCreated, evictions+idleCleanups)
+}
+
+// runThreadSafetyWorker performs a Get/use/occasional-Remove cycle against the
+// shared CacheManager. Errors are reported via t.Errorf — safe to call from a
+// worker goroutine since t.Errorf does not Goexit.
+func runThreadSafetyWorker(ctx context.Context, t *testing.T, mgr *cache.CacheManager, workerID, operations int) {
+	for j := 0; j < operations; j++ {
+		tenantID := fmt.Sprintf("tenant-%d", j%5) // 5 different tenants
+
+		c, err := mgr.Get(ctx, tenantID)
+		if err != nil {
+			t.Errorf("worker %d: Get failed: %v", workerID, err)
+			continue
+		}
+
+		_, err = c.Get(ctx, "test-key")
+		if err != nil && !errors.Is(err, cache.ErrClosed) {
+			t.Errorf("worker %d: cache operation failed: %v", workerID, err)
+		}
+
+		// Occasionally remove cache (ignore error - removal may race with close)
+		if j%20 == 0 {
+			_ = mgr.Remove(tenantID)
+		}
+	}
 }
 
 // slowCloseCache is a mock cache with configurable close delay.

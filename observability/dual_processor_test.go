@@ -323,30 +323,29 @@ func TestEnrichTraceContext(t *testing.T) {
 			// Call enrichTraceContext
 			enrichTraceContext(ctx, &rec)
 
-			// Verify trace fields
 			traceID := rec.TraceID()
 			spanID := rec.SpanID()
-			flags := rec.TraceFlags()
 
-			if tt.expectTraceID {
-				assert.True(t, traceID.IsValid(), "TraceID should be valid")
-				assert.Equal(t, tt.expectedTraceID, traceID.String())
-			} else {
-				assert.False(t, traceID.IsValid(), "TraceID should be invalid (zero)")
-			}
-
-			if tt.expectSpanID {
-				assert.True(t, spanID.IsValid(), "SpanID should be valid")
-				assert.Equal(t, tt.expectedSpanID, spanID.String())
-			} else {
-				assert.False(t, spanID.IsValid(), "SpanID should be invalid (zero)")
-			}
-
+			assertOptionalTraceField(t, "TraceID", tt.expectTraceID, tt.expectedTraceID, traceID.IsValid(), traceID.String())
+			assertOptionalTraceField(t, "SpanID", tt.expectSpanID, tt.expectedSpanID, spanID.IsValid(), spanID.String())
 			if tt.expectTraceID && tt.expectSpanID {
-				assert.Equal(t, tt.expectedFlags, flags)
+				assert.Equal(t, tt.expectedFlags, rec.TraceFlags())
 			}
 		})
 	}
+}
+
+// assertOptionalTraceField verifies the validity (and, when expected, the
+// stringified value) of a trace-ID-shaped field. When expectValid is false,
+// only invalidity is asserted — the expected value is ignored.
+func assertOptionalTraceField(t *testing.T, name string, expectValid bool, expectedValue string, isValid bool, actualValue string) {
+	t.Helper()
+	if !expectValid {
+		assert.False(t, isValid, "%s should be invalid (zero)", name)
+		return
+	}
+	assert.True(t, isValid, "%s should be valid", name)
+	assert.Equal(t, expectedValue, actualValue)
 }
 
 // TestDualModeProcessorEnrichesTraceContext verifies that the processor

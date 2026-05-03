@@ -42,18 +42,8 @@ func (a *App) prepareRuntime() error {
 		return err
 	}
 
-	if a.messagingInitializer != nil && a.messagingInitializer.IsAvailable() && decls != nil {
-		a.messagingInitializer.LogDeploymentMode()
-
-		if a.resourceProvider != nil {
-			if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
-				return err
-			}
-		}
-
-		if err := a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls); err != nil {
-			return err
-		}
+	if err := a.prepareMessagingConsumers(decls); err != nil {
+		return err
 	}
 
 	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
@@ -75,6 +65,25 @@ func (a *App) prepareRuntime() error {
 	a.startMaintenanceLoops()
 
 	return nil
+}
+
+// prepareMessagingConsumers wires lazy consumer initialization and prepares
+// runtime consumers when a messaging initializer is available and there are
+// declarations to replay. It is a no-op otherwise.
+func (a *App) prepareMessagingConsumers(decls *messaging.Declarations) error {
+	if a.messagingInitializer == nil || !a.messagingInitializer.IsAvailable() || decls == nil {
+		return nil
+	}
+
+	a.messagingInitializer.LogDeploymentMode()
+
+	if a.resourceProvider != nil {
+		if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
+			return err
+		}
+	}
+
+	return a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls)
 }
 
 // assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when

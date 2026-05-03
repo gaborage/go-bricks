@@ -653,27 +653,27 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 			envVars := fm.buildEnvironmentVariables()
-
-			// Check expected variables are present
-			for _, expectedVar := range tt.expectedVars {
-				found := false
-				for _, envVar := range envVars {
-					if envVar == expectedVar {
-						found = true
-						break
-					}
-				}
-				assert.True(t, found, "Expected environment variable '%s' not found", expectedVar)
-			}
-
-			// Check that unexpected variable prefixes are not present
-			for _, notExpectedPrefix := range tt.notExpectedVars {
-				for _, envVar := range envVars {
-					assert.NotContains(t, envVar, notExpectedPrefix,
-						"Unexpected environment variable prefix '%s' found in '%s'", notExpectedPrefix, envVar)
-				}
-			}
+			assertEnvVarsContain(t, envVars, tt.expectedVars)
+			assertEnvVarsLackPrefixes(t, envVars, tt.notExpectedVars)
 		})
+	}
+}
+
+func assertEnvVarsContain(t *testing.T, envVars, expected []string) {
+	t.Helper()
+	assert.Subset(t, envVars, expected, "envVars missing expected entries")
+}
+
+// assertEnvVarsLackPrefixes asserts no env var contains any of the forbidden
+// prefixes — used to verify e.g. that an Oracle-only config did not leak any
+// generic DB_ entries.
+func assertEnvVarsLackPrefixes(t *testing.T, envVars, prefixes []string) {
+	t.Helper()
+	for _, prefix := range prefixes {
+		for _, envVar := range envVars {
+			assert.NotContains(t, envVar, prefix,
+				"Unexpected environment variable prefix '%s' found in '%s'", prefix, envVar)
+		}
 	}
 }
 

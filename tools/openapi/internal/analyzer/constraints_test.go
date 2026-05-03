@@ -242,42 +242,55 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 				return
 			}
 
-			// Create a map for easier comparison
-			resultMap := make(map[string]any)
+			resultMap := make(map[string]any, len(result))
 			for _, c := range result {
 				resultMap[c.Name] = c.Value
 			}
-
-			for _, expected := range tt.expected {
-				gotValue, ok := resultMap[expected.Name]
-				if !ok {
-					t.Errorf("%s: missing constraint %q", tt.description, expected.Name)
-					continue
-				}
-
-				// Special handling for enum arrays
-				if expected.Name == "enum" {
-					expectedArr, ok1 := expected.Value.([]any)
-					gotArr, ok2 := gotValue.([]any)
-					if !ok1 || !ok2 {
-						t.Errorf("%s: enum values are not arrays", tt.description)
-						continue
-					}
-					if len(expectedArr) != len(gotArr) {
-						t.Errorf("%s: enum array length mismatch: expected %d, got %d", tt.description, len(expectedArr), len(gotArr))
-						continue
-					}
-					for i := range expectedArr {
-						if expectedArr[i] != gotArr[i] {
-							t.Errorf("%s: enum[%d]: expected %v, got %v", tt.description, i, expectedArr[i], gotArr[i])
-						}
-					}
-				} else if gotValue != expected.Value {
-					t.Errorf("%s: constraint %q: expected %v (type %T), got %v (type %T)",
-						tt.description, expected.Name, expected.Value, expected.Value, gotValue, gotValue)
-				}
-			}
+			assertConstraintsMatch(t, tt.description, tt.expected, resultMap)
 		})
+	}
+}
+
+// assertConstraintsMatch verifies every expected constraint is present in
+// resultMap with the expected value. Enum constraints are compared element-wise
+// since they are slices; scalar constraints are compared via direct equality.
+func assertConstraintsMatch(t *testing.T, description string, expected []OpenAPIConstraint, resultMap map[string]any) {
+	t.Helper()
+	for _, exp := range expected {
+		gotValue, ok := resultMap[exp.Name]
+		if !ok {
+			t.Errorf("%s: missing constraint %q", description, exp.Name)
+			continue
+		}
+		if exp.Name == "enum" {
+			assertEnumConstraint(t, description, exp.Value, gotValue)
+			continue
+		}
+		if gotValue != exp.Value {
+			t.Errorf("%s: constraint %q: expected %v (type %T), got %v (type %T)",
+				description, exp.Name, exp.Value, exp.Value, gotValue, gotValue)
+		}
+	}
+}
+
+// assertEnumConstraint compares two enum constraint values element-wise after
+// asserting both are []any slices.
+func assertEnumConstraint(t *testing.T, description string, expected, got any) {
+	t.Helper()
+	expectedArr, ok1 := expected.([]any)
+	gotArr, ok2 := got.([]any)
+	if !ok1 || !ok2 {
+		t.Errorf("%s: enum values are not arrays", description)
+		return
+	}
+	if len(expectedArr) != len(gotArr) {
+		t.Errorf("%s: enum array length mismatch: expected %d, got %d", description, len(expectedArr), len(gotArr))
+		return
+	}
+	for i := range expectedArr {
+		if expectedArr[i] != gotArr[i] {
+			t.Errorf("%s: enum[%d]: expected %v, got %v", description, i, expectedArr[i], gotArr[i])
+		}
 	}
 }
 
@@ -387,14 +400,14 @@ func TestParseNumeric(t *testing.T) {
 				if err == nil {
 					t.Errorf("%s: expected error, got nil", tt.description)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("%s: unexpected error: %v", tt.description, err)
-				}
-				if result != tt.expected {
-					t.Errorf("%s: expected %v (type %T), got %v (type %T)",
-						tt.description, tt.expected, tt.expected, result, result)
-				}
+				return
+			}
+			if err != nil {
+				t.Errorf("%s: unexpected error: %v", tt.description, err)
+			}
+			if result != tt.expected {
+				t.Errorf("%s: expected %v (type %T), got %v (type %T)",
+					tt.description, tt.expected, tt.expected, result, result)
 			}
 		})
 	}
