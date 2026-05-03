@@ -455,27 +455,8 @@ func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 	// Collect metrics
 	rm := mp.Collect(t)
 
-	// Verify table attribute is present with new OTel attribute name
-	var foundTableAttr bool
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name == metricDBDuration {
-				histData, ok := m.Data.(metricdata.Histogram[float64])
-				require.True(t, ok)
-
-				for _, dp := range histData.DataPoints {
-					for _, attr := range dp.Attributes.ToSlice() {
-						if string(attr.Key) == attrDBCollectionName && attr.Value.AsString() == "users" {
-							foundTableAttr = true
-							break
-						}
-					}
-				}
-			}
-		}
-	}
-
-	assert.True(t, foundTableAttr, "Should have table attribute with value 'users'")
+	// Verify the table attribute is present with the new OTel attribute name.
+	assertMetricHasAttribute(t, rm, metricDBDuration, attrDBCollectionName, "users")
 }
 
 // attributeFinder is a function type that extracts a value from an attribute.
@@ -490,56 +471,76 @@ func findMetricAttribute(rm metricdata.ResourceMetrics, metricName, attrKey stri
 			if m.Name != metricName {
 				continue
 			}
-
-			// Handle different metric data types
-			switch data := m.Data.(type) {
-			case metricdata.Sum[int64]:
-				for _, dp := range data.DataPoints {
-					for _, attr := range dp.Attributes.ToSlice() {
-						if value, found := finder(attr, attrKey); found {
-							return value, true
-						}
-					}
-				}
-			case metricdata.Histogram[float64]:
-				for _, dp := range data.DataPoints {
-					for _, attr := range dp.Attributes.ToSlice() {
-						if value, found := finder(attr, attrKey); found {
-							return value, true
-						}
-					}
-				}
+			if value, found := findAttrInMetricData(m.Data, attrKey, finder); found {
+				return value, true
 			}
 		}
 	}
 	return nil, false
 }
 
-// findMetricAttributeValue searches for a string attribute in the specified metric.
-// It iterates through all ScopeMetrics, Metrics, and DataPoints to find the attribute.
-// Returns the attribute value and true if found, empty string and false otherwise.
-func findMetricAttributeValue(rm metricdata.ResourceMetrics, metricName, attrKey string) (value string, found bool) {
-	stringFinder := func(attr attribute.KeyValue, key string) (any, bool) {
-		if string(attr.Key) == key {
-			return attr.Value.AsString(), true
-		}
-		return "", false
+// findAttrInMetricData dispatches on the metric's data type and delegates to
+// the per-shape helper. Each supported shape (Sum[int64], Histogram[float64])
+// has its own typed traversal because their DataPoints types differ.
+func findAttrInMetricData(data any, attrKey string, finder attributeFinder) (any, bool) {
+	switch d := data.(type) {
+	case metricdata.Sum[int64]:
+		return findAttrInSumPoints(d.DataPoints, attrKey, finder)
+	case metricdata.Histogram[float64]:
+		return findAttrInHistogramPoints(d.DataPoints, attrKey, finder)
 	}
-
-	result, found := findMetricAttribute(rm, metricName, attrKey, stringFinder)
-	if found {
-		return result.(string), true
-	}
-	return "", false
+	return nil, false
 }
 
-// assertMetricHasAttribute asserts that the specified metric has an attribute with the expected value.
-// This helper reduces complexity by encapsulating the nested iteration logic.
+func findAttrInSumPoints(points []metricdata.DataPoint[int64], attrKey string, finder attributeFinder) (any, bool) {
+	for _, dp := range points {
+		for _, attr := range dp.Attributes.ToSlice() {
+			if value, found := finder(attr, attrKey); found {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func findAttrInHistogramPoints(points []metricdata.HistogramDataPoint[float64], attrKey string, finder attributeFinder) (any, bool) {
+	for _, dp := range points {
+		for _, attr := range dp.Attributes.ToSlice() {
+			if value, found := finder(attr, attrKey); found {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// findMetricAttributeValue searches for a string attribute in the specified
+// metric whose value equals expectedValue. It scans every ScopeMetric, Metric,
+// and DataPoint, returning true only on exact key+value match — not on the
+// first key match — so multi-datapoint metrics carrying the same key with
+// different values are checked correctly.
+func findMetricAttributeValue(rm metricdata.ResourceMetrics, metricName, attrKey, expectedValue string) (found bool) {
+	matchExpected := func(attr attribute.KeyValue, key string) (any, bool) {
+		if string(attr.Key) != key {
+			return nil, false
+		}
+		v := attr.Value.AsString()
+		if v != expectedValue {
+			return nil, false
+		}
+		return v, true
+	}
+
+	_, found = findMetricAttribute(rm, metricName, attrKey, matchExpected)
+	return found
+}
+
+// assertMetricHasAttribute asserts that the specified metric has an attribute
+// with the expected value somewhere in its data points.
 func assertMetricHasAttribute(t *testing.T, rm metricdata.ResourceMetrics, metricName, attrKey, expectedValue string) {
 	t.Helper()
-	value, found := findMetricAttributeValue(rm, metricName, attrKey)
-	require.True(t, found, "Metric %s should have attribute %s", metricName, attrKey)
-	assert.Equal(t, expectedValue, value, "Attribute %s should have expected value", attrKey)
+	require.True(t, findMetricAttributeValue(rm, metricName, attrKey, expectedValue),
+		"Metric %s should have attribute %s with value %q", metricName, attrKey, expectedValue)
 }
 
 // TestAsInt64 tests the asInt64() helper function with all supported numeric types.

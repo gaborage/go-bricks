@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -653,27 +654,37 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 			envVars := fm.buildEnvironmentVariables()
-
-			// Check expected variables are present
-			for _, expectedVar := range tt.expectedVars {
-				found := false
-				for _, envVar := range envVars {
-					if envVar == expectedVar {
-						found = true
-						break
-					}
-				}
-				assert.True(t, found, "Expected environment variable '%s' not found", expectedVar)
-			}
-
-			// Check that unexpected variable prefixes are not present
-			for _, notExpectedPrefix := range tt.notExpectedVars {
-				for _, envVar := range envVars {
-					assert.NotContains(t, envVar, notExpectedPrefix,
-						"Unexpected environment variable prefix '%s' found in '%s'", notExpectedPrefix, envVar)
-				}
-			}
+			assertEnvVarsContain(t, envVars, tt.expectedVars)
+			assertEnvVarsLackPrefixes(t, envVars, tt.notExpectedVars)
 		})
+	}
+}
+
+func assertEnvVarsContain(t *testing.T, envVars, expected []string) {
+	t.Helper()
+	// When the test pins zero expected vars, also assert envVars is empty —
+	// otherwise assert.Subset(envVars, []) is vacuously true and would let
+	// non-prefixed leakage (e.g. HOST=foo) pass an unsupported-driver test.
+	if len(expected) == 0 {
+		assert.Empty(t, envVars, "envVars should be empty when no entries are expected")
+		return
+	}
+	assert.Subset(t, envVars, expected, "envVars missing expected entries")
+}
+
+// assertEnvVarsLackPrefixes asserts no env var key starts with any of the
+// forbidden prefixes — used to verify e.g. that an Oracle-only config did not
+// leak any generic DB_ entries. The check is against the key portion only
+// (everything before the first '='), so values that happen to contain a
+// forbidden substring (e.g. a password "MyDB_Pass") do not false-positive.
+func assertEnvVarsLackPrefixes(t *testing.T, envVars, prefixes []string) {
+	t.Helper()
+	for _, envVar := range envVars {
+		key := strings.SplitN(envVar, "=", 2)[0]
+		for _, prefix := range prefixes {
+			assert.False(t, strings.HasPrefix(key, prefix),
+				"Unexpected environment variable prefix '%s' found in key '%s' of '%s'", prefix, key, envVar)
+		}
 	}
 }
 

@@ -136,34 +136,7 @@ func TestRealRedisConnectionPoolConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-
-			for j := 0; j < numOperations; j++ {
-				key := fmt.Sprintf("test:pool:worker%d:op%d", workerID, j)
-				value := []byte(fmt.Sprintf("data-%d-%d", workerID, j))
-
-				// Set
-				if err := client.Set(ctx, key, value, 5*time.Second); err != nil {
-					errChan <- fmt.Errorf("worker %d op %d Set failed: %w", workerID, j, err)
-					continue
-				}
-
-				// Get
-				retrieved, err := client.Get(ctx, key)
-				if err != nil {
-					errChan <- fmt.Errorf("worker %d op %d Get failed: %w", workerID, j, err)
-					continue
-				}
-
-				if string(retrieved) != string(value) {
-					errChan <- fmt.Errorf("worker %d op %d value mismatch: got %s, want %s",
-						workerID, j, string(retrieved), string(value))
-				}
-
-				// Delete
-				if err := client.Delete(ctx, key); err != nil {
-					errChan <- fmt.Errorf("worker %d op %d Delete failed: %w", workerID, j, err)
-				}
-			}
+			runConnectionPoolWorker(ctx, client, workerID, numOperations, errChan)
 		}(i)
 	}
 
@@ -177,6 +150,36 @@ func TestRealRedisConnectionPoolConcurrency(t *testing.T) {
 	}
 
 	assert.Empty(t, errors, "No errors should occur during concurrent operations")
+}
+
+// runConnectionPoolWorker performs a Set/Get/Delete cycle for a slice of keys
+// scoped to a single workerID. Failures are funneled through errChan so the
+// parent test can fail with an aggregated error list.
+func runConnectionPoolWorker(ctx context.Context, client *Client, workerID, numOps int, errChan chan<- error) {
+	for j := 0; j < numOps; j++ {
+		key := fmt.Sprintf("test:pool:worker%d:op%d", workerID, j)
+		value := []byte(fmt.Sprintf("data-%d-%d", workerID, j))
+
+		if err := client.Set(ctx, key, value, 5*time.Second); err != nil {
+			errChan <- fmt.Errorf("worker %d op %d Set failed: %w", workerID, j, err)
+			continue
+		}
+
+		retrieved, err := client.Get(ctx, key)
+		if err != nil {
+			errChan <- fmt.Errorf("worker %d op %d Get failed: %w", workerID, j, err)
+			continue
+		}
+
+		if string(retrieved) != string(value) {
+			errChan <- fmt.Errorf("worker %d op %d value mismatch: got %s, want %s",
+				workerID, j, string(retrieved), string(value))
+		}
+
+		if err := client.Delete(ctx, key); err != nil {
+			errChan <- fmt.Errorf("worker %d op %d Delete failed: %w", workerID, j, err)
+		}
+	}
 }
 
 // =============================================================================

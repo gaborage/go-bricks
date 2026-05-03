@@ -961,22 +961,11 @@ func TestOracleOrderByGroupByQuoting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			query := qb.Select("*").From("users")
-
 			if len(tt.groupBy) > 0 {
-				// Convert []string to []any
-				groupByAny := make([]any, len(tt.groupBy))
-				for i, v := range tt.groupBy {
-					groupByAny[i] = v
-				}
-				query = query.GroupBy(groupByAny...)
+				query = query.GroupBy(toAny(tt.groupBy)...)
 			}
 			if len(tt.orderBy) > 0 {
-				// Convert []string to []any
-				orderByAny := make([]any, len(tt.orderBy))
-				for i, v := range tt.orderBy {
-					orderByAny[i] = v
-				}
-				query = query.OrderBy(orderByAny...)
+				query = query.OrderBy(toAny(tt.orderBy)...)
 			}
 
 			sql, _, err := query.ToSQL()

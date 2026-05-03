@@ -346,56 +346,25 @@ func TestResolveProjectPath(t *testing.T) {
 			name:        "absolute path unchanged",
 			projectRoot: "/tmp/test",
 			expectError: false,
-			checkResult: func(t *testing.T, result string) {
-				// On Windows, absolute paths include drive letters
-				// Convert both to absolute for comparison
-				expected, err := filepath.Abs("/tmp/test")
-				if err != nil {
-					t.Fatalf("Failed to resolve expected path: %v", err)
-				}
-				if result != expected {
-					t.Errorf("Expected %s, got %s", expected, result)
-				}
-			},
+			checkResult: checkResolvedAbsolutePath("/tmp/test"),
 		},
 		{
 			name:        "relative path converted",
 			projectRoot: ".",
 			expectError: false,
-			checkResult: func(t *testing.T, result string) {
-				if !filepath.IsAbs(result) {
-					t.Errorf("Expected absolute path, got %s", result)
-				}
-			},
+			checkResult: checkPathIsAbsolute,
 		},
 		{
 			name:        "relative subdirectory",
 			projectRoot: "./subdir",
 			expectError: false,
-			checkResult: func(t *testing.T, result string) {
-				if !filepath.IsAbs(result) {
-					t.Errorf("Expected absolute path, got %s", result)
-				}
-				if !strings.HasSuffix(result, "subdir") {
-					t.Errorf("Expected path ending with 'subdir', got %s", result)
-				}
-			},
+			checkResult: checkPathIsAbsoluteWithSubdirSuffix,
 		},
 		{
 			name:        "path cleaning",
 			projectRoot: "/tmp/test/../project",
 			expectError: false,
-			checkResult: func(t *testing.T, result string) {
-				// On Windows, absolute paths include drive letters
-				// Convert both to absolute for comparison
-				expected, err := filepath.Abs("/tmp/project")
-				if err != nil {
-					t.Fatalf("Failed to resolve expected path: %v", err)
-				}
-				if result != expected {
-					t.Errorf("Expected %s, got %s", expected, result)
-				}
-			},
+			checkResult: checkResolvedAbsolutePath("/tmp/project"),
 		},
 	}
 
@@ -407,6 +376,34 @@ func TestResolveProjectPath(t *testing.T) {
 				tt.checkResult(t, result)
 			}
 		})
+	}
+}
+
+// checkResolvedAbsolutePath returns a checker that asserts the resolved path
+// equals filepath.Abs(expected). Windows absolute paths include drive letters,
+// so we round-trip the expected value through filepath.Abs for comparison.
+func checkResolvedAbsolutePath(expected string) func(*testing.T, string) {
+	return func(t *testing.T, result string) {
+		absExpected, err := filepath.Abs(expected)
+		if err != nil {
+			t.Fatalf("Failed to resolve expected path: %v", err)
+		}
+		if result != absExpected {
+			t.Errorf("Expected %s, got %s", absExpected, result)
+		}
+	}
+}
+
+func checkPathIsAbsolute(t *testing.T, result string) {
+	if !filepath.IsAbs(result) {
+		t.Errorf("Expected absolute path, got %s", result)
+	}
+}
+
+func checkPathIsAbsoluteWithSubdirSuffix(t *testing.T, result string) {
+	checkPathIsAbsolute(t, result)
+	if !strings.HasSuffix(result, "subdir") {
+		t.Errorf("Expected path ending with 'subdir', got %s", result)
 	}
 }
 
@@ -857,19 +854,19 @@ require github.com/other/package v1.0.0
 		t.Run(tt.name, func(t *testing.T) {
 			version, isReplace, err := parseGoBricksVersion(tt.goModContent)
 
-			if tt.expectError {
-				if err == nil {
-					t.Error(msgExpectedError)
-					return
-				}
-
-				if version != tt.expectedVersion {
-					t.Errorf("Expected version %q, got %q", tt.expectedVersion, version)
-				}
-
-				if isReplace != tt.expectedReplace {
-					t.Errorf("Expected isReplace %v, got %v", tt.expectedReplace, isReplace)
-				}
+			if tt.expectError && err == nil {
+				t.Error(msgExpectedError)
+				return
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("Expected no error, got %v", err)
+				return
+			}
+			if version != tt.expectedVersion {
+				t.Errorf("Expected version %q, got %q", tt.expectedVersion, version)
+			}
+			if isReplace != tt.expectedReplace {
+				t.Errorf("Expected isReplace %v, got %v", tt.expectedReplace, isReplace)
 			}
 		})
 	}
