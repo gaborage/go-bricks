@@ -61,9 +61,11 @@ func (fm *FlywayMigrator) DefaultMigrationConfig() *Config {
 	return fm.defaultConfig(fm)
 }
 
-func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
-	vendor := fm.config.Database.Type
-
+// DefaultMigrationConfigForVendor returns the default migration config for the
+// given database vendor (e.g. "postgresql", "oracle"). Used by multi-tenant
+// migrations where each tenant may run a different vendor than the migrator's
+// own cfg.Database.Type.
+func (fm *FlywayMigrator) DefaultMigrationConfigForVendor(vendor string) *Config {
 	return &Config{
 		FlywayPath:    flywayExecutable,
 		ConfigPath:    fmt.Sprintf("flyway/flyway-%s.conf", vendor),
@@ -74,28 +76,48 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 	}
 }
 
-// Migrate executes pending migrations
+func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
+	return fm.DefaultMigrationConfigForVendor(fm.config.Database.Type)
+}
+
+// Migrate executes pending migrations against the migrator's configured database.
 func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
 	}
+	return fm.MigrateFor(ctx, &fm.config.Database, cfg)
+}
 
-	fm.logger.Info().Str("vendor", fm.config.Database.Type).Msg("Starting database migrations")
+// MigrateFor executes pending migrations against the supplied database.
+// Used by multi-tenant migrations to target a tenant-specific DatabaseConfig.
+func (fm *FlywayMigrator) MigrateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
+	if cfg == nil {
+		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
+	}
 
-	// Execute Flyway command
+	fm.logger.Info().Str("vendor", dbVendor(db, fm.config.Database.Type)).Msg("Starting database migrations")
+
 	args := []string{
 		flagConfigFiles + cfg.ConfigPath,
 		flagLocationsFS + cfg.MigrationPath,
 		"migrate",
 	}
 
-	return fm.runFlywayCommand(ctx, cfg, args)
+	return fm.runFlywayCommandFor(ctx, db, cfg, args)
 }
 
-// Info shows information about the status of migrations
+// Info shows information about the status of migrations against the migrator's database.
 func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
+	}
+	return fm.InfoFor(ctx, &fm.config.Database, cfg)
+}
+
+// InfoFor shows migration status for the supplied database.
+func (fm *FlywayMigrator) InfoFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
+	if cfg == nil {
+		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
 	}
 
 	args := []string{
@@ -104,13 +126,21 @@ func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 		"info",
 	}
 
-	return fm.runFlywayCommand(ctx, cfg, args)
+	return fm.runFlywayCommandFor(ctx, db, cfg, args)
 }
 
-// Validate validates migrations without executing them
+// Validate validates migrations without executing them against the migrator's database.
 func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
+	}
+	return fm.ValidateFor(ctx, &fm.config.Database, cfg)
+}
+
+// ValidateFor validates migrations for the supplied database.
+func (fm *FlywayMigrator) ValidateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
+	if cfg == nil {
+		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
 	}
 
 	args := []string{
@@ -119,30 +149,24 @@ func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 		flywayCmdValidate,
 	}
 
-	return fm.runFlywayCommand(ctx, cfg, args)
+	return fm.runFlywayCommandFor(ctx, db, cfg, args)
 }
 
-// runFlywayCommand executes a Flyway command
-func (fm *FlywayMigrator) runFlywayCommand(ctx context.Context, cfg *Config, args []string) error {
-	// Validate FlywayPath para prevenir inyección de comandos
+// runFlywayCommandFor executes a Flyway command using the supplied database config.
+func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, args []string) error {
 	if err := fm.validateFlywayPath(cfg.FlywayPath); err != nil {
 		return fmt.Errorf("invalid flyway path: %w", err)
 	}
 
-	// Create context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// Prepare command
 	// #nosec G204 -- FlywayPath is validated by validateFlywayPath function
 	cmd := exec.CommandContext(timeoutCtx, cfg.FlywayPath, args...)
 
-	// Set environment variables
-	cmd.Env = append(os.Environ(), fm.buildEnvironmentVariables()...)
+	cmd.Env = append(os.Environ(), buildEnvironmentVariables(db)...)
 
-	// Execute command
 	output, err := cmd.CombinedOutput()
-
 	if err != nil {
 		fm.logger.Error().Err(err).Str("output", string(output)).Msg("Error executing Flyway command")
 		return fmt.Errorf("flyway command failed: %w", err)
@@ -152,11 +176,22 @@ func (fm *FlywayMigrator) runFlywayCommand(ctx context.Context, cfg *Config, arg
 	return nil
 }
 
-// buildEnvironmentVariables builds environment variables for Flyway
-func (fm *FlywayMigrator) buildEnvironmentVariables() []string {
-	var envVars []string
+// dbVendor returns the database vendor string from the supplied config, falling
+// back to the migrator's default when the config has no Type set.
+func dbVendor(db *config.DatabaseConfig, fallback string) string {
+	if db != nil && db.Type != "" {
+		return db.Type
+	}
+	return fallback
+}
 
-	db := fm.config.Database
+// buildEnvironmentVariables builds Flyway environment variables for the supplied database.
+func buildEnvironmentVariables(db *config.DatabaseConfig) []string {
+	if db == nil {
+		return nil
+	}
+
+	var envVars []string
 
 	switch db.Type {
 	case config.PostgreSQL:

@@ -81,7 +81,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "d",
 	}}
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env := fm.buildEnvironmentVariables()
+	env := buildEnvironmentVariables(&fm.config.Database)
 	joined := "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -105,7 +105,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "pdb1",
 	}}
 	fm = NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env = fm.buildEnvironmentVariables()
+	env = buildEnvironmentVariables(&fm.config.Database)
 	joined = "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -653,7 +653,7 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-			envVars := fm.buildEnvironmentVariables()
+			envVars := buildEnvironmentVariables(&fm.config.Database)
 			assertEnvVarsContain(t, envVars, tt.expectedVars)
 			assertEnvVarsLackPrefixes(t, envVars, tt.notExpectedVars)
 		})
