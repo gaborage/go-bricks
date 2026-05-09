@@ -203,7 +203,6 @@ func runParallel(
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, len(tenantIDs))}
 	state := &parallelState{
 		out:    out,
-		runCtx: runCtx,
 		cancel: cancel,
 	}
 	sem := make(chan struct{}, parallelism)
@@ -222,7 +221,7 @@ dispatch:
 		go func(idx int, tenantID string) {
 			defer state.wg.Done()
 			defer func() { <-sem }()
-			state.runWorker(idx, tenantID, migrator, configs, action, opts)
+			state.runWorker(runCtx, idx, tenantID, migrator, configs, action, opts)
 		}(i, id)
 	}
 
@@ -244,10 +243,12 @@ dispatch:
 }
 
 // parallelState bundles the shared mutable state of a runParallel invocation
-// behind one struct so the dispatch loop and worker body stay shallow.
+// behind one struct so the dispatch loop and worker body stay shallow. The
+// run-context is intentionally not a field here — it's threaded through
+// runWorker as a parameter so context.Context isn't held in struct state
+// (Sonar go:S8242).
 type parallelState struct {
 	out      *MigrateAllResult
-	runCtx   context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	hookMu   sync.Mutex
@@ -256,6 +257,7 @@ type parallelState struct {
 }
 
 func (s *parallelState) runWorker(
+	ctx context.Context,
 	idx int,
 	tenantID string,
 	migrator *FlywayMigrator,
@@ -263,7 +265,7 @@ func (s *parallelState) runWorker(
 	action Action,
 	opts MigrateAllOptions,
 ) {
-	res := runOne(s.runCtx, migrator, configs, action, tenantID, opts.BaseConfig)
+	res := runOne(ctx, migrator, configs, action, tenantID, opts.BaseConfig)
 	s.out.Results[idx] = res
 
 	if opts.Hook != nil {
