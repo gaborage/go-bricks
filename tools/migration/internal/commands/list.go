@@ -26,7 +26,7 @@ func NewListCommand() *cobra.Command {
 			return fmt.Errorf("--source-url and --source-config are mutually exclusive")
 		}
 
-		lister, err := buildLister(flags)
+		lister, err := buildLister(flags, nil)
 		if err != nil {
 			return err
 		}
@@ -43,7 +43,7 @@ func NewListCommand() *cobra.Command {
 
 		out := c.OutOrStdout()
 		if flags.JSON {
-			_ = json.NewEncoder(out).Encode(map[string]any{"tenants": ids})
+			_ = json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids})
 			return nil
 		}
 		for _, id := range ids {

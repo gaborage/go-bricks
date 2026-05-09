@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
@@ -20,14 +21,17 @@ const (
 	flagLocationsFS = "-locations=filesystem:"
 
 	flywayExecutable  = "flyway"
+	flywayCmdMigrate  = "migrate"
 	flywayCmdValidate = "validate"
+	flywayCmdInfo     = "info"
 )
 
 // FlywayMigrator handles database migrations using Flyway
 type FlywayMigrator struct {
-	config        *config.Config
-	logger        logger.Logger
-	defaultConfig func(*FlywayMigrator) *Config
+	config         *config.Config
+	logger         logger.Logger
+	defaultConfig  func(*FlywayMigrator) *Config
+	validatedPaths sync.Map
 }
 
 // Config configuration for migrations
@@ -91,19 +95,7 @@ func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 // MigrateFor executes pending migrations against the supplied database.
 // Used by multi-tenant migrations to target a tenant-specific DatabaseConfig.
 func (fm *FlywayMigrator) MigrateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
-	if cfg == nil {
-		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
-	}
-
-	fm.logger.Info().Str("vendor", dbVendor(db, fm.config.Database.Type)).Msg("Starting database migrations")
-
-	args := []string{
-		flagConfigFiles + cfg.ConfigPath,
-		flagLocationsFS + cfg.MigrationPath,
-		"migrate",
-	}
-
-	return fm.runFlywayCommandFor(ctx, db, cfg, args)
+	return fm.runFor(ctx, db, cfg, flywayCmdMigrate)
 }
 
 // Info shows information about the status of migrations against the migrator's database.
@@ -116,17 +108,7 @@ func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 
 // InfoFor shows migration status for the supplied database.
 func (fm *FlywayMigrator) InfoFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
-	if cfg == nil {
-		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
-	}
-
-	args := []string{
-		flagConfigFiles + cfg.ConfigPath,
-		flagLocationsFS + cfg.MigrationPath,
-		"info",
-	}
-
-	return fm.runFlywayCommandFor(ctx, db, cfg, args)
+	return fm.runFor(ctx, db, cfg, flywayCmdInfo)
 }
 
 // Validate validates migrations without executing them against the migrator's database.
@@ -139,16 +121,24 @@ func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 
 // ValidateFor validates migrations for the supplied database.
 func (fm *FlywayMigrator) ValidateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
+	return fm.runFor(ctx, db, cfg, flywayCmdValidate)
+}
+
+func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) error {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
 	}
 
+	fm.logger.Info().
+		Str("vendor", dbVendor(db, fm.config.Database.Type)).
+		Str("action", verb).
+		Msg("Starting Flyway command")
+
 	args := []string{
 		flagConfigFiles + cfg.ConfigPath,
 		flagLocationsFS + cfg.MigrationPath,
-		flywayCmdValidate,
+		verb,
 	}
-
 	return fm.runFlywayCommandFor(ctx, db, cfg, args)
 }
 
@@ -168,7 +158,7 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fm.logger.Error().Err(err).Str("output", string(output)).Msg("Error executing Flyway command")
+		fm.logger.Error().Err(err).Str("output", redactPassword(string(output), db)).Msg("Error executing Flyway command")
 		return fmt.Errorf("flyway command failed: %w", err)
 	}
 
@@ -215,18 +205,20 @@ func buildEnvironmentVariables(db *config.DatabaseConfig) []string {
 	return envVars
 }
 
-// validateFlywayPath valida que el path de Flyway sea seguro
+// validateFlywayPath ensures the Flyway path is non-empty, free of shell
+// metacharacters, and points at an existing file. Successful validations are
+// memoized per FlywayMigrator so multi-tenant runs don't re-stat the binary.
 func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
+	if _, ok := fm.validatedPaths.Load(flywayPath); ok {
+		return nil
+	}
 	if flywayPath == "" {
 		return fmt.Errorf("flyway path cannot be empty")
 	}
-
-	// Verificar que no contenga caracteres peligrosos
 	if strings.Contains(flywayPath, "..") || strings.Contains(flywayPath, ";") || strings.Contains(flywayPath, "&") {
 		return fmt.Errorf("flyway path contains dangerous characters")
 	}
 
-	// Verificar que sea un path absoluto o relativo válido
 	cleanPath := filepath.Clean(flywayPath)
 	if cleanPath != flywayPath {
 		fm.logger.Warn().
@@ -235,12 +227,22 @@ func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 			Msg("Flyway path was cleaned, potential security issue")
 	}
 
-	// Verificar que el archivo exista (opcional, pero recomendado para seguridad)
 	if _, err := os.Stat(cleanPath); os.IsNotExist(err) {
 		return fmt.Errorf("flyway executable not found at path: %s", cleanPath)
 	}
 
+	fm.validatedPaths.Store(flywayPath, struct{}{})
 	return nil
+}
+
+// redactPassword scrubs the database password from Flyway's stdout/stderr so
+// connection-string echoes in error logs don't leak credentials. Empty
+// passwords are left untouched.
+func redactPassword(output string, db *config.DatabaseConfig) string {
+	if db == nil || db.Password == "" {
+		return output
+	}
+	return strings.ReplaceAll(output, db.Password, "[REDACTED]")
 }
 
 // RunMigrationsAtStartup executes migrations automatically at application startup

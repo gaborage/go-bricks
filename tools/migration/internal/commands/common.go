@@ -27,16 +27,20 @@ const (
 	credsSourceAWS  = "aws-secrets-manager"
 	credsSourceFile = "config-file"
 
-	envSourceToken    = "GOBRICKS_MIGRATE_SOURCE_TOKEN"
-	envSecretsPrefix  = "GOBRICKS_MIGRATE_SECRETS_PREFIX"
+	envSourceToken   = "GOBRICKS_MIGRATE_SOURCE_TOKEN"
+	envSecretsPrefix = "GOBRICKS_MIGRATE_SECRETS_PREFIX"
+
+	jsonKeyTenants = "tenants"
 )
 
 // resolveFlags applies env-var fallbacks and returns a validated copy of flags.
-func resolveFlags(flags *CommonFlags) error {
+// cmd is consulted via Flags().Changed so an explicit --secrets-prefix on the
+// command line wins over the env override even when both equal the default.
+func resolveFlags(cmd *cobra.Command, flags *CommonFlags) error {
 	if flags.SourceToken == "" {
 		flags.SourceToken = os.Getenv(envSourceToken)
 	}
-	if v := os.Getenv(envSecretsPrefix); v != "" && flags.SecretsPrefix == "gobricks/migrate/" {
+	if v := os.Getenv(envSecretsPrefix); v != "" && !cmd.Flags().Changed("secrets-prefix") {
 		flags.SecretsPrefix = v
 	}
 
@@ -62,9 +66,26 @@ func resolveFlags(flags *CommonFlags) error {
 	return nil
 }
 
+// maybeLoadFileStore parses the YAML config file once when either the listing
+// path or the credentials path will need it, so the parse isn't repeated.
+// Returns nil when no path needs the file store.
+func maybeLoadFileStore(flags *CommonFlags) (*config.TenantStore, error) {
+	if flags.SourceConfig == "" {
+		return nil, nil
+	}
+	listingNeeds := flags.Tenant == "" && flags.SourceURL == ""
+	credsNeeds := flags.CredentialsFrom == credsSourceFile
+	if !listingNeeds && !credsNeeds {
+		return nil, nil
+	}
+	return loadTenantStoreFromFile(flags.SourceConfig)
+}
+
 // buildLister constructs the TenantLister from the supplied flags.
-// When --tenant is set, returns a single-tenant lister.
-func buildLister(flags *CommonFlags) (migration.TenantLister, error) {
+// When --tenant is set, returns a single-tenant lister. fileStore, when
+// non-nil, is reused for the static-source path so callers can share one
+// parse with buildConfigProvider.
+func buildLister(flags *CommonFlags, fileStore *config.TenantStore) (migration.TenantLister, error) {
 	if flags.Tenant != "" {
 		return &fixedLister{ids: []string{flags.Tenant}}, nil
 	}
@@ -75,15 +96,20 @@ func buildLister(flags *CommonFlags) (migration.TenantLister, error) {
 		})
 	}
 
-	store, err := loadTenantStoreFromFile(flags.SourceConfig)
-	if err != nil {
-		return nil, err
+	if fileStore == nil {
+		var err error
+		fileStore, err = loadTenantStoreFromFile(flags.SourceConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return staticsource.FromConfigStore(store), nil
+	return staticsource.FromConfigStore(fileStore), nil
 }
 
-// buildConfigProvider constructs a database.DBConfigProvider from the supplied flags.
-func buildConfigProvider(ctx context.Context, flags *CommonFlags) (database.DBConfigProvider, error) {
+// buildConfigProvider constructs a database.DBConfigProvider from the supplied
+// flags. fileStore, when non-nil, is reused for the config-file credentials
+// source so the YAML isn't parsed twice per invocation.
+func buildConfigProvider(ctx context.Context, flags *CommonFlags, fileStore *config.TenantStore) (database.DBConfigProvider, error) {
 	switch flags.CredentialsFrom {
 	case credsSourceAWS:
 		fetcher, err := awssm.NewFetcher(ctx, awssm.Options{
@@ -104,6 +130,9 @@ func buildConfigProvider(ctx context.Context, flags *CommonFlags) (database.DBCo
 		return provider, nil
 
 	case credsSourceFile:
+		if fileStore != nil {
+			return fileStore, nil
+		}
 		return loadTenantStoreFromFile(flags.SourceConfig)
 
 	default:
@@ -148,21 +177,20 @@ func validateConfigPath(path string) error {
 }
 
 // buildBaseConfig translates flag values into a *migration.Config with only
-// user-supplied fields filled. Vendor-specific defaults are applied per tenant
-// inside MigrateAll.
+// user-supplied fields filled. Vendor-specific defaults (including Timeout)
+// are applied per tenant inside MigrateAll, so leaving Timeout zero here lets
+// each vendor's recommended timeout win unless the user overrides it.
 func buildBaseConfig(flags *CommonFlags) *migration.Config {
-	cfg := &migration.Config{
+	return &migration.Config{
 		FlywayPath:    flags.FlywayPath,
 		ConfigPath:    flags.FlywayConfig,
 		MigrationPath: flags.MigrationsDir,
-		Timeout:       5 * time.Minute,
 	}
-	return cfg
 }
 
 // runAction is the shared entry point for migrate/validate/info subcommands.
 func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) error {
-	if err := resolveFlags(flags); err != nil {
+	if err := resolveFlags(cmd, flags); err != nil {
 		return err
 	}
 
@@ -171,12 +199,17 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		ctx = context.Background()
 	}
 
-	lister, err := buildLister(flags)
+	fileStore, err := maybeLoadFileStore(flags)
+	if err != nil {
+		return err
+	}
+
+	lister, err := buildLister(flags, fileStore)
 	if err != nil {
 		return fmt.Errorf("build tenant lister: %w", err)
 	}
 
-	provider, err := buildConfigProvider(ctx, flags)
+	provider, err := buildConfigProvider(ctx, flags, fileStore)
 	if err != nil {
 		return fmt.Errorf("build config provider: %w", err)
 	}
@@ -275,8 +308,22 @@ func writeSummary(out interface{ Write(p []byte) (int, error) }, result *migrati
 		return
 	}
 
-	fmt.Fprintf(out, "\n%s summary: %d tenants total, %d failed\n", strings.Title(result.Action.String()), total, len(failed)) //nolint:staticcheck // legacy Title call is fine for ASCII action verbs
+	fmt.Fprintf(out, "\n%s summary: %d tenants total, %d failed\n", titleASCII(result.Action.String()), total, len(failed))
 	for _, f := range failed {
 		fmt.Fprintf(out, "  - %s: %v\n", f.TenantID, f.Err)
 	}
+}
+
+// titleASCII upper-cases the first byte of an ASCII action verb (migrate ->
+// Migrate). Action verbs are guaranteed ASCII so we avoid pulling in
+// golang.org/x/text just to replace the deprecated strings.Title.
+func titleASCII(s string) string {
+	if s == "" {
+		return s
+	}
+	first := s[0]
+	if first >= 'a' && first <= 'z' {
+		return string(first-'a'+'A') + s[1:]
+	}
+	return s
 }

@@ -3,6 +3,8 @@ package commands
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/gaborage/go-bricks/migration"
 )
 
 // CommonFlags holds flags shared by every action subcommand.
@@ -13,9 +15,9 @@ type CommonFlags struct {
 	SourceConfig string
 
 	// Credential resolution.
-	SecretsPrefix string
-	AWSRegion     string
-	AWSProfile    string
+	SecretsPrefix   string
+	AWSRegion       string
+	AWSProfile      string
 	AWSEndpoint     string
 	CredentialsFrom string
 
@@ -67,7 +69,7 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().StringVar(&flags.SourceConfig, "source-config", "", "Path to a YAML config file with multitenant.tenants block (alternative to --source-url)")
 
 	// Credential resolution.
-	cmd.Flags().StringVar(&flags.SecretsPrefix, "secrets-prefix", "gobricks/migrate/", "Prefix for AWS Secrets Manager secret names (final name = prefix + tenant_id)")
+	cmd.Flags().StringVar(&flags.SecretsPrefix, "secrets-prefix", migration.DefaultSecretsPrefix, "Prefix for AWS Secrets Manager secret names (final name = prefix + tenant_id)")
 	cmd.Flags().StringVar(&flags.AWSRegion, "aws-region", "", "AWS region (falls back to AWS_REGION / SDK default chain)")
 	cmd.Flags().StringVar(&flags.AWSProfile, "aws-profile", "", "AWS profile (falls back to AWS_PROFILE)")
 	cmd.Flags().StringVar(&flags.AWSEndpoint, "aws-endpoint", "", "AWS Secrets Manager endpoint override (LocalStack, private VPC endpoint)")

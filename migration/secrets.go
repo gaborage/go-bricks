@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/gaborage/go-bricks/config"
 )
@@ -31,6 +32,9 @@ type SecretsProvider struct {
 
 	// Fetch resolves a secret name to its payload. Required.
 	Fetch SecretFetcher
+
+	validateOnce sync.Once
+	validateErr  error
 }
 
 // ErrInvalidPrefix indicates the configured prefix is unusable.
@@ -43,16 +47,21 @@ var ErrSecretMalformed = errors.New("migration: secret payload malformed")
 // ErrNoFetcher indicates the SecretsProvider was constructed without a Fetch function.
 var ErrNoFetcher = errors.New("migration: SecretsProvider.Fetch is nil")
 
-// Validate checks that the provider is wired correctly. Call eagerly at startup
-// so misconfiguration surfaces before any tenant lookup.
+// Validate checks that the provider is wired correctly. Callers may invoke it
+// eagerly at startup; DBConfig also calls it lazily on first lookup so library
+// callers who skip the explicit check still get a clear error before any
+// tenant fetch.
 func (p *SecretsProvider) Validate() error {
-	if p.Fetch == nil {
-		return ErrNoFetcher
-	}
-	if p.Prefix != "" && !strings.HasSuffix(p.Prefix, "/") {
-		return fmt.Errorf("%w: %q", ErrInvalidPrefix, p.Prefix)
-	}
-	return nil
+	p.validateOnce.Do(func() {
+		if p.Fetch == nil {
+			p.validateErr = ErrNoFetcher
+			return
+		}
+		if p.Prefix != "" && !strings.HasSuffix(p.Prefix, "/") {
+			p.validateErr = fmt.Errorf("%w: %q", ErrInvalidPrefix, p.Prefix)
+		}
+	})
+	return p.validateErr
 }
 
 // SecretName composes the full secret name for the given tenant ID using the
@@ -68,8 +77,8 @@ func (p *SecretsProvider) SecretName(tenantID string) string {
 // DBConfig satisfies database.DBConfigProvider. Looks up the tenant's secret,
 // parses the payload, and returns the resulting DatabaseConfig.
 func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
-	if p.Fetch == nil {
-		return nil, ErrNoFetcher
+	if err := p.Validate(); err != nil {
+		return nil, err
 	}
 
 	name := p.SecretName(tenantID)
@@ -85,69 +94,54 @@ func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*confi
 	return cfg, nil
 }
 
-// secretPayload mirrors both the canonical go-bricks DatabaseConfig shape and
-// the AWS-managed RDS rotation shape. Canonical fields take precedence when
-// both are present.
-type secretPayload struct {
-	// Canonical (go-bricks DatabaseConfig field names)
-	Type             string `json:"type"`
-	Host             string `json:"host"`
-	Port             int    `json:"port"`
-	Database         string `json:"database"`
-	Username         string `json:"username"`
-	Password         string `json:"password"`
-	ConnectionString string `json:"connectionstring"`
-
-	// RDS rotation fallback aliases
+// rdsRotationAliases carries the AWS-managed RDS rotation fields that don't
+// share JSON tags with config.DatabaseConfig. The canonical shape is decoded
+// directly into *config.DatabaseConfig; only these aliases need a parallel
+// struct.
+type rdsRotationAliases struct {
 	Engine string `json:"engine"`
 	DBName string `json:"dbname"`
 }
 
 // parseSecretPayload decodes the secret bytes into a *config.DatabaseConfig.
-// The canonical shape is tried first; if Type/Database are empty, the parser
-// falls back to the AWS RDS rotation shape (engine/dbname). Returns
+// The canonical go-bricks shape is decoded directly; any blank Type/Database
+// is then filled from the AWS RDS rotation aliases (engine/dbname). Returns
 // ErrSecretMalformed if neither shape produces a usable config.
 func parseSecretPayload(raw []byte) (*config.DatabaseConfig, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("%w: empty payload", ErrSecretMalformed)
 	}
 
-	var p secretPayload
-	if err := json.Unmarshal(raw, &p); err != nil {
+	var cfg config.DatabaseConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSecretMalformed, err)
 	}
 
-	dbType := p.Type
-	if dbType == "" {
-		dbType = normalizeEngine(p.Engine)
+	var aliases rdsRotationAliases
+	if err := json.Unmarshal(raw, &aliases); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSecretMalformed, err)
 	}
 
-	dbName := p.Database
-	if dbName == "" {
-		dbName = p.DBName
+	if cfg.Type == "" {
+		cfg.Type = normalizeEngine(aliases.Engine)
+	}
+	if cfg.Database == "" {
+		cfg.Database = aliases.DBName
 	}
 
-	if dbType == "" || p.Host == "" || p.Username == "" {
+	if cfg.Type == "" || cfg.Host == "" || cfg.Username == "" {
 		return nil, fmt.Errorf("%w: missing required fields (type/engine, host, username)", ErrSecretMalformed)
 	}
 
-	return &config.DatabaseConfig{
-		Type:             dbType,
-		Host:             p.Host,
-		Port:             p.Port,
-		Database:         dbName,
-		Username:         p.Username,
-		Password:         p.Password,
-		ConnectionString: p.ConnectionString,
-	}, nil
+	return &cfg, nil
 }
 
 // normalizeEngine maps AWS-managed engine names to go-bricks vendor strings.
 func normalizeEngine(engine string) string {
 	switch strings.ToLower(strings.TrimSpace(engine)) {
-	case "postgres", "postgresql", "aurora-postgresql":
+	case "postgres", config.PostgreSQL, "aurora-postgresql":
 		return config.PostgreSQL
-	case "oracle", "oracle-ee", "oracle-se2":
+	case config.Oracle, "oracle-ee", "oracle-se2":
 		return config.Oracle
 	case "":
 		return ""

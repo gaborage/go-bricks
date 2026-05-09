@@ -27,11 +27,11 @@ const (
 func (a Action) String() string {
 	switch a {
 	case ActionMigrate:
-		return "migrate"
+		return flywayCmdMigrate
 	case ActionValidate:
-		return "validate"
+		return flywayCmdValidate
 	case ActionInfo:
-		return "info"
+		return flywayCmdInfo
 	default:
 		return fmt.Sprintf("unknown(%d)", a)
 	}
@@ -144,12 +144,6 @@ func MigrateAll(
 			Str("action", action.String())
 	}, "Starting multi-tenant migration")
 
-	if opts.Parallelism > 1 && !opts.ContinueOnError {
-		// Parallel + fail-fast can't cancel cleanly without losing in-flight
-		// results. Force continue-on-error semantics to keep behavior sane.
-		opts.ContinueOnError = true
-	}
-
 	if opts.Parallelism <= 1 {
 		return runSequential(ctx, migrator, configs, action, tenantIDs, opts)
 	}
@@ -202,15 +196,22 @@ func runParallel(
 		parallelism = maxParallelism
 	}
 
+	// Derived cancellation lets fail-fast siblings unblock when a tenant fails.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, len(tenantIDs))}
 	var hookMu sync.Mutex
+	var firstErrMu sync.Mutex
+	var firstErr error
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 
+dispatch:
 	for i, id := range tenantIDs {
 		select {
-		case <-ctx.Done():
-			return out, ctx.Err()
+		case <-runCtx.Done():
+			break dispatch
 		case sem <- struct{}{}:
 		}
 
@@ -219,7 +220,7 @@ func runParallel(
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			res := runOne(ctx, migrator, configs, action, tenantID, opts.BaseConfig)
+			res := runOne(runCtx, migrator, configs, action, tenantID, opts.BaseConfig)
 			out.Results[idx] = res
 
 			if opts.Hook != nil {
@@ -227,10 +228,26 @@ func runParallel(
 				opts.Hook(res)
 				hookMu.Unlock()
 			}
+
+			if res.Err != nil && !opts.ContinueOnError {
+				firstErrMu.Lock()
+				if firstErr == nil {
+					firstErr = res.Err
+				}
+				firstErrMu.Unlock()
+				cancel()
+			}
 		}(i, id)
 	}
 
 	wg.Wait()
+
+	if firstErr != nil {
+		return out, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -253,11 +270,8 @@ func runOne(
 	}
 	res.Vendor = dbCfg.Type
 
-	cfg := baseCfg
-	if cfg == nil || cfg.ConfigPath == "" || cfg.MigrationPath == "" {
-		defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)
-		cfg = mergeConfigs(defaults, baseCfg)
-	}
+	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)
+	cfg := mergeConfigs(defaults, baseCfg)
 
 	switch action {
 	case ActionMigrate:

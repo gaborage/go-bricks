@@ -34,6 +34,11 @@ const DefaultPageLimit = 100
 // DefaultTimeout is applied to the underlying *http.Client when none is supplied.
 const DefaultTimeout = 30 * time.Second
 
+// maxPages bounds ListTenants so a misbehaving server returning a non-progressing
+// next_cursor cannot loop forever. At DefaultPageLimit=100, this caps the result
+// set at one million tenants — well past any realistic fleet size.
+const maxPages = 10000
+
 // Options configures TenantSource.
 type Options struct {
 	// BearerToken is sent in the Authorization header when non-empty.
@@ -56,7 +61,7 @@ type TenantSource struct {
 	pageLimit   int
 }
 
-// New constructs an TenantSource. baseURL must be parseable; the /tenants
+// New constructs a TenantSource. baseURL must be parseable; the /tenants
 // path is appended automatically.
 func New(baseURL string, opts Options) (*TenantSource, error) {
 	if strings.TrimSpace(baseURL) == "" {
@@ -132,7 +137,7 @@ func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 		cursor string
 	)
 
-	for {
+	for i := 0; i < maxPages; i++ {
 		page, err := s.fetchPage(ctx, cursor)
 		if err != nil {
 			return nil, err
@@ -147,8 +152,12 @@ func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 		if page.NextCursor == "" {
 			return out, nil
 		}
+		if page.NextCursor == cursor {
+			return nil, fmt.Errorf("control-plane returned non-progressing next_cursor %q", cursor)
+		}
 		cursor = page.NextCursor
 	}
+	return nil, fmt.Errorf("control-plane pagination exceeded %d pages", maxPages)
 }
 
 func (s *TenantSource) fetchPage(ctx context.Context, cursor string) (*envelopeData, error) {
