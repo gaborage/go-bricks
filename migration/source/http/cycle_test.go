@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,10 +14,10 @@ import (
 
 func TestListTenantsRejectsRepeatedCursor(t *testing.T) {
 	// Server that bounces between cursor "a" and cursor "b" forever.
-	hits := 0
+	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cursor := r.URL.Query().Get("cursor")
-		hits++
+		hits.Add(1)
 		var next string
 		switch cursor {
 		case "":
@@ -43,5 +44,5 @@ func TestListTenantsRejectsRepeatedCursor(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cycle detected")
 	// Cycle should be detected within the first few pages.
-	assert.LessOrEqual(t, hits, 4)
+	assert.LessOrEqual(t, hits.Load(), int32(4))
 }

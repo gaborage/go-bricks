@@ -13,5 +13,5 @@ func TestFetcherFromClientNilReturnsErrorFetcher(t *testing.T) {
 	require.NotNil(t, fetcher)
 	_, err := fetcher(context.Background(), "any")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil SecretsManagerAPI client")
+	assert.Contains(t, err.Error(), "nil SecretValueGetter client")
 }

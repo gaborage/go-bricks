@@ -201,11 +201,12 @@ func runParallel(
 	defer cancel()
 
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, len(tenantIDs))}
-	var hookMu sync.Mutex
-	var firstErrMu sync.Mutex
-	var firstErr error
+	state := &parallelState{
+		out:    out,
+		runCtx: runCtx,
+		cancel: cancel,
+	}
 	sem := make(chan struct{}, parallelism)
-	var wg sync.WaitGroup
 	dispatched := 0
 
 dispatch:
@@ -217,32 +218,15 @@ dispatch:
 		}
 
 		dispatched++
-		wg.Add(1)
+		state.wg.Add(1)
 		go func(idx int, tenantID string) {
-			defer wg.Done()
+			defer state.wg.Done()
 			defer func() { <-sem }()
-
-			res := runOne(runCtx, migrator, configs, action, tenantID, opts.BaseConfig)
-			out.Results[idx] = res
-
-			if opts.Hook != nil {
-				hookMu.Lock()
-				opts.Hook(res)
-				hookMu.Unlock()
-			}
-
-			if res.Err != nil && !opts.ContinueOnError {
-				firstErrMu.Lock()
-				if firstErr == nil {
-					firstErr = res.Err
-				}
-				firstErrMu.Unlock()
-				cancel()
-			}
+			state.runWorker(idx, tenantID, migrator, configs, action, opts)
 		}(i, id)
 	}
 
-	wg.Wait()
+	state.wg.Wait()
 
 	// Trim trailing zero-value slots when the dispatch loop exited early so
 	// callers iterating Results don't see synthetic empty tenants.
@@ -250,13 +234,56 @@ dispatch:
 		out.Results = out.Results[:dispatched]
 	}
 
-	if firstErr != nil {
-		return out, firstErr
+	if state.firstErr != nil {
+		return out, state.firstErr
 	}
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
 	return out, nil
+}
+
+// parallelState bundles the shared mutable state of a runParallel invocation
+// behind one struct so the dispatch loop and worker body stay shallow.
+type parallelState struct {
+	out      *MigrateAllResult
+	runCtx   context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	hookMu   sync.Mutex
+	errMu    sync.Mutex
+	firstErr error
+}
+
+func (s *parallelState) runWorker(
+	idx int,
+	tenantID string,
+	migrator *FlywayMigrator,
+	configs database.DBConfigProvider,
+	action Action,
+	opts MigrateAllOptions,
+) {
+	res := runOne(s.runCtx, migrator, configs, action, tenantID, opts.BaseConfig)
+	s.out.Results[idx] = res
+
+	if opts.Hook != nil {
+		s.hookMu.Lock()
+		opts.Hook(res)
+		s.hookMu.Unlock()
+	}
+
+	if res.Err != nil && !opts.ContinueOnError {
+		s.recordFirstErr(res.Err)
+		s.cancel()
+	}
+}
+
+func (s *parallelState) recordFirstErr(err error) {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	if s.firstErr == nil {
+		s.firstErr = err
+	}
 }
 
 func runOne(

@@ -33,7 +33,10 @@ func FromConfigStore(store TenantStoreLister) *TenantSource {
 }
 
 // ListTenants returns the tenant IDs known to the underlying store, sorted
-// alphabetically for deterministic CI output.
+// alphabetically for deterministic CI output. An empty-string tenant ID is
+// rejected with an error rather than silently leaking downstream — the
+// migration runner would otherwise compose a malformed secret name like
+// "gobricks/migrate/" and fail with a confusing fetch error.
 func (s *TenantSource) ListTenants(_ context.Context) ([]string, error) {
 	if s == nil || s.store == nil {
 		return nil, ErrNilStore
@@ -41,6 +44,9 @@ func (s *TenantSource) ListTenants(_ context.Context) ([]string, error) {
 	tenants := s.store.Tenants()
 	out := make([]string, 0, len(tenants))
 	for id := range tenants {
+		if id == "" {
+			return nil, errors.New("migration/source/static: tenant store contains empty tenant id")
+		}
 		out = append(out, id)
 	}
 	sort.Strings(out)

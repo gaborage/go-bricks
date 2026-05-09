@@ -481,13 +481,12 @@ jobs:
               echo "Testing package: $pkg"
               go test -race "$pkg"
             done
-            # Generate combined coverage for SonarCloud (Ubuntu only)
+            # Generate combined coverage for SonarCloud (Ubuntu only).
+            # Failures here fail the job — silent absence of coverage is what
+            # produced the SonarCloud-coverage gap the migrate tool addresses.
             if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
               echo "Generating coverage report for SonarCloud"
-              go test -race -coverprofile=coverage.out -covermode=atomic $packages || {
-                echo "Coverage generation failed, but tests passed"
-                exit 0
-              }
+              go test -race -coverprofile=coverage.out -covermode=atomic $packages
             fi
           else
             echo "No packages found to test"
@@ -659,12 +658,11 @@ jobs:
             echo "Testing package: $pkg"
             go test -race "$pkg"
           done
+          # Coverage failures fail the job — silent absence is what created
+          # the SonarCloud-coverage gap this tool fixes.
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             echo "Generating coverage report for SonarCloud"
-            go test -race -coverprofile=coverage.out -covermode=atomic $packages || {
-              echo "Coverage generation failed, but tests passed"
-              exit 0
-            }
+            go test -race -coverprofile=coverage.out -covermode=atomic $packages
           fi
 
       - name: Run tests (Windows)

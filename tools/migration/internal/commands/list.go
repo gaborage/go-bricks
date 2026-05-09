@@ -18,20 +18,8 @@ func NewListCommand() *cobra.Command {
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {
-		// list never needs credentials — bypass full resolveFlags credential
-		// validation. Require exactly one source selector.
-		selectors := 0
-		if flags.SourceURL != "" {
-			selectors++
-		}
-		if flags.SourceConfig != "" {
-			selectors++
-		}
-		if flags.Tenant != "" {
-			selectors++
-		}
-		if selectors != 1 {
-			return errors.New("exactly one of --source-url, --source-config, or --tenant is required")
+		if err := requireExactlyOneSource(flags); err != nil {
+			return err
 		}
 
 		lister, err := buildLister(flags, nil)
@@ -49,19 +37,44 @@ func NewListCommand() *cobra.Command {
 			return err
 		}
 
-		out := c.OutOrStdout()
-		if flags.JSON {
-			if err := json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids}); err != nil {
-				return fmt.Errorf("encode tenants JSON: %w", err)
-			}
-			return nil
-		}
-		for _, id := range ids {
-			if _, err := fmt.Fprintln(out, id); err != nil {
-				return fmt.Errorf("write tenant id: %w", err)
-			}
+		return writeTenantIDs(c.OutOrStdout(), ids, flags.JSON)
+	}
+	return cmd
+}
+
+// requireExactlyOneSource enforces the listing-only invariant for the list
+// command, which deliberately bypasses resolveFlags' credential checks.
+func requireExactlyOneSource(flags *CommonFlags) error {
+	selectors := 0
+	if flags.SourceURL != "" {
+		selectors++
+	}
+	if flags.SourceConfig != "" {
+		selectors++
+	}
+	if flags.Tenant != "" {
+		selectors++
+	}
+	if selectors != 1 {
+		return errors.New("exactly one of --source-url, --source-config, or --tenant is required")
+	}
+	return nil
+}
+
+// writeTenantIDs emits ids as NDJSON when asJSON is set or one-per-line text
+// otherwise, propagating writer errors so a broken pipe surfaces as a non-zero
+// exit instead of being silently dropped.
+func writeTenantIDs(out interface{ Write(p []byte) (int, error) }, ids []string, asJSON bool) error {
+	if asJSON {
+		if err := json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids}); err != nil {
+			return fmt.Errorf("encode tenants JSON: %w", err)
 		}
 		return nil
 	}
-	return cmd
+	for _, id := range ids {
+		if _, err := fmt.Fprintln(out, id); err != nil {
+			return fmt.Errorf("write tenant id: %w", err)
+		}
+	}
+	return nil
 }

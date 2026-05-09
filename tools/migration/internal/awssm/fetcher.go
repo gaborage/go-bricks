@@ -28,9 +28,9 @@ type Options struct {
 	Endpoint string
 }
 
-// SecretsManagerAPI is the subset of the AWS SDK we depend on. Defined as an
+// SecretValueGetter is the subset of the AWS SDK we depend on. Defined as an
 // interface so tests can substitute a fake without spinning up an HTTP server.
-type SecretsManagerAPI interface {
+type SecretValueGetter interface {
 	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
 }
 
@@ -63,14 +63,14 @@ func NewFetcher(ctx context.Context, opts Options) (migration.SecretFetcher, err
 	return FetcherFromClient(client), nil
 }
 
-// FetcherFromClient wraps any SecretsManagerAPI as a migration.SecretFetcher.
+// FetcherFromClient wraps any SecretValueGetter as a migration.SecretFetcher.
 // Exposed primarily for tests but also useful when callers already hold a
 // configured client. A nil client returns a fetcher that fails deterministically
 // rather than panicking on a nil-interface method call.
-func FetcherFromClient(client SecretsManagerAPI) migration.SecretFetcher {
+func FetcherFromClient(client SecretValueGetter) migration.SecretFetcher {
 	if client == nil {
 		return func(context.Context, string) ([]byte, error) {
-			return nil, errors.New("awssm: nil SecretsManagerAPI client")
+			return nil, errors.New("awssm: nil SecretValueGetter client")
 		}
 	}
 	return func(ctx context.Context, name string) ([]byte, error) {
