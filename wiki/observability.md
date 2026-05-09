@@ -107,7 +107,18 @@ See [llms.txt](../llms.txt) Custom Metrics section for complete code examples in
 
 ## Observability Headers & Authentication
 
-Headers (API keys, bearer tokens) MUST be configured in YAML files, NOT via environment variables. Use environment-specific config files (e.g., `config.production.yaml`) with vendor headers. Never commit secrets to git.
+The OTLP exporter reads headers from `observability.trace.headers` (and the equivalent `metrics.headers` / `logs.headers`) in YAML — there is no built-in support for separate `OBSERVABILITY_*_HEADERS_*` env vars. **The header structure goes in YAML; the secret values come from environment variables via Koanf substitution** (the same pattern used elsewhere in `config.example.yaml`). Hardcoding API keys or bearer tokens directly in committed YAML is forbidden.
+
+```yaml
+# config.production.yaml — SAFE: header structure in YAML, value from env
+observability:
+  trace:
+    headers:
+      api-key: ${NEW_RELIC_API_KEY}   # resolved at startup from environment
+
+# UNSAFE — never commit:
+#   api-key: "nrak-ABC123..."         # hardcoded secret
+```
 
 **Supported vendors:** New Relic, Honeycomb, Datadog, Grafana Cloud, generic Bearer tokens.
 

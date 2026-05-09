@@ -24,6 +24,16 @@ type Executor interface {
 
 **Registration via ModuleDeps:**
 ```go
+// mustParseTime parses "HH:MM" and panics on error — acceptable in init paths
+// where a malformed literal is a programmer bug that must crash at startup.
+func mustParseTime(s string) time.Time {
+    t, err := time.Parse("15:04", s)
+    if err != nil {
+        panic(err)
+    }
+    return t
+}
+
 func (m *Module) Init(deps *app.ModuleDeps) error {
     return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
 }
