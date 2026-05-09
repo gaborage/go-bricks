@@ -65,8 +65,14 @@ func NewFetcher(ctx context.Context, opts Options) (migration.SecretFetcher, err
 
 // FetcherFromClient wraps any SecretsManagerAPI as a migration.SecretFetcher.
 // Exposed primarily for tests but also useful when callers already hold a
-// configured client.
+// configured client. A nil client returns a fetcher that fails deterministically
+// rather than panicking on a nil-interface method call.
 func FetcherFromClient(client SecretsManagerAPI) migration.SecretFetcher {
+	if client == nil {
+		return func(context.Context, string) ([]byte, error) {
+			return nil, errors.New("awssm: nil SecretsManagerAPI client")
+		}
+	}
 	return func(ctx context.Context, name string) ([]byte, error) {
 		out, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
 			SecretId: aws.String(name),

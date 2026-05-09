@@ -192,14 +192,17 @@ func TestDefaultMigrationConfig(t *testing.T) {
 			},
 		},
 		{
-			name:   "custom_database_type",
+			// Unknown vendors fall through the whitelist to the "unknown"
+			// sentinel so a malicious tenant Type can't escape the flyway/
+			// and migrations/ directories via fmt.Sprintf interpolation.
+			name:   "unknown_database_type_falls_back_to_sentinel",
 			dbType: "mysql",
 			appEnv: "testing",
 			expectedConf: func(_, _ string) *Config {
 				return &Config{
 					FlywayPath:    "flyway",
-					ConfigPath:    "flyway/flyway-mysql.conf",
-					MigrationPath: "migrations/mysql",
+					ConfigPath:    "flyway/flyway-unknown.conf",
+					MigrationPath: "migrations/unknown",
 					Timeout:       5 * 60_000_000_000, // 5 minutes
 					Environment:   "testing",
 					DryRun:        false,

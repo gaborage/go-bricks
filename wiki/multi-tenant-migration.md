@@ -7,7 +7,7 @@ live in [ADR-018](adr-018-multi-tenant-migration-cli.md).
 
 ## Architecture at a glance
 
-```
+```text
 ┌─────────────┐    list IDs       ┌─────────────────────┐
 │ CI/CD job   │───────────────────▶│ go-bricks-migrate   │
 └─────────────┘                   └─────────┬───────────┘
@@ -30,7 +30,7 @@ Implement this on your back-office or any control-plane service. The shape
 matches the standard go-bricks `APIResponse` envelope so you can serve it
 with a normal `server.GET(handlerRegistry, e, "/tenants", h.listTenants)`.
 
-```
+```text
 GET <base>/tenants?limit=<int>&cursor=<opaque>
 Authorization: Bearer <optional>
 
@@ -88,7 +88,7 @@ func (h *Handler) listTenants(req ListTenantsReq, ctx server.HandlerContext) (se
 
 Default secret name (configurable via `--secrets-prefix`):
 
-```
+```text
 gobricks/migrate/<tenant_id>
 ```
 
@@ -252,14 +252,45 @@ jobs:
 
 ## Library usage (in-process from your back-office)
 
+The CLI's AWS Secrets Manager wrapper at `tools/migration/internal/awssm/`
+lives under `internal/` and is not importable. Library callers implement the
+`migration.SecretFetcher` function type themselves — typically a 30-line
+adapter over the AWS SDK (or HashiCorp Vault, GCP Secret Manager, etc.):
+
 ```go
 import (
     "context"
+    "fmt"
+    "os"
+
+    "github.com/aws/aws-sdk-go-v2/aws"
+    awsconfig "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 
     "github.com/gaborage/go-bricks/migration"
     httpsource "github.com/gaborage/go-bricks/migration/source/http"
-    "github.com/gaborage/go-bricks/tools/migration/internal/awssm"
 )
+
+// awsSecretFetcher is a public-API equivalent of the CLI's awssm package.
+func awsSecretFetcher(ctx context.Context, region string) (migration.SecretFetcher, error) {
+    awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+    if err != nil {
+        return nil, err
+    }
+    sm := secretsmanager.NewFromConfig(awsCfg)
+    return func(ctx context.Context, name string) ([]byte, error) {
+        out, err := sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+            SecretId: aws.String(name),
+        })
+        if err != nil {
+            return nil, fmt.Errorf("get secret %q: %w", name, err)
+        }
+        if out.SecretString != nil {
+            return []byte(*out.SecretString), nil
+        }
+        return out.SecretBinary, nil
+    }, nil
+}
 
 func RunReleaseMigrations(ctx context.Context) error {
     lister, err := httpsource.New("https://control-plane.example.com/api", httpsource.Options{
@@ -267,7 +298,7 @@ func RunReleaseMigrations(ctx context.Context) error {
     })
     if err != nil { return err }
 
-    fetcher, err := awssm.NewFetcher(ctx, awssm.Options{Region: "us-east-1"})
+    fetcher, err := awsSecretFetcher(ctx, "us-east-1")
     if err != nil { return err }
 
     provider := &migration.SecretsProvider{Fetch: fetcher}

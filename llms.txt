@@ -3705,18 +3705,37 @@ go-bricks-migrate migrate --tenant tenant-a --aws-region us-east-1
 go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
 ```
 
-Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure; `--parallel <N>` (max 32) processes multiple tenants concurrently and forces continue-on-error semantics.
+Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure. `--parallel <N>` (max 32) processes tenants concurrently while preserving fail-fast: on the first per-tenant error, siblings still queued exit immediately and in-flight Flyway processes are cancelled before `MigrateAll` returns. Combine with `--continue-on-error` to keep iterating instead.
 
 ### Library usage (back-office calls MigrateAll directly)
+
+The CLI's AWS Secrets Manager wrapper at `tools/migration/internal/awssm/` is CLI-only (`internal/`). Library callers implement `migration.SecretFetcher` themselves — typically a small adapter over the AWS SDK or any other secret store:
 
 ```go
 import (
     "context"
+    "fmt"
+    "os"
+
+    "github.com/aws/aws-sdk-go-v2/aws"
+    awsconfig "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 
     "github.com/gaborage/go-bricks/migration"
     httpsource "github.com/gaborage/go-bricks/migration/source/http"
-    "github.com/gaborage/go-bricks/tools/migration/internal/awssm"
 )
+
+func awsSecretFetcher(ctx context.Context, region string) (migration.SecretFetcher, error) {
+    awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+    if err != nil { return nil, err }
+    sm := secretsmanager.NewFromConfig(awsCfg)
+    return func(ctx context.Context, name string) ([]byte, error) {
+        out, err := sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String(name)})
+        if err != nil { return nil, fmt.Errorf("get secret %q: %w", name, err) }
+        if out.SecretString != nil { return []byte(*out.SecretString), nil }
+        return out.SecretBinary, nil
+    }, nil
+}
 
 func RunReleaseMigrations(ctx context.Context) error {
     lister, err := httpsource.New("https://control-plane.example.com/api", httpsource.Options{
@@ -3724,7 +3743,7 @@ func RunReleaseMigrations(ctx context.Context) error {
     })
     if err != nil { return err }
 
-    fetcher, err := awssm.NewFetcher(ctx, awssm.Options{Region: "us-east-1"})
+    fetcher, err := awsSecretFetcher(ctx, "us-east-1")
     if err != nil { return err }
 
     provider := &migration.SecretsProvider{Fetch: fetcher} // default prefix gobricks/migrate/

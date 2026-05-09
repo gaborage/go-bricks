@@ -97,7 +97,7 @@ func TestListCommandSourceMutualExclusion(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mutually exclusive")
+	assert.Contains(t, err.Error(), "exactly one")
 }
 
 func TestListCommandTenantFlag(t *testing.T) {

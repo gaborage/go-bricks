@@ -137,6 +137,7 @@ func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 		cursor string
 	)
 
+	seenCursors := make(map[string]struct{})
 	for i := 0; i < maxPages; i++ {
 		page, err := s.fetchPage(ctx, cursor)
 		if err != nil {
@@ -152,9 +153,10 @@ func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 		if page.NextCursor == "" {
 			return out, nil
 		}
-		if page.NextCursor == cursor {
-			return nil, fmt.Errorf("control-plane returned non-progressing next_cursor %q", cursor)
+		if _, dup := seenCursors[page.NextCursor]; dup {
+			return nil, fmt.Errorf("control-plane returned repeated next_cursor %q (cycle detected)", page.NextCursor)
 		}
+		seenCursors[page.NextCursor] = struct{}{}
 		cursor = page.NextCursor
 	}
 	return nil, fmt.Errorf("control-plane pagination exceeded %d pages", maxPages)

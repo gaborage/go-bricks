@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -17,13 +18,20 @@ func NewListCommand() *cobra.Command {
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {
-		// list never needs credentials — relax the cred-source flag check
-		// by short-circuiting validation here.
-		if flags.SourceURL == "" && flags.SourceConfig == "" && flags.Tenant == "" {
-			return fmt.Errorf("one of --source-url, --source-config, or --tenant is required")
+		// list never needs credentials — bypass full resolveFlags credential
+		// validation. Require exactly one source selector.
+		selectors := 0
+		if flags.SourceURL != "" {
+			selectors++
 		}
-		if flags.SourceURL != "" && flags.SourceConfig != "" {
-			return fmt.Errorf("--source-url and --source-config are mutually exclusive")
+		if flags.SourceConfig != "" {
+			selectors++
+		}
+		if flags.Tenant != "" {
+			selectors++
+		}
+		if selectors != 1 {
+			return errors.New("exactly one of --source-url, --source-config, or --tenant is required")
 		}
 
 		lister, err := buildLister(flags, nil)
@@ -43,11 +51,15 @@ func NewListCommand() *cobra.Command {
 
 		out := c.OutOrStdout()
 		if flags.JSON {
-			_ = json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids})
+			if err := json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids}); err != nil {
+				return fmt.Errorf("encode tenants JSON: %w", err)
+			}
 			return nil
 		}
 		for _, id := range ids {
-			fmt.Fprintln(out, id)
+			if _, err := fmt.Fprintln(out, id); err != nil {
+				return fmt.Errorf("write tenant id: %w", err)
+			}
 		}
 		return nil
 	}

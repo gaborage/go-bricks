@@ -50,7 +50,7 @@ resolution reuses the existing `database.DBConfigProvider` interface
 (`database/manager.go`). Decoupling them means **the listing API never carries
 secrets**.
 
-```
+```text
                        ┌──────────────────────────┐
                        │   migration.MigrateAll   │
                        └────────────┬─────────────┘
@@ -78,7 +78,7 @@ implementations. It uses the go-bricks standard `APIResponse` envelope
 (`server/handler.go:35-47`) so a back-office Echo handler that returns the
 shape via `server.GET(...)` gets the wrapping for free.
 
-```
+```text
 GET <base>/tenants?limit=<int>&cursor=<opaque>
 Authorization: Bearer <optional>
 Accept: application/json
@@ -107,7 +107,7 @@ Accept: application/json
 
 Default secret name:
 
-```
+```text
 gobricks/migrate/<tenant_id>
 ```
 
@@ -141,20 +141,24 @@ Minimum IAM for the runner role:
 
 `migration.SecretsProvider` implements `database.DBConfigProvider` on top of a
 small `SecretFetcher` function type. The framework module (`migration`) stays
-free of any cloud SDK. The AWS Secrets Manager client lives in the CLI's
-separate go.mod (`tools/migration/internal/awssm/fetcher.go`). Library users
-who want AWS SM in-process either depend on `tools/migration/internal/awssm`
-explicitly, write a 30-line equivalent against the same `SecretFetcher` seam,
-or plug in HashiCorp Vault / Google Secret Manager / etc. with the same
-contract.
+free of any cloud SDK. **The AWS Secrets Manager client at
+`tools/migration/internal/awssm/` is CLI-only and lives under `internal/`, so
+external library callers cannot import it directly.** Library users who want
+AWS SM in-process implement the `migration.SecretFetcher` function type
+themselves (typically ~30 lines wrapping `secretsmanager.Client`) or plug in
+HashiCorp Vault / Google Secret Manager / etc. with the same contract — see
+`wiki/multi-tenant-migration.md` for a public-API example.
 
 ### Sequential, fail-fast by default
 
 The CLI iterates tenants serially and stops at the first failure. Operators
 who'd rather see all failures at once opt in via `--continue-on-error`. Bulk
-fleets use `--parallel <N>` (capped at 32; combining `--parallel >1` with
-fail-fast is not coherent, so the implementation forces continue-on-error in
-that case).
+fleets use `--parallel <N>` (capped at 32). Parallel mode preserves
+fail-fast: on the first per-tenant error the implementation cancels the
+derived run-context so siblings still queued on the semaphore exit
+immediately, in-flight Flyway processes are signaled (via
+`exec.CommandContext`), and the worker pool is drained before `MigrateAll`
+returns the first error. Use `--continue-on-error` to override.
 
 ### What we did **not** do (explicit non-goals for v1)
 

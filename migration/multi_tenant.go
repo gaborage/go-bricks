@@ -206,6 +206,7 @@ func runParallel(
 	var firstErr error
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
+	dispatched := 0
 
 dispatch:
 	for i, id := range tenantIDs {
@@ -215,6 +216,7 @@ dispatch:
 		case sem <- struct{}{}:
 		}
 
+		dispatched++
 		wg.Add(1)
 		go func(idx int, tenantID string) {
 			defer wg.Done()
@@ -241,6 +243,12 @@ dispatch:
 	}
 
 	wg.Wait()
+
+	// Trim trailing zero-value slots when the dispatch loop exited early so
+	// callers iterating Results don't see synthetic empty tenants.
+	if dispatched < len(out.Results) {
+		out.Results = out.Results[:dispatched]
+	}
 
 	if firstErr != nil {
 		return out, firstErr

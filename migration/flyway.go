@@ -68,16 +68,39 @@ func (fm *FlywayMigrator) DefaultMigrationConfig() *Config {
 // DefaultMigrationConfigForVendor returns the default migration config for the
 // given database vendor (e.g. "postgresql", "oracle"). Used by multi-tenant
 // migrations where each tenant may run a different vendor than the migrator's
-// own cfg.Database.Type.
+// own cfg.Database.Type. Unknown vendors fall back to the migrator's
+// configured Database.Type so the vendor string never reaches filesystem path
+// interpolation unvalidated; if even that is unknown, an "unknown" segment is
+// used so callers see an obvious error rather than a path-traversal artifact.
 func (fm *FlywayMigrator) DefaultMigrationConfigForVendor(vendor string) *Config {
+	safeVendor := safeVendorSegment(vendor, fm.config.Database.Type)
 	return &Config{
 		FlywayPath:    flywayExecutable,
-		ConfigPath:    fmt.Sprintf("flyway/flyway-%s.conf", vendor),
-		MigrationPath: fmt.Sprintf("migrations/%s", vendor),
+		ConfigPath:    fmt.Sprintf("flyway/flyway-%s.conf", safeVendor),
+		MigrationPath: fmt.Sprintf("migrations/%s", safeVendor),
 		Timeout:       5 * time.Minute,
 		Environment:   fm.config.App.Env,
 		DryRun:        false,
 	}
+}
+
+// safeVendorSegment returns vendor when it matches a known go-bricks vendor
+// constant, otherwise falls back to the migrator's configured vendor (also
+// validated), and finally to a neutral "unknown" sentinel. Prevents tenant
+// DatabaseConfig values like "../../tmp" from escaping the flyway/ and
+// migrations/ directories via fmt.Sprintf path interpolation.
+func safeVendorSegment(vendor, fallback string) string {
+	if isKnownVendor(vendor) {
+		return vendor
+	}
+	if isKnownVendor(fallback) {
+		return fallback
+	}
+	return "unknown"
+}
+
+func isKnownVendor(v string) bool {
+	return v == config.PostgreSQL || v == config.Oracle
 }
 
 func (fm *FlywayMigrator) defaultMigrationConfig() *Config {

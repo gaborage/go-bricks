@@ -47,6 +47,9 @@ var ErrSecretMalformed = errors.New("migration: secret payload malformed")
 // ErrNoFetcher indicates the SecretsProvider was constructed without a Fetch function.
 var ErrNoFetcher = errors.New("migration: SecretsProvider.Fetch is nil")
 
+// ErrEmptyTenantID is returned when DBConfig is invoked with a blank tenant ID.
+var ErrEmptyTenantID = errors.New("migration: tenantID is empty")
+
 // Validate checks that the provider is wired correctly. Callers may invoke it
 // eagerly at startup; DBConfig also calls it lazily on first lookup so library
 // callers who skip the explicit check still get a clear error before any
@@ -79,6 +82,11 @@ func (p *SecretsProvider) SecretName(tenantID string) string {
 func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*config.DatabaseConfig, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
+	}
+
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, ErrEmptyTenantID
 	}
 
 	name := p.SecretName(tenantID)
