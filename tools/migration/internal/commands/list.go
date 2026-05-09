@@ -15,6 +15,7 @@ func NewListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List the tenant IDs returned by the configured source",
+		Args:  cobra.NoArgs,
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {

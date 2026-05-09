@@ -12,6 +12,7 @@ func NewMigrateCommand() *cobra.Command {
 		Use:   "migrate",
 		Short: "Apply pending migrations to every tenant",
 		Long:  "Lists tenants from the configured source, resolves each tenant's database credentials, and runs Flyway migrate against each.",
+		Args:  cobra.NoArgs,
 	}
 	flags := addCommonFlags(cmd)
 	cmd.RunE = func(c *cobra.Command, _ []string) error {

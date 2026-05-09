@@ -2,11 +2,13 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -54,6 +56,28 @@ func TestNewListCommandFlags(t *testing.T) {
 	assert.Equal(t, "list", cmd.Use)
 	assert.NotNil(t, cmd.RunE)
 	assert.NotNil(t, cmd.Flags().Lookup("source-url"))
+}
+
+func TestSubcommandsRejectExtraPositionalArgs(t *testing.T) {
+	ctors := []func() *cobra.Command{
+		NewListCommand,
+		NewInfoCommand,
+		NewMigrateCommand,
+		NewValidateCommand,
+		func() *cobra.Command { return NewVersionCommand("dev") },
+	}
+	for _, ctor := range ctors {
+		cmd := ctor()
+		t.Run(cmd.Use, func(t *testing.T) {
+			cmd.SetArgs([]string{"unexpected-positional-arg"})
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetContext(context.Background())
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, strings.ToLower(err.Error()), "arg")
+		})
+	}
 }
 
 func TestNewVersionCommand(t *testing.T) {
