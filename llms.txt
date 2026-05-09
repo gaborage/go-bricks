@@ -3755,16 +3755,19 @@ The framework attaches the following resource attributes to every signal: `servi
 
 ### Secrets Hygiene
 
-Never commit OTLP auth headers to git. Two patterns:
+Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML (it doesn't auto-derive header names from env-var paths), but secret *values* should come from env vars via Koanf `${VAR}` substitution — the same 12-factor pattern used elsewhere in the codebase.
 
-```bash
-# .gitignore
-config.production.yaml
-config.*.local.yaml
+```yaml
+# config.production.yaml — checked into git
+observability:
+  trace:
+    headers:
+      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
 ```
 
+For rotating tokens or secrets fetched from a manager (Vault, AWS Secrets Manager), override programmatically before `app.Run()`:
+
 ```go
-// main.go — inject from env at startup
 cfg, _ := config.Load()
 if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
     headers := map[string]string{"api-key": apiKey}
@@ -4075,7 +4078,7 @@ observability:
     insecure: false
     compression: gzip
     headers:
-      api-key: your-license-key
+      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
 ```
 
 ```yaml
