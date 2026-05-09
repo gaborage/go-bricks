@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle), and clean architecture patterns.
 
-**Requirements**:
-- **Go 1.25** required
+**Requirements:**
+- Go 1.25 required
 - Docker Desktop or Docker Engine (integration tests only)
 
 ## Workflow Rules
@@ -37,70 +37,23 @@ go test -bench=.        # Run benchmarks
 ```
 
 **Key Files:**
-- [CLAUDE.md](CLAUDE.md) - This development guide
-- [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
-- [llms.txt](llms.txt) - Quick code examples for LLMs
-- [.golangci.yml](.golangci.yml) - Linting configuration
+- [CLAUDE.md](CLAUDE.md) — This development guide
+- [llms.txt](llms.txt) — Quick code examples for LLMs
+- [.golangci.yml](.golangci.yml) — Linting configuration
 
-**Additional Documentation:**
-- [TESTING.md](TESTING.md) - Testing strategy deep-dive
-- [METRICS.md](METRICS.md) - Observability metrics reference
-- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Akind%2Ffeature) - Technical backlog. Titles use `<area>: <description>` (lowercase, e.g. `jose: add sample module to demo project`); labels combine `area/<package>` (e.g. `area/messaging`, `area/outbox`) with `kind/<type>` (`feature`, `exploration`, `refactor`, `tech-debt`, `security`) or top-level `bug`/`documentation`.
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [config.example.yaml](config.example.yaml) - Full configuration template
+**Wiki (deep dives — read on demand):**
+- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [observability.md](wiki/observability.md)
+- Patterns: [handler-patterns.md](wiki/handler-patterns.md) · [context-deadlines.md](wiki/context-deadlines.md) · [testing.md](wiki/testing.md)
+- Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup-defaults.md](wiki/startup-defaults.md)
+- ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr-NNN-*.md`
+- Vendor docs: [observability-headers-auth.md](wiki/observability-headers-auth.md) · [new-relic-otlp.md](wiki/new-relic-otlp.md) · [otel-collector.md](wiki/otel-collector.md)
 
 **External Resources:**
-- [Demo Project](https://github.com/gaborage/go-bricks-demo-project) - Complete examples
-- [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) - Code quality metrics
-
-## Table of Contents
-
-**Rules (MUST READ):**
-- [Workflow Rules](#workflow-rules) - Build verification, auto-commit
-- [Git Rules](#git-rules) - Branch safety
-- [PR Review Workflow](#pr-review-workflow) - Review fix sessions
-
-**Getting Started:**
-- [Quick Reference](#quick-reference) - Commands, files, resources
-- [Documentation Hierarchy](#documentation-hierarchy) - How to navigate the docs
-- [Developer Manifesto](#developer-manifesto-mandatory) - Core principles
-- [Development Commands](#development-commands) - Build, test, lint
-
-**Architecture:**
-- [Core Components](#core-components) - Module system, configuration
-- [Database Architecture](#database-architecture) - Query builder, vendors
-- [Messaging Architecture](#messaging-architecture) - AMQP patterns
-- [Observability](#observability) - Tracing, metrics, logging
-- [Context Deadlines & Timeouts](#context-deadlines--timeouts) - Budget hierarchy, propagation, common patterns
-
-**Development:**
-- [Testing Guidelines](#testing-guidelines) - Unit, integration, coverage
-- [Development Workflow](#development-workflow) - Pre-commit, CI/CD
-- [Troubleshooting](#troubleshooting) - Common issues and solutions
-
-**Reference:**
-- [Key Interfaces](#key-interfaces) - Database, messaging, observability
-- [File Organization](#file-organization) - Project structure
-- [Dependencies](#dependencies) - External packages
-
-## Documentation Hierarchy
-
-**For Quick Tasks** (Code-first developers):
-1. [llms.txt](llms.txt) - Copy-paste code snippets (30-second answers)
-2. This file (CLAUDE.md) - Architecture and commands (5-minute orientation)
-
-**For Deep Understanding** (Architecture exploration):
-1. [wiki/architecture_decisions.md](wiki/architecture_decisions.md) - ADRs for breaking changes
-2. [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Working examples
-
-**For End Users** (Application developers):
-1. [README.md](README.md) - Public-facing overview and quick start
-2. [MULTI_TENANT.md](MULTI_TENANT.md) - Multi-tenant patterns
-3. [Go Reference](https://pkg.go.dev/github.com/gaborage/go-bricks) - API documentation
+- [Demo Project](https://github.com/gaborage/go-bricks-demo-project) — Complete examples
+- [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) — Code quality metrics
+- [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Akind%2Ffeature) — Technical backlog. Titles use `<area>: <description>` (lowercase); labels combine `area/<package>` with `kind/<type>` or top-level `bug`/`documentation`.
 
 ## Developer Manifesto (MANDATORY)
-
-> This section provides an overview of core principles that guide all development.
 
 ### Framework Philosophy
 GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
@@ -112,17 +65,17 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **Composition > Inheritance** → Flexible, simple structures. Use interfaces and embedding over inheritance.
 - **Robustness** → Handle errors idiomatically, wrap once at boundaries. No silent failures.
 - **Patterns, not Over-Design** → Use them only when they solve real problems. Justify abstractions.
-- **Security First** → Input validation mandatory, secrets from env/vault, audit raw-SQL escape hatches (see Detailed Security Guidelines below).
-- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. Inherited deadlines propagate through the framework — see [Context Deadlines & Timeouts](#context-deadlines--timeouts) for the budget hierarchy and per-operation guidance.
+- **Security First** → Input validation mandatory, secrets from env/vault, audit raw-SQL escape hatches (see Security Guidelines below).
+- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. See [wiki/context-deadlines.md](wiki/context-deadlines.md).
 - **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`).
 - **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks).
 
-#### Detailed Security Guidelines
-- Input validation is **mandatory** at all boundaries (HTTP, messaging, database)
-- Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()` on `FilterFactory` / `JoinFilterFactory`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review — even on "obviously safe" literal SQL — and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
-- Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault)
-- No hardcoded credentials, no secrets in logs or error messages
-- Audit logging for sensitive operations (access control, data modifications)
+### Security Guidelines
+- Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
+- Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
+- Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
+- No hardcoded credentials, no secrets in logs or error messages.
+- Audit logging for sensitive operations (access control, data modifications).
 
 ### Practices & Patterns
 - **SOLID** → Apply when it simplifies, don't force it.
@@ -132,22 +85,19 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **KISS** → Keep it simple, complexity must earn its place.
 - **YAGNI** → Don't build what isn't needed *today*.
 
-#### YAGNI Exceptions
-Abstractions for vendor differences (databases, cloud providers) are justified. Test utilities only if actively used. Breaking changes acceptable for safety/correctness (see ADRs).
-
 ### Framework vs. Application Development
 
 **GoBricks Framework (this codebase):** 80% coverage (SonarCloud enforced), race detection, multi-platform CI, production-grade stability. Breaking changes acceptable when justified (documented in ADRs).
 
-**Applications Built with GoBricks:** 60-70% coverage on core business logic, focus on happy paths + critical errors, always test database/HTTP/messaging, defer exotic edge cases, iterate on requirements
+**Applications Built with GoBricks:** 60-70% coverage on core business logic, focus on happy paths + critical errors, always test database/HTTP/messaging, defer exotic edge cases, iterate on requirements.
 
-### Engineering Principles (Go & Architecture Mindset)
-- **Observability:** OpenTelemetry standards, W3C traceparent propagation across HTTP/messaging
-- **12-Factor App:** Environment variables for config, stateless design, explicit dependencies
-- **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries
-- **Context Propagation:** No global variables for tenant IDs or trace IDs—always thread context through calls
-- **Automation:** Makefile/Taskfile for common tasks, multi-platform CI/CD pipelines
-- **Documentation:** Just enough for others to understand quickly, examples over exhaustive docs
+### Engineering Principles
+- **Observability:** OpenTelemetry standards, W3C traceparent propagation across HTTP/messaging.
+- **12-Factor App:** Environment variables for config, stateless design, explicit dependencies.
+- **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries.
+- **Context Propagation:** No global variables for tenant IDs or trace IDs — always thread context through calls.
+- **Automation:** Makefile/Taskfile for common tasks, multi-platform CI/CD pipelines.
+- **Documentation:** Just enough for others to understand quickly, examples over exhaustive docs.
 
 **"Build it simple, build it strong, and refactor when it matters."**
 
@@ -181,117 +131,32 @@ make lint                       # Run golangci-lint
 ```
 
 ### Code Quality
-- Linting: `.golangci.yml` with staticcheck, gosec, gocritic
-- SonarCloud: Project `gaborage_go-bricks`, 80% coverage target
-- CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.25
-- Race detection enabled on all platforms
-
-### Breaking Change: Go Naming Conventions (S8179)
-
-GoBricks follows Go's idiomatic naming conventions. Per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/), getter methods should NOT have the `Get` prefix.
-
-**Migration Required:** If upgrading from versions prior to this change, update all call sites:
-
-| Package | Old Method | New Method |
-|---------|------------|------------|
-| `config.Config` | `GetString()`, `GetInt()`, `GetInt64()`, `GetFloat64()`, `GetBool()` | `String()`, `Int()`, `Int64()`, `Float64()`, `Bool()` |
-| `config.Config` | `GetRequiredString()`, `GetRequiredInt()`, `GetRequiredInt64()`, `GetRequiredFloat64()`, `GetRequiredBool()` | `RequiredString()`, `RequiredInt()`, `RequiredInt64()`, `RequiredFloat64()`, `RequiredBool()` |
-| `app.ResourceProvider` | `GetDB()`, `GetMessaging()`, `GetCache()` | `DB()`, `Messaging()`, `Cache()` |
-| `app.ModuleDeps` | `GetDB`, `GetMessaging`, `GetCache` (fields) | `DB`, `Messaging`, `Cache` (fields) |
-| `app.Builder` | `GetError()` | `Error()` |
-| `messaging.Manager` | `GetPublisher()` | `Publisher()` |
-| `server.Validator` | `GetValidator()` | `Validator()` |
-| `validation.TagInfo` | `GetMin()`, `GetMax()`, `GetMinLength()`, `GetMaxLength()`, `GetPattern()`, `GetEnum()`, `GetConstraints()` | `Min()`, `Max()`, `MinLength()`, `MaxLength()`, `Pattern()`, `Enum()`, `AllConstraints()` |
-| `migration.FlywayMigrator` | `GetDefaultMigrationConfig()` | `DefaultMigrationConfig()` |
-| `config.TenantStore` | `GetTenants()` | `Tenants()` |
-| `app.MetadataRegistry` | `GetModules()`, `GetModule()` | `Modules()`, `Module()` |
-| `app.App` | `GetMessagingDeclarations()` | `MessagingDeclarations()` |
-| `database.Interface` | `GetMigrationTable()` | `MigrationTable()` |
-| `database/testing.TestDB` | `GetQueryLog()`, `GetExecLog()` | `QueryLog()`, `ExecLog()` |
-| `database/testing.TenantDBMap` | `GetTenantDB()` | `TenantDB()` |
-| `messaging.Registry` | `GetDeclarations()` | `Declarations()` |
-| `server.RouteRegistry` | `GetRoutes()` | `Routes()` |
-
-**Example Migration:**
-```go
-// ❌ OLD
-host := cfg.GetString("server.host", "0.0.0.0")
-port := cfg.GetInt("server.port", 8080)
-db, err := deps.GetDB(ctx)
-client, err := manager.GetPublisher(ctx, "tenant-1")
-
-// ✅ NEW
-host := cfg.String("server.host", "0.0.0.0")
-port := cfg.Int("server.port", 8080)
-db, err := deps.DB(ctx)
-client, err := manager.Publisher(ctx, "tenant-1")
-```
-
-### Breaking Change: Go Interface Naming Conventions (S8196)
-
-GoBricks follows Go's idiomatic interface naming. Per [SonarCloud rule S8196](https://rules.sonarsource.com/go/RSPEC-8196/) and [ADR-013](wiki/adr-013-interface-naming-conventions.md), interfaces are renamed for clarity.
-
-| Package | Old Interface | New Interface |
-|---------|---------------|---------------|
-| `scheduler` | `Job` | `Executor` |
-| `app` | `HealthProbe` | `Prober` |
-| `database` | `TenantStore` | `DBConfigProvider` |
-| `messaging` | `TenantMessagingResourceSource` | `BrokerURLProvider` |
-| `server` | `ResultLike` | `ResultMetaProvider` |
-| `cache` | `TenantCacheResourceSource` | `ConfigProvider` |
-
-**Example Migration:**
-```go
-// ❌ OLD
-var job scheduler.Job = &MyJob{}
-var probe app.HealthProbe = myProbe
-
-// ✅ NEW
-var job scheduler.Executor = &MyJob{}
-var probe app.Prober = myProbe
-```
-
-### Breaking Change: Standardized `ToSQL()` Across Query Builders (S8179)
-
-Per [ADR-017](wiki/adr-017-insert-query-builder.md), `qb.Insert*` constructors now return `types.InsertQueryBuilder` (a go-bricks-owned interface) instead of `squirrel.InsertBuilder` directly. The render method is renamed from `ToSql()` (squirrel-style) to `ToSQL()` (idiomatic Go, S8179) — matching `Select`/`Update`/`Delete`.
-
-| Constructor | Old return | New return | Render method |
-|---|---|---|---|
-| `qb.Insert(table)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
-| `qb.InsertWithColumns(table, cols...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
-| `qb.InsertStruct(table, instance)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
-| `qb.InsertFields(table, instance, fields...)` | `squirrel.InsertBuilder` | `types.InsertQueryBuilder` | `ToSQL()` |
-
-**Example Migration:**
-```go
-// ❌ OLD
-sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSql()
-
-// ✅ NEW
-sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSQL()
-```
-
-The new interface preserves all common chaining methods (`Columns`, `Values`, `SetMap`, `Options`, `Prefix`, `Suffix`, `Select`). For specialized squirrel-only methods (e.g., `RunWith`, `PlaceholderFormat`), keep the rendered SQL via `ToSQL()` and execute with `db.Exec(ctx, sql, args...)`.
+- Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
+- SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
+- CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.25.
+- Race detection enabled on all platforms.
 
 ## Architecture
 
 ### Core Components
-- **app/** - Application framework and module system
-- **config/** - Configuration management (Koanf: YAML + env vars)
-- **database/** - Multi-database interface with query builder
-- **cache/** - Redis caching with type-safe CBOR serialization
-- **httpclient/** - HTTP client with retries, W3C trace propagation, and interceptors
-- **logger/** - Structured logging (zerolog)
-- **messaging/** - AMQP client for RabbitMQ
-- **scheduler/** - gocron-based job scheduling with observability and CIDR-restricted APIs
-- **server/** - Echo-based HTTP server
-- **migration/** - Flyway integration
-- **observability/** - OpenTelemetry tracing and metrics
-- **outbox/** - Transactional outbox for reliable event publishing (at-least-once delivery)
-- **keystore/** - Named RSA key pair management from DER files or base64 env vars
+- **app/** — Application framework and module system
+- **config/** — Configuration management (Koanf: YAML + env vars)
+- **database/** — Multi-database interface with query builder
+- **cache/** — Redis caching with type-safe CBOR serialization
+- **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors
+- **logger/** — Structured logging (zerolog)
+- **messaging/** — AMQP client for RabbitMQ
+- **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
+- **server/** — Echo-based HTTP server
+- **migration/** — Flyway integration
+- **observability/** — OpenTelemetry tracing and metrics
+- **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
+- **keystore/** — Named RSA key pair management from DER files or base64 env vars
+- **jose/** — Nested JWE-of-JWS protection on HTTP request and response bodies
 
 ### Module System
-Modules implement this core interface. Route registration and messaging are opt-in via duck-typing: if your module implements `RouteRegisterer` or `MessagingDeclarer`, the framework detects this at startup and calls the corresponding method automatically. Modules that don't need HTTP or AMQP simply omit the interface.
+
+Modules implement this core interface. Route registration and messaging are opt-in via duck-typing: if your module implements `RouteRegisterer` or `MessagingDeclarer`, the framework detects this at startup and calls the corresponding method automatically.
 
 ```go
 type Module interface {
@@ -300,13 +165,12 @@ type Module interface {
     Shutdown() error
 }
 
-// Optional: implement to register HTTP routes during startup.
-// hr tracks metadata (route count, tags); r is the Echo RouteRegistrar for binding handlers.
+// Optional: register HTTP routes during startup.
 type RouteRegisterer interface {
     RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
 }
 
-// Optional: implement to declare AMQP exchanges, queues, bindings, publishers, and consumers.
+// Optional: declare AMQP exchanges, queues, bindings, publishers, and consumers.
 // Declarations are validated once at startup and replayed per-tenant for isolation.
 type MessagingDeclarer interface {
     DeclareMessaging(decls *messaging.Declarations)
@@ -323,6 +187,7 @@ type ModuleDeps struct {
 ```
 
 ### Configuration Injection
+
 Service-specific configuration with automatic validation:
 
 ```go
@@ -342,16 +207,12 @@ func (m *Module) Init(deps *ModuleDeps) error {
 }
 ```
 
-**Struct Tags:**
-- `config:"key.path"` - Configuration key (required)
-- `required:"true"` - Validation fails if missing
-- `default:"value"` - Default if not set
-
-**Supported Types:** string, int, int64, float64, bool, time.Duration
-
-**Configuration Priority:** Environment variables > `config.<env>.yaml` > `config.yaml` > defaults
+**Struct Tags:** `config:"key.path"` (required), `required:"true"`, `default:"value"`.
+**Supported Types:** string, int, int64, float64, bool, time.Duration.
+**Configuration Priority:** Environment variables > `config.<env>.yaml` > `config.yaml` > defaults.
 
 ### Enhanced Handler Pattern
+
 Type-safe handlers eliminate boilerplate:
 
 ```go
@@ -368,521 +229,52 @@ type CreateReq struct {
 server.POST(handlerRegistry, echo, "/users", h.createUser)
 ```
 
-Benefits: automatic binding/validation, standardized response envelopes, type safety
+Benefits: automatic binding/validation, standardized response envelopes, type safety.
 
-#### Handler Performance: Pointer vs Value Types
-
-The enhanced handler pattern supports both **value** and **pointer** types for requests and responses, allowing you to optimize for performance when handling large payloads.
-
-**When to Use Value Types (Default)**:
-- ✅ Small requests/responses (<1KB, ~10-15 simple fields)
-- ✅ No large embedded arrays or slices
-- ✅ Emphasizes immutability (idiomatic Go)
-- ✅ Examples: login credentials, ID lookups, simple CRUD operations
-
-**When to Use Pointer Types**:
-- ✅ Large requests/responses (>1KB)
-- ✅ File uploads (base64-encoded images, documents)
-- ✅ Bulk imports/exports (hundreds or thousands of records)
-- ✅ Embedded byte arrays or large slices
-- ✅ Performance-critical high-traffic endpoints
-
-**Examples**:
-
-```go
-// Small request - use value type (default)
-type LoginRequest struct {
-    Email    string `json:"email" validate:"email"`
-    Password string `json:"password" validate:"required"`
-}
-
-func (h *Handler) login(req LoginRequest, ctx server.HandlerContext) (Result[Token], server.IAPIError) {
-    token := h.authService.Authenticate(req)
-    return server.OK(token), nil
-}
-
-// Large request - use pointer type for performance
-type FileUploadRequest struct {
-    Data     []byte `json:"data"` // Base64-encoded file (could be MB)
-    Filename string `json:"filename" validate:"required"`
-    MimeType string `json:"mime_type"`
-}
-
-func (h *Handler) uploadFile(req *FileUploadRequest, ctx server.HandlerContext) (Result[UploadResponse], server.IAPIError) {
-    // Pointer avoids copying large byte slice
-    fileID := h.storageService.Store(req.Data, req.Filename)
-    return server.Created(UploadResponse{FileID: fileID}), nil
-}
-
-// Large response - use pointer type
-type BulkExportResponse struct {
-    Records []Record `json:"records"` // Thousands of records
-    Total   int      `json:"total"`
-}
-
-func (h *Handler) exportAll(req ExportRequest, ctx server.HandlerContext) (*BulkExportResponse, server.IAPIError) {
-    records := h.recordService.GetAll(ctx)
-    return &BulkExportResponse{
-        Records: records,
-        Total:   len(records),
-    }, nil
-}
-
-// Mixed: pointer request, value response
-func (h *Handler) processBulk(req *BulkRequest, ctx server.HandlerContext) (Summary, server.IAPIError) {
-    summary := h.processor.Process(req)
-    return summary, nil
-}
-```
-
-**Performance Impact**:
-- **Value types**: Small struct copy overhead (~nanoseconds for <1KB)
-- **Pointer types**: Zero copy overhead, just 8-byte pointer
-- **Rule of thumb**: Use pointers when struct size >1KB or contains large slices/arrays
-
-**Linter Configuration**:
-Configure `govet` to warn on large value copies:
-```yaml
-# .golangci.yml
-linters-settings:
-  govet:
-    enable:
-      - copylocks
-      - composites
-```
-
-#### Raw Response Mode (Strangler Fig Migration)
-
-For **Strangler Fig pattern** migrations — incrementally replacing a legacy API — some routes must return the exact legacy JSON format without the standard `APIResponse` envelope (`data`/`meta` wrapper). Use `WithRawResponse()` for per-route control:
-
-```go
-// Legacy-compatible route — no envelope, returns handler response directly as JSON
-server.GET(hr, e, "/v1/legacy/users/:id", h.getLegacyUser,
-    server.WithRawResponse(),
-    server.WithTags("legacy"),
-)
-
-// New route — standard APIResponse envelope (unchanged)
-server.GET(hr, e, "/v2/users/:id", h.getUser)
-```
-
-**Handler returns the exact legacy shape:**
-```go
-type LegacyUser struct {
-    UserID   int64  `json:"userId"`
-    UserName string `json:"userName"`
-}
-
-func (h *Handler) getLegacyUser(req GetReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
-    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
-    if err != nil {
-        return LegacyUser{}, server.NewNotFoundError("user")
-    }
-    return LegacyUser{UserID: user.ID, UserName: user.Name}, nil
-}
-// Response: {"userId": 123, "userName": "Alice"} (no data/meta wrapper)
-```
-
-**Error Handling in Raw Mode:**
-
-| Error Path | Raw Mode Behavior |
-|------------|-------------------|
-| Handler returns `IAPIError` | Minimal JSON: `{"code": "...", "message": "..."}` |
-| Binding/validation fails | Same minimal JSON |
-| Unhandled error (panic, timeout) | Detected via context key, same minimal JSON |
-
-For **full control** over legacy error formats, catch domain errors in the handler and return them as the response type `R` with a custom status via `Result[R]`. `IAPIError` is for framework-level issues only.
-
-**What is preserved in raw mode:** W3C `traceparent` header propagation, custom headers via `Result[R]`, `NoContent()` (204), all status codes via `Result[R]`.
-
-**What is bypassed:** `data`/`meta` envelope, `APIErrorResponse` envelope (replaced with minimal `{"code","message"}` structure).
+For pointer-vs-value request/response trade-offs (file uploads, bulk exports) and **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), see [wiki/handler-patterns.md](wiki/handler-patterns.md).
 
 ### Database Architecture
-Unified `database.Interface` supporting PostgreSQL and Oracle with:
-- Query builder with vendor-specific SQL generation
-- Type-safe WHERE clause methods (prevents Oracle reserved word errors)
-- Performance tracking via OpenTelemetry
-- Connection pooling and health monitoring
 
-**Package Structure:**
-- `database/types/` - Core interfaces
-- `database/internal/tracking/` - Performance metrics
-- `database/internal/builder/` - Query builder implementations
+Unified `database.Interface` supporting PostgreSQL and Oracle with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking, and connection pooling.
 
-#### Named Databases (Single-Tenant Multi-Database)
+| Database | Placeholders | Notes |
+|----------|--------------|-------|
+| **Oracle** | `:1`, `:2` | Auto reserved word quoting, SEQUENCE built-in, UDT registration for custom types |
+| **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
 
-GoBricks supports accessing multiple databases in single-tenant mode, useful for legacy system migrations where applications need to access both old (e.g., Oracle) and new (e.g., PostgreSQL) databases.
-
-**Configuration:**
-```yaml
-# Default database (unchanged - backward compatible)
-database:
-  type: postgres
-  host: primary.db.example.com
-  port: 5432
-  database: main_db
-
-# Named databases (NEW) - supports mixed vendors
-databases:
-  legacy:
-    type: oracle
-    host: legacy-oracle.example.com
-    port: 1521
-    service_name: LEGACYDB
-    username: legacy_user
-    password: ${LEGACY_DATABASE_PASSWORD}
-  analytics:
-    type: postgres
-    host: analytics.db.example.com
-    port: 5432
-    database: analytics_db
-```
-
-**Module Usage:**
-```go
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getDB = deps.DB              // Default database (unchanged)
-    m.getDBByName = deps.DBByName  // Named database access (NEW)
-    return nil
-}
-
-// Handler with cross-database operations
-func (h *Handler) MigrateLegacyData(ctx context.Context) error {
-    // Access legacy Oracle database
-    legacyDB, err := h.getDBByName(ctx, "legacy")
-    if err != nil {
-        return err
-    }
-
-    // Access default PostgreSQL database
-    mainDB, err := h.getDB(ctx)
-    if err != nil {
-        return err
-    }
-
-    // Cross-database operation: Oracle -> PostgreSQL
-    oracleQB := builder.NewQueryBuilder(dbtypes.Oracle)
-    rows, _ := legacyDB.Query(ctx, oracleQB.Select("*").From("OLD_USERS").Build())
-    // ... process and write to mainDB ...
-    return nil
-}
-```
-
-**Key Features:**
-- **Mixed vendor support:** Each named database can have a different type (Oracle, PostgreSQL)
-- **Backward compatible:** `deps.DB(ctx)` works exactly as before
-- **Explicit selection:** `deps.DBByName(ctx, "name")` for clarity
-- **Reuses infrastructure:** Same DbManager with LRU, connection pooling, idle cleanup
-- **Works with multi-tenant:** Named databases are shared across all tenants
-
-**Testing:**
-```go
-namedDBs := dbtest.NewNamedDBMap()
-namedDBs.ForNameWithVendor("legacy", dbtypes.Oracle).ExpectQuery("SELECT").WillReturnRows(...)
-namedDBs.SetDefaultDB(dbtest.NewTestDB(dbtypes.PostgreSQL))
-
-deps := &app.ModuleDeps{
-    DB:       namedDBs.AsDBFunc(),
-    DBByName: namedDBs.AsDBByNameFunc(),
-}
-```
-
-#### Breaking Change: Struct-Based Column Extraction (v0.15.0+)
-
-**Problem:** Raw string column names bypass Oracle identifier quoting and lack type safety:
-```go
-// ❌ OLD (pre-v0.15.0) - raw strings, no auto-quoting, no refactor safety
-query := qb.Select("id", "number").From("accounts").Where("number = ?", value)
-```
-
-**Solution:** Use struct-based column extraction with type-safe methods:
-```go
-// ✅ NEW (v0.15.0+) - struct-based with auto-quoting and compile-time safety
-type Account struct {
-    ID     int64  `db:"id"`
-    Number string `db:"number"`  // Oracle reserved word - auto-quoted
-}
-
-cols := qb.Columns(&Account{})
-f := qb.Filter()
-
-query := qb.Select(cols.Fields("ID", "Number")...).
-    From("accounts").
-    Where(f.Eq(cols.Col("Number"), value))
-// Oracle: SELECT "ID", "NUMBER" FROM accounts WHERE "NUMBER" = :1
-```
-
-**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`
-
-**Escape Hatch:** `f.Raw(condition, args...)` (and `jf.Raw(...)` for JOIN conditions) — user must manually quote Oracle reserved words and parameterize all value sides. Every call site MUST carry a `// SECURITY: Manual SQL review completed - <rationale>` comment (see Detailed Security Guidelines).
-
-#### Table Aliases
-
-The query builder supports table aliases with struct-based columns using the `As()` method for type safety and auto-quoting:
-
-```go
-type User struct {
-    ID     int64  `db:"id"`
-    Name   string `db:"name"`
-    Status string `db:"status"`
-}
-
-type Profile struct {
-    UserID int64  `db:"user_id"`
-    Bio    string `db:"bio"`
-}
-
-qb := builder.NewQueryBuilder(dbtypes.Oracle)
-jf := qb.JoinFilter()
-f := qb.Filter()
-
-userCols := qb.Columns(&User{})
-profileCols := qb.Columns(&Profile{})
-
-// Create aliased instances using As()
-u := userCols.As("u")
-p := profileCols.As("p")
-
-query := qb.Select(u.Col("ID"), u.Col("Name"), p.Col("Bio")).
-    From(dbtypes.Table("users").As("u")).
-    LeftJoinOn(dbtypes.Table("profiles").As("p"),
-        jf.EqColumn(u.Col("ID"), p.Col("UserID"))).
-    Where(f.Eq(u.Col("Status"), "active"))
-// Oracle: SELECT u."ID", u."NAME", p."BIO" FROM users u LEFT JOIN profiles p ON u."ID" = p."USER_ID" WHERE u."STATUS" = :1
-```
-
-**Benefits:** Struct-based (DRY principle), type-safe (compile-time field validation), auto-quoting (Oracle reserved words), refactor-friendly (rename struct fields → compiler catches all references), immutable (As() returns new instance)
-
-**Mixed JOIN Conditions (v2.2+):**
-
-JoinFilter supports both column-to-column comparisons and column-to-value filters, eliminating the need for `Raw()` in common cases:
-
-```go
-jf := qb.JoinFilter()
-f := qb.Filter()
-
-// Type-safe mixed conditions (replaces Raw() for common patterns)
-query := qb.Select("*").
-    From(dbtypes.Table("orders").As("o")).
-    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
-        jf.EqColumn("c.id", "o.customer_id"),       // Column-to-column
-        jf.Eq("c.status", "active"),                 // Column-to-value with placeholder
-        jf.In("c.tier", []string{"gold", "platinum"}), // IN clause
-    )).
-    JoinOn(dbtypes.Table("products").As("p"), jf.And(
-        jf.EqColumn("p.id", "o.product_id"),
-        jf.Eq("p.price", qb.Expr("TO_NUMBER(o.max_price)")), // Expression support
-    )).
-    Where(f.Eq("o.status", "pending"))
-
-// SQL (Oracle):
-// SELECT * FROM orders o
-// JOIN customers c ON (c.id = o.customer_id AND c.status = :1 AND c.tier IN (:2,:3))
-// JOIN products p ON (p.id = o.product_id AND p.price = TO_NUMBER(o.max_price))
-// WHERE o.status = :4
-```
-
-**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. See [llms.txt](llms.txt) for examples.
-
-**Expression Support:**
-All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders:
-
-```go
-jf.Eq("emp.col1", qb.Expr("TO_NUMBER(o.field1)"))   // emp.col1 = TO_NUMBER(o.field1)
-jf.Eq("seb.id", qb.Expr("LPAD(emp.col2, 10, '0')")) // seb.id = LPAD(emp.col2, 10, '0')
-jf.Between("age", qb.Expr("18"), qb.Expr("65"))     // age >= 18 AND age <= 65
-```
-
-**Raw() Escape Hatch:**
-Use `jf.Raw()` only for conditions that type-safe methods cannot express (e.g., spatial functions, exotic operators).
-
-#### Subquery Support
-
-Supports subqueries in WHERE clauses with `EXISTS`, `NOT EXISTS`, and `IN` patterns. Type-safe with vendor-specific placeholder handling.
-
-**Example:**
-```go
-type Review struct {
-    ProductID int64 `db:"product_id"`
-    Rating    int   `db:"rating"`
-}
-
-type Product struct {
-    ID   int64  `db:"id"`
-    Name string `db:"name"`
-}
-
-reviewCols := qb.Columns(&Review{})
-productCols := qb.Columns(&Product{})
-
-jf := qb.JoinFilter()
-f := qb.Filter()
-
-p := productCols.As("p")
-
-subquery := qb.Select("1").From("reviews").
-    Where(jf.And(
-        jf.EqColumn("reviews."+reviewCols.Col("ProductID"), p.Col("ID")),
-        f.Eq(reviewCols.Col("Rating"), 5),
-    ))
-
-query := qb.Select(p.Col("Name")).
-    From(dbtypes.Table("products").As("p")).
-    Where(f.Exists(subquery))
-// Oracle: SELECT p."NAME" FROM products p WHERE EXISTS (SELECT 1 FROM reviews WHERE reviews."PRODUCT_ID" = p."ID" AND "RATING" = :1)
-```
-
-**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`. Supports correlated subqueries and nested subqueries.
-
-**For comprehensive examples**, see [database/internal/builder/query_builder_test.go](database/internal/builder/query_builder_test.go)
-
-#### SELECT Expressions (v2.1+)
-
-Supports raw SQL expressions in SELECT, GROUP BY, and ORDER BY for aggregations, functions, and calculations.
-
-**Example:**
-```go
-type Product struct {
-    Category string  `db:"category"`
-    Price    float64 `db:"price"`
-}
-
-cols := qb.Columns(&Product{})
-
-query := qb.Select(
-    cols.Col("Category"),
-    qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price"),
-).From("products").GroupBy(cols.Col("Category"))
-// Oracle: SELECT "CATEGORY", COUNT(*) AS product_count, AVG(price) AS avg_price FROM products GROUP BY "CATEGORY"
-```
-
-**⚠️ SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
-```go
-qb.Expr("COUNT(*)", "total")  // ✅ SAFE
-qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // ❌ SQL INJECTION!
-```
-Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`
-
-**Common Use Cases:** Aggregations, string/date functions, window functions. See [llms.txt](llms.txt) for more examples and [ADR-005](wiki/adr-005-type-safe-where-clauses.md) for security guidelines
-
-#### Struct-Based Column Extraction (v0.15.0+)
-
-GoBricks eliminates column repetition through struct-based column management using `db:"column_name"` tags.
-
-**Key Benefits:**
-- **DRY Principle**: Define columns once in struct tags, reference by field name
-- **Type Safety**: Compile-time field name validation (panics on typos)
-- **Vendor-Aware**: Automatic Oracle reserved word quoting
-- **Zero Overhead**: One-time reflection (~0.6µs), cached forever (~26ns access)
-- **Refactor-Friendly**: Rename struct fields → compiler catches all query references
-
-**Quick Example:**
+**Type-Safe Query Building (use this pattern by default):**
 
 ```go
 type User struct {
     ID    int64  `db:"id"`
     Name  string `db:"name"`
-    Level int    `db:"level"`  // Oracle reserved word - auto-quoted
+    Level int    `db:"level"`  // Oracle reserved word — auto-quoted
 }
 
-// Extract column metadata (cached per vendor)
-cols := qb.Columns(&User{})
+cols := qb.Columns(&User{})  // Cached per vendor
+f := qb.Filter()
 
-// SELECT operations
-query := qb.Select(cols.All()...).From("users")
-query := qb.Select(cols.Fields("ID", "Name")...).From("users")
-
-// WHERE with auto-quoting
-query := qb.Select(cols.All()...).
+query := qb.Select(cols.Fields("ID", "Name")...).
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME", "LEVEL" FROM users WHERE "LEVEL" = :1
-
-// UPDATE operations
-qb.Update("users").
-    Set(cols.Col("Name"), "Jane").
-    Where(f.Eq(cols.Col("ID"), 123))
+// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
 ```
 
-**Common Pattern (Service-Level Caching):**
-```go
-type ProductService struct {
-    qb   *builder.QueryBuilder
-    cols dbtypes.ColumnMetadata
-}
+**Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex*`, `f.JSONContains` (PG only), `f.Null/NotNull`, `f.Between`, `f.Exists`, `f.NotExists`, `f.InSubquery`. Use `qb.Expr()` for complex SQL inside type-safe methods (no placeholders).
 
-func NewProductService(db database.Interface) *ProductService {
-    qb := builder.NewQueryBuilder(db.DatabaseType())
-    return &ProductService{
-        qb:   qb,
-        cols: qb.Columns(&Product{}), // Cached forever
-    }
-}
-```
+**Escape hatch:** `f.Raw(...)` and `jf.Raw(...)` require a `// SECURITY: Manual SQL review completed - <rationale>` annotation at every call site.
 
-**Performance:** First use ~0.6µs (reflection), cached access ~26ns (map lookup), thread-safe via `sync.Map`
+**Defaults applied automatically:** Connection pooling (25 max, keepalive 60s), session timezone (`UTC` per ADR-016), Oracle reserved word quoting.
 
-**Vendor Quoting:** Oracle auto-quotes reserved words (`"NUMBER"`, `"LEVEL"`), PostgreSQL: no quoting
-
-**For detailed examples** (INSERT, JOINs, complex queries), see [llms.txt](llms.txt) and [ADR-007](wiki/adr-007-struct-based-columns.md)
+For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditions, subqueries, SELECT expressions, Oracle UDT registration, pool defaults, and session-timezone opt-out, see [wiki/database.md](wiki/database.md).
 
 ### Cache Architecture
 
-GoBricks provides Redis-based caching with type-safe serialization, multi-tenant isolation, and automatic lifecycle management.
+Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, and automatic lifecycle management.
 
-**Core Components:**
-- **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
-- **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
-- **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements)
-- **TenantStore Integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
-
-**Lifecycle Management (CacheManager):**
-- **Lazy Initialization**: Cache created on first access per tenant (no upfront connections)
-- **LRU Eviction**: Oldest cache evicted when MaxSize exceeded (default: 100 tenants)
-- **Idle Cleanup**: Unused caches closed after IdleTTL (default: 15m, checked every 5m)
-- **Singleflight**: Prevents duplicate cache creation during concurrent access
-- **Lock-Free Close**: Cache close operations don't block Get/Set/Delete operations
-
-**Performance Characteristics:**
-- **Latency**: <1ms for Get/Set (localhost), ~2ms for atomic operations (Lua scripts)
-- **Throughput**: 100k reads/sec, 80k writes/sec (single Redis instance)
-- **CBOR Serialization**: ~83ns/op marshal, ~167ns/op unmarshal (simple structs)
-- **Connection Pool**: Default `NumCPU * 2`, configurable via `cache.redis.pool_size`
-- **Network Impact**: +0.5-1ms (same datacenter), +50-200ms (cross-region, not recommended)
-
-**Benchmark Results** (Apple M4 Pro, localhost Redis):
-| Operation | Performance | Allocations | Notes |
-|-----------|-------------|-------------|-------|
-| CBOR Marshal (simple) | ~83 ns/op | 96 B/op, 2 allocs | 12M ops/sec |
-| CBOR Unmarshal (simple) | ~167 ns/op | 88 B/op, 3 allocs | 6M ops/sec |
-| CBOR Marshal (complex) | ~800 ns/op | 400 B/op, 8 allocs | Nested structs, maps, slices |
-| CBOR Unmarshal (complex) | ~1200 ns/op | 600 B/op, 15 allocs | Full deserialization |
-
-*Run benchmarks:* `go test -bench=BenchmarkCBOR -benchmem ./cache/`
-*Redis benchmarks require:* `docker run -d -p 6379:6379 redis:7-alpine` then `go test -bench=BenchmarkRealRedis -benchmem -tags=integration ./cache/redis/`
-
-**Configuration Example:**
-```yaml
-cache:
-  enabled: true
-  type: redis
-  manager:
-    max_size: 100          # Max tenant cache instances
-    idle_ttl: 15m          # Idle timeout per cache
-    cleanup_interval: 5m   # Cleanup goroutine frequency
-  redis:
-    host: localhost
-    port: 6379
-    password: ${CACHE_REDIS_PASSWORD}  # From environment
-    database: 0
-    pool_size: 10
-```
-
-**Module Setup Pattern:**
 ```go
 type Module struct {
-    getCache func(context.Context) (cache.Cache, error)  // Store function, NOT instance
+    getCache func(context.Context) (cache.Cache, error)  // Store the function, NOT instance
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
@@ -891,381 +283,117 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
-    cache, err := s.getCache(ctx)  // Resolves tenant from context
-    if err != nil {
-        return nil, err
+    c, err := s.getCache(ctx)
+    if err != nil { return nil, err }
+    if data, err := c.Get(ctx, fmt.Sprintf("user:%d", id)); err == nil {
+        return cache.Unmarshal[*User](data)
     }
-
-    // Try cache first
-    data, err := cache.Get(ctx, fmt.Sprintf("user:%d", id))
-    if err == nil {
-        return cache.Unmarshal[User](data)
-    }
-
-    // Cache miss - query database
-    user, err := s.queryDatabase(ctx, id)
-
-    // Store in cache with TTL
-    data, _ = cache.Marshal(user)
-    cache.Set(ctx, fmt.Sprintf("user:%d", id), data, 5*time.Minute)
-
-    return user, nil
+    // Cache miss — fall through to DB, then Set with TTL.
 }
 ```
 
-**Key Operations:**
-| Operation | Method | Use Case | Atomicity |
-|-----------|--------|----------|-----------|
-| Basic read | `Get(ctx, key)` | Query result caching | Single-key |
-| Basic write | `Set(ctx, key, value, ttl)` | Store computed result | Single-key |
-| Deduplication | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys | Atomic SET NX |
-| Distributed lock | `CompareAndSet(ctx, key, expected, new, ttl)` | Job coordination | Lua script CAS |
-| Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
+**Operations:** `Get`, `Set`, `GetOrSet` (atomic SET NX), `CompareAndSet` (Lua CAS), `Marshal`/`Unmarshal` (CBOR). Per-tenant cache instances managed automatically (LRU eviction, idle cleanup, singleflight).
 
-**Multi-Tenant Isolation:**
-- Each tenant gets separate Redis database (configurable per-tenant)
-- Cache instances managed by CacheManager with automatic lifecycle
-- Context propagation ensures tenant resolution via `deps.Cache(ctx)`
-- No key collision between tenants (different Redis databases)
-
-**Observability Integration:**
-When `observability.enabled: true`, cache operations automatically emit:
-- **Traces**: Spans for Get/Set/Delete with `cache.operation`, `cache.key`, `cache.hit` attributes
-- **Metrics**: `cache.operation.duration`, `cache.errors.total`, `cache.manager.active_caches`
-- **Health**: Automatic integration with `/health` endpoint (Redis PING command)
-
-**For comprehensive examples**, see the Cache Operations section in [llms.txt](llms.txt)
+For lifecycle defaults, performance benchmarks, configuration, and multi-tenant patterns, see [wiki/cache.md](wiki/cache.md).
 
 ### HTTP Client
 
-The `httpclient` package provides a production-ready HTTP client with built-in observability and resilience.
-
-**Key Features:**
-- **Builder pattern**: Fluent configuration via `NewBuilder(logger).WithTimeout(...).Build()`
-- **W3C trace propagation**: Automatic `traceparent`/`tracestate` header injection
-- **Retry with backoff**: Exponential backoff with full jitter, configurable max retries
-- **Interceptors**: Request/response interceptor chains for cross-cutting concerns
-- **Structured logging**: Info-level metadata (no PII), optional debug payload logging
+Production-ready HTTP client with builder pattern, W3C trace propagation, retries with backoff, and interceptors:
 
 ```go
-// Builder pattern with trace propagation
 client := httpclient.NewBuilder(logger).
     WithTimeout(10 * time.Second).
     WithRetries(3, 500 * time.Millisecond).
-    WithDefaultHeader("Accept", "application/json").
     WithW3CTrace(true).
     Build()
 
-resp, err := client.Get(ctx, &httpclient.Request{
-    URL: "https://api.example.com/users",
-})
+resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.example.com/users"})
 ```
 
-**Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete`, `Do` — all accept `context.Context` and `*Request`, return `*Response` and `error`.
+For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
 
 ### Scheduler
 
-The `scheduler` package provides gocron-based job scheduling integrated with the GoBricks module system.
+gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention, panic recovery, system APIs at `GET /_sys/jobs` and `POST /_sys/job/:jobId` (CIDR-restricted), OpenTelemetry instrumentation per job.
 
-**Key Features:**
-- **Lazy initialization**: Scheduler created only when first job is registered
-- **Overlapping prevention**: Mutex-based lock per job (skips trigger if already running)
-- **Panic recovery**: Automatic recovery with stack trace logging and metrics
-- **System APIs**: `GET /_sys/jobs` (list), `POST /_sys/job/:jobId` (manual trigger), secured via CIDR middleware
-- **OpenTelemetry**: Counter, histogram, and panic tracking per job
-
-**Executor Interface:**
 ```go
 type Executor interface {
-    Execute(ctx JobContext) error
+    Execute(ctx JobContext) error  // JobContext gives JobID, TriggerType, Logger, DB, Messaging, Config
 }
 
-// JobContext provides: JobID(), TriggerType(), Logger(), DB(), Messaging(), Config()
-```
-
-**Registration via ModuleDeps:**
-```go
 func (m *Module) Init(deps *app.ModuleDeps) error {
     return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
 }
 ```
 
-**Schedule Types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`
+**Schedule Types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
 
 ### Messaging Architecture
-AMQP-based messaging with **validate-once, replay-many** pattern:
-- Declarations validated upfront, replayed per-tenant for isolation
-- Automatic reconnection with exponential backoff
-- Context propagation for tenant IDs and tracing
 
-#### Helper Functions for Simplified Declarations
+AMQP-based messaging with **validate-once, replay-many** pattern. Declarations validated upfront, replayed per-tenant for isolation. Automatic reconnection with exponential backoff. Context propagation for tenant IDs and tracing.
 
-GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):
-
-**Concise Declaration Pattern:**
-```go
-exchange := decls.DeclareTopicExchange("issuance.events")
-queue := decls.DeclareQueue("issuance.events.queue")
-decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
-
-decls.DeclarePublisher(&messaging.PublisherOptions{
-    Exchange: exchange.Name, RoutingKey: "issuance.created",
-    EventType: "CreateBatchIssuanceRequest",
-}, nil)
-
-decls.DeclareConsumer(&messaging.ConsumerOptions{
-    Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
-    Handler: amqp.NewHandler(m.logger),
-}, nil)
-```
-
-**Production-Safe Defaults:**
-- Exchanges: `Durable: true`, `AutoDelete: false`, `Type: "topic"`
-- Queues: `Durable: true`, `AutoDelete: false`, `Exclusive: false`
-- Publishers: `Mandatory: false`, `Immediate: false`
-- Consumers: `AutoAck: false`, `Exclusive: false`, `NoLocal: false`
-
-**Key Helpers:** `DeclareTopicExchange()`, `DeclareQueue()`, `DeclareBinding()`, `DeclarePublisher()`, `DeclareConsumer()`
-
-**For verbose before/after comparison**, see [messaging/declarations.go](messaging/declarations.go)
-
-#### Consumer Registration Best Practices
-
-**CRITICAL: Deduplication Rules**
-
-GoBricks enforces **strict deduplication** to prevent message duplication bugs. Each unique `queue + consumer_tag + event_type` combination must be registered exactly once:
-
+**Concise declaration pattern (use the helpers, not raw structs):**
 ```go
 func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    decls.DeclareConsumer(&messaging.ConsumerOptions{
-        Queue:     "events.queue",
-        Consumer:  "discover-pending",
-        EventType: "discover-pending-events",
-        Handler:   m.discoverHandler.Handle,
+    exchange := decls.DeclareTopicExchange("issuance.events")
+    queue := decls.DeclareQueue("issuance.events.queue")
+    decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
+
+    decls.DeclarePublisher(&messaging.PublisherOptions{
+        Exchange: exchange.Name, RoutingKey: "issuance.created",
+        EventType: "CreateBatchIssuanceRequest",
     }, nil)
 
     decls.DeclareConsumer(&messaging.ConsumerOptions{
-        Queue:     "events.queue",
-        Consumer:  "process-batch",  // Different consumer tag - OK
-        EventType: "process-batch-events",
-        Handler:   m.processHandler.Handle,
+        Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
+        Handler: amqp.NewHandler(m.logger),
     }, nil)
 }
 ```
 
-**Common Mistakes:**
-- Registering consumers in loops or conditional blocks (creates duplicates)
-- Calling `app.RegisterModule()` multiple times for the same module
-- Module registration errors are unrecoverable - MUST use `log.Fatal(err)` to handle
+**Critical Rules:**
+- Each `queue + consumer_tag + event_type` triple must be registered exactly **once** — duplicates panic at startup.
+- Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent.
+- Default consumer concurrency is `runtime.NumCPU() * 4` workers (v0.17+ breaking change). Set `Workers: 1` explicitly when message ordering matters.
 
-See [Troubleshooting](#troubleshooting) section for diagnosing duplicate consumer/module errors
+For helper API, error handling deep dive, panic recovery, concurrency tuning, and reconnection defaults, see [wiki/messaging.md](wiki/messaging.md).
 
-#### Message Error Handling
+### Outbox
 
-**IMPORTANT:** GoBricks uses a **no-retry policy** for failed messages to prevent infinite retry loops.
+Transactional outbox for reliable event publishing. Solves the dual-write problem: events written to an outbox table in the **same database transaction** as business data, then delivered to the broker by a background relay job.
 
-**Behavior:** All handler errors → Message nacked WITHOUT requeue (message dropped). Prevents poison messages from blocking queues. Rich ERROR logs + OpenTelemetry metrics track all failures.
-
-**Panic Recovery:** Handler panics are automatically recovered and treated identically to errors:
-- Panic recovered with stack trace logging
-- Message nacked WITHOUT requeue (consistent with error policy)
-- Service continues processing other messages
-- Metrics recorded with panic error type
-- Other consumers remain unaffected (panic isolation)
-
-**Error Handling Pattern:**
-```go
-func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
-    var order Order
-
-    // Validation errors → message dropped (no retry)
-    if err := json.Unmarshal(delivery.Body, &order); err != nil {
-        return fmt.Errorf("invalid message format: %w", err)
-    }
-
-    // Business logic errors → message dropped (no retry)
-    if err := h.orderService.Process(ctx, order); err != nil {
-        return fmt.Errorf("processing failed: %w", err)
-    }
-
-    return nil // Success → message ACKed
-}
-```
-
-**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `correlation_id`, `error`. OpenTelemetry metrics track operation duration with `error.type` attribute.
-
-**Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay. Dead-letter queue support planned for future releases.
-
-**Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring
-
-#### Consumer Concurrency (v0.17+)
-
-**Breaking Change (v0.17.0):** Default worker count changed from 1 to `runtime.NumCPU() * 4` for optimal I/O-bound performance (20-30x throughput improvement).
-
-**Smart Auto-Scaling:**
-GoBricks automatically configures `Workers = runtime.NumCPU() * 4` to handle blocking I/O operations (database queries, HTTP calls, file operations). The 4x multiplier ensures CPU utilization while threads wait on I/O.
-
-**Configuration:**
-```go
-// Auto-scaling (default): Workers = NumCPU * 4, PrefetchCount = Workers * 10
-decls.DeclareConsumer(&messaging.ConsumerOptions{
-    Queue:     "orders",
-    Consumer:  "processor",
-    EventType: "order.created",
-    Handler:   handler,
-}, queue)
-// 8-core machine: 32 workers, 320 prefetch
-
-// Explicit sequential (for message ordering)
-decls.DeclareConsumer(&messaging.ConsumerOptions{
-    Queue:     "ordered.events",
-    Consumer:  "sequencer",
-    EventType: "event.sequence",
-    Workers:   1,  // Sequential processing
-    Handler:   handler,
-}, queue)
-
-// Custom high concurrency
-decls.DeclareConsumer(&messaging.ConsumerOptions{
-    Queue:         "batch.processing",
-    Consumer:      "batch-worker",
-    EventType:     "batch.import",
-    Workers:       100,          // Explicit
-    PrefetchCount: 500,          // Explicit
-    Handler:       handler,
-}, queue)
-```
-
-**Thread-Safety Requirements:**
-- Handlers MUST be thread-safe (no shared mutable state without locks/atomic operations)
-- Database pools MUST be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
-- External APIs: Add semaphore for rate limit enforcement if needed
-- Test with `go test -race` to detect data races
-
-**Resource Safeguards:**
-- Workers capped at 200 per consumer (prevents goroutine explosion)
-- PrefetchCount capped at 1000 (prevents memory exhaustion)
-- Warnings logged when caps are applied
-
-**Performance Impact (8-core machine, 100ms handler):**
-| Version | Workers | Throughput | Speedup |
-|---------|---------|------------|---------|
-| v0.16.x | 1 | 10 msg/sec | Baseline |
-| v0.17.0 | 32 | 320 msg/sec | **32x** |
-
-**When to Override Defaults:**
-- **Workers=1**: Message ordering required (events must be processed sequentially)
-- **Workers>NumCPU*4**: Very slow handlers (>1s per message) or high throughput needs
-- **Workers<NumCPU*4**: CPU-bound handlers (rare - most handlers are I/O-bound)
-
-**Observability:**
-- Startup logs include `workers` and `prefetch` counts
-- Each worker logs with `worker_id` for debugging
-- OpenTelemetry metrics track per-consumer throughput
-
-### Outbox Architecture
-
-GoBricks provides a built-in **Transactional Outbox** for reliable event publishing. It solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay.
-
-**Core Components:**
-- **Publisher**: Writes events to the outbox table within a database transaction
-- **Relay**: Background poller (scheduler job) that publishes pending events to AMQP
-- **Cleanup**: Scheduled job that removes published events after retention period
-- **Store**: Vendor-agnostic SQL abstraction (PostgreSQL + Oracle)
-
-**Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
-
-**Module Setup:**
 ```go
 fw.RegisterModules(
     scheduler.NewModule(),  // Required: relay runs as a scheduled job
-    outbox.NewModule(),     // Outbox module
+    outbox.NewModule(),     // Outbox module — register BEFORE consumers
     &myapp.OrderModule{},
 )
 
-// In your module:
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getDB = deps.DB
-    m.outbox = deps.Outbox  // nil if outbox not configured (zero cost)
-    return nil
-}
-```
-
-**Business Logic Pattern (atomic write + event):**
-```go
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
-    db, err := s.getDB(ctx)
-    if err != nil { return err }
-
     tx, err := db.Begin(ctx)
     if err != nil { return err }
     defer tx.Rollback(ctx)
 
-    // 1. Write business data
-    _, err = tx.Exec(ctx, "INSERT INTO orders (id, customer_id) VALUES ($1, $2)",
-        req.ID, req.CustomerID)
-    if err != nil { return fmt.Errorf("insert order: %w", err) }
+    if _, err = tx.Exec(ctx, "INSERT INTO orders ..."); err != nil { return err }
 
-    // 2. Write event to outbox (SAME transaction — atomic!)
     payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
-    _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
-        EventType:   "order.created",
-        AggregateID: fmt.Sprintf("order-%d", req.ID),
-        Payload:     payload,
-        Exchange:    "order.events",
-    })
-    if err != nil { return fmt.Errorf("outbox publish: %w", err) }
+    if _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+        EventType: "order.created", AggregateID: fmt.Sprintf("order-%d", req.ID),
+        Payload: payload, Exchange: "order.events",
+    }); err != nil { return err }
 
     return tx.Commit(ctx)
-    // Event GUARANTEED to reach the broker eventually
 }
 ```
 
-**How It Works:**
-1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction
-2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `poll_interval`
-3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
-4. Successfully published events are marked as `published`
-5. Failed events are retried up to `max_retries` times
-6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retention_period`
+**Delivery Guarantee:** At-least-once. Consumers MUST be idempotent; use the `x-outbox-event-id` header for deduplication.
 
-**Configuration:**
-```yaml
-outbox:
-  enabled: true
-  table_name: gobricks_outbox       # Default table name
-  auto_create_table: true           # Create table on first use
-  default_exchange: ""              # Fallback if Event.Exchange empty
-  poll_interval: 5s                 # Relay poll frequency
-  batch_size: 100                   # Events per relay cycle
-  max_retries: 5                    # Max attempts before giving up
-  retention_period: 72h             # Keep published events (0=disable cleanup)
-```
-
-**Event Struct:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `EventType` | string | Yes | Event routing key (e.g., "order.created") |
-| `AggregateID` | string | Yes | Entity identifier for idempotency (e.g., "order-123") |
-| `Payload` | any | Yes | `[]byte` stored as-is, otherwise JSON-marshaled |
-| `Headers` | map[string]any | No | Custom AMQP headers propagated to published message |
-| `Exchange` | string | No | Target AMQP exchange (falls back to `default_exchange` config) |
-| `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
+For configuration, event-struct fields, retry behavior, and operational defaults, see [wiki/outbox.md](wiki/outbox.md).
 
 ### JOSE Middleware
 
-The `jose` package provides nested JWE-of-JWS protection on HTTP request and response bodies. Designed for **Visa Token Services**-style integrations and any partner API that requires sign-then-encrypt outbound and decrypt-then-verify inbound on every payload.
+Nested JWE-of-JWS protection on HTTP request and response bodies. Designed for **Visa Token Services**-style integrations and any partner API requiring sign-then-encrypt outbound and decrypt-then-verify inbound on every payload.
 
-**Key Features:**
-- **Struct-tag opt-in**: Add a `jose:` tag to a sentinel field on the request/response type — no per-route plumbing
-- **Bidirectional symmetry enforced**: both request and response must carry tags or neither (registration-time check)
-- **Strict algorithm allowlist**: `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5`, and `ES256` are rejected at parse time. ECDSA support is gated on extending `keystore.KeyStore` to return ECDSA keys (tracked in [#347](https://github.com/gaborage/go-bricks/issues/347))
-- **Hybrid error envelope**: pre-trust failures (decrypt failed, signature invalid) emit a plaintext minimal `{code,message}` envelope to leak nothing to unauthenticated peers; post-trust handler errors emit the standard `APIResponse` envelope, encrypted with the route's outbound policy
-- **Fail-Fast at startup**: every `kid` is resolved against the keystore at `RegisterHandler` time. Missing keys, asymmetric tags, and `WithRawResponse()` conflicts panic at startup, never at runtime
-- **Observability**: spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`)
-
-**Tag syntax:**
 ```go
 type CreateTokenRequest struct {
     _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
@@ -1278,816 +406,78 @@ type CreateTokenResponse struct {
 }
 ```
 
-**Tag keys (all kids are case-sensitive, charset `[A-Za-z0-9_-]+`):**
-- Request: `decrypt` (our private key), `verify` (peer public key)
-- Response: `sign` (our private key), `encrypt` (peer public key)
-- Optional everywhere: `sig_alg` (default `RS256`), `key_alg` (default `RSA-OAEP-256`), `enc` (default `A256GCM`), `cty` (default `application/json`)
+**Strict allowlist:** `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5` rejected at parse time. Bidirectional symmetry enforced (request and response must both have tags or neither). Pre-trust failures emit minimal `{code,message}` plaintext envelopes; post-trust handler errors emit the standard envelope, encrypted.
 
-**Wiring:**
-```yaml
-keystore:
-  keys:
-    our-signing:
-      public:  { file: certs/our-signing.pub.der }
-      private: { file: certs/our-signing.key.der }
-    visa-vts-encrypt:
-      public:  { value: ${VISA_VTS_ENCRYPT_PUB_B64} }
-    visa-vts-verify:
-      public:  { value: ${VISA_VTS_VERIFY_PUB_B64} }
-```
-
-```go
-// Register the keystore module BEFORE any module declaring jose-tagged routes.
-// app/module_registry.go automatically wires deps.KeyStore + deps.Logger +
-// deps.Tracer + deps.MeterProvider into the JOSE middleware.
-fw.RegisterModules(
-    keystore.NewModule(),
-    &payments.TokensModule{}, // declares jose-tagged routes
-)
-```
-
-**Failure mode → IAPIError mapping (every code surfaces on the wire):**
-
-| Failure | Status | Code |
-|---|---|---|
-| Body required / empty | 400 | `JOSE_BODY_REQUIRED` |
-| Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` |
-| Compact JWE parse failure | 400 | `JOSE_MALFORMED` |
-| `enc`/`alg` not allowed | 400 | `JOSE_ALGORITHM_DISALLOWED` |
-| `alg=none` (downgrade attempt) | 401 | `JOSE_NONE_ALG_REJECTED` (rejected by allowlist parse) |
-| Header missing `kid` | 401 | `JOSE_KID_MISSING` |
-| Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` |
-| Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |
-| Inner payload not a JWS | 400 | `JOSE_INNER_NOT_JWS` |
-| JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` |
-| Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` |
-| Outbound seal failed (server-side) | 500 | `JOSE_OUTBOUND_FAILED` |
-
-**Security invariant** (asserted by tests): a response is JOSE-encrypted iff inbound was successfully verified AND the route has an outbound policy. Tampered-byte negative tests must produce *plaintext* error responses; observing `Content-Type: application/jose` on the failure path is a security regression.
-
-**Replay protection**: the framework verifies the JWS signature and exposes verified claims via `jose.ClaimsFromContext(ctx)`. Applications enforce `iat`/`exp`/`jti` policies (Visa skew rules vary by product).
-
-**Test utilities** (`jose/testing/`):
-- `GenerateTestKeyPair(t)` — 2048-bit RSA pair for fast tests
-- `NewTestResolver(map[string]any{kid: key})` — in-memory KeyResolver
-- `SealForTest(t, payload, policy, resolver)` — produce compact JWE for arrange step
-- `OpenForTest(t, compact, policy, resolver)` — decrypt + verify in assert step
-
-**For complete examples**, see [llms.txt](llms.txt) JOSE section. Outbound httpclient JOSE wrapping (calls TO Visa) is planned for a follow-up release; the current scope covers server in/out only.
+Register `keystore.NewModule()` BEFORE any module declaring jose-tagged routes. For tag syntax, key resolution, the full failure-mode → `IAPIError` mapping table, replay-protection notes, and test utilities, see [wiki/jose.md](wiki/jose.md).
 
 ### Observability
 
-**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod), environment-aware export timeouts (10s dev, 60s prod)
+W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware export timeouts (10s dev / 60s prod).
 
-**Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
-
-**Export Timeout Configuration:** GoBricks uses environment-aware export timeouts to balance fail-fast feedback (development) with network resilience (production):
-- **Development/stdout:** 10s (quick failure detection for debugging)
-- **Production:** 60s (accommodates network latency, TLS handshake, batch transmission)
-- **Override via YAML:** `observability.trace.export.timeout: "90s"` (applies to traces/metrics/logs)
-- **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
-
-**Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type`:
-- **Action logs** (`log.type="action"`): Always exported at 100% (request summaries)
-- **Trace logs** (`log.type="trace"`): ERROR/WARN always exported, INFO/DEBUG sampled by `sampling_rate`
-- Configure via `observability.logs.sampling_rate` (0.0-1.0, default 0.0 drops INFO/DEBUG)
-- Sampling is deterministic per trace (all logs in same trace sampled together)
-
-**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `server.EscalateSeverity(c, zerolog.WarnLevel)`. Configure `observability.logs.slow_request_threshold` for slow request detection.
-
-**Testing:** Use `observability/testing` package:
+**Custom metrics via `deps.MeterProvider`:**
 ```go
-tp := obtest.NewTestTraceProvider()
-spans := tp.Exporter.GetSpans()
-obtest.AssertSpanName(t, &spans[0], "operation")
-
-mp := obtest.NewTestMeterProvider()
-rm := mp.Collect(t)
-obtest.AssertMetricExists(t, rm, "my.counter")
-```
-Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `AssertSpanStatusDescription`, `AssertSpanError`, plus `NewSpanCollector(t, exporter)` for filtering. Metric helpers: `AssertMetricExists`, `AssertMetricValue`, `AssertMetricCount`, `AssertMetricDescription`, `FindMetric`, `GetMetricSumValue`, `GetMetricHistogramCount`. There is no in-memory log exporter today — capture zerolog output via an `io.Writer` sink for action/trace log assertions.
-
-**Debug Mode:** Set `GOBRICKS_DEBUG=true` for `[OBSERVABILITY]` logs (provider init, exporter setup, span lifecycle)
-
-**Common Issues:** Spans not appearing (check `observability.enabled`, wait for batch timeout), logs not exported (verify `observability.logs.enabled`, set `logger.pretty: false`), pretty mode conflict (fails fast at startup). See [Troubleshooting](#troubleshooting) for details
-
-#### Custom Metrics
-
-GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.
-
-**Available in ModuleDeps:**
-- `deps.MeterProvider` - OpenTelemetry MeterProvider for creating custom instruments
-
-**Helper Functions (observability/metrics.go):**
-- `CreateCounter(meter, name, description)` - Monotonically increasing values (requests, errors)
-- `CreateHistogram(meter, name, description)` - Distributions (latency, size)
-- `CreateUpDownCounter(meter, name, description)` - Values that increase/decrease (connections, queue depth)
-
-**Pattern:**
-1. Store `MeterProvider` in module struct
-2. Create instruments in `Init()` (one-time, cached)
-3. Record values in business logic with attributes
-
-**Quick Example:**
-```go
-type OrderModule struct {
-    meterProvider metric.MeterProvider
-    orderCounter  metric.Int64Counter
-}
-
 func (m *OrderModule) Init(deps *app.ModuleDeps) error {
-    m.meterProvider = deps.MeterProvider
-    if m.meterProvider != nil {
-        meter := m.meterProvider.Meter("orders")
+    if deps.MeterProvider != nil {
+        meter := deps.MeterProvider.Meter("orders")
         m.orderCounter, _ = observability.CreateCounter(meter, "orders.created.total", "Total orders created")
     }
     return nil
 }
-
-func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
-    // Record metric with attributes
-    if s.orderCounter != nil {
-        s.orderCounter.Add(ctx, 1,
-            metric.WithAttributes(
-                attribute.String("order_type", req.Type),
-                attribute.String("status", "success"),
-            ),
-        )
-    }
-    // ... business logic
-}
 ```
 
-**Metric Types:**
+**Helper Functions:** `CreateCounter`, `CreateHistogram`, `CreateUpDownCounter` in `observability/metrics.go`. When `observability.enabled: false`, a no-op provider is used (zero overhead, nil-safe).
 
-| Type | Use Case | Example |
-|------|----------|---------|
-| `Int64Counter` | Monotonically increasing counts | Requests, errors, events |
-| `Float64Histogram` | Value distributions | Latency (seconds), payload size (bytes) |
-| `Int64UpDownCounter` | Values that increase/decrease | Active connections, queue depth |
-| `Int64ObservableGauge` | Current state via callback | Memory usage, pool size |
-
-**Best Practices:**
-- Pre-create instruments in `Init()` for performance (avoid per-request creation)
-- Use semantic naming: `<namespace>.<entity>.<measurement>` (e.g., `orders.processing.duration`)
-- Add attributes for dimensions: `status`, `tenant_id`, `operation_type`
-- Nil-check instruments when recording (safe when observability disabled)
-- Test with no-op provider: `noop.NewMeterProvider()` from `go.opentelemetry.io/otel/metric/noop`
-
-**Real-World Example:** See `scheduler/module.go` for production usage with counter, histogram, and panic tracking.
-
-See [llms.txt](llms.txt) Custom Metrics section for complete code examples including observable gauges and testing patterns.
-
-#### Observability Headers & Authentication
-
-Headers (API keys, bearer tokens) MUST be configured in YAML files, NOT via environment variables. Use environment-specific config files (e.g., `config.production.yaml`) with vendor headers. Never commit secrets to git.
-
-**Supported vendors:** New Relic, Honeycomb, Datadog, Grafana Cloud, generic Bearer tokens.
-
-For complete configuration examples, security best practices, and vendor-specific headers, see [wiki/observability-headers-auth.md](wiki/observability-headers-auth.md).
-
-#### New Relic OTLP Integration (Optimized)
-
-GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandwidth reduction), delta temporality (~50% memory savings), and exponential histograms (~90% memory savings).
-
-**Endpoint Format Rules (CRITICAL):**
-
-| Protocol | Endpoint Format | Example |
-|----------|-----------------|---------|
-| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` |
-| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` |
-
-**Common Mistakes:**
-- ❌ `https://otlp.nr-data.net:4317` with `protocol: grpc` → ERROR
-- ✅ `otlp.nr-data.net:4317` with `protocol: grpc` → Correct
-
-For complete gRPC/HTTP configs, port 443 alternatives, and performance benchmarks, see [wiki/new-relic-otlp.md](wiki/new-relic-otlp.md).
-
-#### OpenTelemetry Collector (Recommended for Production)
-
-For high-volume production, use an OTEL Collector as a vendor-agnostic proxy. Benefits: advanced retry/buffering, multi-backend support, data transformation, no vendor lock-in.
-
-**Deployment patterns:** Sidecar (per-pod), DaemonSet (per-node), Gateway (centralized). When using a collector, the GoBricks app points to the collector endpoint with `insecure: true` and no vendor headers.
-
-For deployment patterns, collector configs, and when-to-use guidance, see [wiki/otel-collector.md](wiki/otel-collector.md).
+For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authentication (New Relic/Honeycomb/Datadog), and OTLP collector deployment, see [wiki/observability.md](wiki/observability.md).
 
 ## Context Deadlines & Timeouts
 
-> **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate through the call stack. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight (or, rarely, to *detach* from the request lifecycle for fire-and-forget work).
+> **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight.
 
-### Where deadlines come from
-
-Every operation that crosses an external boundary already has a configured timeout. Module authors do not need to wrap these themselves. The table below covers timeouts that shape **runtime, request-scoped behavior** — the budgets your handler context observes:
-
-| Boundary | Config key | Default | Notes |
-|---|---|---|---|
-| HTTP request handler (deadline applied to `c.Request().Context()`) | `server.timeout.middleware` | **5s** | Set by the framework's `Timeout` middleware. This is the budget every handler inherits. |
-| HTTP server read | `server.timeout.read` | 15s | Time to read the request body |
-| HTTP server write | `server.timeout.write` | 30s | Time to write the response (must exceed `middleware`) |
-| HTTP server idle | `server.timeout.idle` | 60s | Keep-alive idle |
-| HTTP server graceful shutdown | `server.timeout.shutdown` | 10s | Drain inflight requests on SIGTERM |
-| Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s | Per-request timeout on the underlying `http.Client` |
-| Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s | Per-operation socket timeouts |
-| AMQP connection establishment | `messaging.reconnect.connection_timeout` | 30s | Includes publish confirmation |
-| Scheduler — slow job warning | `scheduler.timeout.slowjob` | 25s | Logs WARN if a job exceeds this; does not cancel |
-| Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
-| Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC |
-
-**Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference sections: [Connection Pool Defaults](#connection-pool-defaults) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [Cache Manager Defaults](#cache-manager-defaults) (`manager.idle_ttl`), [Messaging Reconnection Defaults](#messaging-reconnection-defaults) (`reconnect.max_delay`, `publisher.idle_ttl`), [Outbox Defaults](#outbox-defaults), and [Startup Timeout Defaults](#startup-timeout-defaults) (one-shot bootstrap deadlines).
-
-### The default pattern: do nothing
-
-Inside a handler, the request context already carries a 5-second deadline (the configured `server.timeout.middleware`). The deadline propagates through every operation that takes a `context.Context`:
-
-```go
-func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()  // inherits the 5s deadline
-
-    // Each call below observes the inherited deadline — no manual wrapping needed:
-    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))  // Redis dial/read/write
-    order, err := h.svc.FindByID(reqCtx, req.ID)                 // DB query
-    if err != nil {
-        return server.Result[Order]{}, server.NewInternalServerError(err.Error())
-    }
-    _, _ = h.pricingClient.Get(reqCtx, order.SKU)                // outbound HTTP
-
-    return server.NewResult(http.StatusOK, order), nil
-}
-```
-
-When the deadline fires, every in-flight operation observes `ctx.Done()` and returns `context.DeadlineExceeded` — the framework's central error handler then surfaces a `503` envelope. Wrapping any of those calls with another `context.WithTimeout` would either be redundant (same duration) or would *shorten* the already-tight 5s budget, which is rarely what you want by default.
-
-### When to shorten the inherited deadline
-
-The legitimate use case is when one sub-operation should fail fast so the rest of the request budget can do something else. The canonical example is a cache-then-DB lookup, where the cache check should be capped tightly so a Redis hiccup doesn't burn the whole 5s budget:
-
-```go
-func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
-    // Cap the cache lookup at 200ms; if Redis is slow we'd rather fall through to DB.
-    cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-    defer cancel()
-
-    if data, err := s.cache.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
-        return cache.Unmarshal[*User](data)
-    }
-
-    // DB query keeps the rest of the request budget (~4.8s).
-    return s.queryDatabase(ctx, id)
-}
-```
-
-Recommended budgets when shortening (these are *upper bounds*, not floors):
-
-| Operation | Recommended cap | Rationale |
+| Boundary | Config key | Default |
 |---|---|---|
-| Hot-path cache lookup before DB fallback | **200–500 ms** | If Redis is slow, fall through fast |
-| Idempotency-key check / dedup lookup | **100–300 ms** | Short by design; fall through to actual work on miss |
-| Optional enrichment (recommendations, A/B flags) | **500 ms – 1 s** | Best-effort augmentation; degrade on timeout |
-| Internal HTTP RPC to a known-fast service | **1–2 s** | Tighter than the default 30s on `httpclient.WithTimeout` |
-| External partner API (e.g. payments, KYC) | **5–10 s** | Use the default `httpclient` timeout; tune per partner SLA |
-| Background job step inside a scheduler `Executor` | **per-job** | Scheduler doesn't cancel slow jobs — it logs at `slowjob` (25s) and reports duration. Apply your own deadline if the step has a known SLO. |
+| HTTP request handler (deadline on `c.Request().Context()`) | `server.timeout.middleware` | **5s** |
+| HTTP server read / write / idle / shutdown | `server.timeout.{read,write,idle,shutdown}` | 15s / 30s / 60s / 10s |
+| Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
+| Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s |
+| AMQP connection establishment | `messaging.reconnect.connection_timeout` | 30s |
+| Scheduler slow-job WARN / shutdown | `scheduler.timeout.{slowjob,shutdown}` | 25s / 30s |
+| Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) |
 
-**Always pair `context.WithTimeout` with `defer cancel()`** — the linter (`govet`/`lostcancel`) will flag missing cancels, but the discipline matters because leaked cancel functions hold context references and can prevent goroutines from exiting.
+**The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
-### When to detach from the request lifecycle
+For the full deep dive (when to shorten, when to detach, common pitfalls, why context-only timeouts), see [wiki/context-deadlines.md](wiki/context-deadlines.md).
 
-For fire-and-forget background work that must outlive the request (e.g. sending a webhook from a handler that's returning 202 Accepted), use `context.WithoutCancel` (Go 1.21+) to inherit context *values* — trace IDs, tenant ID, logger — while *severing* the parent's cancellation/deadline:
+## Testing
 
-```go
-func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()
+### Test Naming Conventions (MANDATORY)
 
-    bgCtx := context.WithoutCancel(reqCtx)              // inherits values, sheds deadline
-    bgCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)  // re-apply a budget
-
-    go func() {
-        defer cancel()
-        if err := h.worker.Process(bgCtx, req); err != nil {
-            h.logger.WithContext(bgCtx).Error().Err(err).Msg("background job failed")
-        }
-    }()
-
-    return server.Accepted(Receipt{ID: req.ID}), nil
-}
-```
-
-**Why not `context.Background()`?** It severs *everything* — trace ID, tenant ID, request ID, custom logger fields. The job's logs and spans become unattributable. `context.WithoutCancel` is almost always the right tool for "outlive the request, keep the context values."
-
-For scheduler jobs, the `JobContext` passed to `Executor.Execute` carries a context that lives for the job's run and is cancelled on scheduler graceful shutdown (`scheduler.timeout.shutdown`). Jobs SHOULD honor `ctx.Done()` so a SIGTERM doesn't get blocked by a slow job — see [scheduler/module.go](scheduler/module.go).
-
-### Common pitfalls
-
-| Pitfall | Symptom | Fix |
-|---|---|---|
-| Forgetting `defer cancel()` on `context.WithTimeout` | `lostcancel` lint failure; goroutine leaks under load | Always pair `cancel` with `defer` on the next line |
-| Calling `context.Background()` mid-handler | Logs and spans missing trace/tenant attribution; broken trace tree | Use the inherited `ctx` or `context.WithoutCancel(ctx)` |
-| Wrapping with timeout *longer* than the inherited deadline | The longer timeout is silently ignored — the parent's earlier deadline still fires | Don't wrap; the inherited deadline is the cap. If you need longer, see "detach" above |
-| Long loops without `ctx.Err()` checks | Handler keeps running after deadline fires; wasted CPU; eventual `503` from middleware | Check `ctx.Err()` (or `select { case <-ctx.Done(): return ctx.Err(); default: }`) at every iteration boundary in long loops |
-
-### Why context-only timeouts (not `http.TimeoutHandler`)
-
-GoBricks' [`server.Timeout`](server/timeout.go) middleware applies a deadline by wrapping `c.Request().Context()` with `context.WithTimeout` — it does **not** swap the response writer the way Echo's stock `middleware.TimeoutWithConfig` (which wraps `net/http.TimeoutHandler`) would. The trade-off is deliberate: the response-writer swap invalidates `c.Response()` mid-handler, which in turn panics any logging/observability middleware that reads response headers or status. Context-only timeouts let the handler observe cancellation via `ctx.Done()` while keeping the response object valid; the framework's central error handler then renders a standardized 503 envelope. Module authors don't need to do anything special to get this behavior — just use the inherited context.
-
-### Related configuration
-
-- HTTP server timeouts: [`config/types.go`](config/types.go) `TimeoutConfig` (read/write/idle/middleware/shutdown)
-- HTTP client builder: [`httpclient/client.go`](httpclient/client.go) `NewBuilder(...).WithTimeout`
-- Database pool: [Connection Pool Defaults](#connection-pool-defaults)
-- Cache: [Cache Manager Defaults](#cache-manager-defaults), `RedisConfig` in [`config/types.go`](config/types.go)
-- Messaging: [Messaging Reconnection Defaults](#messaging-reconnection-defaults)
-- Scheduler: `scheduler.timeout.{shutdown,slowjob}` in [`config/config.go`](config/config.go)
-- Startup: [Startup Timeout Defaults](#startup-timeout-defaults)
-- Observability export: [`observability.trace.export.timeout`](#observability)
-
-## Testing Guidelines
-
-### Test Naming Conventions
-
-**MANDATORY: Use camelCase for ALL test function names**
+**Use camelCase for ALL test function names.** Snake_case in test function names is forbidden. The codebase has 100% compliance across >800 test functions.
 
 ```go
-// ✅ CORRECT - camelCase naming
+// CORRECT
 func TestUserServiceCreateUser(t *testing.T) { }
 func TestCacheManagerGetOrCreateCache(t *testing.T) { }
-func TestQueryBuilderWithComplexJoins(t *testing.T) { }
 
-// ❌ WRONG - snake_case (NEVER use this)
+// WRONG
 func TestUserService_CreateUser(t *testing.T) { }
 func Test_CacheManager_GetOrCreateCache(t *testing.T) { }
-func TestQueryBuilder_with_complex_joins(t *testing.T) { }
 ```
 
-**Table-Driven Test Naming:**
+**Exception:** Test case descriptions inside table-driven tests use **snake_case** for readability:
 ```go
-// ✅ CORRECT
-func TestFilterEq(t *testing.T) {
-    tests := []struct {
-        name     string  // Use snake_case for test case descriptions
-        column   string
-        value    any
-        expected string
-    }{
-        {name: "simple_equality", column: "id", value: 1, expected: "id = :1"},
-        {name: "string_value", column: "name", value: "Alice", expected: "name = :1"},
-    }
+tests := []struct{ name string }{
+    {name: "simple_equality"},
+    {name: "with_invalid_credentials"},
 }
-
-// ❌ WRONG - function name uses underscores
-func Test_Filter_Eq(t *testing.T) { }
 ```
-
-**Rationale:**
-- **Consistency:** GoBricks enforces camelCase across the entire codebase
-- **Go Idioms:** Test function names are regular Go identifiers (prefer camelCase)
-- **Tooling:** Some tools parse test names assuming camelCase convention
-- **Legacy Code:** All existing tests use camelCase (>800 test functions)
-
-**Exception:** Test case descriptions in table-driven tests use snake_case for readability (e.g., `name: "with_invalid_credentials"`)
 
 ### Testing Strategy
-- **Unit tests:** testify, database/testing (database), httptest (server), fake adapters (messaging)
-- **Integration tests:** testcontainers, `-tags=integration` flag
-- **Race detection:** All tests run with `-race` in CI
-- **Coverage target:** 80% (SonarCloud)
-
-### Database Testing
-
-GoBricks provides `database/testing` package for easy database mocking without sqlmock complexity (**73% less boilerplate**).
-
-**Simple Query Test:**
-```go
-import dbtest "github.com/gaborage/go-bricks/database/testing"
-
-func TestProductService_FindActive(t *testing.T) {
-    // Setup (8 lines vs 30+ with sqlmock)
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
-    db.ExpectQuery("SELECT").
-        WillReturnRows(
-            dbtest.NewRowSet("id", "name").
-                AddRow(int64(1), "Widget").
-                AddRow(int64(2), "Gadget"),
-        )
-
-    deps := &app.ModuleDeps{
-        DB: func(ctx context.Context) (database.Interface, error) {
-            return db, nil
-        },
-    }
-
-    svc := NewProductService(deps)
-    products, err := svc.FindActive(ctx)
-
-    assert.NoError(t, err)
-    assert.Len(t, products, 2)
-    dbtest.AssertQueryExecuted(t, db, "SELECT")
-}
-```
-
-**Transaction Testing:**
-```go
-db := dbtest.NewTestDB(dbtypes.PostgreSQL)
-tx := db.ExpectTransaction().
-    ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
-    ExpectExec("INSERT INTO items").WillReturnRowsAffected(3)
-
-// Test code that uses transactions
-svc.CreateWithItems(ctx, order, items)
-
-dbtest.AssertCommitted(t, tx)
-```
-
-**Multi-Tenant Testing:**
-```go
-tenants := dbtest.NewTenantDBMap()
-tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
-tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
-
-deps := &app.ModuleDeps{
-    DB: tenants.AsDBFunc(),  // Resolves tenant from context
-}
-
-ctx := multitenant.SetTenant(context.Background(), "acme")
-result, err := svc.Process(ctx)  // Uses acme's TestDB
-```
-
-**Key Features:**
-- Fluent expectation API (ExpectQuery/ExpectExec)
-- Multi-tenant support via TenantDBMap
-- Transaction tracking (commit/rollback assertions)
-- Vendor-agnostic RowSet builder
-- Partial SQL matching by default (or strict with StrictSQLMatching())
-
-See [database/testing](database/testing/) package and [llms.txt:294](llms.txt:294) for full examples.
-
-### Cache Testing
-
-GoBricks provides `cache/testing` package for easy cache mocking without Redis dependencies (**similar to database/testing pattern**).
-
-**Simple Cache Test:**
-```go
-import cachetest "github.com/gaborage/go-bricks/cache/testing"
-
-func TestUserServiceCaching(t *testing.T) {
-    mockCache := cachetest.NewMockCache()
-
-    deps := &app.ModuleDeps{
-        Cache: func(ctx context.Context) (cache.Cache, error) {
-            return mockCache, nil
-        },
-    }
-
-    svc := NewUserService(deps)
-    user, err := svc.GetUser(ctx, 123)
-
-    assert.NoError(t, err)
-    cachetest.AssertCacheHit(t, mockCache, "user:123")
-}
-```
-
-**Configurable Failures:**
-```go
-mockCache := cachetest.NewMockCache().
-    WithGetFailure(cache.ErrConnectionError)
-
-// Service should gracefully degrade
-user, err := svc.GetUser(ctx, 123)  // Falls back to database
-assert.NoError(t, err)
-
-// Verify cache operation was attempted
-cachetest.AssertOperationCount(t, mockCache, "Get", 1)
-```
-
-**Multi-Tenant Testing:**
-```go
-tenantCaches := map[string]*cachetest.MockCache{
-    "acme":   cachetest.NewMockCache(),
-    "globex": cachetest.NewMockCache(),
-}
-
-deps := &app.ModuleDeps{
-    Cache: func(ctx context.Context) (cache.Cache, error) {
-        tenantID := multitenant.GetTenant(ctx)
-        return tenantCaches[tenantID], nil
-    },
-}
-
-acmeCtx := multitenant.SetTenant(context.Background(), "acme")
-result, err := svc.Process(acmeCtx)  // Uses acme's MockCache
-```
-
-**Key Features:**
-- Fluent configuration API (`WithGetFailure`, `WithDelay`, `WithCloseCallback`)
-- Operation tracking (Get/Set/Delete/GetOrSet/CompareAndSet counts)
-- 20+ assertion helpers (`AssertCacheHit`, `AssertOperationCount`, `AssertValue`)
-- TTL expiration testing (real time-based expiration)
-- Multi-tenant isolation support
-
-See [cache/testing](cache/testing/) package for full API documentation and the Cache Testing Utilities section in [llms.txt](llms.txt) for comprehensive examples.
-
-### Outbox Testing
-
-GoBricks provides `outbox/testing` package for mocking outbox operations in unit tests.
-
-**Simple Test:**
-```go
-import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
-
-func TestOrderServiceCreateOrder(t *testing.T) {
-    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
-    tx := db.ExpectTransaction().
-        ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1)
-
-    mockOutbox := outboxtest.NewMockOutbox()
-
-    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
-    err := svc.CreateOrder(ctx, order)
-
-    assert.NoError(t, err)
-    dbtest.AssertCommitted(t, tx)
-    outboxtest.AssertEventPublished(t, mockOutbox, "order.created")
-}
-```
-
-**Configurable Failures:**
-```go
-mockOutbox := outboxtest.NewMockOutbox().
-    WithError(fmt.Errorf("outbox unavailable"))
-
-// Service should handle outbox failure (transaction rolls back)
-err := svc.CreateOrder(ctx, order)
-assert.Error(t, err)
-```
-
-**Key Features:**
-- Fluent configuration API (`WithError`)
-- Event tracking (type, aggregate ID, payload, exchange)
-- Assertion helpers (`AssertEventPublished`, `AssertEventCount`, `AssertEventWithAggregate`, `AssertNoEvents`)
-- Thread-safe for concurrent test scenarios
-
-See [outbox/testing](outbox/testing/) package for full API documentation.
-
-### Integration Testing with Testcontainers
-
-**Prerequisites:** Docker Desktop or Docker Engine running
-
-**Run Integration Tests:**
-```bash
-make test-integration           # All integration tests
-make test-coverage-integration  # With coverage
-```
-
-**Build Tag Isolation:** Integration tests use `//go:build integration` - testcontainers dependencies only compiled with `-tags=integration`
-
-**Writing Integration Tests:**
-```go
-//go:build integration
-
-func TestFeature(t *testing.T) {
-    conn, ctx := setupTestContainer(t)      // Starts container
-    defer cleanupTestCollection(t, conn, ctx, "test_coll")
-
-    // Test with real database
-    coll := conn.Collection("test_coll")
-    _, err := coll.InsertOne(ctx, doc, nil)
-    assert.NoError(t, err)
-}
-```
-
-**CI/CD:** Integration tests run only on Ubuntu (Docker requirement), unit tests on all platforms
-
-## Examples and Resources
-
-**Demo Project:** [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) - Comprehensive examples for config injection, OpenAPI, tracing, Oracle, multi-tenant AWS
-
-**Documentation:**
-- Architecture Decisions: `wiki/architecture_decisions.md`, Quick Examples: `llms.txt`
-- Task Planning: `.claude/tasks/archive/`
-
-## Database-Specific Notes
-
-| Database | Placeholders | Key Features |
-|----------|--------------|--------------|
-| **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options, **SEQUENCE support (built-in), UDT registration for custom types** |
-| **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
-
-### Connection Pool Defaults
-
-GoBricks applies production-safe connection pool defaults when database is configured:
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `pool.max.connections` | 25 | Maximum open connections |
-| `pool.idle.connections` | 2 | Minimum warm connections |
-| `pool.idle.time` | 5m | Close idle connections (prevents stale connections) |
-| `pool.lifetime.max` | 30m | Force periodic recycling (DNS, memory hygiene) |
-| `pool.keepalive.enabled` | true | TCP keep-alive probes |
-| `pool.keepalive.interval` | 60s | Probe interval (below NAT timeouts) |
-
-**Cloud Provider Idle Timeouts:**
-| Provider | Component | Timeout |
-|----------|-----------|---------|
-| AWS | NAT Gateway/ALB | 350s |
-| GCP | Cloud NAT | 30s |
-| Azure | NAT Gateway | 240s |
-| On-prem | Firewalls | 60-300s |
-
-**Override defaults** in `config.yaml`:
-```yaml
-database:
-  pool:
-    idle:
-      time: 3m          # More aggressive recycling
-    lifetime:
-      max: 15m          # Shorter lifetime
-    keepalive:
-      interval: 30s     # More frequent probes
-```
-
-### Session Timezone (Breaking Change)
-
-GoBricks applies an opinionated session timezone to every database connection. See [ADR-016](wiki/adr-016-database-session-timezone.md) for full rationale.
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `database.timezone` | `UTC` | IANA timezone applied per session (PostgreSQL via pgx `RuntimeParams`, Oracle via `ALTER SESSION SET TIME_ZONE` on every new physical connection) |
-
-**Behavior:**
-- **Unset / empty** → defaulted to `UTC` at config validation.
-- **IANA name** (e.g., `Asia/Tokyo`, `America/New_York`) → validated via `time.LoadLocation`, applied per-connection.
-- **`-` sentinel** → opt-out; sessions inherit the database server's default (legacy behavior).
-- **Numeric offsets like `+05:30`** → rejected by validation. Use IANA `Etc/GMT±N` (note inverted sign).
-
-**Why per-connection (not one-shot)?** A single `SET TIME ZONE` after `sql.Open` only fixes the first borrowed connection — later pool members revert to the server default. The implementation routes through `pgx.RuntimeParams` (PostgreSQL) and a `driver.Connector` wrapper (Oracle) so every new physical connection inherits the configured timezone.
-
-**Override / opt-out** in `config.yaml`:
-```yaml
-database:
-  timezone: Asia/Tokyo   # Apply Tokyo time to every session
-
-# Or preserve legacy behavior (sessions inherit DB server default):
-database:
-  timezone: "-"
-```
-
-**Migration**: applications upgrading from earlier versions will see session timezone shift from "DB server default" to `UTC` unless they explicitly opt out with `"-"`. If your code relied on the implicit server timezone (e.g., for `CURRENT_TIMESTAMP` in legacy stored procedures), set `database.timezone: "-"` to preserve old behavior.
-
-### Messaging Reconnection Defaults
-
-GoBricks applies production-safe AMQP reconnection defaults when messaging is configured:
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `reconnect.delay` | 5s | Initial delay before reconnect attempts |
-| `reconnect.reinit_delay` | 2s | Delay between channel re-initialization |
-| `reconnect.resend_delay` | 5s | Delay before resending failed messages |
-| `reconnect.connection_timeout` | 30s | Timeout for connection establishment |
-| `reconnect.max_delay` | 60s | Maximum backoff cap for exponential retry |
-| `publisher.max_cached` | 50 | Maximum cached publisher channels |
-| `publisher.idle_ttl` | 10m | TTL for idle publisher channels |
-
-**Override defaults** in `config.yaml`:
-```yaml
-messaging:
-  reconnect:
-    delay: 10s            # Slower initial reconnect
-    max_delay: 120s       # Higher backoff cap
-  publisher:
-    max_cached: 100       # More cached publishers for high-throughput
-    idle_ttl: 30m         # Keep publishers longer
-```
-
-### Cache Manager Defaults
-
-GoBricks applies production-safe cache manager defaults when cache is configured:
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `manager.max_size` | 100 | Maximum tenant cache instances |
-| `manager.idle_ttl` | 15m | Close idle cache connections |
-| `manager.cleanup_interval` | 5m | Frequency of idle cache cleanup |
-
-**Override defaults** in `config.yaml`:
-```yaml
-cache:
-  manager:
-    max_size: 200         # Support more tenants
-    idle_ttl: 30m         # Keep caches longer
-    cleanup_interval: 10m # Less frequent cleanup
-```
-
-### Outbox Defaults
-
-GoBricks applies production-safe outbox defaults when outbox is enabled:
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `outbox.table_name` | `gobricks_outbox` | Outbox table name |
-| `outbox.auto_create_table` | `true` | Auto-create table on first use |
-| `outbox.poll_interval` | `5s` | Relay poll frequency |
-| `outbox.batch_size` | `100` | Events per relay cycle |
-| `outbox.max_retries` | `5` | Max publish attempts |
-| `outbox.retention_period` | `72h` | Published event retention |
-
-**Override defaults** in `config.yaml`:
-```yaml
-outbox:
-  enabled: true
-  poll_interval: 2s           # Lower latency
-  batch_size: 200             # Higher throughput
-  retention_period: 168h      # 7-day retention
-```
-
-### Startup Timeout Defaults
-
-GoBricks applies component-specific startup timeouts for graceful initialization:
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `startup.timeout` | 10s | Overall startup timeout (also serves as fallback for unset components) |
-| `startup.database` | 10s | Database connection establishment |
-| `startup.messaging` | 10s | AMQP broker connection |
-| `startup.cache` | 5s | Redis connection |
-| `startup.observability` | 15s | OTLP endpoint connection (higher for TLS handshake) |
-
-**Fallback Hierarchy:**
-1. Explicit component value (e.g., `startup.database: 15s`) → preserved
-2. Global timeout (if set): `startup.timeout: 30s` → applied to all unset components
-3. Per-component default (shown in table) → used when neither is set
-
-**Example - Global fallback:**
-```yaml
-app:
-  startup:
-    timeout: 30s  # All components inherit 30s (database, messaging, cache, observability)
-```
-
-**Override defaults** in `config.yaml`:
-```yaml
-app:
-  startup:
-    timeout: 30s          # Longer overall timeout
-    database: 15s         # More time for slow databases
-    observability: 30s    # More time for remote OTLP endpoints
-```
-
-### Oracle SEQUENCE Objects (No Configuration Required)
-
-Oracle SEQUENCE objects for ID generation work immediately with standard queries:
-
-```go
-// Get next sequence value
-var id int64
-err := conn.QueryRow(ctx, "SELECT user_seq.NEXTVAL FROM DUAL").Scan(&id)
-
-// Use in INSERT
-_, err = conn.Exec(ctx, "INSERT INTO users VALUES (user_seq.NEXTVAL, :1)", name)
-```
-
-**No UDT registration needed** - SEQUENCE returns standard NUMBER type.
-
-### Oracle User-Defined Types (Require Registration)
-
-For custom object/collection types created with `CREATE TYPE`, use UDT registration:
-
-**When UDT Registration Required:**
-- Bulk insert/update with TABLE OF collections
-- Stored procedures with custom object parameters
-- Functions returning complex types
-
-**Quick Example:**
-```go
-type Product struct {
-    ID    int64  `udt:"ID"`
-    Name  string `udt:"NAME"`
-    Price float64 `udt:"PRICE"`
-}
-
-oracleConn := conn.(*oracle.Connection)
-
-// Register collection type
-err := oracleConn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
-
-// Bulk insert
-products := []Product{{ID: 1, Name: "Widget", Price: 19.99}, ...}
-_, err = conn.Exec(ctx, "BEGIN bulk_insert_products(:1); END;", products)
-```
-
-**For comprehensive examples**, see [llms.txt](llms.txt) Oracle SEQUENCE vs UDT section.
-
-**Common Error:** `"call register type before use user defined type"`
-**Solution:** Call `RegisterType()` during initialization (does NOT affect SEQUENCE queries).
-
-## OpenAPI Tool
-
-```bash
-cd tools/openapi
-make install                    # Install CLI tool
-go-bricks-openapi generate -project . -output docs/openapi.yaml
-go-bricks-openapi doctor        # Check compatibility
-make demo                       # Test on example service
-```
-
-Features: Static analysis-based spec generation, automatic route discovery, typed request/response models
+- **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging).
+- **Integration tests:** testcontainers, `-tags=integration` flag.
+- **Race detection:** All tests run with `-race` in CI.
+- **Coverage target:** 80% (SonarCloud).
+
+For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache configurable failures, MockOutbox event tracking, testcontainers patterns), see [wiki/testing.md](wiki/testing.md).
 
 ## Development Workflow
 
@@ -2100,312 +490,84 @@ make check        # Framework only: fmt, lint, test with race detection
 make check-all    # Framework + tool: catches breaking changes in tool
 
 # Tool-only development
-cd tools/openapi && make check    # Validates tool against current framework
+cd tools/openapi && make check
 ```
 
 **When to use `check-all`:**
-- Modifying public interfaces (server, database, config, observability)
-- Changing struct tags or validation logic
-- Refactoring shared types or error handling
-- Before creating PRs that touch framework APIs
-
-### CI Workflow Testing
-The unified CI workflow (`ci-v2.yml`) intelligently runs only necessary jobs:
-- **Framework changes only:** Skips tool test jobs (saves ~8-10 minutes)
-- **Tool changes only:** Skips framework test/integration jobs (saves ~15-20 minutes)
-- **Both components:** Runs all jobs
-- **Path detection:** Automatic via `dorny/paths-filter@v3` action
+- Modifying public interfaces (server, database, config, observability).
+- Changing struct tags or validation logic.
+- Refactoring shared types or error handling.
+- Before creating PRs that touch framework APIs.
 
 ### Branch Model
-- Main branch: `main` (stable releases)
-- Feature branches: `feature/*`
+- Main branch: `main` (stable releases).
+- Feature branches: `feature/*`.
 
 ### CI/CD Pipeline
-- **Unified CI (ci-v2.yml):** Single workflow with intelligent path-based job execution
-  - Uses `dorny/paths-filter@v3` to detect framework vs tool changes
-  - Framework jobs run only when framework code changes (excludes `tools/**`)
-  - Tool jobs run only when `tools/openapi/**` changes
-  - Shared jobs (lint, security) run independently for each component
-  - Eliminates race conditions from parallel workflow execution
-- **Legacy Workflows:** `ci.yml` and `openapi-tool.yml` (deprecated, use ci-v2.yml)
-- **Test Matrix:** Ubuntu/Windows × Go 1.25
-- **Coverage:** Merged unit + integration coverage → SonarCloud
+- **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter@v3`.
+- Framework jobs run only when framework code changes (excludes `tools/**`); tool jobs run only when `tools/openapi/**` changes.
+- **Test Matrix:** Ubuntu/Windows × Go 1.25.
+- **Coverage:** Merged unit + integration coverage → SonarCloud.
 
-### Windows-Specific Testing
-- Known path differences (`/tmp` vs `D:\temp`)
-- Intelligent retry logic for Windows-specific patterns
-- Race detection enabled
-
-## Troubleshooting
-
-### Common Issues
-
-**Build/Test Failures:**
-
-```bash
-# "cannot find package" errors
-go mod tidy && go mod download
-
-# "Docker not running" during integration tests
-make docker-check  # Check Docker status
-docker info        # Verify Docker daemon
-
-# Race condition failures
-go test -race -run TestSpecificFailing ./package
-
-# Linting errors
-golangci-lint cache clean
-golangci-lint run
-```
-
-**Database Issues:**
-
-```bash
-# Oracle: ORA-00936 "missing expression"
-# → Use type-safe filter methods (f.Eq, f.Lt, f.In, etc.) instead of f.Raw() for auto-quoting
-
-# PostgreSQL: "syntax error at or near $1"
-# → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
-
-# "database not configured" errors
-# → Set database.type, database.host OR database.connection_string (see [ADR-003](wiki/adr-003-database-by-intent.md))
-```
-
-**Connection Pool Issues (ORA-01013, connection reset):**
-
-```bash
-# ORA-01013: "user requested cancel of current operation" after idle period
-# → This indicates stale connections being used after NAT/firewall timeout
-# → GoBricks applies production-safe defaults automatically:
-#   - Pool.KeepAlive.Enabled: true (60s probes prevent silent drops)
-#   - Pool.Idle.Time: 5m (recycle idle connections before timeout)
-#   - Pool.Lifetime.Max: 30m (periodic connection recycling)
-# → For custom configuration, ensure keepalive interval < NAT timeout
-
-# Override defaults for aggressive environments (e.g., strict firewall):
-database:
-  pool:
-    keepalive:
-      enabled: true
-      interval: 30s       # Probe every 30s for strict firewalls
-    idle:
-      time: 2m            # Close idle after 2 minutes
-    lifetime:
-      max: 15m            # Recycle all connections every 15 minutes
-
-# For on-premises with no NAT/firewall concerns, opt-out of recycling:
-database:
-  pool:
-    idle:
-      time: 0             # 0 = no idle timeout (not recommended for cloud)
-    lifetime:
-      max: 1h             # Longer lifetime acceptable without NAT
-```
-
-**Cache Issues:**
-
-```bash
-# "cache not configured" errors
-# → Set cache.enabled: true AND cache.redis.host in config
-# → OR verify multi-tenant cache config in multitenant.tenants.<tenant_id>.cache
-
-# Connection failures
-# → Check Redis server running: redis-cli ping
-# → Verify cache.redis.port matches Redis instance (default: 6379)
-# → Check firewall rules if Redis on different host
-
-# Multi-tenant cache issues
-# → Use deps.Cache(ctx) (function-based, resolves tenant from context)
-# → Ensure tenant context set: multitenant.SetTenant(ctx, tenantID)
-# → Verify tenant has cache.enabled: true in tenant config
-
-# Cache timeout errors
-# → Increase operation timeout: ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-# → Check network latency if Redis on different host
-# → Verify pool size adequate: cache.redis.pool_size >= NumCPU * 2
-
-# Cache hit/miss issues
-# → Check TTL not expired: cache.Set(ctx, key, data, ttl)
-# → Verify key consistency across Set/Get operations
-# → Check CBOR serialization/deserialization for custom types
-
-# CacheManager eviction issues
-# → Increase max_size if seeing unexpected evictions: cache.manager.max_size
-# → Increase idle_ttl if caches closing too quickly: cache.manager.idle_ttl
-# → Monitor stats: cacheManager.Stats() - check Evictions/IdleCleanups counters
-```
-
-**Observability Issues:**
-
-```bash
-# "cannot use OTLP logs with pretty=true"
-# → Set logger.pretty: false when observability.logs.enabled: true
-
-# Spans not appearing in collector
-# → Check observability.enabled: true, wait for batch timeout (500ms dev, 5s prod), or set trace.endpoint: stdout
-
-# Missing trace_id in logs
-# → Use logger.WithContext(ctx).Info(), verify provider initialized before logger enhancement
-
-# Noisy [OBSERVABILITY] debug logs
-# → Unset GOBRICKS_DEBUG environment variable
-
-# gRPC error: "frame header looked like an HTTP/1.1 header" (New Relic)
-# ERROR: rpc error: code = Unavailable desc = connection error: desc = "error reading server preface:
-#        http2: failed reading the frame payload: http2: frame too large, note that the frame header
-#        looked like an HTTP/1.1 header"
-#
-# ROOT CAUSE: gRPC client connecting to HTTP endpoint (port mismatch)
-#
-# SOLUTIONS:
-# 1. Using port 4318 with protocol: grpc → WRONG (4318 is HTTP port)
-#    FIX: Change endpoint to otlp.nr-data.net:4317 (gRPC port)
-#
-# 2. Using https:// scheme with gRPC protocol → WRONG (gRPC doesn't accept scheme)
-#    WRONG: endpoint: https://otlp.nr-data.net:4317
-#    FIX:   endpoint: otlp.nr-data.net:4317 (no https://)
-#
-# 3. Missing TLS configuration → Check insecure: false (New Relic requires TLS)
-#
-# CORRECT NEW RELIC GRPC CONFIG:
-observability:
-  trace:
-    endpoint: otlp.nr-data.net:4317  # NO https://, port 4317 for gRPC
-    protocol: grpc
-    insecure: false  # TLS required
-    compression: gzip
-    headers:
-      api-key: your-license-key
-
-# HTTP endpoint format errors
-# → HTTP requires https:// or http:// scheme: https://otlp.nr-data.net:4318/v1/traces
-# → gRPC requires NO scheme, just host:port: otlp.nr-data.net:4317
-```
-
-**CI/CD Issues:**
-
-```bash
-# Tool tests failing after framework changes
-make check-all  # Run comprehensive validation (framework + tool)
-
-# Windows-specific path failures
-# → Check for /tmp vs D:\temp in test assertions
-# → See: observability/provider_test.go for retry patterns
-
-# Coverage below 80%
-# → Run: make test-coverage
-# → Check SonarCloud quality gate requirements
-```
-
-**Multi-Tenant Issues:**
-
-```bash
-# "tenant ID not found in context"
-# → Use deps.DB(ctx) (function-based, resolves tenant from context)
-# → Ensure tenant resolver configured in multitenant.resolver
-
-# Messaging registry initialization errors
-# → Check logs for "messaging not configured" warnings
-# → Verify messaging.broker.url set for each tenant
-# → See [ADR-004](wiki/adr-004-lazy-messaging-registry.md) for lazy registry creation details
-```
-
-**Messaging Issues:**
-
-```bash
-# "duplicate consumer declaration detected"
-# → Review module's DeclareMessaging() for loops or conditional duplicates
-# → Each queue+consumer+event_type must be registered exactly once
-
-# "duplicate module 'X' detected"
-# → Ensure app.RegisterModule() called exactly once per module in main.go
-# → MUST use log.Fatal(err) to handle module registration errors
-
-# "attempt to replay different declarations for key"
-# → Declaration hash mismatch indicates configuration drift
-# → Review DeclareMessaging() for conditional logic or environment-specific declarations
-
-# Handler panics crashing service (v0.16+: auto-recovered)
-# → Panics are now automatically recovered with stack trace logging
-# → Messages nacked without requeue (same as errors)
-# → Check ERROR logs for "Panic recovered in message handler" with stack traces
-# → Service continues processing other messages (no downtime)
-
-# Diagnostic commands
-grep "Starting AMQP consumers" logs/app.log
-grep "Multiple consumers registered for same queue" logs/app.log
-grep "Panic recovered in message handler" logs/app.log
-```
-
-**Outbox Issues:**
-
-```bash
-# "outbox not configured" or deps.Outbox is nil
-# → Register outbox module BEFORE your application modules (its Init wires
-#   OutboxPublisher into deps.Outbox; downstream modules see nil if it runs later)
-# → Set outbox.enabled: true in config
-
-# Events stuck in "pending" status
-# → Check scheduler is running: GET /_sys/job (should list outbox-relay)
-# → Check messaging is connected: verify messaging.broker.url
-# → Manual trigger: POST /_sys/job/outbox-relay
-
-# Duplicate events received by consumers
-# → Expected behavior (at-least-once delivery)
-# → Use x-outbox-event-id header for idempotency in consumer handlers
-
-# Table creation fails
-# → Set outbox.auto_create_table: false and create table manually
-# → DDL provided in outbox/store_postgres.go and outbox/store_oracle.go
-```
-
-**Module Registration Issues:**
-
-```bash
-# "module X failed to initialize"
-# → Check Init() error logs for specific dependency failures
-# → Verify all required config keys present (Config.InjectInto validation)
-# → Ensure database/messaging configured if module requires them
-
-# Handler registration panics
-# → Verify HandlerRegistry passed to RegisterRoutes()
-# → Check for duplicate route paths (Echo will panic)
-# → Ensure request struct has proper validation tags
-```
-
-### When to Use Each Tool
-
+### Tool Selection
 | Tool | Primary Use Case |
 |------|------------------|
-| `make check` | Daily development, pre-commit checks (fast feedback on framework code) |
-| `make check-all` | Before PRs that modify public interfaces (server, database, config, observability) |
+| `make check` | Daily development, pre-commit (fast feedback on framework code) |
+| `make check-all` | Before PRs that modify public interfaces |
 | `make test-integration` | Testing database/messaging vendor differences (requires Docker) |
-| `go test -run TestName` | Debugging specific failing tests, fast iteration on single test cases |
-| SonarCloud | Coverage metrics (80% target), quality gate validation before releases |
+| `go test -run TestName` | Debugging specific failing tests |
+| SonarCloud | Coverage metrics (80% target), quality gate validation |
+
+For Windows-specific test patterns, CI workflow internals, and operational issues, see [wiki/troubleshooting.md](wiki/troubleshooting.md).
+
+## OpenAPI Tool
+
+```bash
+cd tools/openapi
+make install                    # Install CLI tool
+go-bricks-openapi generate -project . -output docs/openapi.yaml
+go-bricks-openapi doctor        # Check compatibility
+make demo                       # Test on example service
+```
+
+Features: static analysis-based spec generation, automatic route discovery, typed request/response models.
+
+## Breaking Changes
+
+GoBricks has shipped several breaking changes for idiomatic Go conventions. Greenfield work uses the new APIs only — the migration tables are kept in [wiki/migrations.md](wiki/migrations.md) for projects upgrading from older versions:
+
+- **S8179 (getter naming):** `GetX()` → `X()` across all packages (Config, ResourceProvider, ModuleDeps fields, etc.).
+- **S8196 (interface naming):** `Job` → `Executor`, `HealthProbe` → `Prober`, `TenantStore` → `DBConfigProvider`, etc.
+- **ToSQL standardization (ADR-017):** Insert builders return `types.InsertQueryBuilder` with `ToSQL()` (not `ToSql()`).
+- **Session timezone (ADR-016):** Default is now `UTC`. Opt out with `database.timezone: "-"`.
+- **Consumer concurrency (v0.17.0):** Default workers `1` → `NumCPU * 4`. Set `Workers: 1` for sequential ordering.
+- **Message error handling (v2.X):** Errors and panics now nack without requeue (no infinite retry).
+- **MongoDB removed (ADR-012):** Only PostgreSQL and Oracle supported.
 
 ## File Organization
-- **internal/** - Private packages (reflection utilities, test helpers)
-- **testing/** - Framework-wide testing utilities
-  - **testing/mocks/** - Testify-based mocks for database, messaging, query builder interfaces
-  - **testing/fixtures/** - Pre-configured mocks and SQL result builders for common scenarios
-  - **testing/containers/** - Testcontainers helpers (PostgreSQL, Oracle, RabbitMQ, Redis)
-- **database/testing/** - Database-specific testing (TestDB, TenantDBMap, fluent expectations)
-- **cache/testing/** - Cache-specific testing (MockCache, assertion helpers)
-- **observability/testing/** - Test utilities for spans, metrics, and logs
-- **outbox/** - Transactional outbox pattern (Publisher, Relay, Store, multi-vendor)
-- **outbox/testing/** - Outbox-specific testing (MockOutbox, assertion helpers)
-- **keystore/** - Named RSA key pair management (DER files + base64 env vars)
-- **keystore/testing/** - KeyStore-specific testing (MockKeyStore, assertion helpers)
-- **tools/** - Development tooling (OpenAPI generator)
-- **wiki/** - Architecture documentation (see [ADR-006](wiki/adr-006-otlp-log-export.md) for dual-mode logging)
-- **.claude/tasks/** - Development task planning
-- **llms.txt** - Quick reference examples for LLM code generation
-- Tests alongside source files (`*_test.go`)
+
+- **internal/** — Private packages (reflection utilities, test helpers).
+- **testing/** — Framework-wide testing utilities.
+  - **testing/mocks/** — Testify-based mocks for database, messaging, query builder interfaces.
+  - **testing/fixtures/** — Pre-configured mocks and SQL result builders.
+  - **testing/containers/** — Testcontainers helpers (PostgreSQL, Oracle, RabbitMQ, Redis).
+- **database/testing/** — Database-specific testing (TestDB, TenantDBMap, fluent expectations).
+- **cache/testing/** — Cache-specific testing (MockCache, assertion helpers).
+- **observability/testing/** — Test utilities for spans and metrics.
+- **outbox/** — Transactional outbox pattern (Publisher, Relay, Store, multi-vendor).
+- **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
+- **keystore/** — Named RSA key pair management (DER files + base64 env vars).
+- **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
+- **tools/** — Development tooling (OpenAPI generator).
+- **wiki/** — Architecture documentation and ADRs.
+- **.claude/tasks/** — Development task planning.
+- **llms.txt** — Quick reference examples for LLM code generation.
+- Tests alongside source files (`*_test.go`).
 
 ## Key Interfaces
 
-### Database Interface
 ```go
+// Database — see wiki/database.md for full surface
 type Interface interface {
     Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
     Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -2413,19 +575,15 @@ type Interface interface {
     Health(ctx context.Context) error
     DatabaseType() string
 }
-```
 
-### Messaging Client
-```go
+// Messaging
 type Client interface {
     Publish(ctx context.Context, destination string, data []byte) error
     Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error)
     IsReady() bool
 }
-```
 
-### Observability Provider
-```go
+// Observability
 type Provider interface {
     TracerProvider() *sdktrace.TracerProvider
     MeterProvider() *sdkmetric.MeterProvider
@@ -2433,17 +591,13 @@ type Provider interface {
     ShouldDisableStdout() bool
     Shutdown(ctx context.Context) error
 }
-```
 
-### Outbox Publisher
-```go
+// Outbox
 type OutboxPublisher interface {
     Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
 }
-```
 
-### KeyStore
-```go
+// KeyStore (used by JOSE middleware)
 type KeyStore interface {
     PublicKey(name string) (*rsa.PublicKey, error)
     PrivateKey(name string) (*rsa.PrivateKey, error)
@@ -2451,13 +605,14 @@ type KeyStore interface {
 ```
 
 ## Dependencies
-- **Echo v4** - HTTP framework
-- **zerolog** - Structured logging
-- **pgx/v5** - PostgreSQL driver
-- **go-ora/v2** - Oracle driver
-- **Squirrel** - SQL query builder
-- **Koanf v2** - Configuration management
-- **amqp091-go** - RabbitMQ client
-- **validator/v10** - Request validation
-- **testify** - Testing framework
-- **testcontainers-go** - Integration testing
+
+- **Echo v4** — HTTP framework
+- **zerolog** — Structured logging
+- **pgx/v5** — PostgreSQL driver
+- **go-ora/v2** — Oracle driver
+- **Squirrel** — SQL query builder
+- **Koanf v2** — Configuration management
+- **amqp091-go** — RabbitMQ client
+- **validator/v10** — Request validation
+- **testify** — Testing framework
+- **testcontainers-go** — Integration testing
