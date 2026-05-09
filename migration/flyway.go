@@ -4,6 +4,7 @@ package migration
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,16 @@ const (
 	flywayCmdMigrate  = "migrate"
 	flywayCmdValidate = "validate"
 	flywayCmdInfo     = "info"
+
+	// minRedactablePasswordLength gates substring-style password redaction.
+	// Below this length, db.Password collides too easily with unrelated bytes
+	// in Flyway's output (false-positive over-redaction) and short passwords
+	// also leak too readily through encoding tricks; we drop the output
+	// entirely in that case rather than risk leaving credentials in the log.
+	minRedactablePasswordLength = 8
+	// outputSuppressedSentinel replaces the Flyway output in the error log
+	// when redactPassword cannot guarantee a clean scrub.
+	outputSuppressedSentinel = "[REDACTED — output suppressed: password too short for safe substring redaction]"
 )
 
 // FlywayMigrator handles database migrations using Flyway
@@ -259,13 +270,34 @@ func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 }
 
 // redactPassword scrubs the database password from Flyway's stdout/stderr so
-// connection-string echoes in error logs don't leak credentials. Empty
-// passwords are left untouched.
+// connection-string echoes in error logs don't leak credentials. Flyway echoes
+// resolved JDBC URLs (jdbc:postgresql://user:password@host/db) on connection
+// failures, and JDBC drivers percent-encode reserved characters in the
+// userinfo segment per RFC 3986 — so we redact both the raw password and its
+// PathEscape / QueryEscape forms. Passwords shorter than
+// minRedactablePasswordLength are not substring-redacted (they collide with
+// unrelated bytes); we drop the output entirely instead.
 func redactPassword(output string, db *config.DatabaseConfig) string {
 	if db == nil || db.Password == "" {
 		return output
 	}
-	return strings.ReplaceAll(output, db.Password, "[REDACTED]")
+	if len(db.Password) < minRedactablePasswordLength {
+		return outputSuppressedSentinel
+	}
+
+	const placeholder = "[REDACTED]"
+	redacted := strings.ReplaceAll(output, db.Password, placeholder)
+
+	// JDBC URL userinfo uses RFC 3986 percent-encoding (PathEscape semantics).
+	if encoded := url.PathEscape(db.Password); encoded != db.Password {
+		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
+	}
+	// Belt and suspenders: form-encoded variant (spaces as '+') in case any
+	// helper logs the password in application/x-www-form-urlencoded form.
+	if encoded := url.QueryEscape(db.Password); encoded != db.Password {
+		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
+	}
+	return redacted
 }
 
 // RunMigrationsAtStartup executes migrations automatically at application startup
