@@ -227,3 +227,14 @@ func TestSecretsProviderContextCancellation(t *testing.T) {
 	_, err := p.DBConfig(ctx, "x")
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestSecretsProviderEmptyTenantID(t *testing.T) {
+	p := &SecretsProvider{
+		Fetch: func(context.Context, string) ([]byte, error) {
+			t.Fatal("Fetch should not be called for empty tenantID")
+			return nil, nil
+		},
+	}
+	_, err := p.DBConfig(context.Background(), "   ")
+	require.ErrorIs(t, err, ErrEmptyTenantID)
+}
