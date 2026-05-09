@@ -148,7 +148,7 @@ make lint                       # Run golangci-lint
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
-- **migration/** — Flyway integration
+- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md) and [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named RSA key pair management from DER files or base64 env vars

@@ -147,6 +147,15 @@ Introduces `types.InsertQueryBuilder` so `qb.Insert*` constructors return a go-b
 
 ---
 
+### [ADR-018: Multi-Tenant Migration CLI](adr-018-multi-tenant-migration-cli.md)
+**Date:** 2026-05-09 | **Status:** Accepted
+
+Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migration/`) so CI/CD can roll out new Flyway migrations to every existing tenant. Defines a pre-defined HTTP listing contract using the standard go-bricks `APIResponse` envelope and an AWS Secrets Manager naming convention (`gobricks/migrate/<tenant_id>`) for credentials. Reuses `database.DBConfigProvider` so the existing tenant-store abstraction works unchanged.
+
+**Key Benefits:** Documented multi-tenant migration story, secrets-free listing API, library + CLI parity, framework module stays AWS-SDK-free.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented

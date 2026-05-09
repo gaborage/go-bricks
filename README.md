@@ -467,6 +467,19 @@ if err := m.Migrate(ctx, nil); err != nil {     // nil → use vendor-aware defa
 
 Flyway must be installed and on `PATH` (the path is validated against a safe-path allowlist). Defaults can be overridden via a `*migration.Config` struct (FlywayPath, ConfigPath, MigrationPath, Timeout, DryRun).
 
+#### Multi-Tenant Migrations (CI/CD)
+
+For multi-tenant fleets, GoBricks ships a CLI (`go-bricks-migrate` in `tools/migration/`) and a library entry point (`migration.MigrateAll`) that fan migrations out across every tenant. Tenant IDs come from a control-plane HTTP API conforming to a pre-defined contract that uses the standard go-bricks `APIResponse` envelope; tenant database credentials are recovered from AWS Secrets Manager at the documented `gobricks/migrate/<tenant_id>` naming convention.
+
+```bash
+go-bricks-migrate migrate \
+  --source-url https://control-plane.example.com/api \
+  --aws-region us-east-1 \
+  --secrets-prefix gobricks/migrate/
+```
+
+See [wiki/multi-tenant-migration.md](wiki/multi-tenant-migration.md) for the full HTTP contract, IAM policy, secret payload formats (canonical and AWS RDS rotation fallback), CI/CD recipe, and library usage. Architectural rationale lives in [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
+
 ---
 
 ## Cache
