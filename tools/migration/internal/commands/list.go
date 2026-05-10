@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 )
@@ -65,7 +66,7 @@ func requireExactlyOneSource(flags *CommonFlags) error {
 // writeTenantIDs emits ids as NDJSON when asJSON is set or one-per-line text
 // otherwise, propagating writer errors so a broken pipe surfaces as a non-zero
 // exit instead of being silently dropped.
-func writeTenantIDs(out interface{ Write(p []byte) (int, error) }, ids []string, asJSON bool) error {
+func writeTenantIDs(out io.Writer, ids []string, asJSON bool) error {
 	if asJSON {
 		if err := json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids}); err != nil {
 			return fmt.Errorf("encode tenants JSON: %w", err)

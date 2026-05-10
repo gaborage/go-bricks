@@ -202,8 +202,12 @@ func runParallel(
 
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, len(tenantIDs))}
 	state := &parallelState{
-		out:    out,
-		cancel: cancel,
+		out:      out,
+		cancel:   cancel,
+		migrator: migrator,
+		configs:  configs,
+		action:   action,
+		opts:     opts,
 	}
 	sem := make(chan struct{}, parallelism)
 	dispatched := 0
@@ -221,7 +225,7 @@ dispatch:
 		go func(idx int, tenantID string) {
 			defer state.wg.Done()
 			defer func() { <-sem }()
-			state.runWorker(runCtx, idx, tenantID, migrator, configs, action, opts)
+			state.runWorker(runCtx, idx, tenantID)
 		}(i, id)
 	}
 
@@ -242,39 +246,35 @@ dispatch:
 	return out, nil
 }
 
-// parallelState bundles the shared mutable state of a runParallel invocation
-// behind one struct so the dispatch loop and worker body stay shallow. The
-// run-context is intentionally not a field here — it's threaded through
-// runWorker as a parameter so context.Context isn't held in struct state
-// (Sonar go:S8242).
+// parallelState bundles the shared state of a runParallel invocation. Inputs
+// that don't change for the duration of the call (migrator, configs, action,
+// opts) live here so runWorker keeps a small parameter list. The run-context
+// is intentionally NOT a field — Go's idiom keeps Context per call, and
+// runWorker takes it as a parameter.
 type parallelState struct {
 	out      *MigrateAllResult
 	cancel   context.CancelFunc
+	migrator *FlywayMigrator
+	configs  database.DBConfigProvider
+	action   Action
+	opts     MigrateAllOptions
 	wg       sync.WaitGroup
 	hookMu   sync.Mutex
 	errMu    sync.Mutex
 	firstErr error
 }
 
-func (s *parallelState) runWorker(
-	ctx context.Context,
-	idx int,
-	tenantID string,
-	migrator *FlywayMigrator,
-	configs database.DBConfigProvider,
-	action Action,
-	opts MigrateAllOptions,
-) {
-	res := runOne(ctx, migrator, configs, action, tenantID, opts.BaseConfig)
+func (s *parallelState) runWorker(ctx context.Context, idx int, tenantID string) {
+	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, s.opts.BaseConfig)
 	s.out.Results[idx] = res
 
-	if opts.Hook != nil {
+	if s.opts.Hook != nil {
 		s.hookMu.Lock()
-		opts.Hook(res)
+		s.opts.Hook(res)
 		s.hookMu.Unlock()
 	}
 
-	if res.Err != nil && !opts.ContinueOnError {
+	if res.Err != nil && !s.opts.ContinueOnError {
 		s.recordFirstErr(res.Err)
 		s.cancel()
 	}

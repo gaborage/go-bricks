@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -27,14 +28,15 @@ const (
 	flywayCmdInfo     = "info"
 
 	// minRedactablePasswordLength gates substring-style password redaction.
-	// Below this length, db.Password collides too easily with unrelated bytes
-	// in Flyway's output (false-positive over-redaction) and short passwords
-	// also leak too readily through encoding tricks; we drop the output
-	// entirely in that case rather than risk leaving credentials in the log.
+	// Short needles (1-7 bytes) are statistically likely to appear inside
+	// unrelated Flyway output (timestamps, error codes, table names),
+	// causing false-positive over-redaction that obscures the real diagnostic
+	// AND failing to mask encoded variants whose alphabet differs from the
+	// raw password. 8 bytes matches the same minimum we expect at config
+	// validation; below that we drop the output entirely. ASCII-only sentinel
+	// so log pipelines without UTF-8 don't mangle it.
 	minRedactablePasswordLength = 8
-	// outputSuppressedSentinel replaces the Flyway output in the error log
-	// when redactPassword cannot guarantee a clean scrub.
-	outputSuppressedSentinel = "[REDACTED — output suppressed: password too short for safe substring redaction]"
+	outputSuppressedSentinel    = "[REDACTED -- output suppressed: password too short for safe substring redaction]"
 )
 
 // FlywayMigrator handles database migrations using Flyway
@@ -95,23 +97,21 @@ func (fm *FlywayMigrator) DefaultMigrationConfigForVendor(vendor string) *Config
 	}
 }
 
-// safeVendorSegment returns vendor when it matches a known go-bricks vendor
-// constant, otherwise falls back to the migrator's configured vendor (also
-// validated), and finally to a neutral "unknown" sentinel. Prevents tenant
-// DatabaseConfig values like "../../tmp" from escaping the flyway/ and
-// migrations/ directories via fmt.Sprintf path interpolation.
+// safeVendorSegment returns vendor when it matches a supported go-bricks
+// database type, otherwise falls back to the migrator's configured vendor
+// (also validated), and finally to a neutral "unknown" sentinel. Prevents
+// tenant DatabaseConfig values like "../../tmp" from escaping the flyway/ and
+// migrations/ directories via fmt.Sprintf path interpolation. The supported
+// set is sourced from database.ValidateDatabaseType so it stays single-sourced
+// alongside the connection-factory's own check.
 func safeVendorSegment(vendor, fallback string) string {
-	if isKnownVendor(vendor) {
+	if database.ValidateDatabaseType(vendor) == nil {
 		return vendor
 	}
-	if isKnownVendor(fallback) {
+	if database.ValidateDatabaseType(fallback) == nil {
 		return fallback
 	}
 	return "unknown"
-}
-
-func isKnownVendor(v string) bool {
-	return v == config.PostgreSQL || v == config.Oracle
 }
 
 func (fm *FlywayMigrator) defaultMigrationConfig() *Config {

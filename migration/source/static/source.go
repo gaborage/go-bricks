@@ -14,6 +14,10 @@ import (
 // underlying TenantStoreLister is nil.
 var ErrNilStore = errors.New("migration/source/static: TenantStoreLister is nil")
 
+// ErrEmptyTenantID is returned when the underlying tenant store contains an
+// empty-string tenant ID. Callers can branch on this with errors.Is.
+var ErrEmptyTenantID = errors.New("migration/source/static: tenant store contains empty tenant id")
+
 // TenantStoreLister is the subset of *config.TenantStore that TenantSource
 // requires. Defined as an interface so tests can substitute a fake without
 // constructing a full store.
@@ -45,7 +49,7 @@ func (s *TenantSource) ListTenants(_ context.Context) ([]string, error) {
 	out := make([]string, 0, len(tenants))
 	for id := range tenants {
 		if id == "" {
-			return nil, errors.New("migration/source/static: tenant store contains empty tenant id")
+			return nil, ErrEmptyTenantID
 		}
 		out = append(out, id)
 	}

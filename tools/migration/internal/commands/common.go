@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -254,7 +255,7 @@ type fixedLister struct{ ids []string }
 func (f *fixedLister) ListTenants(context.Context) ([]string, error) { return f.ids, nil }
 
 // makeHook returns a TenantResult callback that streams progress to out.
-func makeHook(out interface{ Write(p []byte) (int, error) }, asJSON bool) func(migration.TenantResult) {
+func makeHook(out io.Writer, asJSON bool) func(migration.TenantResult) {
 	if asJSON {
 		enc := json.NewEncoder(out)
 		return func(r migration.TenantResult) {
@@ -291,7 +292,7 @@ func vendorOrUnknown(v string) string {
 	return v
 }
 
-func writeSummary(out interface{ Write(p []byte) (int, error) }, result *migration.MigrateAllResult, asJSON bool) {
+func writeSummary(out io.Writer, result *migration.MigrateAllResult, asJSON bool) {
 	if result == nil {
 		return
 	}

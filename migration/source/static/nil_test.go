@@ -22,11 +22,10 @@ func TestListTenantsNilStore(t *testing.T) {
 	require.ErrorIs(t, err, ErrNilStore)
 }
 
-func TestFromConfigStoreReturnsTenantSource(t *testing.T) {
-	s := FromConfigStore(nil)
-	assert.NotNil(t, s)
-	_, err := s.ListTenants(context.Background())
-	require.ErrorIs(t, err, ErrNilStore)
+func TestFromConfigStoreReturnsNonNilForNilStore(t *testing.T) {
+	// Constructor never returns nil, even when given a nil store. The error
+	// path on the returned source is exercised by TestListTenantsNilStore.
+	assert.NotNil(t, FromConfigStore(nil))
 }
 
 func TestListTenantsRejectsEmptyID(t *testing.T) {
@@ -37,8 +36,7 @@ func TestListTenantsRejectsEmptyID(t *testing.T) {
 		},
 	})
 	_, err := s.ListTenants(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty tenant id")
+	require.ErrorIs(t, err, ErrEmptyTenantID)
 }
 
 func TestListTenantsSortedHappyPath(t *testing.T) {

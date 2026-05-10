@@ -848,8 +848,6 @@ func TestValidateEdgeCases(t *testing.T) {
 	})
 }
 
-// --- safeVendorSegment ----------------------------------------------------
-
 func TestSafeVendorSegmentKnownPasses(t *testing.T) {
 	assert.Equal(t, "postgresql", safeVendorSegment("postgresql", ""))
 	assert.Equal(t, "oracle", safeVendorSegment("oracle", ""))
@@ -865,8 +863,6 @@ func TestSafeVendorSegmentBothUnknownYieldsSentinel(t *testing.T) {
 	assert.Equal(t, "unknown", safeVendorSegment("../../tmp", ""))
 	assert.Equal(t, "unknown", safeVendorSegment("../../tmp", "garbage"))
 }
-
-// --- redactPassword -------------------------------------------------------
 
 func TestRedactPasswordReplacesAll(t *testing.T) {
 	db := &config.DatabaseConfig{Password: "s3cr3tValue"}

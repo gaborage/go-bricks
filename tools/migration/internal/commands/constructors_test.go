@@ -75,7 +75,14 @@ func TestSubcommandsRejectExtraPositionalArgs(t *testing.T) {
 			cmd.SetContext(context.Background())
 			err := cmd.Execute()
 			require.Error(t, err)
-			assert.Contains(t, strings.ToLower(err.Error()), "arg")
+			// cobra.NoArgs surfaces as either an "unknown command" error
+			// (when the subcommand has no further children) or an "accepts
+			// 0 arg(s)" error from the validator. Match both, not the
+			// over-broad substring "arg".
+			msg := strings.ToLower(err.Error())
+			matched := strings.Contains(msg, "unknown command") ||
+				strings.Contains(msg, "accepts 0 arg")
+			assert.Truef(t, matched, "expected NoArgs rejection, got: %s", err.Error())
 		})
 	}
 }
