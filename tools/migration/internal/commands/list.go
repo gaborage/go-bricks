@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -46,15 +47,17 @@ func NewListCommand() *cobra.Command {
 
 // requireExactlyOneSource enforces the listing-only invariant for the list
 // command, which deliberately bypasses resolveFlags' credential checks.
+// Whitespace-only flag values are treated as unset so accidental whitespace
+// from copy-paste or env-var rendering doesn't satisfy the check.
 func requireExactlyOneSource(flags *CommonFlags) error {
 	selectors := 0
-	if flags.SourceURL != "" {
+	if strings.TrimSpace(flags.SourceURL) != "" {
 		selectors++
 	}
-	if flags.SourceConfig != "" {
+	if strings.TrimSpace(flags.SourceConfig) != "" {
 		selectors++
 	}
-	if flags.Tenant != "" {
+	if strings.TrimSpace(flags.Tenant) != "" {
 		selectors++
 	}
 	if selectors != 1 {

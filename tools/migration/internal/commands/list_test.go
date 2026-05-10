@@ -100,6 +100,21 @@ func TestListCommandSourceMutualExclusion(t *testing.T) {
 	assert.Contains(t, err.Error(), "exactly one")
 }
 
+func TestListCommandRejectsWhitespaceOnlySelectors(t *testing.T) {
+	// Whitespace-only flag values should be treated as unset; otherwise
+	// `--tenant '   '` would pass the selector-count check but produce a
+	// confusing downstream error.
+	cmd := NewListCommand()
+	cmd.SetArgs([]string{"--tenant", "   "})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one")
+}
+
 func TestListCommandTenantFlag(t *testing.T) {
 	cmd := NewListCommand()
 	cmd.SetArgs([]string{"--tenant", "single-tenant"})
