@@ -70,7 +70,10 @@ func TestListCommandHTTPSourceJSON(t *testing.T) {
 
 	var parsed map[string]any
 	require.NoError(t, json.NewDecoder(strings.NewReader(stdout.String())).Decode(&parsed))
-	assert.Contains(t, parsed, "tenants")
+	require.Contains(t, parsed, "tenants")
+	tenants, ok := parsed["tenants"].([]any)
+	require.True(t, ok, "tenants should decode to []any, got %T", parsed["tenants"])
+	assert.Equal(t, []any{"t1"}, tenants)
 }
 
 func TestListCommandRequiresSource(t *testing.T) {
