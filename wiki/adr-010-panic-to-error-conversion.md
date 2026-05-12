@@ -236,4 +236,4 @@ The following S8242 (context-in-struct) patterns are **intentionally retained** 
 - [Effective Go: Errors](https://go.dev/doc/effective_go#errors)
 - [SonarCloud S8148: Functions should follow Go's explicit error handling patterns](https://rules.sonarsource.com/go/RSPEC-8148/)
 - [SonarCloud S8242: context.Context should not be embedded in structs](https://rules.sonarsource.com/go/RSPEC-8242/)
-- [GoBricks Manifesto: Robustness - Handle errors idiomatically](.specify/memory/constitution.md)
+- [GoBricks Manifesto: Robustness - Handle errors idiomatically](../CLAUDE.md#developer-manifesto-mandatory)

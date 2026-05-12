@@ -5,6 +5,8 @@
 **Status:** Accepted
 **Context:** Multi-tenant caching infrastructure and distributed locking support
 
+> **Note (2026-05-12):** Code examples in this ADR were updated to reflect the S8179 rename (`GetCache` → `Cache` field on `ModuleDeps`, mirroring the `GetDB` → `DB` / `GetMessaging` → `Messaging` renames). The decision, rationale, and lifecycle behaviour are unchanged. The full rename table lives in [wiki/migrations.md](migrations.md). Entries in the "Completed PRs" list (further down) are deliberately preserved with their original names as a historical record.
+
 ## Problem Statement
 
 GoBricks applications require:
@@ -158,14 +160,14 @@ cache:
 ```go
 type ModuleDeps struct {
     // ... existing fields
-    GetCache func(context.Context) (cache.Cache, error)  // NEW
+    Cache func(context.Context) (cache.Cache, error)  // NEW
 }
 ```
 
 **Impact:**
 - Minor breaking change (new field on struct)
 - Backward compatible: modules not using cache ignore new field
-- Function-based dependency (matches `GetDB`, `GetMessaging` pattern)
+- Function-based dependency (matches `DB`, `Messaging` pattern)
 
 **Rationale:**
 - Consistent API with existing multi-tenant dependencies
@@ -249,7 +251,7 @@ See main implementation plan for details (CBOR serialization, Redis client, conf
 ### Adoption Path
 ```go
 // Phase 1: Basic caching
-cache, _ := deps.GetCache(ctx)
+cache, _ := deps.Cache(ctx)
 data, _ := cache.Marshal(&user)
 cache.Set(ctx, "user:123", data, 5*time.Minute)
 
@@ -358,7 +360,7 @@ defer cache.Delete(ctx, lockKey)
 - Full observability metrics implementation (cache.hit, cache.miss counters)
 
 **Architectural Highlights:**
-- Follows "Explicit > Implicit" manifesto principle with function-based `deps.GetCache(ctx)`
+- Follows "Explicit > Implicit" manifesto principle with function-based `deps.Cache(ctx)`
 - Lock-free close pattern prevents blocking operations during cache lifecycle events
 - Singleflight prevents duplicate cache creation under concurrent load
 - Defensive validation at multiple layers (app, config, Redis client)
