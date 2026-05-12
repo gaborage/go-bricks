@@ -202,8 +202,11 @@ jobs:
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
-          # Build tag controls which tests run - only integration tests will execute
-          go test -race -parallel 2 -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
+          # Build tag controls which tests run - only integration tests will execute.
+          # -timeout 15m is an interim safeguard for the ADR-020 rollout window;
+          # revert (or hold at 15m) once schema-per-test proves stable across
+          # 20 consecutive green runs (issue #404).
+          go test -race -parallel 2 -timeout 15m -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
 
       - name: Upload integration test coverage artifact
         uses: actions/upload-artifact@v7

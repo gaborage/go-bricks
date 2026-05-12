@@ -18,6 +18,29 @@ golangci-lint cache clean
 golangci-lint run
 ```
 
+### Faster local Oracle integration runs (`GO_BRICKS_ORACLE_CONTAINER`)
+
+Since ADR-020, the Oracle integration suite provisions one container per `go test` invocation (~18.5s cold-start) and runs every test in an isolated schema. For tight local iteration where you re-run the suite many times in a row, a long-lived developer container saves the 18.5s on each invocation.
+
+**Pattern** — point a local developer container at a stable port (e.g. 1521) and let a thin wrapper script export the connection details so the test binary reads them via `os.Getenv` and skips the container start:
+
+```bash
+# 1) Start a long-lived container once
+docker run -d --name gobricks-oracle-dev \
+    -p 1521:1521 \
+    -e ORACLE_PASSWORD=testpass \
+    -e APP_USER=testuser \
+    -e APP_USER_PASSWORD=testpass \
+    gvenzl/oracle-free:23-slim
+docker logs -f gobricks-oracle-dev | grep -m1 "DATABASE IS READY TO USE!"
+
+# 2) Wrap go test in a script that exports the existing endpoint
+export GO_BRICKS_ORACLE_CONTAINER="oracle://system:testpass@localhost:1521/FREEPDB1"
+go test -tags=integration ./database/oracle/...
+```
+
+Currently this is a documented developer convenience: TestMain always spins up a container regardless of `GO_BRICKS_ORACLE_CONTAINER`. If you want to plumb it through your own fork, override TestMain in `database/oracle/integration_main_test.go` to check the env var before calling `containers.StartOracleContainerForTestMain` and construct a synthetic `OracleContainer` against the existing endpoint instead. The per-test `NewSchema` helper works against any reachable container regardless of how it was provisioned — DROP USER ... CASCADE keeps the long-lived container clean between runs.
+
 ## Database Issues
 
 ```bash
