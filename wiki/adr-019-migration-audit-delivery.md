@@ -38,7 +38,7 @@ Require every consumer to provide an `AuditSink` implementation. Ship one or two
 
 ### Option 3: Hybrid — OTel default, opt-in `AuditSink` override (Chosen)
 
-Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditSink` interface; when configured on `migration.Runner` (or via `ModuleDeps`), every emitted event fans out to the sink **in parallel** with the OTel emission. Sink failures log a warning but do not abort the migration.
+Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditSink` interface; when configured on `migration.Runner` (or via `ModuleDeps`), every emitted event is dispatched to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue) so the sink cannot stall the migration. Sink failures log a warning but do not abort the migration.
 
 **Chosen because:**
 
