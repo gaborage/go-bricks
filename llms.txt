@@ -3594,6 +3594,192 @@ sql, args := qb.Select(cols.All()...).
 - Add composite indexes on `(tenant_id, other_columns)` for query performance
 - Consider PostgreSQL Row-Level Security (RLS) for additional database-level protection
 
+## Multi-Tenant Migrations (CI/CD)
+
+For multi-tenant fleets, GoBricks ships a CLI (`go-bricks-migrate` in `tools/migration/`) and a library entry point (`migration.MigrateAll`) that fan Flyway migrations across every tenant. Tenant IDs come from a control-plane HTTP API; tenant DB credentials come from AWS Secrets Manager. Full guide: [wiki/multi-tenant-migration.md](wiki/multi-tenant-migration.md). Architecture rationale: [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
+
+### Pre-defined HTTP listing contract
+
+The contract uses the standard go-bricks `APIResponse` envelope, so a back-office implementing the route with `server.GET(...)` gets the wrapping for free.
+
+```
+GET <base>/tenants?limit=<int>&cursor=<opaque>
+Authorization: Bearer <optional>
+
+200 OK
+{
+  "data": {
+    "tenants":     [ { "id": "tenant-a" }, { "id": "tenant-b" } ],
+    "next_cursor": "opaque-or-empty"
+  },
+  "meta": { "timestamp": "...", "traceId": "..." }
+}
+
+4xx / 5xx
+{ "error": { "code": "...", "message": "..." }, "meta": { ... } }
+```
+
+`id` is the only required field per tenant; extra fields ignored. Empty/absent `next_cursor` ends iteration. CLI defaults to `limit=100`.
+
+### Reference back-office handler (Echo, on top of go-bricks)
+
+```go
+type ListTenantsReq struct {
+    Limit  int    `query:"limit"  validate:"omitempty,min=1,max=500"`
+    Cursor string `query:"cursor" validate:"omitempty"`
+}
+type Tenant struct{ ID string `json:"id"` }
+type ListTenantsResp struct {
+    Tenants    []Tenant `json:"tenants"`
+    NextCursor string   `json:"next_cursor"`
+}
+
+func (h *Handler) listTenants(req ListTenantsReq, ctx server.HandlerContext) (server.Result[ListTenantsResp], server.IAPIError) {
+    ids, next, err := h.tenants.Page(ctx.Echo.Request().Context(), req.Limit, req.Cursor)
+    if err != nil {
+        return server.Result[ListTenantsResp]{}, server.NewInternalServerError(err.Error())
+    }
+    out := ListTenantsResp{NextCursor: next, Tenants: make([]Tenant, 0, len(ids))}
+    for _, id := range ids {
+        out.Tenants = append(out.Tenants, Tenant{ID: id})
+    }
+    return server.NewResult(http.StatusOK, out), nil
+}
+```
+
+### AWS Secrets Manager naming convention
+
+Default secret name (overridable via `--secrets-prefix` / `GOBRICKS_MIGRATE_SECRETS_PREFIX`):
+
+```
+gobricks/migrate/<tenant_id>
+```
+
+Canonical payload (preferred) — matches `config.DatabaseConfig` fields:
+
+```json
+{
+  "type":     "postgresql",
+  "host":     "tenant-a.db.example.com",
+  "port":     5432,
+  "database": "tenant_a",
+  "username": "tenant_a_app",
+  "password": "..."
+}
+```
+
+RDS rotation fallback (existing AWS-managed secrets work as-is): `engine` → `type` (with `postgres`/`postgresql`/`aurora-postgresql` → `postgresql`; `oracle*` → `oracle`); `dbname` → `database`. Canonical fields win when both shapes are present.
+
+Minimum IAM for the runner role:
+
+```json
+{
+  "Effect":   "Allow",
+  "Action":   "secretsmanager:GetSecretValue",
+  "Resource": "arn:aws:secretsmanager:<region>:<account>:secret:gobricks/migrate/*"
+}
+```
+
+### CLI usage
+
+```bash
+# Apply migrations to every tenant returned by the control-plane API
+go-bricks-migrate migrate \
+  --source-url https://control-plane.example.com/api \
+  --source-token "$GOBRICKS_MIGRATE_SOURCE_TOKEN" \
+  --secrets-prefix gobricks/migrate/ \
+  --aws-region us-east-1 \
+  --flyway-config flyway/flyway-postgresql.conf \
+  --migrations-dir migrations/postgresql
+
+# Validate without applying (use as a CI gate)
+go-bricks-migrate validate --source-url ... --aws-region us-east-1
+
+# Smoke-test the listing endpoint (no creds, no DB)
+go-bricks-migrate list --source-url https://control-plane.example.com/api
+
+# Single-tenant remediation
+go-bricks-migrate migrate --tenant tenant-a --aws-region us-east-1
+
+# JSON progress for CI parsing
+go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
+```
+
+Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure. `--parallel <N>` (max 32) processes tenants concurrently while preserving fail-fast: on the first per-tenant error, siblings still queued exit immediately and in-flight Flyway processes are cancelled before `MigrateAll` returns. Combine with `--continue-on-error` to keep iterating instead.
+
+### Library usage (back-office calls MigrateAll directly)
+
+The CLI's AWS Secrets Manager wrapper at `tools/migration/internal/awssm/` is CLI-only (`internal/`). Library callers implement `migration.SecretFetcher` themselves — typically a small adapter over the AWS SDK or any other secret store:
+
+```go
+import (
+    "context"
+    "fmt"
+    "os"
+
+    "github.com/aws/aws-sdk-go-v2/aws"
+    awsconfig "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+
+    "github.com/gaborage/go-bricks/migration"
+    httpsource "github.com/gaborage/go-bricks/migration/source/http"
+)
+
+func awsSecretFetcher(ctx context.Context, region string) (migration.SecretFetcher, error) {
+    awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+    if err != nil { return nil, err }
+    sm := secretsmanager.NewFromConfig(awsCfg)
+    return func(ctx context.Context, name string) ([]byte, error) {
+        out, err := sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String(name)})
+        if err != nil { return nil, fmt.Errorf("get secret %q: %w", name, err) }
+        if out.SecretString != nil { return []byte(*out.SecretString), nil }
+        return out.SecretBinary, nil
+    }, nil
+}
+
+func RunReleaseMigrations(ctx context.Context) error {
+    lister, err := httpsource.New("https://control-plane.example.com/api", httpsource.Options{
+        BearerToken: os.Getenv("CONTROL_PLANE_TOKEN"),
+    })
+    if err != nil { return err }
+
+    fetcher, err := awsSecretFetcher(ctx, "us-east-1")
+    if err != nil { return err }
+
+    provider := &migration.SecretsProvider{Fetch: fetcher} // default prefix gobricks/migrate/
+    if err := provider.Validate(); err != nil { return err }
+
+    fm := migration.NewFlywayMigrator(myCfg, myLogger)
+
+    res, err := migration.MigrateAll(ctx, fm, lister, provider, migration.ActionMigrate, migration.MigrateAllOptions{
+        Logger: myLogger,
+        Hook: func(r migration.TenantResult) {
+            myLogger.Info().Str("tenant", r.TenantID).Dur("dur", r.Duration).Msg("tenant migrated")
+        },
+    })
+    if err != nil { return err }
+    if failed := res.Failed(); len(failed) > 0 {
+        return fmt.Errorf("%d tenants failed", len(failed))
+    }
+    return nil
+}
+```
+
+### Plugging in a non-AWS secret store
+
+`migration.SecretFetcher` is just `func(ctx, secretName) ([]byte, error)`. Wire any store you already use:
+
+```go
+provider := &migration.SecretsProvider{
+    Prefix: "vault/migrate/",
+    Fetch: func(ctx context.Context, name string) ([]byte, error) {
+        return myVaultClient.ReadJSON(ctx, name)
+    },
+}
+```
+
+The framework's `migration` module stays AWS-SDK-free; AWS SM lives in the CLI's separate `tools/migration` go.mod.
+
 ## Observability & Logging
 
 GoBricks ships **OpenTelemetry traces, metrics, and structured logs out of the box** — flip `observability.enabled: true` and the framework auto-instruments every external boundary (HTTP, database, AMQP, cache, outbound HTTP). No application code is required for the auto-instrumentation; custom spans/metrics/logs slot in on top.

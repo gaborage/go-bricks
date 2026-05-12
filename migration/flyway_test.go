@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,7 +82,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "d",
 	}}
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env := fm.buildEnvironmentVariables()
+	env := buildEnvironmentVariables(&fm.config.Database)
 	joined := "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -105,7 +106,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "pdb1",
 	}}
 	fm = NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env = fm.buildEnvironmentVariables()
+	env = buildEnvironmentVariables(&fm.config.Database)
 	joined = "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -192,14 +193,17 @@ func TestDefaultMigrationConfig(t *testing.T) {
 			},
 		},
 		{
-			name:   "custom_database_type",
+			// Unknown vendors fall through the whitelist to the "unknown"
+			// sentinel so a malicious tenant Type can't escape the flyway/
+			// and migrations/ directories via fmt.Sprintf interpolation.
+			name:   "unknown_database_type_falls_back_to_sentinel",
 			dbType: "mysql",
 			appEnv: "testing",
 			expectedConf: func(_, _ string) *Config {
 				return &Config{
 					FlywayPath:    "flyway",
-					ConfigPath:    "flyway/flyway-mysql.conf",
-					MigrationPath: "migrations/mysql",
+					ConfigPath:    "flyway/flyway-unknown.conf",
+					MigrationPath: "migrations/unknown",
 					Timeout:       5 * 60_000_000_000, // 5 minutes
 					Environment:   "testing",
 					DryRun:        false,
@@ -653,7 +657,7 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-			envVars := fm.buildEnvironmentVariables()
+			envVars := buildEnvironmentVariables(&fm.config.Database)
 			assertEnvVarsContain(t, envVars, tt.expectedVars)
 			assertEnvVarsLackPrefixes(t, envVars, tt.notExpectedVars)
 		})
@@ -842,4 +846,70 @@ func TestValidateEdgeCases(t *testing.T) {
 		require.NoError(t, readErr)
 		assert.Contains(t, string(captured), "validate")
 	})
+}
+
+func TestSafeVendorSegmentKnownPasses(t *testing.T) {
+	assert.Equal(t, "postgresql", safeVendorSegment("postgresql", ""))
+	assert.Equal(t, "oracle", safeVendorSegment("oracle", ""))
+}
+
+func TestSafeVendorSegmentUnknownFallsBack(t *testing.T) {
+	// Path-traversal attempt falls back to the migrator's own configured vendor.
+	assert.Equal(t, "postgresql", safeVendorSegment("../../tmp", "postgresql"))
+	assert.Equal(t, "oracle", safeVendorSegment("rm -rf /", "oracle"))
+}
+
+func TestSafeVendorSegmentBothUnknownYieldsSentinel(t *testing.T) {
+	assert.Equal(t, "unknown", safeVendorSegment("../../tmp", ""))
+	assert.Equal(t, "unknown", safeVendorSegment("../../tmp", "garbage"))
+}
+
+func TestRedactPasswordReplacesAll(t *testing.T) {
+	db := &config.DatabaseConfig{Password: "s3cr3tValue"}
+	out := redactPassword("connecting with s3cr3tValue to host (s3cr3tValue)", db)
+	assert.Equal(t, "connecting with [REDACTED] to host ([REDACTED])", out)
+}
+
+func TestRedactPasswordEmptyOrNilLeavesOutputUntouched(t *testing.T) {
+	assert.Equal(t, "no secrets here", redactPassword("no secrets here", nil))
+	assert.Equal(t, "no secrets here", redactPassword("no secrets here", &config.DatabaseConfig{}))
+}
+
+func TestRedactPasswordHandlesPercentEncodedJDBCURL(t *testing.T) {
+	// JDBC URLs percent-encode reserved characters in the userinfo segment.
+	// A password like "p@ssw0rd!" appears as "p%40ssw0rd%21" in Flyway error
+	// output; the raw substring will not match, but PathEscape will.
+	db := &config.DatabaseConfig{Password: "p@ssw0rd!"}
+	output := "Unable to connect to jdbc:postgresql://user:p%40ssw0rd%21@host:5432/db"
+	out := redactPassword(output, db)
+	assert.NotContains(t, out, "p%40ssw0rd%21")
+	assert.NotContains(t, out, "p@ssw0rd!")
+	assert.Contains(t, out, "[REDACTED]")
+}
+
+func TestRedactPasswordHandlesQueryEncodedForm(t *testing.T) {
+	// Form-encoded variant uses '+' for spaces; redaction must catch both.
+	db := &config.DatabaseConfig{Password: "pass word!"}
+	queryForm := "?password=" + url.QueryEscape(db.Password)
+	out := redactPassword("dump: "+queryForm, db)
+	assert.NotContains(t, out, url.QueryEscape(db.Password))
+	assert.Contains(t, out, "[REDACTED]")
+}
+
+func TestRedactPasswordSuppressesOutputForShortPasswords(t *testing.T) {
+	// Short passwords substring-collide with unrelated bytes; we drop the
+	// whole output instead of risking partial redaction.
+	db := &config.DatabaseConfig{Password: "abc"}
+	out := redactPassword("connection refused: jdbc:postgresql://user:abc@host", db)
+	assert.Equal(t, outputSuppressedSentinel, out)
+	assert.NotContains(t, out, "abc")
+}
+
+func TestRedactPasswordKeepsAlphanumericLongPasswordsRedactedRaw(t *testing.T) {
+	// Pure-alphanumeric passwords need no encoding; raw substring redaction
+	// suffices.
+	db := &config.DatabaseConfig{Password: "longalphanumeric1"}
+	out := redactPassword("error: jdbc:postgresql://user:longalphanumeric1@host/db", db)
+	assert.Contains(t, out, "[REDACTED]")
+	assert.NotContains(t, out, "longalphanumeric1")
 }

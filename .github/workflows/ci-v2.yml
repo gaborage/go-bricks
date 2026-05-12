@@ -19,6 +19,8 @@ jobs:
       framework: ${{ steps.filter.outputs.framework }}
       # yamllint: valid GitHub Actions context expression
       tool: ${{ steps.filter.outputs.tool }}
+      # yamllint: valid GitHub Actions context expression
+      migrate_tool: ${{ steps.filter.outputs.migrate_tool }}
     steps:
       - uses: actions/checkout@v6
 
@@ -32,6 +34,9 @@ jobs:
               - '!tools/**'
             tool:
               - 'tools/openapi/**'
+              - '.github/workflows/ci-v2.yml'
+            migrate_tool:
+              - 'tools/migration/**'
               - '.github/workflows/ci-v2.yml'
 
   # ============================================================================
@@ -184,14 +189,15 @@ jobs:
   framework-merge-coverage:
     permissions:
       contents: read
-    needs: [changes, framework-test, framework-integration-test, tool-test]
+    needs: [changes, framework-test, framework-integration-test, tool-test, migrate-tool-test]
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true') &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
       (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
-      (needs.tool-test.result == 'success' || needs.tool-test.result == 'skipped')
+      (needs.tool-test.result == 'success' || needs.tool-test.result == 'skipped') &&
+      (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
     runs-on: ubuntu-latest
 
     steps:
@@ -226,6 +232,14 @@ jobs:
           name: openapi-tool-coverage-report
           path: tools/openapi
 
+      - name: Download migrate tool coverage
+        if: needs.changes.outputs.migrate_tool == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: migrate-tool-coverage-report
+          path: tools/migration
+
       - name: Merge coverage files
         run: |
           set -euo pipefail
@@ -237,6 +251,7 @@ jobs:
           has_framework_unit=false
           has_framework_integration=false
           has_tool=false
+          has_migrate_tool=false
 
           if [ -f coverage.out ]; then
             echo "✓ Framework unit tests coverage found"
@@ -253,8 +268,13 @@ jobs:
             has_tool=true
           fi
 
+          if [ -f tools/migration/coverage.out ]; then
+            echo "✓ Migrate tool coverage found"
+            has_migrate_tool=true
+          fi
+
           # Ensure at least one coverage file exists
-          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_tool" = false ]; then
+          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_tool" = false ] && [ "$has_migrate_tool" = false ]; then
             echo "Error: No coverage files found"
             exit 1
           fi
@@ -330,6 +350,11 @@ jobs:
             tail -n +2 tools/openapi/coverage.out >> coverage-merged.out
           fi
 
+          # Append migrate tool coverage (skip mode line)
+          if [ "$has_migrate_tool" = true ]; then
+            tail -n +2 tools/migration/coverage.out >> coverage-merged.out
+          fi
+
           # Show summary
           echo ""
           echo "=== Coverage Merge Summary ==="
@@ -341,6 +366,9 @@ jobs:
           fi
           if [ "$has_tool" = true ]; then
             wc -l tools/openapi/coverage.out | awk '{print "Tool coverage:        " $1 " lines"}'
+          fi
+          if [ "$has_migrate_tool" = true ]; then
+            wc -l tools/migration/coverage.out | awk '{print "Migrate tool coverage:" $1 " lines"}'
           fi
           wc -l coverage-merged.out | awk '{print "Merged total:         " $1 " lines"}'
 
@@ -453,13 +481,12 @@ jobs:
               echo "Testing package: $pkg"
               go test -race "$pkg"
             done
-            # Generate combined coverage for SonarCloud (Ubuntu only)
+            # Generate combined coverage for SonarCloud (Ubuntu only).
+            # Failures here fail the job — silent absence of coverage is what
+            # produced the SonarCloud-coverage gap the migrate tool addresses.
             if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
               echo "Generating coverage report for SonarCloud"
-              go test -race -coverprofile=coverage.out -covermode=atomic $packages || {
-                echo "Coverage generation failed, but tests passed"
-                exit 0
-              }
+              go test -race -coverprofile=coverage.out -covermode=atomic $packages
             fi
           else
             echo "No packages found to test"
@@ -586,6 +613,181 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
+
+  # ============================================================================
+  # Migration Tool CI Jobs (conditional on tools/migration changes)
+  # ============================================================================
+
+  migrate-tool-test:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/migration
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          packages=$(go list ./cmd/... ./internal/...)
+          if [ -z "$packages" ]; then
+            echo "No packages found to test"
+            exit 1
+          fi
+          for pkg in $packages; do
+            echo "Testing package: $pkg"
+            go test -race "$pkg"
+          done
+          # Coverage failures fail the job — silent absence is what created
+          # the SonarCloud-coverage gap this tool fixes.
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            echo "Generating coverage report for SonarCloud"
+            go test -race -coverprofile=coverage.out -covermode=atomic $packages
+          fi
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $packages = go list ./cmd/... ./internal/...
+          if (-not $packages) {
+            Write-Host "No packages found to test"
+            exit 1
+          }
+          go test -race $packages
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload coverage artifact for SonarCloud (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: migrate-tool-coverage-report
+          path: tools/migration/coverage.out
+          retention-days: 1
+          if-no-files-found: ignore
+
+  migrate-tool-build:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/migration
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build and validate CLI (Unix)
+        if: matrix.os != 'windows-latest'
+        run: make validate-cli
+
+      - name: Build and validate CLI (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          go build -ldflags "-X main.version=dev" -o go-bricks-migrate.exe ./cmd/go-bricks-migrate
+          ./go-bricks-migrate.exe version
+          ./go-bricks-migrate.exe --help
+          Write-Host "CLI validation passed"
+
+      - name: Verify go mod (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  lint-migrate-tool:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+
+      - name: golangci-lint (migrate tool)
+        uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
+        with:
+          version: latest
+          working-directory: tools/migration
+          args: --timeout=5m
+
+  security-migrate-tool:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/migration
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run Gosec Security Scanner (migrate tool)
+        run: |
+          set -euo pipefail
+          packages=$(go list ./cmd/... ./internal/...)
+          if [ -z "$packages" ]; then
+            echo "No packages found to scan"
+            exit 1
+          fi
+          gosec $packages
 
   # ============================================================================
   # Shared Jobs (run for framework OR tool OR both)
@@ -715,7 +917,7 @@ jobs:
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true') &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
       needs.framework-merge-coverage.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
