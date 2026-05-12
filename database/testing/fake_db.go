@@ -63,7 +63,7 @@ const (
 //	        WillReturnRowsAffected(1)
 //
 //	deps := &app.ModuleDeps{
-//	    GetDB: func(ctx context.Context) (database.Interface, error) {
+//	    DB: func(ctx context.Context) (database.Interface, error) {
 //	        return db, nil
 //	    },
 //	}
