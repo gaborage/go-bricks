@@ -29,7 +29,7 @@ import (
 //
 //	// Inject into ModuleDeps
 //	deps := &app.ModuleDeps{
-//	    GetDB: tenants.AsGetDBFunc(),
+//	    DB: tenants.AsGetDBFunc(),
 //	}
 //
 //	// Test with tenant context
@@ -127,7 +127,7 @@ func (m *TenantDBMap) SetDefaultDB(db *TestDB) *TenantDBMap {
 	return m
 }
 
-// AsGetDBFunc returns a function compatible with ModuleDeps.GetDB.
+// AsGetDBFunc returns a function compatible with ModuleDeps.DB.
 // The returned function extracts the tenant ID from context and returns the corresponding TestDB.
 //
 // Behavior:
@@ -141,11 +141,11 @@ func (m *TenantDBMap) SetDefaultDB(db *TestDB) *TenantDBMap {
 //	tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
 //
 //	deps := &app.ModuleDeps{
-//	    GetDB: tenants.AsGetDBFunc(),
+//	    DB: tenants.AsGetDBFunc(),
 //	}
 //
 //	ctx := multitenant.SetTenant(context.Background(), "acme")
-//	db, err := deps.GetDB(ctx)  // Returns TestDB for "acme"
+//	db, err := deps.DB(ctx)  // Returns TestDB for "acme"
 func (m *TenantDBMap) AsGetDBFunc() func(context.Context) (dbtypes.Interface, error) {
 	return func(ctx context.Context) (dbtypes.Interface, error) {
 		// Try to get tenant from context
