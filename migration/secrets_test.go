@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -237,4 +238,65 @@ func TestSecretsProviderEmptyTenantID(t *testing.T) {
 	}
 	_, err := p.DBConfig(context.Background(), "   ")
 	require.ErrorIs(t, err, ErrEmptyTenantID)
+}
+
+func TestSecretsProviderTenantIDAllowlist(t *testing.T) {
+	validPayload := []byte(`{"type":"postgresql","host":"h","username":"u"}`)
+
+	t.Run("accepts_allowed_characters", func(t *testing.T) {
+		cases := []string{
+			"tenant1",
+			"TENANT-X",
+			"a_b-c_2",
+			"A",                                // 1 char
+			strings.Repeat("a", 128),           // 128 chars (upper bound)
+			"abcdef-ABCDEF-0123456789-_______", // mixed allowed runes
+		}
+		for _, id := range cases {
+			t.Run(id, func(t *testing.T) {
+				p := &SecretsProvider{
+					Fetch: func(context.Context, string) ([]byte, error) { return validPayload, nil },
+				}
+				_, err := p.DBConfig(context.Background(), id)
+				require.NoError(t, err)
+			})
+		}
+	})
+
+	t.Run("rejects_disallowed_inputs", func(t *testing.T) {
+		cases := []struct {
+			name string
+			id   string
+		}{
+			{"space", "tenant 1"},
+			{"slash", "tenant/secret"},
+			{"dot", "tenant.id"},
+			{"colon", "tenant:id"},
+			{"nul", "tenant\x00id"},
+			{"newline", "tenant\nid"},
+			{"unicode", "tenanté"},
+			{"over_128_chars", strings.Repeat("a", 129)},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				p := &SecretsProvider{
+					Fetch: func(context.Context, string) ([]byte, error) {
+						t.Fatal("Fetch should not be called for disallowed tenantID")
+						return nil, nil
+					},
+				}
+				_, err := p.DBConfig(context.Background(), tc.id)
+				require.ErrorIs(t, err, ErrInvalidTenantID)
+			})
+		}
+	})
+
+	t.Run("trims_then_validates", func(t *testing.T) {
+		p := &SecretsProvider{
+			Fetch: func(context.Context, string) ([]byte, error) { return validPayload, nil },
+		}
+		// Leading/trailing whitespace is trimmed; the inner ID must still match.
+		_, err := p.DBConfig(context.Background(), "  tenant-1  ")
+		require.NoError(t, err)
+	})
 }
