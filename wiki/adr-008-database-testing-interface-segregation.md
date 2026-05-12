@@ -3,6 +3,8 @@
 ## Status
 Accepted (2025-01-10)
 
+> **Note (2026-05-12):** Code examples in this ADR were updated to reflect the S8179 rename (`GetDB` → `DB` field on `ModuleDeps`). The decision, rationale, and test-helper API surface are unchanged. The full rename table lives in [wiki/migrations.md](migrations.md).
+
 ## Context
 Application developers faced testing friction with `database.Interface` requiring ~25 methods across 4 wrapper types (Interface, Tx, Row, Statement). Testing required:
 - **30+ lines of sqlmock boilerplate** per test
@@ -79,7 +81,7 @@ tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
 tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
 
 deps := &app.ModuleDeps{
-    GetDB: tenants.AsGetDBFunc(),  // Respects function-based injection
+    DB: tenants.AsGetDBFunc(),  // Respects function-based injection
 }
 ```
 
@@ -96,7 +98,7 @@ AssertTransactionCommitted(t, db)
 - **73% less test boilerplate**: 30+ lines → 8 lines per test
 - **100% backward compatible**: All 32 test suites pass unchanged
 - **Honors SRP**: Separate Querier (execution) from Transactor (transactions)
-- **Multi-tenant ready**: TenantDBMap respects function-based `GetDB(ctx)` pattern
+- **Multi-tenant ready**: TenantDBMap respects function-based `DB(ctx)` pattern
 - **Type-safe**: Compile-time verification of interface compliance
 - **Clearer test intent**: Expectation-based API vs verbose sqlmock regexp patterns
 - **Zero breaking changes**: Existing code unaffected
@@ -181,7 +183,7 @@ db := dbtest.NewTestDB(dbtypes.PostgreSQL).
     WillReturnRows(dbtest.NewRowSet("id", "name").AddRow(1, "Alice"))
 
 deps := &app.ModuleDeps{
-    GetDB: func(ctx context.Context) (database.Interface, error) {
+    DB: func(ctx context.Context) (database.Interface, error) {
         return db, nil
     },
 }

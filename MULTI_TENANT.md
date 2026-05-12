@@ -74,8 +74,8 @@ All resolvers support context propagation and integrate seamlessly with the midd
 
 Modules access tenant-specific resources through function-based injection in `ModuleDeps`:
 
-- `GetDB(ctx context.Context)` - Returns database connection for the tenant in the context
-- `GetMessaging(ctx context.Context)` - Returns messaging client for the tenant in the context
+- `DB(ctx context.Context)` - Returns database connection for the tenant in the context
+- `Messaging(ctx context.Context)` - Returns messaging client for the tenant in the context
 
 The framework automatically resolves the tenant ID from the request context and provides the appropriate isolated resources. Messaging declarations made in `DeclareMessaging()` are validated once at startup and replayed to each tenant's registry, ensuring complete infrastructure isolation.
 

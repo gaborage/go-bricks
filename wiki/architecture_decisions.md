@@ -138,6 +138,24 @@ Slims the `app.Module` interface from 5 methods to 3, making `RegisterRoutes` an
 
 ---
 
+### [ADR-015: Echo v4 to v5 Migration](adr-015-echo-v5-migration.md)
+**Date:** 2026-04-06 | **Status:** Accepted
+
+Migrates the HTTP framework foundation from Echo v4 to v5 (~92 files affected) to stay within the supported window, unlock `otelecho` v5 support, and align with the Echo ecosystem.
+
+**Key Benefits:** Long-term Echo support, OpenTelemetry instrumentation upgrade path, ecosystem alignment
+
+---
+
+### [ADR-016: Database Session Timezone Configuration](adr-016-database-session-timezone.md)
+**Date:** 2026-04-23 | **Status:** Accepted
+
+Establishes a session-level timezone setting (default `UTC`) applied to every PostgreSQL/Oracle connection in the pool, eliminating cross-environment time-zone drift. Opt out with `database.timezone: "-"`.
+
+**Key Benefits:** Deterministic `time.Time` round-trips across dev/staging/prod, pool-wide consistency, Oracle host-TZ leak closed
+
+---
+
 ### [ADR-017: Standardize on `ToSQL()` Across All Query Builders](adr-017-insert-query-builder.md)
 **Date:** 2026-05-01 | **Status:** Accepted
 
@@ -153,6 +171,15 @@ Introduces `types.InsertQueryBuilder` so `qb.Insert*` constructors return a go-b
 Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migration/`) so CI/CD can roll out new Flyway migrations to every existing tenant. Defines a pre-defined HTTP listing contract using the standard go-bricks `APIResponse` envelope and an AWS Secrets Manager naming convention (`gobricks/migrate/<tenant_id>`) for credentials. Reuses `database.DBConfigProvider` so the existing tenant-store abstraction works unchanged.
 
 **Key Benefits:** Documented multi-tenant migration story, secrets-free listing API, library + CLI parity, framework module stays AWS-SDK-free.
+
+---
+
+### [ADR-019: Migration Audit-Event Delivery — OpenTelemetry-first with Pluggable Sink Override](adr-019-migration-audit-delivery.md)
+**Date:** 2026-05-12 | **Status:** Accepted
+
+Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditSink` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
+
+**Key Benefits:** Zero-config audit for the majority of adopters, durable opt-in path for PCI/SOC 2 customers, schema consistency across both emission paths via a single `AuditEvent` struct.
 
 ---
 
@@ -190,7 +217,7 @@ When creating a new ADR:
 
 - **[CLAUDE.md](../CLAUDE.md)**: Development guide and quick reference
 - **[llms.txt](../llms.txt)**: Code examples for LLM code generation
-- **[.specify/memory/constitution.md](../.specify/memory/constitution.md)**: Project governance framework
+- **[CLAUDE.md → Developer Manifesto](../CLAUDE.md#developer-manifesto-mandatory)**: Project governance — principles, security guidelines, engineering practices
 - **[Demo Project](https://github.com/gaborage/go-bricks-demo-project)**: Working examples
 
 ---
