@@ -67,7 +67,7 @@ The local-developer benefit is real, but we can capture it more cleanly via a `G
 
 ### Option 3: One container per package via `TestMain` + per-test schema isolation (Chosen)
 
-`database/oracle/main_test.go` provisions exactly one Oracle container in `TestMain`, exposes the connection details to package tests via package-level state, and terminates the container in the `m.Run()` post-step. Every existing `setupTestContainer(t)` call site is rewritten to:
+`database/oracle/integration_main_test.go` provisions exactly one Oracle container in `TestMain`, exposes the connection details to package tests via package-level state, and terminates the container in the `m.Run()` post-step. Every existing `setupTestContainer(t)` call site is rewritten to:
 
 1. Generate a random schema/user name (e.g., `gbtest_<random suffix>`).
 2. `CREATE USER ... IDENTIFIED BY ...; GRANT CONNECT, RESOURCE, CREATE TYPE, CREATE PROCEDURE TO ...;`.
