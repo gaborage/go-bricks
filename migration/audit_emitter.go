@@ -102,6 +102,14 @@ type auditEmitter struct {
 	sinkDrops    metric.Int64Counter
 	sinkFailures metric.Int64Counter
 
+	// closeMu serializes the non-blocking enqueue in enqueueForSink with
+	// the channel-close in Close so a concurrent emit cannot panic with
+	// "send on closed channel". Held only for the microsecond-scale span
+	// of a non-blocking select, so contention is negligible at the
+	// audit-event frequency this package expects.
+	closeMu sync.Mutex
+	closed  bool
+
 	consumerCtx    context.Context
 	consumerCancel context.CancelFunc
 	consumerWG     sync.WaitGroup
@@ -199,12 +207,19 @@ func (e *auditEmitter) enqueueForSink(ctx context.Context, ev *AuditEvent) {
 	if e.sink == nil {
 		return
 	}
+	e.closeMu.Lock()
+	defer e.closeMu.Unlock()
+	if e.closed {
+		// OTel emission already happened; dropping the sink delivery on
+		// shutdown is the deliberate trade-off from ADR-019.
+		return
+	}
 	select {
 	case e.sinkQueue <- ev:
 	default:
 		if e.sinkDrops != nil {
 			e.sinkDrops.Add(ctx, 1,
-				metric.WithAttributes(attribute.String("audit.type", string(ev.Type))),
+				metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
 			)
 		}
 		e.logger.Warn().
@@ -224,7 +239,7 @@ func (e *auditEmitter) consumeSink() {
 		}
 		if e.sinkFailures != nil {
 			e.sinkFailures.Add(e.consumerCtx, 1,
-				metric.WithAttributes(attribute.String("audit.type", string(ev.Type))),
+				metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
 			)
 		}
 		e.logger.Warn().
@@ -236,9 +251,9 @@ func (e *auditEmitter) consumeSink() {
 }
 
 // Close drains the AuditSink queue and tears down the consumer goroutine.
-// Safe to call when no sink is configured. Honors ctx for shutdown deadline;
-// events still in the queue when ctx expires are silently dropped (their
-// OTel emission already succeeded).
+// Safe to call when no sink is configured. Idempotent — calling twice is a
+// no-op. Honors ctx for shutdown deadline; events still in the queue when
+// ctx expires are silently dropped (their OTel emission already succeeded).
 //
 // The defer here matters: on the timeout branch, cancelling the consumer
 // context propagates a Done() signal into any in-flight sink.Record call so
@@ -248,8 +263,16 @@ func (e *auditEmitter) Close(ctx context.Context) error {
 	if e == nil || e.sink == nil {
 		return nil
 	}
-	defer e.consumerCancel()
+	e.closeMu.Lock()
+	if e.closed {
+		e.closeMu.Unlock()
+		return nil
+	}
+	e.closed = true
 	close(e.sinkQueue)
+	e.closeMu.Unlock()
+
+	defer e.consumerCancel()
 
 	done := make(chan struct{})
 	go func() {

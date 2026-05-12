@@ -3787,7 +3787,9 @@ Every Flyway `migrate` invocation emits a `migration.applied` audit event. The d
 ```go
 type kafkaAuditSink struct{ producer *kafka.Writer; topic string }
 
-func (s *kafkaAuditSink) Record(ctx context.Context, ev migration.AuditEvent) error {
+// AuditSink.Record takes a pointer (matches outbox.OutboxPublisher convention
+// for medium-sized event payloads).
+func (s *kafkaAuditSink) Record(ctx context.Context, ev *migration.AuditEvent) error {
     payload, _ := json.Marshal(ev)
     return s.producer.WriteMessages(ctx, kafka.Message{
         Topic: s.topic, Key: []byte(ev.Target), Value: payload,

@@ -365,7 +365,6 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 	}
 	sink := newRecordingSink()
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditSink(sink)
-	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	stub := createFlywayStub(t, "postgresql")
 	mcfg := &Config{
@@ -382,10 +381,75 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 	require.NoError(t, fm.Info(context.Background(), mcfg))
 	require.NoError(t, fm.Validate(context.Background(), mcfg))
 
-	// Brief settle window for any (incorrect) async sink dispatch.
-	time.Sleep(100 * time.Millisecond)
+	// Close drains the sink queue deterministically — any event enqueued
+	// (incorrectly) by Info/Validate would arrive before Close returns. A
+	// fixed sleep here would be flaky under load and meaningless on a fast
+	// machine.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, fm.Close(ctx))
+
 	assert.Empty(t, sink.snapshot(),
 		"Info/Validate must not emit migration.applied per ADR-019 (only the migrate verb does)")
+}
+
+func TestEmitterCloseIsIdempotent(t *testing.T) {
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, emitter.Close(ctx))
+	// Second Close must be a no-op, not a "close of closed channel" panic.
+	require.NoError(t, emitter.Close(ctx))
+}
+
+func TestEmitterEmitAfterCloseDoesNotPanic(t *testing.T) {
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, emitter.Close(ctx))
+
+	// emit after Close must not panic; the OTel emission still happens, the
+	// sink delivery is dropped silently.
+	require.NotPanics(t, func() {
+		emitter.emit(context.Background(), baseEvent())
+	})
+}
+
+func TestEmitterConcurrentEmitAndCloseDoesNotPanic(t *testing.T) {
+	// Race-detector flushes out the "send on closed channel" panic class if
+	// the enqueueForSink ↔ Close synchronization regresses.
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+
+	// Hammer emit from many goroutines while a concurrent Close races.
+	var emitWG sync.WaitGroup
+	const writers = 8
+	const perWriter = 64
+	for i := 0; i < writers; i++ {
+		emitWG.Add(1)
+		go func() {
+			defer emitWG.Done()
+			for j := 0; j < perWriter; j++ {
+				emitter.emit(context.Background(), baseEvent())
+			}
+		}()
+	}
+
+	// Close mid-stream — must not panic regardless of which emits land first.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NotPanics(t, func() {
+		_ = emitter.Close(ctx)
+	})
+	emitWG.Wait()
 }
 
 func TestEmitterQueueFullDropsRatherThanBlocks(t *testing.T) {

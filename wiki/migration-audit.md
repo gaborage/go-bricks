@@ -88,9 +88,11 @@ The list is additive — adding a class is non-breaking; removing one is. The en
 
 ```go
 type AuditSink interface {
-    Record(ctx context.Context, event AuditEvent) error
+    Record(ctx context.Context, event *AuditEvent) error
 }
 ```
+
+The event pointer matches the framework convention for medium-sized event payloads (see `outbox.OutboxPublisher`). Implementations SHOULD treat the event as read-only.
 
 Minimal Kafka example (illustrative — your producer choice is up to you):
 
@@ -100,7 +102,7 @@ type kafkaAuditSink struct {
     topic    string
 }
 
-func (s *kafkaAuditSink) Record(ctx context.Context, event migration.AuditEvent) error {
+func (s *kafkaAuditSink) Record(ctx context.Context, event *migration.AuditEvent) error {
     payload, err := json.Marshal(event)
     if err != nil {
         return err
@@ -125,7 +127,7 @@ _ = migrator.Close(shutdownCtx)
 ### Delivery semantics
 
 - **At-least-once via OTel.** The OpenTelemetry path is always on. If the collector pipeline is healthy, every event reaches your backend exactly once. Under collector backpressure, the default Collector batch processor may drop records — this is appropriate for telemetry but is NOT sufficient as the sole record-of-truth for PCI / SOC 2 evidence retention. For that, layer an `AuditSink` on top.
-- **Non-blocking sink fan-out.** Events are enqueued onto a bounded buffer (256 events) and delivered from a single consumer goroutine. If the queue fills (slow sink + bursty traffic), new events are dropped silently and the `migration.audit.sink_drops` counter increments — the trade-off is that audit must never stall a Flyway migration.
+- **Non-blocking sink fan-out.** Events are enqueued onto a bounded buffer (256 events) and delivered from a single consumer goroutine. If the queue fills (slow sink + bursty traffic), new events are dropped — the emitter logs a warning and the `migration.audit.sink_drops` counter increments. The trade-off is that audit must never stall a Flyway migration.
 - **Sink errors do not abort the migration.** `AuditSink.Record` returning an error logs a warning and increments `migration.audit.sink_failures`; the migration proceeds. Sink owners requiring zero-loss audit must back their implementation with a durable buffer (Kafka commit-log, S3 staging, etc.). The framework does not retry on the sink's behalf.
 - **Shutdown drains.** `FlywayMigrator.Close(ctx)` waits for the queue to drain before returning. Events still buffered when `ctx` expires are dropped (their OTel emission already succeeded).
 
@@ -138,7 +140,7 @@ The migration audit emitter publishes two counters via the global OTel meter:
 | `migration.audit.sink_drops` | `Int64Counter` | `audit.type` | Sink queue was full when an event was enqueued |
 | `migration.audit.sink_failures` | `Int64Counter` | `audit.type` | `AuditSink.Record` returned a non-nil error |
 
-These are silent — they don't fire warnings. Wire them into your alerting if your `AuditSink` is the compliance record-of-truth.
+Both counters fire alongside Warn-level log records — useful for grep-based debugging, but the framework does not raise alerts on its own. Wire these counters into your alerting pipeline if your `AuditSink` is the compliance record-of-truth.
 
 ## Known gaps
 
