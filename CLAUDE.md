@@ -14,7 +14,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 - Always run `make check` (or `make check-all` for API changes) before committing and pushing. Never commit or push without a passing build.
 - When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
-- **Before pushing code, run the `/simplify` command** to catch reuse, quality, and efficiency issues earlier than CodeRabbit / SonarCloud would. Apply the findings, then push. This avoids review-cycle ping-pong.
+- **Before pushing code, run BOTH `/simplify` AND `/security-audit`** on the staged diff. `/simplify` catches reuse, quality, and efficiency issues that CodeRabbit and SonarCloud would otherwise flag. `/security-audit` catches credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about. Apply each skill's findings (sequentially is fine — `/simplify` first so its refactors are what `/security-audit` reviews), then push. Trivial fixes (single-line typos, comment-only changes, dependency bumps) can skip both.
 - After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
 
 ## Git Rules
