@@ -28,15 +28,32 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
         with:
+          # Filters intentionally match only code-affecting paths. Doc-only
+          # changes (`wiki/**`, `CLAUDE.md`, `README.md`, `MULTI_TENANT.md`,
+          # `llms.txt`, etc.) match nothing here, so the test/build/lint/security
+          # jobs gated on these outputs cleanly skip — keeping doc PRs fast.
+          # CI workflow changes still trigger every component so reviewers see
+          # the consequences of pipeline edits.
           filters: |
             framework:
-              - '**'
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.golangci.yml'
+              - '.github/workflows/ci-v2.yml'
               - '!tools/**'
             tool:
-              - 'tools/openapi/**'
+              - 'tools/openapi/**/*.go'
+              - 'tools/openapi/go.mod'
+              - 'tools/openapi/go.sum'
+              - 'tools/openapi/Makefile'
               - '.github/workflows/ci-v2.yml'
             migrate_tool:
-              - 'tools/migration/**'
+              - 'tools/migration/**/*.go'
+              - 'tools/migration/go.mod'
+              - 'tools/migration/go.sum'
+              - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
 
   # ============================================================================
