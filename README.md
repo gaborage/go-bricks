@@ -501,7 +501,7 @@ type UserService struct {
 }
 
 func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
-    // GetCache resolves tenant from context automatically
+    // Cache(ctx) resolves the tenant from context automatically
     cache, err := s.getCache(ctx)
     if err != nil {
         return nil, err

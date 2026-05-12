@@ -8,7 +8,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
 - **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements)
-- **TenantStore Integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
+- **Multi-tenant integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
 
 **Lifecycle Management (CacheManager):**
 - **Lazy Initialization**: Cache created on first access per tenant (no upfront connections)
