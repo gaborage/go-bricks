@@ -82,7 +82,8 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "d",
 	}}
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env := buildEnvironmentVariables(&fm.config.Database)
+	env, err := buildEnvironmentVariables(&fm.config.Database)
+	require.NoError(t, err)
 	joined := "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -106,7 +107,8 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 		Database: "pdb1",
 	}}
 	fm = NewFlywayMigrator(cfg, logger.New("disabled", true))
-	env = buildEnvironmentVariables(&fm.config.Database)
+	env, err = buildEnvironmentVariables(&fm.config.Database)
+	require.NoError(t, err)
 	joined = "" + (func() string {
 		s := ""
 		for _, e := range env {
@@ -657,11 +659,73 @@ func TestBuildEnvironmentVariablesComprehensiveDrivers(t *testing.T) {
 			}
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
-			envVars := buildEnvironmentVariables(&fm.config.Database)
+			envVars, err := buildEnvironmentVariables(&fm.config.Database)
+			require.NoError(t, err)
 			assertEnvVarsContain(t, envVars, tt.expectedVars)
 			assertEnvVarsLackPrefixes(t, envVars, tt.notExpectedVars)
 		})
 	}
+}
+
+func TestBuildEnvironmentVariablesRejectsControlChars(t *testing.T) {
+	t.Run("accepts_equals_in_password", func(t *testing.T) {
+		db := &config.DatabaseConfig{
+			Type:     "postgresql",
+			Host:     "h",
+			Port:     5432,
+			Username: "u",
+			Password: "base64==", // legitimate base64-encoded secret tail
+			Database: "d",
+		}
+		envVars, err := buildEnvironmentVariables(db)
+		require.NoError(t, err)
+		assert.Contains(t, envVars, "DB_PASSWORD=base64==")
+	})
+
+	cases := []struct {
+		name, field, badChar string
+	}{
+		{"host_lf", envFieldHost, "\n"},
+		{"host_cr", envFieldHost, "\r"},
+		{"host_nul", envFieldHost, "\x00"},
+		{"username_lf", envFieldUsername, "\n"},
+		{"username_cr", envFieldUsername, "\r"},
+		{"username_nul", envFieldUsername, "\x00"},
+		{"password_lf", envFieldPassword, "\n"},
+		{"password_cr", envFieldPassword, "\r"},
+		{"password_nul", envFieldPassword, "\x00"},
+		{"database_lf", envFieldDatabase, "\n"},
+		{"database_cr", envFieldDatabase, "\r"},
+		{"database_nul", envFieldDatabase, "\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
+			switch tc.field {
+			case envFieldHost:
+				db.Host += tc.badChar
+			case envFieldUsername:
+				db.Username += tc.badChar
+			case envFieldPassword:
+				db.Password += tc.badChar
+			case envFieldDatabase:
+				db.Database += tc.badChar
+			}
+			_, err := buildEnvironmentVariables(db)
+			require.ErrorIs(t, err, ErrEnvFieldHasControlChar)
+			assert.Contains(t, err.Error(), tc.field, "error should name the offending field")
+		})
+	}
+
+	t.Run("error_does_not_echo_value", func(t *testing.T) {
+		db := &config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 5432, Username: "u",
+			Password: "leakySecret\n", Database: "d",
+		}
+		_, err := buildEnvironmentVariables(db)
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "leakySecret", "error message must not echo the offending value")
+	})
 }
 
 func assertEnvVarsContain(t *testing.T, envVars, expected []string) {

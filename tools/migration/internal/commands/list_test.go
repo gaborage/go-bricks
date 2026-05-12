@@ -30,6 +30,7 @@ func TestListCommandHTTPSourceText(t *testing.T) {
 	cmd := NewListCommand()
 	cmd.SetArgs([]string{
 		"--source-url", srv.URL,
+		"--allow-insecure-scheme",
 	})
 
 	var stdout bytes.Buffer
@@ -59,6 +60,7 @@ func TestListCommandHTTPSourceJSON(t *testing.T) {
 	cmd := NewListCommand()
 	cmd.SetArgs([]string{
 		"--source-url", srv.URL,
+		"--allow-insecure-scheme",
 		"--json",
 	})
 

@@ -10,9 +10,10 @@ import (
 // CommonFlags holds flags shared by every action subcommand.
 type CommonFlags struct {
 	// Listing source.
-	SourceURL    string
-	SourceToken  string
-	SourceConfig string
+	SourceURL           string
+	SourceToken         string
+	SourceConfig        string
+	AllowInsecureScheme bool
 
 	// Credential resolution.
 	SecretsPrefix   string
@@ -67,6 +68,7 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().StringVar(&flags.SourceURL, "source-url", "", "Base URL of the control-plane tenant-listing API")
 	cmd.Flags().StringVar(&flags.SourceToken, "source-token", "", "Bearer token for the control-plane API (env: GOBRICKS_MIGRATE_SOURCE_TOKEN)")
 	cmd.Flags().StringVar(&flags.SourceConfig, "source-config", "", "Path to a YAML config file with multitenant.tenants block (alternative to --source-url)")
+	cmd.Flags().BoolVar(&flags.AllowInsecureScheme, "allow-insecure-scheme", false, "Allow http:// (plaintext) base URLs for --source-url; rejected by default to keep the bearer token off the wire")
 
 	// Credential resolution.
 	cmd.Flags().StringVar(&flags.SecretsPrefix, "secrets-prefix", migration.DefaultSecretsPrefix, "Prefix for AWS Secrets Manager secret names (final name = prefix + tenant_id)")

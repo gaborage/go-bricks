@@ -93,7 +93,8 @@ func buildLister(flags *CommonFlags, fileStore *config.TenantStore) (migration.T
 
 	if flags.SourceURL != "" {
 		return httpsource.New(flags.SourceURL, httpsource.Options{
-			BearerToken: flags.SourceToken,
+			BearerToken:         flags.SourceToken,
+			AllowInsecureScheme: flags.AllowInsecureScheme,
 		})
 	}
 

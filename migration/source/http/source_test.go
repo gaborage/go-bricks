@@ -27,20 +27,32 @@ func TestHTTPTenantSourceNewValidation(t *testing.T) {
 	tests := []struct {
 		name    string
 		base    string
+		opts    Options
 		wantErr bool
+		errIs   error
 	}{
 		{name: "valid_https", base: "https://api.example.com"},
-		{name: "valid_http", base: "http://localhost:8080/"},
+		{name: "https_with_insecure_flag_still_works", base: "https://api.example.com", opts: Options{AllowInsecureScheme: true}},
+		{name: "http_rejected_by_default", base: "http://localhost:8080/", wantErr: true, errIs: ErrInsecureScheme},
+		{name: "http_allowed_with_opt_out", base: "http://localhost:8080/", opts: Options{AllowInsecureScheme: true}},
 		{name: "empty_url", base: "", wantErr: true},
 		{name: "missing_scheme", base: "api.example.com", wantErr: true},
 		{name: "missing_host", base: "https://", wantErr: true},
+		{name: "ftp_scheme_rejected", base: "ftp://api.example.com", wantErr: true, errIs: ErrUnsupportedScheme},
+		{name: "file_scheme_rejected", base: "file://server/path", wantErr: true, errIs: ErrUnsupportedScheme},
+		// url.Parse lowercases the scheme per RFC 3986; document that here so a
+		// future Go change that drops normalization fails this test.
+		{name: "uppercase_http_rejected", base: "HTTP://localhost", wantErr: true, errIs: ErrInsecureScheme},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(tt.base, Options{})
+			_, err := New(tt.base, tt.opts)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
+				if tt.errIs != nil {
+					assert.ErrorIs(t, err, tt.errIs)
+				}
 				return
 			}
 			assert.NoError(t, err)
@@ -65,7 +77,7 @@ func TestHTTPTenantSourceListTenantsSinglePage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	got, err := src.ListTenants(context.Background())
@@ -102,7 +114,7 @@ func TestHTTPTenantSourceListTenantsPagination(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	got, err := src.ListTenants(context.Background())
@@ -121,7 +133,7 @@ func TestHTTPTenantSourceBearerTokenForwarded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{BearerToken: "secret-token"})
+	src, err := New(srv.URL, Options{BearerToken: "secret-token", AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	_, err = src.ListTenants(context.Background())
@@ -137,7 +149,7 @@ func TestHTTPTenantSourceContractErrorWithEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	_, err = src.ListTenants(context.Background())
@@ -157,7 +169,7 @@ func TestHTTPTenantSourceContractErrorWithoutEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	_, err = src.ListTenants(context.Background())
@@ -175,7 +187,8 @@ func TestHTTPTenantSourceContextCancellation(t *testing.T) {
 	defer srv.Close()
 
 	src, err := New(srv.URL, Options{
-		Client: &stdhttp.Client{Timeout: 5 * time.Second},
+		Client:              &stdhttp.Client{Timeout: 5 * time.Second},
+		AllowInsecureScheme: true,
 	})
 	require.NoError(t, err)
 
@@ -199,7 +212,7 @@ func TestHTTPTenantSourcePageLimitOverride(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{PageLimit: 25})
+	src, err := New(srv.URL, Options{PageLimit: 25, AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	_, err = src.ListTenants(context.Background())
@@ -212,7 +225,7 @@ func TestHTTPTenantSourceMissingDataField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	_, err = src.ListTenants(context.Background())
@@ -231,7 +244,7 @@ func TestHTTPTenantSourceSkipsEmptyIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 
 	got, err := src.ListTenants(context.Background())

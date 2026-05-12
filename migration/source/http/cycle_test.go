@@ -38,7 +38,7 @@ func TestListTenantsRejectsRepeatedCursor(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, err := New(srv.URL, Options{})
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
 	require.NoError(t, err)
 	_, err = src.ListTenants(context.Background())
 	require.Error(t, err)

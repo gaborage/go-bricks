@@ -123,6 +123,7 @@ func TestMigrateCommandSuccessAcrossPagesAndShapes(t *testing.T) {
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
 		"--source-url", listSrv.URL,
+		"--allow-insecure-scheme",
 		"--aws-endpoint", smSrv.URL,
 		"--aws-region", "us-east-1",
 		"--flyway-path", flyway,
@@ -167,6 +168,7 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
 		"--source-url", listSrv.URL,
+		"--allow-insecure-scheme",
 		"--aws-endpoint", smSrv.URL,
 		"--aws-region", "us-east-1",
 		"--flyway-path", flyway,
@@ -212,6 +214,7 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
 		"--source-url", listSrv.URL,
+		"--allow-insecure-scheme",
 		"--aws-endpoint", smSrv.URL,
 		"--aws-region", "us-east-1",
 		"--flyway-path", flyway,
@@ -255,6 +258,7 @@ func TestMigrateCommandMalformedSecretMentionsTenant(t *testing.T) {
 	cmd := NewMigrateCommand()
 	cmd.SetArgs([]string{
 		"--source-url", listSrv.URL,
+		"--allow-insecure-scheme",
 		"--aws-endpoint", smSrv.URL,
 		"--aws-region", "us-east-1",
 		"--flyway-path", flyway,

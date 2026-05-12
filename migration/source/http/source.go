@@ -51,7 +51,21 @@ type Options struct {
 	// PageLimit is sent as the ?limit= query parameter on each request.
 	// Servers may cap this. When 0 or negative, DefaultPageLimit is used.
 	PageLimit int
+
+	// AllowInsecureScheme opts in to accepting `http://` base URLs. By default
+	// New() rejects plaintext schemes so an operator-supplied bearer token is
+	// never transmitted in clear text. Set this to true only for LocalStack,
+	// dev loops, or internal-only tooling on private networks.
+	AllowInsecureScheme bool
 }
+
+// ErrInsecureScheme is returned by New when the supplied base URL uses a
+// plaintext scheme (`http://`) and Options.AllowInsecureScheme is false.
+var ErrInsecureScheme = errors.New("migration/source/http: http:// scheme requires Options.AllowInsecureScheme=true (defense-in-depth: bearer token would be transmitted in clear text)")
+
+// ErrUnsupportedScheme is returned by New when the supplied base URL uses a
+// scheme other than http or https.
+var ErrUnsupportedScheme = errors.New("migration/source/http: unsupported URL scheme (expected http or https)")
 
 // TenantSource implements migration.TenantLister against an HTTP control-plane API.
 type TenantSource struct {
@@ -62,7 +76,8 @@ type TenantSource struct {
 }
 
 // New constructs a TenantSource. baseURL must be parseable; the /tenants
-// path is appended automatically.
+// path is appended automatically. Plaintext `http://` URLs are rejected unless
+// opts.AllowInsecureScheme is true (defense-in-depth around the bearer token).
 func New(baseURL string, opts Options) (*TenantSource, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, errors.New("migration/source/http: baseURL is empty")
@@ -73,6 +88,17 @@ func New(baseURL string, opts Options) (*TenantSource, error) {
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("migration/source/http: baseURL must include scheme and host: %q", baseURL)
+	}
+	// url.Parse lowercases the scheme per RFC 3986, so a direct equality check
+	// is sufficient here.
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !opts.AllowInsecureScheme {
+			return nil, ErrInsecureScheme
+		}
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedScheme, u.Scheme)
 	}
 
 	client := opts.Client

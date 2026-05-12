@@ -5,11 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/gaborage/go-bricks/config"
 )
+
+// tenantIDPattern enforces a conservative character allowlist on tenant IDs
+// before they are concatenated into secret-store lookup names. AWS Secrets
+// Manager has no path-traversal semantics, so this is defense-in-depth: a
+// compromised control-plane returning malicious tenant IDs cannot craft
+// unexpected secret names (whitespace, control chars, slashes, dots).
+var tenantIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // DefaultSecretsPrefix is the default name prefix used to look up tenant
 // database credentials in a secret store. The full secret name is
@@ -50,6 +58,11 @@ var ErrNoFetcher = errors.New("migration: SecretsProvider.Fetch is nil")
 // ErrEmptyTenantID is returned when DBConfig is invoked with a blank tenant ID.
 var ErrEmptyTenantID = errors.New("migration: tenantID is empty")
 
+// ErrInvalidTenantID is returned when DBConfig is invoked with a tenant ID
+// that contains characters outside the [A-Za-z0-9_-] allowlist or exceeds
+// the 128-character length bound.
+var ErrInvalidTenantID = errors.New("migration: tenantID contains characters outside [A-Za-z0-9_-] or exceeds 128 characters")
+
 // Validate checks that the provider is wired correctly. Callers may invoke it
 // eagerly at startup; DBConfig also calls it lazily on first lookup so library
 // callers who skip the explicit check still get a clear error before any
@@ -87,6 +100,9 @@ func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*confi
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return nil, ErrEmptyTenantID
+	}
+	if !tenantIDPattern.MatchString(tenantID) {
+		return nil, ErrInvalidTenantID
 	}
 
 	name := p.SecretName(tenantID)

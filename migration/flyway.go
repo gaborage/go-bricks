@@ -3,6 +3,7 @@ package migration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -188,7 +189,11 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 	// #nosec G204 -- FlywayPath is validated by validateFlywayPath function
 	cmd := exec.CommandContext(timeoutCtx, cfg.FlywayPath, args...)
 
-	cmd.Env = append(os.Environ(), buildEnvironmentVariables(db)...)
+	envVars, err := buildEnvironmentVariables(db)
+	if err != nil {
+		return fmt.Errorf("build flyway environment: %w", err)
+	}
+	cmd.Env = append(os.Environ(), envVars...)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -209,10 +214,24 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 	return fallback
 }
 
+// ErrEnvFieldHasControlChar is returned when a DatabaseConfig field destined
+// for the Flyway subprocess environment contains a forbidden control character
+// (CR, LF, or NUL). Go's exec.Cmd.Env passes strings to execve(2) verbatim and
+// does not split on newlines, so this isn't a known injection path — but
+// rejecting at the boundary prevents a compromised secret writer from
+// propagating multi-line surprises into downstream logs or env-parsing tools.
+var ErrEnvFieldHasControlChar = errors.New("migration: env field contains forbidden control character (CR/LF/NUL)")
+
 // buildEnvironmentVariables builds Flyway environment variables for the supplied database.
-func buildEnvironmentVariables(db *config.DatabaseConfig) []string {
+// Returns ErrEnvFieldHasControlChar wrapped with the offending field name when
+// any of Host/Username/Password/Database contains CR, LF, or NUL.
+func buildEnvironmentVariables(db *config.DatabaseConfig) ([]string, error) {
 	if db == nil {
-		return nil
+		return nil, nil
+	}
+
+	if err := validateEnvFields(db); err != nil {
+		return nil, err
 	}
 
 	var envVars []string
@@ -236,7 +255,36 @@ func buildEnvironmentVariables(db *config.DatabaseConfig) []string {
 		)
 	}
 
-	return envVars
+	return envVars, nil
+}
+
+const (
+	envFieldHost     = "Host"
+	envFieldUsername = "Username"
+	envFieldPassword = "Password"
+	envFieldDatabase = "Database"
+)
+
+// validateEnvFields rejects any DatabaseConfig string field that would be
+// formatted into the Flyway subprocess environment if it contains CR, LF, or
+// NUL. The error names the offending field but never echoes the value (since
+// it may be the password).
+func validateEnvFields(db *config.DatabaseConfig) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{envFieldHost, db.Host},
+		{envFieldUsername, db.Username},
+		{envFieldPassword, db.Password},
+		{envFieldDatabase, db.Database},
+	}
+	for _, f := range fields {
+		if strings.ContainsAny(f.value, "\r\n\x00") {
+			return fmt.Errorf("%w: %s", ErrEnvFieldHasControlChar, f.name)
+		}
+	}
+	return nil
 }
 
 // validateFlywayPath ensures the Flyway path is non-empty, free of shell
