@@ -365,6 +365,7 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 	}
 	sink := newRecordingSink()
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditSink(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	stub := createFlywayStub(t, "postgresql")
 	mcfg := &Config{
@@ -384,7 +385,7 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 	// Close drains the sink queue deterministically — any event enqueued
 	// (incorrectly) by Info/Validate would arrive before Close returns. A
 	// fixed sleep here would be flaky under load and meaningless on a fast
-	// machine.
+	// machine. Idempotent with the t.Cleanup above.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	require.NoError(t, fm.Close(ctx))
