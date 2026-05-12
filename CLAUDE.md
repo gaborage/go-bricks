@@ -148,7 +148,7 @@ make lint                       # Run golangci-lint
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
-- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md) and [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
+- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), and [ADR-019](wiki/adr-019-migration-audit-delivery.md) (audit-event delivery via OTel default + opt-in sink).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named RSA key pair management from DER files or base64 env vars
@@ -428,6 +428,8 @@ func (m *OrderModule) Init(deps *app.ModuleDeps) error {
 **Helper Functions:** `CreateCounter`, `CreateHistogram`, `CreateUpDownCounter` in `observability/metrics.go`. When `observability.enabled: false`, a no-op provider is used (zero overhead, nil-safe).
 
 For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authentication (New Relic/Honeycomb/Datadog), and OTLP collector deployment, see [wiki/observability.md](wiki/observability.md).
+
+**Migration audit events** (forward-looking — implementation tracked in #382): every migration application and state-machine transition emits via the OTel seam by default (span + structured log record). Compliance-grade durability is opt-in via a `migration.AuditSink` interface that fans out in parallel; see [ADR-019](wiki/adr-019-migration-audit-delivery.md) for the decision and event schema.
 
 ## Context Deadlines & Timeouts
 
