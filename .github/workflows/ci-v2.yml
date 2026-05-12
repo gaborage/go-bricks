@@ -752,7 +752,7 @@ jobs:
       - name: golangci-lint (migrate tool)
         uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
         with:
-          version: latest
+          version: v2.12.2
           working-directory: tools/migration
           args: --timeout=5m
 
@@ -777,7 +777,7 @@ jobs:
           cache-dependency-path: tools/migration/go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
 
       - name: Run Gosec Security Scanner (migrate tool)
         run: |
@@ -813,7 +813,7 @@ jobs:
       - name: golangci-lint (framework)
         uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m --skip-dirs=tools
 
   lint-tool:
@@ -836,7 +836,7 @@ jobs:
       - name: golangci-lint (tool)
         uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
         with:
-          version: latest
+          version: v2.12.2
           working-directory: tools/openapi
           args: --timeout=5m
 
@@ -858,7 +858,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
 
       - name: Run Gosec Security Scanner (framework)
         run: |
@@ -892,7 +892,7 @@ jobs:
           cache-dependency-path: tools/openapi/go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
 
       - name: Run Gosec Security Scanner (tool)
         run: |
