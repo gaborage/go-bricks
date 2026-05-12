@@ -20,6 +20,8 @@ Pulled per-package timing from a representative successful run (`framework-integ
 | `cache/redis` | 18.898s | ~3% |
 | All others combined | ~80s | ~11% |
 
+> **Note on the "Share of suite" column:** values are each `package wall time / job wall time` and are **not additive** — packages run in parallel under `go test -p N ./...`, so they overlap on the wall clock. Oracle being ~80% means it is essentially the serial critical path; other packages run within Oracle's window and consume their own share of wall time independently. Sum-of-package time (~891s) is meaningfully larger than job wall time (~700s); the ~191s gap is the parallelism win the suite already gets from non-Oracle packages.
+
 Sampled total integration-job wall time across 7 successful runs (same day): **median 11m40s, range 11m19s–12m01s**. The Go test default timeout is 10m, applied per-package — when `database/oracle` slips past 10m it panics with the observed `panic: test timed out after 10m0s`.
 
 ### Root cause
