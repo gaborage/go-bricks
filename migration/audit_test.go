@@ -194,6 +194,17 @@ func TestEmitterSinkErrorIsNotPropagated(t *testing.T) {
 	assert.Len(t, sink.snapshot(), 1, "sink should have received the event despite returning an error")
 }
 
+// TestEmitterMissingPrincipalSubstitutesSentinel pins the deliberate design
+// choice from ADR-019: an empty Audit.Principal is NOT a hard failure — the
+// framework emits the event with a "<unspecified>" sentinel + a WARN log so
+// the gap is itself auditable, then continues. The rejected alternative was
+// fail-fast (return an error and refuse to migrate), which loses an
+// emergency-migration ergonomic property: an operator who forgot a CLI flag
+// during an outage can still run the migration, and the missing-principal
+// shows up in the audit trail. ADR-019 line 73 ("operators must pass it")
+// is a documentation contract, not a runtime enforcement. Do not flip this
+// to fail-fast without revisiting the ADR + the wiki + the PR description
+// of #407 — the auditable-gap stance is intentional, not an oversight.
 func TestEmitterMissingPrincipalSubstitutesSentinel(t *testing.T) {
 	setupTestTracer(t)
 	sink := newRecordingSink()
