@@ -34,6 +34,16 @@ jobs:
           # jobs gated on these outputs cleanly skip — keeping doc PRs fast.
           # CI workflow changes still trigger every component so reviewers see
           # the consequences of pipeline edits.
+          #
+          # NOTE: do not add `!tools/**` (or any other `!pattern`) here. Under
+          # dorny/paths-filter's default `predicate-quantifier: some`, a `!`
+          # entry is OR'd as its own positive predicate matching every file
+          # outside the inner glob — it does NOT subtract from the list. Adding
+          # `!tools/**` would make the filter true for every non-tools file
+          # (including all of `wiki/**`), defeating the doc-only skip. The
+          # `**/*.go` pattern below already matches `tools/**/*.go`, so tool
+          # Go-file changes correctly re-run the framework matrix without help
+          # from a negation.
           filters: |
             framework:
               - '**/*.go'
@@ -42,7 +52,6 @@ jobs:
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
-              - '!tools/**'
             tool:
               - 'tools/openapi/**/*.go'
               - 'tools/openapi/go.mod'
