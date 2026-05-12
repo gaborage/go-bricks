@@ -30,7 +30,7 @@ Counting calls in `database/oracle/connection_integration_test.go`:
 - `containers.MustStartOracleContainer` called directly from **8** more test functions that skip the helper.
 - Total: **31 cold container starts** per package execution.
 
-Zero tests call `t.Parallel()`, so all 31 starts run sequentially. At ~18.5s per `gvenzl/oracle-free:23-slim` cold-start on a GHA `ubuntu-24.04` runner, that's 31 × 18.5 = **~573s**, matching the measured 572.131s to within rounding. Essentially 100% of the Oracle suite wall time is container startup; the test logic itself is rounding error.
+Zero tests call `t.Parallel()`, so all 31 starts run sequentially. At ~18.5s per `gvenzl/oracle-free:23-slim` cold-start on a GHA `ubuntu-24.04` runner, that's 31 × 18.5 = **~573s**, matching the measured 572.131s to within rounding. The implied test-logic budget is ~1s aggregated across all 31 tests — so **~99.8% of the current Oracle suite wall time is container startup**, with the actual SQL assertions running in rounding error. (The "~100%" framing in the rest of this ADR refers to that ~99.8% — see the Safety margin note in §Decision for why the projected post-refactor wall time is still measured in minutes, not seconds.)
 
 For comparison, `database/postgresql` uses the exact same anti-pattern (20 `setupTestContainer` calls) but Postgres cold-starts in ~3s, so 20 × 3s ≈ 60s — closely matching the measured 71.6s. **PostgreSQL is fine because Postgres is fast to start, not because the test design is different.** This decision therefore scopes to Oracle only; PG does not need the same treatment.
 
@@ -42,7 +42,7 @@ How to bring the Oracle integration-test wall time down while keeping the test a
 |---|---|---|
 | **A. Reduce per-start cost** | Slimmer image; pre-bake schemas; cache Docker layer | We already use `gvenzl/oracle-free:23-slim` and pre-pull in CI. The ~18.5s is mostly Oracle's *startup* (listener boot, PDB open), not image pull. Optimistic ceiling: maybe -3s per start = ~93s suite-wide. Doesn't solve the problem. |
 | **B. Mask the symptom** | Bump `-timeout=20m`; auto-retry on timeout; isolate Oracle in its own CI job | Eliminates the panic but leaves the cost. Hides the systemic drift that put us at 10m in the first place. Wins back nothing in developer-laptop time. |
-| **C. Eliminate redundant starts** | Share one container across the package via `TestMain` / testcontainers reuse; aggressive `t.Parallel()` | This is where the math actually moves. Going from 31 starts to 1 drops the suite from ~572s to ~30s of container startup + per-test schema setup/teardown overhead. Estimated suite wall time: **~250s** (~55% reduction), well past the issue's 50% target. |
+| **C. Eliminate redundant starts** | Share one container across the package via `TestMain` / testcontainers reuse; aggressive `t.Parallel()` | This is where the math actually moves. Going from 31 starts to 1 drops the floor to ~80s (1 × 18.5s container + 31 × ~2s schema lifecycle + ~1s test logic). The conservative headline estimate of **~250s (~55% reduction)** carries a deliberate ~3× safety margin over that floor — see Safety margin note in §Decision. Either number clears the issue's 50% target. |
 
 Aggressive `t.Parallel()` is additive but secondary: with one shared container, parallel tests would only need fresh schemas, not fresh containers. We list it as a future enhancement, not part of this ADR's scope.
 
@@ -74,11 +74,11 @@ The local-developer benefit is real, but we can capture it more cleanly via a `G
 3. Build a `*Connection` against that schema.
 4. Register `t.Cleanup` to `DROP USER ... CASCADE` (which removes all objects the test created — tables, sequences, UDTs, procedures).
 
-This satisfies test isolation (each test sees a virgin schema) without paying for container provisioning. Oracle user/schema creation is ~50–200ms on a warm container vs. ~18.5s for a cold container, so 31 × ~150ms = ~4.7s of schema overhead replaces ~573s of startup overhead.
+This satisfies test isolation (each test sees a virgin schema) without paying for container provisioning. Oracle user/schema creation is ~50–200ms on a warm container; `DROP USER ... CASCADE` on a populated schema is typically ~500ms–2s depending on object count. Floor math is therefore ~18.5s (one container) + 31 × ~2s (schema create + drop) + ~1s (test logic) = **~80s** suite-wide. The headline estimate of ~250s elsewhere in this ADR is intentionally ~3× this floor — see Safety margin below.
 
 **Chosen because:**
 
-1. **The math matches the diagnosis.** 100% of Oracle suite wall time is currently container startup; eliminating 30 of 31 startups is the only lever proportional to the cost.
+1. **The math matches the diagnosis.** ~99.8% of Oracle suite wall time is currently container startup (572s measured / 573s computed); eliminating 30 of 31 startups is the only lever proportional to the cost.
 2. **Test isolation contract becomes explicit.** Today, isolation is implicit ("each test gets a fresh container"). Under this ADR, isolation is explicit and grep-able: every test must operate inside its assigned schema and `DROP USER ... CASCADE` is the contract for cleanup. This is *better*, not worse, for catching state-leak bugs.
 3. **Compatible with `t.Parallel()` as a future step.** Once schemas are namespaced, individual tests can opt into `t.Parallel()` without colliding on global table/UDT names like `PRODUCT_TYPE` or `test_seq`. We don't ship parallelism in the initial implementation — first prove the schema-per-test refactor is stable, then enable parallel.
 4. **Doesn't change CI infrastructure.** No new jobs, no caching layers, no Docker-layer-cache plumbing. The change is contained to `database/oracle/*_test.go` plus a small helper in `testing/containers/oracle.go` for the `CREATE USER` / `DROP USER` lifecycle.
@@ -104,9 +104,20 @@ Under this ADR, every integration test in `database/oracle`:
 - **MUST NOT** rely on tearing down its own tables/sequences/UDTs by name. `DROP USER ... CASCADE` is the contract; tests that try to `DROP TABLE test_seq` explicitly will see a no-op or already-dropped error.
 - **MAY** opt into `t.Parallel()` once the refactor is stable. Initial implementation does **not** enable parallel; that lands as a separate PR after the schema-per-test pattern proves stable.
 
+### Safety margin in the suite-time estimate
+
+The floor math (1 container + 31 schemas + test logic) lands at **~80s**. The headline estimate of **~250s** and the acceptance bar of **≤ 286s** are deliberately ~3× that floor. The margin covers:
+
+- **`DROP USER ... CASCADE` variance.** On schemas with many objects (the UDT tests create types, collection types, tables, and procedures), Oracle's recursive drop can spike to 5–10s under garbage-collection pressure. We don't have a clean sample of this in CI yet, so we plan for the high end.
+- **CI runner variability.** GHA `ubuntu-24.04` runners are not bare-metal; nested-Docker IO contention has been observed to inflate Oracle ops by 2–4× during noisy-neighbor windows. The current `cache/redis` integration time (3–19s across runs) shows this variance directly.
+- **First-test penalty.** The one remaining container start is on the critical path, not amortized — if it lands on a slow runner at ~30s instead of ~18.5s, that single delta consumes ~15% of the floor estimate.
+- **Unmeasured per-test fixed costs** (logger init, connection-pool warmup, the `Health(ctx)` ping `setupTestContainer` performs today) that I rolled into "~1s test logic" without per-test instrumentation.
+
+Recording these explicitly so future readers don't see "80s floor vs 250s estimate" as an unexplained pessimism. The implementation PR will measure actual wall time across a 10-run sample; if results cluster near 80s, that's a win and the ADR's headline number gets revised in a follow-up edit, not retroactively.
+
 ### Acceptance bar for implementation issue
 
-- Median Oracle suite wall time **≤ 286s** (50% reduction from current 572s baseline) over a 10-run sample.
+- Median Oracle suite wall time **≤ 286s** (50% reduction from current 572s baseline) over a 10-run sample. This is the *floor-of-acceptable*; the target is closer to ~80–150s.
 - Zero `panic: test timed out` flakes across 20 consecutive runs of `framework-integration-test`.
 - No regression in coverage attributable to test consolidation (SonarCloud delta).
 
@@ -114,7 +125,7 @@ Under this ADR, every integration test in `database/oracle`:
 
 **Pros:**
 
-- ~55% reduction in Oracle suite wall time (~572s → ~250s) closes the 10-minute timeout cliff with comfortable headroom.
+- At least ~55% reduction in Oracle suite wall time (572s → ~250s conservative estimate; floor math points to ~80s). Either result closes the 10-minute timeout cliff with comfortable headroom.
 - Local developer iteration time drops dramatically (12–15 minutes → ~3–5 minutes).
 - Test isolation becomes explicit and grep-able rather than implicit.
 - No new CI infrastructure, no Docker-image maintenance, no testcontainers reuse flag quirks.
