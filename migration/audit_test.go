@@ -298,7 +298,8 @@ func TestMigrateForEmitsAuditEventOnSuccess(t *testing.T) {
 	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
 	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
-	require.NoError(t, fm.Migrate(context.Background(), mcfg))
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.NoError(t, err)
 
 	sink.waitForFirst(t, 2*time.Second)
 	events := sink.snapshot()
@@ -362,7 +363,8 @@ func TestAuditTargetFallsBackToMigratorDatabaseWhenAllElseEmpty(t *testing.T) {
 		Username: "user", Password: "longenough-pw",
 		Database: "", // empty — middle fallback yields nothing
 	}
-	require.NoError(t, fm.MigrateFor(context.Background(), emptyDB, mcfg))
+	_, err := fm.MigrateFor(context.Background(), emptyDB, mcfg)
+	require.NoError(t, err)
 
 	sink.waitForFirst(t, 2*time.Second)
 	events := sink.snapshot()
@@ -404,7 +406,7 @@ func TestMigrateForEmitsClassifiedErrorOnFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
 	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
-	err := fm.Migrate(context.Background(), mcfg)
+	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err, "stub exits non-zero so Migrate must report failure")
 
 	sink.waitForFirst(t, 2*time.Second)
@@ -456,6 +458,51 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 
 	assert.Empty(t, sink.snapshot(),
 		"Info/Validate must not emit migration.applied per ADR-019 (only the migrate verb does)")
+}
+
+func TestMigrationAppliedCarriesParsedVersionAndAttributes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	setupTestTracer(t)
+
+	payload := readFixture(t, "migrate_success.json")
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "u", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	stub, _ := createCommandCapturingStub(t, payload)
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+		Audit:         AuditContext{Principal: "deployer@example.com"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.NoError(t, err)
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+
+	ev := events[0]
+	assert.Equal(t, AuditOutcomeSuccess, ev.Outcome)
+	assert.Equal(t, "2", ev.Version, "AuditEvent.Version mirrors Result.EndingVersion")
+	assert.Equal(t, "10.22.0", ev.Attributes["migration.flyway_version"])
+	assert.Equal(t, "1,2", ev.Attributes["migration.applied_versions"])
 }
 
 func TestEmitterCloseIsIdempotent(t *testing.T) {

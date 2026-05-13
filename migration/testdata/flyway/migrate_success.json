@@ -1,0 +1,31 @@
+{
+  "timestamp" : "2026-05-13T20:49:02.646391423",
+  "operation" : "migrate",
+  "exception" : null,
+  "licenseFailed" : false,
+  "initialSchemaVersion" : null,
+  "targetSchemaVersion" : "2",
+  "schemaName" : "",
+  "migrations" : [ {
+    "category" : "Versioned",
+    "version" : "1",
+    "description" : "create users",
+    "type" : "SQL",
+    "filepath" : "/flyway/sql/V1__create_users.sql",
+    "executionTime" : 5
+  }, {
+    "category" : "Versioned",
+    "version" : "2",
+    "description" : "create orders",
+    "type" : "SQL",
+    "filepath" : "/flyway/sql/V2__create_orders.sql",
+    "executionTime" : 3
+  } ],
+  "migrationsExecuted" : 2,
+  "success" : true,
+  "flywayVersion" : "10.22.0",
+  "database" : "testdb",
+  "warnings" : [ ],
+  "databaseType" : "PostgreSQL",
+  "totalMigrationTime" : 8
+}

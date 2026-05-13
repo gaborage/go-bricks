@@ -191,6 +191,61 @@ func TestMakeHookPlainText(t *testing.T) {
 	assert.Contains(t, out, "FAIL")
 }
 
+func TestMakeHookJSONIncludesStructuredResultFields(t *testing.T) {
+	// The CLI's JSON-mode hook is the contract consumers (CI pipelines) rely
+	// on. Adding new fields is non-breaking, but they must show up exactly
+	// when the underlying Result was populated — never on Err-only entries.
+	var buf bytes.Buffer
+	hook := makeHook(&buf, true)
+	hook(migration.TenantResult{
+		TenantID: "tenant_acme",
+		Vendor:   "postgresql",
+		Duration: 50 * time.Millisecond,
+		Result: migration.Result{
+			Success:         true,
+			AppliedVersions: []string{"1", "2"},
+			StartingVersion: "",
+			EndingVersion:   "2",
+			DurationMillis:  42,
+			FlywayVersion:   "10.22.0",
+		},
+	})
+	out := buf.String()
+	assert.Contains(t, out, `"applied_versions":["1","2"]`)
+	assert.Contains(t, out, `"ending_version":"2"`)
+	assert.NotContains(t, out, `"starting_version"`, "empty StartingVersion should be omitted, not emitted as \"\"")
+	assert.Contains(t, out, `"duration_millis":42`)
+	assert.Contains(t, out, `"flyway_version":"10.22.0"`)
+}
+
+func TestMakeHookPlainTextRendersSchemaSummary(t *testing.T) {
+	var buf bytes.Buffer
+	hook := makeHook(&buf, false)
+	// Fresh-apply: ∅ → v2 with 2 migrations.
+	hook(migration.TenantResult{
+		TenantID: "fresh",
+		Vendor:   "postgresql",
+		Duration: 10 * time.Millisecond,
+		Result: migration.Result{
+			AppliedVersions: []string{"1", "2"},
+			EndingVersion:   "2",
+		},
+	})
+	// No-op rerun: starting and ending both at v2, zero applied.
+	hook(migration.TenantResult{
+		TenantID: "noop",
+		Vendor:   "postgresql",
+		Duration: 1 * time.Millisecond,
+		Result: migration.Result{
+			StartingVersion: "2",
+			EndingVersion:   "2",
+		},
+	})
+	out := buf.String()
+	assert.Contains(t, out, "schema=v∅→v2 (2 applied)")
+	assert.Contains(t, out, "schema=v2 (no-op)")
+}
+
 func TestWriteSummaryJSON(t *testing.T) {
 	var buf bytes.Buffer
 	result := &migration.MigrateAllResult{
