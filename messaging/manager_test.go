@@ -609,6 +609,34 @@ func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), wantErr.Error(), "aggregated error should include the underlying client-close message")
 }
 
+// TestMessagingManagerCloseClientOnRollback verifies the load-bearing
+// invariant: when Close returns an error, the helper logs but does NOT
+// panic or propagate — the caller already has a primary error to return.
+func TestMessagingManagerCloseClientOnRollback(t *testing.T) {
+	log := logger.New("error", false)
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, factory)
+
+	t.Run("close succeeds", func(t *testing.T) {
+		client := &stubAMQPClient{}
+		manager.closeClientOnRollback(client, tenant1ID, "replay_declarations")
+
+		client.closedMu.Lock()
+		defer client.closedMu.Unlock()
+		assert.True(t, client.closed, "closeClientOnRollback must invoke Close")
+	})
+
+	t.Run("close errors are logged not propagated", func(t *testing.T) {
+		client := &stubAMQPClient{closeErr: errors.New("rollback close failed")}
+		// No panic, no return — failure observable via logger only.
+		manager.closeClientOnRollback(client, tenant1ID, "publisher_double_create_race")
+
+		client.closedMu.Lock()
+		defer client.closedMu.Unlock()
+		assert.True(t, client.closed, "Close must still be attempted even when it returns an error")
+	})
+}
+
 func TestMessagingManagerStats(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)

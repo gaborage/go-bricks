@@ -158,20 +158,20 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
 	if err := decls.ReplayToRegistry(registry); err != nil {
-		client.Close()
+		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
 	}
 
 	// Declare infrastructure
 	if err := registry.DeclareInfrastructure(ctx); err != nil {
-		client.Close()
+		m.closeClientOnRollback(client, key, "declare_infrastructure")
 		return fmt.Errorf("failed to declare messaging infrastructure: %w", err)
 	}
 
 	// Start consumers with tenant-aware context
 	tenantCtx := multitenant.SetTenant(ctx, key)
 	if err := registry.StartConsumers(tenantCtx); err != nil {
-		client.Close()
+		m.closeClientOnRollback(client, key, "start_consumers")
 		return fmt.Errorf("failed to start messaging consumers: %w", err)
 	}
 
@@ -254,7 +254,7 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 	// Check if publisher was created by another goroutine while we were waiting
 	if existing, exists := m.publishers[key]; exists {
 		// Close our new client and return the existing one
-		client.Close()
+		m.closeClientOnRollback(client, key, "publisher_double_create_race")
 		existing.lastUsed = time.Now()
 		m.pubLru.MoveToFront(existing.element)
 		return existing.client, nil
@@ -297,6 +297,21 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 		Msg("Created AMQP client for key")
 
 	return client, nil
+}
+
+// closeClientOnRollback closes an AMQP client during an error-rollback path
+// and logs (but does not propagate) any close failure. The primary error is
+// what the caller cares about; we keep the close failure observable for
+// forensics. The `phase` argument identifies which rollback site triggered
+// the close (e.g. "replay_declarations", "publisher_double_create_race").
+func (m *Manager) closeClientOnRollback(client AMQPClient, key, phase string) {
+	if err := client.Close(); err != nil {
+		m.logger.Error().
+			Err(err).
+			Str("key", key).
+			Str("phase", phase).
+			Msg("Error closing AMQP client during rollback")
+	}
 }
 
 // evictPublisherIfNeeded removes the least recently used publisher if at capacity
