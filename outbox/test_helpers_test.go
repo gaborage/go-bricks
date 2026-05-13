@@ -37,12 +37,12 @@ func newFakeJobCtx(db dbtypes.Interface, msgClient messaging.Client) *fakeJobCtx
 	}
 }
 
-func (c *fakeJobCtx) JobID() string             { return c.jobID }
-func (c *fakeJobCtx) TriggerType() string       { return c.trigger }
-func (c *fakeJobCtx) Logger() logger.Logger     { return c.log }
-func (c *fakeJobCtx) DB() dbtypes.Interface     { return c.db }
+func (c *fakeJobCtx) JobID() string               { return c.jobID }
+func (c *fakeJobCtx) TriggerType() string         { return c.trigger }
+func (c *fakeJobCtx) Logger() logger.Logger       { return c.log }
+func (c *fakeJobCtx) DB() dbtypes.Interface       { return c.db }
 func (c *fakeJobCtx) Messaging() messaging.Client { return c.msgClient }
-func (c *fakeJobCtx) Config() *config.Config    { return c.cfg }
+func (c *fakeJobCtx) Config() *config.Config      { return c.cfg }
 
 // fakeStore implements the outbox Store interface with configurable
 // return values and call-count tracking. Methods are concurrency-safe via
@@ -169,7 +169,7 @@ func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOption
 	return nil, nil
 }
 
-func (f *fakeAMQP) DeclareQueue(_ string, _, _, _, _ bool) error    { return nil }
+func (f *fakeAMQP) DeclareQueue(_ string, _, _, _, _ bool) error       { return nil }
 func (f *fakeAMQP) DeclareExchange(_, _ string, _, _, _, _ bool) error { return nil }
-func (f *fakeAMQP) BindQueue(_, _, _ string, _ bool) error          { return nil }
-func (f *fakeAMQP) Close() error                                    { return nil }
+func (f *fakeAMQP) BindQueue(_, _, _ string, _ bool) error             { return nil }
+func (f *fakeAMQP) Close() error                                       { return nil }
