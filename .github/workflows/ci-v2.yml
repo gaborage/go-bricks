@@ -197,6 +197,40 @@ jobs:
           wait
           echo "All container images cached"
 
+      - name: Cache Flyway CLI
+        id: cache-flyway
+        # Pinned to 10.22.0 to match the JSON-output fixture captures in
+        # migration/testdata/flyway. The SHA256 is part of the cache key so
+        # a version/digest bump invalidates the cached tarball automatically.
+        uses: actions/cache@v4
+        with:
+          path: /tmp/flyway-10.22.0
+          key: flyway-10.22.0-638df407be107e6b89318ec1b020f60e96290db64981e7308a0d9b674c7f2918
+
+      - name: Install Flyway CLI
+        if: steps.cache-flyway.outputs.cache-hit != 'true'
+        env:
+          FLYWAY_VERSION: 10.22.0
+          FLYWAY_SHA256: 638df407be107e6b89318ec1b020f60e96290db64981e7308a0d9b674c7f2918
+        run: |
+          set -euo pipefail
+          url="https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
+          curl -fsSL "$url" -o /tmp/flyway.tar.gz
+          actual="$(sha256sum /tmp/flyway.tar.gz | awk '{print $1}')"
+          if [ "$actual" != "$FLYWAY_SHA256" ]; then
+            echo "Flyway tarball checksum mismatch:"
+            echo "  expected: $FLYWAY_SHA256"
+            echo "  actual:   $actual"
+            echo "If the bump is intentional, update FLYWAY_SHA256 in this workflow."
+            exit 1
+          fi
+          tar -xzf /tmp/flyway.tar.gz -C /tmp
+
+      - name: Wire Flyway onto PATH
+        run: |
+          sudo ln -sf /tmp/flyway-10.22.0/flyway /usr/local/bin/flyway
+          flyway --version | head -3
+
       - name: Run integration tests
         run: |
           set -euo pipefail
