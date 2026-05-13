@@ -86,6 +86,65 @@ func TestAppBuilderCreateLoggerErrors(t *testing.T) {
 	})
 }
 
+func TestAppBuilderCreateLoggerWithFormat(t *testing.T) {
+	// Verify the builder wiring accepts every format value without erroring
+	// and produces a logger. Pretty-mode resolution itself is covered
+	// exhaustively in logger.TestResolvePretty.
+	cases := []string{"", "auto", "console", "json", "pretty", "structured", "AUTO"}
+
+	for _, format := range cases {
+		t.Run("format="+format, func(t *testing.T) {
+			cfg := &config.Config{
+				App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
+				Log: config.LogConfig{
+					Level:  "info",
+					Output: config.OutputConfig{Format: format},
+				},
+			}
+
+			result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
+			assert.Nil(t, result.err)
+			assert.NotNil(t, result.logger)
+		})
+	}
+}
+
+func TestOtlpLogsActive(t *testing.T) {
+	t.Run("nil_config_returns_false", func(t *testing.T) {
+		assert.False(t, otlpLogsActive(nil))
+	})
+
+	t.Run("observability_disabled_returns_false", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, minimumValidConfig+`
+observability:
+  enabled: false
+`)
+		assert.False(t, otlpLogsActive(cfg))
+	})
+
+	t.Run("observability_enabled_logs_default_returns_true", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, minimumValidConfig+`
+observability:
+  enabled: true
+  service:
+    name: test
+`)
+		assert.True(t, otlpLogsActive(cfg))
+	})
+
+	t.Run("observability_enabled_logs_explicitly_disabled_returns_false", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, minimumValidConfig+`
+observability:
+  enabled: true
+  service:
+    name: test
+  logs:
+    enabled: false
+`)
+		assert.False(t, otlpLogsActive(cfg))
+	})
+}
+
 func TestAppBuilderCreateBootstrapErrors(t *testing.T) {
 	t.Run("missing logger", func(t *testing.T) {
 		cfg := &config.Config{}

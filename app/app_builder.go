@@ -53,7 +53,13 @@ func (b *Builder) CreateLogger() *Builder {
 		return b
 	}
 
-	b.logger = logger.New(b.cfg.Log.Level, b.cfg.Log.Pretty)
+	pretty := logger.ResolvePretty(
+		b.cfg.Log.Output.Format,
+		b.cfg.Log.Pretty,
+		otlpLogsActive(b.cfg),
+		logger.StdoutIsTerminal(),
+	)
+	b.logger = logger.New(b.cfg.Log.Level, pretty)
 	b.logger.Info().
 		Str("app", b.cfg.App.Name).
 		Str("env", b.cfg.App.Env).
@@ -61,6 +67,17 @@ func (b *Builder) CreateLogger() *Builder {
 		Msg("Starting application")
 
 	return b
+}
+
+// otlpLogsActive reports whether OTLP log export will run after bootstrap.
+// Reads raw koanf keys because observability.Config is unmarshaled later in
+// initializeObservability, and the logger is created first. Mirrors the
+// defaulting rule in observability.Config.applyLogsDefaults: when
+// observability is enabled, logs default to enabled unless explicitly off.
+func otlpLogsActive(cfg *config.Config) bool {
+	return cfg != nil &&
+		cfg.Bool("observability.enabled", false) &&
+		cfg.Bool("observability.logs.enabled", true)
 }
 
 // CreateBootstrap creates the bootstrap helper for dependency resolution.

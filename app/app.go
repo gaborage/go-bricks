@@ -152,22 +152,24 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 // createBootstrapLogger creates a logger with smart defaults for bootstrap/initialization logging.
 // This logger is available even when configuration loading fails.
 func createBootstrapLogger() logger.Logger {
-	// Smart defaults: debug in dev, info in prod
 	level := logger.LevelInfo
-	pretty := false
-
-	// Check environment for development mode
 	env := strings.TrimSpace(os.Getenv("APP_ENV"))
 	if env == "" || strings.EqualFold(env, "development") || strings.EqualFold(env, "dev") {
 		level = logger.LevelDebug
-		pretty = true
 	}
-
-	// Allow override via environment variable
 	if envLevel := os.Getenv("LOG_LEVEL"); envLevel != "" {
 		level = envLevel
 	}
 
+	// Bootstrap runs before observability config is unmarshaled, so we
+	// optimistically assume OTLP logs are off. If they turn out to be on,
+	// WithOTelProvider's fail-fast will surface the conflict.
+	pretty := logger.ResolvePretty(
+		os.Getenv("LOG_FORMAT"),
+		false,
+		false,
+		logger.StdoutIsTerminal(),
+	)
 	return logger.New(level, pretty)
 }
 

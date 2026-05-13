@@ -38,6 +38,8 @@ Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `Asse
 
 **Common Issues:** Spans not appearing (check `observability.enabled`, wait for batch timeout), logs not exported (verify `observability.logs.enabled`, set `logger.pretty: false`), pretty mode conflict (fails fast at startup). See the Troubleshooting section in [CLAUDE.md](../CLAUDE.md#troubleshooting) for details
 
+**Log format selection (`log.output.format`):** Defaults to `auto`, which resolves to console (colored) output when stdout is a terminal AND OTLP log export is not active; otherwise structured JSON. Explicit values: `console` / `pretty` (always colored), `json` / `structured` (always JSON). The legacy `log.pretty: true` still works and overrides `log.output.format`. Combining pretty output with `observability.logs.enabled: true` still panics at startup — `auto` is the safe default that keeps local dev colored and production JSON without manual configuration.
+
 ## Custom Metrics
 
 GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.

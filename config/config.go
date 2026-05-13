@@ -138,7 +138,7 @@ func loadDefaults(k *koanf.Koanf) error {
 
 		fieldLogLevel:       logger.LevelInfo,
 		"log.pretty":        false,
-		"log.output.format": "json",
+		"log.output.format": "auto",
 		"log.output.file":   "",
 
 		// Debug endpoints defaults (disabled by default for security)

@@ -63,7 +63,7 @@ func TestLoadWithDefaults(t *testing.T) {
 
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
-	assert.Equal(t, "json", cfg.Log.Output.Format)
+	assert.Equal(t, "auto", cfg.Log.Output.Format)
 	assert.Equal(t, "", cfg.Log.Output.File)
 }
 
@@ -210,7 +210,7 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 
 	assert.Equal(t, "info", k.String("log.level"))
 	assert.False(t, k.Bool("log.pretty"))
-	assert.Equal(t, "json", k.String("log.output.format"))
+	assert.Equal(t, "auto", k.String("log.output.format"))
 	assert.Equal(t, "", k.String("log.output.file"))
 }
 
