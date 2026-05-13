@@ -39,9 +39,15 @@ func TestOracleStoreInsertSuccess(t *testing.T) {
 func TestOracleStoreInsertExecError(t *testing.T) {
 	store := newOracleTestStore(t)
 	wantErr := errors.New("ORA-00001 unique constraint")
-	tx := &errorTx{execErr: wantErr}
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	db.ExpectTransaction().
+		ExpectExec(`INSERT INTO GOBRICKS_OUTBOX`).
+		WillReturnError(wantErr)
 
-	err := store.Insert(t.Context(), tx, sampleRecord())
+	tx, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	err = store.Insert(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "insert failed")

@@ -2,6 +2,7 @@ package testing
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -574,4 +575,116 @@ func TestConvertAssignTimePointer(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, deletedAt)
 	})
+}
+
+// TestTestTxWillReturnErrorOnQuery verifies that WillReturnError targets the most
+// recently added query expectation and that the configured error surfaces through
+// both Query and QueryRow.
+func TestTestTxWillReturnErrorOnQuery(t *testing.T) {
+	wantErr := errors.New("query exploded")
+
+	t.Run("surfaces via Query", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectQuery("SELECT").WillReturnError(wantErr)
+
+		tx, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		defer tx.Rollback(context.Background())
+
+		rows, err := tx.Query(context.Background(), "SELECT 1")
+		assert.Nil(t, rows)
+		assert.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("surfaces via QueryRow", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectQuery("SELECT").WillReturnError(wantErr)
+
+		tx, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		defer tx.Rollback(context.Background())
+
+		var dst int
+		err = tx.QueryRow(context.Background(), "SELECT 1").Scan(&dst)
+		assert.ErrorIs(t, err, wantErr)
+	})
+}
+
+// TestTestTxWillReturnErrorOnExec verifies that WillReturnError targets the most
+// recently added exec expectation and surfaces through Exec.
+func TestTestTxWillReturnErrorOnExec(t *testing.T) {
+	wantErr := errors.New("exec exploded")
+
+	db := NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().
+		ExpectExec("INSERT").WillReturnError(wantErr)
+
+	tx, err := db.Begin(context.Background())
+	assert.NoError(t, err)
+	defer tx.Rollback(context.Background())
+
+	result, err := tx.Exec(context.Background(), "INSERT INTO t VALUES (1)")
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, wantErr)
+}
+
+// TestTestTxWillReturnErrorTargetsMostRecent verifies that in a mixed chain
+// (queries and execs interleaved), WillReturnError binds to whichever Expect*
+// was called most recently, leaving earlier expectations untouched.
+func TestTestTxWillReturnErrorTargetsMostRecent(t *testing.T) {
+	queryErr := errors.New("query target")
+	execErr := errors.New("exec target")
+
+	t.Run("binds to last when last was exec", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectQuery("SELECT").WillReturnRows(NewRowSet("id").AddRow(int64(1))).
+			ExpectExec("INSERT").WillReturnError(execErr)
+
+		tx, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		defer tx.Rollback(context.Background())
+
+		// Query still succeeds — error landed on the exec.
+		var id int64
+		assert.NoError(t, tx.QueryRow(context.Background(), "SELECT 1").Scan(&id))
+		assert.Equal(t, int64(1), id)
+
+		// Exec returns the error.
+		_, err = tx.Exec(context.Background(), "INSERT INTO t VALUES (1)")
+		assert.ErrorIs(t, err, execErr)
+	})
+
+	t.Run("binds to last when last was query", func(t *testing.T) {
+		db := NewTestDB(dbtypes.PostgreSQL)
+		db.ExpectTransaction().
+			ExpectExec("INSERT").WillReturnRowsAffected(1).
+			ExpectQuery("SELECT").WillReturnError(queryErr)
+
+		tx, err := db.Begin(context.Background())
+		assert.NoError(t, err)
+		defer tx.Rollback(context.Background())
+
+		// Exec still succeeds — error landed on the query.
+		result, err := tx.Exec(context.Background(), "INSERT INTO t VALUES (1)")
+		assert.NoError(t, err)
+		affected, _ := result.RowsAffected()
+		assert.Equal(t, int64(1), affected)
+
+		// QueryRow returns the error.
+		var dst int
+		err = tx.QueryRow(context.Background(), "SELECT 1").Scan(&dst)
+		assert.ErrorIs(t, err, queryErr)
+	})
+}
+
+// TestTestTxWillReturnErrorNoOpWhenEmpty verifies that calling WillReturnError
+// before any ExpectQuery or ExpectExec is a safe no-op (matches the existing
+// WillReturnRows / WillReturnRowsAffected behavior).
+func TestTestTxWillReturnErrorNoOpWhenEmpty(t *testing.T) {
+	db := NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction().WillReturnError(errors.New("ignored"))
+	assert.NotNil(t, tx)
 }
