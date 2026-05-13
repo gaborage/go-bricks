@@ -35,6 +35,17 @@ func flywayOrSkip(t *testing.T) string {
 	return path
 }
 
+// testCtx returns a context honoring t.Deadline() so cross-module DB / CLI
+// operations cannot outlive the test. Falls back to a cancel-only context
+// when the test has no deadline.
+func testCtx(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	if dl, ok := t.Deadline(); ok {
+		return context.WithDeadline(context.Background(), dl)
+	}
+	return context.WithCancel(context.Background())
+}
+
 // cliEnv bundles the PG container + scaffolded YAML/migrations dirs the
 // CLI integration tests need. The YAML config drives both tenant listing
 // and credential resolution (--source-config + --credentials-from=config-file).
@@ -58,7 +69,9 @@ func newCLIEnv(t *testing.T, tenantIDs ...string) *cliEnv {
 	t.Helper()
 	flywayPath := flywayOrSkip(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	parent, cancelParent := testCtx(t)
+	t.Cleanup(cancelParent)
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	t.Cleanup(cancel)
 
 	containerCfg := containers.DefaultPostgreSQLConfig()
@@ -141,7 +154,9 @@ func (e *cliEnv) execIn(t *testing.T, dbName, query string) {
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
-	_, err = db.ExecContext(context.Background(), query)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	_, err = db.ExecContext(ctx, query)
 	require.NoError(t, err)
 }
 
@@ -162,7 +177,9 @@ func (e *cliEnv) runMigrate(t *testing.T, extraArgs ...string) (string, error) {
 	cmd.SetArgs(args)
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
-	cmd.SetContext(context.Background())
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	cmd.SetContext(ctx)
 	err := cmd.Execute()
 	return stdout.String(), err
 }

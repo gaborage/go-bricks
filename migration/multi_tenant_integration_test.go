@@ -3,7 +3,6 @@
 package migration
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -34,6 +33,8 @@ func TestMigrateAllAdvisoryLockSerializesConcurrentRuns(t *testing.T) {
 	migrator := env.migrator()
 
 	opts := MigrateAllOptions{BaseConfig: env.flywayConfig()}
+	ctx, cancel := testCtx(t)
+	defer cancel()
 
 	// Two concurrent MigrateAll calls against the same tenant. Flyway's
 	// advisory lock should serialize them; the second invocation must see
@@ -45,7 +46,7 @@ func TestMigrateAllAdvisoryLockSerializesConcurrentRuns(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			res, err := MigrateAll(context.Background(), migrator, lister, configs, ActionMigrate, opts)
+			res, err := MigrateAll(ctx, migrator, lister, configs, ActionMigrate, opts)
 			results[idx] = res
 			errs[idx] = err
 		}(i)
@@ -109,8 +110,10 @@ func TestMigrateAllParallelNonBlocking(t *testing.T) {
 		Parallelism: 2,
 	}
 
+	ctx, cancel := testCtx(t)
+	defer cancel()
 	start := time.Now()
-	result, err := MigrateAll(context.Background(), env.migrator(), lister, configs, ActionMigrate, opts)
+	result, err := MigrateAll(ctx, env.migrator(), lister, configs, ActionMigrate, opts)
 	totalElapsed := time.Since(start)
 
 	require.NoError(t, err)

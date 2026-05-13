@@ -69,7 +69,9 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	t.Helper()
 	flywayPath := flywayOrSkip(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	parent, cancelParent := testCtx(t)
+	t.Cleanup(cancelParent)
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	t.Cleanup(cancel)
 
 	cfg := containers.DefaultPostgreSQLConfig()

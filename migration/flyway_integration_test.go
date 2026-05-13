@@ -3,7 +3,6 @@
 package migration
 
 import (
-	"context"
 	"os"
 	"testing"
 
@@ -23,7 +22,9 @@ func TestFlywayMigrateFreshSchemaPopulatesResult(t *testing.T) {
 		"CREATE TABLE orders (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, total NUMERIC NOT NULL);")
 
 	dbCfg := env.dbConfigFor(env.defaultDB)
-	result, err := env.migrator().MigrateFor(context.Background(), dbCfg, env.flywayConfig())
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	result, err := env.migrator().MigrateFor(ctx, dbCfg, env.flywayConfig())
 	require.NoError(t, err)
 
 	assert.True(t, result.Success)
@@ -53,9 +54,11 @@ func TestFlywayMigrateChecksumMismatchFailsFast(t *testing.T) {
 
 	dbCfg := env.dbConfigFor(env.defaultDB)
 	migrator := env.migrator()
+	ctx, cancel := testCtx(t)
+	defer cancel()
 
 	// First run: applies cleanly.
-	res, err := migrator.MigrateFor(context.Background(), dbCfg, env.flywayConfig())
+	res, err := migrator.MigrateFor(ctx, dbCfg, env.flywayConfig())
 	require.NoError(t, err)
 	require.True(t, res.Success)
 	require.Equal(t, []string{"1"}, res.AppliedVersions)
@@ -68,7 +71,7 @@ func TestFlywayMigrateChecksumMismatchFailsFast(t *testing.T) {
 
 	// Second run: must fail fast on checksum mismatch. Live engine output
 	// is verified to match the parsed error envelope shape.
-	res2, err := migrator.MigrateFor(context.Background(), dbCfg, env.flywayConfig())
+	res2, err := migrator.MigrateFor(ctx, dbCfg, env.flywayConfig())
 	require.Error(t, err, "tampered checksum must surface as an error from MigrateFor")
 	assert.False(t, res2.Success)
 	assert.Equal(t, "VALIDATE_ERROR", res2.ErrorCode,
