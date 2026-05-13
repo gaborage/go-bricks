@@ -793,3 +793,53 @@ func TestReplayToRegistryPreservesWorkerPoolConfig(t *testing.T) {
 	assert.Equal(t, 48, registry.consumers[0].Workers, "Workers should propagate through ReplayToRegistry")
 	assert.Equal(t, 480, registry.consumers[0].PrefetchCount, "PrefetchCount should propagate through ReplayToRegistry")
 }
+
+// TestDeclarationsIsEmpty covers the IsEmpty fast-path. The function delegates
+// to Stats(), so we only need to verify the empty and non-empty branches.
+func TestDeclarationsIsEmpty(t *testing.T) {
+	t.Run("empty declarations", func(t *testing.T) {
+		d := NewDeclarations()
+		assert.True(t, d.IsEmpty())
+	})
+
+	t.Run("becomes non-empty after a single registration", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{Name: testQueue})
+		assert.False(t, d.IsEmpty())
+	})
+}
+
+// TestDeclarationsHashCoversAllArgTypes exercises Hash() with a publisher whose
+// Args map contains every supported value type. This drives writeMapArgs through
+// each typed branch (string/int/int64/bool/float64/default) and exercises
+// writeInt64 / writeFloat64.
+func TestDeclarationsHashCoversAllArgTypes(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic, Durable: true})
+	d.RegisterQueue(&QueueDeclaration{
+		Name:    testQueue,
+		Durable: true,
+		Args: map[string]any{
+			"string_arg":  "value",
+			"int_arg":     int(42),
+			"int64_arg":   int64(1024),
+			"bool_arg":    true,
+			"float64_arg": 1.5,
+			"other_arg":   []string{"non-primitive falls to fmt.Fprintf branch"},
+		},
+	})
+	d.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testRoutingKey})
+	d.RegisterPublisher(&PublisherDeclaration{
+		Exchange:   testExchange,
+		RoutingKey: testRoutingKey,
+		EventType:  eventTestEvent,
+	})
+
+	first := d.Hash()
+	assert.NotZero(t, first, "Hash with multi-typed args must be deterministic and non-zero")
+
+	// Second call must return the same value — confirms map-iteration order is
+	// neutralized by the sorted-keys logic inside writeMapArgs.
+	second := d.Hash()
+	assert.Equal(t, first, second, "Hash must be deterministic across calls regardless of map iteration order")
+}
