@@ -433,13 +433,13 @@ func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
 	ls := &lazyStore{module: m}
 
-	// postgresStore.CreateTable issues multiple statements (CREATE TABLE
-	// then CREATE INDEX). The exact set is exercised by store-level tests;
-	// here we just need at least the CREATE TABLE to be consumed.
+	// postgresStore.CreateTable issues three sequential Exec calls (table
+	// then two indexes). Distinct patterns prevent first-match-wins
+	// ambiguity between the two `CREATE INDEX` statements.
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
-	db.ExpectExec(`CREATE INDEX`).WillReturnRowsAffected(0)
-	db.ExpectExec(`CREATE INDEX`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
 
-	_ = ls.CreateTable(context.Background(), db) // best-effort; error tolerable
-	assert.NotNil(t, m.store, "lazyStore.CreateTable triggers lazy init regardless of SQL outcome")
+	require.NoError(t, ls.CreateTable(context.Background(), db))
+	assert.NotNil(t, m.store, "lazyStore.CreateTable triggered lazy init")
 }
