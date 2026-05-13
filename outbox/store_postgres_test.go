@@ -1,8 +1,6 @@
 package outbox
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -40,28 +38,6 @@ func sampleRecord() *Record {
 	}
 }
 
-// errorTx is a minimal dbtypes.Tx that returns a fixed error from Exec.
-// dbtesting.TestTx doesn't expose WillReturnError on its ExecExpectation
-// (the field is unexported), so we use this local stub for Insert-error paths.
-type errorTx struct {
-	execErr error
-}
-
-func (tx *errorTx) Query(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, errors.New("errorTx.Query not used")
-}
-func (tx *errorTx) QueryRow(context.Context, string, ...any) dbtypes.Row {
-	return nil
-}
-func (tx *errorTx) Exec(context.Context, string, ...any) (sql.Result, error) {
-	return nil, tx.execErr
-}
-func (tx *errorTx) Prepare(context.Context, string) (dbtypes.Statement, error) {
-	return nil, errors.New("errorTx.Prepare not used")
-}
-func (tx *errorTx) Commit(context.Context) error   { return nil }
-func (tx *errorTx) Rollback(context.Context) error { return nil }
-
 // --- Insert -----------------------------------------------------------------
 
 func TestPostgresStoreInsertSuccess(t *testing.T) {
@@ -80,9 +56,15 @@ func TestPostgresStoreInsertSuccess(t *testing.T) {
 func TestPostgresStoreInsertExecError(t *testing.T) {
 	store := newPostgresTestStore(t)
 	wantErr := errors.New("constraint violation")
-	tx := &errorTx{execErr: wantErr}
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().
+		ExpectExec(`INSERT INTO gobricks_outbox`).
+		WillReturnError(wantErr)
 
-	err := store.Insert(t.Context(), tx, sampleRecord())
+	tx, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	err = store.Insert(t.Context(), tx, sampleRecord())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "insert failed")

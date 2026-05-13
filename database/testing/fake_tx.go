@@ -29,16 +29,17 @@ import (
 //	// Assert transaction was committed
 //	AssertCommitted(t, tx)
 type TestTx struct {
-	parent     *TestDB
-	queries    []*QueryExpectation
-	execs      []*ExecExpectation
-	lastQuery  *QueryExpectation
-	lastExec   *ExecExpectation
-	queryLog   []QueryCall
-	execLog    []ExecCall
-	committed  bool
-	rolledBack bool
-	mu         sync.RWMutex
+	parent      *TestDB
+	queries     []*QueryExpectation
+	execs       []*ExecExpectation
+	lastQuery   *QueryExpectation
+	lastExec    *ExecExpectation
+	lastWasExec bool
+	queryLog    []QueryCall
+	execLog     []ExecCall
+	committed   bool
+	rolledBack  bool
+	mu          sync.RWMutex
 }
 
 // ExpectQuery sets up an expectation for Query or QueryRow calls within the transaction.
@@ -55,6 +56,7 @@ func (tx *TestTx) ExpectQuery(sqlPattern string) *TestTx {
 	exp := &QueryExpectation{sql: sqlPattern}
 	tx.queries = append(tx.queries, exp)
 	tx.lastQuery = exp
+	tx.lastWasExec = false
 	return tx
 }
 
@@ -88,6 +90,7 @@ func (tx *TestTx) ExpectExec(sqlPattern string) *TestTx {
 	exp := &ExecExpectation{sql: sqlPattern}
 	tx.execs = append(tx.execs, exp)
 	tx.lastExec = exp
+	tx.lastWasExec = true
 	return tx
 }
 
@@ -103,6 +106,30 @@ func (tx *TestTx) WillReturnRowsAffected(n int64) *TestTx {
 	defer tx.mu.Unlock()
 	if tx.lastExec != nil {
 		tx.lastExec.rowsAffected = n
+	}
+
+	return tx
+}
+
+// WillReturnError configures the most-recently-added expectation (Query or Exec)
+// to return the specified error. The target is whichever ExpectQuery or ExpectExec
+// was called most recently on this TestTx; calling WillReturnError before any
+// expectation has been added is a no-op.
+// Returns the TestTx for method chaining.
+//
+// Example:
+//
+//	tx.ExpectExec("INSERT INTO orders").WillReturnError(errConstraintViolation)
+//	tx.ExpectQuery("SELECT FOR UPDATE").WillReturnError(errLockTimeout)
+func (tx *TestTx) WillReturnError(err error) *TestTx {
+	tx.mu.Lock()
+	defer tx.mu.Unlock()
+	if tx.lastWasExec {
+		if tx.lastExec != nil {
+			tx.lastExec.err = err
+		}
+	} else if tx.lastQuery != nil {
+		tx.lastQuery.err = err
 	}
 
 	return tx
