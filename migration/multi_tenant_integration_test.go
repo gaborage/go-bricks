@@ -87,9 +87,11 @@ func TestMigrateAllParallelNonBlocking(t *testing.T) {
 	env := newIntegrationEnv(t)
 
 	const (
-		tenantA   = "tenant_a"
-		tenantB   = "tenant_b"
-		sleepSecs = 1
+		tenantA = "tenant_a"
+		tenantB = "tenant_b"
+		// 3-second sleep widens the parallel-vs-sequential gap so the bound
+		// stays robust against CI-runner JVM cold-start jitter.
+		sleepSecs = 3
 	)
 	cfgA := env.createTenantDB(t, tenantA)
 	cfgB := env.createTenantDB(t, tenantB)

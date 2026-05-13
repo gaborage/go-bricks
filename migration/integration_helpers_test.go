@@ -34,6 +34,17 @@ func flywayOrSkip(t *testing.T) string {
 	return path
 }
 
+// testCtx returns a context that honors the test's deadline (if any), so DB
+// operations issued from helpers cannot outlive the test's allowed runtime.
+// Falls back to a plain cancel-only context when the test has no deadline.
+func testCtx(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	if dl, ok := t.Deadline(); ok {
+		return context.WithDeadline(context.Background(), dl)
+	}
+	return context.WithCancel(context.Background())
+}
+
 // integrationEnv bundles a per-test PG container plus the on-disk Flyway
 // scaffolding (config file + migrations dir). One env can host multiple
 // tenant databases — call createTenantDB to provision additional ones.
@@ -111,10 +122,12 @@ func (e *integrationEnv) createTenantDB(t *testing.T, dbName string) *config.Dat
 	require.NoError(t, err, "open admin connection")
 	t.Cleanup(func() { _ = db.Close() })
 
+	ctx, cancel := testCtx(t)
+	defer cancel()
 	// %q here is Go string-literal quoting, not PostgreSQL identifier
 	// quoting — coincidentally compatible for the ASCII test tenant names
 	// callers pass. Do not extend to caller-controlled input.
-	if _, err = db.ExecContext(context.Background(),
+	if _, err = db.ExecContext(ctx,
 		fmt.Sprintf(`CREATE DATABASE %q`, dbName)); err != nil {
 		t.Fatalf("create database %q: %v", dbName, err)
 	}
@@ -183,7 +196,9 @@ func (e *integrationEnv) schemaHistoryEntries(t *testing.T, dbName string) []sch
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	rows, err := db.QueryContext(context.Background(),
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	rows, err := db.QueryContext(ctx,
 		`SELECT version, description, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank`)
 	require.NoError(t, err, "query schema history")
 	defer func() { _ = rows.Close() }()

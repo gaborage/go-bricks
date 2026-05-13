@@ -183,7 +183,9 @@ func parseTenantEvents(t *testing.T, stream string) map[string]map[string]any {
 			continue
 		}
 		if ev["event"] == "tenant_complete" {
-			events[ev["tenant_id"].(string)] = ev
+			tenantID, ok := ev["tenant_id"].(string)
+			require.Truef(t, ok && tenantID != "", "tenant_complete missing/invalid tenant_id: %#v", ev)
+			events[tenantID] = ev
 		}
 	}
 	return events
