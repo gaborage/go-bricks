@@ -154,7 +154,8 @@ func TestRunFlywayCommandSuccessWithEnv(t *testing.T) {
 
 	ctx := context.Background()
 	// Should succeed and validate env variables presence
-	require.NoError(t, fm.Migrate(ctx, mcfg))
+	_, err := fm.Migrate(ctx, mcfg)
+	require.NoError(t, err)
 }
 
 func TestDefaultMigrationConfig(t *testing.T) {
@@ -374,7 +375,7 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
-			stub, capturePath := createCommandCapturingStub(t)
+			stub, capturePath := createCommandCapturingStub(t, "")
 			tempDir := t.TempDir()
 			configPath := filepath.Join(tempDir, "flyway.conf")
 			migrationPath := filepath.Join(tempDir, "migrations")
@@ -402,19 +403,26 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 	}
 }
 
-// Helper function to create a stub that captures which command was called
-func createCommandCapturingStub(t *testing.T) (_, _ string) {
+// createCommandCapturingStub builds a flyway-stub that writes the verbatim
+// arg list to capturePath, then optionally emits stdoutPayload on stdout
+// before exiting 0. Pass an empty stdoutPayload for the args-only variant.
+// Path interpolations are shell-quoted so the script survives $TMPDIR values
+// containing spaces or other shell-metacharacters.
+func createCommandCapturingStub(t *testing.T, stdoutPayload string) (stubPath, capturePath string) {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "flyway-capture.sh")
-	capturePath := filepath.Join(dir, "captured_command")
+	stubPath = filepath.Join(dir, "flyway-stub.sh")
+	capturePath = filepath.Join(dir, "captured_command")
 
-	// Create a script that writes the command to a file and exits successfully
-	content := "#!/bin/sh\n" +
-		"echo \"$@\" > " + capturePath + "\n" +
-		"exit 0\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
-	return path, capturePath
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %q\n", capturePath)
+	if stdoutPayload != "" {
+		payloadPath := filepath.Join(dir, "payload")
+		require.NoError(t, os.WriteFile(payloadPath, []byte(stdoutPayload), 0o644))
+		script += fmt.Sprintf("cat %q\n", payloadPath)
+	}
+	script += "exit 0\n"
+	require.NoError(t, os.WriteFile(stubPath, []byte(script), 0o755))
+	return stubPath, capturePath
 }
 
 // Helper function to create a failing stub for testing error scenarios
@@ -469,7 +477,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 		require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
 		ctx := context.Background()
-		err := fm.Migrate(ctx, mcfg)
+		_, err := fm.Migrate(ctx, mcfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "flyway command failed")
 	})
@@ -483,7 +491,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		err := fm.Migrate(ctx, mcfg)
+		_, err := fm.Migrate(ctx, mcfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid flyway path")
 	})
@@ -502,7 +510,7 @@ func TestRunFlywayCommandErrorHandling(t *testing.T) {
 		require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
 		ctx := context.Background()
-		err := fm.Migrate(ctx, mcfg)
+		_, err := fm.Migrate(ctx, mcfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "flyway command failed")
 	})
@@ -769,7 +777,7 @@ func TestMigrateEdgeCases(t *testing.T) {
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
 	t.Run("migrate_with_nil_config_uses_default", func(t *testing.T) {
-		stub, capturePath := createCommandCapturingStub(t)
+		stub, capturePath := createCommandCapturingStub(t, "")
 		tempDir := t.TempDir()
 		configPath := filepath.Join(tempDir, "flyway.conf")
 		migrationPath := filepath.Join(tempDir, "migrations")
@@ -787,7 +795,7 @@ func TestMigrateEdgeCases(t *testing.T) {
 			}
 		}
 
-		err := fm.Migrate(context.Background(), nil)
+		_, err := fm.Migrate(context.Background(), nil)
 		assert.NoError(t, err)
 
 		captured, readErr := os.ReadFile(capturePath)
@@ -809,7 +817,7 @@ func TestMigrateEdgeCases(t *testing.T) {
 		require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
 		ctx := context.Background()
-		err := fm.Migrate(ctx, mcfg)
+		_, err := fm.Migrate(ctx, mcfg)
 		assert.NoError(t, err)
 	})
 }
@@ -827,7 +835,7 @@ func TestInfoEdgeCases(t *testing.T) {
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
 	t.Run("info_with_nil_config_executes_command", func(t *testing.T) {
-		stub, capturePath := createCommandCapturingStub(t)
+		stub, capturePath := createCommandCapturingStub(t, "")
 		tempDir := t.TempDir()
 		configPath := filepath.Join(tempDir, "flyway.conf")
 		migrationPath := filepath.Join(tempDir, "migrations")
@@ -885,7 +893,7 @@ func TestValidateEdgeCases(t *testing.T) {
 	})
 
 	t.Run("validate_with_nil_config_executes_command", func(t *testing.T) {
-		stub, capturePath := createCommandCapturingStub(t)
+		stub, capturePath := createCommandCapturingStub(t, "")
 		tempDir := t.TempDir()
 		configPath := filepath.Join(tempDir, "flyway.conf")
 		migrationPath := filepath.Join(tempDir, "migrations")
@@ -976,4 +984,88 @@ func TestRedactPasswordKeepsAlphanumericLongPasswordsRedactedRaw(t *testing.T) {
 	out := redactPassword("error: jdbc:postgresql://user:longalphanumeric1@host/db", db)
 	assert.Contains(t, out, "[REDACTED]")
 	assert.NotContains(t, out, "longalphanumeric1")
+}
+
+func TestMigrateRequestsJSONOutputAndParsesResult(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	payload := readFixture(t, "migrate_success.json")
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "u", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
+
+	stub, capturePath := createCommandCapturingStub(t, payload)
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	result, err := fm.Migrate(context.Background(), mcfg)
+	require.NoError(t, err)
+
+	captured, readErr := os.ReadFile(capturePath)
+	require.NoError(t, readErr)
+	args := string(captured)
+	assert.Contains(t, args, "-outputType=json", "migrate verb must request JSON output to populate Result")
+	assert.Contains(t, args, "migrate")
+
+	assert.True(t, result.Success)
+	assert.Equal(t, []string{"1", "2"}, result.AppliedVersions)
+	assert.Equal(t, "2", result.EndingVersion)
+	assert.Equal(t, int64(8), result.DurationMillis)
+}
+
+func TestInfoAndValidateDoNotRequestJSONOutput(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "u", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
+
+	for _, tc := range []struct {
+		name string
+		call func(*Config) error
+	}{
+		{"info", func(c *Config) error { return fm.Info(context.Background(), c) }},
+		{"validate", func(c *Config) error { return fm.Validate(context.Background(), c) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub, capturePath := createCommandCapturingStub(t, "")
+			mcfg := &Config{
+				FlywayPath:    stub,
+				ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+				MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+				Timeout:       10 * time.Second,
+			}
+			require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+			require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+			require.NoError(t, tc.call(mcfg))
+
+			captured, readErr := os.ReadFile(capturePath)
+			require.NoError(t, readErr)
+			assert.NotContains(t, string(captured), "-outputType=json",
+				"info/validate keep default pretty-printed output for operator-facing sessions")
+		})
+	}
 }

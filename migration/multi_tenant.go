@@ -50,6 +50,10 @@ type TenantResult struct {
 	Vendor   string
 	Err      error
 	Duration time.Duration
+
+	// Result is the parsed Flyway outcome for ActionMigrate. Zero-valued
+	// for Validate / Info, or when Flyway crashed before emitting JSON.
+	Result Result
 }
 
 // MigrateAllResult aggregates per-tenant results from a MigrateAll run.
@@ -64,9 +68,11 @@ func (r *MigrateAllResult) Failed() []TenantResult {
 		return nil
 	}
 	var out []TenantResult
-	for _, res := range r.Results {
-		if res.Err != nil {
-			out = append(out, res)
+	// Index iteration: TenantResult is too large for gocritic's
+	// rangeValCopy threshold (each step would copy the embedded Result).
+	for i := range r.Results {
+		if r.Results[i].Err != nil {
+			out = append(out, r.Results[i])
 		}
 	}
 	return out
@@ -312,7 +318,7 @@ func runOne(
 
 	switch action {
 	case ActionMigrate:
-		res.Err = migrator.MigrateFor(ctx, dbCfg, cfg)
+		res.Result, res.Err = migrator.MigrateFor(ctx, dbCfg, cfg)
 	case ActionValidate:
 		res.Err = migrator.ValidateFor(ctx, dbCfg, cfg)
 	case ActionInfo:
