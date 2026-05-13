@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ type FlywayMigrator struct {
 	logger         logger.Logger
 	defaultConfig  func(*FlywayMigrator) *Config
 	validatedPaths sync.Map
+	audit          *auditEmitter
 }
 
 // Config configuration for migrations
@@ -56,18 +58,91 @@ type Config struct {
 	Timeout       time.Duration // Timeout for migration operations
 	Environment   string        // Environment (development, testing, production)
 	DryRun        bool          // Only validate, do not execute
+
+	// Audit carries the per-call audit-event context required by ADR-019.
+	// Populated by operators (CLI flags) or pipelines (env vars or library
+	// call argument). The framework will NOT infer Principal from IAM/OS
+	// context — empty values flow through with a warning log.
+	Audit AuditContext
 }
 
-// NewFlywayMigrator creates a new instance of the migrator
+// AuditContext groups the per-call audit fields that flow into every
+// migration.applied event. Operators MUST supply Principal explicitly per
+// ADR-019; GitCommitSHA, PipelineRunID, and Target are optional but
+// strongly recommended for deployment-time runs.
+type AuditContext struct {
+	// Principal identifies who triggered the migration (operator username,
+	// service account name, pipeline identifier). Empty values emit with
+	// PrincipalUnspecified + a warning so the gap is itself auditable.
+	Principal string
+
+	// GitCommitSHA records the source-tree commit the migration was built
+	// from. Useful for correlating an audit event to a specific deployment.
+	GitCommitSHA string
+
+	// PipelineRunID is an opaque CI/CD run identifier (e.g. a GitHub
+	// Actions run ID, a Jenkins build number). Lets compliance reporting
+	// trace an audit event back to a pipeline run.
+	PipelineRunID string
+
+	// Target overrides the audit event's Target field. Defaults to the
+	// database name (db.Database) when empty. Useful for multi-tenant runs
+	// where the tenant ID is more informative for compliance correlation
+	// than the per-tenant schema name.
+	Target string
+}
+
+// NewFlywayMigrator creates a new instance of the migrator with the
+// always-on OpenTelemetry audit-emission path wired up. Call WithAuditRecorder
+// to add an optional compliance-grade durable delivery path per ADR-019.
 func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
 	fm := &FlywayMigrator{
 		config: cfg,
 		logger: log,
+		audit:  newAuditEmitter(log, nil),
 	}
 
 	fm.defaultConfig = (*FlywayMigrator).defaultMigrationConfig
 
 	return fm
+}
+
+// WithAuditRecorder registers an optional AuditRecorder for compliance-grade durable
+// delivery alongside the always-on OpenTelemetry emission. Replaces any
+// previously-configured sink. Returns the receiver for chaining.
+//
+// Intended to be called once at startup. The sink runs on its own goroutine
+// with a bounded send queue per ADR-019 — slow sinks cannot stall
+// migrations, and sink errors are logged but do not abort the migration.
+// Call Close to drain the queue on shutdown.
+func (fm *FlywayMigrator) WithAuditRecorder(sink AuditRecorder) *FlywayMigrator {
+	// Best-effort drain of any previously-installed sink so swapping does
+	// not leak the consumer goroutine. Uses a short background deadline
+	// since this is a setup-time operation, not a request path.
+	if fm.audit != nil && fm.audit.sink != nil {
+		drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := fm.audit.Close(drainCtx); err != nil {
+			// Surface drain failures so silent audit loss during a recorder
+			// swap is operator-visible. We still proceed with the swap —
+			// blocking a startup-time reconfiguration on an in-flight sink
+			// would be worse than logging and moving on.
+			fm.logger.Warn().Err(err).Msg("failed to drain previous audit recorder during swap")
+		}
+		cancel()
+	}
+	fm.audit = newAuditEmitter(fm.logger, sink)
+	return fm
+}
+
+// Close drains the optional AuditRecorder queue and tears down the audit
+// consumer goroutine. Safe to call when no sink is configured. Honors ctx
+// for shutdown deadline; events still in flight when ctx expires are
+// silently dropped (their OTel emission already succeeded).
+func (fm *FlywayMigrator) Close(ctx context.Context) error {
+	if fm == nil || fm.audit == nil {
+		return nil
+	}
+	return fm.audit.Close(ctx)
 }
 
 // DefaultMigrationConfig returns the default configuration for migrations
@@ -160,12 +235,15 @@ func (fm *FlywayMigrator) ValidateFor(ctx context.Context, db *config.DatabaseCo
 }
 
 func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) error {
+	startedAt := time.Now()
+
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
 	}
 
+	vendor := dbVendor(db, fm.config.Database.Type)
 	fm.logger.Info().
-		Str("vendor", dbVendor(db, fm.config.Database.Type)).
+		Str("vendor", vendor).
 		Str("action", verb).
 		Msg("Starting Flyway command")
 
@@ -174,13 +252,42 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 		flagLocationsFS + cfg.MigrationPath,
 		verb,
 	}
-	return fm.runFlywayCommandFor(ctx, db, cfg, args)
+
+	output, runErr := fm.runFlywayCommandFor(ctx, db, cfg, args)
+
+	// ADR-019: migration.applied is emitted only for actual applications
+	// (the migrate verb). Info / validate read state and don't count as
+	// applications even though they invoke Flyway.
+	if verb == flywayCmdMigrate {
+		fm.emitMigrationApplied(ctx, db, cfg, &flywayRunOutcome{
+			Vendor:      vendor,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now(),
+			Output:      output,
+			Err:         runErr,
+		})
+	}
+
+	return runErr
 }
 
-// runFlywayCommandFor executes a Flyway command using the supplied database config.
-func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, args []string) error {
+// flywayRunOutcome bundles the result of a single Flyway subprocess
+// invocation so emitMigrationApplied keeps a small parameter list. Used
+// only by the engine layer; never exported.
+type flywayRunOutcome struct {
+	Vendor      string
+	StartedAt   time.Time
+	CompletedAt time.Time
+	Output      string
+	Err         error
+}
+
+// runFlywayCommandFor executes a Flyway command using the supplied database
+// config. Returns the (password-redacted) combined output alongside any
+// error so the caller can classify failures into an ErrorClass per ADR-019.
+func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, args []string) (string, error) {
 	if err := fm.validateFlywayPath(cfg.FlywayPath); err != nil {
-		return fmt.Errorf("invalid flyway path: %w", err)
+		return "", fmt.Errorf("invalid flyway path: %w", err)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
@@ -191,18 +298,66 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 	envVars, err := buildEnvironmentVariables(db)
 	if err != nil {
-		return fmt.Errorf("build flyway environment: %w", err)
+		return "", fmt.Errorf("build flyway environment: %w", err)
 	}
 	cmd.Env = append(os.Environ(), envVars...)
 
-	output, err := cmd.CombinedOutput()
+	rawOutput, err := cmd.CombinedOutput()
+	redacted := redactPassword(string(rawOutput), db)
 	if err != nil {
-		fm.logger.Error().Err(err).Str("output", redactPassword(string(output), db)).Msg("Error executing Flyway command")
-		return fmt.Errorf("flyway command failed: %w", err)
+		fm.logger.Error().Err(err).Str("output", redacted).Msg("Error executing Flyway command")
+		return redacted, fmt.Errorf("flyway command failed: %w", err)
 	}
 
 	fm.logger.Info().Msg("Flyway command completed successfully")
-	return nil
+	return redacted, nil
+}
+
+// emitMigrationApplied composes an AuditEvent of type migration.applied and
+// dispatches it through the configured emitter (always OTel; optionally
+// AuditRecorder). Best-effort error classification via classifyFlywayError.
+// Version remains empty in v1 — populating it requires parsing Flyway's
+// JSON output, deferred to #376's structured-Result work.
+func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.DatabaseConfig, cfg *Config, run *flywayRunOutcome) {
+	if fm.audit == nil {
+		return
+	}
+
+	target := cfg.Audit.Target
+	if target == "" && db != nil {
+		target = db.Database
+	}
+	if target == "" {
+		// Final fallback: the migrator's own configured database name.
+		// Prevents an empty Target from reaching the audit pipeline when
+		// the per-call db and the operator-supplied override are both
+		// missing — a degenerate config that shouldn't happen in
+		// practice, but the audit record stays useful regardless.
+		target = fm.config.Database.Database
+	}
+
+	ev := &AuditEvent{
+		Type:               AuditEventTypeMigrationApplied,
+		Target:             target,
+		AppliedByPrincipal: cfg.Audit.Principal,
+		StartedAt:          run.StartedAt,
+		CompletedAt:        run.CompletedAt,
+		GitCommitSHA:       cfg.Audit.GitCommitSHA,
+		PipelineRunID:      cfg.Audit.PipelineRunID,
+		Attributes: map[string]string{
+			"migration.vendor":  run.Vendor,
+			"migration.dry_run": strconv.FormatBool(cfg.DryRun),
+		},
+	}
+
+	if run.Err != nil {
+		ev.Outcome = AuditOutcomeFailed
+		ev.ErrorClass = classifyFlywayError(run.Output, run.Err)
+	} else {
+		ev.Outcome = AuditOutcomeSuccess
+	}
+
+	fm.audit.emit(ctx, ev)
 }
 
 // dbVendor returns the database vendor string from the supplied config, falling

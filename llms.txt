@@ -3780,6 +3780,47 @@ provider := &migration.SecretsProvider{
 
 The framework's `migration` module stays AWS-SDK-free; AWS SM lives in the CLI's separate `tools/migration` go.mod.
 
+### Audit Events
+
+Every Flyway `migrate` invocation emits a `migration.applied` audit event. The default path is an OpenTelemetry span (`migration.audit.migration.applied`) plus a structured log record at INFO/ERROR via the framework's `LoggerProvider` — no wiring required. For compliance-grade durable delivery (Kafka/S3/etc.), implement `migration.AuditRecorder`:
+
+```go
+type kafkaAuditRecorder struct{ producer *kafka.Writer; topic string }
+
+// AuditRecorder.Record takes a pointer (matches outbox.OutboxPublisher convention
+// for medium-sized event payloads).
+func (s *kafkaAuditRecorder) Record(ctx context.Context, ev *migration.AuditEvent) error {
+    payload, _ := json.Marshal(ev)
+    return s.producer.WriteMessages(ctx, kafka.Message{
+        Topic: s.topic, Key: []byte(ev.Target), Value: payload,
+    })
+}
+
+// Per-call audit context flows through Config.Audit:
+mcfg := &migration.Config{
+    FlywayPath: "/usr/local/bin/flyway", ConfigPath: "...", MigrationPath: "...",
+    Audit: migration.AuditContext{
+        Principal:     "deployer@example.com",  // REQUIRED — operators must pass explicitly
+        GitCommitSHA:  os.Getenv("GIT_SHA"),
+        PipelineRunID: os.Getenv("GITHUB_RUN_ID"),
+        Target:        "tenant_acme",            // overrides db.Database
+    },
+}
+
+fm := migration.NewFlywayMigrator(cfg, log).WithAuditRecorder(&kafkaAuditRecorder{...})
+defer fm.Close(context.Background())  // drains the sink queue
+
+_ = fm.Migrate(ctx, mcfg)  // → AuditEvent fires on both OTel and sink paths
+```
+
+**Critical semantics** (ADR-019):
+- `Principal` is contract-required but emitted with `<unspecified>` sentinel + warning when empty (so the gap is auditable, business work isn't blocked).
+- Sink runs on a bounded-queue goroutine (cap 256); slow sinks cannot stall migrations. Queue overflows drop silently + increment `migration.audit.sink_drops` counter.
+- `AuditRecorder.Record` errors log warnings + increment `migration.audit.sink_failures`; they do NOT abort the migration. For zero-loss audit, back the sink with a durable buffer.
+- `Outcome == failed` carries a stable `ErrorClass` string from a 7-value taxonomy (`checksum_mismatch`, `lock_timeout`, `schema_history_corrupt`, `target_unreachable`, `target_not_ready`, `quiesce_blocked`, `internal_error`).
+
+Full guide: [wiki/migration-audit.md](wiki/migration-audit.md). Decision rationale: [ADR-019](wiki/adr-019-migration-audit-delivery.md).
+
 ## Observability & Logging
 
 GoBricks ships **OpenTelemetry traces, metrics, and structured logs out of the box** — flip `observability.enabled: true` and the framework auto-instruments every external boundary (HTTP, database, AMQP, cache, outbound HTTP). No application code is required for the auto-instrumentation; custom spans/metrics/logs slot in on top.
