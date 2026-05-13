@@ -11,7 +11,7 @@ The default emission path is on by default — no wiring required. Every `Flyway
 1. An OpenTelemetry span named `migration.audit.migration.applied` with the event payload as span attributes.
 2. A structured log record at `INFO` (or `ERROR` when the migration failed) via the framework's `LoggerProvider`, routed to OTLP per [ADR-006](adr-006-otlp-log-export.md).
 
-To get audit-grade durability (Kafka, S3, your own append-only store), implement `migration.AuditSink` and wire it via `FlywayMigrator.WithAuditSink(sink)`.
+To get audit-grade durability (Kafka, S3, your own append-only store), implement `migration.AuditRecorder` and wire it via `FlywayMigrator.WithAuditRecorder(sink)`.
 
 ## Configuration
 
@@ -66,7 +66,7 @@ type AuditEvent struct {
 }
 ```
 
-The same struct flows into the OpenTelemetry emission path AND the optional `AuditSink`, so schemas cannot drift across delivery paths.
+The same struct flows into the OpenTelemetry emission path AND the optional `AuditRecorder`, so schemas cannot drift across delivery paths.
 
 ## ErrorClass taxonomy
 
@@ -84,10 +84,10 @@ When `Outcome == failed`, `ErrorClass` is a stable string from ADR-019's publish
 
 The list is additive — adding a class is non-breaking; removing one is. The engine's classification is best-effort substring matching against Flyway's combined output; classification is intentionally permissive to avoid silently downgrading real errors to `internal_error`.
 
-## Implementing an AuditSink
+## Implementing an AuditRecorder
 
 ```go
-type AuditSink interface {
+type AuditRecorder interface {
     Record(ctx context.Context, event *AuditEvent) error
 }
 ```
@@ -97,12 +97,12 @@ The event pointer matches the framework convention for medium-sized event payloa
 Minimal Kafka example (illustrative — your producer choice is up to you):
 
 ```go
-type kafkaAuditSink struct {
+type kafkaAuditRecorder struct {
     producer *kafka.Writer
     topic    string
 }
 
-func (s *kafkaAuditSink) Record(ctx context.Context, event *migration.AuditEvent) error {
+func (s *kafkaAuditRecorder) Record(ctx context.Context, event *migration.AuditEvent) error {
     payload, err := json.Marshal(event)
     if err != nil {
         return err
@@ -116,7 +116,7 @@ func (s *kafkaAuditSink) Record(ctx context.Context, event *migration.AuditEvent
 
 // Wire it at startup:
 migrator := migration.NewFlywayMigrator(cfg, log).
-    WithAuditSink(&kafkaAuditSink{producer: producer, topic: "migration-audit"})
+    WithAuditRecorder(&kafkaAuditRecorder{producer: producer, topic: "migration-audit"})
 
 // On shutdown, drain the queue:
 shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -126,9 +126,9 @@ _ = migrator.Close(shutdownCtx)
 
 ### Delivery semantics
 
-- **At-least-once via OTel.** The OpenTelemetry path is always on. If the collector pipeline is healthy, every event reaches your backend exactly once. Under collector backpressure, the default Collector batch processor may drop records — this is appropriate for telemetry but is NOT sufficient as the sole record-of-truth for PCI / SOC 2 evidence retention. For that, layer an `AuditSink` on top.
+- **At-least-once via OTel.** The OpenTelemetry path is always on. If the collector pipeline is healthy, every event reaches your backend exactly once. Under collector backpressure, the default Collector batch processor may drop records — this is appropriate for telemetry but is NOT sufficient as the sole record-of-truth for PCI / SOC 2 evidence retention. For that, layer an `AuditRecorder` on top.
 - **Non-blocking sink fan-out.** Events are enqueued onto a bounded buffer (256 events) and delivered from a single consumer goroutine. If the queue fills (slow sink + bursty traffic), new events are dropped — the emitter logs a warning and the `migration.audit.sink_drops` counter increments. The trade-off is that audit must never stall a Flyway migration.
-- **Sink errors do not abort the migration.** `AuditSink.Record` returning an error logs a warning and increments `migration.audit.sink_failures`; the migration proceeds. Sink owners requiring zero-loss audit must back their implementation with a durable buffer (Kafka commit-log, S3 staging, etc.). The framework does not retry on the sink's behalf.
+- **Sink errors do not abort the migration.** `AuditRecorder.Record` returning an error logs a warning and increments `migration.audit.sink_failures`; the migration proceeds. Sink owners requiring zero-loss audit must back their implementation with a durable buffer (Kafka commit-log, S3 staging, etc.). The framework does not retry on the sink's behalf.
 - **Shutdown drains.** `FlywayMigrator.Close(ctx)` waits for the queue to drain before returning. Events still buffered when `ctx` expires are dropped (their OTel emission already succeeded).
 
 ## Metrics
@@ -138,9 +138,9 @@ The migration audit emitter publishes two counters via the global OTel meter:
 | Metric | Type | Attributes | Trigger |
 |---|---|---|---|
 | `migration.audit.sink_drops` | `Int64Counter` | `audit.type` | Sink queue was full when an event was enqueued |
-| `migration.audit.sink_failures` | `Int64Counter` | `audit.type` | `AuditSink.Record` returned a non-nil error |
+| `migration.audit.sink_failures` | `Int64Counter` | `audit.type` | `AuditRecorder.Record` returned a non-nil error |
 
-Both counters fire alongside Warn-level log records — useful for grep-based debugging, but the framework does not raise alerts on its own. Wire these counters into your alerting pipeline if your `AuditSink` is the compliance record-of-truth.
+Both counters fire alongside Warn-level log records — useful for grep-based debugging, but the framework does not raise alerts on its own. Wire these counters into your alerting pipeline if your `AuditRecorder` is the compliance record-of-truth.
 
 ## Known gaps
 
@@ -150,10 +150,10 @@ Both counters fire alongside Warn-level log records — useful for grep-based de
 
 ## Stakeholder checklist
 
-ADR-019 includes a checklist for validating the design with PCI / SOC 2 evidence owners. Re-confirm before committing to a default `AuditSink` implementation:
+ADR-019 includes a checklist for validating the design with PCI / SOC 2 evidence owners. Re-confirm before committing to a default `AuditRecorder` implementation:
 
 1. Is OTel-grade audit (collector-backed structured logs + traces) sufficient for your compliance regime?
-2. If durable audit is required, which pipeline does the `AuditSink` plug into (Kafka / S3 / append-only DB)?
+2. If durable audit is required, which pipeline does the `AuditRecorder` plug into (Kafka / S3 / append-only DB)?
 3. Is the published `ErrorClass` taxonomy sufficient, or do you have classes you need to pin alerting on?
 
 These answers don't change the framework — the hybrid OTel-default + opt-in sink shape is correct regardless — but they shape the example sink implementations the project may ship over time.

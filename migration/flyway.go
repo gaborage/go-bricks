@@ -93,7 +93,7 @@ type AuditContext struct {
 }
 
 // NewFlywayMigrator creates a new instance of the migrator with the
-// always-on OpenTelemetry audit-emission path wired up. Call WithAuditSink
+// always-on OpenTelemetry audit-emission path wired up. Call WithAuditRecorder
 // to add an optional compliance-grade durable delivery path per ADR-019.
 func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
 	fm := &FlywayMigrator{
@@ -107,7 +107,7 @@ func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
 	return fm
 }
 
-// WithAuditSink registers an optional AuditSink for compliance-grade durable
+// WithAuditRecorder registers an optional AuditRecorder for compliance-grade durable
 // delivery alongside the always-on OpenTelemetry emission. Replaces any
 // previously-configured sink. Returns the receiver for chaining.
 //
@@ -115,7 +115,7 @@ func NewFlywayMigrator(cfg *config.Config, log logger.Logger) *FlywayMigrator {
 // with a bounded send queue per ADR-019 — slow sinks cannot stall
 // migrations, and sink errors are logged but do not abort the migration.
 // Call Close to drain the queue on shutdown.
-func (fm *FlywayMigrator) WithAuditSink(sink AuditSink) *FlywayMigrator {
+func (fm *FlywayMigrator) WithAuditRecorder(sink AuditRecorder) *FlywayMigrator {
 	// Best-effort drain of any previously-installed sink so swapping does
 	// not leak the consumer goroutine. Uses a short background deadline
 	// since this is a setup-time operation, not a request path.
@@ -128,7 +128,7 @@ func (fm *FlywayMigrator) WithAuditSink(sink AuditSink) *FlywayMigrator {
 	return fm
 }
 
-// Close drains the optional AuditSink queue and tears down the audit
+// Close drains the optional AuditRecorder queue and tears down the audit
 // consumer goroutine. Safe to call when no sink is configured. Honors ctx
 // for shutdown deadline; events still in flight when ctx expires are
 // silently dropped (their OTel emission already succeeded).
@@ -253,10 +253,27 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 	// (the migrate verb). Info / validate read state and don't count as
 	// applications even though they invoke Flyway.
 	if verb == flywayCmdMigrate {
-		fm.emitMigrationApplied(ctx, db, cfg, vendor, startedAt, time.Now(), output, runErr)
+		fm.emitMigrationApplied(ctx, db, cfg, &flywayRunOutcome{
+			Vendor:      vendor,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now(),
+			Output:      output,
+			Err:         runErr,
+		})
 	}
 
 	return runErr
+}
+
+// flywayRunOutcome bundles the result of a single Flyway subprocess
+// invocation so emitMigrationApplied keeps a small parameter list. Used
+// only by the engine layer; never exported.
+type flywayRunOutcome struct {
+	Vendor      string
+	StartedAt   time.Time
+	CompletedAt time.Time
+	Output      string
+	Err         error
 }
 
 // runFlywayCommandFor executes a Flyway command using the supplied database
@@ -292,18 +309,10 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 // emitMigrationApplied composes an AuditEvent of type migration.applied and
 // dispatches it through the configured emitter (always OTel; optionally
-// AuditSink). Best-effort error classification via classifyFlywayError.
+// AuditRecorder). Best-effort error classification via classifyFlywayError.
 // Version remains empty in v1 — populating it requires parsing Flyway's
 // JSON output, deferred to #376's structured-Result work.
-func (fm *FlywayMigrator) emitMigrationApplied(
-	ctx context.Context,
-	db *config.DatabaseConfig,
-	cfg *Config,
-	vendor string,
-	startedAt, completedAt time.Time,
-	output string,
-	runErr error,
-) {
+func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.DatabaseConfig, cfg *Config, run *flywayRunOutcome) {
 	if fm.audit == nil {
 		return
 	}
@@ -317,19 +326,19 @@ func (fm *FlywayMigrator) emitMigrationApplied(
 		Type:               AuditEventTypeMigrationApplied,
 		Target:             target,
 		AppliedByPrincipal: cfg.Audit.Principal,
-		StartedAt:          startedAt,
-		CompletedAt:        completedAt,
+		StartedAt:          run.StartedAt,
+		CompletedAt:        run.CompletedAt,
 		GitCommitSHA:       cfg.Audit.GitCommitSHA,
 		PipelineRunID:      cfg.Audit.PipelineRunID,
 		Attributes: map[string]string{
-			"migration.vendor":  vendor,
+			"migration.vendor":  run.Vendor,
 			"migration.dry_run": strconv.FormatBool(cfg.DryRun),
 		},
 	}
 
-	if runErr != nil {
+	if run.Err != nil {
 		ev.Outcome = AuditOutcomeFailed
-		ev.ErrorClass = classifyFlywayError(output, runErr)
+		ev.ErrorClass = classifyFlywayError(run.Output, run.Err)
 	} else {
 		ev.Outcome = AuditOutcomeSuccess
 	}

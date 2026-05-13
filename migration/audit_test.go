@@ -20,7 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// recordingSink is a test AuditSink that captures every Record call.
+// recordingSink is a test AuditRecorder that captures every Record call.
 type recordingSink struct {
 	mu     sync.Mutex
 	events []AuditEvent
@@ -278,7 +278,7 @@ func TestMigrateForEmitsAuditEventOnSuccess(t *testing.T) {
 		App: config.AppConfig{Env: "test"},
 	}
 	sink := newRecordingSink()
-	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditSink(sink)
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
 	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	stub := createFlywayStub(t, "postgresql")
@@ -332,7 +332,7 @@ func TestMigrateForEmitsClassifiedErrorOnFailure(t *testing.T) {
 		App: config.AppConfig{Env: "test"},
 	}
 	sink := newRecordingSink()
-	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditSink(sink)
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
 	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	// Failing stub that prints a recognizable checksum-mismatch line.
@@ -375,7 +375,7 @@ func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 		App: config.AppConfig{Env: "test"},
 	}
 	sink := newRecordingSink()
-	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditSink(sink)
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
 	t.Cleanup(func() { _ = fm.Close(context.Background()) })
 
 	stub := createFlywayStub(t, "postgresql")

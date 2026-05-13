@@ -19,7 +19,7 @@ const (
 	auditMeterName  = "github.com/gaborage/go-bricks/migration"
 
 	// auditSinkQueueCap bounds the in-memory queue feeding the optional
-	// AuditSink. When full the framework drops newest events and increments
+	// AuditRecorder. When full the framework drops newest events and increments
 	// migration.audit.sink_drops — this is the deliberate trade-off from
 	// ADR-019: audit must never block business work.
 	auditSinkQueueCap = 256
@@ -90,13 +90,13 @@ func eventKVs(ev *AuditEvent) []auditKV {
 }
 
 // auditEmitter delivers AuditEvents via two paths: always-on OpenTelemetry
-// (one span + one structured log record per event) and an optional AuditSink
+// (one span + one structured log record per event) and an optional AuditRecorder
 // fan-out on a separate goroutine with a bounded send queue. Zero value is
 // not usable; construct via newAuditEmitter.
 type auditEmitter struct {
 	logger logger.Logger
 	tracer trace.Tracer
-	sink   AuditSink
+	sink   AuditRecorder
 
 	sinkQueue    chan *AuditEvent
 	sinkDrops    metric.Int64Counter
@@ -110,7 +110,11 @@ type auditEmitter struct {
 	closeMu sync.Mutex
 	closed  bool
 
-	consumerCtx    context.Context
+	// consumerCancel is the cancel handle for the long-lived background
+	// context passed to consumeSink. Stored (rather than the context
+	// itself) per Go convention: contexts flow through arguments, never
+	// struct fields. Close calls this to propagate Done() into any
+	// in-flight sink.Record call once the timeout branch fires.
 	consumerCancel context.CancelFunc
 	consumerWG     sync.WaitGroup
 }
@@ -118,7 +122,7 @@ type auditEmitter struct {
 // newAuditEmitter wires the always-on OTel path and, if sink is non-nil,
 // spawns the bounded-queue consumer that fans out to the sink. log must be
 // non-nil; sink may be nil.
-func newAuditEmitter(log logger.Logger, sink AuditSink) *auditEmitter {
+func newAuditEmitter(log logger.Logger, sink AuditRecorder) *auditEmitter {
 	meter := otel.Meter(auditMeterName)
 
 	// Counter creation can fail when the meter is misconfigured. The
@@ -126,11 +130,11 @@ func newAuditEmitter(log logger.Logger, sink AuditSink) *auditEmitter {
 	// going with a nil counter on init failure — same shape here.
 	drops, _ := meter.Int64Counter(
 		"migration.audit.sink_drops",
-		metric.WithDescription("Audit events dropped because the AuditSink queue was full."),
+		metric.WithDescription("Audit events dropped because the AuditRecorder queue was full."),
 	)
 	failures, _ := meter.Int64Counter(
 		"migration.audit.sink_failures",
-		metric.WithDescription("AuditSink.Record calls that returned an error."),
+		metric.WithDescription("AuditRecorder.Record calls that returned an error."),
 	)
 
 	e := &auditEmitter{
@@ -143,9 +147,10 @@ func newAuditEmitter(log logger.Logger, sink AuditSink) *auditEmitter {
 
 	if sink != nil {
 		e.sinkQueue = make(chan *AuditEvent, auditSinkQueueCap)
-		e.consumerCtx, e.consumerCancel = context.WithCancel(context.Background())
+		consumerCtx, cancel := context.WithCancel(context.Background())
+		e.consumerCancel = cancel
 		e.consumerWG.Add(1)
-		go e.consumeSink()
+		go e.consumeSink(consumerCtx)
 	}
 
 	return e
@@ -230,15 +235,18 @@ func (e *auditEmitter) enqueueForSink(ctx context.Context, ev *AuditEvent) {
 	}
 }
 
-func (e *auditEmitter) consumeSink() {
+// consumeSink drains sinkQueue until it is closed. ctx is the long-lived
+// background context derived in newAuditEmitter; Close cancels it on the
+// timeout branch so a slow in-flight sink.Record sees Done() promptly.
+func (e *auditEmitter) consumeSink(ctx context.Context) {
 	defer e.consumerWG.Done()
 	for ev := range e.sinkQueue {
-		err := e.sink.Record(e.consumerCtx, ev)
+		err := e.sink.Record(ctx, ev)
 		if err == nil {
 			continue
 		}
 		if e.sinkFailures != nil {
-			e.sinkFailures.Add(e.consumerCtx, 1,
+			e.sinkFailures.Add(ctx, 1,
 				metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
 			)
 		}
@@ -250,7 +258,7 @@ func (e *auditEmitter) consumeSink() {
 	}
 }
 
-// Close drains the AuditSink queue and tears down the consumer goroutine.
+// Close drains the AuditRecorder queue and tears down the consumer goroutine.
 // Safe to call when no sink is configured. Idempotent — calling twice is a
 // no-op. Honors ctx for shutdown deadline; events still in the queue when
 // ctx expires are silently dropped (their OTel emission already succeeded).

@@ -24,6 +24,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 ## PR Review Workflow
 
 - For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
+- **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner only summarizes the gate metrics — it hides the actual NEW-issue list. Always fetch the per-PR issues via the API and address every MAJOR/MINOR finding: `curl -sS "https://sonarcloud.io/api/issues/search?componentKeys=gaborage_go-bricks&pullRequest=<N>&statuses=OPEN,CONFIRMED"`. For framework-precedent rules (S8196 interface naming, S8179 getter naming, etc.), the precedent is **rename/refactor, never nolint** — see ADR-013 for the canonical example. Same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
 
 ## Quick Reference
 
@@ -148,7 +149,7 @@ make lint                       # Run golangci-lint
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
-- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditSink` for compliance-grade durable delivery. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), and [ADR-019](wiki/adr-019-migration-audit-delivery.md).
+- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), and [ADR-019](wiki/adr-019-migration-audit-delivery.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named RSA key pair management from DER files or base64 env vars
@@ -429,7 +430,7 @@ func (m *OrderModule) Init(deps *app.ModuleDeps) error {
 
 For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authentication (New Relic/Honeycomb/Datadog), and OTLP collector deployment, see [wiki/observability.md](wiki/observability.md).
 
-**Migration audit events**: every Flyway `migrate` invocation emits a `migration.applied` audit event via the OTel seam (one span + one structured log record). Compliance-grade durability is opt-in via `FlywayMigrator.WithAuditSink(sink)`; the sink runs on a bounded-queue goroutine so it cannot stall migrations, and sink errors log but don't abort. Operators MUST supply `Config.Audit.Principal` explicitly via the library call argument — the framework refuses to infer it from IAM/OS and emits `<unspecified>` with a warning when empty. CLI flag plumbing for `--applied-by`/`--git-sha`/`--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up. State-machine and quiesce events are pending #379/#380. See [wiki/migration-audit.md](wiki/migration-audit.md) for the event schema, `ErrorClass` taxonomy, and `AuditSink` examples; [ADR-019](wiki/adr-019-migration-audit-delivery.md) for the design rationale.
+**Migration audit events**: every Flyway `migrate` invocation emits a `migration.applied` audit event via the OTel seam (one span + one structured log record). Compliance-grade durability is opt-in via `FlywayMigrator.WithAuditRecorder(sink)`; the sink runs on a bounded-queue goroutine so it cannot stall migrations, and sink errors log but don't abort. Operators MUST supply `Config.Audit.Principal` explicitly via the library call argument — the framework refuses to infer it from IAM/OS and emits `<unspecified>` with a warning when empty. CLI flag plumbing for `--applied-by`/`--git-sha`/`--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up. State-machine and quiesce events are pending #379/#380. See [wiki/migration-audit.md](wiki/migration-audit.md) for the event schema, `ErrorClass` taxonomy, and `AuditRecorder` examples; [ADR-019](wiki/adr-019-migration-audit-delivery.md) for the design rationale.
 
 ## Context Deadlines & Timeouts
 

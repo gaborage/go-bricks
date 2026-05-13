@@ -73,7 +73,7 @@ const (
 const PrincipalUnspecified = "<unspecified>"
 
 // AuditEvent is the canonical payload that flows into both the OpenTelemetry
-// emission path and the optional AuditSink. The two paths share this struct
+// emission path and the optional AuditRecorder. The two paths share this struct
 // so schemas cannot drift. Backwards-compatible additions follow Go's
 // struct-additive rules; removing a field is a breaking change.
 //
@@ -109,8 +109,8 @@ type AuditEvent struct {
 	Attributes map[string]string
 }
 
-// AuditSink is the opt-in delivery path described in ADR-019. When wired
-// (typically via FlywayMigrator.WithAuditSink), every AuditEvent fires to
+// AuditRecorder is the opt-in delivery path described in ADR-019. When wired
+// (typically via FlywayMigrator.WithAuditRecorder), every AuditEvent fires to
 // Record after the OTel emission, on a separate goroutine with a bounded
 // send queue.
 //
@@ -129,6 +129,6 @@ type AuditEvent struct {
 // migration.audit.sink_failures counter; they do NOT abort the migration.
 // This is a deliberate trade-off per ADR-019: audit must not block business
 // work.
-type AuditSink interface {
+type AuditRecorder interface {
 	Record(ctx context.Context, event *AuditEvent) error
 }

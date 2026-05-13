@@ -177,7 +177,7 @@ Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migra
 ### [ADR-019: Migration Audit-Event Delivery — OpenTelemetry-first with Pluggable Sink Override](adr-019-migration-audit-delivery.md)
 **Date:** 2026-05-12 | **Status:** Accepted
 
-Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditSink` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
+Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditRecorder` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
 
 **Key Benefits:** Zero-config audit for the majority of adopters, durable opt-in path for PCI/SOC 2 customers, schema consistency across both emission paths via a single `AuditEvent` struct.
 
