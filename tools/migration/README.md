@@ -134,8 +134,9 @@ treat absence as "no signal" rather than "zero".
 
 A failed tenant adds `"status": "fail"` and an `"error"` field; the process
 exits non-zero whenever `failed > 0`. Idempotent reruns against already-
-migrated tenants emit `applied_versions: []` (omitted) with
-`ending_version` mirroring `starting_version`.
+migrated tenants omit `applied_versions` (zero-length slices follow the same
+omit-when-empty rule as the other Result-derived keys) with `ending_version`
+mirroring `starting_version`.
 
 ## CI integration
 

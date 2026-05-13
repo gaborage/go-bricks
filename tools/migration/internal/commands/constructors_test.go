@@ -246,6 +246,18 @@ func TestMakeHookPlainTextRendersSchemaSummary(t *testing.T) {
 	assert.Contains(t, out, "schema=v2 (no-op)")
 }
 
+func TestFormatSchemaSummaryFallsBackToLastAppliedWhenEndingMissing(t *testing.T) {
+	// Defensive against a Flyway-output shape we didn't fully parse: when
+	// AppliedVersions is populated but EndingVersion came back empty (e.g.
+	// parser tolerated a missing targetSchemaVersion field), the summary
+	// must still render a usable terminus rather than "v→v".
+	got := formatSchemaSummary(&migration.Result{
+		AppliedVersions: []string{"3", "4"},
+		StartingVersion: "2",
+	})
+	assert.Equal(t, "schema=v2→v4 (2 applied)", got)
+}
+
 func TestWriteSummaryJSON(t *testing.T) {
 	var buf bytes.Buffer
 	result := &migration.MigrateAllResult{

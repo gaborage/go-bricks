@@ -325,14 +325,21 @@ func formatSchemaSummary(r *migration.Result) string {
 	if r.EndingVersion == "" && len(r.AppliedVersions) == 0 {
 		return ""
 	}
+	// Fall back to the last applied version when the parser couldn't read
+	// Flyway's targetSchemaVersion. Keeps the line useful instead of showing
+	// "v→v (N applied)" on engine output we didn't fully recognize.
+	end := r.EndingVersion
+	if end == "" && len(r.AppliedVersions) > 0 {
+		end = r.AppliedVersions[len(r.AppliedVersions)-1]
+	}
 	from := r.StartingVersion
 	if from == "" {
 		from = "∅"
 	}
 	if len(r.AppliedVersions) == 0 {
-		return fmt.Sprintf("schema=v%s (no-op)", r.EndingVersion)
+		return fmt.Sprintf("schema=v%s (no-op)", end)
 	}
-	return fmt.Sprintf("schema=v%s→v%s (%d applied)", from, r.EndingVersion, len(r.AppliedVersions))
+	return fmt.Sprintf("schema=v%s→v%s (%d applied)", from, end, len(r.AppliedVersions))
 }
 
 func vendorOrUnknown(v string) string {

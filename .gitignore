@@ -42,10 +42,10 @@
 
 !.claude/commands/*
 
-# Test fixtures (JSON / SQL / golden files) live alongside the source they
-# exercise; allowlist common extensions so go test pickups don't break.
-!*.json
-!*.sql
+# Test fixtures (JSON / SQL / golden files) live under testdata/ alongside the
+# source they exercise.
+!**/testdata/**/*.json
+!**/testdata/**/*.sql
 
 # ...even if they are in subdirectories
 !*/

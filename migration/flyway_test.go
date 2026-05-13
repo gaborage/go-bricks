@@ -406,17 +406,19 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 // createCommandCapturingStub builds a flyway-stub that writes the verbatim
 // arg list to capturePath, then optionally emits stdoutPayload on stdout
 // before exiting 0. Pass an empty stdoutPayload for the args-only variant.
+// Path interpolations are shell-quoted so the script survives $TMPDIR values
+// containing spaces or other shell-metacharacters.
 func createCommandCapturingStub(t *testing.T, stdoutPayload string) (stubPath, capturePath string) {
 	t.Helper()
 	dir := t.TempDir()
 	stubPath = filepath.Join(dir, "flyway-stub.sh")
 	capturePath = filepath.Join(dir, "captured_command")
 
-	script := "#!/bin/sh\necho \"$@\" > " + capturePath + "\n"
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %q\n", capturePath)
 	if stdoutPayload != "" {
 		payloadPath := filepath.Join(dir, "payload")
 		require.NoError(t, os.WriteFile(payloadPath, []byte(stdoutPayload), 0o644))
-		script += "cat " + payloadPath + "\n"
+		script += fmt.Sprintf("cat %q\n", payloadPath)
 	}
 	script += "exit 0\n"
 	require.NoError(t, os.WriteFile(stubPath, []byte(script), 0o755))
