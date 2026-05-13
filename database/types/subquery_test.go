@@ -132,3 +132,34 @@ func TestMustValidateSubquery(t *testing.T) {
 		})
 	})
 }
+
+// ---------------------------------------------------------------------------
+// ValidateSubquery — covers the previously-uncovered subqueryValidator
+// fast-path branches (success and error). Existing tests cover the
+// nil/invalid-ToSQL/empty-SQL paths via plain mocks; here we use mocks
+// that ALSO implement subqueryValidator to exercise the early-return
+// code path before ToSQL is even called.
+// ---------------------------------------------------------------------------
+
+// mockValidatingSubquery implements both SelectQueryBuilder and the unexported
+// subqueryValidator interface. ValidateForSubquery is wired by the caller.
+type mockValidatingSubquery struct {
+	mockValidSubquery // reuse the existing valid-mock for the SelectQueryBuilder surface
+	validateErr       error
+}
+
+func (m *mockValidatingSubquery) ValidateForSubquery() error { return m.validateErr }
+
+func TestValidateSubqueryReturnsEarlyOnValidatorInterfaceSuccess(t *testing.T) {
+	subquery := &mockValidatingSubquery{validateErr: nil}
+	require.NoError(t, ValidateSubquery(subquery))
+}
+
+func TestValidateSubqueryWrapsValidatorInterfaceError(t *testing.T) {
+	subquery := &mockValidatingSubquery{validateErr: errors.New("missing FROM clause")}
+	err := ValidateSubquery(subquery)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidSubquery),
+		"validator error must be wrapped as ErrInvalidSubquery for caller pattern-matching")
+	assert.Contains(t, err.Error(), "missing FROM clause")
+}
