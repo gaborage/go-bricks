@@ -318,6 +318,59 @@ func TestMigrateForEmitsAuditEventOnSuccess(t *testing.T) {
 	assert.True(t, got.CompletedAt.After(got.StartedAt) || got.CompletedAt.Equal(got.StartedAt))
 }
 
+func TestAuditTargetFallsBackToMigratorDatabaseWhenAllElseEmpty(t *testing.T) {
+	// Pins the 3-level Target fallback: AuditContext.Target → per-call
+	// db.Database → fm.config.Database.Database. Defensive against a
+	// degenerate caller-config where the first two are both empty.
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	setupTestTracer(t)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "user", Password: "longenough-pw",
+			Database: "migrator_default_db", // third-level fallback target
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	// createSimpleFlywayStub exits 0 without asserting any env vars, so an
+	// empty DB_NAME (the whole point of this test) doesn't blow up at the
+	// subprocess boundary before the audit emission runs.
+	stub := createSimpleFlywayStub(t)
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+		// No AuditContext.Target — should walk the fallback chain.
+		Audit: AuditContext{Principal: "deployer@example.com"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	// MigrateFor with an empty per-call db.Database forces the 2nd fallback
+	// to also fail; only the migrator's config.Database.Database remains.
+	emptyDB := &config.DatabaseConfig{
+		Type: "postgresql", Host: "h", Port: 15432,
+		Username: "user", Password: "longenough-pw",
+		Database: "", // empty — middle fallback yields nothing
+	}
+	require.NoError(t, fm.MigrateFor(context.Background(), emptyDB, mcfg))
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, "migrator_default_db", events[0].Target,
+		"empty AuditContext.Target + empty db.Database should fall through to fm.config.Database.Database")
+}
+
 func TestMigrateForEmitsClassifiedErrorOnFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script stub not supported on windows CI")

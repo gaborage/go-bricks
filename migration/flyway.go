@@ -121,7 +121,13 @@ func (fm *FlywayMigrator) WithAuditRecorder(sink AuditRecorder) *FlywayMigrator 
 	// since this is a setup-time operation, not a request path.
 	if fm.audit != nil && fm.audit.sink != nil {
 		drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = fm.audit.Close(drainCtx)
+		if err := fm.audit.Close(drainCtx); err != nil {
+			// Surface drain failures so silent audit loss during a recorder
+			// swap is operator-visible. We still proceed with the swap —
+			// blocking a startup-time reconfiguration on an in-flight sink
+			// would be worse than logging and moving on.
+			fm.logger.Warn().Err(err).Msg("failed to drain previous audit recorder during swap")
+		}
 		cancel()
 	}
 	fm.audit = newAuditEmitter(fm.logger, sink)
@@ -320,6 +326,14 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 	target := cfg.Audit.Target
 	if target == "" && db != nil {
 		target = db.Database
+	}
+	if target == "" {
+		// Final fallback: the migrator's own configured database name.
+		// Prevents an empty Target from reaching the audit pipeline when
+		// the per-call db and the operator-supplied override are both
+		// missing — a degenerate config that shouldn't happen in
+		// practice, but the audit record stays useful regardless.
+		target = fm.config.Database.Database
 	}
 
 	ev := &AuditEvent{
