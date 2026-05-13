@@ -177,9 +177,18 @@ Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migra
 ### [ADR-019: Migration Audit-Event Delivery — OpenTelemetry-first with Pluggable Sink Override](adr-019-migration-audit-delivery.md)
 **Date:** 2026-05-12 | **Status:** Accepted
 
-Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditSink` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
+Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditRecorder` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
 
 **Key Benefits:** Zero-config audit for the majority of adopters, durable opt-in path for PCI/SOC 2 customers, schema consistency across both emission paths via a single `AuditEvent` struct.
+
+---
+
+### [ADR-020: Shared Oracle Container for Integration Tests with Per-Test Schema Isolation](adr-020-oracle-integration-test-container-reuse.md)
+**Date:** 2026-05-12 | **Status:** Accepted
+
+Resolves the investigation in issue #402. The `database/oracle` integration suite consumes ~80% of integration-test wall time (572s of ~700s) because every test starts a fresh Oracle container (31 sequential cold starts × ~18.5s = ~573s, matching the measurement to within rounding). Replaces the per-test container with one container per test binary execution, plus per-test schema isolation via `CREATE USER` / `DROP USER ... CASCADE`. PostgreSQL is out of scope (PG cold-starts in ~3s, so the same anti-pattern costs ~60s — not worth changing).
+
+**Key Benefits:** ~55% Oracle suite reduction (~572s → ~250s), clears the 10-minute Go test timeout with comfortable headroom, makes test isolation an explicit grep-able contract, unblocks future `t.Parallel()` adoption.
 
 ---
 

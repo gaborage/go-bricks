@@ -32,24 +32,24 @@ Emit a `migration.audit.*` span on every application + transition, attach event-
 
 ### Option 2: Pluggable-sink-only (Rejected)
 
-Require every consumer to provide an `AuditSink` implementation. Ship one or two default impls (no-op, file-on-disk) and force PCI/SOC 2 customers to plug in Kafka/S3.
+Require every consumer to provide an `AuditRecorder` implementation. Ship one or two default impls (no-op, file-on-disk) and force PCI/SOC 2 customers to plug in Kafka/S3.
 
 **Rejected because:** Most teams adopting go-bricks aren't operating under compliance regimes that require audit-grade durability. Forcing every consumer to wire a sink — even a no-op — adds a configuration cliff with no upside for the 80% case. It also wastes the OpenTelemetry infrastructure already running in every deployment: the audit data is genuinely useful as structured logs/traces for ordinary troubleshooting, and emitting it nowhere by default would be a regression.
 
-### Option 3: Hybrid — OTel default, opt-in `AuditSink` override (Chosen)
+### Option 3: Hybrid — OTel default, opt-in `AuditRecorder` override (Chosen)
 
-Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditSink` interface; when configured on `migration.Runner` (or via `ModuleDeps`), every emitted event is dispatched to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue) so the sink cannot stall the migration. Sink failures log a warning but do not abort the migration.
+Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditRecorder` interface; when configured on `migration.Runner` (or via `ModuleDeps`), every emitted event is dispatched to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue) so the sink cannot stall the migration. Sink failures log a warning but do not abort the migration.
 
 **Chosen because:**
 
 1. **Zero-config baseline** — adopters without compliance pressure get OTel-grade audit (good enough for troubleshooting, retention via the customer's existing collector pipeline) with no new wiring.
-2. **Opt-in durability** — PCI / SOC 2 customers implement `AuditSink` against Kafka, S3, or their existing audit pipeline. They get full control over schema, retention, and back-pressure behaviour without forking the framework.
+2. **Opt-in durability** — PCI / SOC 2 customers implement `AuditRecorder` against Kafka, S3, or their existing audit pipeline. They get full control over schema, retention, and back-pressure behaviour without forking the framework.
 3. **Matches the rest of the framework.** Observability has OTel default + custom exporters. Cache has Redis default + abstract interface. Messaging has AMQP + abstract `Client` interface. This decision follows the same shape: a sensible default, with an interface for replacement.
 4. **OTel is the cheap insurance.** Even sink-enabled customers benefit from OTel emission — it correlates audit events with the spans/metrics around them in the existing observability dashboards. The sink covers the durability gap that OTel alone leaves.
 
 ## Decision
 
-GoBricks ships **both paths simultaneously**. The default is OTel; the `AuditSink` is optional but always fires when present.
+GoBricks ships **both paths simultaneously**. The default is OTel; the `AuditRecorder` is optional but always fires when present.
 
 ### Event taxonomy
 
@@ -90,17 +90,17 @@ Conditional fields:
 - One structured log record at `INFO` (or `ERROR` when `Outcome == failed`) via the framework's `LoggerProvider`, routed to OTLP per ADR-006.
 - No metrics. Counts/rates are derivable from spans or logs at the backend.
 
-### Optional emission path (`AuditSink`)
+### Optional emission path (`AuditRecorder`)
 
 ```go
 package migration
 
-type AuditSink interface {
+type AuditRecorder interface {
     Record(ctx context.Context, event AuditEvent) error
 }
 ```
 
-Wired on the `Runner` (or via `ModuleDeps.AuditSink`). When set:
+Wired on the `Runner` (or via `ModuleDeps.AuditRecorder`). When set:
 
 - Every event fires to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue).
 - A sink-side error logs a warning and increments an internal `audit_sink_failures_total` metric, but **does not** abort the migration. Audit must not block business work; that's a deliberate trade-off — the sink owner is responsible for backing it with a durable buffer (Kafka commit-log, S3 staging, etc.) if zero-loss is required.
@@ -127,7 +127,7 @@ This list is part of the public API (additive changes only) so downstream alerti
 **Pros:**
 - Zero-config audit for the majority of adopters; durable audit for the compliance minority.
 - Audit events benefit from the same backend correlation as spans / metrics / logs in the OTel pipeline — operators can pivot from a span to an audit event and back in their existing tooling.
-- The `AuditSink` interface is small (one method) and stable; backwards-compatible additions to `AuditEvent` follow Go's struct-additive rules.
+- The `AuditRecorder` interface is small (one method) and stable; backwards-compatible additions to `AuditEvent` follow Go's struct-additive rules.
 
 **Cons:**
 - Two emission paths means schema discipline is essential: any change to `AuditEvent` must update OTel attribute mapping **and** sink contract. Mitigated by the single `AuditEvent` struct flowing into both paths.
@@ -143,10 +143,10 @@ No breaking changes. The interface is new in [#382](https://github.com/gaborage/
 This decision should be validated with the people who own PCI / SOC 2 evidence collection at the consuming organizations before [#382](https://github.com/gaborage/go-bricks/issues/382) is started. Key questions to confirm:
 
 1. Is OTel-grade audit (collector-backed structured logs + traces, with retention configured at the collector) sufficient for their compliance regime, **or** does the regime require an append-only durable store as the record-of-truth?
-2. If they need durable: do they already operate a Kafka / S3 / append-only audit pipeline they want the `AuditSink` to plug into, or are they expecting the framework to ship a default durable impl?
+2. If they need durable: do they already operate a Kafka / S3 / append-only audit pipeline they want the `AuditRecorder` to plug into, or are they expecting the framework to ship a default durable impl?
 3. Is the published `ErrorClass` taxonomy sufficient, or do they have classes they need to pin on for compliance reporting?
 
-These answers don't change the ADR's decision (hybrid is the right shape regardless), but they shape the default `AuditSink` we ship (no-op, or a thin OTel-only wrapper, or a documented Kafka impl) and the initial `ErrorClass` list.
+These answers don't change the ADR's decision (hybrid is the right shape regardless), but they shape the default `AuditRecorder` we ship (no-op, or a thin OTel-only wrapper, or a documented Kafka impl) and the initial `ErrorClass` list.
 
 ## References
 

@@ -12,7 +12,6 @@ import (
 	go_ora "github.com/sijms/go-ora/v2"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/testing/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,35 +22,28 @@ const (
 	currentUserQuery           = "SELECT USER FROM DUAL"
 )
 
-// setupTestContainer starts an Oracle testcontainer and returns the connection
-// The container is automatically cleaned up when the test finishes
-func setupTestContainer(t *testing.T) (*Connection, context.Context) {
+// setupTestSchema acquires a fresh per-test Oracle schema on the shared
+// container (ADR-020) and returns a *Connection bound to it. DROP USER ...
+// CASCADE is registered as a t.Cleanup by the container helper — tests
+// MUST NOT rely on dropping their own tables/sequences/UDTs by name.
+//
+// Tests that need a *different* DatabaseConfig (pool sizing, keep-alive,
+// timezone, connection-string format) call packageOracleContainer().NewSchema(t)
+// directly and build their own cfg from the returned credentials.
+func setupTestSchema(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
-	// Create context with timeout to prevent indefinite hangs
-	// Oracle requires longer timeout due to slower startup (120s container wait)
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-
-	// Register cleanup to cancel context and close connection
-	t.Cleanup(func() {
-		cancel()
-	})
-
-	// Start Oracle container with default configuration (takes ~30-60s)
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
-
-	// Create logger for tests (disabled output)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
-	// Create config using connection details from container
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
-				Name: oracleContainer.Database(),
+				Name: schema.Database,
 			},
 		},
 		Pool: config.PoolConfig{
@@ -68,22 +60,32 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 		},
 	}
 
-	// Create Oracle connection
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "Failed to create Oracle connection")
 
-	// Register cleanup to close connection before container terminates
+	// Register cleanup to close connection before DROP USER ... CASCADE fires.
+	// t.Cleanup runs in LIFO order, so this conn.Close() (registered last)
+	// runs before the schema drop registered inside NewSchema.
 	t.Cleanup(func() {
 		if conn != nil {
 			_ = conn.Close()
 		}
 	})
 
-	// Verify connection works
 	err = conn.Health(ctx)
 	require.NoError(t, err, "Failed to ping Oracle")
 
 	return conn.(*Connection), ctx
+}
+
+// currentSchema returns the Oracle user/schema name backing conn. Used by UDT
+// tests that must fully-qualify CREATE TYPE statements to a specific schema so
+// DROP USER ... CASCADE reclaims them on teardown.
+func currentSchema(t *testing.T, ctx context.Context, conn *Connection) string {
+	t.Helper()
+	var user string
+	require.NoError(t, conn.QueryRow(ctx, currentUserQuery).Scan(&user), "SELECT USER FROM DUAL")
+	return user
 }
 
 // =============================================================================
@@ -91,7 +93,7 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 // =============================================================================
 
 func TestConnectionHealth(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	err := conn.Health(ctx)
 	assert.NoError(t, err, "Health check should succeed")
@@ -102,7 +104,7 @@ func TestConnectionHealth(t *testing.T) {
 }
 
 func TestConnectionStats(t *testing.T) {
-	conn, _ := setupTestContainer(t)
+	conn, _ := setupTestSchema(t)
 
 	stats, err := conn.Stats()
 	assert.NoError(t, err, "Stats retrieval should succeed")
@@ -122,14 +124,14 @@ func TestConnectionStats(t *testing.T) {
 }
 
 func TestConnectionDatabaseType(t *testing.T) {
-	conn, _ := setupTestContainer(t)
+	conn, _ := setupTestSchema(t)
 
 	dbType := conn.DatabaseType()
 	assert.Equal(t, "oracle", dbType, "Database type should be oracle")
 }
 
 func TestConnectionClose(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Connection should work before close
 	err := conn.Health(ctx)
@@ -149,22 +151,18 @@ func TestConnectionClose(t *testing.T) {
 // =============================================================================
 
 func TestConnectionWithServiceName(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Test with service name (most common pattern)
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
-				Name: oracleContainer.Database(),
+				Name: schema.Database,
 			},
 		},
 	}
@@ -183,20 +181,16 @@ func TestConnectionWithServiceName(t *testing.T) {
 // for direct connections. Testing SID would require a traditional Oracle installation or Oracle XE.
 
 func TestConnectionWithDatabaseFallback(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Test with database field (fallback pattern)
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
-		Database: oracleContainer.Database(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
+		Database: schema.Database,
 	}
 
 	conn, err := NewConnection(cfg, log)
@@ -209,16 +203,12 @@ func TestConnectionWithDatabaseFallback(t *testing.T) {
 }
 
 func TestConnectionWithConnectionString(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Test with connection string (most flexible pattern)
 	cfg := &config.DatabaseConfig{
-		ConnectionString: oracleContainer.ConnectionString(),
+		ConnectionString: schema.ConnectionString(),
 	}
 
 	conn, err := NewConnection(cfg, log)
@@ -235,7 +225,7 @@ func TestConnectionWithConnectionString(t *testing.T) {
 // =============================================================================
 
 func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create migration table (executes 2 PL/SQL blocks)
 	err := conn.CreateMigrationTable(ctx)
@@ -261,7 +251,7 @@ func TestConnectionCreateMigrationTableIntegration(t *testing.T) {
 // =============================================================================
 
 func TestConnectionOraclePlaceholders(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_placeholders (id NUMBER PRIMARY KEY, name VARCHAR2(100), value NUMBER)")
@@ -290,7 +280,7 @@ func TestConnectionOraclePlaceholders(t *testing.T) {
 // =============================================================================
 
 func TestConnectionQueryOperations(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_query (id NUMBER PRIMARY KEY, name VARCHAR2(100), value NUMBER)")
@@ -336,7 +326,7 @@ func TestConnectionQueryOperations(t *testing.T) {
 }
 
 func TestConnectionPrepareStatement(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create a test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_prepare (id NUMBER PRIMARY KEY, name VARCHAR2(100))")
@@ -369,7 +359,7 @@ func TestConnectionPrepareStatement(t *testing.T) {
 // =============================================================================
 
 func TestConnectionTransactionCommit(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_commit (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -396,7 +386,7 @@ func TestConnectionTransactionCommit(t *testing.T) {
 }
 
 func TestConnectionTransactionRollback(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create test table
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_rollback (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -422,7 +412,7 @@ func TestConnectionTransactionRollback(t *testing.T) {
 }
 
 func TestConnectionTransactionIsolation(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create test table with initial data
 	_, err := conn.Exec(ctx, "CREATE TABLE test_tx_isolation (id NUMBER PRIMARY KEY, value NUMBER)")
@@ -461,23 +451,18 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 // =============================================================================
 
 func TestConnectionPoolConfiguration(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	// Start container
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, _ := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
-				Name: oracleContainer.Database(),
+				Name: schema.Database,
 			},
 		},
 		Pool: config.PoolConfig{
@@ -512,7 +497,7 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 
 // TestOracleSequenceIntegration verifies SEQUENCE queries work without UDT registration
 func TestOracleSequenceIntegration(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create test sequence
 	_, err := conn.Exec(ctx, "CREATE SEQUENCE test_seq START WITH 1000 INCREMENT BY 1")
@@ -579,12 +564,14 @@ type Product struct {
 }
 
 func TestOracleUDTCollectionIntegration(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
+	schemaName := currentSchema(t, ctx, conn)
 
-	// Setup: Create UDT types and bulk insert procedure
-	setupSQL := `
+	// Setup: Create UDT types and bulk insert procedure. Fully-qualify UDT
+	// owners so DROP USER ... CASCADE reclaims them on teardown (ADR-020).
+	setupSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE PRODUCT_TYPE AS OBJECT (
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.PRODUCT_TYPE AS OBJECT (
 				ID         NUMBER,
 				NAME       VARCHAR2(100),
 				PRICE      NUMBER(10,2),
@@ -596,21 +583,21 @@ func TestOracleUDTCollectionIntegration(t *testing.T) {
 					RAISE;
 				END IF;
 		END;
-	`
+	`, schemaName)
 
 	_, err := conn.Exec(ctx, setupSQL)
 	require.NoError(t, err)
 
-	collectionSQL := `
+	collectionSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE PRODUCT_TABLE AS TABLE OF PRODUCT_TYPE';
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.PRODUCT_TABLE AS TABLE OF %s.PRODUCT_TYPE';
 		EXCEPTION
 			WHEN OTHERS THEN
 				IF SQLCODE != -955 THEN
 					RAISE;
 				END IF;
 		END;
-	`
+	`, schemaName, schemaName)
 
 	_, err = conn.Exec(ctx, collectionSQL)
 	require.NoError(t, err)
@@ -653,7 +640,7 @@ func TestOracleUDTCollectionIntegration(t *testing.T) {
 
 	t.Run("bulkInsertWithCollectionType", func(t *testing.T) {
 		// Register UDT collection type
-		// Note: conn is already *Connection from setupTestContainer
+		// Note: conn is already *Connection from setupTestSchema
 		err := conn.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
 		require.NoError(t, err, "Failed to register UDT")
 
@@ -680,7 +667,7 @@ func TestOracleUDTCollectionIntegration(t *testing.T) {
 func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 	t.Skip("Skipping schema owner test - requires additional Oracle container setup with user creation privileges")
 
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Create schema with types (requires DBA privileges)
 	setupSQL := `
@@ -741,7 +728,7 @@ func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 
 	t.Run("registerWithSchemaOwner", func(t *testing.T) {
 		// Register with schema owner
-		// Note: conn is already *Connection from setupTestContainer
+		// Note: conn is already *Connection from setupTestSchema
 		err := conn.RegisterTypeWithOwner("TESTSCHEMA", "ORDER_ITEM", "ORDER_ITEMS", OrderItem{})
 		require.NoError(t, err)
 
@@ -763,12 +750,13 @@ func TestOracleUDTWithSchemaOwnerIntegration(t *testing.T) {
 // TestOracleUDTObjectOnlyRegistration tests RegisterType with object-only (no collection)
 // Coverage target: connection.go line 375 (else branch)
 func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
+	schemaName := currentSchema(t, ctx, conn)
 
-	// Create simple object type (no collection)
-	setupSQL := `
+	// Create simple object type (no collection). Fully-qualified per ADR-020.
+	setupSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE SIMPLE_TYPE AS OBJECT (
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.SIMPLE_TYPE AS OBJECT (
 				ID NUMBER,
 				NAME VARCHAR2(50)
 			)';
@@ -778,7 +766,7 @@ func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
 					RAISE;
 				END IF;
 		END;
-	`
+	`, schemaName)
 
 	_, err := conn.Exec(ctx, setupSQL)
 	require.NoError(t, err)
@@ -797,7 +785,7 @@ func TestOracleUDTObjectOnlyRegistration(t *testing.T) {
 // TestOracleUDTRegistrationError tests error handling in RegisterType
 // Coverage target: connection.go lines 380-385 (error path)
 func TestOracleUDTRegistrationError(t *testing.T) {
-	conn, _ := setupTestContainer(t)
+	conn, _ := setupTestSchema(t)
 
 	type FakeType struct {
 		ID int64 `udt:"ID"`
@@ -814,17 +802,15 @@ func TestOracleUDTRegistrationError(t *testing.T) {
 // TestOracleUDTObjectOnlyWithOwner tests RegisterTypeWithOwner with object-only
 // Coverage target: connection.go line 426 (else branch)
 func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Get current user for owner parameter
-	var currentUser string
-	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
-	require.NoError(t, err)
+	currentUser := currentSchema(t, ctx, conn)
 
-	// Create object type
-	setupSQL := `
+	// Create object type. Fully-qualified per ADR-020.
+	setupSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_TYPE AS OBJECT (
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.OWNER_TYPE AS OBJECT (
 				VALUE NUMBER
 			)';
 		EXCEPTION
@@ -833,9 +819,9 @@ func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
 					RAISE;
 				END IF;
 		END;
-	`
+	`, currentUser)
 
-	_, err = conn.Exec(ctx, setupSQL)
+	_, err := conn.Exec(ctx, setupSQL)
 	require.NoError(t, err)
 
 	type OwnerType struct {
@@ -851,7 +837,7 @@ func TestOracleUDTObjectOnlyWithOwner(t *testing.T) {
 // TestOracleUDTRegistrationErrorWithOwner tests error handling in RegisterTypeWithOwner
 // Coverage target: connection.go lines 431-437 (error path)
 func TestOracleUDTRegistrationErrorWithOwner(t *testing.T) {
-	conn, _ := setupTestContainer(t)
+	conn, _ := setupTestSchema(t)
 
 	type FakeType struct {
 		ID int64 `udt:"ID"`
@@ -868,17 +854,15 @@ func TestOracleUDTRegistrationErrorWithOwner(t *testing.T) {
 // TestOracleUDTRegistrationLogging tests success path logging in RegisterTypeWithOwner
 // Coverage target: connection.go lines 440-444 (debug logging)
 func TestOracleUDTRegistrationLogging(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Get current user
-	var currentUser string
-	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
-	require.NoError(t, err)
+	currentUser := currentSchema(t, ctx, conn)
 
-	// Create type
-	setupSQL := `
+	// Create type. Fully-qualified per ADR-020.
+	setupSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE LOG_TYPE AS OBJECT (
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.LOG_TYPE AS OBJECT (
 				ID NUMBER
 			)';
 		EXCEPTION
@@ -887,9 +871,9 @@ func TestOracleUDTRegistrationLogging(t *testing.T) {
 					RAISE;
 				END IF;
 		END;
-	`
+	`, currentUser)
 
-	_, err = conn.Exec(ctx, setupSQL)
+	_, err := conn.Exec(ctx, setupSQL)
 	require.NoError(t, err)
 
 	type LogType struct {
@@ -912,17 +896,15 @@ func TestOracleUDTRegistrationLogging(t *testing.T) {
 // This covers the collection type branch where arrayTypeName != "" with owner
 // Coverage target: RegisterTypeWithOwner line 545 (collection type branch)
 func TestOracleUDTCollectionWithOwner(t *testing.T) {
-	conn, ctx := setupTestContainer(t)
+	conn, ctx := setupTestSchema(t)
 
 	// Get current user for owner parameter
-	var currentUser string
-	err := conn.QueryRow(ctx, currentUserQuery).Scan(&currentUser)
-	require.NoError(t, err)
+	currentUser := currentSchema(t, ctx, conn)
 
-	// Create object type
-	objectTypeSQL := `
+	// Create object type. Fully-qualified per ADR-020.
+	objectTypeSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_ITEM_TYPE AS OBJECT (
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.OWNER_ITEM_TYPE AS OBJECT (
 				ID NUMBER,
 				VALUE VARCHAR2(100)
 			)';
@@ -932,21 +914,21 @@ func TestOracleUDTCollectionWithOwner(t *testing.T) {
 					RAISE;
 				END IF;
 		END;
-	`
-	_, err = conn.Exec(ctx, objectTypeSQL)
+	`, currentUser)
+	_, err := conn.Exec(ctx, objectTypeSQL)
 	require.NoError(t, err)
 
-	// Create collection type
-	collectionTypeSQL := `
+	// Create collection type. Fully-qualified per ADR-020.
+	collectionTypeSQL := fmt.Sprintf(`
 		BEGIN
-			EXECUTE IMMEDIATE 'CREATE TYPE OWNER_ITEM_TABLE AS TABLE OF OWNER_ITEM_TYPE';
+			EXECUTE IMMEDIATE 'CREATE TYPE %s.OWNER_ITEM_TABLE AS TABLE OF %s.OWNER_ITEM_TYPE';
 		EXCEPTION
 			WHEN OTHERS THEN
 				IF SQLCODE != -955 THEN
 					RAISE;
 				END IF;
 		END;
-	`
+	`, currentUser, currentUser)
 	_, err = conn.Exec(ctx, collectionTypeSQL)
 	require.NoError(t, err)
 
@@ -964,12 +946,7 @@ func TestOracleUDTCollectionWithOwner(t *testing.T) {
 // TestConnectionWithTCPKeepAlive tests keep-alive dialer execution for Oracle
 // Coverage target: newKeepAliveDialer() execution, DialContext
 func TestConnectionWithTCPKeepAlive(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	// Start container
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Create config with TCP keep-alive enabled
@@ -977,13 +954,13 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 	// 1. Keep-alive dialer creation (newKeepAliveDialer)
 	// 2. DialContext execution with TCP keep-alive settings
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
-				Name: oracleContainer.Database(),
+				Name: schema.Database,
 			},
 		},
 		Pool: config.PoolConfig{
@@ -1022,23 +999,18 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 // TestConnectionWithKeepAliveZeroInterval tests keep-alive with zero interval
 // Coverage target: newKeepAliveDialer with zero interval
 func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
-	// Create context with timeout to prevent indefinite hangs
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	// Start container
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Create config with TCP keep-alive enabled but zero interval
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Oracle: config.OracleConfig{
 			Service: config.ServiceConfig{
-				Name: oracleContainer.Database(),
+				Name: schema.Database,
 			},
 		},
 		Pool: config.PoolConfig{
@@ -1082,25 +1054,22 @@ func queryOracleSessionTimezone(t *testing.T, ctx context.Context, conn *Connect
 	return tz
 }
 
-// newOracleConnectionWithTimezone boots an Oracle container and connects with
-// the given session timezone setting.
+// newOracleConnectionWithTimezone acquires a fresh per-test schema on the
+// shared container and connects with the given session timezone setting.
 func newOracleConnectionWithTimezone(t *testing.T, timezone string) (*Connection, context.Context) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	t.Cleanup(cancel)
-
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Timezone: timezone,
 		Oracle: config.OracleConfig{
-			Service: config.ServiceConfig{Name: oracleContainer.Database()},
+			Service: config.ServiceConfig{Name: schema.Database},
 		},
 		Pool: config.PoolConfig{
 			Max:      config.PoolMaxConfig{Connections: 5},
@@ -1135,17 +1104,14 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	// containers inherit the host's TZ as their session-timezone default
 	// (typically NOT "UTC"), so a regression that incorrectly forces UTC on
 	// the opt-out path would fail this assertion.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	t.Cleanup(cancel)
-
-	oracleContainer := containers.MustStartOracleContainer(ctx, t, nil).WithCleanup(t)
+	schema, ctx := packageOracleContainer().NewSchema(t)
 	log := newDisabledTestLogger()
 
 	// Baseline: open a connection through database/sql directly using the
 	// Oracle driver — no framework involvement, no tzConnector wrapper. The
 	// reported SESSIONTIMEZONE is the unmodified server default.
-	dsn := go_ora.BuildUrl(oracleContainer.Host(), oracleContainer.Port(),
-		oracleContainer.Database(), oracleContainer.Username(), oracleContainer.Password(), nil)
+	dsn := go_ora.BuildUrl(schema.Host, schema.Port,
+		schema.Database, schema.Username, schema.Password, nil)
 	rawDB, err := sql.Open("oracle", dsn)
 	require.NoError(t, err)
 	defer rawDB.Close()
@@ -1155,12 +1121,12 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 
 	// Opt-out via our framework: must match the baseline exactly.
 	cfg := &config.DatabaseConfig{
-		Host:     oracleContainer.Host(),
-		Port:     oracleContainer.Port(),
-		Username: oracleContainer.Username(),
-		Password: oracleContainer.Password(),
+		Host:     schema.Host,
+		Port:     schema.Port,
+		Username: schema.Username,
+		Password: schema.Password,
 		Timezone: "-",
-		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: oracleContainer.Database()}},
+		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: schema.Database}},
 		Pool: config.PoolConfig{
 			Max:      config.PoolMaxConfig{Connections: 5},
 			Idle:     config.PoolIdleConfig{Connections: 2, Time: 30 * time.Minute},

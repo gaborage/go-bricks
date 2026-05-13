@@ -244,14 +244,25 @@ make test-coverage-integration  # With coverage
 //go:build integration
 
 func TestFeature(t *testing.T) {
-    conn, ctx := setupTestContainer(t)      // Starts container
-    defer cleanupTestCollection(t, conn, ctx, "test_coll")
+    conn, ctx := setupTestSchema(t)   // Per-test schema on shared container (Oracle, ADR-020)
 
-    // Test with real database
-    coll := conn.Collection("test_coll")
-    _, err := coll.InsertOne(ctx, doc, nil)
-    assert.NoError(t, err)
+    _, err := conn.Exec(ctx, "CREATE TABLE widgets (id NUMBER PRIMARY KEY, name VARCHAR2(100))")
+    require.NoError(t, err)
+    // ... test against the real database
 }
 ```
+
+### Oracle: shared container + per-test schema (ADR-020)
+
+The `database/oracle` integration suite provisions exactly one Oracle container per test-binary execution (via package-level `TestMain`) and isolates each test in its own randomly-named schema. This avoids the ~18.5s per-test cold-start that previously pushed the package against the 10-minute Go test timeout.
+
+**Test-isolation contract** — every Oracle integration test:
+
+- **MUST** acquire its schema via `setupTestSchema(t)` (which delegates to `(*containers.OracleContainer).NewSchema(t)`).
+- **MUST NOT** create globally-named objects. No `CREATE PUBLIC SYNONYM`, no `CREATE TYPE` outside the test's own schema — fully qualify with the per-test schema name (`CREATE TYPE <schema>.PRODUCT_TYPE`) so `DROP USER ... CASCADE` reclaims them on cleanup.
+- **MUST NOT** rely on dropping its own tables/sequences/UDTs by name. `DROP USER ... CASCADE` is the cleanup primitive; tests that try to `DROP TABLE` explicitly will see no-op or already-dropped errors.
+- **MAY** opt into `t.Parallel()` once the refactor is stable (separate follow-up after ADR-020 lands).
+
+Tests that need a *different* `DatabaseConfig` (pool sizing, keep-alive, timezone, connection-string format variants) call `packageOracleContainer().NewSchema(t)` directly and build their own `cfg` from the returned `*containers.OracleSchema` credentials — still on the shared container, just with custom wiring.
 
 **CI/CD:** Integration tests run only on Ubuntu (Docker requirement), unit tests on all platforms

@@ -104,3 +104,15 @@ func TestMustAs(t *testing.T) {
 		})
 	})
 }
+
+// ---------------------------------------------------------------------------
+// TableRef.As — covers the previously-uncovered nil-receiver branch.
+// ---------------------------------------------------------------------------
+
+func TestTableRefAsReturnsErrorOnNilReceiver(t *testing.T) {
+	var t1 *TableRef // typed-nil receiver
+	_, err := t1.As("x")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNilTableRef),
+		"nil receiver must fail with ErrNilTableRef rather than panic")
+}

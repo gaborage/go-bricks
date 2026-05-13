@@ -28,15 +28,41 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4.0.1
         id: filter
         with:
+          # Filters intentionally match only code-affecting paths. Doc-only
+          # changes (`wiki/**`, `CLAUDE.md`, `README.md`, `MULTI_TENANT.md`,
+          # `llms.txt`, etc.) match nothing here, so the test/build/lint/security
+          # jobs gated on these outputs cleanly skip — keeping doc PRs fast.
+          # CI workflow changes still trigger every component so reviewers see
+          # the consequences of pipeline edits.
+          #
+          # NOTE: do not add `!tools/**` (or any other `!pattern`) here. Under
+          # dorny/paths-filter's default `predicate-quantifier: some`, a `!`
+          # entry is OR'd as its own positive predicate matching every file
+          # outside the inner glob — it does NOT subtract from the list. Adding
+          # `!tools/**` would make the filter true for every non-tools file
+          # (including all of `wiki/**`), defeating the doc-only skip. The
+          # `**/*.go` pattern below already matches `tools/**/*.go`, so tool
+          # Go-file changes correctly re-run the framework matrix without help
+          # from a negation.
           filters: |
             framework:
-              - '**'
-              - '!tools/**'
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.golangci.yml'
+              - '.github/workflows/ci-v2.yml'
             tool:
-              - 'tools/openapi/**'
+              - 'tools/openapi/**/*.go'
+              - 'tools/openapi/go.mod'
+              - 'tools/openapi/go.sum'
+              - 'tools/openapi/Makefile'
               - '.github/workflows/ci-v2.yml'
             migrate_tool:
-              - 'tools/migration/**'
+              - 'tools/migration/**/*.go'
+              - 'tools/migration/go.mod'
+              - 'tools/migration/go.sum'
+              - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
 
   # ============================================================================
@@ -176,8 +202,11 @@ jobs:
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
-          # Build tag controls which tests run - only integration tests will execute
-          go test -race -parallel 2 -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
+          # Build tag controls which tests run - only integration tests will execute.
+          # -timeout 15m is an interim safeguard for the ADR-020 rollout window;
+          # revert (or hold at 15m) once schema-per-test proves stable across
+          # 20 consecutive green runs (issue #404).
+          go test -race -parallel 2 -timeout 15m -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./...
 
       - name: Upload integration test coverage artifact
         uses: actions/upload-artifact@v7
