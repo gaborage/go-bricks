@@ -53,8 +53,8 @@ func (r *fakeRegistrar) DailyAt(jobID string, _ any, localTime time.Time) error 
 func (r *fakeRegistrar) WeeklyAt(_ string, _ any, _ time.Weekday, _ time.Time) error {
 	return nil
 }
-func (r *fakeRegistrar) HourlyAt(_ string, _ any, _ int) error                   { return nil }
-func (r *fakeRegistrar) MonthlyAt(_ string, _ any, _ int, _ time.Time) error     { return nil }
+func (r *fakeRegistrar) HourlyAt(_ string, _ any, _ int) error               { return nil }
+func (r *fakeRegistrar) MonthlyAt(_ string, _ any, _ int, _ time.Time) error { return nil }
 
 func TestModuleName(t *testing.T) {
 	m := NewModule()
@@ -267,16 +267,14 @@ func TestModuleEnsureStoreInitializedDBResolverError(t *testing.T) {
 }
 
 func TestModuleEnsureStoreInitializedIdempotent(t *testing.T) {
-	m, db := initEnabledModule(t, "postgresql", 0)
+	m, _ := initEnabledModule(t, "postgresql", 0)
 	require.NoError(t, m.ensureStoreInitialized(context.Background()))
 	first := m.store
 
-	// Second call must not re-create the store and must not re-query the
-	// database vendor (no extra QueryLog entries from a fresh DatabaseType()
-	// call — though TestDB.DatabaseType doesn't log, we assert via identity).
+	// Second call must not re-create the store — assert via identity since
+	// TestDB.DatabaseType() doesn't log call counts.
 	require.NoError(t, m.ensureStoreInitialized(context.Background()))
 	assert.Same(t, first, m.store, "store identity must be preserved on subsequent calls")
-	_ = db
 }
 
 func TestModuleOutboxPublisherReturnsLazyPublisher(t *testing.T) {
