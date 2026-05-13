@@ -323,3 +323,121 @@ func TestCloseAggregatesErrors(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "close b"))
 	assert.True(t, strings.Contains(err.Error(), "close a"))
 }
+
+func TestDbManagerStatsEmptyManager(t *testing.T) {
+	m := NewDbManager(&stubResourceSource{configs: map[string]*config.DatabaseConfig{}}, newTestLogger(), DbManagerOptions{
+		MaxSize: 5,
+		IdleTTL: 10 * time.Minute,
+	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return nil, errors.New("not used") })
+
+	stats := m.Stats()
+	assert.Equal(t, 0, stats["active_connections"])
+	assert.Equal(t, 5, stats["max_connections"])
+	assert.Equal(t, 600, stats["idle_ttl_seconds"])
+	conns, ok := stats["connections"].([]map[string]any)
+	require.True(t, ok, "connections key must be []map[string]any")
+	assert.Empty(t, conns, "empty manager has no connection entries")
+}
+
+func TestDbManagerStatsPopulatedManager(t *testing.T) {
+	stubA := &stubDB{key: "a"}
+	stubB := &stubDB{key: "b"}
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		if cfg.Host == "host-a" {
+			return stubA, nil
+		}
+		return stubB, nil
+	}
+
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"a": {Type: "postgresql", Host: "host-a"},
+		"b": {Type: "postgresql", Host: "host-b"},
+	}}
+	m := NewDbManager(src, newTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	defer func() { _ = m.Close() }()
+
+	ctx := context.Background()
+	_, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	_, err = m.Get(ctx, "b")
+	require.NoError(t, err)
+
+	stats := m.Stats()
+	assert.Equal(t, 2, stats["active_connections"])
+	conns, ok := stats["connections"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, conns, 2)
+
+	for _, c := range conns {
+		assert.Contains(t, []any{"a", "b"}, c["key"])
+		assert.IsType(t, "", c["last_used"])
+		assert.IsType(t, 0, c["idle_duration"])
+	}
+}
+
+func TestStartCleanupIsIdempotent(t *testing.T) {
+	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
+		MaxSize: 5,
+		IdleTTL: time.Hour,
+	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
+	defer func() { _ = m.Close() }()
+
+	m.StartCleanup(10 * time.Second)
+	// Second call must observe cleanupCh != nil and short-circuit rather
+	// than spawning a duplicate goroutine.
+	require.NotPanics(t, func() {
+		m.StartCleanup(10 * time.Second)
+	})
+
+	m.StopCleanup()
+	// Second StopCleanup hits the early-return path (cleanupCh == nil).
+	require.NotPanics(t, func() {
+		m.StopCleanup()
+	})
+}
+
+func TestStartCleanupAppliesDefaultIntervalForNonPositive(t *testing.T) {
+	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
+		MaxSize: 5,
+		IdleTTL: time.Hour,
+	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
+	defer func() { _ = m.Close() }()
+
+	// Zero substitutes the documented 5-min default; we can't inspect the
+	// ticker directly so the contract is "no panic + clean stop".
+	require.NotPanics(t, func() { m.StartCleanup(0) })
+	m.StopCleanup()
+
+	require.NotPanics(t, func() { m.StartCleanup(-5 * time.Second) })
+	m.StopCleanup()
+}
+
+func TestCleanupIdleConnectionsLogsCloseError(t *testing.T) {
+	failingStub := &stubDB{key: "x", closeErr: errors.New("driver fault on close")}
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return failingStub, nil }
+
+	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
+		MaxSize: 5,
+		IdleTTL: time.Hour,
+	}, connector)
+	defer func() { _ = m.Close() }()
+
+	ctx := context.Background()
+	_, err := m.Get(ctx, "x")
+	require.NoError(t, err)
+
+	// Backdate lastUsed so the cleanup pass sees the entry as idle. Direct
+	// field access under m.mu matches the pattern in
+	// TestCloseAggregatesErrors above.
+	m.mu.Lock()
+	m.conns["x"].lastUsed = time.Now().Add(-2 * time.Hour)
+	m.mu.Unlock()
+
+	m.cleanupIdleConnections()
+
+	assert.Equal(t, 0, m.Size(), "idle connection removed from cache despite Close() error")
+	failingStub.closedMu.Lock()
+	closed := failingStub.closed
+	failingStub.closedMu.Unlock()
+	assert.True(t, closed, "Close was attempted even though it returned an error")
+}
