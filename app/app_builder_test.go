@@ -186,6 +186,72 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		// Defaults still merged in.
 		assert.Contains(t, got.SensitiveFields, "password")
 	})
+
+	t.Run("empty_string_entries_are_dropped", func(t *testing.T) {
+		// An empty string in cfg.SensitiveFields would make strings.Contains
+		// return true for every field name, silently masking the entire log
+		// stream. The normalizer must drop empty (and whitespace-only) entries.
+		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
+		got := resolveLoggerFilterConfig(
+			nil,
+			&config.LogConfig{SensitiveFields: []string{"pan", "", "   ", "cvv2"}},
+		)
+		require.NotNil(t, got)
+		assert.NotContains(t, got.SensitiveFields, "")
+		assert.NotContains(t, got.SensitiveFields, "   ")
+		assert.Contains(t, got.SensitiveFields, "pan")
+		assert.Contains(t, got.SensitiveFields, "cvv2")
+		// Only the two non-empty entries are appended on top of defaults.
+		assert.Equal(t, defaultsLen+2, len(got.SensitiveFields))
+	})
+
+	t.Run("whitespace_padded_entries_are_trimmed", func(t *testing.T) {
+		// Without trimming, "  cvv  " would never match field name "cvv"
+		// because strings.Contains("cvv", "  cvv  ") is false. Operators
+		// pasting from CSV/comments would see silent non-masking — exactly
+		// the failure mode the filter is supposed to prevent.
+		got := resolveLoggerFilterConfig(
+			nil,
+			&config.LogConfig{SensitiveFields: []string{"  cvv  ", "\tpan\n"}},
+		)
+		require.NotNil(t, got)
+		assert.Contains(t, got.SensitiveFields, "cvv")
+		assert.Contains(t, got.SensitiveFields, "pan")
+		assert.NotContains(t, got.SensitiveFields, "  cvv  ")
+		assert.NotContains(t, got.SensitiveFields, "\tpan\n")
+	})
+
+	t.Run("case_insensitive_dedup_within_config", func(t *testing.T) {
+		// PAN/Pan/pan are the same field — emit one entry. Substring matching
+		// would still work for all variants if we appended duplicates, but the
+		// dedup keeps the slice tight (less work per logged field).
+		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
+		got := resolveLoggerFilterConfig(
+			nil,
+			&config.LogConfig{SensitiveFields: []string{"PAN", "Pan", "pan", "PAN "}},
+		)
+		require.NotNil(t, got)
+		// First occurrence wins, preserving its case.
+		assert.Contains(t, got.SensitiveFields, "PAN")
+		assert.NotContains(t, got.SensitiveFields, "Pan")
+		assert.NotContains(t, got.SensitiveFields, "pan")
+		assert.Equal(t, defaultsLen+1, len(got.SensitiveFields))
+	})
+
+	t.Run("config_entry_already_in_defaults_is_skipped", func(t *testing.T) {
+		// "password" already covered by DefaultFilterConfig; re-listing it in
+		// YAML must not produce a duplicate entry.
+		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
+		got := resolveLoggerFilterConfig(
+			nil,
+			&config.LogConfig{SensitiveFields: []string{"password", "PASSWORD", "pan"}},
+		)
+		require.NotNil(t, got)
+		// Defaults still contain "password" (case from DefaultFilterConfig).
+		assert.Contains(t, got.SensitiveFields, "password")
+		// Only "pan" is genuinely new; "password"/"PASSWORD" collapse to the default.
+		assert.Equal(t, defaultsLen+1, len(got.SensitiveFields))
+	})
 }
 
 func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
