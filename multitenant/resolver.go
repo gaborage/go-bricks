@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 // TenantResolver resolves the tenant identifier from an incoming request.
@@ -159,11 +161,7 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 
 	path := req.URL.Path
 	if r.Prefix != "" {
-		prefix := r.Prefix
-		if !strings.HasPrefix(prefix, "/") {
-			prefix = "/" + prefix
-		}
-		if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+		if _, ok := pathutil.StripPathPrefix(path, pathutil.NormalizePrefix(r.Prefix)); !ok {
 			return "", ErrTenantResolutionFailed
 		}
 	}

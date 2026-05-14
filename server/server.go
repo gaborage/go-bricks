@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -33,37 +34,27 @@ type Server struct {
 	readyHandler echo.HandlerFunc
 }
 
-// normalizeBasePath ensures the base path starts with "/" and doesn't end with "/"
-// unless it's the root path. Empty string is returned as-is (no prefix).
+// normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
+// collapses "/" to "" while buildFullPath treats "/" as a meaningful state
+// distinct from the empty no-prefix case. Diverging on purpose.
 func normalizeBasePath(basePath string) string {
 	if basePath == "" {
 		return ""
 	}
-
-	// Ensure it starts with "/"
 	if !strings.HasPrefix(basePath, "/") {
 		basePath = "/" + basePath
 	}
-
-	// Remove trailing "/" unless it's just "/"
 	if len(basePath) > 1 {
 		basePath = strings.TrimRight(basePath, "/")
 	}
-
 	return basePath
 }
 
-// normalizeRoutePath ensures a route path starts with "/" and handles empty paths
 func normalizeRoutePath(route, defaultRoute string) string {
 	if route == "" {
 		route = defaultRoute
 	}
-
-	if !strings.HasPrefix(route, "/") {
-		route = "/" + route
-	}
-
-	return route
+	return pathutil.EnsureLeadingSlash(route)
 }
 
 // buildFullPath combines base path with route path
