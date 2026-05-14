@@ -137,3 +137,56 @@ func (r *ValidatingResolver) ResolveTenant(ctx context.Context, req *http.Reques
 
 	return tenantID, nil
 }
+
+// PathResolver extracts the tenant identifier from a path segment.
+//
+// Segment is 1-indexed (segment 1 is the first non-empty path part after the
+// leading slash). When Prefix is non-empty, the resolver only attempts
+// extraction for requests whose path equals Prefix exactly or starts with
+// "Prefix/" — non-matching paths return ErrTenantResolutionFailed so the
+// composite chain (if any) can fall through to other resolvers.
+type PathResolver struct {
+	Segment int
+	Prefix  string
+}
+
+// ResolveTenant implements TenantResolver.
+func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
+	_ = ctx
+	if r == nil || req == nil || r.Segment <= 0 || req.URL == nil {
+		return "", ErrTenantResolutionFailed
+	}
+
+	path := req.URL.Path
+	if r.Prefix != "" {
+		prefix := r.Prefix
+		if !strings.HasPrefix(prefix, "/") {
+			prefix = "/" + prefix
+		}
+		if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+			return "", ErrTenantResolutionFailed
+		}
+	}
+
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	// Tolerate trailing slashes by dropping trailing empty segments, then
+	// reject any intermediate empty segment — malformed inputs like
+	// "/foo//bar" must not produce a tenant ID at any segment index, not
+	// just the slot pointing at the empty part.
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	for _, p := range parts {
+		if p == "" {
+			return "", ErrTenantResolutionFailed
+		}
+	}
+	if r.Segment > len(parts) {
+		return "", ErrTenantResolutionFailed
+	}
+	tenantID := strings.TrimSpace(parts[r.Segment-1])
+	if tenantID == "" {
+		return "", ErrTenantResolutionFailed
+	}
+	return tenantID, nil
+}

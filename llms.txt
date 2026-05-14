@@ -89,7 +89,7 @@ Add observability settings as needed (see Observability & Logging).
 - Declarative messaging defines exchanges, queues, bindings, publishers, and consumers once; the framework replays per tenant.
 - Transactional outbox guarantees at-least-once event delivery: events written atomically with business data, then reliably published by a background relay.
 - Observability hooks (traces, metrics, structured logs) activate when `observability.enabled=true`.
-- Multi-tenant mode resolves tenants (header/host/custom store) and hands each module tenant-specific resources.
+- Multi-tenant mode resolves tenants (header, subdomain, path, or composite chain) and hands each module tenant-specific resources.
 
 ## Module Skeleton & Composition
 
@@ -3243,10 +3243,12 @@ The httpclient JOSE wrapper for outbound calls (sign-then-encrypt the request bo
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
-- Resolution strategies: `header`, `host`, or custom store implementing `multitenant.Store`.
+- Resolution strategies: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate), or `composite` (header → subdomain → path fallback chain).
 - Each tenant gets isolated DB connections, messaging clients, and module lifecycle events.
+- Resolution runs as middleware before route matching, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
+- Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver advances to the next sub-resolver on validation failure.
 
-**Configuration:**
+**Header (default for internal APIs):**
 
 ```yaml
 multitenant:
@@ -3266,6 +3268,45 @@ multitenant:
         host: globex-db.example.com
         name: globex_production
 ```
+
+**Subdomain (for `<tenant>.<root>` deployments):**
+
+```yaml
+multitenant:
+  enabled: true
+  resolver:
+    type: subdomain
+    domain: api.example.com  # leading dot optional
+    proxies: true            # trust X-Forwarded-Host (only behind a trusted proxy)
+```
+
+**Path (for `/<service>/{tenantID}/...` URLs — e.g. NovoPayment ITSP/TRTSP/3DS):**
+
+```yaml
+multitenant:
+  enabled: true
+  resolver:
+    type: path
+    path:
+      segment: 2          # 1-indexed: /itsp/{tenantID}/... → segment 2
+      prefix: /itsp        # optional gate; only paths under here are eligible
+```
+
+**Composite (header → subdomain → path fallback chain):**
+
+```yaml
+multitenant:
+  enabled: true
+  resolver:
+    type: composite
+    header: X-Tenant-ID
+    domain: api.example.com
+    path:
+      segment: 2
+      prefix: /itsp
+```
+
+For the full resolver reference (segment-indexing semantics, prefix-gate behavior, trailing-slash and query-string handling, when to choose each type), see `wiki/multi-tenant-resolvers.md`.
 
 **Multi-Tenant Service Implementation:**
 

@@ -156,11 +156,20 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.Proxies}
 	}
 
+	newPathResolver := func() multitenant.TenantResolver {
+		if resolverCfg.Path.Segment <= 0 {
+			return nil
+		}
+		return &multitenant.PathResolver{Segment: resolverCfg.Path.Segment, Prefix: resolverCfg.Path.Prefix}
+	}
+
 	switch resolverCfg.Type {
 	case config.ResolverTypeHeader:
 		return wrap(newHeaderResolver())
 	case config.ResolverTypeSubdomain:
 		return wrap(newSubdomainResolver())
+	case config.ResolverTypePath:
+		return wrap(newPathResolver())
 	case config.ResolverTypeComposite:
 		resolvers := []multitenant.TenantResolver{}
 		if header := newHeaderResolver(); header != nil {
@@ -168,6 +177,9 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 		}
 		if subdomain := newSubdomainResolver(); subdomain != nil {
 			resolvers = append(resolvers, subdomain)
+		}
+		if pathr := newPathResolver(); pathr != nil {
+			resolvers = append(resolvers, pathr)
 		}
 		if len(resolvers) == 0 {
 			return nil

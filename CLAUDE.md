@@ -43,7 +43,7 @@ go test -bench=.        # Run benchmarks
 - [.golangci.yml](.golangci.yml) — Linting configuration
 
 **Wiki (deep dives — read on demand):**
-- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [observability.md](wiki/observability.md)
+- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [observability.md](wiki/observability.md) · [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md)
 - Patterns: [handler-patterns.md](wiki/handler-patterns.md) · [context-deadlines.md](wiki/context-deadlines.md) · [testing.md](wiki/testing.md)
 - Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup-defaults.md](wiki/startup-defaults.md)
 - ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr-NNN-*.md`
@@ -150,6 +150,7 @@ make lint                       # Run golangci-lint
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
 - **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". The `migration/provisioning/` subpackage carries a durable, crash-recoverable per-tenant state machine (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches) for dynamic tenant provisioning. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-roles.md](wiki/migration-roles.md), [migration-provisioning.md](wiki/migration-provisioning.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), [ADR-019](wiki/adr-019-migration-audit-delivery.md), and [ADR-021](wiki/adr-021-provisioning-state-machine.md).
+- **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named RSA key pair management from DER files or base64 env vars

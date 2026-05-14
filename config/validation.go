@@ -929,7 +929,7 @@ func validateNoSingleTenantConflict(db *DatabaseConfig, msg *MessagingConfig) er
 
 // validateMultitenantResolver validates tenant resolver configuration
 func validateMultitenantResolver(cfg *ResolverConfig) error {
-	validTypes := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypeComposite}
+	validTypes := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath, ResolverTypeComposite}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("multitenant.resolver.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
@@ -947,6 +947,15 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 		// Normalize: leading dot is optional in config
 		if !strings.HasPrefix(cfg.Domain, ".") {
 			cfg.Domain = "." + cfg.Domain
+		}
+	}
+
+	if cfg.Type == ResolverTypePath || (cfg.Type == ResolverTypeComposite && cfg.Path.Segment != 0) {
+		if cfg.Path.Segment <= 0 {
+			return NewValidationError("multitenant.resolver.path.segment", errMustBePositive)
+		}
+		if cfg.Path.Prefix != "" && !strings.HasPrefix(cfg.Path.Prefix, "/") {
+			return NewValidationError("multitenant.resolver.path.prefix", "must start with '/' when set")
 		}
 	}
 

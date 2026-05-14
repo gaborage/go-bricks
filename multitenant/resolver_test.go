@@ -442,3 +442,218 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 		})
 	}
 }
+
+// setupPathRequest creates an HTTP request with a specific URL path for path-resolver tests.
+func setupPathRequest(rawURL string) *http.Request {
+	ctx := context.Background()
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com"+rawURL, http.NoBody)
+	return req
+}
+
+func TestPathResolverResolveTenant(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		resolver    *PathResolver
+		path        string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:     "segment_one_extracted",
+			resolver: &PathResolver{Segment: 1},
+			path:     "/foo/bar/baz",
+			expected: "foo",
+		},
+		{
+			name:     "segment_two_extracted",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/itsp/servitebca/lifecycle",
+			expected: "servitebca",
+		},
+		{
+			name:     "deep_segment_extracted",
+			resolver: &PathResolver{Segment: 4},
+			path:     "/a/b/c/tenant42/d",
+			expected: "tenant42",
+		},
+		{
+			name:     "prefix_match_extracts",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:     "/itsp/clientA/provisioning",
+			expected: "clientA",
+		},
+		{
+			name:        "prefix_exact_match_no_segment",
+			resolver:    &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:        "/itsp",
+			expectError: true,
+		},
+		{
+			name:        "prefix_mismatch_returns_error",
+			resolver:    &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:        "/health",
+			expectError: true,
+		},
+		{
+			name:        "prefix_partial_word_match_rejected",
+			resolver:    &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:        "/itspx/other",
+			expectError: true,
+		},
+		{
+			name:     "trailing_slash_tolerated",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:     "/itsp/clientB/",
+			expected: "clientB",
+		},
+		{
+			name:     "prefix_without_leading_slash_normalized",
+			resolver: &PathResolver{Segment: 2, Prefix: "itsp"},
+			path:     "/itsp/clientC",
+			expected: "clientC",
+		},
+		{
+			name:        "missing_segment_returns_error",
+			resolver:    &PathResolver{Segment: 3},
+			path:        "/only/two",
+			expectError: true,
+		},
+		{
+			name:        "empty_segment_rejected",
+			resolver:    &PathResolver{Segment: 2},
+			path:        "/foo//bar",
+			expectError: true,
+		},
+		{
+			name:        "root_path_with_segment_one_rejected",
+			resolver:    &PathResolver{Segment: 1},
+			path:        "/",
+			expectError: true,
+		},
+		{
+			name:        "empty_path_rejected",
+			resolver:    &PathResolver{Segment: 1},
+			path:        "",
+			expectError: true,
+		},
+		{
+			name:        "segment_zero_invalid",
+			resolver:    &PathResolver{Segment: 0},
+			path:        "/foo/bar",
+			expectError: true,
+		},
+		{
+			name:        "negative_segment_invalid",
+			resolver:    &PathResolver{Segment: -1},
+			path:        "/foo/bar",
+			expectError: true,
+		},
+		{
+			name:     "query_string_isolated_from_segment",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/itsp/clientD?foo=bar&baz=qux",
+			expected: "clientD",
+		},
+		{
+			name:     "fragment_isolated_from_segment",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/itsp/clientF#section",
+			expected: "clientF",
+		},
+		{
+			name:        "intermediate_empty_segment_rejected_for_any_index",
+			resolver:    &PathResolver{Segment: 3},
+			path:        "/foo//bar/baz",
+			expectError: true,
+		},
+		{
+			name:        "leading_double_slash_rejected",
+			resolver:    &PathResolver{Segment: 1},
+			path:        "//foo",
+			expectError: true,
+		},
+		{
+			name:     "multiple_trailing_slashes_tolerated",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:     "/itsp/clientE//",
+			expected: "clientE",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := setupPathRequest(tc.path)
+			tenantID, err := tc.resolver.ResolveTenant(ctx, req)
+			if tc.expectError {
+				assert.Error(t, err)
+				assert.Equal(t, ErrTenantResolutionFailed, err)
+				assert.Empty(t, tenantID)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expected, tenantID)
+			}
+		})
+	}
+}
+
+func TestPathResolverNilSafety(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil_resolver", func(t *testing.T) {
+		var r *PathResolver
+		req := setupPathRequest("/foo/bar")
+		tenantID, err := r.ResolveTenant(ctx, req)
+		assert.Equal(t, ErrTenantResolutionFailed, err)
+		assert.Empty(t, tenantID)
+	})
+
+	t.Run("nil_request", func(t *testing.T) {
+		r := &PathResolver{Segment: 1}
+		tenantID, err := r.ResolveTenant(ctx, nil)
+		assert.Equal(t, ErrTenantResolutionFailed, err)
+		assert.Empty(t, tenantID)
+	})
+
+	t.Run("nil_request_url", func(t *testing.T) {
+		r := &PathResolver{Segment: 1}
+		req := &http.Request{} // URL is nil
+		tenantID, err := r.ResolveTenant(ctx, req)
+		assert.Equal(t, ErrTenantResolutionFailed, err)
+		assert.Empty(t, tenantID)
+	})
+}
+
+func TestCompositeResolverWithPathSubresolver(t *testing.T) {
+	ctx := context.Background()
+	composite := &CompositeResolver{
+		Resolvers: []TenantResolver{
+			&PathResolver{Segment: 2, Prefix: "/itsp"},
+			&HeaderResolver{},
+		},
+	}
+
+	t.Run("path_match_wins", func(t *testing.T) {
+		req := setupPathRequest("/itsp/clientA/lifecycle")
+		req.Header.Set(tenantIDHeader, "fallback-tenant")
+		tenantID, err := composite.ResolveTenant(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "clientA", tenantID)
+	})
+
+	t.Run("path_miss_falls_through_to_header", func(t *testing.T) {
+		req := setupPathRequest("/health")
+		req.Header.Set(tenantIDHeader, "header-tenant")
+		tenantID, err := composite.ResolveTenant(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "header-tenant", tenantID)
+	})
+
+	t.Run("both_miss_returns_error", func(t *testing.T) {
+		req := setupPathRequest("/health")
+		tenantID, err := composite.ResolveTenant(ctx, req)
+		assert.Equal(t, ErrTenantResolutionFailed, err)
+		assert.Empty(t, tenantID)
+	})
+}

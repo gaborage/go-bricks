@@ -2616,6 +2616,50 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 			msgConfig: &MessagingConfig{},
 		},
 		{
+			name: "valid_path_resolver",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: ResolverTypePath,
+					Path: PathResolverConfig{Segment: 2, Prefix: "/itsp"},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
+		},
+		{
+			name: "valid_path_resolver_no_prefix",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: ResolverTypePath,
+					Path: PathResolverConfig{Segment: 1},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
+		},
+		{
+			name: "valid_composite_resolver_with_path",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "composite",
+					Header: testTenantHeader,
+					Domain: testDomain,
+					Path:   PathResolverConfig{Segment: 2, Prefix: "/itsp"},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:  &DatabaseConfig{},
+			msgConfig: &MessagingConfig{},
+		},
+		{
 			name: "tenants_without_messaging",
 			mtConfig: &MultitenantConfig{
 				Enabled: true,
@@ -2687,6 +2731,68 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
 			expectedError: "multitenant.resolver.type",
+		},
+		{
+			name: "path_resolver_missing_segment",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: ResolverTypePath,
+					Path: PathResolverConfig{Segment: 0},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "multitenant.resolver.path.segment",
+		},
+		{
+			name: "path_resolver_negative_segment",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: ResolverTypePath,
+					Path: PathResolverConfig{Segment: -1},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "multitenant.resolver.path.segment",
+		},
+		{
+			name: "path_resolver_prefix_missing_leading_slash",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type: ResolverTypePath,
+					Path: PathResolverConfig{Segment: 2, Prefix: "itsp"},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "multitenant.resolver.path.prefix",
+		},
+		{
+			name: "composite_with_invalid_path_segment",
+			mtConfig: &MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   "composite",
+					Header: testTenantHeader,
+					Domain: testDomain,
+					Path:   PathResolverConfig{Segment: -2, Prefix: "/itsp"},
+				},
+				Limits:  LimitsConfig{Tenants: 100},
+				Tenants: makeSampleTenants(),
+			},
+			dbConfig:      &DatabaseConfig{},
+			msgConfig:     &MessagingConfig{},
+			expectedError: "multitenant.resolver.path.segment",
 		},
 		{
 			name: "invalid_limits_too_many_tenants",
