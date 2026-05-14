@@ -490,3 +490,64 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin))
 	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 }
+
+// TestCORSProductionAliasesTriggerStrictMode verifies that production env aliases
+// (prd, prod) drive the same strict-origin behavior as the canonical "production"
+// value. Dev aliases (local) do not trigger strict mode.
+func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	tests := []struct {
+		name           string
+		env            string
+		expectStrict   bool
+		allowedOrigins string
+	}{
+		{name: "prd_alias_triggers_strict", env: "prd", expectStrict: true, allowedOrigins: "https://app.example.com"},
+		{name: "prod_alias_triggers_strict", env: "prod", expectStrict: true, allowedOrigins: "https://app.example.com"},
+		{name: "canonical_production_triggers_strict", env: "production", expectStrict: true, allowedOrigins: "https://app.example.com"},
+		{name: "local_does_not_trigger_strict", env: "local", expectStrict: false, allowedOrigins: ""},
+		{name: "tst_neutral_does_not_trigger_strict", env: "tst", expectStrict: false, allowedOrigins: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv("APP_ENV", tc.env)
+			if tc.allowedOrigins != "" {
+				os.Setenv("CORS_ORIGINS", tc.allowedOrigins)
+			} else {
+				os.Unsetenv("CORS_ORIGINS")
+			}
+
+			e := echo.New()
+			corsMiddleware := CORS()
+			handler := corsMiddleware(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "test")
+			})
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+			// Use an origin that's NOT in the allowed list. In strict mode the
+			// Echo CORS middleware refuses to echo it back; in wildcard mode the
+			// UnsafeAllowOriginFunc echoes any origin.
+			req.Header.Set("Origin", "https://intruder.example.com")
+			req.Header.Set(HeaderAccessControlRequestMethod, "POST")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			require.NoError(t, handler(c))
+
+			gotOrigin := rec.Header().Get(HeaderAccessControlAllowOrigin)
+			if tc.expectStrict {
+				assert.Empty(t, gotOrigin,
+					"strict mode must not set Access-Control-Allow-Origin for an unlisted origin")
+			} else {
+				assert.Equal(t, "https://intruder.example.com", gotOrigin,
+					"wildcard mode must echo any origin")
+			}
+		})
+	}
+}

@@ -33,7 +33,7 @@ func Load() (*Config, error) {
 	}
 
 	// Load environment-specific YAML (if exists)
-	env := k.String("app.env")
+	env := k.String(fieldAppEnv)
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
 		if err := tryLoadYAMLFile(k, envFile); err != nil {
@@ -98,7 +98,7 @@ func loadDefaults(k *koanf.Koanf) error {
 	defaults := map[string]any{
 		"app.name":                      "gobricks-service",
 		"app.version":                   "v1.0.0",
-		"app.env":                       EnvDevelopment,
+		fieldAppEnv:                     EnvDevelopment,
 		"app.debug":                     false,
 		"app.namespace":                 "default",
 		fieldAppRateLimit:               100,

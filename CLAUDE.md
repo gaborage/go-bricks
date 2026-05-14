@@ -546,6 +546,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **Consumer concurrency (v0.17.0):** Default workers `1` → `NumCPU * 4`. Set `Workers: 1` for sequential ordering.
 - **Message error handling (v2.X):** Errors and panics now nack without requeue (no infinite retry).
 - **MongoDB removed (ADR-012):** Only PostgreSQL and Oracle supported.
+- **Env policy (ADR-022):** `app.env` is no longer enum-validated to `{development, staging, production}`; consumer projects may use any conforming string (`local`, `tst`, `stg`, `prd`, `production-eu`, …). Behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` predicates with documented alias sets (`{development, dev, local}` / `{production, prod, prd}`). `APP_ENV=prd`/`prod` now triggers production-strict CORS; `APP_ENV=dev`/`local` now enable framework dev conveniences and auto-migrate.
 
 ## File Organization
 

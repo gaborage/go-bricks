@@ -201,6 +201,15 @@ Resolves issue #379. Per-tenant provisioning state machine with durable, crash-r
 
 ---
 
+### [ADR-022: Environment Policy — Free-Form `app.env` with Predicate-Based Branching](adr-022-env-policy.md)
+**Date:** 2026-05-14 | **Status:** Accepted
+
+Resolves issue #435. Replaces the strict `{development, staging, production}` allowlist in `config.validateApp` with a format check (lowercase alphanumeric + hyphen, ≤32 chars). Behavior switches in the framework's six call sites move from string equality against `EnvDevelopment` / `EnvProduction` to predicates (`config.IsDevelopment` / `config.IsProduction`) backed by documented alias maps (`{development, dev, local}` / `{production, prod, prd}`). Consumer projects can now use their own env conventions (e.g. `local/tst/stg/prd`) without forking the validator. Eliminates a latent dead-code path in `server/env.go` and the duplicated inline alias logic in `app/app.go`'s bootstrap logger.
+
+**Key Benefits:** Org-specific naming conventions accepted out of the box, behavior switches read intent (`IsDevelopment()`) rather than enum equality, alias treatment is uniform across CORS + migration + handler call sites, format check still catches structural typos (uppercase, spaces, garbage).
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
