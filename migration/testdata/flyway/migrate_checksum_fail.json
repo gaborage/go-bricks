@@ -1,0 +1,10 @@
+{
+  "error" : {
+    "errorCode" : "VALIDATE_ERROR",
+    "message" : "Validate failed: Migrations have failed validation\nMigration checksum mismatch for migration version 1\n-> Applied to database : -722161396\n-> Resolved locally    : -1154033441\nEither revert the changes to the migration, or run repair to update the schema history.\nNeed more flexibility with validation rules? Learn more: https://rd.gt/3AbJUZE",
+    "stackTrace" : null,
+    "lineNumber" : null,
+    "path" : null,
+    "cause" : null
+  }
+}

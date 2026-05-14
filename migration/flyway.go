@@ -21,8 +21,9 @@ import (
 
 const (
 	// Flyway command flag constants
-	flagConfigFiles = "-configFiles="
-	flagLocationsFS = "-locations=filesystem:"
+	flagConfigFiles    = "-configFiles="
+	flagLocationsFS    = "-locations=filesystem:"
+	flagOutputTypeJSON = "-outputType=json"
 
 	flywayExecutable  = "flyway"
 	flywayCmdMigrate  = "migrate"
@@ -194,8 +195,10 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 	return fm.DefaultMigrationConfigForVendor(fm.config.Database.Type)
 }
 
-// Migrate executes pending migrations against the migrator's configured database.
-func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
+// Migrate executes pending migrations against the migrator's configured
+// database. The Result carries the parsed per-target outcome; on parse
+// failure it is zero-valued and the error return is authoritative.
+func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) (Result, error) {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
 	}
@@ -204,7 +207,8 @@ func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) error {
 
 // MigrateFor executes pending migrations against the supplied database.
 // Used by multi-tenant migrations to target a tenant-specific DatabaseConfig.
-func (fm *FlywayMigrator) MigrateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
+// See Migrate for the Result contract.
+func (fm *FlywayMigrator) MigrateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) (Result, error) {
 	return fm.runFor(ctx, db, cfg, flywayCmdMigrate)
 }
 
@@ -218,7 +222,8 @@ func (fm *FlywayMigrator) Info(ctx context.Context, cfg *Config) error {
 
 // InfoFor shows migration status for the supplied database.
 func (fm *FlywayMigrator) InfoFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
-	return fm.runFor(ctx, db, cfg, flywayCmdInfo)
+	_, err := fm.runFor(ctx, db, cfg, flywayCmdInfo)
+	return err
 }
 
 // Validate validates migrations without executing them against the migrator's database.
@@ -231,10 +236,11 @@ func (fm *FlywayMigrator) Validate(ctx context.Context, cfg *Config) error {
 
 // ValidateFor validates migrations for the supplied database.
 func (fm *FlywayMigrator) ValidateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) error {
-	return fm.runFor(ctx, db, cfg, flywayCmdValidate)
+	_, err := fm.runFor(ctx, db, cfg, flywayCmdValidate)
+	return err
 }
 
-func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) error {
+func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) (Result, error) {
 	startedAt := time.Now()
 
 	if cfg == nil {
@@ -247,28 +253,41 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 		Str("action", verb).
 		Msg("Starting Flyway command")
 
+	// Info / validate keep their default pretty-printed output for operators
+	// running them at the CLI; migrate switches to JSON so we can parse a
+	// structured Result for the audit pipeline and CLI consumers.
+	isMigrate := verb == flywayCmdMigrate
 	args := []string{
 		flagConfigFiles + cfg.ConfigPath,
 		flagLocationsFS + cfg.MigrationPath,
-		verb,
 	}
+	if isMigrate {
+		args = append(args, flagOutputTypeJSON)
+	}
+	args = append(args, verb)
 
 	output, runErr := fm.runFlywayCommandFor(ctx, db, cfg, args)
 
-	// ADR-019: migration.applied is emitted only for actual applications
-	// (the migrate verb). Info / validate read state and don't count as
-	// applications even though they invoke Flyway.
-	if verb == flywayCmdMigrate {
-		fm.emitMigrationApplied(ctx, db, cfg, &flywayRunOutcome{
-			Vendor:      vendor,
-			StartedAt:   startedAt,
-			CompletedAt: time.Now(),
-			Output:      output,
-			Err:         runErr,
-		})
+	if !isMigrate {
+		return Result{}, runErr
 	}
 
-	return runErr
+	result, parseErr := parseFlywayJSON(output)
+	if parseErr != nil {
+		fm.logger.Debug().Err(parseErr).Msg("Failed to parse Flyway JSON output")
+	}
+
+	// ADR-019: migration.applied fires only for actual applications.
+	fm.emitMigrationApplied(ctx, db, cfg, &flywayRunOutcome{
+		Vendor:      vendor,
+		StartedAt:   startedAt,
+		CompletedAt: time.Now(),
+		Output:      output,
+		Result:      result,
+		Err:         runErr,
+	})
+
+	return result, runErr
 }
 
 // flywayRunOutcome bundles the result of a single Flyway subprocess
@@ -279,6 +298,7 @@ type flywayRunOutcome struct {
 	StartedAt   time.Time
 	CompletedAt time.Time
 	Output      string
+	Result      Result
 	Err         error
 }
 
@@ -315,9 +335,8 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 // emitMigrationApplied composes an AuditEvent of type migration.applied and
 // dispatches it through the configured emitter (always OTel; optionally
-// AuditRecorder). Best-effort error classification via classifyFlywayError.
-// Version remains empty in v1 — populating it requires parsing Flyway's
-// JSON output, deferred to #376's structured-Result work.
+// AuditRecorder). Version maps to the parsed Result.EndingVersion — the
+// schema version after the run, equal on both fresh-apply and no-op reruns.
 func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.DatabaseConfig, cfg *Config, run *flywayRunOutcome) {
 	if fm.audit == nil {
 		return
@@ -336,6 +355,17 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 		target = fm.config.Database.Database
 	}
 
+	attrs := map[string]string{
+		"migration.vendor":  run.Vendor,
+		"migration.dry_run": strconv.FormatBool(cfg.DryRun),
+	}
+	if run.Result.FlywayVersion != "" {
+		attrs["migration.flyway_version"] = run.Result.FlywayVersion
+	}
+	if applied := run.Result.AppliedVersions; len(applied) > 0 {
+		attrs["migration.applied_versions"] = strings.Join(applied, ",")
+	}
+
 	ev := &AuditEvent{
 		Type:               AuditEventTypeMigrationApplied,
 		Target:             target,
@@ -344,10 +374,8 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 		CompletedAt:        run.CompletedAt,
 		GitCommitSHA:       cfg.Audit.GitCommitSHA,
 		PipelineRunID:      cfg.Audit.PipelineRunID,
-		Attributes: map[string]string{
-			"migration.vendor":  run.Vendor,
-			"migration.dry_run": strconv.FormatBool(cfg.DryRun),
-		},
+		Version:            run.Result.EndingVersion,
+		Attributes:         attrs,
 	}
 
 	if run.Err != nil {
@@ -503,14 +531,17 @@ func redactPassword(output string, db *config.DatabaseConfig) string {
 	return redacted
 }
 
-// RunMigrationsAtStartup executes migrations automatically at application startup
+// RunMigrationsAtStartup executes migrations automatically at application
+// startup. The structured Result is discarded here; downstream consumers
+// pick it up via the migration.applied audit event.
 func (fm *FlywayMigrator) RunMigrationsAtStartup(ctx context.Context) error {
 	migrationConfig := fm.DefaultMigrationConfig()
 
 	// In development, run migrations automatically
 	if fm.config.App.Env == config.EnvDevelopment {
 		fm.logger.Info().Msg("Running automatic migrations in development environment")
-		return fm.Migrate(ctx, migrationConfig)
+		_, err := fm.Migrate(ctx, migrationConfig)
+		return err
 	}
 
 	// In other environments, only validate

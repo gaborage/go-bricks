@@ -76,7 +76,9 @@ observability:
     endpoint: stdout  # stdout | http://collector:4318/v1/traces | collector:4317 (gRPC)
 logger:
   level: info
-  pretty: false  # Must be false when observability is enabled (pretty + OTLP logs = panic)
+  output:
+    format: auto  # auto (default) | console | json — auto colors TTY stdout when OTLP logs are off
+  pretty: false   # Legacy explicit override; must be false when observability.logs.enabled is true
 ```
 
 `Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`

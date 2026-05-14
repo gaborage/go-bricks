@@ -393,8 +393,8 @@ func (d *Declarations) Hash() uint64 {
 	exchangeKeys := slices.Sorted(maps.Keys(d.Exchanges))
 	for _, name := range exchangeKeys {
 		ex := d.Exchanges[name]
-		h.Write([]byte(ex.Name))
-		h.Write([]byte(ex.Type))
+		writeString(h, ex.Name)
+		writeString(h, ex.Type)
 		writeBool(h, ex.Durable)
 		writeBool(h, ex.AutoDelete)
 		writeBool(h, ex.Internal)
@@ -406,7 +406,7 @@ func (d *Declarations) Hash() uint64 {
 	queueKeys := slices.Sorted(maps.Keys(d.Queues))
 	for _, name := range queueKeys {
 		q := d.Queues[name]
-		h.Write([]byte(q.Name))
+		writeString(h, q.Name)
 		writeBool(h, q.Durable)
 		writeBool(h, q.AutoDelete)
 		writeBool(h, q.Exclusive)
@@ -416,19 +416,19 @@ func (d *Declarations) Hash() uint64 {
 
 	// Hash bindings (already in insertion order)
 	for _, b := range d.Bindings {
-		h.Write([]byte(b.Queue))
-		h.Write([]byte(b.Exchange))
-		h.Write([]byte(b.RoutingKey))
+		writeString(h, b.Queue)
+		writeString(h, b.Exchange)
+		writeString(h, b.RoutingKey)
 		writeBool(h, b.NoWait)
 		writeMapArgs(h, b.Args)
 	}
 
 	// Hash publishers (already in insertion order)
 	for _, p := range d.Publishers {
-		h.Write([]byte(p.Exchange))
-		h.Write([]byte(p.RoutingKey))
-		h.Write([]byte(p.EventType))
-		h.Write([]byte(p.Description))
+		writeString(h, p.Exchange)
+		writeString(h, p.RoutingKey)
+		writeString(h, p.EventType)
+		writeString(h, p.Description)
 		writeBool(h, p.Mandatory)
 		writeBool(h, p.Immediate)
 		writeMapArgs(h, p.Headers)
@@ -437,10 +437,10 @@ func (d *Declarations) Hash() uint64 {
 	// Hash consumers (use consumerOrder for deterministic iteration)
 	for _, key := range d.consumerOrder {
 		c := d.consumerIndex[key]
-		h.Write([]byte(c.Queue))
-		h.Write([]byte(c.Consumer))
-		h.Write([]byte(c.EventType))
-		h.Write([]byte(c.Description))
+		writeString(h, c.Queue)
+		writeString(h, c.Consumer)
+		writeString(h, c.EventType)
+		writeString(h, c.Description)
 		writeBool(h, c.AutoAck)
 		writeBool(h, c.Exclusive)
 		writeBool(h, c.NoLocal)
@@ -451,13 +451,18 @@ func (d *Declarations) Hash() uint64 {
 	return h.Sum64()
 }
 
+// writeString writes s to the hash. hash.Hash.Write never returns an error.
+func writeString(h hash.Hash, s string) {
+	_, _ = h.Write([]byte(s))
+}
+
 // writeBool writes a boolean value to the hash as a single byte
 func writeBool(h hash.Hash, value bool) {
 	var b byte
 	if value {
 		b = 1
 	}
-	h.Write([]byte{b})
+	_, _ = h.Write([]byte{b})
 }
 
 // writeMapArgs writes a map[string]any to the hash in deterministic order
@@ -469,11 +474,11 @@ func writeMapArgs(h hash.Hash, args map[string]any) {
 	// Sort keys for deterministic hashing
 	keys := slices.Sorted(maps.Keys(args))
 	for _, key := range keys {
-		h.Write([]byte(key))
+		writeString(h, key)
 		// Hash the value based on its type
 		switch v := args[key].(type) {
 		case string:
-			h.Write([]byte(v))
+			writeString(h, v)
 		case int:
 			writeInt64(h, int64(v))
 		case int64:
@@ -493,12 +498,12 @@ func writeMapArgs(h hash.Hash, args map[string]any) {
 func writeInt64(h hash.Hash, value int64) {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, uint64(value)) //nolint:gosec // G115 - intentional bit reinterpretation for hash
-	h.Write(buf)
+	_, _ = h.Write(buf)
 }
 
 // writeFloat64 writes a float64 to the hash
 func writeFloat64(h hash.Hash, value float64) {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, math.Float64bits(value))
-	h.Write(buf)
+	_, _ = h.Write(buf)
 }

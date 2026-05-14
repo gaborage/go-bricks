@@ -256,6 +256,10 @@ type fixedLister struct{ ids []string }
 func (f *fixedLister) ListTenants(context.Context) ([]string, error) { return f.ids, nil }
 
 // makeHook returns a TenantResult callback that streams progress to out.
+// JSON mode emits the structured per-target fields populated by the engine's
+// Flyway-JSON parser (applied_versions, starting_version, ending_version,
+// duration_millis) so CI consumers can pin assertions on schema terminus
+// without re-parsing Flyway output themselves.
 func makeHook(out io.Writer, asJSON bool) func(migration.TenantResult) {
 	if asJSON {
 		enc := json.NewEncoder(out)
@@ -266,6 +270,7 @@ func makeHook(out io.Writer, asJSON bool) func(migration.TenantResult) {
 				"vendor":    r.Vendor,
 				"duration":  r.Duration.String(),
 			}
+			addResultFields(rec, &r.Result)
 			if r.Err != nil {
 				rec["error"] = r.Err.Error()
 				rec["status"] = "fail"
@@ -281,9 +286,60 @@ func makeHook(out io.Writer, asJSON bool) func(migration.TenantResult) {
 		if r.Err != nil {
 			status = "FAIL"
 			extra = ": " + r.Err.Error()
+		} else if summary := formatSchemaSummary(&r.Result); summary != "" {
+			extra = " " + summary
 		}
 		fmt.Fprintf(out, "  %s (%s) ... %s (%s)%s\n", r.TenantID, vendorOrUnknown(r.Vendor), status, r.Duration.Round(10*time.Millisecond), extra)
 	}
+}
+
+// addResultFields conditionally merges Result fields into the JSON event
+// record. Empty / zero-valued fields are omitted so consumers parsing the
+// stream don't see noise from validate / info actions (which never populate
+// a Result) or from migrate runs where Flyway crashed before emitting JSON.
+func addResultFields(rec map[string]any, r *migration.Result) {
+	if len(r.AppliedVersions) > 0 {
+		rec["applied_versions"] = r.AppliedVersions
+	}
+	if r.StartingVersion != "" {
+		rec["starting_version"] = r.StartingVersion
+	}
+	if r.EndingVersion != "" {
+		rec["ending_version"] = r.EndingVersion
+	}
+	if r.DurationMillis > 0 {
+		rec["duration_millis"] = r.DurationMillis
+	}
+	if r.FlywayVersion != "" {
+		rec["flyway_version"] = r.FlywayVersion
+	}
+	if r.ErrorCode != "" {
+		rec["error_code"] = r.ErrorCode
+	}
+}
+
+// formatSchemaSummary renders the human-readable schema-terminus summary
+// appended to each tenant line ("v0 → v2 (2 applied)" or "v2 (no-op)").
+// Empty when the Result is zero-valued (validate / info actions).
+func formatSchemaSummary(r *migration.Result) string {
+	if r.EndingVersion == "" && len(r.AppliedVersions) == 0 {
+		return ""
+	}
+	// Fall back to the last applied version when the parser couldn't read
+	// Flyway's targetSchemaVersion. Keeps the line useful instead of showing
+	// "v→v (N applied)" on engine output we didn't fully recognize.
+	end := r.EndingVersion
+	if end == "" && len(r.AppliedVersions) > 0 {
+		end = r.AppliedVersions[len(r.AppliedVersions)-1]
+	}
+	from := r.StartingVersion
+	if from == "" {
+		from = "∅"
+	}
+	if len(r.AppliedVersions) == 0 {
+		return fmt.Sprintf("schema=v%s (no-op)", end)
+	}
+	return fmt.Sprintf("schema=v%s→v%s (%d applied)", from, end, len(r.AppliedVersions))
 }
 
 func vendorOrUnknown(v string) string {
@@ -311,8 +367,8 @@ func writeSummary(out io.Writer, result *migration.MigrateAllResult, asJSON bool
 	}
 
 	fmt.Fprintf(out, "\n%s summary: %d tenants total, %d failed\n", titleASCII(result.Action.String()), total, len(failed))
-	for _, f := range failed {
-		fmt.Fprintf(out, "  - %s: %v\n", f.TenantID, f.Err)
+	for i := range failed {
+		fmt.Fprintf(out, "  - %s: %v\n", failed[i].TenantID, failed[i].Err)
 	}
 }
 
