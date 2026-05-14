@@ -165,7 +165,7 @@ func createBootstrapLogger() logger.Logger {
 	// optimistically assume OTLP logs are off. If they turn out to be on,
 	// WithOTelProvider's fail-fast will surface the conflict.
 	pretty := logger.ResolvePretty(
-		os.Getenv("LOG_FORMAT"),
+		os.Getenv("LOG_OUTPUT_FORMAT"),
 		false,
 		false,
 		logger.StdoutIsTerminal(),

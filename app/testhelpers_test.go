@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,10 +11,18 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
+// configLoadMu serializes os.Chdir + config.Load() so callers of
+// loadConfigFromYAML are safe under t.Parallel() if anyone adds it later.
+var configLoadMu sync.Mutex
+
 // loadConfigFromYAML writes the given YAML to a temp config.yaml and loads
-// it via config.Load(). It restores the original working directory on cleanup.
+// it via config.Load(). It restores the working directory before returning, so
+// callers are not exposed to the temporary chdir.
 func loadConfigFromYAML(t *testing.T, yaml string) *config.Config {
 	t.Helper()
+
+	configLoadMu.Lock()
+	defer configLoadMu.Unlock()
 
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.yaml")
@@ -21,10 +30,8 @@ func loadConfigFromYAML(t *testing.T, yaml string) *config.Config {
 
 	origDir, err := os.Getwd()
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = os.Chdir(origDir)
-	})
 	require.NoError(t, os.Chdir(tmpDir))
+	defer func() { _ = os.Chdir(origDir) }()
 
 	cfg, err := config.Load()
 	require.NoError(t, err)

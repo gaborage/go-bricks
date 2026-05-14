@@ -120,11 +120,11 @@ database:
 
 ```bash
 # "cannot use OTLP logs with pretty=true"
-# → Set logger.pretty: false when observability.logs.enabled: true
-# → Or omit logger.pretty entirely and rely on log.output.format: auto (default)
+# → Set log.pretty: false when observability.logs.enabled: true
+# → Or omit log.pretty entirely and rely on log.output.format: auto (default)
 #   which picks JSON automatically when OTLP logs are active.
 
-# Local logs are uncolored
+# Local logs are not colored as expected
 # → Default is log.output.format: auto, which colors stdout only when it's a TTY
 #   AND OTLP logs aren't active. Force colors via log.output.format: console
 #   (incompatible with observability.logs.enabled: true).
