@@ -116,13 +116,20 @@ func (s *PostgresStore) timestamp() time.Time {
 
 // CreateTable creates the provisioning table and its supporting indexes
 // idempotently. Safe to call on a database where the table already exists.
+//
+// SQL composition note: PostgresStateTableDDL and PostgresStateTableIndexes
+// are package-internal string constants; the only %s substitution is
+// s.quotedTable (and s.indexBase for the index template), both of which are
+// regex-validated identifiers (safePGTableIdent) captured at construction.
+// No user-controlled value reaches the formatted SQL — see the per-line
+// NOSONAR suppressions below.
 func (s *PostgresStore) CreateTable(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(PostgresStateTableDDL, s.quotedTable)); err != nil {
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(PostgresStateTableDDL, s.quotedTable)); err != nil { // NOSONAR S2077: validated identifier substitution; no user input
 		return fmt.Errorf("provisioning postgres: create table: %w", err)
 	}
 	for _, tpl := range PostgresStateTableIndexes {
 		stmt := fmt.Sprintf(tpl, s.quotedTable, s.indexBase)
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil { // NOSONAR S2077: validated identifier substitution; no user input
 			return fmt.Errorf("provisioning postgres: create index: %w", err)
 		}
 	}
@@ -139,7 +146,7 @@ func (s *PostgresStore) Get(ctx context.Context, jobID string) (*Job, error) {
 		 FROM %s WHERE id = $1`,
 		s.quotedTable,
 	)
-	row := s.db.QueryRowContext(ctx, query, jobID)
+	row := s.db.QueryRowContext(ctx, query, jobID) // NOSONAR S2077: query built from validated-identifier template; jobID via $1
 	var (
 		job          Job
 		stateStr     string
@@ -191,7 +198,7 @@ func (s *PostgresStore) Upsert(ctx context.Context, job *Job) (*Job, error) {
 		 ON CONFLICT (id) DO NOTHING`,
 		s.quotedTable,
 	)
-	if _, err := s.db.ExecContext(ctx, insert,
+	if _, err := s.db.ExecContext(ctx, insert, // NOSONAR S2077: insert built from validated-identifier template; all 7 values via $N
 		job.ID, job.TenantID, string(StatePending), 0, "", metadataJSON, now,
 	); err != nil {
 		return nil, fmt.Errorf("provisioning postgres: upsert insert: %w", err)
@@ -237,7 +244,7 @@ func (s *PostgresStore) Transition(
 		 WHERE id = $5 AND state = $6`,
 		s.quotedTable, attemptsExpr,
 	)
-	res, err := s.db.ExecContext(ctx, update,
+	res, err := s.db.ExecContext(ctx, update, // NOSONAR S2077: update built from validated-identifier + literal-bool-selected fragment; all 6 values via $N
 		string(to), lastError, metadataJSON, s.timestamp(), jobID, string(from),
 	)
 	if err != nil {
