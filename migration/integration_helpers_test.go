@@ -25,6 +25,9 @@ import (
 // pattern in testing/containers/postgresql.go so local runs without Flyway
 // installed degrade to a skip rather than a hard failure. CI's framework-
 // integration-test job installs the binary so this branch is exercised.
+//
+// Called lazily by flywayConfig() / migrator() so PG-only role-separation
+// tests can use the same integrationEnv without requiring Flyway.
 func flywayOrSkip(t *testing.T) string {
 	t.Helper()
 	path, err := exec.LookPath("flyway")
@@ -62,12 +65,11 @@ type integrationEnv struct {
 }
 
 // newIntegrationEnv starts a PG testcontainer + scaffolds a per-test Flyway
-// config and migrations directory. flywayOrSkip is checked first so tests
-// fail-fast on hosts without Flyway rather than spending the testcontainer
-// startup time only to skip afterward.
+// config and migrations directory. The Flyway-or-skip check is deferred
+// until flywayConfig() / migrator() is called so PG-only role-separation
+// tests don't require Flyway on PATH.
 func newIntegrationEnv(t *testing.T) *integrationEnv {
 	t.Helper()
-	flywayPath := flywayOrSkip(t)
 
 	parent, cancelParent := testCtx(t)
 	t.Cleanup(cancelParent)
@@ -101,7 +103,6 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 
 	return &integrationEnv{
 		container:     pg,
-		flywayPath:    flywayPath,
 		configPath:    configPath,
 		migrationsDir: migrationsDir,
 		host:          host,
@@ -153,8 +154,14 @@ func (e *integrationEnv) dbConfigFor(dbName string) *config.DatabaseConfig {
 
 // flywayConfig returns a *Config wired with the env's binary + conf +
 // migrations directory. Tests typically copy this and override individual
-// fields (e.g. Timeout, Audit) for their scenario.
-func (e *integrationEnv) flywayConfig() *Config {
+// fields (e.g. Timeout, Audit) for their scenario. Lazily resolves the
+// Flyway binary on PATH and t.Skips when absent so PG-only tests reusing
+// integrationEnv don't require Flyway.
+func (e *integrationEnv) flywayConfig(t *testing.T) *Config {
+	t.Helper()
+	if e.flywayPath == "" {
+		e.flywayPath = flywayOrSkip(t)
+	}
 	return &Config{
 		FlywayPath:    e.flywayPath,
 		ConfigPath:    e.configPath,
@@ -219,4 +226,34 @@ type schemaHistoryRow struct {
 	Version     string
 	Description string
 	Success     bool
+}
+
+// adminDB returns a *sql.DB authenticated as the container admin user against
+// the env's default database. Used by role-provisioning integration tests to
+// create roles and schemas before connecting as the freshly-provisioned roles.
+// The connection is closed automatically when the test ends.
+func (e *integrationEnv) adminDB(t *testing.T) *sql.DB {
+	t.Helper()
+	return e.openAsRole(t, e.adminUser, e.adminPassword)
+}
+
+// openAsRole returns a *sql.DB authenticated as the given PostgreSQL role
+// using the env's default database. Used by role-separation tests to verify
+// that DDL is rejected for runtime roles and that DML is permitted for
+// migrator-owned tables via ALTER DEFAULT PRIVILEGES.
+func (e *integrationEnv) openAsRole(t *testing.T, role, password string) *sql.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		role, password, e.host, e.port, e.defaultDB)
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err, "open connection as role %q", role)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Eagerly verify the credential — sql.Open is lazy and a bad password
+	// would otherwise surface inside the test body, masking the credential
+	// problem as a feature failure.
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	require.NoError(t, db.PingContext(ctx), "ping as role %q", role)
+	return db
 }
