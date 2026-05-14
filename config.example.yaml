@@ -123,6 +123,19 @@ log:
   output:
     format: json
     file: ""
+  # sensitive_fields extends logger.DefaultFilterConfig (password, api_key,
+  # token, …) with extra field names whose values must be masked in every
+  # log line — including framework middleware. Substring match,
+  # case-insensitive. For PCI/PII workloads (PAN, CVV2, OTP). For full
+  # control (custom mask value, opt-out, code composition) use
+  # app.Options.LoggerFilterConfig instead — see
+  # wiki/observability.md#sensitive-data-filtering.
+  sensitive_fields:
+    - pan
+    - primary_account_number
+    - cvv
+    - cvv2
+    - otp
 
 # Messaging configuration (OPTIONAL - only required if using AMQP/RabbitMQ)
 # If not using messaging, you can omit this entire section or leave broker.url empty

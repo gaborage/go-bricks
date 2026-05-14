@@ -40,6 +40,112 @@ Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `Asse
 
 **Log format selection (`log.output.format`):** Defaults to `auto`, which resolves to console (colored) output when stdout is a terminal AND OTLP log export is not active; otherwise structured JSON. Explicit values: `console` / `pretty` (always colored), `json` / `structured` (always JSON). The legacy `log.pretty: true` still works and overrides `log.output.format`. Combining pretty output with `observability.logs.enabled: true` still panics at startup — `auto` is the safe default that keeps local dev colored and production JSON without manual configuration.
 
+## Sensitive Data Filtering
+
+Every log line emitted via the framework logger passes through a `logger.SensitiveDataFilter` that masks values whose **field names** match an allowlist (case-insensitive substring). The filter is applied uniformly — including in the framework's own request/response middleware, AMQP consumer panic recovery, slow-request warnings, scheduler job traces, and any module-level `log.Info()/Error()/...` call. There is no opt-in surface to wrap "after the fact" — the filter is wired into the logger before any subsystem captures a reference to it.
+
+### Default field list
+
+`logger.DefaultFilterConfig()` (in [`logger/filter.go`](../logger/filter.go)) ships these names (all matched case-insensitive substring, so `password` matches `Password`, `db_password`, `oldPasswordHash`, etc.):
+
+| Category | Default names |
+|---|---|
+| Credentials | `password`, `passwd`, `pwd`, `secret`, `key`, `api_key`, `apikey`, `token`, `access_token`, `refresh_token` |
+| Auth headers | `auth`, `authorization` |
+| Generic | `credential`, `credentials` |
+| Connection strings | `broker_url`, `database_url`, `db_url` |
+
+URLs in masked fields keep host/path but strip the password: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`. The default mask value is `***`.
+
+### Extending the filter (two seams)
+
+For regulated payloads — PCI-DSS (PAN, CVV2), PII (SSN, account numbers), one-time passwords — extend the list at bootstrap. Both seams are additive-only changes; existing apps see no behavior difference until they opt in.
+
+**Seam 1 — YAML config (recommended for static lists):**
+
+```yaml
+log:
+  level: info
+  sensitive_fields:                     # NEW: appended to DefaultFilterConfig
+    - pan                               # masks "pan", "PAN", "card_pan"
+    - primary_account_number            # masks the long-form variant too
+    - cvv
+    - cvv2
+    - cvc2
+    - otp
+    - one_time_password
+    - ssn
+    - tax_id
+```
+
+No Go code changes. The framework reads `cfg.Log.SensitiveFields` during `Builder.CreateLogger`, merges it into `DefaultFilterConfig().SensitiveFields`, and threads the resulting filter through `logger.NewWithFilter(...)` before any module's `Init(deps)` runs. Every default name remains in effect; your custom entries are appended.
+
+**Seam 2 — `app.Options.LoggerFilterConfig` (full replacement, code-level):**
+
+Use this when YAML can't express what you need:
+- Custom `MaskValue` (e.g., `[REDACTED]`, `<hidden>`, vendor-specific).
+- Opting out of every default field (testing, deterministic-output fixtures).
+- Composing the list at startup from a secret manager, feature flag, or remote config.
+- Different policies per deployment compiled from one binary.
+
+```go
+import (
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/logger"
+)
+
+// Common pattern: extend defaults + override mask value.
+base := logger.DefaultFilterConfig()
+base.SensitiveFields = append(base.SensitiveFields,
+    "pan", "primary_account_number", "cvv", "cvv2", "otp",
+)
+base.MaskValue = "[REDACTED]"
+
+fw, err := app.NewWithOptions(&app.Options{
+    LoggerFilterConfig: base,
+})
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
+
+// Opt-out variant (no masking at all — use only for test fixtures or
+// environments where structured logs are sandboxed):
+fw, err = app.NewWithOptions(&app.Options{
+    LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
+})
+```
+
+**Precedence** when both are set: `Options.LoggerFilterConfig` wins. The YAML `log.sensitive_fields` value is **ignored entirely** in that case (no silent merge — the consumer is in full control). Mention this in your runbook if your deployment pattern mixes both.
+
+### Matching semantics — what gets masked
+
+- **Field names**, not field values. The filter never scans string contents for PAN-shaped digit sequences or Luhn-valid numbers. Value scanning is a defense-in-depth concern that belongs in application code (see *Defense in depth*, below).
+- **Case-insensitive substring**. `pan` matches `pan`, `PAN`, `Pan`, `card_pan`, `primary_account_number`. This is intentional — it survives typos, naming-convention drift, and underscored-vs-camelCase variants in different modules.
+- **Recursive into structures**. Direct `Str/Int/Interface(...)` fields, nested `map[string]any`, struct fields (using `json` tags when present), and slice/array elements are all walked. Recursion is bounded (`logger.DefaultMaxDepth = 8`) and cycle-safe (visited pointer set).
+- **URLs as a special case**. If a masked field's value is an HTTP/AMQP URL with `user:password@host`, only the password component is replaced — the rest of the URL stays readable. This keeps `database_url` and `broker_url` actionable in error logs.
+
+### What this does *not* do
+
+- **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught. Build a `sensitive.Scrub(...)` helper in your service layer if you need this.
+- **No per-tenant policies.** The filter is configured once at bootstrap and applied uniformly to every log line, regardless of tenant context. If different tenants have different masking requirements, you need either separate deployments or a custom logger wrapper at the handler layer.
+- **No metric/trace masking.** The filter only intercepts log records. OTel span attributes and metric labels go through different code paths. Treat span attributes as "would I publish this on a dashboard?" — never put a PAN in a span attribute.
+
+### Defense in depth (recommended for PCI workloads)
+
+Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combines it with:
+
+1. **Don't log raw payloads.** Use validated DTOs in handlers, mask at the source: `log.Str("pan_last4", req.PAN[len(req.PAN)-4:])` is safer than relying on field-name masking to catch a `log.Interface("payload", req)` call.
+2. **Mask in error wrapping.** When wrapping errors that may include sensitive context, redact before `fmt.Errorf`. Helper pattern: `func MaskPAN(s string) string`.
+3. **Scrub free-text values.** Outside of structured logging, regex-scan any `log.Msg("...")` argument for digit sequences with Luhn validity. Implement as a `LogFilter` wrapper if your compliance auditor requires evidence.
+4. **Audit your default list.** Run `git grep -E 'Str|Int64|Interface\("([^"]+)"' --include='*.go'` periodically. Anything that looks PII-shaped should be in the allowlist.
+5. **Test that masking is active.** Add at least one integration test that emits a sensitive value and asserts the captured log line contains `***` (or your configured mask value). See `logger.TestNewWithFilter` for the pattern.
+
+### Migration notes
+
+- **Existing apps see no change** until they set either seam. The framework's logger continues to call `NewSensitiveDataFilter(DefaultFilterConfig())` internally when both `Options.LoggerFilterConfig` and `cfg.Log.SensitiveFields` are absent.
+- **Removing the in-module wrapper anti-pattern**: if your codebase previously wrapped `deps.Logger` per-module to apply a filter, you can delete that wrapper after migrating to YAML or `Options.LoggerFilterConfig`. The bootstrap-level filter covers every framework subsystem; the per-module wrapper covered only your code.
+- **Upgrading from v0.30.0**: the only behavioral change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New`. No flag, no environment variable, no migration step.
+
 ## Custom Metrics
 
 GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.

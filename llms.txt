@@ -4131,6 +4131,82 @@ func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (serv
 - `logger.WithFields(map)` → Persistent fields for all subsequent logs
 - Fluent API: chain methods → end with `.Msg("message")`
 
+### Sensitive Data Filtering (PCI / PII Masking)
+
+The framework logger masks values whose field names match a configurable allowlist (case-insensitive substring). The default list covers common credentials (`password`, `api_key`, `token`, `secret`, `authorization`, `broker_url`, `database_url`, …) plus URL passwords for `http(s)://` and `amqp(s)://` URIs. **Masking applies to every log line** emitted via the framework logger — including the framework's own request/response middleware, AMQP consumer panic recovery, slow-request warnings, and any module-level log call.
+
+For regulated payloads (PAN, CVV2, OTP, account numbers) you extend the list at bootstrap. Two seams are exposed; both are additive-only changes to `app.Options` / `config.yaml`.
+
+**Option 1 — YAML config (extends defaults):**
+
+```yaml
+log:
+  level: info
+  sensitive_fields:        # NEW: appended to logger.DefaultFilterConfig
+    - pan
+    - primary_account_number
+    - cvv
+    - cvv2
+    - otp
+```
+
+```go
+// No code change required at the call site. The framework reads
+// cfg.Log.SensitiveFields at startup and threads a SensitiveDataFilter
+// through the logger before any module or middleware captures a
+// reference to it.
+fw, err := app.New()
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
+
+// Inside a handler — values for "pan" are masked before reaching stdout / OTLP:
+log.Info().
+    Str("pan", req.PAN).            // → "pan":"***"
+    Str("primary_account_number", req.PAN). // → "***"
+    Str("order_id", req.OrderID).   // → "order_id":"ord_12345" (not in allowlist)
+    Msg("Authorizing payment")
+```
+
+**Option 2 — `app.Options.LoggerFilterConfig` (full replacement, code-level):**
+
+Use this when you need a custom `MaskValue`, want to opt out of every default field, or are composing the list from a secret manager / feature flag at startup. Options take precedence over YAML.
+
+```go
+import (
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/logger"
+)
+
+// Extend defaults + override mask value:
+base := logger.DefaultFilterConfig()
+base.SensitiveFields = append(base.SensitiveFields,
+    "pan", "primary_account_number", "cvv", "cvv2", "otp",
+)
+base.MaskValue = "[REDACTED]"
+
+fw, err := app.NewWithOptions(&app.Options{
+    LoggerFilterConfig: base,
+})
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
+
+// Opt out entirely (e.g., test fixtures emitting deterministic payloads):
+fw, err = app.NewWithOptions(&app.Options{
+    LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
+})
+```
+
+**Matching semantics:**
+- Substring, case-insensitive. `pan` masks `pan`, `PAN`, `card_pan`, `primary_account_number`.
+- Applies to direct `Str/Int/Interface(...)` fields, nested maps, structs (uses `json` tags when present), and slice/array elements.
+- URL values whose key is masked get the password stripped but path/host preserved: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`.
+
+**What this does *not* do:**
+- It does not scan string values for PAN-shaped digit sequences (no Luhn detection). Defense-in-depth value scrubbing belongs in application code.
+- It does not cover per-tenant policies — the filter is configured once at bootstrap and applied to every log line uniformly.
+
 ### Dual-Mode Logging — Action vs Trace Logs
 
 GoBricks separates two log streams to keep volume under control without losing visibility:

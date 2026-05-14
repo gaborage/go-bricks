@@ -83,7 +83,7 @@ func (s *Server) buildFullPath(route string) string {
 // New creates a new HTTP server instance with the given configuration and logger.
 // It initializes Echo with middlewares, error handling, and health check endpoints.
 func New(cfg *config.Config, log logger.Logger) *Server {
-	SetCaptureStackTraces(isDevelopmentEnv(cfg.App.Env))
+	SetCaptureStackTraces(cfg.App.IsDevelopment())
 
 	e := echo.New()
 	// Use an error handler that emits standardized APIResponse envelopes.
@@ -310,7 +310,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
 	code := statusToErrorCode(status)
 	base := NewBaseAPIError(code, msg, status)
 	// Include raw error details in development
-	if isDevelopmentEnv(cfg.App.Env) {
+	if cfg.App.IsDevelopment() {
 		_ = base.WithDetails("error", err.Error())
 	}
 
