@@ -753,7 +753,7 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 		Message: apiErr.Message(),
 	}
 
-	if isDevelopmentEnv(cfg.App.Env) {
+	if cfg.App.IsDevelopment() {
 		errorResp.Details = devDetails(apiErr)
 	}
 
@@ -859,7 +859,7 @@ func formatRawErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Confi
 		Message: apiErr.Message(),
 	}
 
-	if isDevelopmentEnv(cfg.App.Env) {
+	if cfg.App.IsDevelopment() {
 		payload.Details = devDetails(apiErr)
 	}
 

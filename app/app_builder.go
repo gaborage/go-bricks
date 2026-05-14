@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -59,7 +60,7 @@ func (b *Builder) CreateLogger() *Builder {
 		otlpLogsActive(b.cfg),
 		logger.StdoutIsTerminal(),
 	)
-	b.logger = logger.New(b.cfg.Log.Level, pretty)
+	b.logger = logger.NewWithFilter(b.cfg.Log.Level, pretty, resolveLoggerFilterConfig(b.opts, &b.cfg.Log))
 	b.logger.Info().
 		Str("app", b.cfg.App.Name).
 		Str("env", b.cfg.App.Env).
@@ -67,6 +68,45 @@ func (b *Builder) CreateLogger() *Builder {
 		Msg("Starting application")
 
 	return b
+}
+
+// resolveLoggerFilterConfig picks the sensitive-data filter applied to the
+// framework logger. Precedence:
+//
+//  1. opts.LoggerFilterConfig — full replacement; consumer is in control.
+//  2. cfg.SensitiveFields — extends logger.DefaultFilterConfig with custom
+//     field names (substring-matched, case-insensitive). Values are
+//     trimmed and case-insensitively de-duplicated against the defaults
+//     and each other; empty entries are dropped. An un-normalized empty
+//     string would make strings.Contains match every field, silently
+//     masking the entire log stream.
+//  3. nil — logger.NewWithFilter falls back to logger.DefaultFilterConfig
+//     (identical to the legacy logger.New path; preserved for back-compat).
+func resolveLoggerFilterConfig(opts *Options, cfg *config.LogConfig) *logger.FilterConfig {
+	if opts != nil && opts.LoggerFilterConfig != nil {
+		return opts.LoggerFilterConfig
+	}
+	if cfg != nil && len(cfg.SensitiveFields) > 0 {
+		base := logger.DefaultFilterConfig()
+		seen := make(map[string]struct{}, len(base.SensitiveFields)+len(cfg.SensitiveFields))
+		for _, f := range base.SensitiveFields {
+			seen[strings.ToLower(strings.TrimSpace(f))] = struct{}{}
+		}
+		for _, raw := range cfg.SensitiveFields {
+			field := strings.TrimSpace(raw)
+			if field == "" {
+				continue
+			}
+			key := strings.ToLower(field)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			base.SensitiveFields = append(base.SensitiveFields, field)
+		}
+		return base
+	}
+	return nil
 }
 
 // otlpLogsActive reports whether OTLP log export will run after bootstrap.

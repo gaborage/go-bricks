@@ -90,6 +90,7 @@ const (
 	fieldMessaging       = "messaging"
 	fieldServerPort      = "server.port"
 	fieldLogLevel        = "log.level"
+	fieldAppEnv          = "app.env"
 	fieldAppRateLimit    = "app.rate.limit"
 	fieldCacheRedisDB    = "cache.redis.database"
 	fieldCacheRedisPool  = "cache.redis.poolsize"
@@ -150,8 +151,8 @@ func validateMessaging(cfg *MessagingConfig) error {
 }
 
 // validateApp validates the application configuration in cfg.
-// It requires Name and Version to be non-empty, Env to be one of
-// EnvDevelopment, EnvStaging, or EnvProduction, and Rate.Limit to be non-negative.
+// It requires Name and Version to be non-empty, Env to match envFormat (see
+// envFormat docs for the policy), and Rate.Limit to be non-negative.
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
@@ -162,9 +163,12 @@ func validateApp(cfg *AppConfig) error {
 		return NewMissingFieldError("app.version", "APP_VERSION", "app.version")
 	}
 
-	validEnvs := []string{EnvDevelopment, EnvStaging, EnvProduction}
-	if !slices.Contains(validEnvs, cfg.Env) {
-		return NewInvalidFieldError("app.env", fmt.Sprintf("'%s' is not valid", cfg.Env), validEnvs)
+	if !envFormat.MatchString(cfg.Env) {
+		return NewInvalidFieldError(
+			fieldAppEnv,
+			fmt.Sprintf("'%s' must be 1-32 lowercase alphanumeric or hyphen, starting with a letter", cfg.Env),
+			nil,
+		)
 	}
 
 	if cfg.Rate.Limit < 0 {

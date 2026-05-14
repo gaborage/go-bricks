@@ -154,7 +154,7 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 func createBootstrapLogger() logger.Logger {
 	level := logger.LevelInfo
 	env := strings.TrimSpace(os.Getenv("APP_ENV"))
-	if env == "" || strings.EqualFold(env, "development") || strings.EqualFold(env, "dev") {
+	if env == "" || config.IsDevelopment(env) {
 		level = logger.LevelDebug
 	}
 	if envLevel := os.Getenv("LOG_LEVEL"); envLevel != "" {

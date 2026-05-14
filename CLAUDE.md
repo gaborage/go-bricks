@@ -75,7 +75,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
 - Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
 - Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
-- No hardcoded credentials, no secrets in logs or error messages.
+- No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PCI/PII workloads (PAN, CVV2, OTP) extend the default list via `log.sensitive_fields` in YAML or `app.Options.LoggerFilterConfig` in code — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
 - Audit logging for sensitive operations (access control, data modifications).
 
 ### Practices & Patterns
@@ -149,7 +149,7 @@ make lint                       # Run golangci-lint
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
-- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-roles.md](wiki/migration-roles.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), and [ADR-019](wiki/adr-019-migration-audit-delivery.md).
+- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". The `migration/provisioning/` subpackage carries a durable, crash-recoverable per-tenant state machine (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches) for dynamic tenant provisioning. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-roles.md](wiki/migration-roles.md), [migration-provisioning.md](wiki/migration-provisioning.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), [ADR-019](wiki/adr-019-migration-audit-delivery.md), and [ADR-021](wiki/adr-021-provisioning-state-machine.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named RSA key pair management from DER files or base64 env vars
@@ -546,6 +546,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **Consumer concurrency (v0.17.0):** Default workers `1` → `NumCPU * 4`. Set `Workers: 1` for sequential ordering.
 - **Message error handling (v2.X):** Errors and panics now nack without requeue (no infinite retry).
 - **MongoDB removed (ADR-012):** Only PostgreSQL and Oracle supported.
+- **Env policy (ADR-022):** `app.env` is no longer enum-validated to `{development, staging, production}`; consumer projects may use any conforming string (`local`, `tst`, `stg`, `prd`, `production-eu`, …). Behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` predicates with documented alias sets (`{development, dev, local}` / `{production, prod, prd}`). `APP_ENV=prd`/`prod` now triggers production-strict CORS; `APP_ENV=dev`/`local` now enable framework dev conveniences and auto-migrate.
 
 ## File Organization
 
