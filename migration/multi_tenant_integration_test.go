@@ -32,7 +32,7 @@ func TestMigrateAllAdvisoryLockSerializesConcurrentRuns(t *testing.T) {
 	configs := newFakeConfigProvider(map[string]*config.DatabaseConfig{tenantID: tenantCfg})
 	migrator := env.migrator()
 
-	opts := MigrateAllOptions{BaseConfig: env.flywayConfig()}
+	opts := MigrateAllOptions{BaseConfig: env.flywayConfig(t)}
 	ctx, cancel := testCtx(t)
 	defer cancel()
 
@@ -106,7 +106,7 @@ func TestMigrateAllParallelNonBlocking(t *testing.T) {
 		tenantB: cfgB,
 	})
 	opts := MigrateAllOptions{
-		BaseConfig:  env.flywayConfig(),
+		BaseConfig:  env.flywayConfig(t),
 		Parallelism: 2,
 	}
 
