@@ -168,7 +168,19 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 		}
 	}
 
-	parts := strings.Split(strings.Trim(path, "/"), "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	// Tolerate trailing slashes by dropping trailing empty segments, then
+	// reject any intermediate empty segment — malformed inputs like
+	// "/foo//bar" must not produce a tenant ID at any segment index, not
+	// just the slot pointing at the empty part.
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	for _, p := range parts {
+		if p == "" {
+			return "", ErrTenantResolutionFailed
+		}
+	}
 	if r.Segment > len(parts) {
 		return "", ErrTenantResolutionFailed
 	}

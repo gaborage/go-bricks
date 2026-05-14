@@ -64,7 +64,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 **Trailing slashes are tolerated**: `/itsp/acme/` resolves identically to `/itsp/acme`.
 
-**Empty segments are rejected**: `/itsp//foo` is not a valid resolution.
+**Empty segments are rejected outright**: paths with intermediate empty parts like `/itsp//foo` or a leading double-slash (`//foo`) fail at any segment index — these are malformed inputs that must not produce a tenant ID regardless of which slot is configured.
 
 **Query strings and fragments are ignored**: they're isolated from `URL.Path` by the standard library before the resolver sees the request.
 

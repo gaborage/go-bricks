@@ -556,6 +556,30 @@ func TestPathResolverResolveTenant(t *testing.T) {
 			path:     "/itsp/clientD?foo=bar&baz=qux",
 			expected: "clientD",
 		},
+		{
+			name:     "fragment_isolated_from_segment",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/itsp/clientF#section",
+			expected: "clientF",
+		},
+		{
+			name:        "intermediate_empty_segment_rejected_for_any_index",
+			resolver:    &PathResolver{Segment: 3},
+			path:        "/foo//bar/baz",
+			expectError: true,
+		},
+		{
+			name:        "leading_double_slash_rejected",
+			resolver:    &PathResolver{Segment: 1},
+			path:        "//foo",
+			expectError: true,
+		},
+		{
+			name:     "multiple_trailing_slashes_tolerated",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:     "/itsp/clientE//",
+			expected: "clientE",
+		},
 	}
 
 	for _, tc := range tests {
