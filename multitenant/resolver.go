@@ -160,8 +160,9 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 	}
 
 	path := req.URL.Path
-	if r.Prefix != "" {
-		if _, ok := pathutil.StripPathPrefix(path, pathutil.NormalizePrefix(r.Prefix)); !ok {
+	normalizedPrefix := pathutil.NormalizePrefix(r.Prefix)
+	if normalizedPrefix != "" {
+		if _, ok := pathutil.StripPathPrefix(path, normalizedPrefix); !ok {
 			return "", ErrTenantResolutionFailed
 		}
 	}
