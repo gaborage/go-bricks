@@ -515,6 +515,18 @@ func TestPathResolverResolveTenant(t *testing.T) {
 			expected: "clientC",
 		},
 		{
+			name:     "root_prefix_treated_as_no_prefix",
+			resolver: &PathResolver{Segment: 2, Prefix: "/"},
+			path:     "/itsp/clientG/lifecycle",
+			expected: "clientG",
+		},
+		{
+			name:     "trailing_slash_prefix_normalized",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp/"},
+			path:     "/itsp/clientH",
+			expected: "clientH",
+		},
+		{
 			name:        "missing_segment_returns_error",
 			resolver:    &PathResolver{Segment: 3},
 			path:        "/only/two",

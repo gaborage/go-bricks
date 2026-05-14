@@ -171,21 +171,25 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	case config.ResolverTypePath:
 		return wrap(newPathResolver())
 	case config.ResolverTypeComposite:
-		resolvers := []multitenant.TenantResolver{}
-		if header := newHeaderResolver(); header != nil {
-			resolvers = append(resolvers, header)
-		}
-		if subdomain := newSubdomainResolver(); subdomain != nil {
-			resolvers = append(resolvers, subdomain)
-		}
-		if pathr := newPathResolver(); pathr != nil {
-			resolvers = append(resolvers, pathr)
-		}
-		if len(resolvers) == 0 {
-			return nil
-		}
-		return &multitenant.CompositeResolver{Resolvers: resolvers, TenantRegex: tenantRegex}
+		return buildCompositeTenantResolver(tenantRegex, newHeaderResolver(), newSubdomainResolver(), newPathResolver())
 	default:
 		return nil
 	}
+}
+
+// buildCompositeTenantResolver collects the non-nil sub-resolvers (header,
+// subdomain, path) into a single CompositeResolver wrapped with the tenant-ID
+// validation regex. Returns nil when no sub-resolver is configured so the
+// caller can fall through to the default no-resolution path.
+func buildCompositeTenantResolver(tenantRegex *regexp.Regexp, subs ...multitenant.TenantResolver) multitenant.TenantResolver {
+	resolvers := make([]multitenant.TenantResolver, 0, len(subs))
+	for _, r := range subs {
+		if r != nil {
+			resolvers = append(resolvers, r)
+		}
+	}
+	if len(resolvers) == 0 {
+		return nil
+	}
+	return &multitenant.CompositeResolver{Resolvers: resolvers, TenantRegex: tenantRegex}
 }

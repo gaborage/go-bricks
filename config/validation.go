@@ -934,31 +934,44 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 		return NewInvalidFieldError("multitenant.resolver.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
 
-	// Set defaults
 	if cfg.Header == "" {
 		cfg.Header = "X-Tenant-ID"
 	}
 
-	// Validate subdomain-specific configuration
-	if cfg.Type == ResolverTypeSubdomain || cfg.Type == ResolverTypeComposite {
-		if strings.TrimSpace(cfg.Domain) == "" {
-			return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
-		}
-		// Normalize: leading dot is optional in config
-		if !strings.HasPrefix(cfg.Domain, ".") {
-			cfg.Domain = "." + cfg.Domain
-		}
+	if err := validateSubdomainResolverFields(cfg); err != nil {
+		return err
 	}
+	return validatePathResolverFields(cfg)
+}
 
-	if cfg.Type == ResolverTypePath || (cfg.Type == ResolverTypeComposite && cfg.Path.Segment != 0) {
-		if cfg.Path.Segment <= 0 {
-			return NewValidationError("multitenant.resolver.path.segment", errMustBePositive)
-		}
-		if cfg.Path.Prefix != "" && !strings.HasPrefix(cfg.Path.Prefix, "/") {
-			return NewValidationError("multitenant.resolver.path.prefix", "must start with '/' when set")
-		}
+func validateSubdomainResolverFields(cfg *ResolverConfig) error {
+	if cfg.Type != ResolverTypeSubdomain && cfg.Type != ResolverTypeComposite {
+		return nil
 	}
+	if strings.TrimSpace(cfg.Domain) == "" {
+		return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
+	}
+	if !strings.HasPrefix(cfg.Domain, ".") {
+		cfg.Domain = "." + cfg.Domain
+	}
+	return nil
+}
 
+// validatePathResolverFields enforces path-segment + prefix rules for the path
+// resolver and for composite configurations that opt into a path sub-resolver
+// (Segment != 0 inside a composite indicates intent to include path).
+func validatePathResolverFields(cfg *ResolverConfig) error {
+	required := cfg.Type == ResolverTypePath ||
+		(cfg.Type == ResolverTypeComposite && cfg.Path.Segment != 0)
+	if !required {
+		return nil
+	}
+	if cfg.Path.Segment <= 0 {
+		return NewValidationError("multitenant.resolver.path.segment", errMustBePositive)
+	}
+	if cfg.Path.Prefix != "" && !strings.HasPrefix(cfg.Path.Prefix, "/") {
+		return NewValidationError("multitenant.resolver.path.prefix", "must start with '/' when set")
+	}
 	return nil
 }
 

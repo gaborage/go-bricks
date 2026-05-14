@@ -1,9 +1,9 @@
 package server
 
 import (
-	"strings"
-
 	"github.com/labstack/echo/v5"
+
+	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 type routeGroup struct {
@@ -14,7 +14,7 @@ type routeGroup struct {
 func newRouteGroup(group *echo.Group, prefix string) RouteRegistrar {
 	return &routeGroup{
 		group:  group,
-		prefix: normalizePrefix(prefix),
+		prefix: pathutil.NormalizePrefix(prefix),
 	}
 }
 
@@ -24,7 +24,7 @@ func (rg *routeGroup) Add(method, path string, handler echo.HandlerFunc, middlew
 }
 
 func (rg *routeGroup) Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar {
-	normalized := normalizePrefix(prefix)
+	normalized := pathutil.NormalizePrefix(prefix)
 	newGroup := rg.group.Group(normalized, middleware...)
 
 	return &routeGroup{
@@ -54,13 +54,13 @@ func (rg *routeGroup) FullPath(path string) string {
 }
 
 func (rg *routeGroup) relativePath(path string) string {
-	normalized := ensureLeadingSlash(path)
+	normalized := pathutil.EnsureLeadingSlash(path)
 
 	if normalized == "/" {
 		return ""
 	}
 
-	if trimmed, ok := stripPathPrefix(normalized, rg.prefix); ok {
+	if trimmed, ok := pathutil.StripPathPrefix(normalized, rg.prefix); ok {
 		if trimmed == "" {
 			return ""
 		}
@@ -80,41 +80,4 @@ func (rg *routeGroup) combinePrefix(suffix string) string {
 	}
 
 	return rg.prefix + suffix
-}
-
-func ensureLeadingSlash(path string) string {
-	if path == "" {
-		return "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		return "/" + path
-	}
-	return path
-}
-
-func normalizePrefix(prefix string) string {
-	if prefix == "" || prefix == "/" {
-		return ""
-	}
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	return strings.TrimRight(prefix, "/")
-}
-
-func stripPathPrefix(path, prefix string) (string, bool) {
-	if prefix == "" {
-		return path, false
-	}
-	if !strings.HasPrefix(path, prefix) {
-		return path, false
-	}
-	remainder := strings.TrimPrefix(path, prefix)
-	if remainder == "" {
-		return "", true
-	}
-	if strings.HasPrefix(remainder, "/") {
-		return remainder, true
-	}
-	return path, false
 }
