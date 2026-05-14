@@ -400,10 +400,22 @@ type TenantMessagingConfig struct {
 
 // ResolverConfig holds tenant resolution strategy settings.
 type ResolverConfig struct {
-	Type    string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"`                // header, subdomain, composite
-	Header  string `koanf:"header" json:"header" yaml:"header" toml:"header" mapstructure:"header"`      // default: X-Tenant-ID
-	Domain  string `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"`      // e.g., api.example.com or .api.example.com (leading dot optional)
-	Proxies bool   `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"` // trust X-Forwarded-Host
+	Type    string             `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"`                // header, subdomain, path, composite
+	Header  string             `koanf:"header" json:"header" yaml:"header" toml:"header" mapstructure:"header"`      // default: X-Tenant-ID
+	Domain  string             `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"`      // e.g., api.example.com or .api.example.com (leading dot optional)
+	Proxies bool               `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"` // trust X-Forwarded-Host
+	Path    PathResolverConfig `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`                // path-segment resolver settings
+}
+
+// PathResolverConfig holds settings for the path-segment tenant resolver.
+//
+// Segment is 1-indexed: 1 = first non-empty path part after the leading slash.
+// Prefix is an optional gate — when set, only requests whose path equals
+// Prefix exactly or starts with "Prefix/" are eligible for extraction (useful
+// when a service hosts both tenant-scoped and non-tenant-scoped routes).
+type PathResolverConfig struct {
+	Segment int    `koanf:"segment" json:"segment" yaml:"segment" toml:"segment" mapstructure:"segment"`
+	Prefix  string `koanf:"prefix" json:"prefix" yaml:"prefix" toml:"prefix" mapstructure:"prefix"`
 }
 
 // LimitsConfig holds resource limits for multi-tenant operation.
@@ -438,6 +450,7 @@ const (
 const (
 	ResolverTypeHeader    = "header"
 	ResolverTypeSubdomain = "subdomain"
+	ResolverTypePath      = "path"
 	ResolverTypeComposite = "composite"
 )
 
