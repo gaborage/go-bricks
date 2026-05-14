@@ -103,13 +103,16 @@ base.MaskValue = "[REDACTED]"
 
 fw, err := app.NewWithOptions(&app.Options{
     LoggerFilterConfig: base,
-}, myModule)
+})
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
 
 // Opt-out variant (no masking at all — use only for test fixtures or
 // environments where structured logs are sandboxed):
-fw, err := app.NewWithOptions(&app.Options{
+fw, err = app.NewWithOptions(&app.Options{
     LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
-}, myModule)
+})
 ```
 
 **Precedence** when both are set: `Options.LoggerFilterConfig` wins. The YAML `log.sensitive_fields` value is **ignored entirely** in that case (no silent merge — the consumer is in full control). Mention this in your runbook if your deployment pattern mixes both.

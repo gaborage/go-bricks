@@ -4151,11 +4151,14 @@ log:
 ```
 
 ```go
-// No code change. The framework reads cfg.Log.SensitiveFields at startup
-// and threads a SensitiveDataFilter through the logger before any module
-// or middleware captures a reference to it.
-fw, _ := app.New(myModule)
-fw.Run()
+// No code change required at the call site. The framework reads
+// cfg.Log.SensitiveFields at startup and threads a SensitiveDataFilter
+// through the logger before any module or middleware captures a
+// reference to it.
+fw, err := app.New()
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
 
 // Inside a handler — values for "pan" are masked before reaching stdout / OTLP:
 log.Info().
@@ -4170,7 +4173,10 @@ log.Info().
 Use this when you need a custom `MaskValue`, want to opt out of every default field, or are composing the list from a secret manager / feature flag at startup. Options take precedence over YAML.
 
 ```go
-import "github.com/gaborage/go-bricks/logger"
+import (
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/logger"
+)
 
 // Extend defaults + override mask value:
 base := logger.DefaultFilterConfig()
@@ -4179,14 +4185,17 @@ base.SensitiveFields = append(base.SensitiveFields,
 )
 base.MaskValue = "[REDACTED]"
 
-fw, _ := app.NewWithOptions(&app.Options{
+fw, err := app.NewWithOptions(&app.Options{
     LoggerFilterConfig: base,
-}, myModule)
+})
+if err != nil { log.Fatal(err) }
+fw.RegisterModules(myModule)
+log.Fatal(fw.Run())
 
 // Opt out entirely (e.g., test fixtures emitting deterministic payloads):
-fw, _ := app.NewWithOptions(&app.Options{
+fw, err = app.NewWithOptions(&app.Options{
     LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
-}, myModule)
+})
 ```
 
 **Matching semantics:**
