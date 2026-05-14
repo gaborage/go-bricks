@@ -51,8 +51,12 @@ func (m *MemoryStore) Get(_ context.Context, jobID string) (*Job, error) {
 
 // Upsert inserts job at StatePending if no record exists, or returns the
 // existing record unchanged. The CreatedAt and UpdatedAt fields on the
-// returned record are populated by the store.
+// returned record are populated by the store. Rejects nil jobs and jobs
+// missing ID or TenantID via ErrInvalidJob.
 func (m *MemoryStore) Upsert(_ context.Context, job *Job) (*Job, error) {
+	if err := validateJobForUpsert(job); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing, ok := m.jobs[job.ID]; ok {

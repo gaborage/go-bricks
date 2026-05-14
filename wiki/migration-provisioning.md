@@ -12,7 +12,7 @@ issue #379; design rationale in [ADR-021](adr-021-provisioning-state-machine.md)
 A `Job` represents one per-tenant provisioning attempt. It walks a finite
 state graph:
 
-```
+```text
 pending → schema_created → role_created → migrated → seeded → ready
    \           \              \              \           \
     +-----------+--------------+--------------+-----------+--> cleanup → failed

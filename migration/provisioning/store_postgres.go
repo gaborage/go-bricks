@@ -44,11 +44,21 @@ var PostgresStateTableIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_%[2]s_state  ON %[1]s (state)`,
 }
 
+// maxPGTableSegment caps the per-segment length of a provisioning table
+// name. NAMEDATALEN-1 = 63 is PostgreSQL's identifier limit, but supporting
+// indexes are derived as `idx_<base>_<suffix>` where the longest suffix is
+// "_tenant" (7 chars) plus the "idx_" prefix (4 chars), so reserving 11
+// chars for the index decoration leaves 52 for the base. Bumping this past
+// 52 risks supporting indexes silently overflowing on the extreme case.
+const maxPGTableSegment = 52
+
 // safePGTableIdent matches PostgreSQL identifiers acceptable as table names
 // for the provisioning store. Permits an optional schema-qualified form
 // `schema.table` where each segment matches the safe-identifier subset
-// used elsewhere in the migration package (see migration/roles.go).
-var safePGTableIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}(\.[A-Za-z_][A-Za-z0-9_]{0,62})?$`)
+// used elsewhere in the migration package (see migration/roles.go). The
+// per-segment cap (maxPGTableSegment) is below NAMEDATALEN-1 so the
+// derived index names also fit; see PostgresStateTableIndexes.
+var safePGTableIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,51}(\.[A-Za-z_][A-Za-z0-9_]{0,51})?$`)
 
 // ErrInvalidTableName is returned by NewPostgresStore when the supplied
 // table name fails the safe-identifier check.
@@ -153,7 +163,11 @@ func (s *PostgresStore) Get(ctx context.Context, jobID string) (*Job, error) {
 
 // Upsert inserts job at StatePending when no row exists for job.ID, or
 // returns the existing row unchanged. Matches the StateStore contract.
+// Rejects nil jobs and jobs missing ID or TenantID via ErrInvalidJob.
 func (s *PostgresStore) Upsert(ctx context.Context, job *Job) (*Job, error) {
+	if err := validateJobForUpsert(job); err != nil {
+		return nil, err
+	}
 	now := s.timestamp()
 	metadataJSON, err := encodeMetadata(job.Metadata)
 	if err != nil {
@@ -237,10 +251,18 @@ func (s *PostgresStore) Transition(
 		// Either the row doesn't exist or the state has moved on. Disambiguate
 		// so callers get the right sentinel — important for the dispatcher
 		// (out of scope here) which retries on stale reads but not on missing.
-		if _, err := s.Get(ctx, jobID); errors.Is(err, ErrJobNotFound) {
+		// Propagate non-NotFound errors from the disambiguation Get verbatim
+		// so transient failures (context cancellation, connection drop, bad
+		// metadata decode) aren't silently rewritten to ErrStaleRead.
+		_, getErr := s.Get(ctx, jobID)
+		switch {
+		case errors.Is(getErr, ErrJobNotFound):
 			return ErrJobNotFound
+		case getErr != nil:
+			return fmt.Errorf("provisioning postgres: disambiguate zero-row update: %w", getErr)
+		default:
+			return ErrStaleRead
 		}
-		return ErrStaleRead
 	}
 	return nil
 }

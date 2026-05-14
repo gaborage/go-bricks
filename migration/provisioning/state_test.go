@@ -55,6 +55,10 @@ func TestValidateTransitionRejectsIllegalEdges(t *testing.T) {
 		{StatePending, StateRoleCreated},
 		{StatePending, StateReady},
 		{StateSchemaCreated, StateMigrated},
+		// Failed is reachable only via cleanup — no direct shortcut.
+		{StatePending, StateFailed},
+		{StateSchemaCreated, StateFailed},
+		{StateRoleCreated, StateFailed},
 		// Terminal states are dead ends.
 		{StateReady, StatePending},
 		{StateFailed, StateCleanup},

@@ -73,11 +73,12 @@ func (s State) IsTerminal() bool {
 }
 
 // allowedNext encodes the directed transition graph from issue #379.
-// Every non-terminal forward state additionally allows StateCleanup as a
-// branch; the cleanup step drops partial work and transitions to
-// StateFailed when done.
+// Every non-terminal forward state allows StateCleanup as a branch; the
+// cleanup step drops partial work and transitions to StateFailed when done.
+// StateFailed is reachable only via StateCleanup — there is no direct
+// non-terminal → failed shortcut, so callers cannot bypass cleanup.
 var allowedNext = map[State][]State{
-	StatePending:       {StateSchemaCreated, StateCleanup, StateFailed},
+	StatePending:       {StateSchemaCreated, StateCleanup},
 	StateSchemaCreated: {StateRoleCreated, StateCleanup},
 	StateRoleCreated:   {StateMigrated, StateCleanup},
 	StateMigrated:      {StateSeeded, StateCleanup},
@@ -244,77 +245,89 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-
-		// StateCleanup is special: we run the Cleanup step and unconditionally
-		// transition to StateFailed regardless of its outcome. The cleanup
-		// error (if any) is logged but doesn't block the failure transition.
-		if job.State == StateCleanup {
-			if cleanupErr := e.Steps.Cleanup(ctx, job); cleanupErr != nil {
-				e.Logger.Error().
-					Err(cleanupErr).
-					Str("job_id", job.ID).
-					Str("tenant_id", job.TenantID).
-					Msg("Cleanup step returned error; proceeding to failed anyway")
-				if job.LastError == "" {
-					job.LastError = "cleanup error: " + cleanupErr.Error()
-				}
-			}
-			if err := e.Store.Transition(ctx, job.ID, StateCleanup, StateFailed, job.Metadata, job.LastError); err != nil {
-				return fmt.Errorf("provisioning: transition to failed: %w", err)
-			}
-			job.State = StateFailed
-			continue
+		if err := e.advance(ctx, job); err != nil {
+			return err
 		}
-
-		// StateSeeded → StateReady is an acknowledgment-only edge: the Seed
-		// step (which ran while exiting StateMigrated) already performed all
-		// required work. Modeling it as an automatic advance keeps the Steps
-		// struct one-callback-per-side-effect; consumers needing an
-		// "activation" hook (e.g. notify a control plane) can do it inside
-		// their Seed step rather than introducing a sixth callback.
-		if job.State == StateSeeded {
-			if err := e.Store.Transition(ctx, job.ID, StateSeeded, StateReady, job.Metadata, ""); err != nil {
-				return fmt.Errorf("provisioning: transition seeded -> ready: %w", err)
-			}
-			job.LastError = ""
-			job.State = StateReady
-			continue
-		}
-
-		// Forward step.
-		step := e.stepFor(job.State)
-		if step == nil {
-			return fmt.Errorf("provisioning: no step registered for state %q", job.State)
-		}
-
-		stepErr := step(ctx, job)
-		if stepErr != nil {
-			e.Logger.Warn().
-				Err(stepErr).
-				Str("job_id", job.ID).
-				Str("tenant_id", job.TenantID).
-				Str("state", string(job.State)).
-				Msg("Forward step failed; entering cleanup")
-			job.LastError = stepErr.Error()
-			if err := e.Store.Transition(ctx, job.ID, job.State, StateCleanup, job.Metadata, job.LastError); err != nil {
-				return fmt.Errorf("provisioning: transition to cleanup: %w", err)
-			}
-			job.State = StateCleanup
-			continue
-		}
-
-		// Step succeeded — advance to the forward target.
-		next := nextForward[job.State]
-		if err := e.Store.Transition(ctx, job.ID, job.State, next, job.Metadata, ""); err != nil {
-			return fmt.Errorf("provisioning: transition %s -> %s: %w", job.State, next, err)
-		}
-		job.LastError = ""
-		job.State = next
 	}
 
 	if job.State == StateFailed {
 		return fmt.Errorf("provisioning: job %q ended in failed state: %s", job.ID, job.LastError)
 	}
+	return nil
+}
+
+// advance moves job forward by one transition. Mutates job in place so the
+// outer Run loop sees the new persisted state on the next iteration.
+func (e *Executor) advance(ctx context.Context, job *Job) error {
+	switch job.State {
+	case StateCleanup:
+		return e.runCleanup(ctx, job)
+	case StateSeeded:
+		// Acknowledgment-only edge: the Seed step (which ran while exiting
+		// StateMigrated) already performed all required work. Modeling it
+		// as an automatic advance keeps Steps one-callback-per-side-effect;
+		// consumers needing an "activation" hook (e.g. notify a control
+		// plane) can do it inside their Seed step.
+		return e.transitionAndAdvance(ctx, job, StateReady, "")
+	case StatePending, StateSchemaCreated, StateRoleCreated, StateMigrated:
+		return e.runForwardStep(ctx, job)
+	case StateReady, StateFailed:
+		// Terminal states never enter the loop body (IsTerminal gate above).
+		// Treat as a programmer error to keep the switch exhaustive.
+		return fmt.Errorf("provisioning: advance called with terminal state %q", job.State)
+	}
+	return fmt.Errorf("provisioning: advance called with unknown state %q", job.State)
+}
+
+// runCleanup executes the Cleanup step and unconditionally transitions to
+// StateFailed regardless of the step's outcome. A cleanup error is logged
+// but doesn't block the failure transition — leaving a job stuck in
+// StateCleanup would be worse than recording a best-effort failure.
+func (e *Executor) runCleanup(ctx context.Context, job *Job) error {
+	if cleanupErr := e.Steps.Cleanup(ctx, job); cleanupErr != nil {
+		e.Logger.Error().
+			Err(cleanupErr).
+			Str("job_id", job.ID).
+			Str("tenant_id", job.TenantID).
+			Msg("Cleanup step returned error; proceeding to failed anyway")
+		if job.LastError == "" {
+			job.LastError = "cleanup error: " + cleanupErr.Error()
+		}
+	}
+	return e.transitionAndAdvance(ctx, job, StateFailed, job.LastError)
+}
+
+// runForwardStep executes the consumer-supplied step that exits job.State,
+// then transitions to the forward target on success or to StateCleanup on
+// step error.
+func (e *Executor) runForwardStep(ctx context.Context, job *Job) error {
+	step := e.stepFor(job.State)
+	if step == nil {
+		return fmt.Errorf("provisioning: no step registered for state %q", job.State)
+	}
+	if stepErr := step(ctx, job); stepErr != nil {
+		e.Logger.Warn().
+			Err(stepErr).
+			Str("job_id", job.ID).
+			Str("tenant_id", job.TenantID).
+			Str("state", string(job.State)).
+			Msg("Forward step failed; entering cleanup")
+		job.LastError = stepErr.Error()
+		return e.transitionAndAdvance(ctx, job, StateCleanup, job.LastError)
+	}
+	return e.transitionAndAdvance(ctx, job, nextForward[job.State], "")
+}
+
+// transitionAndAdvance persists the from→to edge and mutates job in place
+// (state + last-error) so the outer Run loop's next iteration sees the
+// advanced state. Errors are wrapped with the failing edge for diagnostics.
+func (e *Executor) transitionAndAdvance(ctx context.Context, job *Job, to State, lastError string) error {
+	from := job.State
+	if err := e.Store.Transition(ctx, job.ID, from, to, job.Metadata, lastError); err != nil {
+		return fmt.Errorf("provisioning: transition %s -> %s: %w", from, to, err)
+	}
+	job.State = to
+	job.LastError = lastError
 	return nil
 }
 

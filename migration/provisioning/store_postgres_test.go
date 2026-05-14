@@ -37,6 +37,9 @@ func TestNewPostgresStoreAcceptsValidNames(t *testing.T) {
 		{"_internal_jobs", `"_internal_jobs"`, "_internal_jobs"},
 		// Schema-qualified form is permitted.
 		{"app.provisioning_jobs", `"app"."provisioning_jobs"`, "provisioning_jobs"},
+		// Boundary: maxPGTableSegment (52 chars) is accepted; one longer is
+		// rejected (covered in TestNewPostgresStoreRejectsInvalidNames).
+		{strings.Repeat("a", maxPGTableSegment), `"` + strings.Repeat("a", maxPGTableSegment) + `"`, strings.Repeat("a", maxPGTableSegment)},
 	}
 	for _, c := range cases {
 		c := c
@@ -58,7 +61,10 @@ func TestNewPostgresStoreRejectsInvalidNames(t *testing.T) {
 		"semicolon;DROP",
 		`embedded"quote`,
 		"too.many.dots.here",
-		// Length cap (NAMEDATALEN-1 per segment).
+		// Length cap: maxPGTableSegment is the upper bound. Anything longer
+		// would derive an `idx_<base>_tenant` index name that overflows
+		// PostgreSQL's NAMEDATALEN-1 = 63 limit.
+		strings.Repeat("a", maxPGTableSegment+1),
 		strings.Repeat("a", 64),
 	}
 	for _, name := range invalid {
@@ -91,6 +97,25 @@ func TestQuoteQualifiedAndIndexBase(t *testing.T) {
 	assert.Equal(t, `"a"."b"`, quoteQualified("a.b"))
 	assert.Equal(t, "foo", indexBaseName("foo"))
 	assert.Equal(t, "b", indexBaseName("a.b"))
+}
+
+func TestPostgresStateTableIndexNamesFitNAMEDATALEN(t *testing.T) {
+	// PostgreSQL's identifier limit is NAMEDATALEN-1 = 63 bytes. The DDL
+	// templates produce `idx_<base>_<suffix>` index names; a base at the
+	// maxPGTableSegment cap must still fit. This guards against future
+	// edits that lengthen the suffix or the cap without revisiting both.
+	const pgNameDataLen = 63
+	base := strings.Repeat("a", maxPGTableSegment)
+	for _, tpl := range PostgresStateTableIndexes {
+		stmt := strings.ReplaceAll(strings.ReplaceAll(tpl, "%[1]s", `"`+base+`"`), "%[2]s", base)
+		// Pull out the index name (between CREATE INDEX IF NOT EXISTS and ON).
+		idx := strings.Index(stmt, "idx_")
+		end := strings.Index(stmt[idx:], " ")
+		require.Greater(t, end, 0, "could not locate index-name suffix in %q", stmt)
+		idxName := stmt[idx : idx+end]
+		assert.LessOrEqual(t, len(idxName), pgNameDataLen,
+			"index name %q exceeds NAMEDATALEN-1 at the maxPGTableSegment boundary", idxName)
+	}
 }
 
 func TestPostgresStateTableDDLHasExpectedColumns(t *testing.T) {

@@ -124,3 +124,24 @@ func TestMemoryStoreClockOverride(t *testing.T) {
 func TestMemoryStoreCreateTableIsNoOp(t *testing.T) {
 	assert.NoError(t, NewMemoryStore().CreateTable(context.Background()))
 }
+
+func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
+	s := NewMemoryStore()
+	tests := []struct {
+		name      string
+		job       *Job
+		wantField string
+	}{
+		{"nil_job", nil, "job is nil"},
+		{"missing_id", &Job{TenantID: "t1"}, "job.ID"},
+		{"missing_tenant_id", &Job{ID: "j1"}, "job.TenantID"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := s.Upsert(context.Background(), tt.job)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrInvalidJob), "want wrapped ErrInvalidJob, got %v", err)
+			assert.Contains(t, err.Error(), tt.wantField)
+		})
+	}
+}

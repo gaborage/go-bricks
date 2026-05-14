@@ -3,6 +3,7 @@ package provisioning
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // StateStore persists Job records and enforces optimistic-concurrency
@@ -64,4 +65,27 @@ var (
 	// doesn't match the caller's expected `from`. Indicates a concurrent
 	// writer changed the job between the caller's read and transition.
 	ErrStaleRead = errors.New("provisioning: stale read; concurrent transition detected")
+
+	// ErrInvalidJob is returned by Upsert when the supplied Job is nil
+	// or has an empty ID/TenantID. Wrapped with the failing field name.
+	ErrInvalidJob = errors.New("provisioning: invalid job")
 )
+
+// validateJobForUpsert rejects nil jobs and jobs missing ID or TenantID
+// before they reach a StateStore. Without this guard, an empty ID would
+// silently collapse multiple tenants onto the same `""` storage key,
+// breaking the per-job-ID idempotency contract. Shared between
+// MemoryStore.Upsert and PostgresStore.Upsert so both stores behave
+// identically.
+func validateJobForUpsert(job *Job) error {
+	if job == nil {
+		return fmt.Errorf("%w: job is nil", ErrInvalidJob)
+	}
+	if job.ID == "" {
+		return fmt.Errorf("%w: job.ID is required", ErrInvalidJob)
+	}
+	if job.TenantID == "" {
+		return fmt.Errorf("%w: job.TenantID is required", ErrInvalidJob)
+	}
+	return nil
+}
