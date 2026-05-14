@@ -542,8 +542,8 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 
 			gotOrigin := rec.Header().Get(HeaderAccessControlAllowOrigin)
 			if tc.expectStrict {
-				assert.NotEqual(t, "https://intruder.example.com", gotOrigin,
-					"strict mode must not echo unlisted origin")
+				assert.Empty(t, gotOrigin,
+					"strict mode must not set Access-Control-Allow-Origin for an unlisted origin")
 			} else {
 				assert.Equal(t, "https://intruder.example.com", gotOrigin,
 					"wildcard mode must echo any origin")

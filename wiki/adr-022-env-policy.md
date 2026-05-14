@@ -73,7 +73,7 @@ GoBricks ships a free-form `app.env` policy. The string is validated only for fo
 
 ### Alias maps
 
-```
+```text
 developmentAliases = {development, dev, local}
 productionAliases  = {production, prod, prd}
 ```
@@ -142,7 +142,7 @@ Rejects: empty, `Production` (uppercase), `prd eu` (space), `1prod` (leading dig
 
 ### Negative
 
-- Loses the fail-fast property that catches semantic typos within the canonical set (`develpoment` → previously rejected with "must be one of: development, staging, production"; now rejected only if it violates the format rule, which it doesn't). Mitigation: the format check still catches the most common structural typos (uppercase, spaces, length); semantic typos surface immediately in logs, span attributes, and the loaded `config.<env>.yaml` filename (a `develpoment` env would attempt to load `config.develpoment.yaml`, which is missing → falls back silently).
+- Loses the fail-fast property that catches semantic typos within the canonical set: `develpoment` was previously rejected with "must be one of: development, staging, production", whereas it is now accepted by the format check (lowercase letters only — perfectly valid format) despite being semantically wrong. Mitigation: the format check still catches the most common structural typos (uppercase, spaces, length); pure semantic typos surface immediately in logs, span attributes, and the loaded `config.<env>.yaml` filename (a `develpoment` env would attempt to load `config.develpoment.yaml`, which is missing → falls back silently to the base `config.yaml`).
 - Marginal observability complexity: dashboards filtering on `env=production` will not match `env=prd`. Mitigation: consumers picking short-code conventions should standardize their dashboard filters accordingly; the framework does not coerce the value before emitting it.
 
 ### Neutral
