@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,6 +108,117 @@ func TestAppBuilderCreateLoggerWithFormat(t *testing.T) {
 			assert.NotNil(t, result.logger)
 		})
 	}
+}
+
+func TestResolveLoggerFilterConfig(t *testing.T) {
+	t.Run("no_options_no_config_returns_nil", func(t *testing.T) {
+		got := resolveLoggerFilterConfig(nil, &config.LogConfig{})
+		assert.Nil(t, got)
+	})
+
+	t.Run("nil_options_and_nil_cfg_returns_nil", func(t *testing.T) {
+		got := resolveLoggerFilterConfig(nil, nil)
+		assert.Nil(t, got)
+	})
+
+	t.Run("options_filter_takes_precedence", func(t *testing.T) {
+		custom := &logger.FilterConfig{
+			SensitiveFields: []string{"pan"},
+			MaskValue:       "XXX",
+		}
+		got := resolveLoggerFilterConfig(
+			&Options{LoggerFilterConfig: custom},
+			&config.LogConfig{SensitiveFields: []string{"cvv2"}},
+		)
+		require.NotNil(t, got)
+		assert.Same(t, custom, got, "options config should be returned verbatim")
+		assert.Equal(t, []string{"pan"}, got.SensitiveFields)
+		assert.Equal(t, "XXX", got.MaskValue)
+	})
+
+	t.Run("options_filter_can_opt_out_entirely", func(t *testing.T) {
+		// Setting SensitiveFields to nil/empty bypasses all masking.
+		// Consumers in non-regulated contexts can use this to drop the default list.
+		empty := &logger.FilterConfig{SensitiveFields: nil}
+		got := resolveLoggerFilterConfig(&Options{LoggerFilterConfig: empty}, &config.LogConfig{})
+		require.NotNil(t, got)
+		assert.Empty(t, got.SensitiveFields)
+	})
+
+	t.Run("config_sensitive_fields_extend_defaults", func(t *testing.T) {
+		// Additive: every default field is preserved AND custom fields appended.
+		got := resolveLoggerFilterConfig(
+			nil,
+			&config.LogConfig{SensitiveFields: []string{"pan", "cvv2", "otp"}},
+		)
+		require.NotNil(t, got)
+
+		defaults := logger.DefaultFilterConfig().SensitiveFields
+		// Defaults are preserved.
+		for _, defaultField := range defaults {
+			assert.Contains(t, got.SensitiveFields, defaultField, "default field %q must survive merge", defaultField)
+		}
+		// Custom fields are appended.
+		assert.Contains(t, got.SensitiveFields, "pan")
+		assert.Contains(t, got.SensitiveFields, "cvv2")
+		assert.Contains(t, got.SensitiveFields, "otp")
+		// Length sanity check.
+		assert.Equal(t, len(defaults)+3, len(got.SensitiveFields))
+	})
+
+	t.Run("empty_config_sensitive_fields_returns_nil", func(t *testing.T) {
+		// An empty slice is treated the same as no override — caller falls
+		// through to DefaultFilterConfig via NewWithFilter(nil).
+		got := resolveLoggerFilterConfig(nil, &config.LogConfig{SensitiveFields: []string{}})
+		assert.Nil(t, got)
+	})
+
+	t.Run("options_present_but_filter_nil_uses_config", func(t *testing.T) {
+		// A populated Options struct that doesn't set LoggerFilterConfig must not
+		// short-circuit the config path — typical for apps that configure
+		// Database/Server via Options and masking via YAML.
+		got := resolveLoggerFilterConfig(
+			&Options{Database: nil}, // LoggerFilterConfig left zero
+			&config.LogConfig{SensitiveFields: []string{"pan"}},
+		)
+		require.NotNil(t, got)
+		assert.Contains(t, got.SensitiveFields, "pan")
+		// Defaults still merged in.
+		assert.Contains(t, got.SensitiveFields, "password")
+	})
+}
+
+func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
+	t.Run("options_filter_accepted", func(t *testing.T) {
+		// Smoke test: builder wires Options.LoggerFilterConfig through without
+		// error. End-to-end masking behavior is covered by logger.TestNewWithFilter.
+		cfg := &config.Config{
+			App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
+			Log: config.LogConfig{Level: "info"},
+		}
+		opts := &Options{
+			LoggerFilterConfig: &logger.FilterConfig{
+				SensitiveFields: []string{"pan", "cvv2"},
+				MaskValue:       "***",
+			},
+		}
+		result := NewAppBuilder().WithConfig(cfg, opts).CreateLogger()
+		assert.Nil(t, result.err)
+		assert.NotNil(t, result.logger)
+	})
+
+	t.Run("config_sensitive_fields_accepted", func(t *testing.T) {
+		cfg := &config.Config{
+			App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
+			Log: config.LogConfig{
+				Level:           "info",
+				SensitiveFields: []string{"pan", "cvv2", "otp"},
+			},
+		}
+		result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
+		assert.Nil(t, result.err)
+		assert.NotNil(t, result.logger)
+	})
 }
 
 func TestOtlpLogsActive(t *testing.T) {

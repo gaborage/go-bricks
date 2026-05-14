@@ -59,7 +59,7 @@ func (b *Builder) CreateLogger() *Builder {
 		otlpLogsActive(b.cfg),
 		logger.StdoutIsTerminal(),
 	)
-	b.logger = logger.New(b.cfg.Log.Level, pretty)
+	b.logger = logger.NewWithFilter(b.cfg.Log.Level, pretty, resolveLoggerFilterConfig(b.opts, &b.cfg.Log))
 	b.logger.Info().
 		Str("app", b.cfg.App.Name).
 		Str("env", b.cfg.App.Env).
@@ -67,6 +67,26 @@ func (b *Builder) CreateLogger() *Builder {
 		Msg("Starting application")
 
 	return b
+}
+
+// resolveLoggerFilterConfig picks the sensitive-data filter applied to the
+// framework logger. Precedence:
+//
+//  1. opts.LoggerFilterConfig — full replacement; consumer is in control.
+//  2. cfg.SensitiveFields — extends logger.DefaultFilterConfig with custom
+//     field names (substring-matched, case-insensitive).
+//  3. nil — logger.NewWithFilter falls back to logger.DefaultFilterConfig
+//     (identical to the legacy logger.New path; preserved for back-compat).
+func resolveLoggerFilterConfig(opts *Options, cfg *config.LogConfig) *logger.FilterConfig {
+	if opts != nil && opts.LoggerFilterConfig != nil {
+		return opts.LoggerFilterConfig
+	}
+	if cfg != nil && len(cfg.SensitiveFields) > 0 {
+		base := logger.DefaultFilterConfig()
+		base.SensitiveFields = append(base.SensitiveFields, cfg.SensitiveFields...)
+		return base
+	}
+	return nil
 }
 
 // otlpLogsActive reports whether OTLP log export will run after bootstrap.
