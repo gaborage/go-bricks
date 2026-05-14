@@ -280,7 +280,8 @@ type RedisConfig struct {
 	MaxRetryBackoff time.Duration `koanf:"maxretrybackoff" json:"maxretrybackoff" yaml:"maxretrybackoff" toml:"maxretrybackoff" mapstructure:"maxretrybackoff"`
 }
 
-// LogConfig holds logging settings.
+// LogConfig holds logging settings. See OutputConfig.Format for the
+// rendering-mode selector (auto/console/json) and the legacy Pretty override.
 type LogConfig struct {
 	Level  string       `koanf:"level" json:"level" yaml:"level" toml:"level" mapstructure:"level"`
 	Pretty bool         `koanf:"pretty" json:"pretty" yaml:"pretty" toml:"pretty" mapstructure:"pretty"`
@@ -288,6 +289,16 @@ type LogConfig struct {
 }
 
 // OutputConfig holds log output settings.
+//
+// Format selects the rendering mode for stdout, evaluated case-insensitively:
+//   - "auto" (default): console output only when stdout is a terminal AND OTLP
+//     log export is not active; otherwise JSON.
+//   - "console" / "pretty": always console (colored).
+//   - "json" / "structured": always JSON.
+//
+// LogConfig.Pretty=true is a legacy override that always forces console output.
+// Console output is incompatible with OTLP log export — that combination
+// panics at startup via logger.WithOTelProvider.
 type OutputConfig struct {
 	Format string `koanf:"format" json:"format" yaml:"format" toml:"format" mapstructure:"format"`
 	File   string `koanf:"file" json:"file" yaml:"file" toml:"file" mapstructure:"file"`
