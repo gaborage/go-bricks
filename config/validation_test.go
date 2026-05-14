@@ -101,6 +101,42 @@ func TestValidateAppSuccess(t *testing.T) {
 				Rate:    RateConfig{Limit: 0},
 			},
 		},
+		{
+			name: "alias_local_accepted",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "local",
+				Rate:    RateConfig{Limit: 100},
+			},
+		},
+		{
+			name: "short_code_tst_accepted",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "tst",
+				Rate:    RateConfig{Limit: 100},
+			},
+		},
+		{
+			name: "short_code_prd_accepted",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "prd",
+				Rate:    RateConfig{Limit: 100},
+			},
+		},
+		{
+			name: "custom_env_with_hyphen",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "production-eu",
+				Rate:    RateConfig{Limit: 100},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -138,11 +174,51 @@ func TestValidateAppFailures(t *testing.T) {
 			expectedError: "app.version",
 		},
 		{
-			name: "invalid_environment",
+			name: "empty_environment",
 			cfg: AppConfig{
 				Name:    testAppName,
 				Version: testAppVersion,
-				Env:     "invalid",
+				Env:     "",
+				Rate:    RateConfig{Limit: 100},
+			},
+			expectedError: "app.env",
+		},
+		{
+			name: "uppercase_environment_rejected",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "Production",
+				Rate:    RateConfig{Limit: 100},
+			},
+			expectedError: "app.env",
+		},
+		{
+			name: "environment_with_space_rejected",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "stg eu",
+				Rate:    RateConfig{Limit: 100},
+			},
+			expectedError: "app.env",
+		},
+		{
+			name: "leading_digit_rejected",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "1prod",
+				Rate:    RateConfig{Limit: 100},
+			},
+			expectedError: "app.env",
+		},
+		{
+			name: "environment_too_long_rejected",
+			cfg: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     "this-is-an-extremely-long-environment-name-that-exceeds-the-cap",
 				Rate:    RateConfig{Limit: 100},
 			},
 			expectedError: "app.env",

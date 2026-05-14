@@ -38,9 +38,10 @@ func CORS() echo.MiddlewareFunc {
 		MaxAge:           86400,
 	}
 
-	// Determine allowed origins based on environment
+	// CORS() is constructed before config validation has run, so we read
+	// APP_ENV directly rather than going through cfg.App.IsProduction().
 	useWildcard := true
-	if os.Getenv("APP_ENV") == config.EnvProduction {
+	if config.IsProduction(os.Getenv("APP_ENV")) {
 		origins := os.Getenv("CORS_ORIGINS")
 		if origins != "" {
 			cfg.AllowOrigins = strings.Split(origins, ",")
