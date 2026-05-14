@@ -75,7 +75,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
 - Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
 - Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
-- No hardcoded credentials, no secrets in logs or error messages.
+- No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PCI/PII workloads (PAN, CVV2, OTP) extend the default list via `log.sensitive_fields` in YAML or `app.Options.LoggerFilterConfig` in code — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
 - Audit logging for sensitive operations (access control, data modifications).
 
 ### Practices & Patterns
