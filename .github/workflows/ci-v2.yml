@@ -202,7 +202,7 @@ jobs:
         # Pinned to 10.22.0 to match the JSON-output fixture captures in
         # migration/testdata/flyway. The SHA256 is part of the cache key so
         # a version/digest bump invalidates the cached tarball automatically.
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /tmp/flyway-10.22.0
           key: flyway-10.22.0-638df407be107e6b89318ec1b020f60e96290db64981e7308a0d9b674c7f2918
