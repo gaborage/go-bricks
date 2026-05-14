@@ -192,6 +192,15 @@ Resolves the investigation in issue #402. The `database/oracle` integration suit
 
 ---
 
+### [ADR-021: Provisioning State Machine — Diverge on the Model, Mirror the Patterns](adr-021-provisioning-state-machine.md)
+**Date:** 2026-05-13 | **Status:** Accepted
+
+Resolves issue #379. Per-tenant provisioning state machine with durable, crash-recoverable persistence (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches). New `migration/provisioning/` package borrows the engineering patterns from `outbox/` (vendor-pluggable Store, bundled DDL, in-memory mock under `testing/`) but diverges on the data model: outbox is a fire-and-forget event queue; provisioning is a finite-state graph with blocking transitions and per-tenant scope. Rejects the alternatives of sharing storage tables, the Store interface, or extending the outbox package because the consumer APIs and table shapes don't overlap.
+
+**Key Benefits:** Focused consumer surface, no outbox-side churn, mirrored patterns make adding new vendors cheap (Oracle equivalent follows the outbox-Oracle precedent under #385), the state transitions are durably auditable for #382's pending events.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
