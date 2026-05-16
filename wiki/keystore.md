@@ -95,6 +95,7 @@ func (s *Service) Digest(payload []byte) ([]byte, error) {
     if err != nil {
         return nil, fmt.Errorf("get mac key: %w", err)
     }
+    defer func() { clear(key) }()  // caller owns the copy — zeroize after use
     mac := hmac.New(sha256.New, key)
     mac.Write(payload)
     return mac.Sum(nil), nil
