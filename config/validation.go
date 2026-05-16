@@ -732,10 +732,15 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 	return nil
 }
 
-// validateKeyStore validates keystore configuration.
-// Returns nil if no keys are configured. Each key pair must have a public key
-// with exactly one source (file or value). Private keys are optional.
+// validateKeyStore validates keystore configuration. Returns nil if no keys
+// are configured. SecretMinLength must be non-negative. Each entry is either
+// an RSA pair (public required with exactly one source, private optional) or a
+// symmetric secret — a mixed entry is rejected.
 func validateKeyStore(cfg *KeyStoreConfig) error {
+	if cfg.SecretMinLength < 0 {
+		return NewValidationError("keystore.secret_min_length", errMustBeNonNegative)
+	}
+
 	if len(cfg.Keys) == 0 {
 		return nil
 	}
@@ -749,14 +754,37 @@ func validateKeyStore(cfg *KeyStoreConfig) error {
 
 	for _, name := range names {
 		kp := cfg.Keys[name]
-		if err := validateKeySource(kp.Public, name, "public", true); err != nil {
-			return err
-		}
-		if err := validateKeySource(kp.Private, name, "private", false); err != nil {
+		if err := validateKeyEntry(&kp, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validateKeyEntry validates a single keystore entry. An entry is either an
+// RSA pair (public required, private optional) or a symmetric secret — a mixed
+// entry is a structural error detected here without an explicit discriminator.
+func validateKeyEntry(kp *KeyPairConfig, name string) error {
+	hasSecret := kp.Secret.IsSet()
+	hasAsymmetric := kp.Public.IsSet() || kp.Private.IsSet()
+
+	if hasSecret && hasAsymmetric {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fmt.Sprintf("keystore.keys.%s", name),
+			Message:  "entry has both a symmetric 'secret' and asymmetric 'public'/'private' material",
+			Action:   "configure an entry as either a 'secret' or an RSA pair, not both",
+		}
+	}
+
+	if hasSecret {
+		return validateKeySource(kp.Secret, name, "secret", true)
+	}
+
+	if err := validateKeySource(kp.Public, name, "public", true); err != nil {
+		return err
+	}
+	return validateKeySource(kp.Private, name, "private", false)
 }
 
 // validateKeySource checks that a key source has exactly one of file or value set.
@@ -773,7 +801,7 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 			Action:   "use exactly one of 'file' or 'value'",
 		}
 	}
-	if required && !hasFile && !hasValue {
+	if required && !src.IsSet() {
 		return &ConfigError{
 			Category: errCategoryMissing,
 			Field:    fmt.Sprintf("keystore.keys.%s.%s", keyName, keyType),

@@ -212,6 +212,9 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.False(t, k.Bool("log.pretty"))
 	assert.Equal(t, "auto", k.String("log.output.format"))
 	assert.Equal(t, "", k.String("log.output.file"))
+
+	// KeyStore symmetric-secret floor defaults to 32 bytes.
+	assert.Equal(t, 32, k.Int("keystore.secret_min_length"))
 }
 
 func TestLoadEdgeCases(t *testing.T) {
