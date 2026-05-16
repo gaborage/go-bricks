@@ -26,6 +26,15 @@ func AssertPrivateKeyAvailable(t *testing.T, ks app.KeyStore, name string) {
 	assert.NotNil(t, key, "private key %q should not be nil", name)
 }
 
+// AssertSecretAvailable verifies that a non-empty symmetric secret with the
+// given name can be successfully retrieved from the KeyStore.
+func AssertSecretAvailable(t *testing.T, ks app.KeyStore, name string) {
+	t.Helper()
+	secret, err := ks.Secret(name)
+	require.NoError(t, err, "secret %q should be available", name)
+	assert.NotEmpty(t, secret, "secret %q should not be empty", name)
+}
+
 // AssertKeyNotFound verifies that retrieving a key with the given name returns an error
 // from both PublicKey and PrivateKey. Note that this does not distinguish between
 // "key name not found" and "no private key configured" — it only asserts that both

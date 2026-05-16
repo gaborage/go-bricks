@@ -67,6 +67,36 @@ func TestKeystoreModuleInitWithValidKeys(t *testing.T) {
 	assert.True(t, privKey.PublicKey.Equal(gotPub))
 }
 
+func TestKeystoreModuleInitWithSecret(t *testing.T) {
+	secret := []byte("a-32-byte-symmetric-mac-key!!!!!")
+	deps := newTestDeps(t, config.KeyStoreConfig{
+		SecretMinLength: 32,
+		Keys: map[string]config.KeyPairConfig{
+			"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(secret)}},
+		},
+	})
+
+	m := NewModule()
+	require.NoError(t, m.Init(deps))
+
+	got, err := m.store.Secret("mac")
+	require.NoError(t, err)
+	assert.Equal(t, secret, got)
+}
+
+func TestKeystoreModuleInitSecretBelowMinLengthFails(t *testing.T) {
+	deps := newTestDeps(t, config.KeyStoreConfig{
+		SecretMinLength: 32,
+		Keys: map[string]config.KeyPairConfig{
+			"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString([]byte("short"))}},
+		},
+	})
+
+	err := NewModule().Init(deps)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "minimum is 32")
+}
+
 func TestKeystoreModuleInitFileNotFound(t *testing.T) {
 	deps := newTestDeps(t, config.KeyStoreConfig{
 		Keys: map[string]config.KeyPairConfig{

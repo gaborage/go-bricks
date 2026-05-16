@@ -3,6 +3,7 @@
 package testing
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"fmt"
 	"sync"
@@ -24,8 +25,10 @@ type MockKeyStore struct {
 	mu          sync.RWMutex
 	publicKeys  map[string]*rsa.PublicKey
 	privateKeys map[string]*rsa.PrivateKey
+	secrets     map[string][]byte
 	publicErr   error
 	privateErr  error
+	secretErr   error
 }
 
 // NewMockKeyStore creates an empty MockKeyStore.
@@ -33,6 +36,7 @@ func NewMockKeyStore() *MockKeyStore {
 	return &MockKeyStore{
 		publicKeys:  make(map[string]*rsa.PublicKey),
 		privateKeys: make(map[string]*rsa.PrivateKey),
+		secrets:     make(map[string][]byte),
 	}
 }
 
@@ -49,6 +53,23 @@ func (m *MockKeyStore) WithPrivateKey(name string, key *rsa.PrivateKey) *MockKey
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.privateKeys[name] = key
+	return m
+}
+
+// WithSecret adds raw symmetric key material for the given name. The slice is
+// copied so later caller mutations do not bleed into the mock.
+func (m *MockKeyStore) WithSecret(name string, secret []byte) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.secrets[name] = bytes.Clone(secret)
+	return m
+}
+
+// WithSecretError configures all Secret calls to return this error.
+func (m *MockKeyStore) WithSecretError(err error) *MockKeyStore {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.secretErr = err
 	return m
 }
 
@@ -94,4 +115,19 @@ func (m *MockKeyStore) PrivateKey(name string) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("mock keystore: private key %q not found", name)
 	}
 	return key, nil
+}
+
+// Secret implements app.KeyStore. It returns a defensive copy, mirroring the
+// real store so tests exercise the same ownership contract.
+func (m *MockKeyStore) Secret(name string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.secretErr != nil {
+		return nil, m.secretErr
+	}
+	secret, ok := m.secrets[name]
+	if !ok {
+		return nil, fmt.Errorf("mock keystore: secret %q not found", name)
+	}
+	return bytes.Clone(secret), nil
 }

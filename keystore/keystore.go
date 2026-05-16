@@ -39,6 +39,7 @@
 package keystore
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -48,16 +49,19 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
-// keyPair holds a parsed public/private RSA key pair.
-type keyPair struct {
+// keyEntry holds the parsed material for one logical name: either an RSA pair
+// (public set, private optional) or a symmetric secret. The two are mutually
+// exclusive — the config layer rejects mixed entries before newStore runs.
+type keyEntry struct {
 	public  *rsa.PublicKey
 	private *rsa.PrivateKey // May be nil if only public key is configured
+	secret  []byte          // Non-nil only for symmetric-secret entries
 }
 
 // store implements app.KeyStore.
 // All keys are loaded at construction time; access is read-only and thread-safe.
 type store struct {
-	keys map[string]*keyPair
+	keys map[string]*keyEntry
 }
 
 // PublicKey returns the RSA public key for the given key pair name.
@@ -65,6 +69,9 @@ func (s *store) PublicKey(name string) (*rsa.PublicKey, error) {
 	kp, ok := s.keys[name]
 	if !ok {
 		return nil, fmt.Errorf("keystore: key %q not found", name)
+	}
+	if kp.public == nil {
+		return nil, fmt.Errorf("keystore: key %q has no public key configured", name)
 	}
 	return kp.public, nil
 }
@@ -81,52 +88,95 @@ func (s *store) PrivateKey(name string) (*rsa.PrivateKey, error) {
 	return kp.private, nil
 }
 
-// newStore creates a KeyStore by loading all configured key pairs.
-// Fails fast if any key cannot be loaded or parsed.
-func newStore(keys map[string]config.KeyPairConfig) (*store, error) {
-	parsed := make(map[string]*keyPair, len(keys))
+// Secret returns a defensive copy of the raw symmetric key material for the
+// given name. The caller owns the returned slice and may zeroize it.
+func (s *store) Secret(name string) ([]byte, error) {
+	kp, ok := s.keys[name]
+	if !ok {
+		return nil, fmt.Errorf("keystore: key %q not found", name)
+	}
+	if kp.secret == nil {
+		return nil, fmt.Errorf("keystore: key %q has no symmetric secret configured", name)
+	}
+	return bytes.Clone(kp.secret), nil
+}
+
+// newStore creates a KeyStore by loading all configured entries.
+// secretMinLength is the byte floor for symmetric secrets (0 disables it).
+// Fails fast if any entry cannot be loaded, parsed, or fails the floor.
+func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store, error) {
+	parsed := make(map[string]*keyEntry, len(keys))
 
 	for name, kpCfg := range keys {
-		kp := &keyPair{}
-
-		// Load public key (required)
-		pubDER, err := loadDERBytes(kpCfg.Public, name, "public")
+		entry, err := loadKeyEntry(name, &kpCfg, secretMinLength)
 		if err != nil {
 			return nil, err
 		}
-		if pubDER == nil {
-			return nil, fmt.Errorf("keystore: key %q: public key is required", name)
-		}
-		kp.public, err = parsePublicKey(pubDER, name)
-		if err != nil {
-			return nil, err
-		}
-
-		// Load private key (optional)
-		privDER, err := loadDERBytes(kpCfg.Private, name, "private")
-		if err != nil {
-			return nil, err
-		}
-		if privDER != nil {
-			kp.private, err = parsePrivateKey(privDER, name)
-			if err != nil {
-				return nil, err
-			}
-			// Fail fast if public and private keys don't match
-			if kp.private.E != kp.public.E || kp.private.N.Cmp(kp.public.N) != 0 {
-				return nil, fmt.Errorf("keystore: key %q: public and private keys do not match", name)
-			}
-		}
-
-		parsed[name] = kp
+		parsed[name] = entry
 	}
 
 	return &store{keys: parsed}, nil
 }
 
-// loadDERBytes resolves a KeySourceConfig to raw DER bytes.
-// Returns nil if neither file nor value is set (key not configured).
-func loadDERBytes(src config.KeySourceConfig, keyName, keyType string) ([]byte, error) {
+// loadKeyEntry loads one entry as either a symmetric secret or an RSA pair.
+// The config layer guarantees the two are mutually exclusive.
+func loadKeyEntry(name string, cfg *config.KeyPairConfig, secretMinLength int) (*keyEntry, error) {
+	if cfg.Secret.IsSet() {
+		return loadSecretEntry(name, cfg.Secret, secretMinLength)
+	}
+	return loadRSAEntry(name, cfg)
+}
+
+// loadSecretEntry loads raw symmetric key material and enforces the byte floor.
+func loadSecretEntry(name string, src config.KeySourceConfig, secretMinLength int) (*keyEntry, error) {
+	raw, err := loadKeyBytes(src, name, "secret")
+	if err != nil {
+		return nil, err
+	}
+	// src.IsSet() is true here, so loadKeyBytes never returns nil without error.
+	if secretMinLength > 0 && len(raw) < secretMinLength {
+		return nil, fmt.Errorf("keystore: key %q: secret is %d bytes, minimum is %d", name, len(raw), secretMinLength)
+	}
+	return &keyEntry{secret: raw}, nil
+}
+
+// loadRSAEntry loads an RSA pair: public required, private optional, matched.
+func loadRSAEntry(name string, cfg *config.KeyPairConfig) (*keyEntry, error) {
+	kp := &keyEntry{}
+
+	pubDER, err := loadKeyBytes(cfg.Public, name, "public")
+	if err != nil {
+		return nil, err
+	}
+	if pubDER == nil {
+		return nil, fmt.Errorf("keystore: key %q: public key is required", name)
+	}
+	kp.public, err = parsePublicKey(pubDER, name)
+	if err != nil {
+		return nil, err
+	}
+
+	privDER, err := loadKeyBytes(cfg.Private, name, "private")
+	if err != nil {
+		return nil, err
+	}
+	if privDER != nil {
+		kp.private, err = parsePrivateKey(privDER, name)
+		if err != nil {
+			return nil, err
+		}
+		// Fail fast if public and private keys don't match
+		if kp.private.E != kp.public.E || kp.private.N.Cmp(kp.public.N) != 0 {
+			return nil, fmt.Errorf("keystore: key %q: public and private keys do not match", name)
+		}
+	}
+
+	return kp, nil
+}
+
+// loadKeyBytes resolves a KeySourceConfig to raw bytes — DER for RSA keys,
+// raw key material for secrets. Returns nil if neither file nor value is set.
+func loadKeyBytes(src config.KeySourceConfig, keyName, keyType string) ([]byte, error) {
 	hasFile := src.File != ""
 	hasValue := src.Value != ""
 
