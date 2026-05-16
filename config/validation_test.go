@@ -3693,3 +3693,79 @@ func TestValidateKeyStoreWiredIntoValidate(t *testing.T) {
 	assert.ErrorContains(t, err, "keystore config")
 	assert.ErrorContains(t, err, "both 'file' and 'value' set")
 }
+
+func TestValidateKeyStoreSecretValid(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"mac-file":  {Secret: KeySourceConfig{File: "mac.bin"}},
+			"mac-value": {Secret: KeySourceConfig{Value: "base64data"}},
+		},
+	}
+	assert.NoError(t, validateKeyStore(cfg))
+}
+
+func TestValidateKeyStoreSecretRequiresSource(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"empty-secret": {Secret: KeySourceConfig{}},
+		},
+	}
+	// An entry with no material at all falls back to the public-key path.
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "key source required")
+}
+
+func TestValidateKeyStoreSecretBothSourcesSet(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"mac": {Secret: KeySourceConfig{File: "mac.bin", Value: "also"}},
+		},
+	}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "both 'file' and 'value' set")
+	assert.ErrorContains(t, err, "keystore.keys.mac.secret")
+}
+
+func TestValidateKeyStoreMixedEntrySecretPlusPublic(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"mixed": {
+				Public: KeySourceConfig{File: "pub.der"},
+				Secret: KeySourceConfig{File: "mac.bin"},
+			},
+		},
+	}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
+	assert.ErrorContains(t, err, "keystore.keys.mixed")
+}
+
+func TestValidateKeyStoreMixedEntrySecretPlusPrivate(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		Keys: map[string]KeyPairConfig{
+			"mixed": {
+				Private: KeySourceConfig{Value: "privb64"},
+				Secret:  KeySourceConfig{Value: "macb64"},
+			},
+		},
+	}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
+}
+
+func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
+	cfg := &KeyStoreConfig{SecretMinLength: -1}
+	err := validateKeyStore(cfg)
+	assert.ErrorContains(t, err, "keystore.secret_min_length")
+	assert.ErrorContains(t, err, "must be non-negative")
+}
+
+func TestValidateKeyStoreSecretMinLengthZeroAllowed(t *testing.T) {
+	cfg := &KeyStoreConfig{
+		SecretMinLength: 0,
+		Keys: map[string]KeyPairConfig{
+			"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
+		},
+	}
+	assert.NoError(t, validateKeyStore(cfg))
+}

@@ -534,27 +534,48 @@ type SchedulerTimeoutConfig struct {
 	SlowJob time.Duration `koanf:"slowjob" json:"slowjob" yaml:"slowjob" toml:"slowjob" mapstructure:"slowjob"`
 }
 
-// KeyStoreConfig holds named RSA key pair configuration.
-// Keys can be loaded from DER files (local dev) or base64-encoded values (EKS deployment).
+// KeyStoreConfig holds named key material configuration.
+// Keys can be loaded from files (local dev) or base64-encoded values (EKS deployment).
 type KeyStoreConfig struct {
-	// Keys maps logical names to key pair configurations.
-	// Example names: "signing", "encryption", "legacy".
+	// Keys maps logical names to key material configurations. Each entry is
+	// either an RSA pair (public/private) or a symmetric secret — never both.
+	// Example names: "signing", "encryption", "legacy", "my-mac-key".
 	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
+
+	// SecretMinLength is the minimum byte length enforced for symmetric secret
+	// entries at startup. The default (32) is applied via loadDefaults; an
+	// explicit 0 disables the check (opt-out for callers with a deliberate
+	// reason to allow shorter keys). Negative values are rejected at validation.
+	SecretMinLength int `koanf:"secret_min_length" json:"secret_min_length" yaml:"secret_min_length" toml:"secret_min_length" mapstructure:"secret_min_length"`
 }
 
-// KeyPairConfig holds a public/private RSA key pair configuration.
-// Public key is required; private key is optional (e.g., verification-only services).
+// KeyPairConfig holds key material for one logical name. An entry is either an
+// RSA key pair (Public required, Private optional) or a symmetric Secret —
+// never a mix. A mixed entry is rejected at startup (structural detection; no
+// explicit discriminator needed).
 type KeyPairConfig struct {
 	Public  KeySourceConfig `koanf:"public" json:"public" yaml:"public" toml:"public" mapstructure:"public"`
 	Private KeySourceConfig `koanf:"private" json:"private" yaml:"private" toml:"private" mapstructure:"private"`
+	// Secret holds raw symmetric key material (HMAC/CMAC key, HKDF input).
+	// Mutually exclusive with Public/Private.
+	Secret KeySourceConfig `koanf:"secret" json:"secret" yaml:"secret" toml:"secret" mapstructure:"secret"`
 }
 
-// KeySourceConfig specifies where to load a DER-encoded RSA key from.
+// KeySourceConfig specifies where to load a key from.
 // For required keys (e.g., public), exactly one of File or Value must be set.
 // For optional keys (e.g., private in verification-only services), both may be empty.
-//   - File: path to a .der file (local development)
-//   - Value: base64-encoded DER bytes (EKS deployment via env vars)
+//   - File: path to a key file — DER bytes for RSA, raw key bytes for a secret
+//     (local development)
+//   - Value: base64-encoded bytes — DER for RSA, raw key material for a secret
+//     (EKS deployment via env vars)
 type KeySourceConfig struct {
 	File  string `koanf:"file" json:"file" yaml:"file" toml:"file" mapstructure:"file"`
 	Value string `koanf:"value" json:"value" yaml:"value" toml:"value" mapstructure:"value"`
+}
+
+// IsSet reports whether this source has any material configured (file or
+// value). It is the single source of truth for "is a key source populated",
+// shared by config validation and the keystore loader.
+func (s *KeySourceConfig) IsSet() bool {
+	return s.File != "" || s.Value != ""
 }
