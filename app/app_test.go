@@ -395,6 +395,10 @@ func (s *stubKeyStore) PrivateKey(_ string) (*rsa.PrivateKey, error) {
 	return nil, fmt.Errorf("stub")
 }
 
+func (s *stubKeyStore) Secret(_ string) ([]byte, error) {
+	return nil, fmt.Errorf("stub")
+}
+
 type testAppFixture struct {
 	t         *testing.T
 	app       *App

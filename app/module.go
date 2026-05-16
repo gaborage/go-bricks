@@ -119,6 +119,12 @@ type KeyStore interface {
 	// PrivateKey returns the parsed RSA private key for the given certificate name.
 	// Returns an error if the name is not configured or no private key was provided.
 	PrivateKey(name string) (*rsa.PrivateKey, error)
+
+	// Secret returns a defensive copy of the raw symmetric key material for the
+	// given name (HMAC/CMAC key, HKDF input). The caller owns the returned slice
+	// and may zeroize it after use. Returns an error if the name is not
+	// configured or the entry holds an RSA pair rather than a secret.
+	Secret(name string) ([]byte, error)
 }
 
 // KeyStoreProvider is an optional interface that modules can implement to provide

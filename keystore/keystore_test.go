@@ -59,7 +59,7 @@ func TestNewStoreWithFileSource(t *testing.T) {
 			Public:  config.KeySourceConfig{File: pubPath},
 			Private: config.KeySourceConfig{File: privPath},
 		},
-	})
+	}, 0)
 
 	require.NoError(t, err)
 
@@ -83,7 +83,7 @@ func TestNewStoreWithBase64Source(t *testing.T) {
 			Public:  config.KeySourceConfig{Value: pubB64},
 			Private: config.KeySourceConfig{Value: privB64},
 		},
-	})
+	}, 0)
 
 	require.NoError(t, err)
 
@@ -114,7 +114,7 @@ func TestNewStoreMultipleKeyPairs(t *testing.T) {
 			Public:  config.KeySourceConfig{Value: pub2B64},
 			Private: config.KeySourceConfig{Value: priv2B64},
 		},
-	})
+	}, 0)
 
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestNewStorePrivateKeyOptional(t *testing.T) {
 			Public: config.KeySourceConfig{Value: pubB64},
 			// No private key
 		},
-	})
+	}, 0)
 
 	require.NoError(t, err)
 
@@ -150,14 +150,14 @@ func TestNewStorePrivateKeyOptional(t *testing.T) {
 }
 
 func TestPublicKeyNotFound(t *testing.T) {
-	s := &store{keys: map[string]*keyPair{}}
+	s := &store{keys: map[string]*keyEntry{}}
 
 	_, err := s.PublicKey("nonexistent")
 	assert.ErrorContains(t, err, `key "nonexistent" not found`)
 }
 
 func TestPrivateKeyNotFound(t *testing.T) {
-	s := &store{keys: map[string]*keyPair{}}
+	s := &store{keys: map[string]*keyEntry{}}
 
 	_, err := s.PrivateKey("nonexistent")
 	assert.ErrorContains(t, err, `key "nonexistent" not found`)
@@ -168,7 +168,7 @@ func TestNewStoreFileNotFound(t *testing.T) {
 		"missing": {
 			Public: config.KeySourceConfig{File: "/nonexistent/path.der"},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "read file")
 }
@@ -178,7 +178,7 @@ func TestNewStoreInvalidBase64(t *testing.T) {
 		"bad": {
 			Public: config.KeySourceConfig{Value: "not-valid-base64!!!"},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "base64 decode")
 }
@@ -190,7 +190,7 @@ func TestNewStoreInvalidDER(t *testing.T) {
 		"corrupt": {
 			Public: config.KeySourceConfig{Value: badB64},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "ParsePKIXPublicKey")
 }
@@ -205,7 +205,7 @@ func TestNewStoreInvalidPrivateKeyDER(t *testing.T) {
 			Public:  config.KeySourceConfig{Value: pubB64},
 			Private: config.KeySourceConfig{Value: badPrivB64},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "PKCS1 fallback also failed")
 }
@@ -224,7 +224,7 @@ func TestNewStorePKCS1Fallback(t *testing.T) {
 			Public:  config.KeySourceConfig{Value: pubB64},
 			Private: config.KeySourceConfig{Value: privB64},
 		},
-	})
+	}, 0)
 
 	require.NoError(t, err)
 
@@ -239,7 +239,7 @@ func TestNewStorePublicKeyRequired(t *testing.T) {
 			// No public key configured
 			Private: config.KeySourceConfig{Value: "dW51c2Vk"},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "public key is required")
 }
@@ -257,32 +257,133 @@ func TestNewStoreMismatchedKeyPair(t *testing.T) {
 			Public:  config.KeySourceConfig{Value: pub1B64},
 			Private: config.KeySourceConfig{Value: priv2B64},
 		},
-	})
+	}, 0)
 
 	assert.ErrorContains(t, err, "public and private keys do not match")
 }
 
-func TestLoadDERBytesFromFile(t *testing.T) {
+func TestLoadKeyBytesFromFile(t *testing.T) {
 	dir := t.TempDir()
 	expected := []byte("test-der-content")
 	path := writeDERFile(t, dir, "test.der", expected)
 
-	data, err := loadDERBytes(config.KeySourceConfig{File: path}, "test", "public")
+	data, err := loadKeyBytes(config.KeySourceConfig{File: path}, "test", "public")
 	require.NoError(t, err)
 	assert.Equal(t, expected, data)
 }
 
-func TestLoadDERBytesFromBase64(t *testing.T) {
+func TestLoadKeyBytesFromBase64(t *testing.T) {
 	expected := []byte("test-der-content")
 	b64 := base64.StdEncoding.EncodeToString(expected)
 
-	data, err := loadDERBytes(config.KeySourceConfig{Value: b64}, "test", "public")
+	data, err := loadKeyBytes(config.KeySourceConfig{Value: b64}, "test", "public")
 	require.NoError(t, err)
 	assert.Equal(t, expected, data)
 }
 
-func TestLoadDERBytesNeitherSet(t *testing.T) {
-	data, err := loadDERBytes(config.KeySourceConfig{}, "test", "public")
+func TestLoadKeyBytesNeitherSet(t *testing.T) {
+	data, err := loadKeyBytes(config.KeySourceConfig{}, "test", "public")
 	require.NoError(t, err)
 	assert.Nil(t, data)
+}
+
+// =============================================================================
+// Symmetric secret tests
+// =============================================================================
+
+func TestNewStoreWithSecretFileSource(t *testing.T) {
+	dir := t.TempDir()
+	want := []byte("0123456789abcdef0123456789abcdef") // 32 bytes
+	path := writeDERFile(t, dir, "mac.bin", want)
+
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{File: path}},
+	}, 32)
+	require.NoError(t, err)
+
+	got, err := s.Secret("mac")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestNewStoreWithSecretBase64Source(t *testing.T) {
+	want := []byte("an-explicitly-32-byte-mac-key!!!")
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
+	}, 32)
+	require.NoError(t, err)
+
+	got, err := s.Secret("mac")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestSecretReturnsDefensiveCopy(t *testing.T) {
+	want := []byte("0123456789abcdef0123456789abcdef")
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
+	}, 32)
+	require.NoError(t, err)
+
+	first, err := s.Secret("mac")
+	require.NoError(t, err)
+	first[0] ^= 0xFF // caller mutates its copy
+
+	second, err := s.Secret("mac")
+	require.NoError(t, err)
+	assert.Equal(t, want, second, "store must not be affected by caller mutation")
+}
+
+func TestNewStoreSecretBelowMinLength(t *testing.T) {
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString([]byte("short"))}},
+	}, 32)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `key "weak"`)
+	assert.ErrorContains(t, err, "minimum is 32")
+}
+
+func TestNewStoreSecretMinLengthDisabled(t *testing.T) {
+	want := []byte("short")
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"weak": {Secret: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(want)}},
+	}, 0) // 0 disables the floor
+	require.NoError(t, err)
+
+	got, err := s.Secret("weak")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestSecretNotFound(t *testing.T) {
+	s := &store{keys: map[string]*keyEntry{}}
+	_, err := s.Secret("nope")
+	assert.ErrorContains(t, err, `key "nope" not found`)
+}
+
+func TestSecretOnRSAEntryRejected(t *testing.T) {
+	_, pub := generateTestKeys(t)
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"signing": {Public: config.KeySourceConfig{
+			Value: base64.StdEncoding.EncodeToString(marshalPublicKeyDER(t, pub)),
+		}},
+	}, 32)
+	require.NoError(t, err)
+
+	_, err = s.Secret("signing")
+	assert.ErrorContains(t, err, "has no symmetric secret configured")
+}
+
+func TestPublicKeyOnSecretEntryRejected(t *testing.T) {
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{
+			Value: base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")),
+		}},
+	}, 32)
+	require.NoError(t, err)
+
+	_, pubErr := s.PublicKey("mac")
+	assert.ErrorContains(t, pubErr, "has no public key configured")
+	_, privErr := s.PrivateKey("mac")
+	assert.ErrorContains(t, privErr, "has no private key configured")
 }

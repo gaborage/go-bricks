@@ -40,7 +40,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
-	s, err := newStore(cfg.Keys)
+	s, err := newStore(cfg.Keys, cfg.SecretMinLength)
 	if err != nil {
 		return err
 	}
