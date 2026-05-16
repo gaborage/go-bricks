@@ -2871,10 +2871,12 @@ curl -X POST http://localhost:8080/_sys/job/outbox-relay
 SELECT count(*) FROM gobricks_outbox WHERE status = 'pending';
 ```
 
-## KeyStore (Named RSA Key Pairs)
+## KeyStore (Named RSA Keys & Symmetric Secrets)
 
-Load DER-encoded RSA keys from files (local dev) or base64-encoded env vars (EKS).
-Keys are loaded once at startup and held in memory — no caching or synchronization needed.
+Load DER-encoded RSA keys or raw symmetric secrets (HMAC/CMAC keys, HKDF input)
+from files (local dev) or base64-encoded env vars (EKS). Each entry is **either**
+an RSA pair **or** a secret — a mixed entry fails fast at startup. Keys are loaded
+once and held in memory — no caching or synchronization needed.
 
 ### Configuration
 
@@ -2890,12 +2892,19 @@ keystore:
 
 # EKS deployment (base64-encoded DER via env vars)
 keystore:
+  secret_min_length: 32          # default 32; 0 disables the floor
   keys:
     signing:
       public:
         value: "${SIGNING_PUBLIC_KEY_BASE64}"
       private:
         value: "${SIGNING_PRIVATE_KEY_BASE64}"
+    mac-key:                     # symmetric secret entry
+      secret:
+        file: "certs/mac-key.bin"        # local dev: raw key bytes
+    mac-key-deployed:
+      secret:
+        value: "${MAC_KEY_BASE64}"       # deployed: base64 raw key
 ```
 
 ### Module Setup
@@ -2925,6 +2934,17 @@ func (s *Service) DecryptJWE(ctx context.Context, token string) ([]byte, error) 
     }
     return DecryptJWECompact(token, privKey)
 }
+
+// Symmetric secret — Secret returns a defensive copy the caller owns.
+func (s *Service) Digest(payload []byte) ([]byte, error) {
+    key, err := s.keyStore.Secret("mac-key")
+    if err != nil {
+        return nil, fmt.Errorf("get mac key: %w", err)
+    }
+    mac := hmac.New(sha256.New, key)
+    mac.Write(payload)
+    return mac.Sum(nil), nil
+}
 ```
 
 ### Testing
@@ -2951,16 +2971,27 @@ func TestServiceDecryption(t *testing.T) {
 mock := kstest.NewMockKeyStore().
     WithPrivateKeyError(fmt.Errorf("key unavailable"))
 
+// Symmetric secret mock + error injection
+mock := kstest.NewMockKeyStore().
+    WithSecret("mac-key", []byte("32-byte-symmetric-mac-key-mater!")).
+    WithPrivateKeyError(fmt.Errorf("key unavailable"))
+
 // Assertion helpers
 kstest.AssertPublicKeyAvailable(t, mock, "signing")
 kstest.AssertPrivateKeyAvailable(t, mock, "signing")
+kstest.AssertSecretAvailable(t, mock, "mac-key")
 kstest.AssertKeyNotFound(t, mock, "nonexistent")
 ```
 
 **Key Points:**
-- Public key required per pair, private key optional (verification-only services)
-- Exactly one source per key: `file` (DER path) or `value` (base64 string)
-- Fails fast at startup if any key cannot be loaded or parsed
+- Public key required per RSA pair, private key optional (verification-only services)
+- Symmetric `secret` entries are mutually exclusive with `public`/`private` — a
+  mixed entry is a startup config error (structural detection, no discriminator)
+- `Secret(name)` returns a **defensive copy**; the caller owns it and may zeroize
+- `keystore.secret_min_length` (default 32) enforces a byte floor at startup; an
+  explicit `0` disables it
+- Exactly one source per key: `file` (raw/DER path) or `value` (base64 string)
+- Fails fast at startup if any key cannot be loaded, parsed, or is too short
 - PKCS8 with PKCS1 fallback for private keys (handles legacy formats)
 
 ## JOSE Middleware (Nested JWE-of-JWS)

@@ -1,20 +1,28 @@
-// Package keystore provides named RSA key pair management for GoBricks applications.
+// Package keystore provides named key-material management for GoBricks
+// applications: RSA key pairs and raw symmetric secrets (HMAC/CMAC keys,
+// HKDF input).
 //
-// Keys are loaded at startup from DER-encoded files or base64-encoded values
-// (typically injected via environment variables for Kubernetes/EKS deployments).
-// Once loaded, the store is read-only and safe for concurrent access.
+// Material is loaded at startup from files or base64-encoded values (typically
+// injected via environment variables for Kubernetes/EKS deployments). Once
+// loaded, the store is read-only and safe for concurrent access. Each entry is
+// either an RSA pair or a symmetric secret — a mixed entry is rejected by the
+// config layer at startup (structural detection, no explicit discriminator).
 //
 // # Configuration
 //
 // Keys are configured in YAML under the "keystore" section:
 //
 //	keystore:
+//	  secret_min_length: 32                        # default 32; 0 disables
 //	  keys:
 //	    signing:
 //	      public:
 //	        file: "certs/signing_public.der"       # Local dev
 //	      private:
 //	        value: "${SIGNING_PRIVATE_KEY_BASE64}"  # EKS (base64-encoded DER)
+//	    mac-key:
+//	      secret:
+//	        value: "${MAC_KEY_BASE64}"              # base64 raw key material
 //
 // # Usage
 //
@@ -36,6 +44,11 @@
 //	}
 //
 //	privKey, err := m.keyStore.PrivateKey("signing")
+//
+// Secret returns a defensive copy of symmetric key material; the caller owns
+// the slice and may zeroize it after use:
+//
+//	macKey, err := m.keyStore.Secret("mac-key")
 package keystore
 
 import (

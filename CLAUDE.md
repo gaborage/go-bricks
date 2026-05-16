@@ -43,7 +43,7 @@ go test -bench=.        # Run benchmarks
 - [.golangci.yml](.golangci.yml) — Linting configuration
 
 **Wiki (deep dives — read on demand):**
-- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [observability.md](wiki/observability.md) · [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md)
+- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md)
 - Patterns: [handler-patterns.md](wiki/handler-patterns.md) · [context-deadlines.md](wiki/context-deadlines.md) · [testing.md](wiki/testing.md)
 - Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup-defaults.md](wiki/startup-defaults.md)
 - ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr-NNN-*.md`
@@ -153,7 +153,7 @@ make lint                       # Run golangci-lint
 - **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
-- **keystore/** — Named RSA key pair management from DER files or base64 env vars
+- **keystore/** — Named key-material management: RSA key pairs and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
 - **jose/** — Nested JWE-of-JWS protection on HTTP request and response bodies
 
 ### Module System
@@ -561,7 +561,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **observability/testing/** — Test utilities for spans and metrics.
 - **outbox/** — Transactional outbox pattern (Publisher, Relay, Store, multi-vendor).
 - **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
-- **keystore/** — Named RSA key pair management (DER files + base64 env vars).
+- **keystore/** — Named RSA key pairs + symmetric secrets (DER/raw files + base64 env vars).
 - **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
 - **tools/** — Development tooling (OpenAPI generator).
 - **wiki/** — Architecture documentation and ADRs.
@@ -606,6 +606,7 @@ type OutboxPublisher interface {
 type KeyStore interface {
     PublicKey(name string) (*rsa.PublicKey, error)
     PrivateKey(name string) (*rsa.PrivateKey, error)
+    Secret(name string) ([]byte, error) // raw symmetric key material (defensive copy)
 }
 ```
 
