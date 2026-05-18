@@ -41,6 +41,10 @@
 !sonar-project.properties
 
 !.claude/commands/*
+!.claude/settings.json
+!.claude/hooks/*
+!.claude/agents/*
+!.claude/skills/**
 
 # Test fixtures (JSON / SQL / golden files) live under testdata/ alongside the
 # source they exercise.
