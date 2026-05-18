@@ -41,7 +41,7 @@ Use when reviewing or fixing a PR. The argument is the PR number (e.g.
 
 4. Output a table grouped by severity:
 
-   ```
+   ```text
    ## SonarCloud — PR #N  (X issues, Y hotspots)
 
    | Severity | Rule | Location | Message | Disposition |
