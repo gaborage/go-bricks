@@ -70,7 +70,7 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
 
 Return ONLY this structure (no preamble):
 
-```
+```text
 ## project-conventions-reviewer
 
 ### Blocking (must fix before push)

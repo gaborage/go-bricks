@@ -20,7 +20,7 @@ Use when reviewing or fixing a PR. The argument is the PR number (e.g.
 2. Fetch the NEW issues (public endpoint, no auth needed):
 
    ```bash
-   curl -sS "https://sonarcloud.io/api/issues/search?componentKeys=gaborage_go-bricks&pullRequest=N&statuses=OPEN,CONFIRMED&ps=500" \
+   curl -fsSL "https://sonarcloud.io/api/issues/search?componentKeys=gaborage_go-bricks&pullRequest=N&statuses=OPEN,CONFIRMED&ps=500" \
      | jq -r '.issues[] | "\(.severity)\t\(.rule)\t\(.component | sub("^gaborage_go-bricks:";""))#\(.line // 0)\t\(.message)"' \
      | sort
    ```
@@ -28,7 +28,7 @@ Use when reviewing or fixing a PR. The argument is the PR number (e.g.
    Also fetch security hotspots, which the issues endpoint omits:
 
    ```bash
-   curl -sS "https://sonarcloud.io/api/hotspots/search?projectKey=gaborage_go-bricks&pullRequest=N&ps=500" \
+   curl -fsSL "https://sonarcloud.io/api/hotspots/search?projectKey=gaborage_go-bricks&pullRequest=N&ps=500" \
      | jq -r '.hotspots[]? | "HOTSPOT\t\(.securityCategory)\t\(.component | sub("^gaborage_go-bricks:";""))#\(.line // 0)\t\(.message)"'
    ```
 

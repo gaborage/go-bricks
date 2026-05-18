@@ -27,9 +27,19 @@ command -v jq >/dev/null 2>&1 || {
 
 input="$(cat)"
 
+block_unparseable() {
+  echo "check-raw-sql: unparseable or unsupported hook payload — refusing to allow a potentially unguarded edit." >&2
+  exit 2
+}
+
+# Fail CLOSED on malformed input: a payload jq cannot parse must block, never
+# fall through as "not a Go file". (Swallowing jq errors with `|| true` would
+# silently break the fail-closed contract this guard advertises.)
+jq -e . >/dev/null 2>&1 <<<"$input" || block_unparseable
+
 # Cheapest guard first: only Go source files can contain f.Raw()/jf.Raw().
 # Extracting just the path keeps the common non-Go edit on a single jq fork.
-file="$(jq -r '.tool_input.file_path // empty' <<<"$input" 2>/dev/null || true)"
+file="$(jq -er '.tool_input.file_path // empty' <<<"$input" 2>/dev/null)" || block_unparseable
 case "$file" in
   *.go) ;;
   *) exit 0 ;;
@@ -39,19 +49,35 @@ esac
 #   Write      -> .tool_input.content
 #   Edit       -> .tool_input.new_string
 #   MultiEdit  -> joined .tool_input.edits[].new_string  (nulls filtered)
-added="$(jq -r '
+added="$(jq -er '
   .tool_input.content
   // .tool_input.new_string
   // ([.tool_input.edits[]?.new_string // empty] | join("\n"))
-  // ""' <<<"$input" 2>/dev/null || true)"
+  // ""' <<<"$input" 2>/dev/null)" || block_unparseable
 
 # Does this edit introduce a raw-SQL escape hatch?
 if ! grep -Eq '(^|[^A-Za-z0-9_])(f|jf)\.Raw\(' <<<"$added"; then
   exit 0
 fi
 
-# Is the mandatory annotation present in the SAME edit?
-if grep -q 'SECURITY: Manual SQL review completed' <<<"$added"; then
+# Is the mandatory annotation present AND positioned to cover the calls?
+#
+# Stronger than "annotation appears anywhere in the blob": every (f|jf).Raw(
+# occurrence must be preceded (same line or any earlier line in this edit) by
+# a SECURITY annotation. This rejects the "annotation pasted after the calls"
+# and "bare call, no annotation" cases.
+#
+# It deliberately does NOT enforce strict line-N-1 adjacency: CLAUDE.md /
+# the security-audit policy explicitly permit ONE annotation above an
+# enclosing dispatch (table-driven loop, multi-call JoinOn chain) covering
+# several Raw calls. A pre-edit hook only sees a string fragment, so strict
+# per-call adjacency would false-block that sanctioned pattern. Semantic
+# adjacency review remains the job of /security-audit + human review.
+if awk '
+  /SECURITY: Manual SQL review completed/ { seen = 1 }
+  /(^|[^A-Za-z0-9_])(f|jf)\.Raw\(/      { if (!seen) { missing = 1 } }
+  END                                    { exit (missing ? 1 : 0) }
+' <<<"$added"; then
   exit 0
 fi
 
