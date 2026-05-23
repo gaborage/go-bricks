@@ -268,6 +268,9 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/jose", rec.Header().Get(echo.HeaderContentType))
 
+	// OpenForTest internally t.Fatals on decrypt/verify failure (jose/testing/helpers.go).
+	// The discarded second return is *jose.Claims (verified claims), not an error — this
+	// test doesn't need to inspect claims, only the envelope shape.
 	plainResp, _ := jositest.OpenForTest(t, rec.Body.String(), f.peerInbound(), f.resolver)
 	var envelope map[string]any
 	require.NoError(t, json.Unmarshal(plainResp, &envelope))
@@ -324,6 +327,8 @@ func TestJOSEResultWithMetaReservedKeyDroppedInsideSeal(t *testing.T) {
 	require.NoError(t, h(c))
 	assert.Equal(t, http.StatusOK, w.Code)
 
+	// Per OpenForTest comment above (line 271 sibling test): the `_` is *jose.Claims,
+	// not an error; decrypt/verify already t.Fatals on failure.
 	plainResp, _ := jositest.OpenForTest(t, w.Body.String(), f.peerInbound(), f.resolver)
 	var envelope map[string]any
 	require.NoError(t, json.Unmarshal(plainResp, &envelope))

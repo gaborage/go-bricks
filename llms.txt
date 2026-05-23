@@ -550,6 +550,7 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 type ListUsersReq struct {
 	Status string `query:"status" validate:"omitempty,oneof=active inactive"`
 	Limit  int    `query:"limit" validate:"omitempty,min=1,max=100"`
+	Offset int    `query:"offset" validate:"omitempty,min=0"`
 }
 
 func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server.Result[[]User], server.IAPIError) {
