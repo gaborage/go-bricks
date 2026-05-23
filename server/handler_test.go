@@ -17,6 +17,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (
@@ -1602,23 +1603,66 @@ func TestWrapHandlerMergesEnvelopeMeta(t *testing.T) {
 	assert.True(t, hasTimestamp)
 }
 
+// levelRecLogger is a level-aware variant of recLogger. It captures every event with the
+// level that produced it so reserved-key collision tests can assert WARN severity (a
+// regression to Info/Debug would otherwise pass silently against the shared recLogger).
+type levelRecLogger struct {
+	events []levelRecEvent
+}
+
+type levelRecEvent struct {
+	level     string
+	fields    map[string]string
+	intFields map[string]int
+	message   string
+}
+
+func (l *levelRecLogger) record(level string) logger.LogEvent {
+	l.events = append(l.events, levelRecEvent{
+		level:     level,
+		fields:    map[string]string{},
+		intFields: map[string]int{},
+	})
+	return &l.events[len(l.events)-1]
+}
+func (l *levelRecLogger) Info() logger.LogEvent                     { return l.record("info") }
+func (l *levelRecLogger) Warn() logger.LogEvent                     { return l.record("warn") }
+func (l *levelRecLogger) Error() logger.LogEvent                    { return l.record("error") }
+func (l *levelRecLogger) Debug() logger.LogEvent                    { return l.record("debug") }
+func (l *levelRecLogger) Fatal() logger.LogEvent                    { return l.record("fatal") }
+func (l *levelRecLogger) WithContext(_ any) logger.Logger           { return l }
+func (l *levelRecLogger) WithFields(_ map[string]any) logger.Logger { return l }
+
+func (e *levelRecEvent) Msg(msg string)                                { e.message = msg }
+func (e *levelRecEvent) Msgf(_ string, _ ...any)                       {}
+func (e *levelRecEvent) Err(_ error) logger.LogEvent                   { return e }
+func (e *levelRecEvent) Str(k, v string) logger.LogEvent               { e.fields[k] = v; return e }
+func (e *levelRecEvent) Int(k string, v int) logger.LogEvent           { e.intFields[k] = v; return e }
+func (e *levelRecEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *levelRecEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *levelRecEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *levelRecEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
+func (e *levelRecEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *levelRecEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+
 func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
-	rec := &recLogger{}
+	rec := &levelRecLogger{}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		return ResultWithMeta[helloResp]{
 			Data:   helloResp{Message: "x"},
 			Status: http.StatusOK,
 			Meta: map[string]any{
-				// Single reserved key — recLogger captures only the LAST event, so testing
-				// one reserved key at a time keeps the assertion deterministic regardless of
-				// map-iteration order. The nil-logger sibling test covers the other key.
-				fieldTraceID: "fake-trace",
-				"page":       1,
+				// Both reserved keys at once — level-aware logger captures every event, so
+				// we can assert BOTH WARNs fire (catching a future bug that exits the merge
+				// loop early after the first collision).
+				fieldTimestamp: "fake-ts",
+				fieldTraceID:   "fake-trace",
+				"page":         1,
 			},
 		}, nil
 	}
@@ -1635,15 +1679,22 @@ func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
-	// Framework key wins — handler's "fake-trace" must NOT appear.
+	// Framework keys win — neither "fake-ts" nor "fake-trace" must appear.
 	assert.Equal(t, "real-trace", resp.Meta["traceId"])
+	assert.NotEqual(t, "fake-ts", resp.Meta["timestamp"])
 	assert.Equal(t, float64(1), resp.Meta["page"])
 
-	// WARN emitted naming exactly the offending key (deterministic given single reserved key).
-	require.NotNil(t, rec.last, "expected a log event")
-	assert.Equal(t, "envelope meta key collides with framework-managed key; handler value dropped", rec.last.message)
-	assert.Equal(t, fieldTraceID, rec.last.fields["key"])
-	assert.Equal(t, "", rec.last.fields["route"], "route is empty when no Echo route is mounted; non-empty in production")
+	// Two WARNs (one per reserved key); severity must be "warn" not "info"/"debug"
+	// (regression guard for the documented contract).
+	require.Len(t, rec.events, 2, "expected one WARN per reserved-key collision")
+	seenKeys := map[string]bool{}
+	for _, ev := range rec.events {
+		assert.Equal(t, "warn", ev.level, "reserved-key collision must log at WARN severity")
+		assert.Equal(t, "envelope meta key collides with framework-managed key; handler value dropped", ev.message)
+		seenKeys[ev.fields["key"]] = true
+	}
+	assert.True(t, seenKeys[fieldTimestamp], "WARN missing for timestamp collision")
+	assert.True(t, seenKeys[fieldTraceID], "WARN missing for traceId collision")
 }
 
 func TestWrapHandlerEnvelopeMetaReservedKeyNilLoggerSilentlyDrops(t *testing.T) {
@@ -1736,10 +1787,13 @@ func TestWrapHandlerRawResponseDropsEnvelopeMeta(t *testing.T) {
 	assert.False(t, hasData, "raw mode must not wrap data")
 	assert.Equal(t, "raw", raw["message"])
 
-	// Debug log fired naming the misconfiguration.
+	// Debug log fired naming the misconfiguration — message is interface-generic so it
+	// stays accurate for custom ResultEnvelopeProvider implementations, with the actual
+	// concrete type recorded in the `type` field.
 	require.NotNil(t, rec.last, "expected a debug log event")
-	assert.Equal(t, "raw response mode dropped envelope meta from ResultWithMeta", rec.last.message)
+	assert.Equal(t, "raw response mode dropped envelope meta from ResultEnvelopeProvider", rec.last.message)
 	assert.Equal(t, 1, rec.last.intFields["dropped_meta_keys"])
+	assert.Contains(t, rec.last.fields["type"], "ResultWithMeta", "type field should record the concrete provider")
 }
 
 func TestWithLoggerOptionSetsField(t *testing.T) {

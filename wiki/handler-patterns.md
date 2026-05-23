@@ -138,8 +138,12 @@ type ListUsersResp struct {
     Items []User `json:"items"`
 }
 
-func (h *Handler) listUsers(req ListUsersReq, _ server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
-    users, total, _ := h.svc.List(req.Limit, req.Offset)
+func (h *Handler) listUsers(req ListUsersReq, hctx server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
+    ctx := hctx.Echo.Request().Context()
+    users, total, err := h.svc.List(ctx, req.Limit, req.Offset)
+    if err != nil {
+        return server.ResultWithMeta[ListUsersResp]{}, server.InternalServerError(err)
+    }
     return server.ResultWithMeta[ListUsersResp]{
         Data:   ListUsersResp{Items: users},
         Status: http.StatusOK,
@@ -154,6 +158,7 @@ func (h *Handler) listUsers(req ListUsersReq, _ server.HandlerContext) (server.R
 ```
 
 Produces:
+
 ```json
 {
   "data": { "items": [...] },

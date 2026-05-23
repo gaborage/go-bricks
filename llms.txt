@@ -586,8 +586,9 @@ type ListUsersResp struct {
 	Items []User `json:"items"`
 }
 
-func (h *Handler) ListUsersPaginated(req ListUsersReq, _ server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
-	users, total, err := h.svc.ListPaged(req.Limit, req.Offset)
+func (h *Handler) ListUsersPaginated(req ListUsersReq, hctx server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
+	ctx := hctx.Echo.Request().Context()
+	users, total, err := h.svc.ListPaged(ctx, req.Limit, req.Offset)
 	if err != nil {
 		return server.ResultWithMeta[ListUsersResp]{}, server.InternalServerError(err)
 	}

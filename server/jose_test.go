@@ -256,7 +256,8 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	}
 	h := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, nil, false, joseCfg)
 
-	plainReq := []byte(`{"pan":"4111111111111111"}`)
+	// Non-PAN sentinel keeps card-data scanners (OpenGrep) from flagging this fixture.
+	plainReq := []byte(`{"pan":"test-pan-001"}`)
 	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
 	req.Header.Set(echo.HeaderContentType, "application/jose")
@@ -276,7 +277,7 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	require.Contains(t, envelope, "meta")
 
 	dataObj, _ := envelope["data"].(map[string]any)
-	assert.Equal(t, "tok-4111111111111111", dataObj["token"])
+	assert.Equal(t, "tok-test-pan-001", dataObj["token"])
 
 	metaObj, _ := envelope["meta"].(map[string]any)
 	assert.Equal(t, float64(1), metaObj["total"])
@@ -284,6 +285,61 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	// Framework keys present.
 	assert.Contains(t, metaObj, "timestamp")
 	assert.Contains(t, metaObj, "traceId")
+}
+
+func TestJOSEResultWithMetaReservedKeyDroppedInsideSeal(t *testing.T) {
+	// The framework-key invariant must hold even inside the JOSE-sealed envelope.
+	// A handler that supplies "traceId" or "timestamp" in Meta MUST have those keys
+	// overridden by the framework before the body is sealed, so peers receive the
+	// authoritative trace correlation rather than handler-controlled values.
+	f := newJOSEFixture(t)
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	obs := newJOSEObservability(nil, nil, nil)
+	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
+
+	handler := func(req joseTokenReq, _ HandlerContext) (ResultWithMeta[joseTokenResp], IAPIError) {
+		return ResultWithMeta[joseTokenResp]{
+			Data:   joseTokenResp{Token: "tok-" + req.Pan},
+			Status: http.StatusOK,
+			Meta: map[string]any{
+				fieldTraceID:   "attacker-controlled-trace",
+				fieldTimestamp: "attacker-controlled-timestamp",
+				"page":         7,
+			},
+		}, nil
+	}
+	rec := &levelRecLogger{}
+	h := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, rec, false, joseCfg)
+
+	plainReq := []byte(`{"pan":"test-pan-002"}`)
+	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
+	req.Header.Set(echo.HeaderContentType, "application/jose")
+	req.Header.Set(echo.HeaderXRequestID, "real-jose-trace")
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	plainResp, _ := jositest.OpenForTest(t, w.Body.String(), f.peerInbound(), f.resolver)
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(plainResp, &envelope))
+
+	metaObj, _ := envelope["meta"].(map[string]any)
+	// Framework key wins inside the sealed envelope.
+	assert.Equal(t, "real-jose-trace", metaObj["traceId"])
+	assert.NotEqual(t, "attacker-controlled-trace", metaObj["traceId"])
+	assert.NotEqual(t, "attacker-controlled-timestamp", metaObj["timestamp"])
+	assert.Equal(t, float64(7), metaObj["page"])
+
+	// WARN logs fired for both reserved keys on the JOSE path too.
+	require.Len(t, rec.events, 2, "expected one WARN per reserved-key collision on JOSE outbound")
+	for _, ev := range rec.events {
+		assert.Equal(t, "warn", ev.level, "JOSE reserved-key collision must log at WARN severity")
+	}
 }
 
 // --- Registration-time panic tests ---

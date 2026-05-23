@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"mime"
@@ -742,8 +743,15 @@ func formatSuccessEnvelopeWithStatus(c *echo.Context, data any, status int, head
 	}
 
 	ensureTraceParentHeader(c)
+	// 204 No Content and 304 Not Modified MUST NOT carry a body per RFC 7230 §3.3.3.
+	// Short-circuit BEFORE building the meta map so handler-supplied userMeta is silently
+	// dropped (the wire shape mandates it) and reserved-key WARNs don't fire for a body
+	// that will never ship.
 	if status == http.StatusNoContent {
 		return c.NoContent(http.StatusNoContent)
+	}
+	if status == http.StatusNotModified {
+		return c.NoContent(http.StatusNotModified)
 	}
 
 	response := APIResponse{
@@ -767,13 +775,22 @@ func buildFrameworkMeta(c *echo.Context) map[string]any {
 // Framework keys (reservedMetaKeys) are authoritative: any handler value for those keys is
 // dropped, and a structured WARN is emitted via log identifying the offending key and the
 // route path so SREs can locate the misbehaving handler. log==nil disables the warning but
-// preserves the drop.
+// preserves the drop. Trailing writes to fieldTimestamp/fieldTraceID are the authoritative
+// guarantee; the per-key drop in the loop exists to emit the WARN signal — a maintainer
+// relaxing the loop guard would NOT regress the framework-key invariant.
 func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logger) map[string]any {
 	out := make(map[string]any, len(userMeta)+len(reservedMetaKeys))
 	for k, v := range userMeta {
 		if _, reserved := reservedMetaKeys[k]; reserved {
 			if log != nil {
-				log.WithContext(c.Request().Context()).Warn().
+				// SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates
+				// the underlying writer. Fall back to a background context so the WARN
+				// still ships (without trace correlation) instead of panicking.
+				ctx := context.Background()
+				if req := c.Request(); req != nil {
+					ctx = req.Context()
+				}
+				log.WithContext(ctx).Warn().
 					Str("key", k).
 					Str("route", c.Path()).
 					Msg("envelope meta key collides with framework-managed key; handler value dropped")
@@ -857,10 +874,16 @@ func (rh *responseHandler) handleRawResponse(c *echo.Context, response any, apiE
 	if re, ok := response.(ResultEnvelopeProvider); ok {
 		status, headers, data, meta := re.ResultEnvelope()
 		if len(meta) > 0 && rh.log != nil {
-			rh.log.WithContext(c.Request().Context()).Debug().
+			// SAFETY: tolerate nil c.Request() under Echo TimeoutHandler teardown.
+			ctx := context.Background()
+			if req := c.Request(); req != nil {
+				ctx = req.Context()
+			}
+			rh.log.WithContext(ctx).Debug().
 				Str("route", c.Path()).
+				Str("type", fmt.Sprintf("%T", response)).
 				Int("dropped_meta_keys", len(meta)).
-				Msg("raw response mode dropped envelope meta from ResultWithMeta")
+				Msg("raw response mode dropped envelope meta from ResultEnvelopeProvider")
 		}
 		return formatRawSuccessResponseWithStatus(c, data, status, headers)
 	}
@@ -1106,10 +1129,21 @@ type ResultMetaProvider interface {
 	ResultMeta() (status int, headers http.Header, data any)
 }
 
-// ResultEnvelopeProvider extends ResultMetaProvider with handler-supplied envelope meta
-// entries (pagination totals, deprecation notices, etc.). The framework merges the
-// returned meta map with its own keys (timestamp, traceId); reservedMetaKeys are always
-// authoritative — handler values for those keys are dropped with a structured WARN.
+// ResultEnvelopeProvider is the alternative to ResultMetaProvider for handlers that want
+// to contribute extra entries (pagination totals, deprecation notices, etc.) to the response
+// envelope's meta map. The two interfaces have disjoint method sets (ResultEnvelope vs
+// ResultMeta) and ResultEnvelopeProvider does NOT embed ResultMetaProvider — types wanting
+// to be visible to legacy ResultMetaProvider-aware code (e.g. third-party middleware) must
+// implement both methods explicitly. ResultWithMeta[R] does so as the reference example.
+//
+// The framework merges the returned meta map with its own keys (timestamp, traceId);
+// reservedMetaKeys are always authoritative — handler values for those keys are dropped
+// with a structured WARN.
+//
+// The framework dispatcher checks ResultEnvelopeProvider BEFORE ResultMetaProvider so a
+// type satisfying both routes through the envelope path. Maintainers MUST preserve that
+// ordering at every dispatch site (server.handleResponse, server.handleRawResponse,
+// JOSE outbound) or ResultWithMeta would silently lose its meta payload.
 //
 // On JOSE-protected routes, ResultEnvelopeProvider causes the sealed body to ship an
 // envelope shape ({"data": ..., "meta": ...}) instead of bare data. In raw-response mode
@@ -1202,11 +1236,15 @@ func NewResultWithMeta[R any](status int, data R, meta map[string]any) ResultWit
 	}
 }
 
-// WithLogger attaches a general-purpose logger to the handler registry. Currently used to
-// emit a structured WARN when a handler-supplied envelope meta key collides with a
-// framework-reserved key (timestamp, traceId). Independent of WithJOSELogger.
+// WithLogger attaches a general-purpose logger to the handler registry. Used by the
+// response pipeline to emit:
+//   - A structured WARN when a handler-supplied envelope meta key collides with a
+//     framework-reserved key (timestamp, traceId).
+//   - A structured DEBUG when raw-response mode drops envelope meta returned by a
+//     ResultEnvelopeProvider (typically misconfigured routes).
 //
-// Passing nil is a no-op — reserved keys are still dropped, the warning is just suppressed.
+// Independent of WithJOSELogger. Passing nil is a no-op — reserved keys are still dropped,
+// the warning is just suppressed.
 func WithLogger(log logger.Logger) HandlerRegistryOption {
 	return func(hr *HandlerRegistry) {
 		hr.log = log
