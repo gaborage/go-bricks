@@ -916,8 +916,14 @@ func formatRawSuccessResponseWithStatus(c *echo.Context, data any, status int, h
 	}
 
 	ensureTraceParentHeader(c)
+	// Aligned with formatSuccessEnvelopeWithStatus and joseHandleResponse: 204/304 MUST
+	// NOT carry a body per RFC 7230 §3.3.3. Raw mode is no exception — the writer-parity
+	// contract is what makes Strangler Fig migrations predictable.
 	if status == http.StatusNoContent {
 		return c.NoContent(http.StatusNoContent)
+	}
+	if status == http.StatusNotModified {
+		return c.NoContent(http.StatusNotModified)
 	}
 
 	return c.JSON(status, data)
