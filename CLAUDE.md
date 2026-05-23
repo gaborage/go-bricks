@@ -233,7 +233,9 @@ server.POST(handlerRegistry, echo, "/users", h.createUser)
 
 Benefits: automatic binding/validation, standardized response envelopes, type safety.
 
-For pointer-vs-value request/response trade-offs (file uploads, bulk exports) and **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), see [wiki/handler-patterns.md](wiki/handler-patterns.md).
+Use `server.ResultWithMeta[R]` when a handler needs to contribute extra entries to the response envelope's `meta` map (pagination `total`/`limit`/`offset`/`hasMore`, deprecation notices, rate-limit headroom). Framework keys `timestamp` and `traceId` remain authoritative — handler values for those keys are dropped with a structured WARN.
+
+For pointer-vs-value request/response trade-offs (file uploads, bulk exports), **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), and the `ResultWithMeta` envelope-meta extension hook, see [wiki/handler-patterns.md](wiki/handler-patterns.md).
 
 ### Database Architecture
 

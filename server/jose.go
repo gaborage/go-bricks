@@ -351,9 +351,24 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 
 	status := http.StatusOK
 	var headers http.Header
-	data := response
-	if rl, ok := response.(ResultMetaProvider); ok {
-		status, headers, data = rl.ResultMeta()
+	sealBody := response
+	// Dispatch precedence mirrors handleResponse: ResultEnvelopeProvider first (seal a
+	// {data, meta} envelope), then ResultMetaProvider (seal bare data — historical contract),
+	// otherwise seal response as-is.
+	switch r := response.(type) {
+	case ResultEnvelopeProvider:
+		var data any
+		var meta map[string]any
+		status, headers, data, meta = r.ResultEnvelope()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		sealBody = APIResponse{
+			Data: data,
+			Meta: mergeEnvelopeMeta(c, meta, rh.log),
+		}
+	case ResultMetaProvider:
+		status, headers, sealBody = r.ResultMeta()
 		if status == 0 {
 			status = http.StatusOK
 		}
@@ -374,7 +389,7 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 		return nil
 	}
 
-	payload, err := json.Marshal(data)
+	payload, err := json.Marshal(sealBody)
 	if err != nil {
 		marshalErr := &joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal response", status: http.StatusInternalServerError}
 		obs.recordFailure(c.Request().Context(), c, "outbound", marshalErr)

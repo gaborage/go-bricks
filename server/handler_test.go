@@ -1349,7 +1349,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1389,7 +1389,7 @@ func TestWrapHandlerRawResponseWithResult(t *testing.T) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/hello?name=Jane", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1417,7 +1417,7 @@ func TestWrapHandlerRawResponseError(t *testing.T) {
 		return helloResp{}, NewNotFoundError("User")
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1452,7 +1452,7 @@ func TestWrapHandlerRawResponseValidationError(t *testing.T) {
 		return helloResp{Message: testResponse + req.Name}, nil
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	// Missing required query parameter "name" triggers validation error
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
@@ -1485,7 +1485,7 @@ func TestWrapHandlerRawResponseNoContent(t *testing.T) {
 		return NoContent(), nil
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1509,7 +1509,7 @@ func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
 		return helloResp{}, NewNotFoundError("User")
 	}
 
-	h := wrapHandler(handler, binder, cfg, true)
+	h := wrapHandler(handler, binder, cfg, nil, true)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1525,4 +1525,225 @@ func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
 	// Details should be omitted in production
 	_, hasDetails := raw["details"]
 	assert.False(t, hasDetails, "production raw error should not include details")
+}
+
+// ---- ResultWithMeta / ResultEnvelopeProvider ----
+
+func TestResultWithMetaSatisfiesBothInterfaces(t *testing.T) {
+	r := ResultWithMeta[helloResp]{
+		Data:   helloResp{Message: "ok"},
+		Meta:   map[string]any{"total": 42},
+		Status: http.StatusOK,
+	}
+
+	var _ ResultEnvelopeProvider = r
+	var _ ResultMetaProvider = r
+
+	status, headers, data, meta := r.ResultEnvelope()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Nil(t, headers)
+	assert.Equal(t, helloResp{Message: "ok"}, data)
+	assert.Equal(t, 42, meta["total"])
+
+	// ResultMeta is the legacy-shape projection: same status/headers/data, no meta.
+	mStatus, mHeaders, mData := r.ResultMeta()
+	assert.Equal(t, status, mStatus)
+	assert.Equal(t, headers, mHeaders)
+	assert.Equal(t, data, mData)
+}
+
+func TestNewResultWithMetaConstructor(t *testing.T) {
+	r := NewResultWithMeta(http.StatusCreated, helloResp{Message: "new"}, map[string]any{"location": "/users/1"})
+	assert.Equal(t, http.StatusCreated, r.Status)
+	assert.Equal(t, helloResp{Message: "new"}, r.Data)
+	assert.Equal(t, "/users/1", r.Meta["location"])
+	assert.Nil(t, r.Headers)
+}
+
+func TestWrapHandlerMergesEnvelopeMeta(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
+		return ResultWithMeta[helloResp]{
+			Data:   helloResp{Message: "paged"},
+			Status: http.StatusOK,
+			Meta: map[string]any{
+				"total":   123,
+				"limit":   50,
+				"offset":  0,
+				"hasMore": true,
+			},
+		}, nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, nil, false)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "merge-trace")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	assert.Equal(t, float64(123), resp.Meta["total"])
+	assert.Equal(t, float64(50), resp.Meta["limit"])
+	assert.Equal(t, float64(0), resp.Meta["offset"])
+	assert.Equal(t, true, resp.Meta["hasMore"])
+	// Framework keys still present and authoritative.
+	assert.Equal(t, "merge-trace", resp.Meta["traceId"])
+	_, hasTimestamp := resp.Meta["timestamp"]
+	assert.True(t, hasTimestamp)
+}
+
+func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	rec := &recLogger{}
+
+	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
+		return ResultWithMeta[helloResp]{
+			Data:   helloResp{Message: "x"},
+			Status: http.StatusOK,
+			Meta: map[string]any{
+				// Single reserved key — recLogger captures only the LAST event, so testing
+				// one reserved key at a time keeps the assertion deterministic regardless of
+				// map-iteration order. The nil-logger sibling test covers the other key.
+				fieldTraceID: "fake-trace",
+				"page":       1,
+			},
+		}, nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, rec, false)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "real-trace")
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Framework key wins — handler's "fake-trace" must NOT appear.
+	assert.Equal(t, "real-trace", resp.Meta["traceId"])
+	assert.Equal(t, float64(1), resp.Meta["page"])
+
+	// WARN emitted naming exactly the offending key (deterministic given single reserved key).
+	require.NotNil(t, rec.last, "expected a log event")
+	assert.Equal(t, "envelope meta key collides with framework-managed key; handler value dropped", rec.last.message)
+	assert.Equal(t, fieldTraceID, rec.last.fields["key"])
+	assert.Equal(t, "", rec.last.fields["route"], "route is empty when no Echo route is mounted; non-empty in production")
+}
+
+func TestWrapHandlerEnvelopeMetaReservedKeyNilLoggerSilentlyDrops(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
+		return ResultWithMeta[helloResp]{
+			Data:   helloResp{Message: "x"},
+			Status: http.StatusOK,
+			Meta:   map[string]any{fieldTraceID: "fake"},
+		}, nil
+	}
+
+	// nil logger MUST NOT panic — reserved keys are still dropped, warning is suppressed.
+	h := wrapHandler(handler, binder, cfg, nil, false)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "trace-A")
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "trace-A", resp.Meta["traceId"])
+}
+
+func TestWrapHandlerEnvelopeMetaPropagatesHeadersAndStatus(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
+		r := ResultWithMeta[helloResp]{
+			Data:    helloResp{Message: "created"},
+			Status:  http.StatusCreated,
+			Headers: http.Header{},
+			Meta:    map[string]any{"x": 1},
+		}
+		r.Headers.Set("Location", "/widgets/42")
+		return r, nil
+	}
+
+	h := wrapHandler(handler, binder, cfg, nil, false)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, "/widgets/42", w.Header().Get("Location"))
+}
+
+func TestWrapHandlerRawResponseDropsEnvelopeMeta(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	rec := &recLogger{}
+
+	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
+		return ResultWithMeta[helloResp]{
+			Data:   helloResp{Message: "raw"},
+			Status: http.StatusOK,
+			Meta:   map[string]any{"total": 7},
+		}, nil
+	}
+
+	// rawResponse=true causes the meta map to be silently dropped; only data ships.
+	h := wrapHandler(handler, binder, cfg, rec, true)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRouteWithQueryParams, http.NoBody)
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	// Body is bare data — envelope (meta/data/error keys) MUST NOT appear.
+	_, hasMeta := raw["meta"]
+	_, hasData := raw["data"]
+	assert.False(t, hasMeta, "raw mode must not emit meta key")
+	assert.False(t, hasData, "raw mode must not wrap data")
+	assert.Equal(t, "raw", raw["message"])
+
+	// Debug log fired naming the misconfiguration.
+	require.NotNil(t, rec.last, "expected a debug log event")
+	assert.Equal(t, "raw response mode dropped envelope meta from ResultWithMeta", rec.last.message)
+	assert.Equal(t, 1, rec.last.intFields["dropped_meta_keys"])
+}
+
+func TestWithLoggerOptionSetsField(t *testing.T) {
+	rec := &recLogger{}
+	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithLogger(rec))
+	assert.Same(t, rec, hr.log.(*recLogger))
 }

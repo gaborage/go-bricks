@@ -127,21 +127,28 @@ func (ra *requestAllocator[T]) validateNotNil(request T) error {
 // responseHandler handles response formatting for both success and error cases.
 type responseHandler struct {
 	cfg *config.Config
+	log logger.Logger // nilable; used only to warn on envelope-meta reserved-key collisions
 }
 
 // newResponseHandler creates a new response handler.
-func newResponseHandler(cfg *config.Config) *responseHandler {
-	return &responseHandler{cfg: cfg}
+func newResponseHandler(cfg *config.Config, log logger.Logger) *responseHandler {
+	return &responseHandler{cfg: cfg, log: log}
 }
 
 // handleResponse formats and sends the HTTP response based on the handler result.
-// Handles three cases:
-// 1. API error: formats error response with appropriate status code
-// 2. ResultMetaProvider interface: custom status/headers response
-// 3. Default: standard 200 OK response
+// Dispatch precedence:
+//  1. API error → error envelope
+//  2. ResultEnvelopeProvider → success envelope with merged meta (handler meta ∪ framework meta)
+//  3. ResultMetaProvider → success envelope with framework meta only
+//  4. Default → 200 OK with framework meta only
 func (rh *responseHandler) handleResponse(c *echo.Context, response any, apiErr IAPIError) error {
 	if apiErr != nil {
 		return formatErrorResponse(c, apiErr, rh.cfg)
+	}
+
+	if re, ok := response.(ResultEnvelopeProvider); ok {
+		status, headers, data, meta := re.ResultEnvelope()
+		return formatSuccessEnvelopeWithStatus(c, data, status, headers, meta, rh.log)
 	}
 
 	if rl, ok := response.(ResultMetaProvider); ok {
@@ -258,10 +265,12 @@ type handlerWrapper[T any, R any] struct {
 }
 
 // newHandlerWrapper creates a new handler wrapper with all processing components initialized.
-func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, rawResponse bool, joseCfg *joseRouteConfig) *handlerWrapper[T, R] {
+// log is forwarded to the responseHandler and is used only to warn on envelope-meta
+// reserved-key collisions; nil is tolerated and silences those warnings.
+func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, log logger.Logger, rawResponse bool, joseCfg *joseRouteConfig) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
 		processor:   newRequestProcessor[T](binder, cfg),
-		responder:   newResponseHandler(cfg),
+		responder:   newResponseHandler(cfg, log),
 		checker:     newContextChecker(cfg),
 		rawResponse: rawResponse,
 		jose:        joseCfg,
@@ -364,7 +373,7 @@ func WrapHandler[T any, R any](
 	binder *RequestBinder,
 	cfg *config.Config,
 ) echo.HandlerFunc {
-	return wrapHandler(handlerFunc, binder, cfg, false)
+	return wrapHandler(handlerFunc, binder, cfg, nil, false)
 }
 
 // wrapHandler is the internal implementation that supports raw response mode.
@@ -373,9 +382,10 @@ func wrapHandler[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
 	cfg *config.Config,
+	log logger.Logger,
 	rawResponse bool,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, nil)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, log, rawResponse, nil)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -387,10 +397,11 @@ func wrapHandlerWithJOSE[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,
 	cfg *config.Config,
+	log logger.Logger,
 	rawResponse bool,
 	joseCfg *joseRouteConfig,
 ) echo.HandlerFunc {
-	wrapper := newHandlerWrapper[T, R](binder, cfg, rawResponse, joseCfg)
+	wrapper := newHandlerWrapper[T, R](binder, cfg, log, rawResponse, joseCfg)
 	return wrapper.wrap(handlerFunc)
 }
 
@@ -702,10 +713,7 @@ func formatSuccessResponse(c *echo.Context, data any) error {
 	ensureTraceParentHeader(c)
 	response := APIResponse{
 		Data: data,
-		Meta: map[string]any{
-			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
-			fieldTraceID:   getTraceID(c),
-		},
+		Meta: buildFrameworkMeta(c),
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -713,6 +721,14 @@ func formatSuccessResponse(c *echo.Context, data any) error {
 
 // formatSuccessResponseWithStatus formats a successful response with a custom status and headers.
 func formatSuccessResponseWithStatus(c *echo.Context, data any, status int, headers http.Header) error {
+	return formatSuccessEnvelopeWithStatus(c, data, status, headers, nil, nil)
+}
+
+// formatSuccessEnvelopeWithStatus is the shared writer for success envelopes. It accepts
+// an optional userMeta map; reserved keys (timestamp/traceId) are dropped before merging,
+// with a structured warning emitted via log when supplied. log may be nil — the warning is
+// then suppressed but reserved keys are still dropped (framework keys remain authoritative).
+func formatSuccessEnvelopeWithStatus(c *echo.Context, data any, status int, headers http.Header, userMeta map[string]any, log logger.Logger) error {
 	if status == 0 {
 		status = http.StatusOK
 	}
@@ -732,12 +748,43 @@ func formatSuccessResponseWithStatus(c *echo.Context, data any, status int, head
 
 	response := APIResponse{
 		Data: data,
-		Meta: map[string]any{
-			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
-			fieldTraceID:   getTraceID(c),
-		},
+		Meta: mergeEnvelopeMeta(c, userMeta, log),
 	}
 	return c.JSON(status, response)
+}
+
+// buildFrameworkMeta returns the framework-managed envelope meta map populated with
+// timestamp and traceId. Callers that need to merge handler-supplied meta should use
+// mergeEnvelopeMeta instead.
+func buildFrameworkMeta(c *echo.Context) map[string]any {
+	return map[string]any{
+		fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
+		fieldTraceID:   getTraceID(c),
+	}
+}
+
+// mergeEnvelopeMeta returns the union of handler-supplied meta and framework-managed meta.
+// Framework keys (reservedMetaKeys) are authoritative: any handler value for those keys is
+// dropped, and a structured WARN is emitted via log identifying the offending key and the
+// route path so SREs can locate the misbehaving handler. log==nil disables the warning but
+// preserves the drop.
+func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logger) map[string]any {
+	out := make(map[string]any, len(userMeta)+len(reservedMetaKeys))
+	for k, v := range userMeta {
+		if _, reserved := reservedMetaKeys[k]; reserved {
+			if log != nil {
+				log.WithContext(c.Request().Context()).Warn().
+					Str("key", k).
+					Str("route", c.Path()).
+					Msg("envelope meta key collides with framework-managed key; handler value dropped")
+			}
+			continue
+		}
+		out[k] = v
+	}
+	out[fieldTimestamp] = time.Now().UTC().Format(time.RFC3339)
+	out[fieldTraceID] = getTraceID(c)
+	return out
 }
 
 // formatErrorResponse formats an error response with standardized structure.
@@ -759,10 +806,7 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 
 	response := APIResponse{
 		Error: errorResp,
-		Meta: map[string]any{
-			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
-			fieldTraceID:   getTraceID(c),
-		},
+		Meta:  buildFrameworkMeta(c),
 	}
 
 	ensureTraceParentHeader(c)
@@ -800,9 +844,25 @@ func devDetails(apiErr IAPIError) map[string]any {
 
 // handleRawResponse formats and sends the HTTP response without the APIResponse envelope.
 // Mirrors handleResponse logic but writes the response data directly as JSON.
+//
+// Raw mode strips the envelope by definition. Handlers returning ResultEnvelopeProvider
+// (e.g. ResultWithMeta) on a raw route have their meta map silently dropped; the bare data
+// is serialized. A debug-level log notes the misconfiguration when a logger is wired so
+// the divergence is at least traceable in development.
 func (rh *responseHandler) handleRawResponse(c *echo.Context, response any, apiErr IAPIError) error {
 	if apiErr != nil {
 		return formatRawErrorResponse(c, apiErr, rh.cfg)
+	}
+
+	if re, ok := response.(ResultEnvelopeProvider); ok {
+		status, headers, data, meta := re.ResultEnvelope()
+		if len(meta) > 0 && rh.log != nil {
+			rh.log.WithContext(c.Request().Context()).Debug().
+				Str("route", c.Path()).
+				Int("dropped_meta_keys", len(meta)).
+				Msg("raw response mode dropped envelope meta from ResultWithMeta")
+		}
+		return formatRawSuccessResponseWithStatus(c, data, status, headers)
 	}
 
 	if rl, ok := response.(ResultMetaProvider); ok {
@@ -925,6 +985,7 @@ type RouteRegistrar interface {
 type HandlerRegistry struct {
 	binder            *RequestBinder
 	cfg               *config.Config
+	log               logger.Logger // general-purpose logger; nilable, used for envelope-meta warnings
 	joseResolver      jose.KeyResolver
 	joseLogger        logger.Logger
 	joseTracer        trace.Tracer
@@ -1001,7 +1062,7 @@ func RegisterHandler[T any, R any](
 			Obs:      hr.joseObs,
 		}
 	}
-	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, descriptor.RawResponse, joseCfg)
+	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
 	r.Add(method, path, wrappedHandler)
 }
 
@@ -1043,6 +1104,18 @@ func OPTIONS[T any, R any](hr *HandlerRegistry, r RouteRegistrar, path string, h
 // ResultMetaProvider exposes status, headers, and payload for successful responses.
 type ResultMetaProvider interface {
 	ResultMeta() (status int, headers http.Header, data any)
+}
+
+// ResultEnvelopeProvider extends ResultMetaProvider with handler-supplied envelope meta
+// entries (pagination totals, deprecation notices, etc.). The framework merges the
+// returned meta map with its own keys (timestamp, traceId); reservedMetaKeys are always
+// authoritative — handler values for those keys are dropped with a structured WARN.
+//
+// On JOSE-protected routes, ResultEnvelopeProvider causes the sealed body to ship an
+// envelope shape ({"data": ..., "meta": ...}) instead of bare data. In raw-response mode
+// (WithRawResponse), the meta map is silently dropped — only data is serialized.
+type ResultEnvelopeProvider interface {
+	ResultEnvelope() (status int, headers http.Header, data any, meta map[string]any)
 }
 
 // Result is a generic success wrapper allowing handlers to customize status and headers
@@ -1092,6 +1165,53 @@ func Accepted[R any](data R) Result[R] {
 
 // NoContent returns a 204 No Content result without a response body
 func NoContent() NoContentResult { return NoContentResult{} }
+
+// ResultWithMeta is a generic success wrapper that carries handler-supplied envelope meta
+// alongside the standard status/headers/data. The framework merges Meta into the response
+// envelope's meta map, with timestamp and traceId remaining framework-managed and
+// authoritative (handler values for those keys are dropped during merge).
+//
+// Implements both ResultEnvelopeProvider (preferred by the framework dispatcher) and
+// ResultMetaProvider (so third-party middleware that type-asserts the older interface keeps
+// working — meta is dropped on that path).
+type ResultWithMeta[R any] struct {
+	Data    R
+	Meta    map[string]any
+	Status  int
+	Headers http.Header
+}
+
+// ResultEnvelope implements ResultEnvelopeProvider for ResultWithMeta[R].
+func (r ResultWithMeta[R]) ResultEnvelope() (status int, headers http.Header, data any, meta map[string]any) {
+	return r.Status, r.Headers, r.Data, r.Meta
+}
+
+// ResultMeta implements ResultMetaProvider for ResultWithMeta[R]. Provided so consumers
+// that only type-assert ResultMetaProvider keep functioning; on that path Meta is dropped
+// — handlers wanting envelope-meta semantics must reach a ResultEnvelopeProvider-aware writer.
+func (r ResultWithMeta[R]) ResultMeta() (status int, headers http.Header, data any) {
+	return r.Status, r.Headers, r.Data
+}
+
+// NewResultWithMeta is a convenience constructor for ResultWithMeta.
+func NewResultWithMeta[R any](status int, data R, meta map[string]any) ResultWithMeta[R] {
+	return ResultWithMeta[R]{
+		Data:   data,
+		Meta:   meta,
+		Status: status,
+	}
+}
+
+// WithLogger attaches a general-purpose logger to the handler registry. Currently used to
+// emit a structured WARN when a handler-supplied envelope meta key collides with a
+// framework-reserved key (timestamp, traceId). Independent of WithJOSELogger.
+//
+// Passing nil is a no-op — reserved keys are still dropped, the warning is just suppressed.
+func WithLogger(log logger.Logger) HandlerRegistryOption {
+	return func(hr *HandlerRegistry) {
+		hr.log = log
+	}
+}
 
 // getCallerPackage extracts the package path of the calling function
 func getCallerPackage() string {

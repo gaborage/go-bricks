@@ -128,3 +128,58 @@ For **full control** over legacy error formats, catch domain errors in the handl
 **What is preserved in raw mode:** W3C `traceparent` header propagation, custom headers via `Result[R]`, `NoContent()` (204), all status codes via `Result[R]`.
 
 **What is bypassed:** `data`/`meta` envelope, `APIErrorResponse` envelope (replaced with minimal `{"code","message"}` structure).
+
+## Custom Envelope Meta (`ResultWithMeta[R]`)
+
+The standard `Result[R]` lets handlers control status code and headers, but the response envelope's `meta` map is fixed to `{timestamp, traceId}`. When a handler needs to contribute additional `meta` entries — pagination totals, cursors, rate-limit headroom, deprecation notices — return `server.ResultWithMeta[R]` instead.
+
+```go
+type ListUsersResp struct {
+    Items []User `json:"items"`
+}
+
+func (h *Handler) listUsers(req ListUsersReq, _ server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
+    users, total, _ := h.svc.List(req.Limit, req.Offset)
+    return server.ResultWithMeta[ListUsersResp]{
+        Data:   ListUsersResp{Items: users},
+        Status: http.StatusOK,
+        Meta: map[string]any{
+            "total":   total,
+            "limit":   req.Limit,
+            "offset":  req.Offset,
+            "hasMore": req.Offset+len(users) < total,
+        },
+    }, nil
+}
+```
+
+Produces:
+```json
+{
+  "data": { "items": [...] },
+  "meta": {
+    "total":     123,
+    "limit":     50,
+    "offset":    0,
+    "hasMore":   true,
+    "timestamp": "2026-05-23T12:34:56Z",
+    "traceId":   "<uuid>"
+  }
+}
+```
+
+### Reserved Keys
+
+`timestamp` and `traceId` are framework-managed — observability/SRE tooling expects a single authoritative source for both. If a handler supplies either key in its `Meta` map, the framework drops the handler value and emits a structured WARN log identifying the offending key and the route path. The merge is deterministic; reserved keys always win.
+
+### Interaction with Other Modes
+
+| Mode | Behavior |
+|------|----------|
+| **Standard envelope** (default) | Response body: `{"data": ..., "meta": {handler-meta ∪ framework-meta}}` |
+| **Raw mode** (`WithRawResponse()`) | Meta map is silently dropped; only `data` is serialized. A debug log notes the misconfiguration. |
+| **JOSE-protected route** | Sealed body is the full `{data, meta}` envelope (symmetric with how the JOSE error path already builds an envelope). Vanilla `Result[R]` from JOSE routes continues to seal bare data unchanged. |
+
+### Compatibility
+
+`ResultWithMeta[R]` implements both `ResultEnvelopeProvider` (preferred by the framework dispatcher) and `ResultMetaProvider` (so third-party middleware that type-asserts the older interface keeps working — `Meta` is dropped on that legacy path).

@@ -32,6 +32,16 @@ const (
 	statusReady = "ready"
 )
 
+// reservedMetaKeys enumerates envelope meta keys owned by the framework. Handler-supplied
+// values for these keys are dropped during merge and a structured warning is emitted so
+// observability/SRE tooling sees a single authoritative source for timestamp/traceId.
+//
+// Immutable after package init; do not mutate (Go has no const map).
+var reservedMetaKeys = map[string]struct{}{
+	fieldTimestamp: {},
+	fieldTraceID:   {},
+}
+
 // HTTP Server Default Timeouts
 //
 // These constants define default timeout values for the Echo HTTP server.

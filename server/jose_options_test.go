@@ -97,7 +97,7 @@ func TestIsJOSEContentTypeVariants(t *testing.T) {
 func TestJOSEHandleResponseRefusesWithoutInboundVerification(t *testing.T) {
 	e := echo.New()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
-	rh := newResponseHandler(cfg)
+	rh := newResponseHandler(cfg, nil)
 
 	// Build a request without WithInboundVerified — simulates the invariant violation.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", http.NoBody)

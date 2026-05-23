@@ -118,7 +118,7 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 		opts = append(opts, server.WithJOSEResolver(jose.NewKeyStoreResolver(r.deps.KeyStore)))
 	}
 	if r.deps.Logger != nil {
-		opts = append(opts, server.WithJOSELogger(r.deps.Logger))
+		opts = append(opts, server.WithLogger(r.deps.Logger), server.WithJOSELogger(r.deps.Logger))
 	}
 	if r.deps.Tracer != nil {
 		opts = append(opts, server.WithJOSETracer(r.deps.Tracer))
