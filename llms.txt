@@ -550,6 +550,7 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 type ListUsersReq struct {
 	Status string `query:"status" validate:"omitempty,oneof=active inactive"`
 	Limit  int    `query:"limit" validate:"omitempty,min=1,max=100"`
+	Offset int    `query:"offset" validate:"omitempty,min=0"`
 }
 
 func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server.Result[[]User], server.IAPIError) {
@@ -575,6 +576,38 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 | LIST with query  | `query:"..."` struct tags    | `server.OK(list)`       | Query params auto-bound        |
 | DELETE           | `server.NoBody`              | `server.NoContent()`    | Return typed API errors        |
 | ASYNC acceptance | Request struct               | `server.Accepted(meta)` | For enqueue-style workflows    |
+| PAGINATED list   | `query:"..."` struct tags    | `server.ResultWithMeta` | Adds pagination keys to `meta` |
+
+### Paginated List with Envelope Meta
+
+Return `server.ResultWithMeta[R]` to contribute extra keys to the response envelope's `meta` map (pagination totals, cursors, deprecation notices). Framework keys `timestamp` and `traceId` remain authoritative — handler values for those keys are dropped with a structured WARN.
+
+```go
+type ListUsersResp struct {
+	Items []User `json:"items"`
+}
+
+func (h *Handler) ListUsersPaginated(req ListUsersReq, hctx server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
+	ctx := hctx.Echo.Request().Context()
+	users, total, err := h.svc.ListPaged(ctx, req.Limit, req.Offset)
+	if err != nil {
+		return server.ResultWithMeta[ListUsersResp]{}, server.InternalServerError(err)
+	}
+	return server.ResultWithMeta[ListUsersResp]{
+		Data:   ListUsersResp{Items: users},
+		Status: http.StatusOK,
+		Meta: map[string]any{
+			"total":   total,
+			"limit":   req.Limit,
+			"offset":  req.Offset,
+			"hasMore": req.Offset+len(users) < total,
+		},
+	}, nil
+}
+// Response body:
+// {"data": {"items": [...]}, "meta": {"total": 123, "limit": 50, "offset": 0,
+//                                      "hasMore": true, "timestamp": "...", "traceId": "..."}}
+```
 
 ### Pointer Types for Large Payloads
 

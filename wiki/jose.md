@@ -74,6 +74,16 @@ fw.RegisterModules(
 
 **Security invariant** (asserted by tests): a response is JOSE-encrypted iff inbound was successfully verified AND the route has an outbound policy. Tampered-byte negative tests must produce *plaintext* error responses; observing `Content-Type: application/jose` on the failure path is a security regression.
 
+**Sealed body shape** depends on the handler's return type:
+
+| Handler returns | Sealed JWE payload |
+|---|---|
+| Bare value / `Result[R]` / `NoContentResult` | Bare `data` (no envelope) |
+| `ResultWithMeta[R]` / any `ResultEnvelopeProvider` | Standard `{data, meta}` envelope with framework-managed `timestamp` and `traceId` merged in |
+| `IAPIError` (post-trust handler failure) | Standard `{error, meta}` envelope (`buildErrorEnvelope`) |
+
+Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed JSON shapes work unchanged. Handlers explicitly opt into envelope semantics by returning `ResultWithMeta` (see [handler-patterns.md](handler-patterns.md#custom-envelope-meta-resultwithmetar)).
+
 **Replay protection**: the framework verifies the JWS signature and exposes verified claims via `jose.ClaimsFromContext(ctx)`. Applications enforce `iat`/`exp`/`jti` policies (Visa skew rules vary by product).
 
 **Test utilities** (`jose/testing/`):

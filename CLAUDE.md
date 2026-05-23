@@ -14,7 +14,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 - Always run `make check` (or `make check-all` for API changes) before committing and pushing. Never commit or push without a passing build.
 - When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
-- **Before pushing code, run BOTH `/simplify` AND `/security-audit`** on the staged diff. **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). `/simplify` catches reuse, quality, and efficiency issues that CodeRabbit and SonarCloud would otherwise flag; `/security-audit` catches credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about. Apply each skill's findings (sequentially is fine — `/simplify` first so its refactors are what `/security-audit` reviews), then push. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need both checks. When in doubt, run them.
+- **Before pushing code, run BOTH `/code-review` AND `/security-audit`** on the staged diff. **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). `/code-review` (formerly `/simplify`, renamed 2026-05-23) catches reuse, quality, efficiency, and correctness issues that CodeRabbit and SonarCloud would otherwise flag; `/security-audit` catches credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about. Apply each skill's findings (sequentially is fine — `/code-review` first so its refactors are what `/security-audit` reviews), then push. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need both checks. When in doubt, run them.
 - After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
 
 ## Git Rules
@@ -233,7 +233,9 @@ server.POST(handlerRegistry, echo, "/users", h.createUser)
 
 Benefits: automatic binding/validation, standardized response envelopes, type safety.
 
-For pointer-vs-value request/response trade-offs (file uploads, bulk exports) and **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), see [wiki/handler-patterns.md](wiki/handler-patterns.md).
+Use `server.ResultWithMeta[R]` when a handler needs to contribute extra entries to the response envelope's `meta` map (pagination `total`/`limit`/`offset`/`hasMore`, deprecation notices, rate-limit headroom). Framework keys `timestamp` and `traceId` remain authoritative — handler values for those keys are dropped with a structured WARN.
+
+For pointer-vs-value request/response trade-offs (file uploads, bulk exports), **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), and the `ResultWithMeta` envelope-meta extension hook, see [wiki/handler-patterns.md](wiki/handler-patterns.md).
 
 ### Database Architecture
 

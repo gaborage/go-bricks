@@ -110,7 +110,7 @@ func newJOSETestServer(t *testing.T, f *joseFixture, handler HandlerFunc[joseTok
 
 	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
-	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, false, joseCfg)
+	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, nil, false, joseCfg)
 	return e, wrapped
 }
 
@@ -230,6 +230,131 @@ func TestJOSEPostTrustErrorIsEncrypted(t *testing.T) {
 	errObj, _ := envelope["error"].(map[string]any)
 	assert.Equal(t, "CARD_BLOCKED", errObj["code"])
 	assert.Contains(t, envelope, "meta")
+}
+
+func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
+	// When the handler returns ResultWithMeta on a JOSE-protected route, the sealed body
+	// is the standard APIResponse envelope ({data, meta}) — symmetric with how the JOSE
+	// error path already produces an envelope. Vanilla Result[R] continues to seal bare
+	// data (see TestJOSEHappyPathRoundtrip).
+	f := newJOSEFixture(t)
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	obs := newJOSEObservability(nil, nil, nil)
+	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
+
+	handler := func(req joseTokenReq, _ HandlerContext) (ResultWithMeta[joseTokenResp], IAPIError) {
+		return ResultWithMeta[joseTokenResp]{
+			Data:   joseTokenResp{Token: "tok-" + req.Pan},
+			Status: http.StatusOK,
+			Meta: map[string]any{
+				"total":   1,
+				"hasMore": false,
+			},
+		}, nil
+	}
+	h := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, nil, false, joseCfg)
+
+	// Non-PAN sentinel keeps card-data scanners (OpenGrep) from flagging this fixture.
+	plainReq := []byte(`{"pan":"test-pan-001"}`)
+	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
+	req.Header.Set(echo.HeaderContentType, "application/jose")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/jose", rec.Header().Get(echo.HeaderContentType))
+
+	// OpenForTest internally t.Fatals on decrypt/verify failure (jose/testing/helpers.go).
+	// The discarded second return is *jose.Claims (verified claims), not an error — this
+	// test doesn't need to inspect claims, only the envelope shape.
+	plainResp, _ := jositest.OpenForTest(t, rec.Body.String(), f.peerInbound(), f.resolver)
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(plainResp, &envelope))
+
+	// Sealed body is the APIResponse envelope, not bare data.
+	require.Contains(t, envelope, "data", "ResultWithMeta on JOSE route must seal {data, meta} envelope")
+	require.Contains(t, envelope, "meta")
+
+	dataObj, _ := envelope["data"].(map[string]any)
+	assert.Equal(t, "tok-test-pan-001", dataObj["token"])
+
+	metaObj, _ := envelope["meta"].(map[string]any)
+	assert.Equal(t, float64(1), metaObj["total"])
+	assert.Equal(t, false, metaObj["hasMore"])
+	// Framework keys present.
+	assert.Contains(t, metaObj, "timestamp")
+	assert.Contains(t, metaObj, "traceId")
+}
+
+func TestJOSEResultWithMetaReservedKeyDroppedInsideSeal(t *testing.T) {
+	// The framework-key invariant must hold even inside the JOSE-sealed envelope.
+	// A handler that supplies "traceId" or "timestamp" in Meta MUST have those keys
+	// overridden by the framework before the body is sealed, so peers receive the
+	// authoritative trace correlation rather than handler-controlled values.
+	f := newJOSEFixture(t)
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	obs := newJOSEObservability(nil, nil, nil)
+	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
+
+	handler := func(req joseTokenReq, _ HandlerContext) (ResultWithMeta[joseTokenResp], IAPIError) {
+		return ResultWithMeta[joseTokenResp]{
+			Data:   joseTokenResp{Token: "tok-" + req.Pan},
+			Status: http.StatusOK,
+			Meta: map[string]any{
+				fieldTraceID:   "attacker-controlled-trace",
+				fieldTimestamp: "attacker-controlled-timestamp",
+				"page":         7,
+			},
+		}, nil
+	}
+	rec := &levelRecLogger{}
+	h := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, rec, false, joseCfg)
+
+	plainReq := []byte(`{"pan":"test-pan-002"}`)
+	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(compactReq)))
+	req.Header.Set(echo.HeaderContentType, "application/jose")
+	req.Header.Set(echo.HeaderXRequestID, "real-jose-trace")
+	w := httptest.NewRecorder()
+	c := e.NewContext(req, w)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Per OpenForTest comment above (line 271 sibling test): the `_` is *jose.Claims,
+	// not an error; decrypt/verify already t.Fatals on failure.
+	plainResp, _ := jositest.OpenForTest(t, w.Body.String(), f.peerInbound(), f.resolver)
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(plainResp, &envelope))
+
+	metaObj, _ := envelope["meta"].(map[string]any)
+	// Framework key wins inside the sealed envelope.
+	assert.Equal(t, "real-jose-trace", metaObj["traceId"])
+	assert.NotEqual(t, "attacker-controlled-trace", metaObj["traceId"])
+	assert.NotEqual(t, "attacker-controlled-timestamp", metaObj["timestamp"])
+	assert.Equal(t, float64(7), metaObj["page"])
+
+	// WARN logs fired for both reserved keys on the JOSE path too. Asserts on
+	// presence + content rather than exact event count so a future refactor that
+	// batches both collisions into a single structured WARN remains compatible.
+	require.NotEmpty(t, rec.events, "expected at least one log event for JOSE reserved-key collision")
+	joseWarnKeys := map[string]bool{}
+	for _, ev := range rec.events {
+		if ev.level != "warn" {
+			continue
+		}
+		if k := ev.fields["key"]; k != "" {
+			joseWarnKeys[k] = true
+		}
+	}
+	assert.True(t, joseWarnKeys[fieldTimestamp], "JOSE WARN missing for timestamp collision")
+	assert.True(t, joseWarnKeys[fieldTraceID], "JOSE WARN missing for traceId collision")
 }
 
 // --- Registration-time panic tests ---

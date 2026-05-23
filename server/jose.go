@@ -351,9 +351,25 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 
 	status := http.StatusOK
 	var headers http.Header
-	data := response
-	if rl, ok := response.(ResultMetaProvider); ok {
-		status, headers, data = rl.ResultMeta()
+	sealBody := response
+	var envelopeMeta map[string]any
+	envelopeRequested := false
+	// Dispatch precedence mirrors handleResponse: ResultEnvelopeProvider first (seal a
+	// {data, meta} envelope), then ResultMetaProvider (seal bare data — historical contract),
+	// otherwise seal response as-is. Renamed the type-switch binding from `r` to `prov` so it
+	// no longer shadows the outer `r jose.KeyResolver` parameter (a future maintainer adding
+	// resolver use inside a case would silently get the wrong identity).
+	switch prov := response.(type) {
+	case ResultEnvelopeProvider:
+		var data any
+		status, headers, data, envelopeMeta = prov.ResultEnvelope()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		sealBody = data
+		envelopeRequested = true
+	case ResultMetaProvider:
+		status, headers, sealBody = prov.ResultMeta()
 		if status == 0 {
 			status = http.StatusOK
 		}
@@ -367,14 +383,23 @@ func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, api
 
 	// 204 No Content (and 304 Not Modified) MUST NOT carry a body per RFC 7230 §3.3.3.
 	// Mirror formatSuccessResponseWithStatus's behavior: write the status and no body,
-	// skipping the seal entirely. Sealing nil and returning ciphertext on a 204 would be
-	// invalid HTTP and divergent from the standard envelope path.
+	// skipping the seal entirely. Short-circuit BEFORE mergeEnvelopeMeta so reserved-key
+	// WARNs don't fire for a body that won't ship (matches the standard envelope writer).
 	if status == http.StatusNoContent || status == http.StatusNotModified {
 		c.Response().WriteHeader(status)
 		return nil
 	}
 
-	payload, err := json.Marshal(data)
+	// Only now — once we know we'll actually seal a body — build the envelope and merge
+	// handler meta with framework keys.
+	if envelopeRequested {
+		sealBody = APIResponse{
+			Data: sealBody,
+			Meta: mergeEnvelopeMeta(c, envelopeMeta, rh.log),
+		}
+	}
+
+	payload, err := json.Marshal(sealBody)
 	if err != nil {
 		marshalErr := &joseAPIError{code: "JOSE_OUTBOUND_FAILED", message: "Failed to marshal response", status: http.StatusInternalServerError}
 		obs.recordFailure(c.Request().Context(), c, "outbound", marshalErr)
@@ -444,18 +469,17 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 	return writeErr
 }
 
-// buildErrorEnvelope constructs the standard APIResponse-shaped error body. Kept
-// jose-local so the standard error formatter in handler.go can stay untouched.
+// buildErrorEnvelope constructs the standard APIResponse-shaped error body. Routes through
+// buildFrameworkMeta so reserved-key evolution stays consistent with the standard envelope
+// writer; if buildFrameworkMeta ever grows new keys (requestId, region, etc.), JOSE error
+// envelopes pick them up automatically rather than silently drifting.
 func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, _ *config.Config) map[string]any {
 	out := map[string]any{
 		fieldError: map[string]any{
 			"code":       apiErr.ErrorCode(),
 			fieldMessage: apiErr.Message(),
 		},
-		"meta": map[string]any{
-			fieldTimestamp: time.Now().UTC().Format(time.RFC3339),
-			fieldTraceID:   getTraceID(c),
-		},
+		"meta": buildFrameworkMeta(c),
 	}
 	if details := apiErr.Details(); len(details) > 0 {
 		out[fieldError].(map[string]any)["details"] = details
