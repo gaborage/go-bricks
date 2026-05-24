@@ -515,7 +515,10 @@ type LogsConfig struct {
 	Protocol string `mapstructure:"protocol"`
 
 	// Insecure controls whether to use insecure connections (no TLS).
-	// Only applicable for OTLP endpoints (http/grpc). Falls back to trace setting when unset.
+	// Only applicable for OTLP endpoints (http/grpc). Independent of Trace.Insecure:
+	// when unset, defaults to false (TLS-secure) via applyLogsDefaults — it does NOT
+	// inherit from the trace setting. Operators running a plaintext local OTLP
+	// collector for logs must opt in by setting logs.insecure: true explicitly.
 	Insecure *bool `mapstructure:"insecure"`
 
 	// DisableStdout controls whether to disable stdout logging when OTLP is enabled.
