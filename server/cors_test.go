@@ -147,7 +147,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
 	}()
 
-	// Set production environment without CORS_ORIGINS
+	// Set production environment without CORS_ORIGINS — must fail closed.
 	os.Setenv("APP_ENV", "production")
 	os.Unsetenv("CORS_ORIGINS")
 
@@ -160,7 +160,9 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 		return c.String(http.StatusOK, "test")
 	})
 
-	// Test with any origin - should allow all since no specific origins are set
+	// Test with any origin — must NOT echo it back (no AllowOrigins set, no
+	// UnsafeAllowOriginFunc registered). Browsers reject cross-origin
+	// requests when this header is absent.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
 	req.Header.Set("Origin", "https://somesite.com")
 	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
@@ -171,8 +173,45 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 	err := handler(c)
 	require.NoError(t, err)
 
-	// Should echo origin back when no CORS_ORIGINS is set (via UnsafeAllowOriginFunc)
-	assert.Equal(t, "https://somesite.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+		"non-dev env without CORS_ORIGINS must NOT emit Access-Control-Allow-Origin")
+}
+
+// TestCORSNeutralEnvWithoutCustomOriginsFailsClosed verifies that custom
+// environment names (anything not in the development or production alias
+// sets per ADR-022) also fail closed when CORS_ORIGINS is unset. The
+// previous default of "any env without CORS_ORIGINS gets wildcard" shipped
+// credential-leaking CORS to staging and regional production envs.
+func TestCORSNeutralEnvWithoutCustomOriginsFailsClosed(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	envs := []string{"staging", "stg", "production-eu", "tst", ""}
+	for _, env := range envs {
+		t.Run("env_"+env, func(t *testing.T) {
+			os.Setenv("APP_ENV", env)
+			os.Unsetenv("CORS_ORIGINS")
+
+			e := echo.New()
+			handler := CORS()(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "test")
+			})
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+			req.Header.Set("Origin", "https://intruder.example.com")
+			req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			require.NoError(t, handler(c))
+			assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+				"env=%q without CORS_ORIGINS must fail closed", env)
+		})
+	}
 }
 
 func TestCORSAllowedHeaders(t *testing.T) {
@@ -372,7 +411,10 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
 	}()
 
-	// Set production with empty CORS_ORIGINS
+	// Production env with explicitly-empty CORS_ORIGINS — treated the same
+	// as unset: fail closed. Empty-string and unset are observationally
+	// identical (both make os.Getenv return ""), and operators who set
+	// CORS_ORIGINS="" deserve the same loud signal as those who forgot.
 	os.Setenv("APP_ENV", "production")
 	os.Setenv("CORS_ORIGINS", "")
 
@@ -394,8 +436,8 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 	err := handler(c)
 	require.NoError(t, err)
 
-	// When CORS_ORIGINS is empty string, should echo origin back (via UnsafeAllowOriginFunc)
-	assert.Equal(t, "https://test.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+		"empty CORS_ORIGINS in non-dev env must fail closed, not echo origin")
 }
 
 func TestCORSSingleOrigin(t *testing.T) {
@@ -493,7 +535,9 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 
 // TestCORSProductionAliasesTriggerStrictMode verifies that production env aliases
 // (prd, prod) drive the same strict-origin behavior as the canonical "production"
-// value. Dev aliases (local) do not trigger strict mode.
+// value. Dev aliases (local) use wildcard echo. Neutral envs (tst) without
+// CORS_ORIGINS fail closed — the observable effect (empty Allow-Origin for an
+// unlisted origin) is the same as strict mode, encoded here as expectStrict=true.
 func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -511,8 +555,8 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 		{name: "prd_alias_triggers_strict", env: "prd", expectStrict: true, allowedOrigins: "https://app.example.com"},
 		{name: "prod_alias_triggers_strict", env: "prod", expectStrict: true, allowedOrigins: "https://app.example.com"},
 		{name: "canonical_production_triggers_strict", env: "production", expectStrict: true, allowedOrigins: "https://app.example.com"},
-		{name: "local_does_not_trigger_strict", env: "local", expectStrict: false, allowedOrigins: ""},
-		{name: "tst_neutral_does_not_trigger_strict", env: "tst", expectStrict: false, allowedOrigins: ""},
+		{name: "local_dev_alias_uses_wildcard_echo", env: "local", expectStrict: false, allowedOrigins: ""},
+		{name: "tst_neutral_fails_closed", env: "tst", expectStrict: true, allowedOrigins: ""},
 	}
 
 	for _, tc := range tests {
@@ -550,4 +594,134 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCORSEnvOverrideHonorsConfigValue verifies that the variadic
+// envOverride parameter (passed by SetupMiddlewares from cfg.App.Env)
+// takes precedence over APP_ENV from the OS env. This ensures the
+// common `go run` workflow — which relies on Koanf's EnvDevelopment
+// default — gets the dev wildcard rather than fail-closed CORS.
+func TestCORSEnvOverrideHonorsConfigValue(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	// Deliberately unset APP_ENV — caller passes "development" via the
+	// variadic override (simulates SetupMiddlewares passing cfg.App.Env
+	// when the operator relies on the Koanf default).
+	os.Unsetenv("APP_ENV")
+	os.Unsetenv("CORS_ORIGINS")
+
+	e := echo.New()
+	handler := CORS("development")(func(c *echo.Context) error {
+		return c.String(http.StatusOK, "test")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set(HeaderAccessControlRequestMethod, "POST")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin),
+		"explicit dev env override must take precedence over the empty APP_ENV from the OS env")
+}
+
+// TestCORSStrictBranchRejectsWildcardEntry verifies the strict branch
+// drops "*" rather than passing it to Echo's CORSWithConfig (which would
+// panic at startup when combined with AllowCredentials=true).
+func TestCORSStrictBranchRejectsWildcardEntry(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	os.Setenv("APP_ENV", "production")
+	os.Setenv("CORS_ORIGINS", "*,https://myapp.com")
+
+	// Must not panic at construction time.
+	e := echo.New()
+	handler := CORS()(func(c *echo.Context) error {
+		return c.String(http.StatusOK, "test")
+	})
+
+	// Verify the explicit non-wildcard origin still works.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+	req.Header.Set("Origin", "https://myapp.com")
+	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, "https://myapp.com", rec.Header().Get(HeaderAccessControlAllowOrigin),
+		"explicit non-wildcard origin must still be allowed after '*' is dropped")
+}
+
+// TestCORSStrictBranchTolerantOfTrailingComma verifies operator copy-paste
+// errors (trailing comma) don't panic Echo's CORSWithConfig validator,
+// which rejects empty origin strings.
+func TestCORSStrictBranchTolerantOfTrailingComma(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	os.Setenv("APP_ENV", "production")
+	os.Setenv("CORS_ORIGINS", "https://myapp.com,")
+
+	// Must not panic at construction time.
+	e := echo.New()
+	handler := CORS()(func(c *echo.Context) error {
+		return c.String(http.StatusOK, "test")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+	req.Header.Set("Origin", "https://myapp.com")
+	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, handler(c))
+	assert.Equal(t, "https://myapp.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
+}
+
+// TestCORSStrictBranchAllWildcardFailsClosed verifies CORS_ORIGINS="*"
+// (which after dropping '*' becomes empty) falls into the fail-closed
+// branch instead of panicking Echo.
+func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
+	}()
+
+	os.Setenv("APP_ENV", "production")
+	os.Setenv("CORS_ORIGINS", "*")
+
+	// Must not panic.
+	e := echo.New()
+	handler := CORS()(func(c *echo.Context) error {
+		return c.String(http.StatusOK, "test")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+	req.Header.Set("Origin", "https://anyone.example.com")
+	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, handler(c))
+	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+		"CORS_ORIGINS=* in non-dev env must fail closed, not echo the origin")
+	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials),
+		"fail-closed mode must explicitly drop AllowCredentials so the response cannot carry session cookies cross-origin")
 }

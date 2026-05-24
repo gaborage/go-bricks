@@ -352,4 +352,34 @@ func TestMergeConfigs(t *testing.T) {
 		out := mergeConfigs(nil, override)
 		assert.Equal(t, override, out)
 	})
+
+	t.Run("audit_fields_propagate_individually", func(t *testing.T) {
+		base := &Config{
+			Audit: AuditContext{
+				Principal:     "ci-baseline",
+				GitCommitSHA:  "deadbeef",
+				PipelineRunID: "run-1",
+				Target:        "tenant-default",
+			},
+		}
+		override := &Config{
+			Audit: AuditContext{
+				Principal: "tenant-operator",
+				Target:    "tenant-acme",
+			},
+		}
+		out := mergeConfigs(base, override)
+		assert.Equal(t, "tenant-operator", out.Audit.Principal, "override Principal should win")
+		assert.Equal(t, "tenant-acme", out.Audit.Target, "override Target should win")
+		assert.Equal(t, "deadbeef", out.Audit.GitCommitSHA, "unset override field should inherit from base")
+		assert.Equal(t, "run-1", out.Audit.PipelineRunID, "unset override field should inherit from base")
+	})
+
+	t.Run("audit_only_override_is_not_empty", func(t *testing.T) {
+		override := &Config{Audit: AuditContext{Principal: "compliance-bot"}}
+		assert.False(t, isEmptyConfig(override), "config with only Audit set must not be treated as empty")
+		out := mergeConfigs(defaults, override)
+		assert.Equal(t, "compliance-bot", out.Audit.Principal)
+		assert.Equal(t, defaults.ConfigPath, out.ConfigPath, "non-Audit fields should still inherit from base")
+	})
 }

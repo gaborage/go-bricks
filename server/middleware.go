@@ -21,8 +21,12 @@ import (
 // It sets up CORS, logging, recovery, security headers, rate limiting, and other essential middleware.
 // healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
-	// Request ID
-	e.Use(middleware.RequestID())
+	// Request ID — validates the inbound X-Request-ID and sets the response
+	// header to either the validated value or a fresh UUID. Replaces Echo's
+	// stock middleware.RequestID() which echoes the inbound header verbatim
+	// without validation, exposing the framework to log poisoning and
+	// CRLF-injection via attacker-controlled request IDs.
+	e.Use(RequestIDMiddleware())
 
 	// OpenTelemetry instrumentation - creates spans AND metrics for HTTP requests
 	// Skip health/ready probes to avoid noisy traces/metrics
@@ -64,8 +68,10 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// Operation Tracker - Initialize AMQP and DB operation tracking for each request
 	e.Use(PerformanceStats())
 
-	// CORS
-	e.Use(CORS())
+	// CORS — pass cfg.App.Env so the policy honors the Koanf default of
+	// EnvDevelopment (instead of falling back to os.Getenv which is empty
+	// when the operator relies on config.yaml / framework defaults).
+	e.Use(CORS(cfg.App.Env))
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {
