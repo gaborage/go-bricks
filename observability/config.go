@@ -138,12 +138,11 @@ func (c *Config) applyTraceDefaults() {
 		c.Trace.Protocol = ProtocolHTTP
 	}
 
-	// Insecure defaults to true for local development
-	// Note: With mapstructure, we can't distinguish between explicitly false and unset
-	// We'll assume insecure=true as default for stdout endpoint
-	if c.Trace.Endpoint == EndpointStdout {
-		c.Trace.Insecure = true
-	}
+	// Trace.Insecure intentionally left at its zero value (false) when unset.
+	// The stdout trace exporter never opens a network connection and ignores
+	// the flag, but Logs.Insecure inherits from Trace.Insecure further down,
+	// so silently flipping Trace.Insecure=true on the stdout branch would
+	// downgrade an unrelated remote OTLP logs endpoint to insecure transport.
 
 	// Compression default - gzip for bandwidth reduction (New Relic recommendation)
 	if c.Trace.Compression == "" {
@@ -269,9 +268,14 @@ func (c *Config) applyLogsDefaults() {
 		c.Logs.Protocol = ProtocolHTTP
 	}
 
-	// Insecure default - inherit from trace configuration
+	// Insecure default — secure (TLS) by default. The previous code inherited
+	// from c.Trace.Insecure, which coupled an unrelated endpoint's transport
+	// choice into the logs pipeline. Operators running stdout traces with a
+	// plaintext local OTLP collector for logs must set `logs.insecure: true`
+	// explicitly (the stdout-trace branch is informational, not authoritative,
+	// for the logs endpoint's transport).
 	if c.Logs.Insecure == nil {
-		c.Logs.Insecure = BoolPtr(c.Trace.Insecure)
+		c.Logs.Insecure = BoolPtr(false)
 	}
 
 	// Headers default - clone from trace configuration if not set

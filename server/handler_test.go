@@ -1807,3 +1807,44 @@ func TestWithLoggerOptionSetsField(t *testing.T) {
 	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithLogger(rec))
 	assert.Same(t, rec, hr.log.(*recLogger))
 }
+
+func TestGetTraceIDPassesValidInboundHeader(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	req.Header.Set(echo.HeaderXRequestID, "valid-trace-id-123")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	assert.Equal(t, "valid-trace-id-123", getTraceID(c))
+}
+
+func TestGetTraceIDRejectsInvalidInboundHeader(t *testing.T) {
+	cases := []string{
+		"has spaces",
+		"has\ttab",
+		"<script>",
+		strings.Repeat("x", 200), // over 128-byte cap
+		"path/with/slashes",
+	}
+	for _, junk := range cases {
+		// Sanitize the case label for use as a subtest name — '/' is a
+		// path separator in Go's testing framework, so `go test -run` filters
+		// against unsanitized junk would fail to match the intended scope.
+		label := strings.ReplaceAll(junk[:min(len(junk), 12)], "/", "_")
+		t.Run("rejects_"+label, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+			req.Header.Set(echo.HeaderXRequestID, junk)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			got := getTraceID(c)
+			assert.NotEqual(t, junk, got, "invalid inbound X-Request-ID must NOT be reflected")
+			assert.NotEmpty(t, got, "getTraceID must always return a usable ID")
+			// Generated IDs are UUIDs (36 chars including hyphens).
+			assert.Len(t, got, 36, "expected a generated UUID when inbound rejected")
+			// Response header should carry the same generated ID.
+			assert.Equal(t, got, rec.Header().Get(echo.HeaderXRequestID))
+		})
+	}
+}

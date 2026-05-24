@@ -359,11 +359,29 @@ func mergeConfigs(defaults, override *Config) *Config {
 	if override.DryRun {
 		out.DryRun = override.DryRun
 	}
+	// Audit fields propagate per-field so per-tenant overrides can refine
+	// individual fields without clobbering inherited ones. Without this,
+	// every per-tenant migration.applied event would emit with the
+	// vendor-default Audit (Principal=<unspecified>) — see ADR-019.
+	if override.Audit.Principal != "" {
+		out.Audit.Principal = override.Audit.Principal
+	}
+	if override.Audit.GitCommitSHA != "" {
+		out.Audit.GitCommitSHA = override.Audit.GitCommitSHA
+	}
+	if override.Audit.PipelineRunID != "" {
+		out.Audit.PipelineRunID = override.Audit.PipelineRunID
+	}
+	if override.Audit.Target != "" {
+		out.Audit.Target = override.Audit.Target
+	}
 	return &out
 }
 
 // isEmptyConfig reports whether c carries no override fields.
 func isEmptyConfig(c *Config) bool {
 	return c.FlywayPath == "" && c.ConfigPath == "" && c.MigrationPath == "" &&
-		c.Timeout == 0 && c.Environment == "" && !c.DryRun
+		c.Timeout == 0 && c.Environment == "" && !c.DryRun &&
+		c.Audit.Principal == "" && c.Audit.GitCommitSHA == "" &&
+		c.Audit.PipelineRunID == "" && c.Audit.Target == ""
 }

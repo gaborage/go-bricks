@@ -957,16 +957,25 @@ func formatRawErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Confi
 }
 
 // getTraceID extracts or generates a trace ID for the request.
+//
+// The inbound X-Request-ID header is caller-controlled, so it's validated
+// against a strict charset/length pattern before use. Values that fail
+// validation are discarded and a fresh UUID is generated — preventing
+// attackers from poisoning logs or reusing a victim's request ID for
+// correlation-confusion attacks. The response-header read is ALSO validated
+// as defense in depth: the framework's RequestIDMiddleware should populate
+// it with a known-good value, but the validation is cheap and protects
+// downstream consumers if the middleware is ever misconfigured or replaced.
 func getTraceID(c *echo.Context) string {
-	// Prefer incoming request header set by upstream/proxy/middleware
-	if requestID := c.Request().Header.Get(echo.HeaderXRequestID); requestID != "" {
+	// Prefer incoming request header — but validate it first.
+	if requestID := validateRequestID(c.Request().Header.Get(echo.HeaderXRequestID)); requestID != "" {
 		return requestID
 	}
-	// Then try the response header (may be set by request ID middleware)
+	// Then try the response header (normally set by RequestIDMiddleware).
 	// SAFETY: After a timeout, c.Response() may be nil due to timeoutHandler invalidating
 	// the underlying ResponseWriter. We check for nil to prevent panic.
 	if resp := c.Response(); resp != nil {
-		if requestID := resp.Header().Get(echo.HeaderXRequestID); requestID != "" {
+		if requestID := validateRequestID(resp.Header().Get(echo.HeaderXRequestID)); requestID != "" {
 			return requestID
 		}
 	}

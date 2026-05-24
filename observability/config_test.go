@@ -417,7 +417,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Enabled:  BoolPtr(true),
 					Endpoint: EndpointStdout,
 					Protocol: ProtocolHTTP,
-					Insecure: true,
+					Insecure: false, // Default is secure; stdout exporter ignores the flag, and Logs.Insecure inherits this value.
 					Sample: SampleConfig{
 						Rate: Float64Ptr(1.0),
 					},
