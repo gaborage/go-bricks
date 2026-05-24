@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"net/http"
 	"slices"
 	"testing"
 )
@@ -172,16 +173,6 @@ func TestMaskURL(t *testing.T) {
 // =============================================================================
 // Enhanced Sensitive Data Filtering Tests
 // =============================================================================
-
-func TestSensitiveDataFilterRunHook(_ *testing.T) {
-	filter := NewSensitiveDataFilter(nil)
-
-	// Test that Run method can be called without panic
-	// This is primarily a placeholder method but should work safely
-	filter.Run(nil, 0, "test message")
-
-	// The method should not panic or error, it's a no-op placeholder
-}
 
 func TestFilterValueStructFiltering(t *testing.T) {
 	filter := NewSensitiveDataFilter(&FilterConfig{
@@ -389,11 +380,12 @@ func TestFilterValueNonStructType(t *testing.T) {
 		t.Errorf("Expected slice to pass through unchanged")
 	}
 
-	stringMap := map[string]string{"key": "value"}
+	// Non-sensitive key: should pass through (now returns map[string]any after reflect.Map fix)
+	stringMap := map[string]string{"username": "alice"}
 	mapResult := filter.FilterValue("field", stringMap)
-	mapResultTyped, ok := mapResult.(map[string]string)
-	if !ok || mapResultTyped["key"] != "value" {
-		t.Errorf("Expected string map to pass through unchanged")
+	mapResultTyped, ok := mapResult.(map[string]any)
+	if !ok || mapResultTyped["username"] != "alice" {
+		t.Errorf("Expected non-sensitive string map field to pass through unchanged")
 	}
 }
 
@@ -556,6 +548,126 @@ var completeFieldCoverageFilter = NewSensitiveDataFilter(&FilterConfig{
 
 const completeCoverageTestName = "test"
 
+func TestFilterValueMapStringStringSensitiveKeyMasked(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"password", "token"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	cases := []struct {
+		name     string
+		in       map[string]string
+		key      string
+		wantMask bool
+	}{
+		{name: "sensitive_key_masked", in: map[string]string{"password": "s3cr3t", "user": "bob"}, key: "password", wantMask: true},
+		{name: "non_sensitive_preserved", in: map[string]string{"username": "bob"}, key: "username", wantMask: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := filter.FilterValue("data", tc.in)
+			resultMap, ok := result.(map[string]any)
+			if !ok {
+				t.Fatalf("Expected map[string]any, got %T", result)
+			}
+			got := resultMap[tc.key]
+			if tc.wantMask && got != DefaultMaskValue {
+				t.Errorf("Expected %q to be masked, got %v", tc.key, got)
+			}
+			if !tc.wantMask && got != tc.in[tc.key] {
+				t.Errorf("Expected %q to be %q, got %v", tc.key, tc.in[tc.key], got)
+			}
+		})
+	}
+}
+
+func TestFilterValueNilMapPreservesNil(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	// A typed-nil map must remain nil in the output, not become an empty {}.
+	// Without an rv.IsNil() guard, typed nils bypass the interface nil check.
+	var h http.Header // nil map of type map[string][]string
+	result := filter.FilterValue("headers", h)
+	if result != nil {
+		t.Errorf("Expected typed-nil http.Header to filter as nil, got %T %v", result, result)
+	}
+
+	var m map[string]string // nil map of type map[string]string
+	result2 := filter.FilterValue("data", m)
+	if result2 != nil {
+		t.Errorf("Expected typed-nil map[string]string to filter as nil, got %T %v", result2, result2)
+	}
+}
+
+func TestFilterValueHTTPHeaderMasksSensitiveKeys(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"authorization", "token"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	headers := map[string][]string{
+		"Authorization": {"Bearer eyJhbGciOiJSUzI1NiJ9"},
+		"Content-Type":  {"application/json"},
+	}
+	result := filter.FilterValue("headers", headers)
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map[string]any, got %T", result)
+	}
+	if resultMap["Authorization"] != DefaultMaskValue {
+		t.Errorf("Expected Authorization header to be masked, got %v", resultMap["Authorization"])
+	}
+	if resultMap["Content-Type"] == DefaultMaskValue {
+		t.Error("Expected Content-Type header to be preserved")
+	}
+}
+
+func TestFilterValueDepthExhaustionMasks(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"password"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	// Build a map nested deeper than DefaultMaxDepth (8).
+	// The "password" field lives at depth 10 — previously leaked due to fail-open;
+	// after the fix, the entire subtree at depth 0 is replaced with the mask.
+	var buildDeep func(depth int) map[string]any
+	buildDeep = func(depth int) map[string]any {
+		if depth == 0 {
+			return map[string]any{"password": "s3cr3t", "name": "leaf"}
+		}
+		return map[string]any{"next": buildDeep(depth - 1)}
+	}
+	deep := buildDeep(DefaultMaxDepth + 2)
+
+	result := filter.FilterValue("data", deep)
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map[string]any, got %T", result)
+	}
+	// Top-level key is non-sensitive; the nested subtree exceeds depth limit.
+	// The subtree is replaced with the mask rather than leaking its contents.
+	if resultMap["next"] == nil {
+		t.Error("Expected 'next' key to be present")
+	}
+	// Walk as deep as possible and confirm we never get a plain "s3cr3t" string.
+	var checkNoLeak func(v any)
+	checkNoLeak = func(v any) {
+		switch val := v.(type) {
+		case string:
+			if val == "s3cr3t" {
+				t.Error("Sensitive password leaked despite depth exhaustion")
+			}
+		case map[string]any:
+			for _, inner := range val {
+				checkNoLeak(inner)
+			}
+		}
+	}
+	checkNoLeak(result)
+}
+
 func TestFilterStructWithInterfaceField(t *testing.T) {
 	type TestStruct struct {
 		Username string `json:"username"`
@@ -659,7 +771,6 @@ func TestFilterStructPointerToValidStruct(t *testing.T) {
 }
 
 func TestFilterStructDirectPointerHandling(t *testing.T) {
-	// Test the pointer handling within filterStruct directly
 	type TestStruct struct {
 		Name     string `json:"name"`
 		Password string `json:"password"`
@@ -670,8 +781,7 @@ func TestFilterStructDirectPointerHandling(t *testing.T) {
 		Password: "secret",
 	}
 
-	// Call filterStruct directly to test pointer dereferencing
-	result := completeFieldCoverageFilter.filterStruct(input)
+	result := completeFieldCoverageFilter.FilterValue(completeCoverageTestName, input)
 	resultMap, ok := result.(map[string]any)
 	if !ok {
 		t.Fatal(expectedMaskedMapMsg)

@@ -2,12 +2,11 @@
 package logger
 
 import (
+	"fmt"
 	"net/url"
 	"reflect"
 	"strings"
 	"unsafe"
-
-	"github.com/rs/zerolog"
 )
 
 const (
@@ -46,7 +45,9 @@ func DefaultFilterConfig() *FilterConfig {
 	}
 }
 
-// SensitiveDataFilter implements zerolog.Hook to filter sensitive data from logs
+// SensitiveDataFilter filters sensitive data from logs. Filtering is enforced by the
+// adapter layer (LogEventAdapter) — never add a Zerolog() accessor to ZeroLogger as
+// that would create a bypass path around this filter boundary.
 type SensitiveDataFilter struct {
 	config *FilterConfig
 }
@@ -60,17 +61,6 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 		config.MaskValue = DefaultMaskValue
 	}
 	return &SensitiveDataFilter{config: config}
-}
-
-// Run implements zerolog.Hook interface to filter sensitive data
-func (f *SensitiveDataFilter) Run(_ *zerolog.Event, _ zerolog.Level, _ string) {
-	// Note: zerolog's Event doesn't expose its internal fields directly,
-	// so we need to work with the event through its methods.
-	// The filtering will be applied when fields are added to the event.
-
-	// This hook serves as a placeholder for the filtering mechanism.
-	// The actual filtering happens in the FilterString and FilterValue methods
-	// that are called by the enhanced logger methods.
 }
 
 // FilterString filters sensitive data from string values
@@ -97,9 +87,12 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 		return nil
 	}
 
-	// Check depth limit
+	// Check depth limit — fail-closed: mask the subtree rather than leaking sensitive
+	// leaves the recursion budget didn't reach. Contrast with cycle detection (below)
+	// which returns value because masking a cycle root discards the rest of the tree;
+	// depth exhaustion can always safely substitute the mask.
 	if maxDepth <= 0 {
-		return value
+		return f.config.MaskValue
 	}
 
 	return f.filterByTypeWithProtection(key, value, visited, maxDepth)
@@ -123,6 +116,28 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 			return f.filterStructWithProtection(value, visited, maxDepth)
 		}
 		return value
+	case reflect.Map:
+		// Covers map[string]string, map[string][]string (http.Header), map[string]int, etc.
+		// map[string]any is handled by the fast-path type-assertion above; this arm catches
+		// every other concrete map type. Keys are stringified so non-string-keyed maps still
+		// get their keys sensitivity-checked. Output is always map[string]any — the log
+		// consumer does not require the original value type.
+		if rv.IsNil() {
+			// A typed nil map (e.g. var h http.Header = nil) must stay nil in the log output.
+			// Without this guard, rv.Len()==0 would produce {} instead of null.
+			return nil
+		}
+		result := make(map[string]any, rv.Len())
+		for _, k := range rv.MapKeys() {
+			var keyStr string
+			if k.Kind() == reflect.String {
+				keyStr = k.String()
+			} else {
+				keyStr = fmt.Sprintf("%v", k.Interface())
+			}
+			result[keyStr] = f.filterValueWithProtection(keyStr, rv.MapIndex(k).Interface(), visited, maxDepth-1)
+		}
+		return result
 	default:
 		// All other types pass through unchanged
 		return value
@@ -279,21 +294,15 @@ func (f *SensitiveDataFilter) buildMaskedURL(parsed *url.URL, username string) s
 	return b.String()
 }
 
-// filterStruct filters sensitive fields in struct values using reflection
-func (f *SensitiveDataFilter) filterStruct(value any) any {
-	visited := make(map[uintptr]struct{})
-	return f.filterStructWithProtection(value, visited, DefaultMaxDepth)
-}
-
 // filterStructWithProtection filters sensitive fields with cycle detection and depth limiting
 func (f *SensitiveDataFilter) filterStructWithProtection(value any, visited map[uintptr]struct{}, maxDepth int) any {
 	if value == nil {
 		return nil
 	}
 
-	// Check depth limit
+	// Check depth limit — fail-closed; see filterValueWithProtection for rationale.
 	if maxDepth <= 0 {
-		return value
+		return f.config.MaskValue
 	}
 
 	structVal, structType, ptr := f.extractStructValueWithPointer(value)

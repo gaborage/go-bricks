@@ -121,7 +121,7 @@ fw, err = app.NewWithOptions(&app.Options{
 
 - **Field names**, not field values. The filter never scans string contents for PAN-shaped digit sequences or Luhn-valid numbers. Value scanning is a defense-in-depth concern that belongs in application code (see *Defense in depth*, below).
 - **Case-insensitive substring**. `pan` matches `pan`, `PAN`, `Pan`, `card_pan`, `primary_account_number`. This is intentional — it survives typos, naming-convention drift, and underscored-vs-camelCase variants in different modules.
-- **Recursive into structures**. Direct `Str/Int/Interface(...)` fields, nested `map[string]any`, struct fields (using `json` tags when present), and slice/array elements are all walked. Recursion is bounded (`logger.DefaultMaxDepth = 8`) and cycle-safe (visited pointer set).
+- **Recursive into structures**. All log-event methods are covered — `Str`, `Int`, `Int64`, `Uint64`, `Dur`, `Bytes`, and `Interface(...)` — as well as nested `map[string]any`, `map[string]string`, `http.Header` (`map[string][]string`), struct fields (using `json` tags when present), and slice/array elements. Recursion is bounded (`logger.DefaultMaxDepth = 8`) and cycle-safe (visited pointer set). Depth exhaustion fails **closed** — values past the depth limit are replaced with the mask rather than logged verbatim.
 - **URLs as a special case**. If a masked field's value is an HTTP/AMQP URL with `user:password@host`, only the password component is replaced — the rest of the URL stays readable. This keeps `database_url` and `broker_url` actionable in error logs.
 
 ### What this does *not* do
@@ -137,7 +137,7 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 1. **Don't log raw payloads.** Use validated DTOs in handlers, mask at the source: `log.Str("pan_last4", req.PAN[len(req.PAN)-4:])` is safer than relying on field-name masking to catch a `log.Interface("payload", req)` call.
 2. **Mask in error wrapping.** When wrapping errors that may include sensitive context, redact before `fmt.Errorf`. Helper pattern: `func MaskPAN(s string) string`.
 3. **Scrub free-text values.** Outside of structured logging, regex-scan any `log.Msg("...")` argument for digit sequences with Luhn validity. Implement as a `LogFilter` wrapper if your compliance auditor requires evidence.
-4. **Audit your default list.** Run `git grep -E 'Str|Int64|Interface\("([^"]+)"' --include='*.go'` periodically. Anything that looks PII-shaped should be in the allowlist.
+4. **Audit your default list.** Run `git grep -E '\.(Str|Int|Int64|Uint64|Dur|Bytes|Interface)\("([^"]+)"' --include='*.go'` periodically. Anything that looks PII-shaped should be in the allowlist. All these typed methods pass through the filter when the field name is sensitive.
 5. **Test that masking is active.** Add at least one integration test that emits a sensitive value and asserts the captured log line contains `***` (or your configured mask value). See `logger.TestNewWithFilter` for the pattern.
 
 ### Migration notes

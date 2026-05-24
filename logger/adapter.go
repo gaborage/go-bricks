@@ -42,21 +42,33 @@ func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 
 // Int adds an integer field to the log event
 func (lea *LogEventAdapter) Int(key string, value int) LogEvent {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Int(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
 // Int64 adds an int64 field to the log event
 func (lea *LogEventAdapter) Int64(key string, value int64) LogEvent {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Int64(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
 // Uint64 adds a uint64 field to the log event
 func (lea *LogEventAdapter) Uint64(key string, value uint64) LogEvent {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Uint64(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
 // Dur adds a duration field to the log event
 func (lea *LogEventAdapter) Dur(key string, d time.Duration) LogEvent {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Dur(key, d), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
@@ -70,6 +82,9 @@ func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 
 // Bytes adds a byte slice field to the log event
 func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+	}
 	return &LogEventAdapter{event: lea.event.Bytes(key, val), filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 

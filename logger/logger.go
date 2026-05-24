@@ -31,38 +31,7 @@ var callerMarshalOnce sync.Once
 // New creates a new ZeroLogger instance with the specified log level and formatting options.
 // If pretty is true, output will be formatted for human readability.
 func New(level string, pretty bool) *ZeroLogger {
-	callerMarshalOnce.Do(func() {
-		zerolog.CallerMarshalFunc = func(_ uintptr, file string, line int) string {
-			base := filepath.Base(file)
-			parent := filepath.Base(filepath.Dir(file))
-			if parent != "." && parent != "" {
-				return parent + "/" + base + ":" + strconv.Itoa(line)
-			}
-			return base + ":" + strconv.Itoa(line)
-		}
-	})
-
-	var l zerolog.Logger
-
-	if pretty {
-		l = zerolog.New(zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: time.RFC3339,
-		}).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
-	} else {
-		l = zerolog.New(os.Stdout).With().Timestamp().CallerWithSkipFrameCount(3).Logger()
-	}
-
-	zLevel, err := zerolog.ParseLevel(level)
-	if err != nil {
-		zLevel = zerolog.InfoLevel
-	}
-	l = l.Level(zLevel)
-
-	// Initialize the sensitive data filter with default configuration
-	filter := NewSensitiveDataFilter(DefaultFilterConfig())
-
-	return &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
+	return NewWithFilter(level, pretty, DefaultFilterConfig())
 }
 
 // NewWithFilter creates a new ZeroLogger instance with custom filter configuration.

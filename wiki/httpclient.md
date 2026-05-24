@@ -28,3 +28,27 @@ resp, err := client.Get(ctx, &httpclient.Request{
 ```
 
 **Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete`, `Do` — all accept `context.Context` and `*Request`, return `*Response` and `error`.
+
+## Payload Logging
+
+> **Warning:** payload logging is a debug aid for development/staging only. Enabling it in production widens the audit-log surface and may expose sensitive data to log pipelines.
+
+By default the client logs only request/response metadata (method, URL, status, elapsed, body size). Debug-level payload logging can be enabled via the builder:
+
+```go
+client := httpclient.NewBuilder(logger).
+    WithLogPayloads(true).
+    WithMaxPayloadLogBytes(2048). // default 1024; must be > 0
+    Build()
+```
+
+**Content-type-aware logging:** Request and response bodies are handled differently depending on the `Content-Type` header:
+
+| Content-Type | Behaviour |
+|---|---|
+| `application/json` or `*+json` | Body is parsed with `json.Unmarshal` and logged as `body_preview` (`map[string]any`). The framework's `SensitiveDataFilter` walks the parsed map and masks keys that match the sensitive field list (`password`, `token`, `api_key`, …). |
+| Everything else (form-urlencoded, binary, multipart, missing/unknown) | Bytes are **not** logged. Instead `body_content_type` and `body_preview_dropped` (byte count) appear in the log. Form-urlencoded bodies often carry credential pairs; multipart and binary blobs are not filterable. |
+
+**JSON parse failure:** If the Content-Type is JSON but the body is malformed (e.g. truncated by `MaxPayloadLogBytes`), `body_content_type` and `body_preview_status: json_parse_failed` are logged instead of raw bytes.
+
+**Recommendation:** Keep `WithLogPayloads` disabled in production configs. If you need body inspection in production, log only the specific fields you need at the application layer (before or after the HTTP call) rather than enabling blanket payload logging.
