@@ -722,4 +722,6 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 	require.NoError(t, handler(c))
 	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
 		"CORS_ORIGINS=* in non-dev env must fail closed, not echo the origin")
+	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials),
+		"fail-closed mode must explicitly drop AllowCredentials so the response cannot carry session cookies cross-origin")
 }

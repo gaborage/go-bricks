@@ -417,7 +417,7 @@ func TestConfigApplyDefaults(t *testing.T) {
 					Enabled:  BoolPtr(true),
 					Endpoint: EndpointStdout,
 					Protocol: ProtocolHTTP,
-					Insecure: false, // Default is secure; stdout exporter ignores the flag, and Logs.Insecure inherits this value.
+					Insecure: false, // Default is secure; stdout exporter ignores the flag. Logs.Insecure defaults independently.
 					Sample: SampleConfig{
 						Rate: Float64Ptr(1.0),
 					},
@@ -587,6 +587,28 @@ func TestLogsHeadersMapIsolation(t *testing.T) {
 	assert.Equal(t, "Bearer logs-token", cfg.Logs.Headers["Authorization"])
 	assert.Equal(t, "logs-value", cfg.Logs.Headers[xLogsHeaderKey])
 	assert.NotContains(t, cfg.Logs.Headers, xTraceHeaderKey)
+}
+
+// TestLogsInsecureDoesNotInheritFromTraceInsecure is a regression guard for
+// the inheritance decoupling done in this PR. Before the fix, Logs.Insecure
+// defaulted to *Trace.Insecure, which silently downgraded a remote OTLP logs
+// endpoint to plaintext transport whenever the operator chose stdout traces.
+// The decoupling MUST hold even when Trace.Insecure is explicitly true.
+func TestLogsInsecureDoesNotInheritFromTraceInsecure(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: "test"},
+		Trace: TraceConfig{
+			Insecure: true, // Explicit, not inferred.
+		},
+		// Logs.Insecure deliberately unset.
+	}
+
+	cfg.ApplyDefaults()
+
+	require.NotNil(t, cfg.Logs.Insecure, "Logs.Insecure must be populated after ApplyDefaults")
+	assert.False(t, *cfg.Logs.Insecure,
+		"Logs.Insecure must default to false (secure) regardless of Trace.Insecure — see PR #454")
 }
 
 // TestCloneHeaderMapNil verifies that cloning a nil map returns nil.
