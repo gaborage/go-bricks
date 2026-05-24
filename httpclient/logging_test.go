@@ -650,6 +650,73 @@ func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
 	assert.Contains(t, preview, "password", "parsed map must contain all JSON keys")
 }
 
+// TestLogBodyPreviewPrimitiveRootDropped verifies that JSON bodies whose root is a
+// primitive or array are never emitted as body_preview. SensitiveDataFilter can only
+// walk map[string]any keys, so logging a raw string/number/bool/array would bypass
+// filtering entirely. The fix gates on map[string]any and drops everything else.
+func TestLogBodyPreviewPrimitiveRootDropped(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{name: "json_string", body: []byte(`"secret-token"`)},
+		{name: "json_number", body: []byte(`123456789`)},
+		{name: "json_bool", body: []byte(`true`)},
+		{name: "json_array", body: []byte(`["item1","item2"]`)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeLog := &fakeLogger{}
+			c := &client{
+				logger: fakeLog,
+				config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+			assert.NoError(t, err)
+			req.Header.Set(testContentTypeHeader, testContentType)
+
+			c.logRequest(req, tc.body, "trace-123")
+
+			debugEvents := fakeLog.eventsByLevel("debug")
+			assert.Len(t, debugEvents, 1)
+
+			ev := debugEvents[0]
+			assert.Nil(t, ev.fields["body_preview"], "primitive/array JSON root must not appear as body_preview")
+			assert.Equal(t, len(tc.body), ev.fields["body_preview_dropped"], "byte count must be logged for dropped body")
+		})
+	}
+}
+
+// TestLogBodyPreviewMalformedJSONLogsDroppedCount verifies that when a JSON body
+// fails to parse (e.g., truncated mid-token by MaxPayloadLogBytes), the log event
+// contains both body_preview_status and body_preview_dropped so operators can
+// distinguish truncation-induced errors from server-side malformed JSON.
+func TestLogBodyPreviewMalformedJSONLogsDroppedCount(t *testing.T) {
+	fakeLog := &fakeLogger{}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 10},
+	}
+
+	// A 10-byte truncation of valid JSON produces invalid JSON (cut mid-token)
+	body := []byte(`{"username": "alice", "password": "s3cr3t"}`)
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+	assert.NoError(t, err)
+	req.Header.Set(testContentTypeHeader, testContentType)
+
+	c.logRequest(req, body, "trace-123")
+
+	debugEvents := fakeLog.eventsByLevel("debug")
+	assert.Len(t, debugEvents, 1)
+
+	ev := debugEvents[0]
+	assert.Equal(t, "json_parse_failed", ev.fields["body_preview_status"], "status must indicate parse failure")
+	assert.Equal(t, 10, ev.fields["body_preview_dropped"], "byte count must be logged even on parse failure")
+	assert.Nil(t, ev.fields["body_preview"], "raw body bytes must never appear in log output")
+}
+
 // TestIsJSONContentTypeEdgeCases verifies that isJSONContentType handles
 // edge-case Content-Type values that occur with proxies or custom transports.
 func TestIsJSONContentTypeEdgeCases(t *testing.T) {

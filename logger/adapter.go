@@ -15,6 +15,11 @@ type LogEventAdapter struct {
 	hook   func(zerolog.Level)
 }
 
+// wrapEvent creates a new LogEventAdapter reusing the current filter/level/hook.
+func (lea *LogEventAdapter) wrapEvent(e *zerolog.Event) *LogEventAdapter {
+	return &LogEventAdapter{event: e, filter: lea.filter, level: lea.level, hook: lea.hook}
+}
+
 // Msg logs the message
 func (lea *LogEventAdapter) Msg(msg string) {
 	lea.trackSeverity()
@@ -29,7 +34,7 @@ func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 
 // Err adds an error to the log event
 func (lea *LogEventAdapter) Err(err error) LogEvent {
-	return &LogEventAdapter{event: lea.event.Err(err), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Err(err))
 }
 
 // Str adds a string field to the log event
@@ -37,39 +42,39 @@ func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 	if lea.filter != nil {
 		value = lea.filter.FilterString(key, value)
 	}
-	return &LogEventAdapter{event: lea.event.Str(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Str(key, value))
 }
 
 // Int adds an integer field to the log event
 func (lea *LogEventAdapter) Int(key string, value int) LogEvent {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
 	}
-	return &LogEventAdapter{event: lea.event.Int(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Int(key, value))
 }
 
 // Int64 adds an int64 field to the log event
 func (lea *LogEventAdapter) Int64(key string, value int64) LogEvent {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
 	}
-	return &LogEventAdapter{event: lea.event.Int64(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Int64(key, value))
 }
 
 // Uint64 adds a uint64 field to the log event
 func (lea *LogEventAdapter) Uint64(key string, value uint64) LogEvent {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
 	}
-	return &LogEventAdapter{event: lea.event.Uint64(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Uint64(key, value))
 }
 
 // Dur adds a duration field to the log event
 func (lea *LogEventAdapter) Dur(key string, d time.Duration) LogEvent {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
 	}
-	return &LogEventAdapter{event: lea.event.Dur(key, d), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Dur(key, d))
 }
 
 // Interface adds an any field to the log event
@@ -77,15 +82,15 @@ func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 	if lea.filter != nil {
 		i = lea.filter.FilterValue(key, i)
 	}
-	return &LogEventAdapter{event: lea.event.Interface(key, i), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Interface(key, i))
 }
 
 // Bytes adds a byte slice field to the log event
 func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return &LogEventAdapter{event: lea.event.Interface(key, lea.filter.config.MaskValue), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
 	}
-	return &LogEventAdapter{event: lea.event.Bytes(key, val), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Bytes(key, val))
 }
 
 // Bool adds a boolean field to the log event
@@ -93,12 +98,12 @@ func (lea *LogEventAdapter) Bool(key string, value bool) LogEvent {
 	if lea.filter != nil {
 		filtered := lea.filter.FilterValue(key, value)
 		if b, ok := filtered.(bool); ok {
-			return &LogEventAdapter{event: lea.event.Bool(key, b), filter: lea.filter, level: lea.level, hook: lea.hook}
+			return lea.wrapEvent(lea.event.Bool(key, b))
 		}
 		// Sensitive field was masked to a string — fall back to Interface to preserve the mask
-		return &LogEventAdapter{event: lea.event.Interface(key, filtered), filter: lea.filter, level: lea.level, hook: lea.hook}
+		return lea.wrapEvent(lea.event.Interface(key, filtered))
 	}
-	return &LogEventAdapter{event: lea.event.Bool(key, value), filter: lea.filter, level: lea.level, hook: lea.hook}
+	return lea.wrapEvent(lea.event.Bool(key, value))
 }
 
 func (lea *LogEventAdapter) trackSeverity() {

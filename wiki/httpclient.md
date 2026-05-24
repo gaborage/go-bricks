@@ -46,7 +46,7 @@ client := httpclient.NewBuilder(logger).
 
 | Content-Type | Behaviour |
 |---|---|
-| `application/json` or `*+json` | Body is parsed with `json.Unmarshal` and logged as `body_preview` (`map[string]any`). The framework's `SensitiveDataFilter` walks the parsed map and masks keys that match the sensitive field list (`password`, `token`, `api_key`, …). |
+| `application/json` or `*+json` | Body is parsed with `json.Unmarshal`. If the root is a JSON object, it is logged as `body_preview` after `SensitiveDataFilter` walks it to mask sensitive keys (`password`, `token`, `api_key`, …). Primitive/array roots are dropped — the filter can only walk map keys. |
 | Everything else (form-urlencoded, binary, multipart, missing/unknown) | Bytes are **not** logged. Instead `body_content_type` and `body_preview_dropped` (byte count) appear in the log. Form-urlencoded bodies often carry credential pairs; multipart and binary blobs are not filterable. |
 
 **JSON parse failure:** If the Content-Type is JSON but the body is malformed (e.g. truncated by `MaxPayloadLogBytes`), `body_content_type` and `body_preview_status: json_parse_failed` are logged instead of raw bytes.

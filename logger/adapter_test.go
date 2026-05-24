@@ -519,6 +519,16 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		assert.Equal(t, "[MASKED]", entry["password"])
 	})
 
+	t.Run("Int64_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Int64("user_id", 9876543210).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(9876543210), entry["user_id"], "Int64 non-sensitive must not be masked")
+	})
+
 	t.Run("Uint64_sensitive_masked", func(t *testing.T) {
 		var buf bytes.Buffer
 		zl := zerolog.New(&buf)
@@ -529,6 +539,16 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		assert.Equal(t, "[MASKED]", entry["api_key"])
 	})
 
+	t.Run("Uint64_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Uint64("file_size", 1024).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(1024), entry["file_size"], "Uint64 non-sensitive must not be masked")
+	})
+
 	t.Run("Dur_sensitive_masked", func(t *testing.T) {
 		var buf bytes.Buffer
 		zl := zerolog.New(&buf)
@@ -537,6 +557,16 @@ func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
 		var entry map[string]any
 		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
 		assert.Equal(t, "[MASKED]", entry["token"])
+	})
+
+	t.Run("Dur_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Dur("elapsed", 250*time.Millisecond).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(250), entry["elapsed"], "Dur non-sensitive must not be masked")
 	})
 
 	t.Run("Bytes_sensitive_masked", func(t *testing.T) {

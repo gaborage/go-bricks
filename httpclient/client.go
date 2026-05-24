@@ -630,8 +630,8 @@ func (c *client) ensureContentTypeHeader(httpReq *nethttp.Request, body []byte) 
 	if body == nil {
 		return
 	}
-	if httpReq.Header.Get("Content-Type") == "" {
-		httpReq.Header.Set("Content-Type", mimeApplicationJSON)
+	if httpReq.Header.Get(headerContentType) == "" {
+		httpReq.Header.Set(headerContentType, mimeApplicationJSON)
 	}
 }
 
@@ -759,6 +759,28 @@ func isJSONContentType(ct string) bool {
 	return ct == mimeApplicationJSON || strings.HasSuffix(ct, "+json")
 }
 
+// logBodyPreview appends body-preview fields to dbg and returns the updated event.
+// JSON object roots are parsed and filter-walked via Interface so SensitiveDataFilter
+// can mask sensitive keys. Non-JSON, JSON primitive/array roots, and parse failures
+// log only metadata (content-type + byte count) — primitive/array roots cannot be
+// key-walked by the filter, so dropping them is the safe default.
+func logBodyPreview(dbg logger.LogEvent, preview []byte, ct string) logger.LogEvent {
+	if !isJSONContentType(ct) {
+		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
+	}
+	var parsed any
+	if err := json.Unmarshal(preview, &parsed); err != nil {
+		return dbg.Str("body_content_type", ct).Str("body_preview_status", "json_parse_failed").Int("body_preview_dropped", len(preview))
+	}
+	m, ok := parsed.(map[string]any)
+	if !ok {
+		// JSON primitive/array root — SensitiveDataFilter can only walk map keys;
+		// drop rather than log a value it cannot inspect.
+		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
+	}
+	return dbg.Interface("body_preview", m)
+}
+
 // logRequest logs the outgoing request
 func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID string) {
 	// Info-level: only metadata to avoid leaking PII/secrets
@@ -799,20 +821,7 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 			}
 			dbg = dbg.Int("body_size", len(body)).
 				Str("body_truncated", strconv.FormatBool(truncated))
-			ct := httpReq.Header.Get("Content-Type")
-			if isJSONContentType(ct) {
-				var parsed any
-				if jsonErr := json.Unmarshal(preview, &parsed); jsonErr == nil {
-					dbg = dbg.Interface("body_preview", parsed)
-				} else {
-					dbg = dbg.Str("body_content_type", ct).Str("body_preview_status", "json_parse_failed")
-				}
-			} else {
-				// Non-JSON bodies (form-urlencoded, multipart, binary) are never emitted —
-				// form-urlencoded encodes credential pairs in plaintext and binary payloads
-				// are not filterable. Log only the content-type and byte count.
-				dbg = dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
-			}
+			dbg = logBodyPreview(dbg, preview, httpReq.Header.Get(headerContentType))
 		}
 		dbg.Msg("REST client request")
 	}
@@ -854,17 +863,7 @@ func (c *client) logResponse(resp *Response, traceID string) {
 			}
 			dbg = dbg.Int("body_size", len(resp.Body)).
 				Str("body_truncated", strconv.FormatBool(truncated))
-			ct := resp.Headers.Get("Content-Type")
-			if isJSONContentType(ct) {
-				var parsed any
-				if jsonErr := json.Unmarshal(preview, &parsed); jsonErr == nil {
-					dbg = dbg.Interface("body_preview", parsed)
-				} else {
-					dbg = dbg.Str("body_content_type", ct).Str("body_preview_status", "json_parse_failed")
-				}
-			} else {
-				dbg = dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
-			}
+			dbg = logBodyPreview(dbg, preview, resp.Headers.Get(headerContentType))
 		}
 		// Response headers go through logger filter to mask sensitive keys/values
 		if len(resp.Headers) > 0 {
