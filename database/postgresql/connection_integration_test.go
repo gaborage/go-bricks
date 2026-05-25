@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/testing/containers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +39,7 @@ func setupTestContainer(t *testing.T) (*Connection, context.Context) {
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
 
 	// Create logger for tests (disabled output)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create config using connection string from container
 	cfg := &config.DatabaseConfig{
@@ -357,7 +358,7 @@ func TestConnectionPoolConfiguration(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{
@@ -404,7 +405,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
@@ -473,7 +474,7 @@ func TestConnectionWithHostPort(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
@@ -529,7 +530,7 @@ func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
@@ -583,7 +584,7 @@ func TestConnectionWithTLSMode(t *testing.T) {
 
 	// Start container
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Get host and port from container
 	host, err := pgContainer.Host(ctx)
@@ -650,7 +651,7 @@ func newConnectionWithTimezone(t *testing.T, timezone string) (*Connection, cont
 	t.Cleanup(cancel)
 
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	host, err := pgContainer.Host(ctx)
 	require.NoError(t, err, containerHostErr)
@@ -699,7 +700,7 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	t.Cleanup(cancel)
 
 	pgContainer := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	host, err := pgContainer.Host(ctx)
 	require.NoError(t, err, containerHostErr)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/tracking"
+	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -191,73 +192,9 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	return conn, nil
 }
 
-// Statement wraps sql.Stmt to implement types.Statement
-type Statement struct {
-	stmt *sql.Stmt
-}
-
-// Query executes a prepared query with arguments
-func (s *Statement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
-	return s.stmt.QueryContext(ctx, args...)
-}
-
-// QueryRow executes a prepared query that returns a single row
-func (s *Statement) QueryRow(ctx context.Context, args ...any) types.Row {
-	return types.NewRowFromSQL(s.stmt.QueryRowContext(ctx, args...))
-}
-
-// Exec executes a prepared statement with arguments
-func (s *Statement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
-	return s.stmt.ExecContext(ctx, args...)
-}
-
-// Close closes the prepared statement
-func (s *Statement) Close() error {
-	return s.stmt.Close()
-}
-
-// Transaction wraps sql.Tx to implement types.Tx
-type Transaction struct {
-	tx *sql.Tx
-}
-
-// Query executes a query within the transaction
-func (t *Transaction) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return t.tx.QueryContext(ctx, query, args...)
-}
-
-// QueryRow executes a query that returns a single row within the transaction
-func (t *Transaction) QueryRow(ctx context.Context, query string, args ...any) types.Row {
-	return types.NewRowFromSQL(t.tx.QueryRowContext(ctx, query, args...))
-}
-
-// Exec executes a query without returning rows within the transaction
-func (t *Transaction) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return t.tx.ExecContext(ctx, query, args...)
-}
-
-// Prepare creates a prepared statement within the transaction
-func (t *Transaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
-	stmt, err := t.tx.PrepareContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return &Statement{stmt: stmt}, nil
-}
-
-// Commit commits the transaction
-// Note: PostgreSQL's sql.Tx.Commit doesn't accept context; it's atomic and non-cancellable.
-// The context parameter maintains interface consistency for databases that support it.
-func (t *Transaction) Commit(_ context.Context) error {
-	return t.tx.Commit()
-}
-
-// Rollback rolls back the transaction
-// Note: PostgreSQL's sql.Tx.Rollback doesn't accept context; it's atomic and non-cancellable.
-// The context parameter maintains interface consistency for databases that support it.
-func (t *Transaction) Rollback(_ context.Context) error {
-	return t.tx.Rollback()
-}
+// PostgreSQL re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
+type Statement = wrapper.Statement
+type Transaction = wrapper.Transaction
 
 // Query executes a query that returns rows
 func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -280,7 +217,7 @@ func (c *Connection) Prepare(ctx context.Context, query string) (types.Statement
 	if err != nil {
 		return nil, err
 	}
-	return &Statement{stmt: stmt}, nil
+	return wrapper.NewStatement(stmt), nil
 }
 
 // Begin starts a transaction
@@ -289,7 +226,7 @@ func (c *Connection) Begin(ctx context.Context) (types.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Transaction{tx: tx}, nil
+	return wrapper.NewTransaction(tx), nil
 }
 
 // BeginTx starts a transaction with options
@@ -298,7 +235,7 @@ func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx
 	if err != nil {
 		return nil, err
 	}
-	return &Transaction{tx: tx}, nil
+	return wrapper.NewTransaction(tx), nil
 }
 
 // Health checks database connectivity

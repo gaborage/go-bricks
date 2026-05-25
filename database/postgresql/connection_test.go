@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
+	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -31,7 +33,7 @@ const (
 func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	c := &Connection{db: db, logger: newDisabledTestLogger()}
+	c := &Connection{db: db, logger: dbtestlog.NewDisabledTestLogger()}
 	return db, mock, c
 }
 
@@ -81,7 +83,7 @@ func createPostgreSQLConfig(connType, value string) *config.DatabaseConfig {
 
 // testConnectionExpectedError tests that a connection attempt fails with expected error
 func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	_, err := NewConnection(cfg, log)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), postgrePingErrorMsg)
@@ -253,7 +255,7 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
@@ -296,7 +298,7 @@ func TestConnectionInjectsTimezoneRuntimeParam(t *testing.T) {
 	}
 
 	mock.ExpectClose()
-	conn, err := NewConnection(cfg, newTestLogger())
+	conn, err := NewConnection(cfg, dbtestlog.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 	require.NotNil(t, captured)
@@ -340,7 +342,7 @@ func TestConnectionSkipsTimezoneOnDashSentinel(t *testing.T) {
 	}
 
 	mock.ExpectClose()
-	conn, err := NewConnection(cfg, newTestLogger())
+	conn, err := NewConnection(cfg, dbtestlog.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 	require.NotNil(t, captured)
@@ -382,7 +384,7 @@ func TestConnectionTimezoneOverridesDSNValue(t *testing.T) {
 	}
 
 	mock.ExpectClose()
-	conn, err := NewConnection(cfg, newTestLogger())
+	conn, err := NewConnection(cfg, dbtestlog.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 	require.NotNil(t, captured)
@@ -399,7 +401,7 @@ func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 		ConnectionString: "invalid-connection-string-format",
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	_, err := NewConnection(cfg, log)
 
@@ -422,7 +424,7 @@ func TestStatementQueryAndQueryRow(t *testing.T) {
 
 	stmt, err := db.PrepareContext(ctx, "SELECT id FROM widgets WHERE active = $1")
 	require.NoError(t, err)
-	ps := &Statement{stmt: stmt}
+	ps := wrapper.NewStatement(stmt)
 
 	rows, err := ps.Query(ctx, true)
 	require.NoError(t, err)
@@ -437,7 +439,7 @@ func TestStatementQueryAndQueryRow(t *testing.T) {
 
 	stmtRow, err := db.PrepareContext(ctx, "SELECT name FROM widgets WHERE id = $1")
 	require.NoError(t, err)
-	psRow := &Statement{stmt: stmtRow}
+	psRow := wrapper.NewStatement(stmtRow)
 
 	row := psRow.QueryRow(ctx, 7)
 	var name string
@@ -457,7 +459,7 @@ func TestTransactionQueryPrepareAndExec(t *testing.T) {
 	nativeTx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer nativeTx.Rollback() // No-op after commit
-	trx := &Transaction{tx: nativeTx}
+	trx := wrapper.NewTransaction(nativeTx)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM parts WHERE sku = $1")).
 		WithArgs("A-1").
@@ -508,7 +510,7 @@ func TestTransactionPrepareError(t *testing.T) {
 	nativeTx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	defer nativeTx.Rollback() // Called after explicit rollback below (no-op)
-	trx := &Transaction{tx: nativeTx}
+	trx := wrapper.NewTransaction(nativeTx)
 
 	prepareErr := errors.New("prepare failed")
 	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO fail(id) VALUES ($1)")).
@@ -609,7 +611,7 @@ func TestConnectionTransactionOperationsErrorHandling(t *testing.T) {
 // =============================================================================
 
 func TestMakeKeepAliveDialer(t *testing.T) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	t.Run("createDialerWithValidConfig", func(t *testing.T) {
 		cfg := config.PoolKeepAliveConfig{
@@ -672,7 +674,7 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
@@ -730,7 +732,7 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
@@ -933,7 +935,7 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 	// Create connection with nil config
 	c := &Connection{
 		db:     db,
-		logger: newDisabledTestLogger(),
+		logger: dbtestlog.NewDisabledTestLogger(),
 		config: nil, // Explicitly nil config
 	}
 
@@ -964,7 +966,7 @@ func TestConnectionCloseWithNilMetricsCleanup(t *testing.T) {
 	// Create connection with nil metricsCleanup
 	c := &Connection{
 		db:             db,
-		logger:         newDisabledTestLogger(),
+		logger:         dbtestlog.NewDisabledTestLogger(),
 		metricsCleanup: nil, // Explicitly nil - no metrics registered
 	}
 

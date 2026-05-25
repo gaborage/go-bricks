@@ -12,6 +12,7 @@ import (
 	go_ora "github.com/sijms/go-ora/v2"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +35,7 @@ func setupTestSchema(t *testing.T) (*Connection, context.Context) {
 	t.Helper()
 
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	cfg := &config.DatabaseConfig{
 		Host:     schema.Host,
@@ -152,7 +153,7 @@ func TestConnectionClose(t *testing.T) {
 
 func TestConnectionWithServiceName(t *testing.T) {
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Test with service name (most common pattern)
 	cfg := &config.DatabaseConfig{
@@ -182,7 +183,7 @@ func TestConnectionWithServiceName(t *testing.T) {
 
 func TestConnectionWithDatabaseFallback(t *testing.T) {
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Test with database field (fallback pattern)
 	cfg := &config.DatabaseConfig{
@@ -204,7 +205,7 @@ func TestConnectionWithDatabaseFallback(t *testing.T) {
 
 func TestConnectionWithConnectionString(t *testing.T) {
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Test with connection string (most flexible pattern)
 	cfg := &config.DatabaseConfig{
@@ -452,7 +453,7 @@ func TestConnectionTransactionIsolation(t *testing.T) {
 
 func TestConnectionPoolConfiguration(t *testing.T) {
 	schema, _ := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create connection with specific pool configuration
 	cfg := &config.DatabaseConfig{
@@ -947,7 +948,7 @@ func TestOracleUDTCollectionWithOwner(t *testing.T) {
 // Coverage target: newKeepAliveDialer() execution, DialContext
 func TestConnectionWithTCPKeepAlive(t *testing.T) {
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create config with TCP keep-alive enabled
 	// This exercises:
@@ -1000,7 +1001,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 // Coverage target: newKeepAliveDialer with zero interval
 func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Create config with TCP keep-alive enabled but zero interval
 	cfg := &config.DatabaseConfig{
@@ -1060,7 +1061,7 @@ func newOracleConnectionWithTimezone(t *testing.T, timezone string) (*Connection
 	t.Helper()
 
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	cfg := &config.DatabaseConfig{
 		Host:     schema.Host,
@@ -1105,7 +1106,7 @@ func TestConnectionSessionTimezoneOptOutPreservesServerDefault(t *testing.T) {
 	// (typically NOT "UTC"), so a regression that incorrectly forces UTC on
 	// the opt-out path would fail this assertion.
 	schema, ctx := packageOracleContainer().NewSchema(t)
-	log := newDisabledTestLogger()
+	log := dbtestlog.NewDisabledTestLogger()
 
 	// Baseline: open a connection through database/sql directly using the
 	// Oracle driver — no framework involvement, no tzConnector wrapper. The
