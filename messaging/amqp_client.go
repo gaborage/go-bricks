@@ -38,23 +38,34 @@ type AMQPClientImpl struct {
 	isReady         bool
 
 	// pendingPublishes correlates broker confirmations to the in-flight publish
-	// that issued them. Keyed by DeliveryTag (uint64) → chan amqp.Confirmation
-	// (buffered, capacity 1). Each Publish captures channel.GetNextPublishSeqNo()
-	// before publishing, registers its own per-publish channel under that tag,
-	// and waits on it. A dispatcher goroutine reads from notifyConfirm and
-	// routes each confirmation to the matching pending publish. On channel
-	// reinit, pending entries are drained with a synthetic NACK so publishers
-	// retry instead of hanging on a tag the new channel will never emit.
+	// that issued them. Keyed by (channel generation, DeliveryTag) →
+	// chan amqp.Confirmation (buffered, capacity 1). The generation rotates on
+	// every changeChannel() so that late confirmations from a torn-down
+	// channel cannot hit a publish registered against the NEW channel — both
+	// channels start their DeliveryTag sequence at 1, so without generation
+	// scoping a stale ACK would silently mark the wrong publish as confirmed.
+	// On channel reinit, pending entries from the previous generation are
+	// drained with a synthetic NACK so their publishers retry instead of
+	// hanging on a tag the new generation will never emit.
 	pendingPublishes sync.Map
 
-	// publishSerial serializes the (GetNextPublishSeqNo → pendingPublishes.Store →
-	// PublishWithContext) sequence inside PublishToExchange. amqp091 takes its
-	// own lock around GetNextPublishSeqNo and PublishWithContext separately, so
-	// without this serialization two concurrent publishes can both read the
-	// same "next" seq number, both register under that tag (second overwrites
-	// first), and end up receiving each other's (or no) confirmations. The
-	// scope is narrow: only the registration+publish handshake; the confirm
-	// wait stays per-publish and remains concurrent.
+	// generation rotates on every changeChannel() to scope pendingPublishes
+	// entries to a single channel incarnation. Read under publishSerial
+	// (which also guards channel reinit) so each publisher captures a
+	// channel+generation pair that is mutually consistent.
+	generation uint64
+
+	// publishSerial serializes the full (channel snapshot → generation snapshot
+	// → GetNextPublishSeqNo → pendingPublishes.Store → PublishWithContext)
+	// sequence inside PublishToExchange and also guards changeChannel() —
+	// changeChannel rotates the generation and starts a new dispatcher, so it
+	// must not interleave with an in-flight publish that has already captured
+	// the old channel reference. amqp091 takes its own lock around
+	// GetNextPublishSeqNo and PublishWithContext separately, so without this
+	// serialization two concurrent publishes can both read the same "next"
+	// seq number, both register under that tag (second overwrites first), and
+	// end up receiving each other's (or no) confirmations. The per-publish
+	// confirm wait stays outside the lock and remains concurrent.
 	publishSerial sync.Mutex
 
 	// Configuration
@@ -221,11 +232,31 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		default:
 		}
 
-		// Atomically capture both channel and confirm notification channel under a single lock
-		// to prevent mismatch during reconnection
+		// Prepare message with headers, trace context, and message IDs
+		publishing := preparePublishing(ctx, options, data)
+		messageID := publishing.MessageId
+		correlationID := publishing.CorrelationId
+
+		// publishSerial guards the full critical section: readiness check,
+		// channel snapshot, generation snapshot, GetNextPublishSeqNo,
+		// pendingPublishes.Store, and PublishWithContext. Holding it across
+		// all of these means:
+		//   1. The channel and generation are mutually consistent — a
+		//      changeChannel() rotation cannot interleave between our
+		//      channel capture and our generation capture.
+		//   2. amqp091's separately-locked GetNextPublishSeqNo and
+		//      PublishWithContext become atomic from the publisher's POV,
+		//      so concurrent publishers cannot collide on the same tag.
+		// The per-publish confirm wait (below the Unlock) stays concurrent.
+		confirmCh := make(chan amqp.Confirmation, 1)
+		c.publishSerial.Lock()
 		c.m.RLock()
-		if !c.isReady {
-			c.m.RUnlock()
+		isReady := c.isReady
+		channel := c.channel
+		gen := c.generation
+		c.m.RUnlock()
+		if !isReady {
+			c.publishSerial.Unlock()
 			c.log.Warn().
 				Str("exchange", options.Exchange).
 				Str("routing_key", options.RoutingKey).
@@ -237,27 +268,9 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// instead of believing publish succeeded.
 			return errNotConnected
 		}
-		channel := c.channel
-		c.m.RUnlock()
-
-		// Prepare message with headers, trace context, and message IDs
-		publishing := preparePublishing(ctx, options, data)
-		messageID := publishing.MessageId
-		correlationID := publishing.CorrelationId
-
-		// Capture the broker's next DeliveryTag BEFORE publishing so we know
-		// which confirmation belongs to THIS publish. amqp091's
-		// GetNextPublishSeqNo and PublishWithContext take separate lock
-		// acquisitions internally, so without serialization two concurrent
-		// publishers can both see the same "next" seq number, both register
-		// pendingPublishes[N] (second overwrites first), and the broker then
-		// assigns them different tags — leaving one publish hanging on a
-		// confirm that never arrives. publishSerial closes that race; the
-		// per-publish confirm wait (below the Unlock) stays fully concurrent.
-		confirmCh := make(chan amqp.Confirmation, 1)
-		c.publishSerial.Lock()
 		expectedTag := channel.GetNextPublishSeqNo()
-		c.pendingPublishes.Store(expectedTag, confirmCh)
+		key := confirmKey{generation: gen, tag: expectedTag}
+		c.pendingPublishes.Store(key, confirmCh)
 		err := channel.PublishWithContext(
 			ctx,
 			options.Exchange,
@@ -272,7 +285,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// Publish never made it to the broker — drop our pending registration.
 			// (A stray broker confirmation for this tag, if it somehow arrives later,
 			// will be silently dropped by the dispatcher's unmatched-tag handling.)
-			c.pendingPublishes.Delete(expectedTag)
+			c.pendingPublishes.Delete(key)
 			retryCount++
 			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
 
@@ -305,19 +318,19 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		}
 
 		// Wait for confirmation on OUR per-publish channel — the dispatcher
-		// goroutine routes only the confirmation whose DeliveryTag matches
-		// expectedTag here.
+		// goroutine routes only the confirmation whose (generation, DeliveryTag)
+		// matches our key here.
 		select {
 		case <-ctx.Done():
 			// Cleanup so the dispatcher doesn't hold a stale chan reference.
-			c.pendingPublishes.Delete(expectedTag)
+			c.pendingPublishes.Delete(key)
 			elapsed := time.Since(startTime)
 			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
 			span.RecordError(ctx.Err())
 			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
-			c.pendingPublishes.Delete(expectedTag)
+			c.pendingPublishes.Delete(key)
 			elapsed := time.Since(startTime)
 			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
 			span.RecordError(errShutdown)
@@ -664,13 +677,30 @@ func (c *AMQPClientImpl) changeConnection(connection amqpConnection) {
 	c.connection.NotifyClose(c.notifyConnClose)
 }
 
-// changeChannel updates the channel and sets up notifications.
-// The previous channel's pending publishes (if any) are drained with a
-// synthetic NACK so their waiters retry on the new channel instead of
-// hanging on a DeliveryTag that the new channel's broker session will
-// never emit (each new channel starts its sequence counter at 1).
+// confirmKey scopes a pending-publish entry to a single channel incarnation.
+// The dispatcher matches on the full (generation, tag) pair so a late
+// confirmation from a torn-down channel cannot hit a publish registered
+// against the new channel (both channels start at DeliveryTag 1).
+type confirmKey struct {
+	generation uint64
+	tag        uint64
+}
+
+// changeChannel updates the channel, rotates the generation, drains any
+// pending publishes from the previous incarnation (synthetic NACK so their
+// waiters retry on the new channel instead of hanging on a tag the new
+// generation will never emit), and starts a fresh dispatcher pinned to the
+// new generation. Acquires publishSerial so it is mutually exclusive with
+// in-flight publish-handshake critical sections.
 func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
-	c.drainPendingPublishesWithNack()
+	c.publishSerial.Lock()
+	defer c.publishSerial.Unlock()
+
+	oldGen := c.generation
+	c.drainPendingPublishesWithNack(oldGen)
+
+	c.generation++
+	newGen := c.generation
 
 	c.channel = channel
 	c.notifyChanClose = make(chan *amqp.Error, 1)
@@ -681,21 +711,25 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	c.channel.NotifyClose(c.notifyChanClose)
 	c.channel.NotifyPublish(c.notifyConfirm)
 
-	// Start the dispatcher for this channel incarnation. It exits naturally
-	// when notifyConfirm is closed (which happens on channel teardown via
-	// amqp091's internal close path).
-	go c.dispatchConfirms(c.notifyConfirm)
+	// Start the dispatcher for this channel incarnation, pinned to newGen
+	// so late confirms from a previous channel (read by the previous
+	// dispatcher, which is still running until its source channel closes)
+	// route only to entries of THAT generation — never to ours.
+	go c.dispatchConfirms(c.notifyConfirm, newGen)
 }
 
-// drainPendingPublishesWithNack signals every pending publish from the previous
-// channel incarnation that its confirmation will never arrive. Synthesizing a
-// NACK (rather than closing the channel) lets the publisher's existing retry
-// loop kick in cleanly — it captures a fresh DeliveryTag from the new channel
-// and tries again.
-func (c *AMQPClientImpl) drainPendingPublishesWithNack() {
+// drainPendingPublishesWithNack signals every pending publish from the given
+// generation that its confirmation will never arrive. Synthesizing a NACK
+// (rather than closing the channel) lets the publisher's existing retry
+// loop kick in cleanly — it captures a fresh DeliveryTag from the new
+// channel/generation and tries again.
+func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 	c.pendingPublishes.Range(func(key, value any) bool {
+		k, ok := key.(confirmKey)
+		if !ok || k.generation != gen {
+			return true
+		}
 		c.pendingPublishes.Delete(key)
-		tag, _ := key.(uint64)
 		ch, ok := value.(chan amqp.Confirmation)
 		if !ok {
 			return true
@@ -703,7 +737,7 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack() {
 		// Non-blocking send: if the publisher already gave up via ctx.Done,
 		// nobody reads, and we'd otherwise block forever.
 		select {
-		case ch <- amqp.Confirmation{DeliveryTag: tag, Ack: false}:
+		case ch <- amqp.Confirmation{DeliveryTag: k.tag, Ack: false}:
 		default:
 		}
 		return true
@@ -711,12 +745,18 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack() {
 }
 
 // dispatchConfirms reads confirmations from the broker's notify channel and
-// routes each to the in-flight publish that registered for its DeliveryTag.
+// routes each to the in-flight publish that registered for its (generation,
+// DeliveryTag). The generation parameter pins this dispatcher to one channel
+// incarnation — late confirms from a previous channel are read by THAT
+// channel's dispatcher (still running until amqp091 closes the old notify
+// channel), looked up under the previous generation, and never touch entries
+// from the new generation even though the tags collide.
+//
 // Exits when src is closed (channel teardown) OR when c.done is closed (full
 // client shutdown). Unmatched confirmations are silently dropped — they happen
 // when a publish errored out before registering or when the publisher already
 // drained via NACK after channel reinit.
-func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation) {
+func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, gen uint64) {
 	for {
 		select {
 		case <-c.done:
@@ -725,7 +765,7 @@ func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation) {
 			if !ok {
 				return // channel closed by broker / channel teardown
 			}
-			v, ok := c.pendingPublishes.LoadAndDelete(confirm.DeliveryTag)
+			v, ok := c.pendingPublishes.LoadAndDelete(confirmKey{generation: gen, tag: confirm.DeliveryTag})
 			if !ok {
 				continue
 			}

@@ -155,8 +155,11 @@ func sendConfirmsAfterEachAttempt(t *testing.T, c *AMQPClientImpl, ch *fakeChann
 // Helper to build a client with fake channel.
 // Uses changeChannel() so the production notify-wiring and confirm-dispatcher
 // goroutine are active — tests that need to drive ACKs send to ch.notifyConfirmCh
-// (captured by fakeChannel.NotifyPublish during changeChannel).
-func newClientWithFakeChannel(ch amqpChannel) *AMQPClientImpl {
+// (captured by fakeChannel.NotifyPublish during changeChannel). Registers a
+// t.Cleanup that calls Close() so the dispatcher goroutine spawned by
+// changeChannel doesn't leak across tests in the suite.
+func newClientWithFakeChannel(t *testing.T, ch amqpChannel) *AMQPClientImpl {
+	t.Helper()
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
@@ -168,6 +171,17 @@ func newClientWithFakeChannel(ch amqpChannel) *AMQPClientImpl {
 		isReady:           true,
 	}
 	c.changeChannel(ch)
+	t.Cleanup(func() {
+		// Stop the dispatcher goroutine spawned by changeChannel. Some tests
+		// close c.done directly without going through Close() — guard against
+		// double-close by checking the channel state first.
+		select {
+		case <-c.done:
+			// already closed by the test itself; nothing to do
+		default:
+			_ = c.Close()
+		}
+	})
 	return c
 }
 
@@ -271,7 +285,7 @@ func TestComputeBackoffHandlesDegenerateInputs(t *testing.T) {
 // still resolve correctly, proving the routing is keyed by tag not by arrival.
 func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	// Coordinate via publishAttemptSignal so we know both publishes have
 	// registered their tags before we send confirmations.
@@ -337,33 +351,44 @@ func TestPublishConcurrentNoTagCollision(t *testing.T) {
 	const N = 16
 
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	// The default helper sets connectionTimeout=15ms — too aggressive when we
 	// want to send N ACKs after a small settle delay. Give the publishers room
 	// to actually receive their per-tag confirmation before retry-on-timeout.
 	c.connectionTimeout = 5 * time.Second
 
-	results := make(chan error, N)
-	start := make(chan struct{})
+	// Deterministic synchronization: wait until each publisher has actually
+	// reached PublishWithContext (and therefore registered its tag) before
+	// feeding ACKs. Without this, a time.Sleep-based settle delay races
+	// with goroutine scheduling — the publishers might not all have entered
+	// publishSerial yet when ACKs start flowing, and unmatched ACKs are
+	// dropped by the dispatcher.
+	ch.mu.Lock()
+	sig := make(chan struct{}, N)
+	ch.publishAttemptSignal = sig
+	ch.mu.Unlock()
 
-	// Launch N publishers; they all unblock simultaneously on `start` close.
+	results := make(chan error, N)
+	startBarrier := make(chan struct{})
+
+	// Launch N publishers; they all unblock simultaneously on `startBarrier` close.
 	for i := 0; i < N; i++ {
 		go func() {
-			<-start
+			<-startBarrier
 			results <- c.PublishToExchange(context.Background(),
 				PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 		}()
 	}
-	close(start)
+	close(startBarrier)
 
-	// Feed N ACKs into the dispatcher. We don't know what order publishers
-	// raced through publishSerial, but with the fix each one is registered
-	// under a unique tag in [1..N] before the next claims a tag. So sending
-	// ACKs for tags 1..N (any order) will resolve all N publishers.
+	// Feed N ACKs into the dispatcher, but only after all N publishers have
+	// fired their PublishWithContext (and thus registered their tag under
+	// publishSerial). With the fix each one is registered under a unique
+	// tag in [1..N] before the next claims a tag.
 	go func() {
-		// Brief settle delay so each publisher has time to pass through
-		// publishSerial and register its tag before we start feeding ACKs.
-		time.Sleep(20 * time.Millisecond)
+		for i := 0; i < N; i++ {
+			<-sig
+		}
 		for i := uint64(1); i <= N; i++ {
 			c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: i}
 		}
@@ -381,6 +406,75 @@ func TestPublishConcurrentNoTagCollision(t *testing.T) {
 	}
 }
 
+// TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher guards the
+// most consequential W3-D bug, caught by CodeRabbit on PR #459 review:
+//
+// Per amqp091 + RabbitMQ semantics, each new channel restarts its DeliveryTag
+// sequence at 1. The previous channel's dispatcher (still running until its
+// notify channel closes during channel teardown) can deliver late
+// confirmations whose tags collide with tags already registered against the
+// NEW channel. If pendingPublishes is keyed only by DeliveryTag, that late
+// confirm hits a publish from the new channel and routes the wrong ACK —
+// which propagates to outbox/relay.go marking events as published when they
+// weren't. The fix scopes pendingPublishes by (generation, DeliveryTag).
+//
+// This test simulates the worst case: a publisher registers tag 1 against
+// channel 1, then channel 1 is replaced (rotating generation), then a NEW
+// publisher registers tag 1 against channel 2. A "late" confirm for tag 1
+// from the OLD channel's dispatcher must NOT resolve the NEW publisher.
+func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.T) {
+	ch1 := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch1)
+
+	// Capture the channel-1 dispatcher's source channel BEFORE rotation
+	// (so we can manually feed it a late confirm after changeChannel).
+	c.m.RLock()
+	gen1NotifyConfirm := c.notifyConfirm
+	c.m.RUnlock()
+
+	// Rotate to channel 2.
+	ch2 := &fakeChannel{}
+	c.changeChannel(ch2)
+
+	// New publisher registers against channel 2; its expected tag is 1
+	// (channel 2's broker session starts fresh).
+	confirmCh2 := make(chan amqp.Confirmation, 1)
+	c.publishSerial.Lock()
+	c.m.RLock()
+	channel2 := c.channel
+	gen2 := c.generation
+	c.m.RUnlock()
+	tag2 := channel2.GetNextPublishSeqNo()
+	if tag2 != 1 {
+		t.Fatalf("expected channel 2 to start at tag 1, got %d", tag2)
+	}
+	key2 := confirmKey{generation: gen2, tag: tag2}
+	c.pendingPublishes.Store(key2, confirmCh2)
+	c.publishSerial.Unlock()
+
+	// Inject a "late" confirm for tag 1 into the OLD generation's notify
+	// channel. The OLD dispatcher (pinned to gen1) reads it and looks up
+	// (gen1, 1) — which does not exist (drained on rotation). The NEW
+	// publisher's entry (gen2, 1) MUST remain untouched.
+	gen1NotifyConfirm <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+
+	// Verify the new publisher's per-publish channel got NO confirm.
+	// Use a short timeout because if the bug exists, the confirm arrives
+	// promptly; the absence of a confirm in that window is the success
+	// condition.
+	select {
+	case got := <-confirmCh2:
+		t.Fatalf("stale confirm from old generation routed to new publisher: got %+v", got)
+	case <-time.After(50 * time.Millisecond):
+		// Expected: nothing arrived; the new publisher's entry is still pending.
+	}
+
+	// Sanity: the new entry is still registered.
+	if _, ok := c.pendingPublishes.Load(key2); !ok {
+		t.Fatal("new publisher's pendingPublishes entry was unexpectedly removed")
+	}
+}
+
 // TestPublishNotReadyReturnsErrNotConnected guards the W3-D breaking change:
 // pre-fix Publish silently returned nil when the client wasn't ready, dropping
 // the message without any error to the caller. Post-fix it returns errNotConnected
@@ -395,7 +489,7 @@ func TestPublishNotReadyReturnsErrNotConnected(t *testing.T) {
 
 func TestUnsafePublishSuccessInjectionAndIDs(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	ctx := context.Background()
 	err := c.unsafePublish(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("payload"))
 	if err != nil {
@@ -418,7 +512,7 @@ func TestUnsafePublishSuccessInjectionAndIDs(t *testing.T) {
 
 func TestPublishToExchangeAckSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -431,7 +525,7 @@ func TestPublishToExchangeAckSuccess(t *testing.T) {
 
 func TestPublishToExchangeNackThenCancel(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// First publish gets DeliveryTag=1 (fakeChannel.GetNextPublishSeqNo). Send a
@@ -458,7 +552,7 @@ func TestPublishToExchangeNackThenCancel(t *testing.T) {
 func TestPublishToExchangeConfirmTimeoutThenCancel(t *testing.T) {
 	t.Helper()
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	// No confirmation sent -> timeout branch executed
 	// Use timeout context instead of sleep-based cancellation
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
@@ -470,7 +564,7 @@ func TestConsumeFromQueueSuccess(t *testing.T) {
 	deliveries := make(chan amqp.Delivery)
 	close(deliveries)
 	ch := &fakeChannel{consumeCh: deliveries}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	out, err := c.ConsumeFromQueue(context.Background(), ConsumeOptions{Queue: "q"})
 	if err != nil || out == nil {
 		t.Fatalf("unexpected consume err=%v ch=%v", err, out)
@@ -487,7 +581,7 @@ func TestConsumeNotReady(t *testing.T) {
 
 func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	if err := c.DeclareQueue("q", true, false, false, false); err != nil {
 		t.Fatalf("DeclareQueue err=%v", err)
 	}
@@ -501,7 +595,7 @@ func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 
 func TestCloseChannelAndConnectionErrors(t *testing.T) {
 	ch := &fakeChannel{closeErr: errors.New("channel close failed")}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	c.m.Lock()
 	c.isReady = true
 	c.m.Unlock()
@@ -874,7 +968,7 @@ func TestConnectDialFailure(t *testing.T) {
 
 func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	// Close done channel immediately to simulate shutdown
 	close(c.done)
@@ -890,7 +984,7 @@ func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
 
 func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	// Close done channel after publish but before confirmation
 	go func() {
@@ -909,7 +1003,7 @@ func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 
 func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	ch := &fakeChannel{publishErr: errors.New("publish failed")}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = 1 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -926,7 +1020,7 @@ func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 
 func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = 1 * time.Millisecond
 
 	// Fail first attempt, succeed on second
@@ -960,7 +1054,7 @@ func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
 
 func TestPublishToExchangeCustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -1014,7 +1108,7 @@ func TestPublishToExchangeCustomHeaders(t *testing.T) {
 
 func TestPublishToExchangeContextTrackingOnSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	// Create context with counters for tracking
 	ctx := context.Background()
@@ -1031,7 +1125,7 @@ func TestPublishToExchangeContextTrackingOnSuccess(t *testing.T) {
 
 func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 	c.connectionTimeout = 5 * time.Millisecond
 	c.resendDelay = 1 * time.Millisecond
 
@@ -1054,7 +1148,7 @@ func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
 
 func TestPublishBasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(ch)
+	c := newClientWithFakeChannel(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -1164,7 +1258,7 @@ func TestAMQPClientConsumeFromQueueChannelError(t *testing.T) {
 		consumeErr: consumeErr,
 	}
 
-	client := newClientWithFakeChannel(mockChannel)
+	client := newClientWithFakeChannel(t, mockChannel)
 	// Ensure resources are cleaned up like the production constructor would
 	t.Cleanup(func() { _ = client.Close() })
 
