@@ -68,7 +68,7 @@ func NewBuilder(log logger.Logger) *Builder {
 			ResponseInterceptors: []ResponseInterceptor{},
 			DefaultHeaders:       make(map[string]string),
 			LogPayloads:          false,
-			MaxPayloadLogBytes:   1024,
+			MaxPayloadLogBytes:   defaultMaxPayloadLogBytes,
 			TraceIDHeader:        HeaderXRequestID,
 			NewTraceID:           func() string { return EnsureTraceID(context.Background()) },
 			TraceIDExtractor:     TraceIDFromContext,
@@ -525,19 +525,18 @@ func (c *client) shouldRetryStatus(ctx context.Context, statusCode, attempt, max
 func (c *client) backoffDelay(attempt int) time.Duration {
 	base := c.config.RetryDelay
 	if base <= 0 {
-		base = 50 * time.Millisecond
+		base = defaultBackoffBase
 	}
 	// Cap attempt to avoid overflow when computing multiplier
-	if attempt > 20 { // 2^20 = 1,048,576
-		attempt = 20
+	if attempt > maxBackoffAttempt {
+		attempt = maxBackoffAttempt
 	}
 	// Exponential backoff: base * 2^attempt
 	mult := 1 << attempt
 	d := base * time.Duration(mult)
-	// Cap to 30 seconds to avoid excessive sleeps
-	const maxBackoff = 30 * time.Second
-	if d > maxBackoff {
-		d = maxBackoff
+	// Cap to maxBackoffDuration to avoid excessive sleeps
+	if d > maxBackoffDuration {
+		d = maxBackoffDuration
 	}
 	// Full jitter: random duration in [0, d)
 	if d <= 0 {
@@ -726,7 +725,7 @@ func (c *client) isTimeout(err error) bool {
 }
 
 func (c *client) isRetryableStatus(code int) bool {
-	return code >= 500 && code < 600
+	return code >= httpStatusServerErrorMin && code < httpStatusServerErrorMax
 }
 
 // runRequestInterceptors executes all request interceptors
@@ -811,7 +810,7 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 		if len(body) > 0 {
 			limit := c.config.MaxPayloadLogBytes
 			if limit <= 0 {
-				limit = 1024
+				limit = defaultMaxPayloadLogBytes
 			}
 			truncated := false
 			preview := body
@@ -853,7 +852,7 @@ func (c *client) logResponse(resp *Response, traceID string) {
 		if len(resp.Body) > 0 {
 			limit := c.config.MaxPayloadLogBytes
 			if limit <= 0 {
-				limit = 1024
+				limit = defaultMaxPayloadLogBytes
 			}
 			truncated := false
 			preview := resp.Body
