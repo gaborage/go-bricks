@@ -188,8 +188,8 @@ func (m *Module) Shutdown() error {
 
 	m.logger.Info().Msg("Initiating graceful scheduler shutdown")
 
-	// Get shutdown timeout from config (default 30s per ASSUME-010)
-	timeout := 30 * time.Second
+	// Get shutdown timeout from config (default per ASSUME-010, see constants.go)
+	timeout := defaultShutdownTimeout
 	if m.config != nil && m.config.Scheduler.Timeout.Shutdown > 0 {
 		timeout = m.config.Scheduler.Timeout.Shutdown
 	}
@@ -750,7 +750,7 @@ func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLev
 	}
 
 	// WARN: Slow job (succeeded but exceeded threshold)
-	threshold := 30 * time.Second // default
+	threshold := defaultSlowJobThreshold
 	if m.config != nil && m.config.Scheduler.Timeout.SlowJob > 0 {
 		threshold = m.config.Scheduler.Timeout.SlowJob
 	}
