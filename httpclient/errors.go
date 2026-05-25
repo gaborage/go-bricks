@@ -3,6 +3,7 @@ package httpclient
 import (
 	"errors"
 	"fmt"
+	nethttp "net/http"
 	"time"
 )
 
@@ -180,7 +181,8 @@ func IsHTTPStatusError(err error, statusCode int) bool {
 	return false
 }
 
-// IsSuccessStatus checks if a status code represents success (2xx)
+// IsSuccessStatus checks if a status code represents success (2xx).
+// Uses stdlib constants for self-documenting boundaries.
 func IsSuccessStatus(statusCode int) bool {
-	return statusCode >= 200 && statusCode < 300
+	return statusCode >= nethttp.StatusOK && statusCode < nethttp.StatusMultipleChoices
 }
