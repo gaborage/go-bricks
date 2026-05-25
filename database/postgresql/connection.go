@@ -18,12 +18,17 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Connection implements the types.Interface for PostgreSQL
+// vendorName is the human-readable vendor name used in log messages,
+// errors, and wrapper.Connection.Name.
+const vendorName = "PostgreSQL"
+
+// Connection implements the types.Interface for PostgreSQL. Embeds the
+// vendor-agnostic wrapper.Connection which carries the byte-identical
+// delegation methods (Query, Exec, Prepare, Begin, Health, Stats, Close, etc.)
+// — see database/internal/wrapper. PostgreSQL-only methods (DatabaseType,
+// MigrationTable, CreateMigrationTable DDL) stay defined here.
 type Connection struct {
-	db             *sql.DB
-	config         *config.DatabaseConfig
-	logger         logger.Logger
-	metricsCleanup func() // Cleanup function for unregistering metrics callback
+	*wrapper.Connection
 }
 
 var (
@@ -179,15 +184,19 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		Msg("Connected to PostgreSQL database")
 
 	conn := &Connection{
-		db:     db,
-		config: cfg,
-		logger: log,
+		Connection: &wrapper.Connection{
+			DB:     db,
+			Config: cfg,
+			Logger: log,
+			Name:   vendorName,
+		},
 	}
 
 	// Register connection pool metrics for observability with server metadata
-	// Store cleanup function to allow proper unregistration during Close()
+	// Store cleanup function on the embedded wrapper.Connection so its Close()
+	// can invoke it during shutdown.
 	namespace := tracking.BuildPostgreSQLNamespace(cfg.Database, cfg.PostgreSQL.Schema)
-	conn.metricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "postgresql", cfg.Host, cfg.Port, namespace)
+	conn.MetricsCleanup = tracking.RegisterConnectionPoolMetrics(conn, "postgresql", cfg.Host, cfg.Port, namespace)
 
 	return conn, nil
 }
@@ -195,94 +204,6 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 // PostgreSQL re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
 type Statement = wrapper.Statement
 type Transaction = wrapper.Transaction
-
-// Query executes a query that returns rows
-func (c *Connection) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return c.db.QueryContext(ctx, query, args...)
-}
-
-// QueryRow executes a query that returns at most one row
-func (c *Connection) QueryRow(ctx context.Context, query string, args ...any) types.Row {
-	return types.NewRowFromSQL(c.db.QueryRowContext(ctx, query, args...))
-}
-
-// Exec executes a query without returning any rows
-func (c *Connection) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return c.db.ExecContext(ctx, query, args...)
-}
-
-// Prepare creates a prepared statement for later queries or executions
-func (c *Connection) Prepare(ctx context.Context, query string) (types.Statement, error) {
-	stmt, err := c.db.PrepareContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	return wrapper.NewStatement(stmt), nil
-}
-
-// Begin starts a transaction
-func (c *Connection) Begin(ctx context.Context) (types.Tx, error) {
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return wrapper.NewTransaction(tx), nil
-}
-
-// BeginTx starts a transaction with options
-func (c *Connection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
-	tx, err := c.db.BeginTx(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-	return wrapper.NewTransaction(tx), nil
-}
-
-// Health checks database connectivity
-func (c *Connection) Health(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	return c.db.PingContext(ctx)
-}
-
-// Stats returns database connection statistics
-func (c *Connection) Stats() (map[string]any, error) {
-	stats := c.db.Stats()
-	result := map[string]any{
-		"max_open_connections": stats.MaxOpenConnections,
-		"open_connections":     stats.OpenConnections,
-		"in_use":               stats.InUse,
-		"idle":                 stats.Idle,
-		"wait_count":           stats.WaitCount,
-		"wait_duration":        stats.WaitDuration.String(),
-		"max_idle_closed":      stats.MaxIdleClosed,
-		"max_idle_time_closed": stats.MaxIdleTimeClosed,
-		"max_lifetime_closed":  stats.MaxLifetimeClosed,
-	}
-
-	// Add configured idle connections if config is available
-	if c.config != nil {
-		result["max_idle_connections"] = int(c.config.Pool.Idle.Connections)
-		// configured_idle_connections represents the target maximum idle connections setting.
-		// Go's sql.DB does not enforce a minimum idle count; this is purely a configured target.
-		result["configured_idle_connections"] = int(c.config.Pool.Idle.Connections)
-	}
-
-	return result, nil
-}
-
-// Close closes the database connection
-func (c *Connection) Close() error {
-	c.logger.Info().Msg("Closing PostgreSQL database connection")
-
-	// Unregister metrics callback to allow garbage collection
-	if c.metricsCleanup != nil {
-		c.metricsCleanup()
-	}
-
-	return c.db.Close()
-}
 
 // DatabaseType returns the database type
 func (c *Connection) DatabaseType() string {

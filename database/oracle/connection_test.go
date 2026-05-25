@@ -42,7 +42,7 @@ type ConnectionTestData struct {
 func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	c := &Connection{db: db, logger: dbtestlog.NewDisabledTestLogger()}
+	c := &Connection{Connection: &wrapper.Connection{DB: db, Logger: dbtestlog.NewDisabledTestLogger(), Name: "Oracle"}}
 	return db, mock, c
 }
 
@@ -1215,9 +1215,12 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 
 	// Create connection with nil config
 	c := &Connection{
-		db:     db,
-		logger: dbtestlog.NewDisabledTestLogger(),
-		config: nil, // Explicitly nil config
+		Connection: &wrapper.Connection{
+			DB:     db,
+			Logger: dbtestlog.NewDisabledTestLogger(),
+			Config: nil, // Explicitly nil config
+			Name:   "Oracle",
+		},
 	}
 
 	stats, err := c.Stats()
