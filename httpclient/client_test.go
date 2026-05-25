@@ -962,3 +962,43 @@ func TestTraceIDUtilities(t *testing.T) {
 		assert.Equal(t, "existing-trace", req.Header.Get(HeaderXRequestID))
 	})
 }
+
+// TestBackoffDelayFallbacks covers the three defensive fallback branches in
+// backoffDelay that the existing retry-path tests don't reach: zero RetryDelay
+// (uses defaultBackoffBase), attempt exceeding maxBackoffAttempt (clamped),
+// and computed delay exceeding maxBackoffDuration (capped). Without explicit
+// coverage of these, the W4-D constants extraction would drop SonarCloud's
+// new-code coverage below the 80% gate.
+func TestBackoffDelayFallbacks(t *testing.T) {
+	t.Run("zero_retry_delay_uses_default_base", func(t *testing.T) {
+		c := &client{config: &Config{RetryDelay: 0}}
+		// With base=50ms and attempt=0, mult=1, so d=50ms. Jitter returns [0, 50ms).
+		got := c.backoffDelay(0)
+		if got < 0 || got >= defaultBackoffBase {
+			t.Fatalf("expected backoff in [0, %v), got %v", defaultBackoffBase, got)
+		}
+	})
+
+	t.Run("attempt_exceeding_max_is_clamped", func(t *testing.T) {
+		c := &client{config: &Config{RetryDelay: 1 * time.Millisecond}}
+		// Attempt 1000 should clamp to maxBackoffAttempt; then 1ms * 2^20 = ~17min,
+		// which exceeds maxBackoffDuration (30s), so the cap kicks in. Result must
+		// fall in [0, maxBackoffDuration).
+		got := c.backoffDelay(1000)
+		if got < 0 || got >= maxBackoffDuration {
+			t.Fatalf("expected backoff in [0, %v) after attempt clamp + duration cap, got %v",
+				maxBackoffDuration, got)
+		}
+	})
+
+	t.Run("computed_delay_exceeds_max_is_capped", func(t *testing.T) {
+		// Large base + moderate attempt → product exceeds maxBackoffDuration → cap.
+		c := &client{config: &Config{RetryDelay: 10 * time.Second}}
+		// 10s * 2^5 = 320s > 30s → cap. Jitter then samples [0, 30s).
+		got := c.backoffDelay(5)
+		if got < 0 || got >= maxBackoffDuration {
+			t.Fatalf("expected backoff in [0, %v) after duration cap, got %v",
+				maxBackoffDuration, got)
+		}
+	})
+}
