@@ -379,6 +379,14 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// Continue to retry the publish operation
 			continue
 		case <-time.After(c.connectionTimeout):
+			// Drop this attempt's waiter from pendingPublishes before retrying.
+			// Unlike the NACK path (where the dispatcher already consumed the
+			// entry via LoadAndDelete before forwarding the confirmation), the
+			// timeout path bails BEFORE any confirmation arrives, so the entry
+			// is still registered. Without this delete every timeout leaks one
+			// pendingPublishes entry until the channel is torn down, and a
+			// silently-stuck broker can grow the map unboundedly.
+			c.pendingPublishes.Delete(key)
 			// Confirmation timeout - retry the publish
 			retryCount++
 			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
