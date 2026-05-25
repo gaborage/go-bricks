@@ -1050,7 +1050,7 @@ func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
 func queryOracleSessionTimezone(t *testing.T, ctx context.Context, conn *Connection) string {
 	t.Helper()
 	var tz string
-	row := conn.db.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual")
+	row := conn.DB.QueryRowContext(ctx, "SELECT SESSIONTIMEZONE FROM dual")
 	require.NoError(t, row.Scan(&tz))
 	return tz
 }
@@ -1165,7 +1165,7 @@ func TestConnectionSessionTimezoneAppliedToAllPoolMembers(t *testing.T) {
 	}()
 
 	for i := 0; i < concurrency; i++ {
-		c, err := conn.db.Conn(ctx)
+		c, err := conn.DB.Conn(ctx)
 		require.NoError(t, err, "should obtain pool connection #%d", i)
 		pinned = append(pinned, c)
 	}
