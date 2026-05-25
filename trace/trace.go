@@ -110,21 +110,6 @@ type HeaderAccessor interface {
 	Set(key string, value any)
 }
 
-// InjectMode controls how headers are written by InjectIntoHeaders
-type InjectMode int
-
-const (
-	// InjectForce overwrites or aligns headers to ensure consistency with traceparent
-	InjectForce InjectMode = iota
-	// InjectPreserve sets headers only if missing; does not overwrite existing values
-	InjectPreserve
-)
-
-// InjectOptions configures how trace context is injected into headers
-type InjectOptions struct {
-	Mode InjectMode
-}
-
 // ExtractFromHeaders extracts trace context from transport headers
 func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Context {
 	if headers == nil {
@@ -183,44 +168,28 @@ func extractTraceState(ctx context.Context, headers HeaderAccessor) context.Cont
 	return ctx
 }
 
-// InjectIntoHeaders injects trace context into transport headers (default: force mode)
-// Backward compatible wrapper over InjectIntoHeadersWithOptions.
+// InjectIntoHeaders writes the trace context (X-Request-ID, traceparent, and
+// optionally tracestate) into the given transport headers. Always overwrites
+// any existing values — the trace ID is forced to align with the traceparent
+// so log/metric correlation across services stays consistent.
+//
+// Historically this routed through an InjectIntoHeadersWithOptions variant
+// that supported a Preserve mode (set-if-missing). Preserve mode had zero
+// callers across the framework, tools, and tests, so the mode-selector API
+// was removed in W4-H. Add it back with a fresh design if a real consumer
+// need surfaces.
 func InjectIntoHeaders(ctx context.Context, headers HeaderAccessor) {
-	InjectIntoHeadersWithOptions(ctx, headers, InjectOptions{Mode: InjectForce})
-}
-
-// InjectIntoHeadersWithOptions injects trace context into headers with configurable behavior
-func InjectIntoHeadersWithOptions(ctx context.Context, headers HeaderAccessor, opts InjectOptions) {
 	if headers == nil {
 		return
 	}
 
-	// Normalize mode (default to force)
-	mode := opts.Mode
-	if mode != InjectPreserve {
-		mode = InjectForce
-	}
-
-	// Resolve values once
 	traceparent := computeTraceParent(ctx, headers)
+	alignedTraceID := forceAlignTraceID(EnsureTraceID(ctx), traceparent)
 
-	if mode == InjectForce {
-		// Align trace ID with traceparent and overwrite headers
-		alignedTraceID := forceAlignTraceID(EnsureTraceID(ctx), traceparent)
-		setHeader(headers, HeaderXRequestID, alignedTraceID, false)
-		setHeader(headers, HeaderTraceParent, traceparent, false)
-		if ts, ok := StateFromContext(ctx); ok {
-			setHeader(headers, HeaderTraceState, ts, false)
-		}
-		return
-	}
-
-	// Preserve mode: only set when missing
-	effectiveTraceID := computeTraceIDPreserve(ctx, headers, traceparent)
-	setHeader(headers, HeaderXRequestID, effectiveTraceID, true)
-	setHeader(headers, HeaderTraceParent, traceparent, true)
+	headers.Set(HeaderXRequestID, alignedTraceID)
+	headers.Set(HeaderTraceParent, traceparent)
 	if ts, ok := StateFromContext(ctx); ok {
-		setHeader(headers, HeaderTraceState, ts, true)
+		headers.Set(HeaderTraceState, ts)
 	}
 }
 
@@ -233,31 +202,6 @@ func computeTraceParent(ctx context.Context, headers HeaderAccessor) string {
 		return tp
 	}
 	return GenerateTraceParent()
-}
-
-// computeTraceIDPreserve returns the trace ID to use in preserve mode.
-// Preference: existing header > context > derived from traceparent > generated
-func computeTraceIDPreserve(ctx context.Context, headers HeaderAccessor, traceparent string) string {
-	if v := headerString(headers, HeaderXRequestID); v != "" {
-		return v
-	}
-	if tid, ok := IDFromContext(ctx); ok && tid != "" {
-		return tid
-	}
-	if tid := extractTraceIDFromParent(traceparent); tid != "" {
-		return tid
-	}
-	return EnsureTraceID(ctx)
-}
-
-// setHeader writes a header value, honoring preserve=true to avoid overwrites
-func setHeader(headers HeaderAccessor, key, value string, preserve bool) {
-	if preserve {
-		if headerString(headers, key) != "" {
-			return
-		}
-	}
-	headers.Set(key, value)
 }
 
 // headerString gets a header as string using safe conversion

@@ -2,7 +2,6 @@ package trace
 
 import (
 	"context"
-	nethttp "net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -67,57 +66,6 @@ func TestGenerateTraceParentFormat(t *testing.T) {
 func TestIDFromContextMissing(t *testing.T) {
 	_, ok := IDFromContext(context.Background())
 	assert.False(t, ok)
-}
-
-func TestInjectIntoHeadersWithOptionsPreservePreservesExisting(t *testing.T) {
-	headers := nethttp.Header{}
-	// Pre-populate headers
-	headers.Set(HeaderXRequestID, "pre-xid")
-	headers.Set(HeaderTraceParent, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
-	headers.Set(HeaderTraceState, "vendor=a:b")
-
-	// adapter
-	acc := httpHeaderAccessor{h: headers}
-
-	// Context has different values – should not overwrite in preserve mode
-	ctx := WithTraceID(context.Background(), "ctx-xid")
-	ctx = WithTraceParent(ctx, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
-	ctx = WithTraceState(ctx, "vendor=ctx")
-
-	InjectIntoHeadersWithOptions(ctx, &acc, InjectOptions{Mode: InjectPreserve})
-
-	assert.Equal(t, "pre-xid", headers.Get(HeaderXRequestID))
-	assert.Equal(t, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", headers.Get(HeaderTraceParent))
-	assert.Equal(t, "vendor=a:b", headers.Get(HeaderTraceState))
-}
-
-func TestInjectIntoHeadersWithOptionsPreserveFillsMissing(t *testing.T) {
-	headers := nethttp.Header{}
-	acc := httpHeaderAccessor{h: headers}
-
-	// Context supplies traceparent and tracestate
-	ctx := WithTraceParent(context.Background(), "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01")
-	ctx = WithTraceState(ctx, "vendor=x")
-
-	InjectIntoHeadersWithOptions(ctx, &acc, InjectOptions{Mode: InjectPreserve})
-
-	assert.Equal(t, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01", headers.Get(HeaderTraceParent))
-	// X-Request-ID should be derived from traceparent when missing
-	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", headers.Get(HeaderXRequestID))
-	assert.Equal(t, "vendor=x", headers.Get(HeaderTraceState))
-}
-
-// Minimal http header accessor for tests
-type httpHeaderAccessor struct{ h nethttp.Header }
-
-func (a *httpHeaderAccessor) Get(key string) any { return a.h.Get(key) }
-func (a *httpHeaderAccessor) Set(key string, value any) {
-	switch v := value.(type) {
-	case string:
-		a.h.Set(key, v)
-	default:
-		a.h.Set(key, safeToString(v))
-	}
 }
 
 // Additional tests merged from trace_extra_test.go
@@ -201,19 +149,6 @@ func TestComputeHelpers(t *testing.T) {
 	gen := computeTraceParent(context.Background(), &mapAccessor{})
 	ok, _ := regexp.MatchString(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, gen)
 	assert.True(t, ok)
-
-	// computeTraceIDPreserve: header > context > derived > generated
-	acc2 := &mapAccessor{m: map[string]any{HeaderXRequestID: "hdr-id"}}
-	assert.Equal(t, "hdr-id", computeTraceIDPreserve(context.Background(), acc2, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
-
-	ctx2 := WithTraceID(context.Background(), "ctx-id")
-	assert.Equal(t, "ctx-id", computeTraceIDPreserve(ctx2, &mapAccessor{}, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
-
-	assert.Equal(t, "deadbeefdeadbeefdeadbeefdeadbeef", computeTraceIDPreserve(context.Background(), &mapAccessor{}, "00-deadbeefdeadbeefdeadbeefdeadbeef-0123456789abcdef-01"))
-
-	// generated when nothing present
-	got := computeTraceIDPreserve(context.Background(), &mapAccessor{}, "invalid-parent")
-	assert.NotEmpty(t, got)
 }
 
 func TestHeaderStringAndSafeToString(t *testing.T) {
