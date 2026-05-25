@@ -157,7 +157,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 		allowlist = m.config.Scheduler.Security.CIDRAllowlist
 		trustedProxies = m.config.Scheduler.Security.TrustedProxies
 	}
-	cidrMiddleware := CIDRMiddleware(allowlist, trustedProxies)
+	cidrMiddleware := CIDRMiddleware(m.logger, allowlist, trustedProxies)
 
 	// Create a group for system endpoints with CIDR protection
 	sysGroup := r.Group("/_sys")
@@ -484,6 +484,14 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 // - Graceful shutdown handling per FR-024
 func (m *Module) createJobWrapper(entry *jobEntry) func() {
 	return func() {
+		// Register as in-flight BEFORE any shutdown check or tryLock. If Add(1)
+		// happens after either, a shutdown firing concurrently with this closure
+		// can race: Shutdown's wg.Wait() observes counter==0 and returns before
+		// this wrapper increments it, then the job runs after Shutdown returned.
+		// Defer Done() immediately so every return path balances the Add.
+		m.wg.Add(1)
+		defer m.wg.Done()
+
 		// Check for shutdown
 		select {
 		case <-m.shutdownCtx.Done():
@@ -503,15 +511,9 @@ func (m *Module) createJobWrapper(entry *jobEntry) func() {
 			entry.metadata.incrementSkipped()
 			return
 		}
-
-		// Track in-flight execution for graceful shutdown
-		m.wg.Add(1)
-
-		// Ensure cleanup happens
-		defer func() {
-			entry.unlock()
-			m.wg.Done()
-		}()
+		// Defer unlock AFTER Done() so LIFO ordering releases the lock first,
+		// matching the prior coupled-defer ordering (unlock then Done).
+		defer entry.unlock()
 
 		// Create execution context with cancellation for graceful shutdown
 		ctx, cancel := context.WithCancel(m.shutdownCtx)

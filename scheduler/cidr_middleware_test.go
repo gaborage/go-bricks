@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +52,7 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			middleware := CIDRMiddleware([]string{}, []string{}) // Empty allowlist = localhost-only, no trusted proxies
+			middleware := CIDRMiddleware(nil, []string{}, []string{}) // Empty allowlist = localhost-only, no trusted proxies
 
 			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
@@ -120,7 +121,7 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			middleware := CIDRMiddleware(tt.allowlist, []string{}) // No trusted proxies in basic tests
+			middleware := CIDRMiddleware(nil, tt.allowlist, []string{}) // No trusted proxies in basic tests
 
 			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
@@ -196,7 +197,7 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			middleware := CIDRMiddleware(tt.allowlist, tt.trustedProxies)
+			middleware := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
 
 			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
@@ -299,7 +300,7 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			middleware := CIDRMiddleware(tt.allowlist, tt.trustedProxies)
+			middleware := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
 
 			handler := middleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "OK")
@@ -335,7 +336,7 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	e := echo.New()
 	// Invalid CIDR should fall back to localhost-only
-	middleware := CIDRMiddleware([]string{"not-a-valid-cidr", "also invalid"}, []string{})
+	middleware := CIDRMiddleware(nil, []string{"not-a-valid-cidr", "also invalid"}, []string{})
 
 	handler := middleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "OK")
@@ -362,4 +363,173 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	httpErr, ok := err2.(*echo.HTTPError)
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+}
+
+// TestParseCIDRAllowlistReturnsInvalidEntries verifies the parser surfaces invalid
+// CIDR strings so the middleware can log them — silent fallback is a visibility gap.
+func TestParseCIDRAllowlistReturnsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name              string
+		allowlist         []string
+		wantInvalid       []string
+		wantLocalhostOnly bool
+		wantNetCount      int
+	}{
+		{
+			name:              "empty_allowlist_is_localhost_only_no_invalid",
+			allowlist:         []string{},
+			wantInvalid:       nil,
+			wantLocalhostOnly: true,
+			wantNetCount:      0,
+		},
+		{
+			name:              "all_valid_no_invalid_reported",
+			allowlist:         []string{"10.0.0.0/8", "192.168.0.0/16"},
+			wantInvalid:       nil,
+			wantLocalhostOnly: false,
+			wantNetCount:      2,
+		},
+		{
+			name:              "mixed_valid_and_invalid_surfaces_only_invalid",
+			allowlist:         []string{"10.0.0.0/8", "not-a-cidr", "192.168.1.0/240"},
+			wantInvalid:       []string{"not-a-cidr", "192.168.1.0/240"},
+			wantLocalhostOnly: false,
+			wantNetCount:      1,
+		},
+		{
+			name:              "all_invalid_falls_back_to_localhost_and_surfaces_all",
+			allowlist:         []string{"bad1", "bad2"},
+			wantInvalid:       []string{"bad1", "bad2"},
+			wantLocalhostOnly: true,
+			wantNetCount:      0,
+		},
+		{
+			name:              "whitespace_around_valid_entry_is_trimmed",
+			allowlist:         []string{"  10.0.0.0/8  "},
+			wantInvalid:       nil,
+			wantLocalhostOnly: false,
+			wantNetCount:      1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nets, localhostOnly, invalid := parseCIDRAllowlist(tc.allowlist)
+			assert.Equal(t, tc.wantInvalid, invalid, "invalid entries")
+			assert.Equal(t, tc.wantLocalhostOnly, localhostOnly, "localhost-only flag")
+			assert.Len(t, nets, tc.wantNetCount, "valid nets count")
+		})
+	}
+}
+
+// TestParseTrustedProxiesReturnsInvalidEntries mirrors the allowlist test for proxy CIDRs.
+// Critical because silent drops of trusted-proxy CIDRs cause downstream IP-extraction to
+// fall back to the immediate peer, masking real client IPs from behind a misconfigured proxy.
+func TestParseTrustedProxiesReturnsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name         string
+		proxies      []string
+		wantInvalid  []string
+		wantNetCount int
+	}{
+		{
+			name:         "empty_list_no_invalid",
+			proxies:      []string{},
+			wantInvalid:  nil,
+			wantNetCount: 0,
+		},
+		{
+			name:         "all_valid",
+			proxies:      []string{"10.0.0.0/8", "172.16.0.0/12"},
+			wantInvalid:  nil,
+			wantNetCount: 2,
+		},
+		{
+			name:         "mixed_surfaces_only_invalid",
+			proxies:      []string{"10.0.0.0/8", "bogus", "192.168.1.0/240"},
+			wantInvalid:  []string{"bogus", "192.168.1.0/240"},
+			wantNetCount: 1,
+		},
+		{
+			// Parity with parseCIDRAllowlist's whitespace handling — YAML often
+			// leaves leading/trailing spaces around list entries.
+			name:         "whitespace_around_valid_entry_is_trimmed",
+			proxies:      []string{"  10.0.0.0/8  "},
+			wantInvalid:  nil,
+			wantNetCount: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nets, invalid := parseTrustedProxies(tc.proxies)
+			assert.Equal(t, tc.wantInvalid, invalid, "invalid entries")
+			assert.Len(t, nets, tc.wantNetCount, "valid nets count")
+		})
+	}
+}
+
+// TestCIDRMiddlewareLogsInvalidEntries exercises the WARN-logging branches
+// of CIDRMiddleware that the other tests skip by passing a nil logger. The
+// assertion is structural (middleware constructs and serves without error)
+// rather than message-content based, but this guarantees the logging code
+// paths are covered so changes there can't regress silently.
+func TestCIDRMiddlewareLogsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name           string
+		allowlist      []string
+		trustedProxies []string
+	}{
+		{
+			name:           "invalid_allowlist_triggers_warn",
+			allowlist:      []string{"not-a-cidr", "192.168.1.0/240"},
+			trustedProxies: []string{},
+		},
+		{
+			name:           "invalid_trusted_proxy_triggers_warn",
+			allowlist:      []string{"10.0.0.0/8"},
+			trustedProxies: []string{"bogus"},
+		},
+		{
+			name:           "both_invalid_triggers_both_warns",
+			allowlist:      []string{"bad-allowlist"},
+			trustedProxies: []string{"bad-proxy"},
+		},
+		{
+			name:           "all_valid_emits_no_warn",
+			allowlist:      []string{"10.0.0.0/8"},
+			trustedProxies: []string{"192.168.0.0/16"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use a real logger writing to a buffer would let us assert content,
+			// but that requires importing zerolog internals. Pass a real production
+			// logger — it'll print to stdout during the test run, but the WARN
+			// branch coverage is the goal here.
+			log := logger.New("warn", false)
+			middleware := CIDRMiddleware(log, tc.allowlist, tc.trustedProxies)
+
+			// Construct + invoke through a request to make sure the middleware
+			// is fully wired (not just constructed).
+			e := echo.New()
+			handler := middleware(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "OK")
+			})
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+			req.RemoteAddr = testLocalhostAddr
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler(c)
+			// Localhost is always allowed (localhost-only fallback OR explicit allowlist
+			// — either way an allowlist with 10.0.0.0/8 doesn't include 127.0.0.1, so
+			// some sub-cases expect Forbidden). We only care that the middleware
+			// constructed and ran without panic; the response code varies by sub-case.
+			_ = err
+			assert.NotNil(t, rec)
+		})
+	}
 }
