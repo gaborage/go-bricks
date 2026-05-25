@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
+	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
@@ -40,7 +42,7 @@ type ConnectionTestData struct {
 func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	c := &Connection{db: db, logger: newDisabledTestLogger()}
+	c := &Connection{db: db, logger: dbtestlog.NewDisabledTestLogger()}
 	return db, mock, c
 }
 
@@ -94,7 +96,7 @@ func createOracleConfig(connType, value string) *config.DatabaseConfig {
 
 // testConnectionExpectedError tests that a connection attempt fails with expected error
 func testConnectionExpectedError(t *testing.T, cfg *config.DatabaseConfig) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	_, err := NewConnection(cfg, log)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), oraclePingErrorMsg)
@@ -276,7 +278,7 @@ func TestConnectionNewConnectionSuccess(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
@@ -333,7 +335,7 @@ func TestOracleStatementQueryAndQueryRow(t *testing.T) {
 
 	stmt, err := db.PrepareContext(context.Background(), "SELECT id FROM dual WHERE flag = :1")
 	require.NoError(t, err)
-	ps := &Statement{stmt: stmt}
+	ps := wrapper.NewStatement(stmt)
 
 	rows, err := ps.Query(context.Background(), true)
 	require.NoError(t, err)
@@ -348,7 +350,7 @@ func TestOracleStatementQueryAndQueryRow(t *testing.T) {
 
 	stmtRow, err := db.PrepareContext(context.Background(), selectQuery)
 	require.NoError(t, err)
-	psRow := &Statement{stmt: stmtRow}
+	psRow := wrapper.NewStatement(stmtRow)
 
 	row := psRow.QueryRow(context.Background(), 5)
 	var name string
@@ -367,7 +369,7 @@ func TestOracleTransactionQueryPrepareExec(t *testing.T) {
 	nativeTx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	defer nativeTx.Rollback() // No-op after commit
-	trx := &Transaction{tx: nativeTx}
+	trx := wrapper.NewTransaction(nativeTx)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM dual WHERE code = :1")).
 		WithArgs("X").
@@ -418,7 +420,7 @@ func TestOracleTransactionPrepareError(t *testing.T) {
 	nativeTx, err := db.BeginTx(context.Background(), nil)
 	require.NoError(t, err)
 	defer nativeTx.Rollback() // Called after explicit rollback below (no-op)
-	trx := &Transaction{tx: nativeTx}
+	trx := wrapper.NewTransaction(nativeTx)
 
 	prepareErr := errors.New("prepare failed")
 	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO fail(id) VALUES (:1)")).
@@ -524,7 +526,7 @@ func TestConnectionMetadata(t *testing.T) {
 }
 
 func TestConnectionValidationIntegration(t *testing.T) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	tests := []ConnectionTestData{
 		{
@@ -741,7 +743,7 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
@@ -809,7 +811,7 @@ func TestNewConnectionWithKeepAliveFallback(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err, "should succeed with fallback")
 	require.NotNil(t, conn)
@@ -873,7 +875,7 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
@@ -941,7 +943,7 @@ func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
@@ -1037,7 +1039,7 @@ func TestBuildURLOptions(t *testing.T) {
 }
 
 func TestKeepAliveDialerDialContext(t *testing.T) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	dialer := newKeepAliveDialer(60*time.Second, log)
 
 	// Verify dialer is properly initialized
@@ -1046,7 +1048,7 @@ func TestKeepAliveDialerDialContext(t *testing.T) {
 }
 
 func TestKeepAliveDialerDialContextWithListener(t *testing.T) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	dialer := newKeepAliveDialer(60*time.Second, log)
 
 	// Use context-aware listener (noctx linter requirement)
@@ -1070,7 +1072,7 @@ func TestKeepAliveDialerDialContextWithListener(t *testing.T) {
 }
 
 func TestKeepAliveDialerDialContextError(t *testing.T) {
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	dialer := newKeepAliveDialer(60*time.Second, log)
 
 	// Use a short timeout since we expect failure
@@ -1113,7 +1115,7 @@ func TestNewConnectionPingFailure(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 	mock.ExpectClose() // DB should be closed on ping failure
 
 	conn, err := NewConnection(cfg, log)
@@ -1214,7 +1216,7 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 	// Create connection with nil config
 	c := &Connection{
 		db:     db,
-		logger: newDisabledTestLogger(),
+		logger: dbtestlog.NewDisabledTestLogger(),
 		config: nil, // Explicitly nil config
 	}
 
@@ -1274,7 +1276,7 @@ func TestLogConnectionSuccessWithSID(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
@@ -1321,7 +1323,7 @@ func TestLogConnectionSuccessWithDatabaseFallback(t *testing.T) {
 		},
 	}
 
-	log := newTestLogger()
+	log := dbtestlog.NewTestLogger()
 
 	conn, err := NewConnection(cfg, log)
 	require.NoError(t, err)
@@ -1387,7 +1389,7 @@ func TestNewConnectionRoutesThroughTimezoneAwarePathWhenSet(t *testing.T) {
 	}
 
 	mock.ExpectClose()
-	conn, err := NewConnection(cfg, newTestLogger())
+	conn, err := NewConnection(cfg, dbtestlog.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
@@ -1442,7 +1444,7 @@ func TestNewConnectionUsesLegacyPathOnDashSentinel(t *testing.T) {
 	}
 
 	mock.ExpectClose()
-	conn, err := NewConnection(cfg, newTestLogger())
+	conn, err := NewConnection(cfg, dbtestlog.NewTestLogger())
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
