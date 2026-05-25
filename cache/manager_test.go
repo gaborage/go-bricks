@@ -651,6 +651,86 @@ func TestCacheManagerClose(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestCacheManagerGetAfterCloseReturnsErrManagerClosed locks in the W3-C
+// closed-state guard. Pre-fix, Get() could race against Close() and return a
+// cache instance that was about to be torn down (still in m.caches but
+// queued in Close's toClose slice). Post-fix, Get() consults the atomic
+// `closed` flag at the very top and returns ErrManagerClosed immediately.
+func TestCacheManagerGetAfterCloseReturnsErrManagerClosed(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Close())
+
+	_, err = mgr.Get(context.Background(), tenantOne)
+	assert.ErrorIs(t, err, cache.ErrManagerClosed)
+}
+
+// TestCacheManagerRemoveAfterCloseReturnsErrManagerClosed mirrors the Get
+// test for the Remove() operational path.
+func TestCacheManagerRemoveAfterCloseReturnsErrManagerClosed(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+
+	// Seed an entry first so we can prove the closed-state check fires BEFORE
+	// the lookup — without the guard, Remove would happily delete from a
+	// half-torn-down map.
+	_, err = mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Close())
+
+	err = mgr.Remove(tenantOne)
+	assert.ErrorIs(t, err, cache.ErrManagerClosed)
+}
+
+// TestCacheManagerGetRacesCloseReturnsErrOrSuccess stress-tests the
+// closed-state guard under concurrent Close + Get. Each Get must either
+// succeed (closed wasn't yet observed) or return ErrManagerClosed — it
+// must NEVER return a different error or panic with a use-after-close.
+// Run under -race to catch any unsynchronized access to the manager's
+// internal maps during shutdown.
+func TestCacheManagerGetRacesCloseReturnsErrOrSuccess(t *testing.T) {
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+
+	const N = 64
+	results := make(chan error, N)
+	start := make(chan struct{})
+
+	for i := 0; i < N; i++ {
+		go func(id int) {
+			<-start
+			_, err := mgr.Get(context.Background(), fmt.Sprintf("tenant-%d", id))
+			results <- err
+		}(i)
+	}
+
+	// Fire concurrent Close from another goroutine; let them race.
+	go func() {
+		<-start
+		_ = mgr.Close()
+	}()
+
+	close(start)
+
+	for i := 0; i < N; i++ {
+		err := <-results
+		if err != nil && !errors.Is(err, cache.ErrManagerClosed) {
+			t.Errorf("Get during Close returned unexpected error: %v (want nil or ErrManagerClosed)", err)
+		}
+	}
+}
+
 // TestCacheManagerStats tests statistics reporting.
 func TestCacheManagerStats(t *testing.T) {
 	connector := func(_ context.Context, key string) (cache.Cache, error) {
