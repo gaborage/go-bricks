@@ -22,6 +22,12 @@ var (
 
 	// ErrInvalidTTL is returned when a TTL value is invalid (e.g., negative).
 	ErrInvalidTTL = errors.New("cache: invalid TTL")
+
+	// ErrManagerClosed is returned by CacheManager operations (Get, Remove)
+	// after Close() has been called. Callers can errors.Is(err, ErrManagerClosed)
+	// to distinguish "manager is gone" from per-cache failures and decide
+	// whether to abort or fall back to a non-cache path.
+	ErrManagerClosed = errors.New("cache: manager closed")
 )
 
 // ConfigError represents a configuration error during cache initialization.

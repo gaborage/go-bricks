@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
@@ -64,6 +65,11 @@ type CacheManager struct {
 	// Lifecycle
 	closeCh   chan struct{}
 	closeOnce sync.Once
+	// closed flips to true the moment Close() begins. Read on the hot path of
+	// Get/Remove so callers immediately see ErrManagerClosed instead of getting
+	// a handle to a cache instance that is about to be torn down. Atomic so we
+	// don't need to take m.mu on every operation just to consult shutdown state.
+	closed atomic.Bool
 }
 
 // ManagerConfig configures the cache manager's behavior.
@@ -119,7 +125,11 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 }
 
 // Get retrieves or creates a cache instance for the given key.
+// Returns ErrManagerClosed if Close() has been called.
 func (m *CacheManager) Get(ctx context.Context, key string) (Cache, error) {
+	if m.closed.Load() {
+		return nil, ErrManagerClosed
+	}
 	// Fast path: check if cache already exists
 	if cache := m.getExisting(key); cache != nil {
 		return cache, nil
@@ -214,7 +224,11 @@ func (m *CacheManager) evictIfNeeded() *cacheEntry {
 }
 
 // Remove explicitly removes a cache instance from the manager.
+// Returns ErrManagerClosed if Close() has been called.
 func (m *CacheManager) Remove(key string) error {
+	if m.closed.Load() {
+		return ErrManagerClosed
+	}
 	m.mu.Lock()
 	entry := m.removeEntryLocked(key)
 	m.mu.Unlock()
@@ -295,10 +309,19 @@ func (m *CacheManager) cleanupIdleCaches() {
 }
 
 // Close shuts down all managed cache instances and stops the cleanup goroutine.
+// After Close() returns, subsequent calls to Get() and Remove() return ErrManagerClosed.
 func (m *CacheManager) Close() error {
 	var closeErr error
 
 	m.closeOnce.Do(func() {
+		// Flip closed BEFORE doing any teardown work so concurrent Get/Remove
+		// callers immediately see ErrManagerClosed rather than racing against
+		// half-torn-down state (e.g. getting a cache instance that's already
+		// in the toClose slice below). atomic.Bool is the right primitive here:
+		// it's lock-free on the hot path of every Get, and the memory ordering
+		// guarantees that any subsequent Load reads the final true value.
+		m.closed.Store(true)
+
 		// Signal cleanup goroutine to stop
 		close(m.closeCh)
 
