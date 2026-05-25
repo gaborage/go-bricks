@@ -192,11 +192,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	return conn, nil
 }
 
-// Statement and Transaction are re-exported as type aliases of the vendor-agnostic
-// wrappers in database/internal/wrapper. The implementations were byte-identical
-// across postgresql and oracle (W4-B); centralizing them means a behavior change
-// to the wrapping logic ships in one place. Type aliases preserve the existing
-// public API surface (postgresql.Statement, postgresql.Transaction).
+// PostgreSQL re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
 type Statement = wrapper.Statement
 type Transaction = wrapper.Transaction
 
