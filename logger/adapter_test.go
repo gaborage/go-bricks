@@ -472,6 +472,126 @@ func TestLogEventAdapterSpecialCharacters(t *testing.T) {
 	assert.Equal(t, "special characters test", logEntry["message"])
 }
 
+// TestLogEventAdapterTypedMethodsMaskSensitiveKeys verifies that Int, Int64, Uint64,
+// Dur, and Bytes emit the mask string (via Interface) when the key is sensitive, not the
+// raw numeric/byte value. This is the typed-method bypass regression guard: before the
+// fix, log.Bytes("api_key", rawKey) or log.Int64("password_hash", h) leaked verbatim.
+func TestLogEventAdapterTypedMethodsMaskSensitiveKeys(t *testing.T) {
+	filterConfig := &FilterConfig{
+		SensitiveFields: []string{"password", "token", "api_key", "secret"},
+		MaskValue:       "[MASKED]",
+	}
+
+	sensitiveKeys := []string{"password", "token", "api_key", "my_secret_field"}
+	nonSensitiveKeys := []string{"count", "size", "elapsed", "user_id"}
+
+	t.Run("Int_sensitive_masked", func(t *testing.T) {
+		for _, key := range sensitiveKeys {
+			var buf bytes.Buffer
+			zl := zerolog.New(&buf)
+			logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+			logger.Info().Int(key, 12345).Msg("x")
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, "[MASKED]", entry[key], "Int(%q) must be masked", key)
+		}
+	})
+
+	t.Run("Int_non_sensitive_preserved", func(t *testing.T) {
+		for _, key := range nonSensitiveKeys {
+			var buf bytes.Buffer
+			zl := zerolog.New(&buf)
+			logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+			logger.Info().Int(key, 42).Msg("x")
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+			assert.Equal(t, float64(42), entry[key], "Int(%q) must not be masked", key)
+		}
+	})
+
+	t.Run("Int64_sensitive_masked", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Int64("password", 9876543210).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, "[MASKED]", entry["password"])
+	})
+
+	t.Run("Int64_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Int64("user_id", 9876543210).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(9876543210), entry["user_id"], "Int64 non-sensitive must not be masked")
+	})
+
+	t.Run("Uint64_sensitive_masked", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Uint64("api_key", 1234567890).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, "[MASKED]", entry["api_key"])
+	})
+
+	t.Run("Uint64_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Uint64("file_size", 1024).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(1024), entry["file_size"], "Uint64 non-sensitive must not be masked")
+	})
+
+	t.Run("Dur_sensitive_masked", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Dur("token", 5*time.Second).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, "[MASKED]", entry["token"])
+	})
+
+	t.Run("Dur_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Dur("elapsed", 250*time.Millisecond).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, float64(250), entry["elapsed"], "Dur non-sensitive must not be masked")
+	})
+
+	t.Run("Bytes_sensitive_masked", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		rawKey := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE}
+		logger.Info().Bytes("api_key", rawKey).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.Equal(t, "[MASKED]", entry["api_key"], "Bytes with sensitive key must not leak raw bytes")
+	})
+
+	t.Run("Bytes_non_sensitive_preserved", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+		logger.Info().Bytes("payload", []byte("hello")).Msg("x")
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+		assert.NotEqual(t, "[MASKED]", entry["payload"], "non-sensitive Bytes must not be masked")
+		assert.NotEmpty(t, entry["payload"])
+	})
+}
+
 func TestLogEventAdapterReturnedTypes(t *testing.T) {
 	logger, _ := createTestLogger()
 

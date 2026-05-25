@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"math/big"
 	"net"
 	nethttp "net/http"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +30,8 @@ const (
 
 	// DefaultRetryDelay is the default delay between retries
 	DefaultRetryDelay = 1 * time.Second
+
+	mimeApplicationJSON = "application/json"
 )
 
 // client implements the Client interface
@@ -83,6 +88,25 @@ func (b *Builder) WithTimeout(timeout time.Duration) *Builder {
 func (b *Builder) WithRetries(maxRetries int, retryDelay time.Duration) *Builder {
 	b.config.MaxRetries = maxRetries
 	b.config.RetryDelay = retryDelay
+	return b
+}
+
+// WithLogPayloads enables debug-level logging of request and response bodies.
+// WARNING: enable only in development/staging — even with SensitiveDataFilter active,
+// JSON bodies are parsed and field-masked but the full body surface is widened significantly.
+// Non-JSON bodies (form-urlencoded, binary, etc.) are never emitted; only the content-type
+// and byte count are logged to prevent credential pairs from reaching the log stream.
+func (b *Builder) WithLogPayloads(enabled bool) *Builder {
+	b.config.LogPayloads = enabled
+	return b
+}
+
+// WithMaxPayloadLogBytes caps the number of body bytes inspected per direction when
+// WithLogPayloads is enabled. Values <= 0 are ignored; the built-in fallback (1024) applies.
+func (b *Builder) WithMaxPayloadLogBytes(n int) *Builder {
+	if n > 0 {
+		b.config.MaxPayloadLogBytes = n
+	}
 	return b
 }
 
@@ -606,8 +630,8 @@ func (c *client) ensureContentTypeHeader(httpReq *nethttp.Request, body []byte) 
 	if body == nil {
 		return
 	}
-	if httpReq.Header.Get("Content-Type") == "" {
-		httpReq.Header.Set("Content-Type", "application/json")
+	if httpReq.Header.Get(headerContentType) == "" {
+		httpReq.Header.Set(headerContentType, mimeApplicationJSON)
 	}
 }
 
@@ -725,6 +749,38 @@ func (c *client) runResponseInterceptors(ctx context.Context, req *nethttp.Reque
 	return nil
 }
 
+// isJSONContentType reports whether ct is an application/json or *+json media type.
+// Parameters such as "; charset=utf-8" are stripped before the check.
+func isJSONContentType(ct string) bool {
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return ct == mimeApplicationJSON || strings.HasSuffix(ct, "+json")
+}
+
+// logBodyPreview appends body-preview fields to dbg and returns the updated event.
+// JSON object roots are parsed and filter-walked via Interface so SensitiveDataFilter
+// can mask sensitive keys. Non-JSON, JSON primitive/array roots, and parse failures
+// log only metadata (content-type + byte count) — primitive/array roots cannot be
+// key-walked by the filter, so dropping them is the safe default.
+func logBodyPreview(dbg logger.LogEvent, preview []byte, ct string) logger.LogEvent {
+	if !isJSONContentType(ct) {
+		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
+	}
+	var parsed any
+	if err := json.Unmarshal(preview, &parsed); err != nil {
+		return dbg.Str("body_content_type", ct).Str("body_preview_status", "json_parse_failed").Int("body_preview_dropped", len(preview))
+	}
+	m, ok := parsed.(map[string]any)
+	if !ok {
+		// JSON primitive/array root — SensitiveDataFilter can only walk map keys;
+		// drop rather than log a value it cannot inspect.
+		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
+	}
+	return dbg.Interface("body_preview", m)
+}
+
 // logRequest logs the outgoing request
 func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID string) {
 	// Info-level: only metadata to avoid leaking PII/secrets
@@ -764,8 +820,8 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 				truncated = true
 			}
 			dbg = dbg.Int("body_size", len(body)).
-				Str("body_truncated", map[bool]string{true: "true", false: "false"}[truncated]).
-				Bytes("body_preview", preview)
+				Str("body_truncated", strconv.FormatBool(truncated))
+			dbg = logBodyPreview(dbg, preview, httpReq.Header.Get(headerContentType))
 		}
 		dbg.Msg("REST client request")
 	}
@@ -806,8 +862,8 @@ func (c *client) logResponse(resp *Response, traceID string) {
 				truncated = true
 			}
 			dbg = dbg.Int("body_size", len(resp.Body)).
-				Str("body_truncated", map[bool]string{true: "true", false: "false"}[truncated]).
-				Bytes("body_preview", preview)
+				Str("body_truncated", strconv.FormatBool(truncated))
+			dbg = logBodyPreview(dbg, preview, resp.Headers.Get(headerContentType))
 		}
 		// Response headers go through logger filter to mask sensitive keys/values
 		if len(resp.Headers) > 0 {

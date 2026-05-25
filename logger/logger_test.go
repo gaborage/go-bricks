@@ -528,17 +528,6 @@ func TestNewWithFilterEdgeCases(t *testing.T) {
 	})
 }
 
-func TestSensitiveDataFilterRun(_ *testing.T) {
-	// Test the Run method that currently has 0% coverage
-	filter := NewSensitiveDataFilter(nil)
-
-	// The Run method is a no-op placeholder, but we need to call it for coverage
-	filter.Run(nil, zerolog.InfoLevel, testMessage)
-
-	// No assertions needed since it's a placeholder method
-	// But this covers the 0% coverage method
-}
-
 func TestFilterValueEdgeCases(t *testing.T) {
 	config := &FilterConfig{
 		SensitiveFields: []string{"password", "secret", "token"},
@@ -635,16 +624,6 @@ func TestFilterStructEdgeCases(t *testing.T) {
 		result := filter.FilterValue("empty", data)
 		assert.NotNil(t, result)
 	})
-}
-
-func TestSensitiveDataFilterRunMethodCoverage(t *testing.T) {
-	filter := NewSensitiveDataFilter(DefaultFilterConfig())
-
-	// Test Run method directly (currently 0% coverage)
-	filter.Run(nil, zerolog.InfoLevel, testMessage)
-
-	// The Run method is a placeholder implementation, so just ensuring it doesn't panic
-	assert.NotNil(t, filter)
 }
 
 func TestCallerMarshalFuncCoverage(t *testing.T) {

@@ -242,6 +242,7 @@ func TestClientLogRequest(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), "PUT", "https://api.example.com/resource", http.NoBody)
 		assert.NoError(t, err)
 		req.Header.Set("X-API-Key", "secret")
+		req.Header.Set(testContentTypeHeader, testContentType)
 
 		body := []byte(`{"data": "some content for testing"}`)
 		c.logRequest(req, body, "trace-789")
@@ -260,8 +261,11 @@ func TestClientLogRequest(t *testing.T) {
 		assert.Equal(t, "trace-789", debugEvent.fields["request_id"])
 		assert.NotNil(t, debugEvent.fields["headers"])
 		assert.Equal(t, len(body), debugEvent.fields["body_size"])
-		assert.Equal(t, "false", debugEvent.fields["body_truncated"]) // Body is small, not truncated
-		assert.Equal(t, body, debugEvent.fields["body_preview"])
+		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
+		// JSON body is parsed and logged via Interface (not raw bytes)
+		preview, ok := debugEvent.fields["body_preview"].(map[string]any)
+		assert.True(t, ok, "JSON body_preview should be a parsed map")
+		assert.Equal(t, "some content for testing", preview["data"])
 	})
 
 	t.Run("request with large body truncation", func(t *testing.T) {
@@ -286,7 +290,10 @@ func TestClientLogRequest(t *testing.T) {
 		debugEvent := debugEvents[0]
 		assert.Equal(t, len(largeBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
-		assert.Equal(t, largeBody[:10], debugEvent.fields["body_preview"])
+		// Plain text body (no Content-Type) → bytes dropped, not logged
+		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Equal(t, 10, debugEvent.fields["body_preview_dropped"])
+		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
 
 	t.Run("request with zero MaxPayloadLogBytes uses default", func(t *testing.T) {
@@ -316,7 +323,10 @@ func TestClientLogRequest(t *testing.T) {
 		debugEvent := debugEvents[0]
 		assert.Equal(t, len(largeBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
-		assert.Equal(t, largeBody[:1024], debugEvent.fields["body_preview"]) // Should use 1024 default
+		// Plain text body (no Content-Type) → bytes dropped, not logged; preview size is capped at default 1024
+		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Equal(t, 1024, debugEvent.fields["body_preview_dropped"])
+		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
 }
 
@@ -404,7 +414,7 @@ func TestClientLogResponse(t *testing.T) {
 		response := &Response{
 			StatusCode: 201,
 			Body:       []byte(`{"id": 123, "created": true}`),
-			Headers:    http.Header{"X-Rate-Limit": []string{"100"}},
+			Headers:    http.Header{"X-Rate-Limit": []string{"100"}, testContentTypeHeader: []string{testContentType}},
 			Stats: Stats{
 				ElapsedTime: 300 * time.Millisecond,
 				CallCount:   2,
@@ -428,7 +438,11 @@ func TestClientLogResponse(t *testing.T) {
 		assert.NotNil(t, debugEvent.fields["headers"])
 		assert.Equal(t, len(response.Body), debugEvent.fields["body_size"])
 		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
-		assert.Equal(t, response.Body, debugEvent.fields["body_preview"])
+		// JSON response body is parsed and logged via Interface (filter can walk keys)
+		preview, ok := debugEvent.fields["body_preview"].(map[string]any)
+		assert.True(t, ok, "JSON body_preview should be a parsed map")
+		assert.Equal(t, float64(123), preview["id"])
+		assert.Equal(t, true, preview["created"])
 	})
 
 	t.Run("response with large body truncation", func(t *testing.T) {
@@ -460,7 +474,10 @@ func TestClientLogResponse(t *testing.T) {
 		debugEvent := debugEvents[0]
 		assert.Equal(t, len(largeResponseBody), debugEvent.fields["body_size"])
 		assert.Equal(t, "true", debugEvent.fields["body_truncated"])
-		assert.Equal(t, largeResponseBody[:15], debugEvent.fields["body_preview"])
+		// No Content-Type on response headers → bytes dropped, not logged
+		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Equal(t, 15, debugEvent.fields["body_preview_dropped"])
+		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
 
 	t.Run("response error scenarios", func(t *testing.T) {
@@ -548,7 +565,179 @@ func TestLoggingIntegration(t *testing.T) {
 		assert.Len(t, fakeLog.eventsByLevel("debug"), 1)
 
 		debugEvent := fakeLog.eventsByLevel("debug")[0]
-		assert.Contains(t, debugEvent.fields, "body_preview")
+		// Plain text body (no Content-Type) → bytes dropped, not logged
+		assert.Equal(t, "", debugEvent.fields["body_content_type"])
+		assert.Equal(t, len(body), debugEvent.fields["body_preview_dropped"])
+		assert.Nil(t, debugEvent.fields["body_preview"])
 		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
 	})
+}
+
+// TestBuilderPayloadLoggingSetters verifies that WithLogPayloads and WithMaxPayloadLogBytes
+// propagate correctly into the built client config.
+func TestBuilderPayloadLoggingSetters(t *testing.T) {
+	t.Run("WithLogPayloads enables payload logging", func(t *testing.T) {
+		fakeLog := &fakeLogger{}
+		builtClient := NewBuilder(fakeLog).
+			WithLogPayloads(true).
+			Build()
+		c := builtClient.(*client)
+		assert.True(t, c.config.LogPayloads)
+	})
+
+	t.Run("WithLogPayloads false disables payload logging", func(t *testing.T) {
+		fakeLog := &fakeLogger{}
+		builtClient := NewBuilder(fakeLog).
+			WithLogPayloads(false).
+			Build()
+		c := builtClient.(*client)
+		assert.False(t, c.config.LogPayloads)
+	})
+
+	t.Run("WithMaxPayloadLogBytes sets limit", func(t *testing.T) {
+		fakeLog := &fakeLogger{}
+		builtClient := NewBuilder(fakeLog).
+			WithLogPayloads(true).
+			WithMaxPayloadLogBytes(2048).
+			Build()
+		c := builtClient.(*client)
+		assert.True(t, c.config.LogPayloads)
+		assert.Equal(t, 2048, c.config.MaxPayloadLogBytes)
+	})
+
+	t.Run("WithMaxPayloadLogBytes ignores zero or negative", func(t *testing.T) {
+		fakeLog := &fakeLogger{}
+		builtClient := NewBuilder(fakeLog).
+			WithMaxPayloadLogBytes(0).
+			Build()
+		c := builtClient.(*client)
+		// Should retain the default (1024), not override with zero
+		assert.Equal(t, 1024, c.config.MaxPayloadLogBytes)
+	})
+}
+
+// TestClientLogRequestJSONBodyParsedAsMap verifies that JSON request bodies are parsed
+// into map[string]any before being passed to Interface() — this is what enables the
+// SensitiveDataFilter to walk nested keys and mask sensitive fields. Actual masking
+// is tested at the logger layer (logger/adapter_test.go, logger/filter_test.go).
+func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
+	fakeLog := &fakeLogger{}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{
+			LogPayloads:        true,
+			MaxPayloadLogBytes: 512,
+		},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/auth", http.NoBody)
+	assert.NoError(t, err)
+	req.Header.Set(testContentTypeHeader, testContentType)
+
+	body := []byte(`{"username": "alice", "password": "s3cr3t!", "amount": 100}`)
+	c.logRequest(req, body, "trace-sensitive")
+
+	debugEvents := fakeLog.eventsByLevel("debug")
+	assert.Len(t, debugEvents, 1)
+
+	debugEvent := debugEvents[0]
+	// JSON body_preview must be map[string]any so the SensitiveDataFilter can walk its keys.
+	// If it were []byte, the filter would see an opaque blob and masking could not occur.
+	preview, ok := debugEvent.fields["body_preview"].(map[string]any)
+	assert.True(t, ok, "JSON body_preview must be a parsed map[string]any to enable filter walking")
+	assert.Equal(t, "alice", preview["username"])
+	assert.Equal(t, float64(100), preview["amount"])
+	assert.Contains(t, preview, "password", "parsed map must contain all JSON keys")
+}
+
+// TestLogBodyPreviewPrimitiveRootDropped verifies that JSON bodies whose root is a
+// primitive or array are never emitted as body_preview. SensitiveDataFilter can only
+// walk map[string]any keys, so logging a raw string/number/bool/array would bypass
+// filtering entirely. The fix gates on map[string]any and drops everything else.
+func TestLogBodyPreviewPrimitiveRootDropped(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{name: "json_string", body: []byte(`"secret-token"`)},
+		{name: "json_number", body: []byte(`123456789`)},
+		{name: "json_bool", body: []byte(`true`)},
+		{name: "json_array", body: []byte(`["item1","item2"]`)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeLog := &fakeLogger{}
+			c := &client{
+				logger: fakeLog,
+				config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+			assert.NoError(t, err)
+			req.Header.Set(testContentTypeHeader, testContentType)
+
+			c.logRequest(req, tc.body, "trace-123")
+
+			debugEvents := fakeLog.eventsByLevel("debug")
+			assert.Len(t, debugEvents, 1)
+
+			ev := debugEvents[0]
+			assert.Nil(t, ev.fields["body_preview"], "primitive/array JSON root must not appear as body_preview")
+			assert.Equal(t, len(tc.body), ev.fields["body_preview_dropped"], "byte count must be logged for dropped body")
+		})
+	}
+}
+
+// TestLogBodyPreviewMalformedJSONLogsDroppedCount verifies that when a JSON body
+// fails to parse (e.g., truncated mid-token by MaxPayloadLogBytes), the log event
+// contains both body_preview_status and body_preview_dropped so operators can
+// distinguish truncation-induced errors from server-side malformed JSON.
+func TestLogBodyPreviewMalformedJSONLogsDroppedCount(t *testing.T) {
+	fakeLog := &fakeLogger{}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 10},
+	}
+
+	// A 10-byte truncation of valid JSON produces invalid JSON (cut mid-token)
+	body := []byte(`{"username": "alice", "password": "s3cr3t"}`)
+	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+	assert.NoError(t, err)
+	req.Header.Set(testContentTypeHeader, testContentType)
+
+	c.logRequest(req, body, "trace-123")
+
+	debugEvents := fakeLog.eventsByLevel("debug")
+	assert.Len(t, debugEvents, 1)
+
+	ev := debugEvents[0]
+	assert.Equal(t, "json_parse_failed", ev.fields["body_preview_status"], "status must indicate parse failure")
+	assert.Equal(t, 10, ev.fields["body_preview_dropped"], "byte count must be logged even on parse failure")
+	assert.Nil(t, ev.fields["body_preview"], "raw body bytes must never appear in log output")
+}
+
+// TestIsJSONContentTypeEdgeCases verifies that isJSONContentType handles
+// edge-case Content-Type values that occur with proxies or custom transports.
+func TestIsJSONContentTypeEdgeCases(t *testing.T) {
+	cases := []struct {
+		ct   string
+		want bool
+	}{
+		{ct: "application/json", want: true},
+		{ct: "application/json; charset=utf-8", want: true},
+		{ct: "  application/json  ", want: true},             // leading/trailing whitespace
+		{ct: " application/json; charset=utf-8", want: true}, // leading space before semicolon
+		{ct: "application/vnd.api+json", want: true},
+		{ct: "APPLICATION/JSON", want: true},
+		{ct: "text/plain", want: false},
+		{ct: "", want: false},
+		{ct: "text/html; charset=utf-8", want: false},
+	}
+	for _, tc := range cases {
+		got := isJSONContentType(tc.ct)
+		if got != tc.want {
+			t.Errorf("isJSONContentType(%q) = %v, want %v", tc.ct, got, tc.want)
+		}
+	}
 }
