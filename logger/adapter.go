@@ -20,6 +20,16 @@ func (lea *LogEventAdapter) wrapEvent(e *zerolog.Event) *LogEventAdapter {
 	return &LogEventAdapter{event: e, filter: lea.filter, level: lea.level, hook: lea.hook}
 }
 
+// maskIfSensitive returns a masked adapter when the key is sensitive, signalling via ok.
+// Centralizes the typed-method mask check so adding a new typed slot (e.g. Float64) cannot
+// silently bypass the privacy boundary by forgetting to wire the same conditional.
+func (lea *LogEventAdapter) maskIfSensitive(key string) (LogEvent, bool) {
+	if lea.filter != nil && lea.filter.isSensitiveField(key) {
+		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue)), true
+	}
+	return nil, false
+}
+
 // Msg logs the message
 func (lea *LogEventAdapter) Msg(msg string) {
 	lea.trackSeverity()
@@ -47,32 +57,32 @@ func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 
 // Int adds an integer field to the log event
 func (lea *LogEventAdapter) Int(key string, value int) LogEvent {
-	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
+	if masked, ok := lea.maskIfSensitive(key); ok {
+		return masked
 	}
 	return lea.wrapEvent(lea.event.Int(key, value))
 }
 
 // Int64 adds an int64 field to the log event
 func (lea *LogEventAdapter) Int64(key string, value int64) LogEvent {
-	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
+	if masked, ok := lea.maskIfSensitive(key); ok {
+		return masked
 	}
 	return lea.wrapEvent(lea.event.Int64(key, value))
 }
 
 // Uint64 adds a uint64 field to the log event
 func (lea *LogEventAdapter) Uint64(key string, value uint64) LogEvent {
-	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
+	if masked, ok := lea.maskIfSensitive(key); ok {
+		return masked
 	}
 	return lea.wrapEvent(lea.event.Uint64(key, value))
 }
 
 // Dur adds a duration field to the log event
 func (lea *LogEventAdapter) Dur(key string, d time.Duration) LogEvent {
-	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
+	if masked, ok := lea.maskIfSensitive(key); ok {
+		return masked
 	}
 	return lea.wrapEvent(lea.event.Dur(key, d))
 }
@@ -87,8 +97,8 @@ func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 
 // Bytes adds a byte slice field to the log event
 func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
-	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue))
+	if masked, ok := lea.maskIfSensitive(key); ok {
+		return masked
 	}
 	return lea.wrapEvent(lea.event.Bytes(key, val))
 }

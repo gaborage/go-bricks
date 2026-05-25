@@ -598,6 +598,14 @@ func TestFilterValueNilMapPreservesNil(t *testing.T) {
 	if result2 != nil {
 		t.Errorf("Expected typed-nil map[string]string to filter as nil, got %T %v", result2, result2)
 	}
+
+	// map[string]any is handled by the fast-path type assertion (not reflect.Map),
+	// so it needs its own nil guard. Locks in regression coverage for the fast path.
+	var ma map[string]any
+	result3 := filter.FilterValue("payload", ma)
+	if result3 != nil {
+		t.Errorf("Expected typed-nil map[string]any to filter as nil, got %T %v", result3, result3)
+	}
 }
 
 func TestFilterValueHTTPHeaderMasksSensitiveKeys(t *testing.T) {

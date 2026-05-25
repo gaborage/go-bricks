@@ -102,6 +102,11 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, visited map[uintptr]struct{}, maxDepth int) any {
 	// Handle typed map first (most common case)
 	if m, ok := value.(map[string]any); ok {
+		if m == nil {
+			// Preserve typed-nil parity with the reflect.Map branch below
+			// (filterStringMapWithProtection would otherwise return {} via make).
+			return nil
+		}
 		return f.filterStringMapWithProtection(m, visited, maxDepth)
 	}
 
