@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -36,8 +37,29 @@ type AMQPClientImpl struct {
 	notifyConfirm   chan amqp.Confirmation
 	isReady         bool
 
+	// pendingPublishes correlates broker confirmations to the in-flight publish
+	// that issued them. Keyed by DeliveryTag (uint64) → chan amqp.Confirmation
+	// (buffered, capacity 1). Each Publish captures channel.GetNextPublishSeqNo()
+	// before publishing, registers its own per-publish channel under that tag,
+	// and waits on it. A dispatcher goroutine reads from notifyConfirm and
+	// routes each confirmation to the matching pending publish. On channel
+	// reinit, pending entries are drained with a synthetic NACK so publishers
+	// retry instead of hanging on a tag the new channel will never emit.
+	pendingPublishes sync.Map
+
+	// publishSerial serializes the (GetNextPublishSeqNo → pendingPublishes.Store →
+	// PublishWithContext) sequence inside PublishToExchange. amqp091 takes its
+	// own lock around GetNextPublishSeqNo and PublishWithContext separately, so
+	// without this serialization two concurrent publishes can both read the
+	// same "next" seq number, both register under that tag (second overwrites
+	// first), and end up receiving each other's (or no) confirmations. The
+	// scope is narrow: only the registration+publish handshake; the confirm
+	// wait stays per-publish and remains concurrent.
+	publishSerial sync.Mutex
+
 	// Configuration
 	reconnectDelay    time.Duration
+	reconnectMaxDelay time.Duration // upper bound for exponential backoff
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
 	connectionTimeout time.Duration
@@ -46,9 +68,15 @@ type AMQPClientImpl struct {
 // Reconnection delays
 const (
 	defaultReconnectDelay    = 5 * time.Second
+	defaultReconnectMaxDelay = 60 * time.Second
 	defaultReInitDelay       = 2 * time.Second
 	defaultResendDelay       = 5 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
+	// defaultConfirmBufferSize sizes the channel that receives broker publish
+	// confirmations. Big enough to absorb a reasonable concurrent-publish burst
+	// without backpressuring producers, small enough that a stalled dispatcher
+	// surfaces quickly rather than hiding behind a massive in-flight queue.
+	defaultConfirmBufferSize = 256
 )
 
 // OpenTelemetry constants
@@ -76,6 +104,7 @@ func NewAMQPClient(brokerURL string, log logger.Logger) *AMQPClientImpl {
 		log:               log,
 		done:              make(chan bool),
 		reconnectDelay:    defaultReconnectDelay,
+		reconnectMaxDelay: defaultReconnectMaxDelay,
 		reInitDelay:       defaultReInitDelay,
 		resendDelay:       defaultResendDelay,
 		connectionTimeout: defaultConnectionTimeout,
@@ -201,11 +230,14 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				Str("exchange", options.Exchange).
 				Str("routing_key", options.RoutingKey).
 				Msg("AMQP client not ready, message not published")
-			span.SetStatus(codes.Error, "AMQP client not ready")
-			return nil // Return nil to avoid failing the business operation
+			span.RecordError(errNotConnected)
+			span.SetStatus(codes.Error, errNotConnected.Error())
+			// BREAKING CHANGE: previously returned nil, silently dropping the message.
+			// Returning the error gives callers a chance to retry, log, or escalate
+			// instead of believing publish succeeded.
+			return errNotConnected
 		}
 		channel := c.channel
-		confirmCh := c.notifyConfirm
 		c.m.RUnlock()
 
 		// Prepare message with headers, trace context, and message IDs
@@ -213,7 +245,19 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		messageID := publishing.MessageId
 		correlationID := publishing.CorrelationId
 
-		// Publish using the captured channel
+		// Capture the broker's next DeliveryTag BEFORE publishing so we know
+		// which confirmation belongs to THIS publish. amqp091's
+		// GetNextPublishSeqNo and PublishWithContext take separate lock
+		// acquisitions internally, so without serialization two concurrent
+		// publishers can both see the same "next" seq number, both register
+		// pendingPublishes[N] (second overwrites first), and the broker then
+		// assigns them different tags — leaving one publish hanging on a
+		// confirm that never arrives. publishSerial closes that race; the
+		// per-publish confirm wait (below the Unlock) stays fully concurrent.
+		confirmCh := make(chan amqp.Confirmation, 1)
+		c.publishSerial.Lock()
+		expectedTag := channel.GetNextPublishSeqNo()
+		c.pendingPublishes.Store(expectedTag, confirmCh)
 		err := channel.PublishWithContext(
 			ctx,
 			options.Exchange,
@@ -222,8 +266,13 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			options.Immediate,
 			publishing,
 		)
+		c.publishSerial.Unlock()
 
 		if err != nil {
+			// Publish never made it to the broker — drop our pending registration.
+			// (A stray broker confirmation for this tag, if it somehow arrives later,
+			// will be silently dropped by the dispatcher's unmatched-tag handling.)
+			c.pendingPublishes.Delete(expectedTag)
 			retryCount++
 			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
 
@@ -255,17 +304,20 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			continue
 		}
 
-		// Wait for confirmation on the captured confirm channel
+		// Wait for confirmation on OUR per-publish channel — the dispatcher
+		// goroutine routes only the confirmation whose DeliveryTag matches
+		// expectedTag here.
 		select {
 		case <-ctx.Done():
-			// Record failed publish metrics before returning
+			// Cleanup so the dispatcher doesn't hold a stale chan reference.
+			c.pendingPublishes.Delete(expectedTag)
 			elapsed := time.Since(startTime)
 			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
 			span.RecordError(ctx.Err())
 			span.SetStatus(codes.Error, ctx.Err().Error())
 			return ctx.Err()
 		case <-c.done:
-			// Record failed publish metrics before returning
+			c.pendingPublishes.Delete(expectedTag)
 			elapsed := time.Since(startTime)
 			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
 			span.RecordError(errShutdown)
@@ -447,6 +499,7 @@ func (c *AMQPClientImpl) Close() error {
 
 // handleReconnect manages connection lifecycle and reconnection logic.
 func (c *AMQPClientImpl) handleReconnect() {
+	attempt := 0
 	for {
 		c.m.Lock()
 		c.isReady = false
@@ -456,20 +509,59 @@ func (c *AMQPClientImpl) handleReconnect() {
 
 		conn, err := c.connect()
 		if err != nil {
-			c.log.Error().Err(err).Msg("Failed to connect to AMQP broker, retrying...")
+			attempt++
+			delay := computeBackoff(c.reconnectDelay, c.reconnectMaxDelay, attempt)
+			c.log.Error().Err(err).
+				Dur("backoff", delay).
+				Int("attempt", attempt).
+				Msg("Failed to connect to AMQP broker, retrying with exponential backoff")
 
 			select {
 			case <-c.done:
 				return
-			case <-time.After(c.reconnectDelay):
+			case <-time.After(delay):
 			}
 			continue
 		}
 
+		// Reset attempt counter on successful connect — next outage starts fresh.
+		attempt = 0
 		if c.handleReInit(conn) {
 			break
 		}
 	}
+}
+
+// computeBackoff returns a duration in [0, min(base*2^attempt, cap)] for use as
+// a reconnection/retry delay. Implements "full jitter" exponential backoff
+// (https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) —
+// the upper bound grows exponentially with the attempt count but every actual
+// wait is a uniform random sample below it, which spreads herd recovery
+// after a broker outage instead of all clients reconnecting at exactly t=cap.
+func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		base = defaultReconnectDelay
+	}
+	if maxDelay <= 0 {
+		maxDelay = defaultReconnectMaxDelay
+	}
+	if maxDelay < base {
+		maxDelay = base
+	}
+	backoff := base
+	for i := 0; i < attempt && backoff < maxDelay; i++ {
+		backoff *= 2
+	}
+	if backoff > maxDelay {
+		backoff = maxDelay
+	}
+	if backoff <= 0 {
+		return base
+	}
+	// Full jitter is a load-distribution mechanism, not a security primitive —
+	// math/rand/v2 is the right tool here. crypto/rand would add system-call
+	// overhead per reconnect attempt without changing the herd-spreading behavior.
+	return time.Duration(rand.Int64N(int64(backoff))) //nolint:gosec // G404: jitter randomness, not cryptographic
 }
 
 // connect creates a new AMQP connection.
@@ -573,12 +665,81 @@ func (c *AMQPClientImpl) changeConnection(connection amqpConnection) {
 }
 
 // changeChannel updates the channel and sets up notifications.
+// The previous channel's pending publishes (if any) are drained with a
+// synthetic NACK so their waiters retry on the new channel instead of
+// hanging on a DeliveryTag that the new channel's broker session will
+// never emit (each new channel starts its sequence counter at 1).
 func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
+	c.drainPendingPublishesWithNack()
+
 	c.channel = channel
 	c.notifyChanClose = make(chan *amqp.Error, 1)
-	c.notifyConfirm = make(chan amqp.Confirmation, 1)
+	// Buffer sized for a reasonable concurrent-publish burst. The dispatcher
+	// goroutine drains it; the broker will block PublishWithContext if this
+	// fills up, providing natural backpressure.
+	c.notifyConfirm = make(chan amqp.Confirmation, defaultConfirmBufferSize)
 	c.channel.NotifyClose(c.notifyChanClose)
 	c.channel.NotifyPublish(c.notifyConfirm)
+
+	// Start the dispatcher for this channel incarnation. It exits naturally
+	// when notifyConfirm is closed (which happens on channel teardown via
+	// amqp091's internal close path).
+	go c.dispatchConfirms(c.notifyConfirm)
+}
+
+// drainPendingPublishesWithNack signals every pending publish from the previous
+// channel incarnation that its confirmation will never arrive. Synthesizing a
+// NACK (rather than closing the channel) lets the publisher's existing retry
+// loop kick in cleanly — it captures a fresh DeliveryTag from the new channel
+// and tries again.
+func (c *AMQPClientImpl) drainPendingPublishesWithNack() {
+	c.pendingPublishes.Range(func(key, value any) bool {
+		c.pendingPublishes.Delete(key)
+		tag, _ := key.(uint64)
+		ch, ok := value.(chan amqp.Confirmation)
+		if !ok {
+			return true
+		}
+		// Non-blocking send: if the publisher already gave up via ctx.Done,
+		// nobody reads, and we'd otherwise block forever.
+		select {
+		case ch <- amqp.Confirmation{DeliveryTag: tag, Ack: false}:
+		default:
+		}
+		return true
+	})
+}
+
+// dispatchConfirms reads confirmations from the broker's notify channel and
+// routes each to the in-flight publish that registered for its DeliveryTag.
+// Exits when src is closed (channel teardown) OR when c.done is closed (full
+// client shutdown). Unmatched confirmations are silently dropped — they happen
+// when a publish errored out before registering or when the publisher already
+// drained via NACK after channel reinit.
+func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation) {
+	for {
+		select {
+		case <-c.done:
+			return
+		case confirm, ok := <-src:
+			if !ok {
+				return // channel closed by broker / channel teardown
+			}
+			v, ok := c.pendingPublishes.LoadAndDelete(confirm.DeliveryTag)
+			if !ok {
+				continue
+			}
+			ch, ok := v.(chan amqp.Confirmation)
+			if !ok {
+				continue
+			}
+			// Non-blocking send: publisher may have abandoned via ctx.Done.
+			select {
+			case ch <- confirm:
+			default:
+			}
+		}
+	}
 }
 
 // amqpHeaderAccessor implements trace.HeaderAccessor for AMQP headers
