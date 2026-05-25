@@ -186,19 +186,19 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclar
 		opts.Workers = runtime.NumCPU() * 4
 	}
 
-	// Resource safeguard: Cap workers at 200 per consumer
-	if opts.Workers > 200 {
-		opts.Workers = 200
+	// Resource safeguard: Cap workers per consumer
+	if opts.Workers > maxWorkersPerConsumer {
+		opts.Workers = maxWorkersPerConsumer
 	}
 
-	// PrefetchCount: Default to Workers * 10 for optimal pipeline, capped at 500
+	// PrefetchCount: Default to Workers * multiplier for optimal pipeline, capped at maxDefaultPrefetch
 	if opts.PrefetchCount == 0 {
-		opts.PrefetchCount = min(opts.Workers*10, 500)
+		opts.PrefetchCount = min(opts.Workers*defaultPrefetchMultiplier, maxDefaultPrefetch)
 	}
 
-	// Resource safeguard: Cap prefetch at 1000 to prevent memory exhaustion
-	if opts.PrefetchCount > 1000 {
-		opts.PrefetchCount = 1000
+	// Resource safeguard: Cap prefetch to prevent memory exhaustion
+	if opts.PrefetchCount > maxPrefetchCount {
+		opts.PrefetchCount = maxPrefetchCount
 	}
 
 	consumer := NewConsumer(opts)

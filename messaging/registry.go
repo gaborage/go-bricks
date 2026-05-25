@@ -253,10 +253,10 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	}
 
 	// Wait for AMQP client to be ready with timeout
-	timeout := time.NewTimer(30 * time.Second)
+	timeout := time.NewTimer(readyTimeoutDuration)
 	defer timeout.Stop()
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(readinessCheckInterval)
 	defer ticker.Stop()
 
 	for {
