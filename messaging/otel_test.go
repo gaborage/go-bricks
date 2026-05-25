@@ -180,7 +180,9 @@ func TestPublishNotReadyRecordsError(t *testing.T) {
 	data := []byte(testMessage)
 
 	err := client.Publish(ctx, destination, data)
-	require.NoError(t, err) // Returns nil to avoid failing business operation
+	// W3-D breaking change: pre-fix returned nil to avoid failing the business
+	// operation; post-fix returns errNotConnected so callers can retry/escalate.
+	require.ErrorIs(t, err, errNotConnected)
 
 	// Verify span recorded the error status
 	spans := exporter.GetSpans()
@@ -188,7 +190,7 @@ func TestPublishNotReadyRecordsError(t *testing.T) {
 
 	span := spans[0]
 	assert.Equal(t, codes.Error, span.Status.Code)
-	assert.Contains(t, span.Status.Description, "not ready")
+	assert.Contains(t, span.Status.Description, "not connected")
 
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
@@ -390,12 +392,16 @@ func setupReadyClient(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeCha
 		connectionTimeout: 100 * time.Millisecond,
 	}
 
-	// Manually set up connection and channel
+	// Manually set up connection
 	client.connection = fakeConn
-	client.channel = fakeCh
 	client.notifyConnClose = fakeConn.notifyCloseCh
-	client.notifyChanClose = fakeCh.notifyCloseCh
-	client.notifyConfirm = fakeCh.notifyConfirmCh
+
+	// Use changeChannel for channel/confirm wiring so the W3-D dispatcher
+	// goroutine routes confirmations to per-publish channels. After this call,
+	// fakeCh.notifyConfirmCh == client.notifyConfirm (the fake's NotifyPublish
+	// captures the channel argument), so tests that send to fakeCh.notifyConfirmCh
+	// still feed the dispatcher correctly.
+	client.changeChannel(fakeCh)
 	client.isReady = true
 
 	return client, fakeConn, fakeCh
