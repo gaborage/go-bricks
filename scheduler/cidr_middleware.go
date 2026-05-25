@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/labstack/echo/v5"
 )
@@ -15,52 +16,79 @@ import (
 //
 // trustedProxies: CIDR ranges of reverse proxies that can be trusted to provide
 // X-Forwarded-For/X-Real-IP headers. If empty, proxy headers are IGNORED to prevent spoofing.
-func CIDRMiddleware(allowlist, trustedProxies []string) echo.MiddlewareFunc {
-	allowedNets, localhostOnly := parseCIDRAllowlist(allowlist)
-	trustedNets := parseTrustedProxies(trustedProxies)
+//
+// Invalid CIDR entries in either list are skipped (not fatal). The supplied logger
+// receives a WARN with the invalid entries so operators see misconfigurations rather
+// than silently degrading to a more restrictive posture (allowlist) or losing real
+// client IPs from behind a reverse proxy (trustedProxies).
+func CIDRMiddleware(log logger.Logger, allowlist, trustedProxies []string) echo.MiddlewareFunc {
+	allowedNets, localhostOnly, invalidAllowlist := parseCIDRAllowlist(allowlist)
+	trustedNets, invalidProxies := parseTrustedProxies(trustedProxies)
+
+	if log != nil {
+		if len(invalidAllowlist) > 0 {
+			log.Warn().
+				Int("count", len(invalidAllowlist)).
+				Interface("entries", invalidAllowlist).
+				Bool("falling_back_to_localhost_only", localhostOnly).
+				Msg("Scheduler CIDR allowlist contains invalid entries; they were skipped")
+		}
+		if len(invalidProxies) > 0 {
+			log.Warn().
+				Int("count", len(invalidProxies)).
+				Interface("entries", invalidProxies).
+				Msg("Scheduler trusted-proxies list contains invalid CIDR entries; proxy headers from those ranges will not be trusted")
+		}
+	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return createIPCheckHandler(next, allowedNets, trustedNets, localhostOnly)
 	}
 }
 
-// parseCIDRAllowlist parses CIDR ranges and determines if localhost-only mode should be used
-func parseCIDRAllowlist(allowlist []string) ([]*net.IPNet, bool) {
+// parseCIDRAllowlist parses CIDR ranges and determines if localhost-only mode should be used.
+// Returns the parsed nets, the localhost-only flag, and any input entries that failed to parse
+// (so the caller can surface them — silent fallback is a security visibility gap).
+func parseCIDRAllowlist(allowlist []string) (nets []*net.IPNet, localhostOnly bool, invalid []string) {
 	if len(allowlist) == 0 {
-		return nil, true
+		return nil, true, nil
 	}
 
-	allowedNets := make([]*net.IPNet, 0, len(allowlist))
+	nets = make([]*net.IPNet, 0, len(allowlist))
 	for _, cidr := range allowlist {
 		cidr = strings.TrimSpace(cidr)
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			continue // Invalid CIDR - skip it
+			invalid = append(invalid, cidr)
+			continue
 		}
-		allowedNets = append(allowedNets, ipNet)
+		nets = append(nets, ipNet)
 	}
 
 	// If all CIDRs were invalid, fall back to localhost-only
-	localhostOnly := len(allowedNets) == 0
-	return allowedNets, localhostOnly
+	localhostOnly = len(nets) == 0
+	return nets, localhostOnly, invalid
 }
 
-// parseTrustedProxies parses trusted proxy CIDR ranges for header validation
-func parseTrustedProxies(trustedProxies []string) []*net.IPNet {
+// parseTrustedProxies parses trusted proxy CIDR ranges for header validation.
+// Returns the parsed nets and any input entries that failed to parse.
+func parseTrustedProxies(trustedProxies []string) (nets []*net.IPNet, invalid []string) {
 	if len(trustedProxies) == 0 {
-		return nil // No trusted proxies = ignore all proxy headers
+		return nil, nil
 	}
 
-	trustedNets := make([]*net.IPNet, 0, len(trustedProxies))
+	nets = make([]*net.IPNet, 0, len(trustedProxies))
 	for _, cidr := range trustedProxies {
+		cidr = strings.TrimSpace(cidr)
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			continue // Invalid CIDR - skip it
+			invalid = append(invalid, cidr)
+			continue
 		}
-		trustedNets = append(trustedNets, ipNet)
+		nets = append(nets, ipNet)
 	}
 
-	return trustedNets
+	return nets, invalid
 }
 
 // createIPCheckHandler creates the handler function that validates IP addresses

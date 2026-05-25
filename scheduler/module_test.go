@@ -130,6 +130,73 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 	assert.Equal(t, 0, job.count(), "Job should not execute after shutdown")
 }
 
+// TestCreateJobWrapperBalancesAddDoneOnShutdownPath asserts that the wrapper's
+// wg.Add(1)/wg.Done() pair stays balanced when the closure bails because the
+// shutdown context is already cancelled. The pre-fix code did Add AFTER the
+// shutdown check, so a shutdown-cancelled invocation never incremented wg —
+// allowing wg.Wait() in Shutdown() to return before the closure had even
+// observed the cancellation. The fix moves Add to the first statement; this
+// test locks in the invariant that every bail path balances Add and Done.
+func TestCreateJobWrapperBalancesAddDoneOnShutdownPath(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
+	defer func() { _ = module.Shutdown() }()
+
+	entry := &jobEntry{
+		job:      &slowJob{duration: time.Millisecond},
+		metadata: &JobMetadata{JobID: "wg-shutdown-test"},
+	}
+	wrapper := module.createJobWrapper(entry)
+
+	// Cancel the shutdown context BEFORE invoking the wrapper, so the closure
+	// hits the shutdown bail path immediately after wg.Add(1).
+	module.shutdownCancel()
+
+	wrapper() // synchronous invoke; defer wg.Done() must fire on return
+
+	// After the wrapper returns, wg counter must be back to 0 (Add balanced by Done).
+	// Use a goroutine + timeout so a leak surfaces as a test failure, not a hang.
+	done := make(chan struct{})
+	go func() { module.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("wg.Wait() blocked after wrapper returned — Add(1) was not balanced by Done()")
+	}
+}
+
+// TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath asserts the same Add/Done
+// balance when the closure bails because the entry's lock is already held (a
+// concurrent invocation is already running). Pre-fix, Add was placed after
+// tryLock — so a tryLock-fail path also skipped Add. Post-fix, Add fires first
+// and defer Done() balances every return.
+func TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
+	defer func() { _ = module.Shutdown() }()
+
+	entry := &jobEntry{
+		job:      &slowJob{duration: time.Millisecond},
+		metadata: &JobMetadata{JobID: "wg-trylock-test"},
+	}
+	// Pre-acquire the lock so the wrapper's tryLock fails inside the closure.
+	require.True(t, entry.tryLock(), "test setup: first tryLock must succeed")
+	defer entry.unlock()
+
+	wrapper := module.createJobWrapper(entry)
+	wrapper() // closure bails at tryLock-fail; defer Done() must still fire
+
+	done := make(chan struct{})
+	go func() { module.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("wg.Wait() blocked after wrapper returned via tryLock-fail path")
+	}
+
+	// Sanity: the skip counter should have incremented (proves we actually hit
+	// the tryLock-fail branch rather than some other path).
+	assert.Equal(t, int64(1), entry.metadata.snapshot().SkippedCount, "expected skip counter increment")
+}
+
 // TestShutdownIdempotent verifies that calling Shutdown more than once is a no-op
 // and does not return an error or fail the underlying gocron scheduler. Regression
 // test for the spurious "Error stopping scheduler" log emitted when a deferred
