@@ -33,7 +33,7 @@ const (
 func setupMockConnection(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *Connection) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	c := &Connection{db: db, logger: dbtestlog.NewDisabledTestLogger()}
+	c := &Connection{Connection: &wrapper.Connection{DB: db, Logger: dbtestlog.NewDisabledTestLogger(), Name: "PostgreSQL"}}
 	return db, mock, c
 }
 
@@ -934,9 +934,12 @@ func TestConnectionStatsWithNilConfig(t *testing.T) {
 
 	// Create connection with nil config
 	c := &Connection{
-		db:     db,
-		logger: dbtestlog.NewDisabledTestLogger(),
-		config: nil, // Explicitly nil config
+		Connection: &wrapper.Connection{
+			DB:     db,
+			Logger: dbtestlog.NewDisabledTestLogger(),
+			Config: nil, // Explicitly nil config
+			Name:   "PostgreSQL",
+		},
 	}
 
 	stats, err := c.Stats()
@@ -963,11 +966,14 @@ func TestConnectionCloseWithNilMetricsCleanup(t *testing.T) {
 
 	mock.ExpectClose()
 
-	// Create connection with nil metricsCleanup
+	// Create connection with nil MetricsCleanup
 	c := &Connection{
-		db:             db,
-		logger:         dbtestlog.NewDisabledTestLogger(),
-		metricsCleanup: nil, // Explicitly nil - no metrics registered
+		Connection: &wrapper.Connection{
+			DB:             db,
+			Logger:         dbtestlog.NewDisabledTestLogger(),
+			MetricsCleanup: nil, // Explicitly nil - no metrics registered
+			Name:           "PostgreSQL",
+		},
 	}
 
 	err = c.Close()
