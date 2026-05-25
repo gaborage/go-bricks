@@ -162,23 +162,28 @@ func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, erro
 	}
 }
 
+// shutdownTimeouts returns the inner timeout (passed to module Shutdown calls)
+// and the outer hard-stop deadline (inner + 5s headroom). Falls back to 10s/15s
+// when cfg is nil or the configured value is non-positive — matching the
+// documented server.timeout.shutdown default. Reading both values from a single
+// helper keeps drainServerError and the main shutdown sequence in lockstep.
+func (a *App) shutdownTimeouts() (inner, outer time.Duration) {
+	inner = 10 * time.Second
+	if a.cfg != nil && a.cfg.Server.Timeout.Shutdown > 0 {
+		inner = a.cfg.Server.Timeout.Shutdown
+	}
+	outer = inner + 5*time.Second
+	return inner, outer
+}
+
 // drainServerError drains any remaining error from the server error channel
 func (a *App) drainServerError(ch <-chan error) error {
 	if ch == nil {
 		return nil
 	}
 
-	// Derive from configured shutdown timeout with headroom
-	timeoutDur := 15 * time.Second // default timeout
-	if a.cfg != nil {
-		timeoutDur = a.cfg.Server.Timeout.Shutdown
-		if timeoutDur <= 0 {
-			timeoutDur = 15 * time.Second
-		} else {
-			timeoutDur += 5 * time.Second
-		}
-	}
-	timeout := time.After(timeoutDur)
+	_, outer := a.shutdownTimeouts()
+	timeout := time.After(outer)
 
 	if a.logger != nil {
 		a.logger.Debug().Msg("Draining server error channel")
@@ -223,7 +228,8 @@ func (a *App) Run() error {
 		a.logger.Error().Err(serverErr).Msg("Server stopped unexpectedly")
 	}
 
-	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), 10*time.Second)
+	inner, outer := a.shutdownTimeouts()
+	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), inner)
 
 	a.logger.Info().Msg("Shutting down application")
 
@@ -234,13 +240,13 @@ func (a *App) Run() error {
 		close(shutdownComplete)
 	}()
 
-	// Wait for shutdown with hard timeout
+	// Wait for shutdown with hard timeout (5s headroom over inner via shutdownTimeouts)
 	var shutdownErr error
 	select {
 	case shutdownErr = <-shutdownComplete:
 		a.logger.Info().Msg("Graceful shutdown completed")
 		cancel()
-	case <-time.After(15 * time.Second): // 5 seconds longer than shutdown context
+	case <-time.After(outer):
 		a.logger.Error().Msg("Shutdown timed out, forcing exit")
 		cancel()
 		return fmt.Errorf("shutdown timed out")
