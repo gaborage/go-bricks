@@ -17,6 +17,56 @@ const (
 	testApp = "test-app"
 )
 
+func TestShutdownTimeouts(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       *config.Config
+		wantInner time.Duration
+		wantOuter time.Duration
+	}{
+		{
+			name:      "nil_cfg_uses_documented_defaults",
+			cfg:       nil,
+			wantInner: 10 * time.Second,
+			wantOuter: 15 * time.Second,
+		},
+		{
+			name:      "positive_config_overrides_default",
+			cfg:       &config.Config{Server: config.ServerConfig{Timeout: config.TimeoutConfig{Shutdown: 30 * time.Second}}},
+			wantInner: 30 * time.Second,
+			wantOuter: 35 * time.Second,
+		},
+		{
+			name:      "small_positive_config_keeps_5s_headroom",
+			cfg:       &config.Config{Server: config.ServerConfig{Timeout: config.TimeoutConfig{Shutdown: 1 * time.Second}}},
+			wantInner: 1 * time.Second,
+			wantOuter: 6 * time.Second,
+		},
+		{
+			name:      "zero_config_falls_back_to_default",
+			cfg:       &config.Config{Server: config.ServerConfig{Timeout: config.TimeoutConfig{Shutdown: 0}}},
+			wantInner: 10 * time.Second,
+			wantOuter: 15 * time.Second,
+		},
+		{
+			name:      "negative_config_falls_back_to_default",
+			cfg:       &config.Config{Server: config.ServerConfig{Timeout: config.TimeoutConfig{Shutdown: -5 * time.Second}}},
+			wantInner: 10 * time.Second,
+			wantOuter: 15 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &App{cfg: tc.cfg}
+			gotInner, gotOuter := app.shutdownTimeouts()
+			assert.Equal(t, tc.wantInner, gotInner, "inner timeout")
+			assert.Equal(t, tc.wantOuter, gotOuter, "outer timeout")
+			assert.Equal(t, gotInner+5*time.Second, gotOuter, "outer must equal inner + 5s headroom")
+		})
+	}
+}
+
 func TestShutdownTiming(t *testing.T) {
 	// Test that the shutdown process completes within reasonable time
 	cfg := &config.Config{
