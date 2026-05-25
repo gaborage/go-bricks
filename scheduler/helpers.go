@@ -21,7 +21,7 @@ import (
 //
 // Panics on invalid input (wrong format, invalid hour/minute values).
 func ParseTime(timeStr string) time.Time {
-	t, err := time.Parse("15:04", timeStr)
+	t, err := time.Parse(timeOfDayFormat, timeStr)
 	if err != nil {
 		panic(fmt.Sprintf("scheduler: invalid time format '%s' - expected HH:MM (24-hour), error: %v", timeStr, err)) //nolint:S8148 // NOSONAR: Fail-fast on invalid time format (configuration error)
 	}
