@@ -3941,7 +3941,7 @@ client := httpclient.NewBuilder(log).
 resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.stripe.com/v1/charges"})
 ```
 
-`WithPeerName` sets the `peer.service` attribute on all emitted metrics (`http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, `http.client.request.resend.count`). Use it to attribute SLO budget consumption per upstream: `"stripe"`, `"visa-vts"`, `"payments-core"`, etc. When omitted the attribute is absent — metrics aggregate across all upstreams.
+`WithPeerName` sets the `peer.service` attribute on all emitted metrics (`http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, `http.client.retries.total`). Use it to attribute SLO budget consumption per upstream: `"stripe"`, `"visa-vts"`, `"payments-core"`, etc. When omitted the attribute is absent — metrics aggregate across all upstreams.
 
 ## Observability & Logging
 

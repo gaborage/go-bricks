@@ -976,11 +976,14 @@ func TestTraceIDUtilities(t *testing.T) {
 // provider for metric collection and a cleanup function that must be deferred.
 func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
 	t.Helper()
+	prev := otel.GetMeterProvider()
 	mp = obtest.NewTestMeterProvider()
 	otel.SetMeterProvider(mp)
 	tracking.ResetMeterForTesting()
 	tracking.InitHTTPMeter()
 	return mp, func() {
+		otel.SetMeterProvider(prev)
+		tracking.ResetMeterForTesting()
 		require.NoError(t, mp.Shutdown(context.Background()))
 	}
 }
@@ -1055,13 +1058,12 @@ func TestHTTPClientMetricsSuccessPath(t *testing.T) {
 	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
 	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
 	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
-	if ok {
-		var netTotal int64
-		for _, dp := range sumData.DataPoints {
-			netTotal += dp.Value
-		}
-		assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+	require.True(t, ok, "http.client.active_requests data must be Sum[int64]")
+	var netTotal int64
+	for _, dp := range sumData.DataPoints {
+		netTotal += dp.Value
 	}
+	assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
 }
 
 // TestHTTPClientMetricsRetryOn503 verifies that when the server returns 503 then 200
@@ -1228,13 +1230,12 @@ func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
 	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
 	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
 	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
-	if ok {
-		var netTotal int64
-		for _, dp := range sumData.DataPoints {
-			netTotal += dp.Value
-		}
-		assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+	require.True(t, ok, "http.client.active_requests data must be Sum[int64]")
+	var netTotal int64
+	for _, dp := range sumData.DataPoints {
+		netTotal += dp.Value
 	}
+	assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
 }
 
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in

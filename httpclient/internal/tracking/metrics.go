@@ -77,12 +77,8 @@ func logMetricError(metricName string, err error) {
 }
 
 // initHTTPMeter performs the one-time meter and instrument initialization.
-// It is called via sync.Once and is protected by meterInitMu to prevent
-// races between a reset (in tests) and concurrent callers.
+// Caller MUST hold meterInitMu.
 func initHTTPMeter() {
-	meterInitMu.Lock()
-	defer meterInitMu.Unlock()
-
 	if httpMeter != nil {
 		return
 	}
@@ -134,9 +130,11 @@ func initHTTPMeter() {
 }
 
 // InitHTTPMeter initializes the HTTP client meter idempotently.
-// Subsequent calls after the first are no-ops. The meter is pulled from
-// otel.GetMeterProvider() lazily via sync.Once.
+// Subsequent calls after the first are no-ops. Holds meterInitMu so that
+// concurrent calls and ResetMeterForTesting cannot race on meterOnce.
 func InitHTTPMeter() {
+	meterInitMu.Lock()
+	defer meterInitMu.Unlock()
 	meterOnce.Do(initHTTPMeter)
 }
 
