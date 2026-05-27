@@ -51,6 +51,10 @@ const (
 	retryReason5xx           = "5xx"
 )
 
+// netOpDial is the net.OpError.Op value for TCP dial operations. Centralised
+// as a constant because classifyError and its tests reference it in four places.
+const netOpDial = "dial"
+
 // OTel error.type attribute values returned by classifyError. These are the
 // canonical string values emitted on the http.client.request.duration histogram
 // and http.client.request.failed counter — kept as named constants so that

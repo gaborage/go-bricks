@@ -452,8 +452,14 @@ func (c *client) handleExecutionError(ctx context.Context, err error, attempt, m
 		return attemptResult{err: handledErr}
 	}
 	if retry {
+		// Derive retry.reason from classifyError so it agrees with the
+		// error.type attribute recorded on the duration histogram. Using a
+		// separate isTimeout call here previously caused divergence: a dial
+		// timeout was labelled error.type="connection_error" but
+		// retry.reason="timeout" because isTimeout matches net.Error.Timeout().
+		errType := classifyError(err)
 		reason := retryReasonNetwork
-		if c.isTimeout(err) {
+		if errType == errorTypeTimeout || errType == errorTypeContextCanceled {
 			reason = retryReasonTimeout
 		}
 		return attemptResult{retry: true, retryReason: reason}
@@ -814,6 +820,24 @@ func (c *client) isRetryableStatus(code int) bool {
 // classifyError maps a typed/wrapped error to the OTel error.type enum value.
 // Returns "" when err is nil (including for HTTP error status codes — those carry
 // the signal via http.response.status_code, not error.type, per OTel guidance).
+//
+// Check ordering rationale:
+//  1. nil → ""
+//  2. context.Canceled → "context_canceled"
+//  3. Framework TimeoutError / context.DeadlineExceeded → "timeout"
+//  4. InterceptorError — checked BEFORE all errors.As chains because
+//     interceptorError.Unwrap() exposes its cause; without this guard,
+//     errors.As would traverse the chain and match the wrapped net type
+//     (e.g. *net.DNSError inside an interceptor failure would be
+//     mis-labelled "name_resolution_error" instead of "interceptor_failed").
+//  5. *net.DNSError — must precede the generic net.Error.Timeout() check
+//     because *net.DNSError implements net.Error and Timeout() can return
+//     true for timed-out lookups; matching it here keeps the label specific.
+//  6. TLS errors.
+//  7. Dial OpError — must precede the generic net.Error.Timeout() check so
+//     a dial that times out is labelled "connection_error", not "timeout".
+//  8. Generic net.Error.Timeout() — read-deadline exceeded and similar.
+//  9. Catch-all → "_OTHER".
 func classifyError(err error) string {
 	if err == nil {
 		return ""
@@ -825,6 +849,12 @@ func classifyError(err error) string {
 	// Framework-typed timeout or context deadline exceeded.
 	if IsErrorType(err, TimeoutError) || errors.Is(err, context.DeadlineExceeded) {
 		return errorTypeTimeout
+	}
+	// Interceptor failure — must precede all errors.As network-type checks so
+	// that an interceptor wrapping a *net.DNSError/*net.OpError/tls error is
+	// labelled "interceptor_failed", not the wrapped cause's type.
+	if IsErrorType(err, InterceptorError) {
+		return errorTypeInterceptorFailed
 	}
 	// DNS resolution failure — must precede the generic net.Error.Timeout() check
 	// because *net.DNSError implements net.Error and Timeout() can return true for
@@ -845,7 +875,7 @@ func classifyError(err error) string {
 	// Dial connection failure — must precede the generic net.Error.Timeout() check
 	// so a dial that times out is labelled "connection_error", not "timeout".
 	var opErr *net.OpError
-	if errors.As(err, &opErr) && opErr.Op == "dial" {
+	if errors.As(err, &opErr) && opErr.Op == netOpDial {
 		return errorTypeConnection
 	}
 	// Generic net-layer timeout (e.g. read deadline exceeded) that did not match
@@ -853,10 +883,6 @@ func classifyError(err error) string {
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return errorTypeTimeout
-	}
-	// Interceptor failure.
-	if IsErrorType(err, InterceptorError) {
-		return errorTypeInterceptorFailed
 	}
 	// Any other wrapped network error or unknown error.
 	return errorTypeOther

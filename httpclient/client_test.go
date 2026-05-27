@@ -1340,7 +1340,7 @@ func TestClassifyError(t *testing.T) {
 		},
 		{
 			name:     "tcp_dial_failure",
-			err:      &net.OpError{Op: "dial", Err: errors.New("connection refused")},
+			err:      &net.OpError{Op: netOpDial, Err: errors.New("connection refused")},
 			expected: errorTypeConnection,
 		},
 		{
@@ -1353,6 +1353,22 @@ func TestClassifyError(t *testing.T) {
 		{
 			name:     "interceptor_failure",
 			err:      NewInterceptorError("interceptor failed", "request", errors.New("upstream")),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			// Regression: an interceptor wrapping a *net.DNSError must be
+			// "interceptor_failed", not "name_resolution_error". Without the
+			// InterceptorError guard before the errors.As chains, errors.As
+			// would traverse Unwrap() and match the wrapped *net.DNSError.
+			name:     "interceptor_wrapping_dns_error",
+			err:      NewInterceptorError("validate", "response", &net.DNSError{Err: "no such host", IsNotFound: true}),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			// Regression: an interceptor wrapping a *net.OpError (dial) must be
+			// "interceptor_failed", not "connection_error".
+			name:     "interceptor_wrapping_dial_error",
+			err:      NewInterceptorError("validate", "response", &net.OpError{Op: netOpDial, Err: errors.New("connection refused")}),
 			expected: errorTypeInterceptorFailed,
 		},
 		{
@@ -1371,6 +1387,66 @@ func TestClassifyError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := classifyError(tc.err)
 			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+// TestClassifyErrorRetryReasonCoherence verifies that the retry.reason derived
+// from classifyError agrees with the error.type label — i.e., errors that are
+// NOT classified as timeout or context_canceled must produce retryReasonNetwork,
+// not retryReasonTimeout. This is the regression guard for Bug 2: a dial timeout
+// previously produced error.type="connection_error" but retry.reason="timeout"
+// because handleExecutionError called isTimeout separately from classifyError.
+func TestClassifyErrorRetryReasonCoherence(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		wantErrType     string
+		wantRetryReason string
+	}{
+		{
+			name:            "dial_timeout_connection_not_timeout",
+			err:             &net.OpError{Op: netOpDial, Err: errors.New("connection refused")},
+			wantErrType:     errorTypeConnection,
+			wantRetryReason: retryReasonNetwork,
+		},
+		{
+			name:            "dns_timeout_name_resolution_not_timeout",
+			err:             &net.DNSError{Err: "i/o timeout", IsTimeout: true},
+			wantErrType:     errorTypeNameResolution,
+			wantRetryReason: retryReasonNetwork,
+		},
+		{
+			name:            "context_deadline_exceeded_is_timeout",
+			err:             context.DeadlineExceeded,
+			wantErrType:     errorTypeTimeout,
+			wantRetryReason: retryReasonTimeout,
+		},
+		{
+			name:            "framework_timeout_is_timeout",
+			err:             NewTimeoutError("request timed out", 5*time.Second),
+			wantErrType:     errorTypeTimeout,
+			wantRetryReason: retryReasonTimeout,
+		},
+		{
+			name:            "interceptor_wrapping_dns_is_network",
+			err:             NewInterceptorError("validate", "response", &net.DNSError{Err: "no such host", IsNotFound: true}),
+			wantErrType:     errorTypeInterceptorFailed,
+			wantRetryReason: retryReasonNetwork,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errType := classifyError(tc.err)
+			assert.Equal(t, tc.wantErrType, errType, "classifyError mismatch")
+
+			// Mirror the retry-reason logic from handleExecutionError.
+			reason := retryReasonNetwork
+			if errType == errorTypeTimeout || errType == errorTypeContextCanceled {
+				reason = retryReasonTimeout
+			}
+			assert.Equal(t, tc.wantRetryReason, reason, "retry.reason mismatch for error.type=%q", errType)
 		})
 	}
 }
