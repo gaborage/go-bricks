@@ -34,6 +34,9 @@
 
 !wiki/*
 
+!docs/superpowers/specs/*.md
+!docs/superpowers/plans/*.md
+
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
 !.github/ISSUE_TEMPLATE/*.yml
