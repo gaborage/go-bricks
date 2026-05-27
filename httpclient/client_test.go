@@ -1457,19 +1457,20 @@ func TestClassifyErrorRetryReasonCoherence(t *testing.T) {
 
 // setupTestTracerForClient installs an in-memory test trace provider as the
 // global tracer + propagator, returning a cleanup that restores both.
-func setupTestTracerForClient(t *testing.T) (*obtest.TestTraceProvider, func()) {
+func setupTestTracerForClient(t *testing.T) (tp *obtest.TestTraceProvider, cleanup func()) {
 	t.Helper()
-	tp := obtest.NewTestTraceProvider()
+	tp = obtest.NewTestTraceProvider()
 	originalTP := otel.GetTracerProvider()
 	originalProp := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(tp.TracerProvider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	tracking.ResetTracerForTesting()
-	return tp, func() {
+	cleanup = func() {
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalProp)
 		tracking.ResetTracerForTesting()
 	}
+	return tp, cleanup
 }
 
 // partitionSpans splits the captured spans into the single parent (no parent
@@ -1653,6 +1654,8 @@ func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing
 	obtest.AssertSpanAttribute(t, &parent, "http.response.status_code", int64(200))
 
 	// First two attempts (503) → Error status, last (200) → Unset.
+	// codes.Ok is unused for client spans per OTel HTTP semconv (4xx-as-OK
+	// is signalled by Unset, not Ok).
 	errorCount, unsetCount := 0, 0
 	for i := range children {
 		switch children[i].Status.Code {
@@ -1660,6 +1663,8 @@ func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing
 			errorCount++
 		case codes.Unset:
 			unsetCount++
+		case codes.Ok:
+			t.Fatalf("attempt span %d unexpectedly has codes.Ok status (client spans should never set Ok)", i)
 		}
 	}
 	assert.Equal(t, 2, errorCount, "first two 5xx attempts should have Error status")

@@ -286,4 +286,3 @@ func TestStartHTTPClientSpanNilURLEmitsEmptyAttrs(t *testing.T) {
 	obtest.AssertSpanAttribute(t, &got, "server.address", "")
 	obtest.AssertSpanAttribute(t, &got, "url.scheme", "")
 }
-
