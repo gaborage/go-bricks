@@ -82,6 +82,10 @@ type Config struct {
 	TraceIDExtractor func(_ context.Context) (traceID string, ok bool)
 	// EnableW3CTrace enables W3C Trace Context (traceparent/tracestate) propagation and generation
 	EnableW3CTrace bool
+	// PeerName is a low-cardinality logical service name attached to every metric emitted
+	// by this client. Intended for SLO attribution (e.g., "stripe", "visa-vts").
+	// When unset, only the high-cardinality server.address is recorded.
+	PeerName string
 }
 
 // Trace ID utility functions

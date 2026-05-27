@@ -13,7 +13,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	obtest "github.com/gaborage/go-bricks/observability/testing"
+
+	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -961,6 +967,206 @@ func TestTraceIDUtilities(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "existing-trace", req.Header.Get(HeaderXRequestID))
 	})
+}
+
+// setupClientTestMeterProvider creates a TestMeterProvider, sets it as the global OTel
+// provider, resets tracking meter state, and initialises the instruments. Returns the
+// provider for metric collection and a cleanup function that must be deferred.
+func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
+	t.Helper()
+	mp = obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	tracking.ResetMeterForTesting()
+	tracking.InitHTTPMeter()
+	return mp, func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}
+}
+
+// hasStringAttr returns true when an attribute with the given key and value appears in attrs.
+func hasStringAttr(attrs []attribute.KeyValue, key, val string) bool {
+	for _, a := range attrs {
+		if string(a.Key) == key && a.Value.AsString() == val {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAttrKey returns true when any attribute with the given key appears in attrs.
+func hasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHTTPClientMetricsSuccessPath verifies that a successful request emits the
+// duration histogram with peer.service and status_code attributes, no error.type
+// attribute, and that active_requests returns to 0 after the call completes.
+func TestHTTPClientMetricsSuccessPath(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("test-peer").
+		Build()
+
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have exactly 1 datapoint.
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration metric must be emitted")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(1), totalCount, "expected 1 histogram observation for a single successful request")
+
+	// Verify peer.service and status_code attributes, absent error.type.
+	require.NotEmpty(t, histData.DataPoints)
+	dp0 := histData.DataPoints[0]
+	attrs := dp0.Attributes.ToSlice()
+	assert.True(t, hasStringAttr(attrs, "peer.service", "test-peer"), "peer.service attribute should be 'test-peer'")
+	assert.True(t, hasAttrKey(attrs, "http.response.status_code"), "http.response.status_code attribute must be present")
+	assert.False(t, hasAttrKey(attrs, "error.type"), "error.type attribute must be absent on success")
+
+	// Active requests must be net 0 after the call returns (defer fired before we reach here).
+	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
+	if activeMetric != nil {
+		sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+		if ok {
+			var netTotal int64
+			for _, dp := range sumData.DataPoints {
+				netTotal += dp.Value
+			}
+			assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+		}
+	}
+}
+
+// TestHTTPClientMetricsRetryOn503 verifies that when the server returns 503 then 200
+// the duration histogram records one observation per attempt and the retries counter
+// is incremented with retry.reason="5xx".
+func TestHTTPClientMetricsRetryOn503(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	var callCount atomic.Int32
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		if callCount.Add(1) == 1 {
+			w.WriteHeader(nethttp.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("retry-peer").
+		WithRetries(2, 1*time.Millisecond).
+		Build()
+
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have 2 total observations (one per attempt).
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(2), totalCount, "expected 2 histogram observations (one per attempt)")
+
+	// Retries counter must be 1 with retry.reason="5xx".
+	retryMetric := obtest.FindMetric(rm, "http.client.retries.total")
+	require.NotNil(t, retryMetric, "http.client.retries.total must be emitted")
+	sumData, ok := retryMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] for retries.total")
+
+	var totalRetries int64
+	foundFiveXX := false
+	for _, dp := range sumData.DataPoints {
+		totalRetries += dp.Value
+		if hasStringAttr(dp.Attributes.ToSlice(), "retry.reason", "5xx") {
+			foundFiveXX = true
+		}
+	}
+	assert.Equal(t, int64(1), totalRetries, "expected exactly 1 retry")
+	assert.True(t, foundFiveXX, "retry.reason='5xx' attribute must be present on retry counter")
+}
+
+// TestHTTPClientMetricsTimeoutClassification verifies that when the server delays
+// beyond the client timeout the duration histogram datapoint carries error.type="timeout"
+// and no http.response.status_code attribute.
+func TestHTTPClientMetricsTimeoutClassification(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("timeout-peer").
+		WithTimeout(10 * time.Millisecond).
+		Build()
+
+	_, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.Error(t, err)
+	assert.True(t, IsErrorType(err, TimeoutError))
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted on timeout")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+	require.NotEmpty(t, histData.DataPoints)
+
+	// Find the datapoint that has error.type="timeout".
+	foundTimeout := false
+	for _, dp := range histData.DataPoints {
+		attrs := dp.Attributes.ToSlice()
+		if hasStringAttr(attrs, "error.type", "timeout") {
+			foundTimeout = true
+			assert.False(t, hasAttrKey(attrs, "http.response.status_code"),
+				"http.response.status_code must be absent when status is 0 (transport error)")
+		}
+	}
+	assert.True(t, foundTimeout, "at least one datapoint must have error.type='timeout'")
 }
 
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in

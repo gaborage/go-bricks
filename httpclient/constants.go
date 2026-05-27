@@ -41,3 +41,12 @@ const (
 	// from filling log storage during high-volume request capture.
 	defaultMaxPayloadLogBytes = 1024
 )
+
+// Retry reason labels passed to tracking.IncRetry. These values match the
+// retry.reason attribute values defined in the tracking package.
+const (
+	retryReasonTimeout       = "timeout"
+	retryReasonNetwork       = "network"
+	retryReasonBuildResponse = "build_response"
+	retryReason5xx           = "5xx"
+)

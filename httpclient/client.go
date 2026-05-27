@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	nethttp "net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +21,8 @@ import (
 
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
+
+	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
 )
 
 const (
@@ -155,6 +159,16 @@ func (b *Builder) WithW3CTrace(enabled bool) *Builder {
 	return b
 }
 
+// WithPeerName sets a low-cardinality logical service name attached to every
+// metric emitted by this client. Intended for SLO attribution (e.g., "stripe",
+// "visa-vts"). When unset, only the high-cardinality server.address is recorded.
+func (b *Builder) WithPeerName(name string) *Builder {
+	if name != "" {
+		b.config.PeerName = name
+	}
+	return b
+}
+
 // WithHTTPClient allows providing a custom *http.Client instance.
 // If the provided client's Timeout is zero, the builder applies its configured Timeout; otherwise it is used as-is.
 // The client's Transport is preserved unless explicitly overridden via WithTransport.
@@ -264,6 +278,7 @@ func deepCopyConfig(src *Config) *Config {
 		MaxPayloadLogBytes: src.MaxPayloadLogBytes,
 		TraceIDHeader:      src.TraceIDHeader,
 		EnableW3CTrace:     src.EnableW3CTrace,
+		PeerName:           src.PeerName,
 	}
 
 	// Copy BasicAuth
@@ -327,18 +342,23 @@ func (c *client) Delete(ctx context.Context, req *Request) (*Response, error) {
 }
 
 type attemptResult struct {
-	response *Response
-	err      error
-	retry    bool
+	response    *Response
+	err         error
+	retry       bool
+	retryReason string
 }
 
 // responseProcessingContext groups the metadata needed when handling an HTTP response.
 type responseProcessingContext struct {
-	attempt    int
-	maxRetries int
-	start      time.Time
-	callCount  int64
-	traceID    string
+	attempt      int
+	maxRetries   int
+	start        time.Time
+	callCount    int64
+	traceID      string
+	attemptStart time.Time
+	method       string
+	requestBytes int
+	httpReqURL   *url.URL
 }
 
 // Do performs an HTTP request with the specified method
@@ -351,9 +371,21 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 	callCount := atomic.AddInt64(&c.callCount, 1)
 	maxRetries := c.config.MaxRetries
 
+	// Pre-extract host once for active_requests attribute. URL parse failures
+	// surface in buildRequest, not here — leave addr empty if parse fails so
+	// the attribute is omitted rather than crashing the gauge.
+	addr := ""
+	if parsed, err := url.Parse(req.URL); err == nil {
+		addr = parsed.Hostname()
+	}
+
+	tracking.IncActiveRequests(ctx, c.config.PeerName, method, addr)
+	defer tracking.DecActiveRequests(ctx, c.config.PeerName, method, addr)
+
 	for attempt := 0; ; attempt++ {
 		result := c.executeAttempt(ctx, method, req, attempt, maxRetries, start, callCount)
 		if result.retry {
+			tracking.IncRetry(ctx, c.config.PeerName, method, result.retryReason)
 			continue
 		}
 		return result.response, result.err
@@ -370,6 +402,7 @@ func (c *client) executeAttempt(
 ) attemptResult {
 	httpReq, err := c.buildRequest(ctx, method, req)
 	if err != nil {
+		// Pre-roundtrip build failure: do NOT record a metric observation.
 		return attemptResult{err: err}
 	}
 
@@ -378,20 +411,37 @@ func (c *client) executeAttempt(
 
 	c.logRequest(httpReq, req.Body, traceIDForLog)
 
+	attemptStart := time.Now()
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		if httpResp != nil && httpResp.Body != nil {
 			httpResp.Body.Close()
 		}
+		// Transport error: record metric with status 0 and classified error type.
+		m := tracking.HTTPClientMeasurement{
+			PeerName:     c.config.PeerName,
+			Method:       method,
+			URL:          httpReq.URL,
+			StatusCode:   0,
+			ErrorType:    classifyError(err),
+			ResendCount:  attempt,
+			Elapsed:      time.Since(attemptStart),
+			RequestBytes: len(req.Body),
+		}
+		tracking.RecordHTTPClientMetrics(ctx, &m)
 		return c.handleExecutionError(ctx, err, attempt, maxRetries)
 	}
 
-	respCtx := responseProcessingContext{
-		attempt:    attempt,
-		maxRetries: maxRetries,
-		start:      start,
-		callCount:  callCount,
-		traceID:    traceIDForLog,
+	respCtx := &responseProcessingContext{
+		attempt:      attempt,
+		maxRetries:   maxRetries,
+		start:        start,
+		callCount:    callCount,
+		traceID:      traceIDForLog,
+		attemptStart: attemptStart,
+		method:       method,
+		requestBytes: len(req.Body),
+		httpReqURL:   httpReq.URL,
 	}
 	return c.processHTTPResponse(ctx, httpReq, httpResp, respCtx)
 }
@@ -402,7 +452,11 @@ func (c *client) handleExecutionError(ctx context.Context, err error, attempt, m
 		return attemptResult{err: handledErr}
 	}
 	if retry {
-		return attemptResult{retry: true}
+		reason := retryReasonNetwork
+		if c.isTimeout(err) {
+			reason = retryReasonTimeout
+		}
+		return attemptResult{retry: true, retryReason: reason}
 	}
 	return attemptResult{err: NewNetworkError("request execution failed", err)}
 }
@@ -411,12 +465,25 @@ func (c *client) processHTTPResponse(
 	ctx context.Context,
 	httpReq *nethttp.Request,
 	httpResp *nethttp.Response,
-	respCtx responseProcessingContext,
+	respCtx *responseProcessingContext,
 ) attemptResult {
 	resp, err := c.buildResponse(ctx, respCtx.start, respCtx.callCount, httpReq, httpResp)
 	if err != nil {
 		return c.handleResponseBuildError(ctx, err, respCtx.attempt, respCtx.maxRetries)
 	}
+	// Record per-attempt metric for successful roundtrip (including HTTP error status codes).
+	m := tracking.HTTPClientMeasurement{
+		PeerName:      c.config.PeerName,
+		Method:        respCtx.method,
+		URL:           respCtx.httpReqURL,
+		StatusCode:    resp.StatusCode,
+		ErrorType:     classifyError(nil),
+		ResendCount:   respCtx.attempt,
+		Elapsed:       time.Since(respCtx.attemptStart),
+		RequestBytes:  respCtx.requestBytes,
+		ResponseBytes: len(resp.Body),
+	}
+	tracking.RecordHTTPClientMetrics(ctx, &m)
 	return c.finalizeResponse(ctx, resp, respCtx.attempt, respCtx.maxRetries, respCtx.traceID)
 }
 
@@ -426,7 +493,7 @@ func (c *client) handleResponseBuildError(ctx context.Context, err error, attemp
 		return attemptResult{err: handledErr}
 	}
 	if retry {
-		return attemptResult{retry: true}
+		return attemptResult{retry: true, retryReason: retryReasonBuildResponse}
 	}
 	return attemptResult{err: err}
 }
@@ -442,7 +509,7 @@ func (c *client) finalizeResponse(ctx context.Context, resp *Response, attempt, 
 		return attemptResult{response: resp, err: err}
 	}
 	if retry {
-		return attemptResult{retry: true}
+		return attemptResult{retry: true, retryReason: retryReason5xx}
 	}
 
 	c.logResponse(resp, traceID)
@@ -726,6 +793,55 @@ func (c *client) isTimeout(err error) bool {
 
 func (c *client) isRetryableStatus(code int) bool {
 	return code >= httpStatusServerErrorMin && code < httpStatusServerErrorMax
+}
+
+// classifyError maps a typed/wrapped error to the OTel error.type enum value.
+// Returns "" when err is nil (including for HTTP error status codes — those carry
+// the signal via http.response.status_code, not error.type, per OTel guidance).
+func classifyError(err error) string {
+	if err == nil {
+		return ""
+	}
+	// Timeout: framework timeout type, context deadline, or net.Error.Timeout().
+	if IsErrorType(err, TimeoutError) || errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	// Context canceled.
+	if errors.Is(err, context.Canceled) {
+		return "context_canceled"
+	}
+	// DNS resolution failure.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "name_resolution_error"
+	}
+	// TLS errors.
+	var tlsRecordErr *tls.RecordHeaderError
+	if errors.As(err, &tlsRecordErr) {
+		return "tls_error"
+	}
+	var tlsCertErr *tls.CertificateVerificationError
+	if errors.As(err, &tlsCertErr) {
+		return "tls_error"
+	}
+	// Dial connection failure.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return "connection_error"
+	}
+	// Interceptor failure.
+	if IsErrorType(err, InterceptorError) {
+		return "interceptor_failed"
+	}
+	// Any other wrapped network error.
+	if IsErrorType(err, NetworkError) {
+		return "_OTHER"
+	}
+	return "_OTHER"
 }
 
 // runRequestInterceptors executes all request interceptors

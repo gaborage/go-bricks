@@ -3,7 +3,6 @@ package tracking
 import (
 	"context"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,15 +16,10 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
-// resetMeterForTesting resets package-level meter state so each test starts clean.
+// resetMeterForTesting is a package-internal alias for the exported ResetMeterForTesting
+// kept for test-file readability. Uses the exported function to avoid duplication.
 func resetMeterForTesting() {
-	meterOnce = sync.Once{}
-	httpMeter = nil
-	requestDuration = nil
-	activeRequests = nil
-	requestBodySize = nil
-	responseBodySize = nil
-	retriesTotal = nil
+	ResetMeterForTesting()
 }
 
 // setupTestMeterProvider creates a test meter provider, sets it as the global provider,
