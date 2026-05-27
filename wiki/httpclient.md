@@ -35,6 +35,8 @@ resp, err := client.Get(ctx, &httpclient.Request{
 
 The `httpclient` package emits five OpenTelemetry instruments under the meter name `go-bricks/httpclient`. All instruments are initialized lazily on first use via `otel.GetMeterProvider()` and governed by `observability.enabled` — when observability is disabled a no-op provider is active and there is zero overhead.
 
+**Meter scope:** `go-bricks/httpclient`
+
 ### Instrument Reference
 
 | Name | Kind | Unit | Description |
@@ -69,19 +71,19 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 
 **`http.client.active_requests` attributes:**
 
-| Attribute | Notes |
-|---|---|
-| `peer.service` | Omitted when `WithPeerName` is not set. |
-| `http.request.method` | Canonical HTTP method. |
-| `server.address` | Omitted when not available. |
+| Attribute | Type | Notes |
+|---|---|---|
+| `peer.service` | string | Omitted when `WithPeerName` is not set. |
+| `http.request.method` | string | Canonical HTTP method. |
+| `server.address` | string | Omitted when URL parsing fails or the URL has no hostname. |
 
 **`http.client.retries.total` attributes:**
 
-| Attribute | Notes |
-|---|---|
-| `peer.service` | Omitted when `WithPeerName` is not set. |
-| `http.request.method` | Canonical HTTP method. |
-| `retry.reason` | One of `"timeout"`, `"network"`, `"5xx"`, `"build_response"`. |
+| Attribute | Type | Notes |
+|---|---|---|
+| `peer.service` | string | Omitted when `WithPeerName` is not set. |
+| `http.request.method` | string | Canonical HTTP method. |
+| `retry.reason` | string | One of `"timeout"`, `"network"`, `"5xx"`, `"build_response"`. |
 
 ### `error.type` Enum
 
@@ -116,7 +118,29 @@ For clients constructed with `WithJOSE(...)`, the `http.client.request.body.size
 
 ### Test Utilities
 
-The internal `tracking` package (at `httpclient/internal/tracking`) exposes `ResetMeterForTesting()` in `testing.go` for tests that need to swap meter providers between sub-tests. It resets all package-level instrument state to nil so the next `InitHTTPMeter()` call re-registers with whatever provider is active at that point. Because the package is under `internal/`, it is only importable by code within the `httpclient` package boundary.
+**External module tests (the common case):** Use the `observability/testing` helpers to install an in-memory meter provider, exercise code that calls httpclient, then assert instruments were recorded:
+
+```go
+import (
+    "github.com/gaborage/go-bricks/httpclient"
+    obtest "github.com/gaborage/go-bricks/observability/testing"
+    "go.opentelemetry.io/otel"
+)
+
+func TestMyService(t *testing.T) {
+    mp := obtest.NewTestMeterProvider()
+    prev := otel.GetMeterProvider()
+    otel.SetMeterProvider(mp)
+    t.Cleanup(func() { otel.SetMeterProvider(prev) })
+
+    // ... exercise code that uses httpclient ...
+
+    rm := mp.Collect(t)
+    obtest.AssertMetricExists(t, rm, "http.client.request.duration")
+}
+```
+
+**Internal httpclient tests only:** `tracking.ResetMeterForTesting()` (in `httpclient/internal/tracking/testing.go`) resets cached instrument state so the next `InitHTTPMeter()` re-registers against whichever provider is active. The `internal/` boundary limits this to code within the `httpclient/**` package tree.
 
 ## Payload Logging
 
