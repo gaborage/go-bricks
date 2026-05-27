@@ -2,6 +2,8 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	nethttp "net/http"
@@ -13,7 +15,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	obtest "github.com/gaborage/go-bricks/observability/testing"
+
+	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -963,6 +971,273 @@ func TestTraceIDUtilities(t *testing.T) {
 	})
 }
 
+// setupClientTestMeterProvider creates a TestMeterProvider, sets it as the global OTel
+// provider, resets tracking meter state, and initialises the instruments. Returns the
+// provider for metric collection and a cleanup function that must be deferred.
+func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
+	t.Helper()
+	prev := otel.GetMeterProvider()
+	mp = obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	tracking.ResetMeterForTesting()
+	tracking.InitHTTPMeter()
+	return mp, func() {
+		otel.SetMeterProvider(prev)
+		tracking.ResetMeterForTesting()
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}
+}
+
+// hasStringAttr returns true when an attribute with the given key and value appears in attrs.
+func hasStringAttr(attrs []attribute.KeyValue, key, val string) bool {
+	for _, a := range attrs {
+		if string(a.Key) == key && a.Value.AsString() == val {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAttrKey returns true when any attribute with the given key appears in attrs.
+func hasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHTTPClientMetricsSuccessPath verifies that a successful request emits the
+// duration histogram with peer.service and status_code attributes, no error.type
+// attribute, and that active_requests returns to 0 after the call completes.
+func TestHTTPClientMetricsSuccessPath(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("test-peer").
+		Build()
+
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have exactly 1 datapoint.
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration metric must be emitted")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(1), totalCount, "expected 1 histogram observation for a single successful request")
+
+	// Verify peer.service and status_code attributes, absent error.type.
+	require.NotEmpty(t, histData.DataPoints)
+	dp0 := histData.DataPoints[0]
+	attrs := dp0.Attributes.ToSlice()
+	assert.True(t, hasStringAttr(attrs, "peer.service", "test-peer"), "peer.service attribute should be 'test-peer'")
+	assert.True(t, hasAttrKey(attrs, "http.response.status_code"), "http.response.status_code attribute must be present")
+	assert.False(t, hasAttrKey(attrs, "error.type"), "error.type attribute must be absent on success")
+
+	// Active requests must be net 0 after the call returns (defer fired before we reach here).
+	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
+	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
+	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "http.client.active_requests data must be Sum[int64]")
+	var netTotal int64
+	for _, dp := range sumData.DataPoints {
+		netTotal += dp.Value
+	}
+	assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+}
+
+// TestHTTPClientMetricsRetryOn503 verifies that when the server returns 503 then 200
+// the duration histogram records one observation per attempt and the retries counter
+// is incremented with retry.reason="5xx".
+func TestHTTPClientMetricsRetryOn503(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	var callCount atomic.Int32
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		if callCount.Add(1) == 1 {
+			w.WriteHeader(nethttp.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("retry-peer").
+		WithRetries(2, 1*time.Millisecond).
+		Build()
+
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have 2 total observations (one per attempt).
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(2), totalCount, "expected 2 histogram observations (one per attempt)")
+
+	// Retries counter must be 1 with retry.reason="5xx".
+	retryMetric := obtest.FindMetric(rm, "http.client.retries.total")
+	require.NotNil(t, retryMetric, "http.client.retries.total must be emitted")
+	sumData, ok := retryMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] for retries.total")
+
+	var totalRetries int64
+	foundFiveXX := false
+	for _, dp := range sumData.DataPoints {
+		totalRetries += dp.Value
+		if hasStringAttr(dp.Attributes.ToSlice(), "retry.reason", "5xx") {
+			foundFiveXX = true
+		}
+	}
+	assert.Equal(t, int64(1), totalRetries, "expected exactly 1 retry")
+	assert.True(t, foundFiveXX, "retry.reason='5xx' attribute must be present on retry counter")
+}
+
+// TestHTTPClientMetricsTimeoutClassification verifies that when the server delays
+// beyond the client timeout the duration histogram datapoint carries error.type="timeout"
+// and no http.response.status_code attribute.
+func TestHTTPClientMetricsTimeoutClassification(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("timeout-peer").
+		WithTimeout(10 * time.Millisecond).
+		Build()
+
+	_, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.Error(t, err)
+	assert.True(t, IsErrorType(err, TimeoutError))
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted on timeout")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+	require.NotEmpty(t, histData.DataPoints)
+
+	// Find the datapoint that has error.type="timeout".
+	foundTimeout := false
+	for _, dp := range histData.DataPoints {
+		attrs := dp.Attributes.ToSlice()
+		if hasStringAttr(attrs, "error.type", "timeout") {
+			foundTimeout = true
+			assert.False(t, hasAttrKey(attrs, "http.response.status_code"),
+				"http.response.status_code must be absent when status is 0 (transport error)")
+		}
+	}
+	assert.True(t, foundTimeout, "at least one datapoint must have error.type='timeout'")
+}
+
+// TestHTTPClientMetricsBuildResponseFailureRecorded verifies that when a response
+// interceptor returns an error — a post-roundtrip failure where the wire was hit and
+// the server returned a status — the duration histogram still records exactly one
+// observation. The datapoint must carry the wire status code (200) and
+// error.type="interceptor_failed", and active_requests must be net 0 after the call.
+func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	respInterceptor := func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
+		return fmt.Errorf("interceptor boom")
+	}
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("interceptor-fail-peer").
+		WithResponseInterceptor(respInterceptor).
+		Build()
+
+	_, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.Error(t, err)
+	assert.True(t, IsErrorType(err, InterceptorError))
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have exactly 1 datapoint — the build-response failure.
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted on buildResponse failure")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(1), totalCount, "expected 1 histogram observation for the build-response failure attempt")
+
+	// The datapoint must carry the wire status code (200) and error.type="interceptor_failed".
+	require.NotEmpty(t, histData.DataPoints)
+	dp0 := histData.DataPoints[0]
+	attrs := dp0.Attributes.ToSlice()
+	assert.True(t, hasAttrKey(attrs, "http.response.status_code"),
+		"http.response.status_code must be present — server returned 200 before interceptor failed")
+	assert.True(t, hasStringAttr(attrs, "error.type", "interceptor_failed"),
+		"error.type must be 'interceptor_failed' for response interceptor errors")
+
+	// Active requests must be net 0 after the call returns.
+	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
+	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
+	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "http.client.active_requests data must be Sum[int64]")
+	var netTotal int64
+	for _, dp := range sumData.DataPoints {
+		netTotal += dp.Value
+	}
+	assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+}
+
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in
 // backoffDelay that the existing retry-path tests don't reach: zero RetryDelay
 // (uses defaultBackoffBase), attempt exceeding maxBackoffAttempt (clamped),
@@ -1001,4 +1276,178 @@ func TestBackoffDelayFallbacks(t *testing.T) {
 				maxBackoffDuration, got)
 		}
 	})
+}
+
+// netTimeoutErr is a minimal net.Error implementation used to exercise the
+// generic net.Error.Timeout() branch in classifyError without matching any of
+// the more specific error types (DNSError, OpError, etc.).
+type netTimeoutErr struct{}
+
+func (netTimeoutErr) Error() string   { return "simulated net timeout" }
+func (netTimeoutErr) Timeout() bool   { return true }
+func (netTimeoutErr) Temporary() bool { return true }
+
+// TestClassifyError is a white-box table-driven test that verifies every branch
+// of classifyError, including the DNS-timeout regression (a timed-out
+// *net.DNSError must yield "name_resolution_error", not "timeout").
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "nil_error",
+			err:      nil,
+			expected: "",
+		},
+		{
+			name:     "context_canceled",
+			err:      context.Canceled,
+			expected: errorTypeContextCanceled,
+		},
+		{
+			name:     "context_deadline_exceeded",
+			err:      context.DeadlineExceeded,
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "framework_timeout",
+			err:      NewTimeoutError("request timed out", 5*time.Second),
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "dns_error_nxdomain",
+			err:      &net.DNSError{Err: "no such host", IsNotFound: true},
+			expected: errorTypeNameResolution,
+		},
+		{
+			// Regression: a timed-out DNS lookup must be errorTypeNameResolution,
+			// not errorTypeTimeout. Previously the generic net.Error.Timeout() check
+			// fired first because *net.DNSError implements net.Error with Timeout()==true.
+			name:     "dns_error_timeout_regression",
+			err:      &net.DNSError{Err: "i/o timeout", IsTimeout: true},
+			expected: errorTypeNameResolution,
+		},
+		{
+			name:     "tls_record_header_error",
+			err:      &tls.RecordHeaderError{Msg: "bad record header"},
+			expected: errorTypeTLS,
+		},
+		{
+			name:     "tls_cert_verification_error",
+			err:      &tls.CertificateVerificationError{Err: errors.New("cert expired")},
+			expected: errorTypeTLS,
+		},
+		{
+			name:     "tcp_dial_failure",
+			err:      &net.OpError{Op: netOpDial, Err: errors.New("connection refused")},
+			expected: errorTypeConnection,
+		},
+		{
+			// A read-deadline net.Error (not a DNSError or dial OpError) must fall
+			// through to the generic net.Error.Timeout() branch → errorTypeTimeout.
+			name:     "generic_net_timeout",
+			err:      netTimeoutErr{},
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "interceptor_failure",
+			err:      NewInterceptorError("interceptor failed", "request", errors.New("upstream")),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			// Regression: an interceptor wrapping a *net.DNSError must be
+			// "interceptor_failed", not "name_resolution_error". Without the
+			// InterceptorError guard before the errors.As chains, errors.As
+			// would traverse Unwrap() and match the wrapped *net.DNSError.
+			name:     "interceptor_wrapping_dns_error",
+			err:      NewInterceptorError("validate", "response", &net.DNSError{Err: "no such host", IsNotFound: true}),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			// Regression: an interceptor wrapping a *net.OpError (dial) must be
+			// "interceptor_failed", not "connection_error".
+			name:     "interceptor_wrapping_dial_error",
+			err:      NewInterceptorError("validate", "response", &net.OpError{Op: netOpDial, Err: errors.New("connection refused")}),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			name:     "generic_network_error",
+			err:      NewNetworkError("network failure", errors.New("connection reset")),
+			expected: errorTypeOther,
+		},
+		{
+			name:     "unknown_error",
+			err:      errors.New("mystery error"),
+			expected: errorTypeOther,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyError(tc.err)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+// TestClassifyErrorRetryReasonCoherence verifies that the retry.reason derived
+// from classifyError agrees with the error.type label — i.e., errors that are
+// NOT classified as timeout or context_canceled must produce retryReasonNetwork,
+// not retryReasonTimeout. This is the regression guard for Bug 2: a dial timeout
+// previously produced error.type="connection_error" but retry.reason="timeout"
+// because handleExecutionError called isTimeout separately from classifyError.
+func TestClassifyErrorRetryReasonCoherence(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		wantErrType     string
+		wantRetryReason string
+	}{
+		{
+			name:            "dial_timeout_connection_not_timeout",
+			err:             &net.OpError{Op: netOpDial, Err: errors.New("connection refused")},
+			wantErrType:     errorTypeConnection,
+			wantRetryReason: retryReasonNetwork,
+		},
+		{
+			name:            "dns_timeout_name_resolution_not_timeout",
+			err:             &net.DNSError{Err: "i/o timeout", IsTimeout: true},
+			wantErrType:     errorTypeNameResolution,
+			wantRetryReason: retryReasonNetwork,
+		},
+		{
+			name:            "context_deadline_exceeded_is_timeout",
+			err:             context.DeadlineExceeded,
+			wantErrType:     errorTypeTimeout,
+			wantRetryReason: retryReasonTimeout,
+		},
+		{
+			name:            "framework_timeout_is_timeout",
+			err:             NewTimeoutError("request timed out", 5*time.Second),
+			wantErrType:     errorTypeTimeout,
+			wantRetryReason: retryReasonTimeout,
+		},
+		{
+			name:            "interceptor_wrapping_dns_is_network",
+			err:             NewInterceptorError("validate", "response", &net.DNSError{Err: "no such host", IsNotFound: true}),
+			wantErrType:     errorTypeInterceptorFailed,
+			wantRetryReason: retryReasonNetwork,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errType := classifyError(tc.err)
+			assert.Equal(t, tc.wantErrType, errType, "classifyError mismatch")
+
+			// Mirror the retry-reason logic from handleExecutionError.
+			reason := retryReasonNetwork
+			if errType == errorTypeTimeout || errType == errorTypeContextCanceled {
+				reason = retryReasonTimeout
+			}
+			assert.Equal(t, tc.wantRetryReason, reason, "retry.reason mismatch for error.type=%q", errType)
+		})
+	}
 }

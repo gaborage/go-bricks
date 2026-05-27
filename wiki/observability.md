@@ -6,6 +6,8 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod), environment-aware export timeouts (10s dev, 60s prod)
 
+**Per-Subsystem Instrumented Meters:** The framework ships three automatically-instrumented meters alongside the Go runtime meter. `go-bricks/database` records query durations and pool utilisation. `go-bricks/messaging` records AMQP publish and consume durations. `go-bricks/httpclient` records five outbound HTTP instruments: `http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, and `http.client.retries.total`. All three meters are governed by `observability.enabled` and are no-ops when disabled. See [httpclient.md#metrics](httpclient.md#metrics) for the full attribute reference.
+
 **Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
 **Export Timeout Configuration:** GoBricks uses environment-aware export timeouts to balance fail-fast feedback (development) with network resilience (production):
