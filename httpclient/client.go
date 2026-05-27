@@ -818,46 +818,48 @@ func classifyError(err error) string {
 	if err == nil {
 		return ""
 	}
-	// Timeout: framework timeout type, context deadline, or net.Error.Timeout().
-	if IsErrorType(err, TimeoutError) || errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
-	}
-	// Context canceled.
+	// Context canceled (check before deadline so Canceled isn't shadowed).
 	if errors.Is(err, context.Canceled) {
-		return "context_canceled"
+		return errorTypeContextCanceled
 	}
-	// DNS resolution failure.
+	// Framework-typed timeout or context deadline exceeded.
+	if IsErrorType(err, TimeoutError) || errors.Is(err, context.DeadlineExceeded) {
+		return errorTypeTimeout
+	}
+	// DNS resolution failure — must precede the generic net.Error.Timeout() check
+	// because *net.DNSError implements net.Error and Timeout() can return true for
+	// timed-out lookups; matching it here keeps the label specific.
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "name_resolution_error"
+		return errorTypeNameResolution
 	}
 	// TLS errors.
 	var tlsRecordErr *tls.RecordHeaderError
 	if errors.As(err, &tlsRecordErr) {
-		return "tls_error"
+		return errorTypeTLS
 	}
 	var tlsCertErr *tls.CertificateVerificationError
 	if errors.As(err, &tlsCertErr) {
-		return "tls_error"
+		return errorTypeTLS
 	}
-	// Dial connection failure.
+	// Dial connection failure — must precede the generic net.Error.Timeout() check
+	// so a dial that times out is labelled "connection_error", not "timeout".
 	var opErr *net.OpError
 	if errors.As(err, &opErr) && opErr.Op == "dial" {
-		return "connection_error"
+		return errorTypeConnection
+	}
+	// Generic net-layer timeout (e.g. read deadline exceeded) that did not match
+	// any of the more specific types above.
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return errorTypeTimeout
 	}
 	// Interceptor failure.
 	if IsErrorType(err, InterceptorError) {
-		return "interceptor_failed"
+		return errorTypeInterceptorFailed
 	}
-	// Any other wrapped network error.
-	if IsErrorType(err, NetworkError) {
-		return "_OTHER"
-	}
-	return "_OTHER"
+	// Any other wrapped network error or unknown error.
+	return errorTypeOther
 }
 
 // runRequestInterceptors executes all request interceptors

@@ -50,3 +50,31 @@ const (
 	retryReasonBuildResponse = "build_response"
 	retryReason5xx           = "5xx"
 )
+
+// OTel error.type attribute values returned by classifyError. These are the
+// canonical string values emitted on the http.client.request.duration histogram
+// and http.client.request.failed counter — kept as named constants so that
+// both classifyError and its tests can reference them without duplication.
+const (
+	// errorTypeContextCanceled indicates the request was cancelled by the caller.
+	errorTypeContextCanceled = "context_canceled"
+
+	// errorTypeTimeout covers framework TimeoutError, context.DeadlineExceeded,
+	// and generic net.Error timeouts that are not more specifically classified.
+	errorTypeTimeout = "timeout"
+
+	// errorTypeNameResolution indicates a DNS lookup failure (including timeouts).
+	errorTypeNameResolution = "name_resolution_error"
+
+	// errorTypeTLS indicates a TLS handshake or certificate verification failure.
+	errorTypeTLS = "tls_error"
+
+	// errorTypeConnection indicates a TCP dial failure.
+	errorTypeConnection = "connection_error"
+
+	// errorTypeInterceptorFailed indicates a request or response interceptor returned an error.
+	errorTypeInterceptorFailed = "interceptor_failed"
+
+	// errorTypeOther is the catch-all for unclassified errors.
+	errorTypeOther = "_OTHER"
+)

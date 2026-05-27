@@ -2,6 +2,8 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	nethttp "net/http"
@@ -1051,15 +1053,14 @@ func TestHTTPClientMetricsSuccessPath(t *testing.T) {
 
 	// Active requests must be net 0 after the call returns (defer fired before we reach here).
 	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
-	if activeMetric != nil {
-		sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
-		if ok {
-			var netTotal int64
-			for _, dp := range sumData.DataPoints {
-				netTotal += dp.Value
-			}
-			assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
+	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+	if ok {
+		var netTotal int64
+		for _, dp := range sumData.DataPoints {
+			netTotal += dp.Value
 		}
+		assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
 	}
 }
 
@@ -1225,15 +1226,14 @@ func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
 
 	// Active requests must be net 0 after the call returns.
 	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
-	if activeMetric != nil {
-		sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
-		if ok {
-			var netTotal int64
-			for _, dp := range sumData.DataPoints {
-				netTotal += dp.Value
-			}
-			assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+	require.NotNil(t, activeMetric, "http.client.active_requests must be emitted")
+	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+	if ok {
+		var netTotal int64
+		for _, dp := range sumData.DataPoints {
+			netTotal += dp.Value
 		}
+		assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
 	}
 }
 
@@ -1275,4 +1275,102 @@ func TestBackoffDelayFallbacks(t *testing.T) {
 				maxBackoffDuration, got)
 		}
 	})
+}
+
+// netTimeoutErr is a minimal net.Error implementation used to exercise the
+// generic net.Error.Timeout() branch in classifyError without matching any of
+// the more specific error types (DNSError, OpError, etc.).
+type netTimeoutErr struct{}
+
+func (netTimeoutErr) Error() string   { return "simulated net timeout" }
+func (netTimeoutErr) Timeout() bool   { return true }
+func (netTimeoutErr) Temporary() bool { return true }
+
+// TestClassifyError is a white-box table-driven test that verifies every branch
+// of classifyError, including the DNS-timeout regression (a timed-out
+// *net.DNSError must yield "name_resolution_error", not "timeout").
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "nil_error",
+			err:      nil,
+			expected: "",
+		},
+		{
+			name:     "context_canceled",
+			err:      context.Canceled,
+			expected: errorTypeContextCanceled,
+		},
+		{
+			name:     "context_deadline_exceeded",
+			err:      context.DeadlineExceeded,
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "framework_timeout",
+			err:      NewTimeoutError("request timed out", 5*time.Second),
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "dns_error_nxdomain",
+			err:      &net.DNSError{Err: "no such host", IsNotFound: true},
+			expected: errorTypeNameResolution,
+		},
+		{
+			// Regression: a timed-out DNS lookup must be errorTypeNameResolution,
+			// not errorTypeTimeout. Previously the generic net.Error.Timeout() check
+			// fired first because *net.DNSError implements net.Error with Timeout()==true.
+			name:     "dns_error_timeout_regression",
+			err:      &net.DNSError{Err: "i/o timeout", IsTimeout: true},
+			expected: errorTypeNameResolution,
+		},
+		{
+			name:     "tls_record_header_error",
+			err:      &tls.RecordHeaderError{Msg: "bad record header"},
+			expected: errorTypeTLS,
+		},
+		{
+			name:     "tls_cert_verification_error",
+			err:      &tls.CertificateVerificationError{Err: errors.New("cert expired")},
+			expected: errorTypeTLS,
+		},
+		{
+			name:     "tcp_dial_failure",
+			err:      &net.OpError{Op: "dial", Err: errors.New("connection refused")},
+			expected: errorTypeConnection,
+		},
+		{
+			// A read-deadline net.Error (not a DNSError or dial OpError) must fall
+			// through to the generic net.Error.Timeout() branch → errorTypeTimeout.
+			name:     "generic_net_timeout",
+			err:      netTimeoutErr{},
+			expected: errorTypeTimeout,
+		},
+		{
+			name:     "interceptor_failure",
+			err:      NewInterceptorError("interceptor failed", "request", errors.New("upstream")),
+			expected: errorTypeInterceptorFailed,
+		},
+		{
+			name:     "generic_network_error",
+			err:      NewNetworkError("network failure", errors.New("connection reset")),
+			expected: errorTypeOther,
+		},
+		{
+			name:     "unknown_error",
+			err:      errors.New("mystery error"),
+			expected: errorTypeOther,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyError(tc.err)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
 }
