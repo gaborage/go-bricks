@@ -469,6 +469,22 @@ func (c *client) processHTTPResponse(
 ) attemptResult {
 	resp, err := c.buildResponse(ctx, respCtx.start, respCtx.callCount, httpReq, httpResp)
 	if err != nil {
+		// The wire was hit and the server returned a status code, but the response
+		// could not be successfully assembled (interceptor error or body-read failure).
+		// Per the "exactly once per attempt that reaches the wire" rule, record the
+		// histogram observation here before delegating to the error handler.
+		m := tracking.HTTPClientMeasurement{
+			PeerName:      c.config.PeerName,
+			Method:        respCtx.method,
+			URL:           respCtx.httpReqURL,
+			StatusCode:    httpResp.StatusCode,
+			ErrorType:     classifyError(err),
+			ResendCount:   respCtx.attempt,
+			Elapsed:       time.Since(respCtx.attemptStart),
+			RequestBytes:  respCtx.requestBytes,
+			ResponseBytes: 0,
+		}
+		tracking.RecordHTTPClientMetrics(ctx, &m)
 		return c.handleResponseBuildError(ctx, err, respCtx.attempt, respCtx.maxRetries)
 	}
 	// Record per-attempt metric for successful roundtrip (including HTTP error status codes).

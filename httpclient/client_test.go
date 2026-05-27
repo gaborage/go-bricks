@@ -1169,6 +1169,74 @@ func TestHTTPClientMetricsTimeoutClassification(t *testing.T) {
 	assert.True(t, foundTimeout, "at least one datapoint must have error.type='timeout'")
 }
 
+// TestHTTPClientMetricsBuildResponseFailureRecorded verifies that when a response
+// interceptor returns an error — a post-roundtrip failure where the wire was hit and
+// the server returned a status — the duration histogram still records exactly one
+// observation. The datapoint must carry the wire status code (200) and
+// error.type="interceptor_failed", and active_requests must be net 0 after the call.
+func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
+	mp, cleanup := setupClientTestMeterProvider(t)
+	defer cleanup()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+			t.Errorf("server write failed: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	respInterceptor := func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
+		return fmt.Errorf("interceptor boom")
+	}
+
+	log := createTestLogger()
+	c := NewBuilder(log).
+		WithPeerName("interceptor-fail-peer").
+		WithResponseInterceptor(respInterceptor).
+		Build()
+
+	_, err := c.Get(context.Background(), &Request{URL: server.URL})
+	require.Error(t, err)
+	assert.True(t, IsErrorType(err, InterceptorError))
+
+	rm := mp.Collect(t)
+
+	// Duration histogram must have exactly 1 datapoint — the build-response failure.
+	durationMetric := obtest.FindMetric(rm, "http.client.request.duration")
+	require.NotNil(t, durationMetric, "http.client.request.duration must be emitted on buildResponse failure")
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(1), totalCount, "expected 1 histogram observation for the build-response failure attempt")
+
+	// The datapoint must carry the wire status code (200) and error.type="interceptor_failed".
+	require.NotEmpty(t, histData.DataPoints)
+	dp0 := histData.DataPoints[0]
+	attrs := dp0.Attributes.ToSlice()
+	assert.True(t, hasAttrKey(attrs, "http.response.status_code"),
+		"http.response.status_code must be present — server returned 200 before interceptor failed")
+	assert.True(t, hasStringAttr(attrs, "error.type", "interceptor_failed"),
+		"error.type must be 'interceptor_failed' for response interceptor errors")
+
+	// Active requests must be net 0 after the call returns.
+	activeMetric := obtest.FindMetric(rm, "http.client.active_requests")
+	if activeMetric != nil {
+		sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+		if ok {
+			var netTotal int64
+			for _, dp := range sumData.DataPoints {
+				netTotal += dp.Value
+			}
+			assert.Equal(t, int64(0), netTotal, "net active requests must be 0 after the call completes")
+		}
+	}
+}
+
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in
 // backoffDelay that the existing retry-path tests don't reach: zero RetryDelay
 // (uses defaultBackoffBase), attempt exceeding maxBackoffAttempt (clamped),
