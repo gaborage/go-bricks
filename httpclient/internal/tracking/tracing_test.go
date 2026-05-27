@@ -3,6 +3,8 @@ package tracking
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -362,4 +364,62 @@ func TestStartHTTPClientSpanNilURLEmitsEmptyAttrs(t *testing.T) {
 	obtest.AssertSpanAttribute(t, &got, "http.request.method", "GET")
 	obtest.AssertSpanAttribute(t, &got, "server.address", "")
 	obtest.AssertSpanAttribute(t, &got, "url.scheme", "")
+}
+
+// TestEndHTTPClientSpanStripQueryStringFromTransportError locks in F-SEC-1
+// from the pre-push security audit: when a transport error's underlying
+// *url.Error carries a query string with credentials, the span's exception
+// event must NOT contain those credentials. Pre-fix, span.RecordError(err)
+// would export Go's default stringification including the full URL.
+func TestEndHTTPClientSpanStripQueryStringFromTransportError(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/foo")
+	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+	// Simulate a transport error with a *url.Error carrying a sensitive
+	// query string and a userinfo password — mirrors what net/http surfaces.
+	const secretToken = "sk_live_super_secret_value"
+	urlErr := &url.Error{
+		Op:  "Get",
+		URL: "https://user:pw@api.example.com/foo?token=" + secretToken + "&api_key=anothersecret",
+		Err: errors.New("dial tcp: connection refused"),
+	}
+	EndHTTPClientSpan(span, 0, "connection_error", 0, urlErr)
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	require.NotEmpty(t, got.Events, "transport error should produce an exception event")
+	var exMsg string
+	for _, ev := range got.Events {
+		if ev.Name == "exception" {
+			for _, kv := range ev.Attributes {
+				if string(kv.Key) == "exception.message" {
+					exMsg = kv.Value.AsString()
+				}
+			}
+		}
+	}
+	require.NotEmpty(t, exMsg, "exception event should have an exception.message attribute")
+	assert.NotContainsf(t, exMsg, secretToken,
+		"exception.message must not contain query-string secret token, got %q", exMsg)
+	assert.NotContainsf(t, exMsg, "anothersecret",
+		"exception.message must not contain query-string api_key value, got %q", exMsg)
+	assert.NotContainsf(t, exMsg, "user:pw",
+		"exception.message must not contain userinfo credentials, got %q", exMsg)
+	// The operation + redacted URL + inner error should still be present so
+	// the message remains debuggable.
+	assert.Truef(t, strings.Contains(exMsg, "Get"),
+		"exception.message should retain the operation verb for debuggability, got %q", exMsg)
+	assert.Truef(t, strings.Contains(exMsg, "api.example.com"),
+		"exception.message should retain the host for debuggability, got %q", exMsg)
+}
+
+// TestRedactErrorMessageNonTransportErrorIsUnchanged confirms that errors
+// without an embedded *url.Error pass through unchanged — interceptor
+// failures, framework HTTPErrors, etc. don't carry raw URLs and don't need
+// query-stripping.
+func TestRedactErrorMessageNonTransportErrorIsUnchanged(t *testing.T) {
+	plain := errors.New("interceptor failed: bad signature")
+	assert.Equal(t, plain.Error(), redactErrorMessage(plain))
+	assert.Equal(t, "", redactErrorMessage(nil))
 }

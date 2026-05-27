@@ -2,6 +2,8 @@ package tracking
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
@@ -138,7 +140,20 @@ func EndHTTPClientSpan(span trace.Span, statusCode int, errType string, response
 		span.SetAttributes(attribute.String(attrErrorType, errType))
 	}
 	if err != nil {
-		span.RecordError(err)
+		// SECURITY: Don't call span.RecordError(err) directly. Go's stdlib
+		// `*url.Error` formats with the full request URL — and `*url.Error`
+		// only redacts the userinfo password, NOT query strings. A request
+		// like `GET https://api.example.com/x?token=secret` whose transport
+		// fails produces an error whose `.Error()` contains `token=secret`,
+		// and `span.RecordError(err)` would export that to every OTel backend
+		// the operator has configured. The framework's logger pipeline runs
+		// a `SensitiveDataFilter` for this class of leak; the OTel pipeline
+		// does not. Build the exception event manually with a query-stripped
+		// message instead. See #471 pre-push security audit findings.
+		span.AddEvent("exception", trace.WithAttributes(
+			attribute.String("exception.type", fmt.Sprintf("%T", err)),
+			attribute.String("exception.message", redactErrorMessage(err)),
+		))
 	}
 
 	switch {
@@ -210,4 +225,35 @@ func urlPath(u *url.URL) string {
 		return ""
 	}
 	return u.Path
+}
+
+// redactErrorMessage returns a span-safe stringification of err with embedded
+// request URLs stripped of query strings and userinfo. Used in place of
+// `span.RecordError(err)` to prevent token/api-key leaks via Go's stdlib
+// `*url.Error.Error()` formatter, which includes the full URL (Go redacts
+// the userinfo password but never the query string).
+//
+// Strategy: walk the error chain with errors.As looking for `*url.Error`.
+// When found, rebuild a redacted variant (scheme+host+port+path only) and
+// return its `.Error()`. When not found, return err.Error() unchanged — non
+// transport errors (interceptor failures, framework-wrapped HTTPErrors, etc.)
+// don't carry raw URLs.
+func redactErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.URL != "" {
+		if u, parseErr := url.Parse(urlErr.URL); parseErr == nil {
+			u.RawQuery = "" // strip ?token=... &api_key=...
+			u.User = nil    // strip user:pass@ (Go's default only hides password)
+			redacted := &url.Error{
+				Op:  urlErr.Op,
+				URL: u.String(),
+				Err: urlErr.Err,
+			}
+			return redacted.Error()
+		}
+	}
+	return err.Error()
 }

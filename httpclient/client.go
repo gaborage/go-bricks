@@ -412,8 +412,15 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 		// same classification so the rollup span reflects the panic instead
 		// of silently ending as success (statusCode=0, err=nil → unset).
 		// Re-panic so caller-installed recover/log/middleware still sees it.
+		//
+		// SECURITY: we deliberately do NOT format the panic value into the
+		// err passed to EndHTTPClientSpan — a panic with a sensitive payload
+		// (e.g. `panic(authConfig)`) would otherwise reach OTel backends via
+		// the exception event. Only the panic value's TYPE is included; the
+		// value itself stays in the re-panic, where the caller's recover is
+		// the appropriate place to capture and (carefully) log it.
 		if r := recover(); r != nil {
-			panicErr := fmt.Errorf("httpclient: panic during Do: %v", r)
+			panicErr := fmt.Errorf("httpclient: panic during Do (type: %T)", r)
 			tracking.EndHTTPClientSpan(doSpan, 0, errorTypePanic, 0, panicErr)
 			panic(r)
 		}
@@ -471,8 +478,11 @@ func (c *client) executeAttempt(
 	// close (via Do's defer) but with zero finalStatus/finalErr, silently
 	// classifying a panic as success.
 	defer func() {
+		// SECURITY: include only the panic value's TYPE in the span error,
+		// never its content (`%T` not `%v`) — a sensitive payload in
+		// `panic(...)` must not reach OTel backends.
 		if r := recover(); r != nil {
-			panicErr := fmt.Errorf("httpclient: panic during attempt %d: %v", attempt, r)
+			panicErr := fmt.Errorf("httpclient: panic during attempt %d (type: %T)", attempt, r)
 			tracking.EndHTTPClientSpan(attemptSpan, 0, errorTypePanic, 0, panicErr)
 			panic(r)
 		}
