@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	obtest "github.com/gaborage/go-bricks/observability/testing"
@@ -272,14 +273,14 @@ func TestRecordHTTPClientMetricsWithZeroBodySizes(t *testing.T) {
 }
 
 // TestIncDecActiveRequestsBalanced verifies that a paired Inc/Dec results in a net zero
-// active-request count.
+// active-request count and that the server.address attribute is present on the datapoint.
 func TestIncDecActiveRequestsBalanced(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	IncActiveRequests(ctx, "svc", "GET")
-	DecActiveRequests(ctx, "svc", "GET")
+	IncActiveRequests(ctx, "svc", "GET", "api.example.com")
+	DecActiveRequests(ctx, "svc", "GET", "api.example.com")
 
 	rm := mp.Collect(t)
 	obtest.AssertMetricExists(t, rm, metricActiveRequests)
@@ -295,6 +296,10 @@ func TestIncDecActiveRequestsBalanced(t *testing.T) {
 		total += dp.Value
 	}
 	assert.Equal(t, int64(0), total, "net active requests should be 0 after balanced inc/dec")
+
+	// server.address must be present on the datapoint.
+	require.NotEmpty(t, sumData.DataPoints)
+	assertHasAttribute(t, sumData.DataPoints[0].Attributes.ToSlice(), attrServerAddress, "api.example.com")
 }
 
 // TestIncRetryWithVariousReasons verifies that IncRetry increments the retry counter
@@ -391,8 +396,8 @@ func TestEmptyPeerNameOmitsPeerServiceAttribute(t *testing.T) {
 		RequestBytes:  100,
 		ResponseBytes: 50,
 	})
-	IncActiveRequests(ctx, "", "GET")
-	DecActiveRequests(ctx, "", "GET")
+	IncActiveRequests(ctx, "", "GET", "")
+	DecActiveRequests(ctx, "", "GET", "")
 	IncRetry(ctx, "", "GET", "timeout")
 
 	rm := mp.Collect(t)
@@ -455,4 +460,131 @@ func TestUnknownMethodNormalizedToOther(t *testing.T) {
 	require.NotEmpty(t, histData.DataPoints)
 
 	assertHasAttribute(t, histData.DataPoints[0].Attributes.ToSlice(), attrHTTPMethod, methodOther)
+}
+
+// TestNoopMeterProviderPath verifies that when the global meter provider is a noop provider
+// all tracking functions execute without panicking and no instruments are registered.
+func TestNoopMeterProviderPath(t *testing.T) {
+	// Save original provider so we can restore it.
+	original := otel.GetMeterProvider()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(original)
+		resetMeterForTesting()
+		// Re-initialize with real provider so other tests are unaffected.
+	})
+
+	// Install noop provider and reset cached meter.
+	otel.SetMeterProvider(metricnoop.NewMeterProvider())
+	resetMeterForTesting()
+
+	ctx := context.Background()
+
+	// All functions must complete without panicking.
+	assert.NotPanics(t, func() {
+		RecordHTTPClientMetrics(ctx, &HTTPClientMeasurement{
+			Method:     "GET",
+			URL:        mustParseURL("https://api.example.com/ping"),
+			StatusCode: 200,
+			Elapsed:    1 * time.Millisecond,
+		})
+	})
+	assert.NotPanics(t, func() { IncActiveRequests(ctx, "svc", "GET", "api.example.com") })
+	assert.NotPanics(t, func() { DecActiveRequests(ctx, "svc", "GET", "api.example.com") })
+	assert.NotPanics(t, func() { IncRetry(ctx, "svc", "GET", "timeout") })
+}
+
+// TestRecordHTTPClientMetricsHTTPErrorStatusOmitsErrorType verifies that a 503 response
+// does not automatically set error.type — 4xx/5xx status codes alone do not imply an error type.
+func TestRecordHTTPClientMetricsHTTPErrorStatusOmitsErrorType(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:     "GET",
+		URL:        mustParseURL("https://api.example.com/health"),
+		StatusCode: 503,
+		ErrorType:  "", // explicitly empty — no transport-level error
+		Elapsed:    8 * time.Millisecond,
+	})
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric, "duration histogram must be emitted for 503 responses")
+
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+	require.NotEmpty(t, histData.DataPoints, "duration histogram must have datapoints")
+
+	attrs := histData.DataPoints[0].Attributes.ToSlice()
+	// 503 must produce a status code attribute.
+	assertHasIntAttribute(t, attrs, attrHTTPStatusCode, 503)
+	// 5xx without an explicit ErrorType must NOT produce an error.type attribute.
+	assertNoAttribute(t, attrs, attrErrorType)
+}
+
+// TestServerAddressPort exercises the defensive branches of serverAddressPort directly.
+func TestServerAddressPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawURL   string
+		nilURL   bool
+		wantAddr string
+		wantPort int
+	}{
+		{
+			name:     "nil_url",
+			nilURL:   true,
+			wantAddr: "",
+			wantPort: 0,
+		},
+		{
+			name:     "http_no_explicit_port",
+			rawURL:   "http://example.com/path",
+			wantAddr: "example.com",
+			wantPort: 80,
+		},
+		{
+			name:     "https_no_explicit_port",
+			rawURL:   "https://example.com/path",
+			wantAddr: "example.com",
+			wantPort: 443,
+		},
+		{
+			name:     "explicit_port_overrides_scheme_default",
+			rawURL:   "https://example.com:8443/path",
+			wantAddr: "example.com",
+			wantPort: 8443,
+		},
+		{
+			name:     "http_explicit_port",
+			rawURL:   "http://example.com:9090/path",
+			wantAddr: "example.com",
+			wantPort: 9090,
+		},
+		{
+			name:     "ipv6_with_explicit_port",
+			rawURL:   "http://[::1]:8080/path",
+			wantAddr: "::1", // url.URL.Hostname() strips brackets
+			wantPort: 8080,
+		},
+		{
+			name:     "unknown_scheme_falls_back_to_80",
+			rawURL:   "ftp://example.com/files",
+			wantAddr: "example.com",
+			wantPort: 80,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var u *url.URL
+			if !tc.nilURL {
+				u = mustParseURL(tc.rawURL)
+			}
+			addr, port := serverAddressPort(u)
+			assert.Equal(t, tc.wantAddr, addr, "addr mismatch")
+			assert.Equal(t, tc.wantPort, port, "port mismatch")
+		})
+	}
 }

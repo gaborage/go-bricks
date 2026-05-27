@@ -37,7 +37,7 @@ const (
 	attrHTTPStatusCode  = "http.response.status_code"
 	attrErrorType       = "error.type"
 	attrHTTPResendCount = "http.request.resend_count"
-	attrRetryReason     = "reason"
+	attrRetryReason     = "retry.reason"
 
 	// Sentinel value for unknown HTTP methods per OTel spec.
 	methodOther = "_OTHER"
@@ -204,24 +204,26 @@ func RecordHTTPClientMetrics(ctx context.Context, m *HTTPClientMeasurement) {
 
 // IncActiveRequests increments the http.client.active_requests counter.
 // Call this immediately before sending a request.
-// peer is the peer.service value (omitted when empty); method is the HTTP method.
-func IncActiveRequests(ctx context.Context, peer, method string) {
+// peer is the peer.service value (omitted when empty); method is the HTTP method;
+// addr is the server hostname (server.address, omitted when empty).
+func IncActiveRequests(ctx context.Context, peer, method, addr string) {
 	InitHTTPMeter()
 	if activeRequests == nil {
 		return
 	}
-	attrs := activeRequestAttrs(peer, canonicalMethod(method))
+	attrs := activeRequestAttrs(peer, canonicalMethod(method), addr)
 	activeRequests.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 // DecActiveRequests decrements the http.client.active_requests counter.
 // Call this after the request completes (in a defer alongside IncActiveRequests).
-func DecActiveRequests(ctx context.Context, peer, method string) {
+// addr is the server hostname (server.address, omitted when empty).
+func DecActiveRequests(ctx context.Context, peer, method, addr string) {
 	InitHTTPMeter()
 	if activeRequests == nil {
 		return
 	}
-	attrs := activeRequestAttrs(peer, canonicalMethod(method))
+	attrs := activeRequestAttrs(peer, canonicalMethod(method), addr)
 	activeRequests.Add(ctx, -1, metric.WithAttributes(attrs...))
 }
 
@@ -261,12 +263,17 @@ func baseAttrs(peer, method, addr string, port int, scheme string) []attribute.K
 }
 
 // activeRequestAttrs builds the minimal attribute set for the active_requests counter.
-func activeRequestAttrs(peer, method string) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 2)
+// Per OTel spec, active_requests carries: peer.service, server.address, http.request.method.
+// peer and addr are omitted when empty.
+func activeRequestAttrs(peer, method, addr string) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 3)
 	if peer != "" {
 		attrs = append(attrs, attribute.String(attrPeerService, peer))
 	}
 	attrs = append(attrs, attribute.String(attrHTTPMethod, method))
+	if addr != "" {
+		attrs = append(attrs, attribute.String(attrServerAddress, addr))
+	}
 	return attrs
 }
 
