@@ -23,6 +23,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 
 	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -359,6 +363,10 @@ type responseProcessingContext struct {
 	method       string
 	requestBytes int
 	httpReqURL   *url.URL
+	// attemptSpan is the OTel span opened for this attempt. processHTTPResponse
+	// ends it at the same point it records the per-attempt metric, so the
+	// span and metric carry symmetric status/error attribution.
+	attemptSpan trace.Span
 }
 
 // Do performs an HTTP request with the specified method
@@ -371,22 +379,50 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 	callCount := atomic.AddInt64(&c.callCount, 1)
 	maxRetries := c.config.MaxRetries
 
-	// Pre-extract host once for active_requests attribute. URL parse failures
-	// surface in buildRequest, not here — leave addr empty if parse fails so
-	// the attribute is omitted rather than crashing the gauge.
+	// Pre-extract host + parsed URL once for active_requests + Do-span attributes.
+	// URL parse failures surface in buildRequest, not here — leave addr empty if
+	// parse fails so the attribute is omitted rather than crashing the gauge.
 	addr := ""
+	var parsedURL *url.URL
 	if parsed, err := url.Parse(req.URL); err == nil {
 		addr = parsed.Hostname()
+		parsedURL = parsed
 	}
 
 	tracking.IncActiveRequests(ctx, c.config.PeerName, method, addr)
 	defer tracking.DecActiveRequests(ctx, c.config.PeerName, method, addr)
+
+	// Open the parent "Do" span — the logical request rollup. Closed in defer
+	// with the final attempt's outcome. Child spans per attempt are opened in
+	// executeAttempt and inherit this as their parent via the returned ctx.
+	ctx, doSpan := tracking.StartHTTPClientSpan(ctx, &tracking.HTTPSpanInfo{
+		PeerName: c.config.PeerName,
+		Method:   method,
+		URL:      parsedURL,
+	})
+	var (
+		finalStatus    int
+		finalErrType   string
+		finalRespBytes int
+		finalErr       error
+	)
+	defer func() {
+		tracking.EndHTTPClientSpan(doSpan, finalStatus, finalErrType, finalRespBytes, finalErr)
+	}()
 
 	for attempt := 0; ; attempt++ {
 		result := c.executeAttempt(ctx, method, req, attempt, maxRetries, start, callCount)
 		if result.retry {
 			tracking.IncRetry(ctx, c.config.PeerName, method, result.retryReason)
 			continue
+		}
+		if result.response != nil {
+			finalStatus = result.response.StatusCode
+			finalRespBytes = len(result.response.Body)
+		}
+		if result.err != nil {
+			finalErr = result.err
+			finalErrType = classifyError(result.err)
 		}
 		return result.response, result.err
 	}
@@ -402,8 +438,22 @@ func (c *client) executeAttempt(
 ) attemptResult {
 	httpReq, err := c.buildRequest(ctx, method, req)
 	if err != nil {
-		// Pre-roundtrip build failure: do NOT record a metric observation.
+		// Pre-roundtrip build failure: do NOT record a metric/span observation.
 		return attemptResult{err: err}
+	}
+
+	// Open the child attempt span as a child of the parent Do span on ctx.
+	// Rebind the request to attemptCtx so the W3C trace-context injection that
+	// follows reflects the attempt span's trace/span IDs.
+	attemptCtx, attemptSpan := tracking.StartHTTPClientSpan(ctx, &tracking.HTTPSpanInfo{
+		PeerName:    c.config.PeerName,
+		Method:      method,
+		URL:         httpReq.URL,
+		ResendCount: attempt,
+	})
+	httpReq = httpReq.WithContext(attemptCtx)
+	if c.config.EnableW3CTrace {
+		c.ensureTraceContextHeaders(httpReq)
 	}
 
 	traceHeader := c.traceHeaderName()
@@ -418,17 +468,19 @@ func (c *client) executeAttempt(
 			httpResp.Body.Close()
 		}
 		// Transport error: record metric with status 0 and classified error type.
+		errType := classifyError(err)
 		m := tracking.HTTPClientMeasurement{
 			PeerName:     c.config.PeerName,
 			Method:       method,
 			URL:          httpReq.URL,
 			StatusCode:   0,
-			ErrorType:    classifyError(err),
+			ErrorType:    errType,
 			ResendCount:  attempt,
 			Elapsed:      time.Since(attemptStart),
 			RequestBytes: len(req.Body),
 		}
 		tracking.RecordHTTPClientMetrics(ctx, &m)
+		tracking.EndHTTPClientSpan(attemptSpan, 0, errType, 0, err)
 		return c.handleExecutionError(ctx, err, attempt, maxRetries)
 	}
 
@@ -442,6 +494,7 @@ func (c *client) executeAttempt(
 		method:       method,
 		requestBytes: len(req.Body),
 		httpReqURL:   httpReq.URL,
+		attemptSpan:  attemptSpan,
 	}
 	return c.processHTTPResponse(ctx, httpReq, httpResp, respCtx)
 }
@@ -479,18 +532,23 @@ func (c *client) processHTTPResponse(
 		// could not be successfully assembled (interceptor error or body-read failure).
 		// Per the "exactly once per attempt that reaches the wire" rule, record the
 		// histogram observation here before delegating to the error handler.
+		errType := classifyError(err)
 		m := tracking.HTTPClientMeasurement{
 			PeerName:      c.config.PeerName,
 			Method:        respCtx.method,
 			URL:           respCtx.httpReqURL,
 			StatusCode:    httpResp.StatusCode,
-			ErrorType:     classifyError(err),
+			ErrorType:     errType,
 			ResendCount:   respCtx.attempt,
 			Elapsed:       time.Since(respCtx.attemptStart),
 			RequestBytes:  respCtx.requestBytes,
 			ResponseBytes: 0,
 		}
 		tracking.RecordHTTPClientMetrics(ctx, &m)
+		// End the attempt span using the upstream status code (the wire was hit),
+		// but include errType so the OTel error.type attribute carries the build
+		// failure classification — symmetric with the metric's ErrorType.
+		tracking.EndHTTPClientSpan(respCtx.attemptSpan, httpResp.StatusCode, errType, 0, err)
 		return c.handleResponseBuildError(ctx, err, respCtx.attempt, respCtx.maxRetries)
 	}
 	// Record per-attempt metric for successful roundtrip (including HTTP error status codes).
@@ -506,6 +564,10 @@ func (c *client) processHTTPResponse(
 		ResponseBytes: len(resp.Body),
 	}
 	tracking.RecordHTTPClientMetrics(ctx, &m)
+	// End the attempt span with the response's status code so OTel client-span
+	// status mapping (4xx unset, 5xx Error) is applied even when this attempt
+	// results in a retry. This is symmetric with the metric emission cadence.
+	tracking.EndHTTPClientSpan(respCtx.attemptSpan, resp.StatusCode, "", len(resp.Body), nil)
 	return c.finalizeResponse(ctx, resp, respCtx.attempt, respCtx.maxRetries, respCtx.traceID)
 }
 
@@ -694,15 +756,15 @@ func (c *client) traceHeaderName() string {
 	return HeaderXRequestID
 }
 
-// applyHeaders applies headers to the HTTP request
+// applyHeaders applies headers to the HTTP request. W3C trace-context headers
+// (`traceparent` / `tracestate`) are NOT injected here — they're injected per
+// attempt in executeAttempt AFTER the attempt span starts, so the propagator
+// can write a traceparent that matches the active attempt span's IDs.
 func (c *client) applyHeaders(httpReq *nethttp.Request, req *Request) {
 	applyHeaderMap(httpReq.Header, c.config.DefaultHeaders)
 	applyHeaderMap(httpReq.Header, req.Headers)
 	c.ensureContentTypeHeader(httpReq, req.Body)
 	c.ensureTraceIDHeader(httpReq)
-	if c.config.EnableW3CTrace {
-		c.ensureTraceContextHeaders(httpReq)
-	}
 }
 
 func applyHeaderMap(dst nethttp.Header, headers map[string]string) {
@@ -731,16 +793,32 @@ func (c *client) ensureTraceIDHeader(httpReq *nethttp.Request) {
 	httpReq.Header.Set(headerName, c.extractTraceID(httpReq.Context()))
 }
 
+// ensureTraceContextHeaders injects W3C trace-context headers per attempt.
+//
+// Precedence:
+//  1. When a recording span is active on the request context (the per-attempt
+//     span this package opens, or a surrounding span from upstream middleware),
+//     delegate to otel.GetTextMapPropagator().Inject — this writes a
+//     traceparent that carries the active span's trace/span IDs and joins the
+//     wider trace.
+//  2. Otherwise, fall back to the legacy synthetic path: use a traceparent
+//     inherited from context, or generate a fresh one. This preserves
+//     backward compatibility for callers that wire httpclient without OTel.
 func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
+	ctx := httpReq.Context()
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
+		return
+	}
 	if httpReq.Header.Get(HeaderTraceParent) == "" {
-		if tp, ok := TraceParentFromContext(httpReq.Context()); ok {
+		if tp, ok := TraceParentFromContext(ctx); ok {
 			httpReq.Header.Set(HeaderTraceParent, tp)
 		} else {
 			httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
 		}
 	}
 	if httpReq.Header.Get(HeaderTraceState) == "" {
-		if ts, ok := TraceStateFromContext(httpReq.Context()); ok {
+		if ts, ok := TraceStateFromContext(ctx); ok {
 			httpReq.Header.Set(HeaderTraceState, ts)
 		}
 	}

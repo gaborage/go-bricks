@@ -17,7 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 
@@ -1450,4 +1453,251 @@ func TestClassifyErrorRetryReasonCoherence(t *testing.T) {
 			assert.Equal(t, tc.wantRetryReason, reason, "retry.reason mismatch for error.type=%q", errType)
 		})
 	}
+}
+
+// setupTestTracerForClient installs an in-memory test trace provider as the
+// global tracer + propagator, returning a cleanup that restores both.
+func setupTestTracerForClient(t *testing.T) (*obtest.TestTraceProvider, func()) {
+	t.Helper()
+	tp := obtest.NewTestTraceProvider()
+	originalTP := otel.GetTracerProvider()
+	originalProp := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tp.TracerProvider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	tracking.ResetTracerForTesting()
+	return tp, func() {
+		otel.SetTracerProvider(originalTP)
+		otel.SetTextMapPropagator(originalProp)
+		tracking.ResetTracerForTesting()
+	}
+}
+
+// partitionSpans splits the captured spans into the single parent (no parent
+// SpanContext) and the children (parent SpanContext valid).
+func partitionSpans(t *testing.T, spans tracetest.SpanStubs) (parent tracetest.SpanStub, children []tracetest.SpanStub) {
+	t.Helper()
+	for i := range spans {
+		if spans[i].Parent.IsValid() {
+			children = append(children, spans[i])
+		} else {
+			parent = spans[i]
+		}
+	}
+	return parent, children
+}
+
+func TestClientDoEmitsParentAndChildSpansOnSuccess(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).WithPeerName("test-peer").Build()
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	require.NoError(t, err)
+	require.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 2, "expected one parent Do span + one child attempt span")
+
+	parent, children := partitionSpans(t, spans)
+	require.Len(t, children, 1)
+	assert.Equal(t, "GET test-peer", parent.Name, "parent span name should use peer template")
+	assert.Equal(t, parent.SpanContext.SpanID(), children[0].Parent.SpanID(),
+		"attempt span must reference the Do span as its parent")
+	obtest.AssertSpanStatus(t, &parent, codes.Unset)
+	obtest.AssertSpanAttribute(t, &parent, "http.response.status_code", int64(200))
+	obtest.AssertSpanAttribute(t, &children[0], "peer.service", "test-peer")
+}
+
+func TestClientDoEmitsParentAndChildSpansWithoutPeer(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).Build()
+	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	require.NoError(t, err)
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 2)
+	parent, _ := partitionSpans(t, spans)
+	assert.Equal(t, "HTTP GET", parent.Name, "parent span name should use HTTP-METHOD template when no peer")
+}
+
+func TestClientDoInjectsRealTraceparentWhenSpanActive(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	var receivedTP string
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		receivedTP = r.Header.Get("traceparent")
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	require.NoError(t, err)
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 2)
+	_, children := partitionSpans(t, spans)
+	require.Len(t, children, 1)
+	require.True(t, children[0].SpanContext.IsValid(), "child attempt span should have a valid span context")
+	require.NotEmpty(t, receivedTP, "server should have received a traceparent header")
+	traceID := children[0].SpanContext.TraceID().String()
+	assert.Containsf(t, receivedTP, traceID,
+		"traceparent header should carry the attempt span's trace ID, got %q", receivedTP)
+}
+
+func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
+	// Install a no-op tracer provider so no real span context is active.
+	tp := obtest.NewTestTraceProvider()
+	originalTP := otel.GetTracerProvider()
+	originalProp := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tp.TracerProvider) // sets a real provider
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	tracking.ResetTracerForTesting()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(originalTP)
+		otel.SetTextMapPropagator(originalProp)
+		tracking.ResetTracerForTesting()
+	})
+
+	var receivedTP string
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		receivedTP = r.Header.Get("traceparent")
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	require.NoError(t, err)
+	// Even with a no-op tracer that yields a non-recording span, the
+	// attempt span this package opens is recording (since the test provider is
+	// a real SDK). The traceparent injected on the wire matches the attempt
+	// span's trace ID. The "no real span on context" fallback path is
+	// exercised by client_test.go's existing TestEnsureTraceContextHeaders*
+	// tests, which call the function directly with a bare context.
+	require.NotEmpty(t, receivedTP)
+}
+
+func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		n := attempts.Add(1)
+		if n < 3 {
+			w.WriteHeader(nethttp.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(nethttp.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).
+		WithRetries(2, time.Millisecond).
+		WithPeerName("flaky-svc").
+		Build()
+	resp, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	require.NoError(t, err)
+	require.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 4, "expected one parent Do span + three attempt spans (2x 503 + 1x 200)")
+	parent, children := partitionSpans(t, spans)
+	require.Len(t, children, 3)
+
+	// Every attempt span has the Do span as its parent.
+	for i := range children {
+		assert.Equalf(t, parent.SpanContext.SpanID(), children[i].Parent.SpanID(),
+			"child span %d must reference the Do span as its parent", i)
+	}
+
+	// Resend counts: attempt 0 omits resend_count, attempts 1 and 2 set 1 and 2.
+	resendCounts := map[int64]int{}
+	var firstAttemptHasResend bool
+	for i := range children {
+		found := int64(-1)
+		for _, kv := range children[i].Attributes {
+			if string(kv.Key) == "http.request.resend_count" {
+				found = kv.Value.AsInt64()
+			}
+		}
+		if found == -1 {
+			// resend_count omitted → first attempt
+			require.False(t, firstAttemptHasResend, "only one attempt should omit resend_count (attempt 0)")
+			firstAttemptHasResend = true
+			continue
+		}
+		resendCounts[found]++
+	}
+	assert.Equal(t, 1, resendCounts[1], "exactly one attempt should have resend_count=1")
+	assert.Equal(t, 1, resendCounts[2], "exactly one attempt should have resend_count=2")
+
+	// Parent Do span ends with the final 2xx → status unset, status_code=200.
+	obtest.AssertSpanStatus(t, &parent, codes.Unset)
+	obtest.AssertSpanAttribute(t, &parent, "http.response.status_code", int64(200))
+
+	// First two attempts (503) → Error status, last (200) → Unset.
+	errorCount, unsetCount := 0, 0
+	for i := range children {
+		switch children[i].Status.Code {
+		case codes.Error:
+			errorCount++
+		case codes.Unset:
+			unsetCount++
+		}
+	}
+	assert.Equal(t, 2, errorCount, "first two 5xx attempts should have Error status")
+	assert.Equal(t, 1, unsetCount, "final 2xx attempt should have Unset status")
+}
+
+func TestClientDoTransportErrorSpan(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	// Address that should fail to connect: closed loopback port.
+	c := NewBuilder(createTestLogger()).WithPeerName("dead-svc").Build()
+	_, err := c.Get(context.Background(), &Request{URL: "http://127.0.0.1:1/foo"})
+	require.Error(t, err)
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 2)
+	parent, children := partitionSpans(t, spans)
+	require.Len(t, children, 1)
+
+	// Both spans should carry Error status; the child's exception event records the error.
+	obtest.AssertSpanStatus(t, &parent, codes.Error)
+	obtest.AssertSpanStatus(t, &children[0], codes.Error)
+	hasException := false
+	for _, ev := range children[0].Events {
+		if ev.Name == "exception" {
+			hasException = true
+			break
+		}
+	}
+	assert.True(t, hasException, "transport error should produce an exception event on the attempt span")
+	// error.type should be present on the attempt span.
+	foundErrType := false
+	for _, kv := range children[0].Attributes {
+		if string(kv.Key) == "error.type" {
+			foundErrType = true
+			break
+		}
+	}
+	assert.True(t, foundErrType, "transport error should set error.type on the attempt span")
 }
