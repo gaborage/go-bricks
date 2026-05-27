@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	// httpTracer is the package-level tracer initialised lazily on first use.
+	// httpTracer is the package-level tracer initialized lazily on first use.
 	httpTracer trace.Tracer
 
 	// tracerOnce + tracerInitMu mirror the metric init pattern: sync.Once for the
@@ -63,7 +63,7 @@ func initHTTPTracer() {
 	httpTracer = otel.Tracer(httpTracerName)
 }
 
-// InitHTTPTracer initialises the HTTP client tracer idempotently. Subsequent
+// InitHTTPTracer initializes the HTTP client tracer idempotently. Subsequent
 // calls after the first are no-ops. Holds tracerInitMu so concurrent calls and
 // ResetTracerForTesting cannot race on tracerOnce.
 func InitHTTPTracer() {
@@ -94,6 +94,13 @@ func InitHTTPTracer() {
 // literal nil (not relevant here but cheap to keep).
 func StartHTTPClientSpan(ctx context.Context, info *HTTPSpanInfo) (context.Context, trace.Span) {
 	InitHTTPTracer()
+	// Treat nil info as an empty value so the caller doesn't have to nil-check
+	// at every call site. Equivalent to passing &HTTPSpanInfo{}: empty method
+	// canonicalises to "_OTHER", URL accessors are nil-safe, and ResendCount
+	// defaults to 0 (omitted attribute).
+	if info == nil {
+		info = &HTTPSpanInfo{}
+	}
 	method := canonicalMethod(info.Method)
 	ctx, span := httpTracer.Start(ctx, spanName(info, method), trace.WithSpanKind(trace.SpanKindClient))
 	span.SetAttributes(spanStartAttributes(info, method)...)
@@ -192,9 +199,14 @@ func spanName(info *HTTPSpanInfo, method string) string {
 	return "HTTP " + method
 }
 
-// spanStartAttributes builds the attribute set applied at span start. peer.service
-// is omitted when PeerName is empty; url.path is omitted when the URL has no path;
-// http.request.resend_count is omitted when 0 (first attempt or the Do rollup).
+// spanStartAttributes builds the attribute set applied at span start. Per OTel
+// guidance, attributes with unknown values are OMITTED rather than emitted as
+// empty/zero — this keeps "missing" and "empty" distinguishable in trace
+// queries. peer.service, server.address, server.port, url.scheme, url.path,
+// and http.request.resend_count are each omitted when their source is empty/nil.
+// http.request.method and network.protocol.name are always present because
+// canonicalMethod returns a sentinel ("_OTHER") rather than an empty string
+// and the protocol is a constant.
 func spanStartAttributes(info *HTTPSpanInfo, method string) []attribute.KeyValue {
 	addr, port := serverAddressPort(info.URL)
 	scheme := urlScheme(info.URL)
@@ -204,11 +216,18 @@ func spanStartAttributes(info *HTTPSpanInfo, method string) []attribute.KeyValue
 	}
 	attrs = append(attrs,
 		attribute.String(attrHTTPMethod, method),
-		attribute.String(attrServerAddress, addr),
-		attribute.Int(attrServerPort, port),
-		attribute.String(attrURLScheme, scheme),
 		attribute.String(attrNetworkProtocolName, networkProtocolHTTP),
 	)
+	if addr != "" {
+		attrs = append(attrs, attribute.String(attrServerAddress, addr))
+		// Port only makes sense alongside a known address.
+		if port > 0 {
+			attrs = append(attrs, attribute.Int(attrServerPort, port))
+		}
+	}
+	if scheme != "" {
+		attrs = append(attrs, attribute.String(attrURLScheme, scheme))
+	}
 	if p := urlPath(info.URL); p != "" {
 		attrs = append(attrs, attribute.String(attrURLPath, p))
 	}

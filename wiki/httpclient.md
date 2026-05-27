@@ -146,7 +146,7 @@ func TestMyService(t *testing.T) {
 
 ### Overview
 
-The `httpclient` package emits OpenTelemetry **CLIENT** spans for every outbound HTTP call under the tracer name `go-bricks/httpclient`. The tracer is initialised lazily on first use via `otel.GetTracerProvider()` and governed by `observability.enabled` — when observability is disabled the global tracer is a no-op and there is zero overhead per request.
+The `httpclient` package emits OpenTelemetry **CLIENT** spans for every outbound HTTP call under the tracer name `go-bricks/httpclient`. The tracer is initialized lazily on first use via `otel.GetTracerProvider()` and governed by `observability.enabled` — when observability is disabled the global tracer is a no-op and there is zero overhead per request.
 
 **Tracer scope:** `go-bricks/httpclient`
 
@@ -198,14 +198,17 @@ Set at span end:
 
 OTel HTTP **client** span status convention (different from server spans):
 
-| Outcome | Span status | RecordError? |
+| Outcome | Span status | Exception event? |
 |---|---|---|
-| 2xx / 3xx response | `codes.Unset` (default OK) | no |
-| 4xx response | `codes.Unset` | no |
-| 5xx response | `codes.Error`, description `"HTTP {code}"` | no |
-| Transport error (no response) | `codes.Error`, description = error.type | yes (`span.RecordError(err)`) |
+| 2xx / 3xx response (no err) | `codes.Unset` (default OK) | no |
+| 4xx response (no err) | `codes.Unset` | no |
+| 5xx response (no err) | `codes.Error`, description `"HTTP {code}"` | no |
+| Transport error (no response) | `codes.Error`, description = error.type | yes — sanitized event |
+| Any response + non-nil err (interceptor/build failure on a 2xx, terminal HTTPError on a 5xx, …) | `codes.Error`, description = error.type or err message | yes — sanitized event |
 
-Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-control signal (the server told you something legitimate about the request). 5xx signals a server-side failure; transport errors signal a network-side failure on the path between us and the server.
+Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-control signal (the server told you something legitimate about the request). 5xx signals a server-side failure; transport errors signal a network-side failure on the path between us and the server. Any err alongside a response (e.g. a response interceptor failing on a 200) takes the error path so the span doesn't silently look like a success.
+
+**Sanitized exception events.** Where the table says "yes — sanitized event," the framework emits the exception as an explicit `AddEvent("exception", ...)` rather than `span.RecordError(err)`. Go's stdlib `*url.Error.Error()` includes the full request URL with query string (Go redacts userinfo passwords but not query strings), and Go's default `RecordError` would export those bytes to every configured OTel backend. The framework walks the error chain via `errors.As(*url.Error)` and strips both `RawQuery` and `User` from any embedded URL before recording the exception message — so credentials passed as `?token=...` or in `user:pass@` userinfo never reach trace exporters. Defense-in-depth note: this is per-package, not framework-wide; until a global span-attribute SensitiveDataFilter ships, callers adding new span attributes carrying header/body bytes must run their own redaction.
 
 ### W3C `traceparent` Propagation
 

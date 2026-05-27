@@ -90,6 +90,7 @@ func TestStartHTTPClientSpanReturnsRecordingSpan(t *testing.T) {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestStartHTTPClientSpanReturnsRecordingSpan -v
 ```
+
 Expected: build fails — `StartHTTPClientSpan`, `HTTPSpanInfo`, and `ResetTracerForTesting` are undefined.
 
 - [ ] **Step 3: Implement the skeleton — minimum to compile and pass**
@@ -192,6 +193,7 @@ func ResetTracerForTesting() {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestStartHTTPClientSpanReturnsRecordingSpan -v
 ```
+
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -277,6 +279,7 @@ func TestSpanNameTemplateUnknownMethod(t *testing.T) {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestSpanNameTemplate -v
 ```
+
 Expected: all three pass.
 
 - [ ] **Step 3: Commit**
@@ -397,6 +400,7 @@ func TestStartHTTPClientSpanOmitsURLPathWhenEmpty(t *testing.T) {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestStartHTTPClientSpan -v
 ```
+
 Expected: the four new tests fail (attributes are not yet emitted).
 
 - [ ] **Step 3: Replace `StartHTTPClientSpan` body to set attributes**
@@ -461,6 +465,7 @@ func urlPath(u *url.URL) string {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestStartHTTPClientSpan -v
 ```
+
 Expected: all four pass.
 
 - [ ] **Step 5: Commit**
@@ -670,6 +675,7 @@ func TestStartHTTPClientSpanNoopProviderReturnsNonRecording(t *testing.T) {
 ```bash
 go test ./httpclient/internal/tracking/ -run TestStartHTTPClientSpanNoop -v
 ```
+
 Expected: PASS. This test locks in the no-op behavior against regressions.
 
 - [ ] **Step 3: Commit**
@@ -803,17 +809,21 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 ```bash
 go test ./httpclient -run TestClientDoEmitsParentSpan -v
 ```
+
 Expected: fail with `expected 2 spans, got 1`. **Adjust the test assertion to `collector.AssertCount(1)` for now**, then re-run:
 
 Update the test:
+
 ```go
 	collector.AssertCount(1)
 ```
 
 Re-run:
+
 ```bash
 go test ./httpclient -run TestClientDoEmitsParentSpan -v
 ```
+
 Expected: PASS — exactly one parent Do span emitted.
 
 - [ ] **Step 5: Commit**
@@ -861,6 +871,7 @@ In `client_test.go`, find `TestClientDoEmitsParentSpanOnSuccess` and update the 
 ```
 
 You'll need an additional import in the test file:
+
 ```go
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 ```
@@ -997,6 +1008,7 @@ Defer to Task 8 for propagator injection.
 ```bash
 go test ./httpclient -run TestClientDoEmitsParentSpan -v
 ```
+
 Expected: PASS — 2 spans, parent SpanID matches child's Parent.SpanID().
 
 - [ ] **Step 5: Run the full httpclient test suite to catch regressions**
@@ -1004,6 +1016,7 @@ Expected: PASS — 2 spans, parent SpanID matches child's Parent.SpanID().
 ```bash
 go test ./httpclient/... -race
 ```
+
 Expected: all existing tests still pass.
 
 - [ ] **Step 6: Commit**
@@ -1071,6 +1084,7 @@ func TestClientDoInjectsRealTraceparentWhenSpanActive(t *testing.T) {
 ```
 
 Add these imports to `client_test.go` if not already present:
+
 ```go
 	"go.opentelemetry.io/otel/propagation"
 ```
@@ -1113,6 +1127,7 @@ func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
 ```
 
 Add imports:
+
 ```go
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -1142,6 +1157,7 @@ In `executeAttempt`, after starting the attempt span (Task 7's modification), up
 Important: this means `applyHeaders → ensureTraceContextHeaders` inside `buildRequest` runs with the *parent Do* context (or empty), but the post-start re-injection overwrites with the attempt span's traceparent. To avoid duplicate logic, REMOVE the original `ensureTraceContextHeaders` call from `applyHeaders` and call it ONLY here (after the attempt span starts).
 
 In `applyHeaders`, change:
+
 ```go
 func (c *client) applyHeaders(httpReq *nethttp.Request, req *Request) {
 	applyHeaderMap(httpReq.Header, c.config.DefaultHeaders)
@@ -1393,11 +1409,13 @@ Find the existing paragraph that mentions `go-bricks/database`, `go-bricks/messa
 - [ ] **Step 2: Update the `httpclient/` bullet in `CLAUDE.md`**
 
 Find the line in CLAUDE.md that reads:
+
 ```markdown
 - **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors. OpenTelemetry metrics: see [wiki/httpclient.md#metrics](wiki/httpclient.md#metrics).
 ```
 
 Replace with:
+
 ```markdown
 - **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors. OpenTelemetry metrics: see [wiki/httpclient.md#metrics](wiki/httpclient.md#metrics). OpenTelemetry tracing: see [wiki/httpclient.md#tracing](wiki/httpclient.md#tracing).
 ```
@@ -1445,6 +1463,7 @@ Common possibilities:
 ```bash
 make check-all
 ```
+
 Expected: PASS.
 
 - [ ] **Step 4: Commit if any fixes were needed**

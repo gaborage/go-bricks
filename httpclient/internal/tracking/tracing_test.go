@@ -352,7 +352,12 @@ func TestEndHTTPClientSpanNilSpanIsNoop(t *testing.T) {
 	})
 }
 
-func TestStartHTTPClientSpanNilURLEmitsEmptyAttrs(t *testing.T) {
+// TestStartHTTPClientSpanNilURLOmitsUnknownAttrs verifies OTel's "omit unknown
+// values" guidance: when info.URL is nil we cannot derive server.address /
+// server.port / url.scheme / url.path, so those attributes must be absent from
+// the span (not emitted as "" / 0). Trace queries can then distinguish
+// "missing" from "empty".
+func TestStartHTTPClientSpanNilURLOmitsUnknownAttrs(t *testing.T) {
 	tp, cleanup := setupTestTraceProvider(t)
 	defer cleanup()
 
@@ -361,9 +366,39 @@ func TestStartHTTPClientSpanNilURLEmitsEmptyAttrs(t *testing.T) {
 	span.End()
 
 	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	// http.request.method is always present (canonicalMethod returns _OTHER
+	// for unknown rather than empty). network.protocol.name is a constant.
 	obtest.AssertSpanAttribute(t, &got, "http.request.method", "GET")
-	obtest.AssertSpanAttribute(t, &got, "server.address", "")
-	obtest.AssertSpanAttribute(t, &got, "url.scheme", "")
+	obtest.AssertSpanAttribute(t, &got, "network.protocol.name", "http")
+	// All URL-derived attrs must be omitted.
+	omitted := []string{"server.address", "server.port", "url.scheme", "url.path"}
+	for _, kv := range got.Attributes {
+		key := string(kv.Key)
+		for _, o := range omitted {
+			assert.NotEqualf(t, o, key,
+				"attribute %q should be omitted when URL is nil (OTel: prefer missing over empty)", o)
+		}
+	}
+}
+
+// TestStartHTTPClientSpanNilInfoIsSafe locks in the nil-info guard.
+// CodeRabbit flagged this as a potential panic on nil dereference; the
+// guard at the top of StartHTTPClientSpan treats nil as an empty value.
+func TestStartHTTPClientSpanNilInfoIsSafe(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	require.NotPanics(t, func() {
+		_, span := StartHTTPClientSpan(context.Background(), nil)
+		require.NotNil(t, span)
+		span.End()
+	})
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	// Empty method canonicalises to _OTHER per the package's existing behaviour;
+	// the span name therefore uses the HTTP-METHOD template since PeerName is
+	// also empty.
+	assert.Equal(t, "HTTP _OTHER", got.Name)
 }
 
 // TestEndHTTPClientSpanStripQueryStringFromTransportError locks in F-SEC-1
