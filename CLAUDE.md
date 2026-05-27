@@ -144,7 +144,7 @@ make lint                       # Run golangci-lint
 - **config/** — Configuration management (Koanf: YAML + env vars)
 - **database/** — Multi-database interface with query builder
 - **cache/** — Redis caching with type-safe CBOR serialization
-- **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors
+- **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors. OpenTelemetry metrics: see [wiki/httpclient.md#metrics](wiki/httpclient.md#metrics).
 - **logger/** — Structured logging (zerolog)
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
@@ -309,6 +309,7 @@ client := httpclient.NewBuilder(logger).
     WithTimeout(10 * time.Second).
     WithRetries(3, 500 * time.Millisecond).
     WithW3CTrace(true).
+    WithPeerName("downstream-service").
     Build()
 
 resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.example.com/users"})
