@@ -18,3 +18,14 @@ func ResetMeterForTesting() {
 	responseBodySize = nil
 	retriesTotal = nil
 }
+
+// ResetTracerForTesting resets the package-level tracer state so each test
+// starts with a fresh tracer. Mirrors ResetMeterForTesting. Safe to call
+// concurrently with InitHTTPTracer — the mutex serialises both paths.
+func ResetTracerForTesting() {
+	tracerInitMu.Lock()
+	defer tracerInitMu.Unlock()
+
+	tracerOnce = sync.Once{}
+	httpTracer = nil
+}

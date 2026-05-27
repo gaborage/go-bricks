@@ -144,7 +144,7 @@ make lint                       # Run golangci-lint
 - **config/** — Configuration management (Koanf: YAML + env vars)
 - **database/** — Multi-database interface with query builder
 - **cache/** — Redis caching with type-safe CBOR serialization
-- **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors. OpenTelemetry metrics: see [wiki/httpclient.md#metrics](wiki/httpclient.md#metrics).
+- **httpclient/** — HTTP client with retries, W3C trace propagation, and interceptors. OpenTelemetry metrics: see [wiki/httpclient.md#metrics](wiki/httpclient.md#metrics). OpenTelemetry tracing (parent Do span + child attempt spans, OTel propagator for `traceparent` injection): see [wiki/httpclient.md#tracing](wiki/httpclient.md#tracing).
 - **logger/** — Structured logging (zerolog)
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs

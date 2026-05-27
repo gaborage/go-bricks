@@ -142,6 +142,120 @@ func TestMyService(t *testing.T) {
 
 **Internal httpclient tests only:** `tracking.ResetMeterForTesting()` (in `httpclient/internal/tracking/testing.go`) resets cached instrument state so the next `InitHTTPMeter()` re-registers against whichever provider is active. The `internal/` boundary limits this to code within the `httpclient/**` package tree.
 
+## Tracing
+
+### Overview
+
+The `httpclient` package emits OpenTelemetry **CLIENT** spans for every outbound HTTP call under the tracer name `go-bricks/httpclient`. The tracer is initialized lazily on first use via `otel.GetTracerProvider()` and governed by `observability.enabled` — when observability is disabled the global tracer is a no-op and there is zero overhead per request.
+
+**Tracer scope:** `go-bricks/httpclient`
+
+### Span Tree Structure
+
+Each call to `Client.Do` (and its method shortcuts `Get` / `Post` / etc.) emits:
+
+1. **One parent "Do" span** — the logical request rollup. Opened in `Do` after request validation; closed when `Do` returns with the *final* attempt's status, error type, and response body size.
+2. **One child attempt span per attempt** — opened in `executeAttempt` after `buildRequest` succeeds; closed at the same point the per-attempt metric is recorded, so span status and metric attribution stay in sync.
+
+Every attempt span has the parent Do span as its direct parent in the trace tree. No span links are emitted between siblings — parent-child structure plus the `http.request.resend_count` attribute is sufficient to query the retry tree.
+
+### Span Naming
+
+| Condition | Span name |
+|---|---|
+| `PeerName` set via `WithPeerName` | `"{METHOD} {peer}"` (e.g. `"POST stripe"`) |
+| `PeerName` unset | `"HTTP {METHOD}"` (e.g. `"HTTP GET"`) |
+| Non-standard HTTP method | `METHOD` canonicalises to `"_OTHER"` |
+
+URL paths are **never** in the span name. Without route templating (which the client does not have), path-in-name is a cardinality bomb.
+
+### Attribute Reference
+
+Set at span start (both Do span and attempt span unless noted):
+
+| Attribute | Notes |
+|---|---|
+| `peer.service` | From `WithPeerName`. Omitted when empty. |
+| `http.request.method` | Canonical uppercase. `"_OTHER"` for non-standard methods. |
+| `server.address` | Hostname from the parsed URL. |
+| `server.port` | Port from URL, defaulting to 80 (http) or 443 (https). |
+| `url.scheme` | `"http"` or `"https"`. |
+| `url.path` | Path component only — query string and userinfo are not included (`url.URL.Path` already excludes them). Omitted when empty. |
+| `network.protocol.name` | Constant `"http"`. HTTP/1.1 vs HTTP/2 is not distinguished — the OTel-recommended low-cardinality default. |
+| `http.request.resend_count` | **Attempt span only.** Omitted when `0` (first attempt) and always omitted on the parent Do span (which is the rollup, not any single attempt). |
+
+Set at span end:
+
+| Attribute | Notes |
+|---|---|
+| `http.response.status_code` | Set when a response is received. Omitted on transport error. |
+| `http.response.body.size` | Set when response body bytes > 0. |
+| `error.type` | Set only on transport error (status 0) and on response-build errors. Mirrors the duration histogram's `error.type` attribute. |
+
+`url.full` is **never** emitted. Even with userinfo and query-string redaction, paths can still leak (`/users/{secret-token}/...`). Emitting `server.address` + `url.scheme` + `url.path` is sufficient for service-graph slicing without the leakage surface.
+
+### Span Status Mapping
+
+OTel HTTP **client** span status convention (different from server spans):
+
+| Outcome | Span status | Exception event? |
+|---|---|---|
+| 2xx / 3xx response (no err) | `codes.Unset` (default OK) | no |
+| 4xx response (no err) | `codes.Unset` | no |
+| 5xx response (no err) | `codes.Error`, description `"HTTP {code}"` | no |
+| Transport error (no response) | `codes.Error`, description = error.type | yes — sanitized event |
+| Any response + non-nil err (interceptor/build failure on a 2xx, terminal HTTPError on a 5xx, …) | `codes.Error`, description = error.type or err message | yes — sanitized event |
+
+Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-control signal (the server told you something legitimate about the request). 5xx signals a server-side failure; transport errors signal a network-side failure on the path between us and the server. Any err alongside a response (e.g. a response interceptor failing on a 200) takes the error path so the span doesn't silently look like a success.
+
+**Sanitized exception events.** Where the table says "yes — sanitized event," the framework emits the exception as an explicit `AddEvent("exception", ...)` rather than `span.RecordError(err)`. Go's stdlib `*url.Error.Error()` includes the full request URL with query string (Go redacts userinfo passwords but not query strings), and Go's default `RecordError` would export those bytes to every configured OTel backend. The framework walks the error chain via `errors.As(*url.Error)` and strips both `RawQuery` and `User` from any embedded URL before recording the exception message — so credentials passed as `?token=...` or in `user:pass@` userinfo never reach trace exporters. Defense-in-depth note: this is per-package, not framework-wide; until a global span-attribute SensitiveDataFilter ships, callers adding new span attributes carrying header/body bytes must run their own redaction.
+
+### W3C `traceparent` Propagation
+
+`httpclient` injects `traceparent` / `tracestate` headers per attempt with this precedence:
+
+1. **OTel propagator path** — when a recording span is active on the request context (the attempt span this package opens, *or* a surrounding span from `server/` middleware), `otel.GetTextMapPropagator().Inject(ctx, headerCarrier)` writes the *real* traceparent matching that span. The framework registers `propagation.TraceContext{}` as the default global propagator.
+2. **Legacy fallback** — when `c.config.EnableW3CTrace == true` AND no span is active on the context, the existing `TraceParentFromContext` / `GenerateTraceParent` path emits a synthetic traceparent. This preserves backward compatibility for callers wiring `httpclient` without an OTel tracer.
+3. **Disabled** — `WithW3CTrace(false)` disables W3C injection entirely.
+
+You don't need to change anything to benefit from the OTel propagator — leave `EnableW3CTrace` at its default `true` and register a tracer provider (`app.New(...)` does this automatically when `observability.enabled: true`). Downstream services receive a real traceparent that joins your trace.
+
+### Zero-overhead when disabled
+
+When `observability.enabled: false`, the framework installs `noop.NewTracerProvider()` as the global tracer. `StartHTTPClientSpan` returns a non-recording span; `EndHTTPClientSpan` is a no-op; every span method call is a no-op. The only per-request cost is one `otel.Tracer(...)` lookup (cached after the first call inside `sync.Once`).
+
+### Testing Tracing
+
+Use `observability/testing` helpers — they're exactly the same shape as the metrics test helpers documented above:
+
+```go
+import (
+    obtest "github.com/gaborage/go-bricks/observability/testing"
+    "github.com/gaborage/go-bricks/httpclient/internal/tracking"
+    "go.opentelemetry.io/otel"
+)
+
+func TestModuleEmitsHTTPSpans(t *testing.T) {
+    tp := obtest.NewTestTraceProvider()
+    original := otel.GetTracerProvider()
+    otel.SetTracerProvider(tp.TracerProvider)
+    tracking.ResetTracerForTesting()
+    defer func() {
+        otel.SetTracerProvider(original)
+        tracking.ResetTracerForTesting()
+    }()
+
+    // ... exercise code that performs an outbound HTTP call ...
+
+    collector := obtest.NewSpanCollector(t, tp.Exporter)
+    collector.AssertCount(2) // 1 parent Do span + 1 child attempt span
+    span := collector.WithName("GET stripe").First()
+    obtest.AssertSpanAttribute(t, &span, "peer.service", "stripe")
+}
+```
+
+**Internal httpclient tests only:** `tracking.ResetTracerForTesting()` resets cached tracer state so the next `InitHTTPTracer()` re-registers against whichever provider is active. Same `internal/` boundary as `ResetMeterForTesting`.
+
 ## Payload Logging
 
 > **Warning:** payload logging is a debug aid for development/staging only. Enabling it in production widens the audit-log surface and may expose sensitive data to log pipelines.
