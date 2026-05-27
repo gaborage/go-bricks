@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 
@@ -1560,12 +1561,16 @@ func TestClientDoInjectsRealTraceparentWhenSpanActive(t *testing.T) {
 		"traceparent header should carry the attempt span's trace ID, got %q", receivedTP)
 }
 
+// TestClientDoSyntheticTraceparentWhenNoTracerActive exercises the legacy
+// synthetic-traceparent fallback in ensureTraceContextHeaders — the path
+// taken when no recording span exists on the request context. We install a
+// noop TracerProvider so StartHTTPClientSpan returns a non-recording span
+// whose SpanContext is invalid; ensureTraceContextHeaders's IsValid() branch
+// then fails over to GenerateTraceParent().
 func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
-	// Install a no-op tracer provider so no real span context is active.
-	tp := obtest.NewTestTraceProvider()
 	originalTP := otel.GetTracerProvider()
 	originalProp := otel.GetTextMapPropagator()
-	otel.SetTracerProvider(tp.TracerProvider) // sets a real provider
+	otel.SetTracerProvider(tracenoop.NewTracerProvider())
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	tracking.ResetTracerForTesting()
 	t.Cleanup(func() {
@@ -1584,13 +1589,41 @@ func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
 	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
 	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
-	// Even with a no-op tracer that yields a non-recording span, the
-	// attempt span this package opens is recording (since the test provider is
-	// a real SDK). The traceparent injected on the wire matches the attempt
-	// span's trace ID. The "no real span on context" fallback path is
-	// exercised by client_test.go's existing TestEnsureTraceContextHeaders*
-	// tests, which call the function directly with a bare context.
-	require.NotEmpty(t, receivedTP)
+	require.NotEmpty(t, receivedTP,
+		"synthetic-traceparent fallback should write a header even without a recording span")
+	// The synthetic generator's traceparent format is "00-<32hex>-<16hex>-01".
+	// Spot-check the prefix and shape so a future regression that returns "" or
+	// the propagator's empty value is caught.
+	assert.True(t, strings.HasPrefix(receivedTP, "00-"),
+		"synthetic traceparent should start with version 00, got %q", receivedTP)
+	assert.Len(t, receivedTP, 55, "W3C traceparent length should be 55 chars (00-trace-span-flags)")
+}
+
+// TestClientDoPreservesCallerSuppliedTraceparent codifies F2 from the
+// pre-push review: when a caller pins a traceparent via req.Headers (e.g.
+// a vendor SDK that wants the upstream trace ID to flow through), the OTel
+// propagator path must NOT overwrite it. Pre-fix behavior: with a real SDK
+// active, the attempt span's trace ID would clobber the caller value.
+func TestClientDoPreservesCallerSuppliedTraceparent(t *testing.T) {
+	_, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	const pinned = "00-0123456789abcdef0123456789abcdef-fedcba9876543210-01"
+	var receivedTP string
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		receivedTP = r.Header.Get("traceparent")
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	_, err := c.Get(context.Background(), &Request{
+		URL:     server.URL + "/foo",
+		Headers: map[string]string{"traceparent": pinned},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pinned, receivedTP,
+		"caller-supplied traceparent must survive — propagator must not overwrite an explicit header value")
 }
 
 func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing.T) {
@@ -1669,6 +1702,41 @@ func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing
 	}
 	assert.Equal(t, 2, errorCount, "first two 5xx attempts should have Error status")
 	assert.Equal(t, 1, unsetCount, "final 2xx attempt should have Unset status")
+}
+
+// TestClientDoPanicInResponseInterceptorEndsBothSpansWithErrorType locks in
+// F3: a panic in user-supplied code that runs AFTER the attempt span opens
+// (here, a response interceptor that fires post-roundtrip) must not leak the
+// attempt span or silently classify the Do span as success. Both spans must
+// end with error.type="panic" and codes.Error; the panic must propagate.
+func TestClientDoPanicInResponseInterceptorEndsBothSpansWithErrorType(t *testing.T) {
+	tp, cleanup := setupTestTracerForClient(t)
+	defer cleanup()
+
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewBuilder(createTestLogger()).
+		WithResponseInterceptor(func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
+			panic("user-supplied response interceptor panicked")
+		}).
+		Build()
+
+	require.Panics(t, func() {
+		_, _ = c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
+	})
+
+	spans := tp.Exporter.GetSpans()
+	require.Len(t, spans, 2, "panic must still produce one parent Do span + one attempt span")
+	parent, children := partitionSpans(t, spans)
+	require.Len(t, children, 1)
+
+	obtest.AssertSpanStatus(t, &parent, codes.Error)
+	obtest.AssertSpanAttribute(t, &parent, "error.type", "panic")
+	obtest.AssertSpanStatus(t, &children[0], codes.Error)
+	obtest.AssertSpanAttribute(t, &children[0], "error.type", "panic")
 }
 
 func TestClientDoTransportErrorSpan(t *testing.T) {

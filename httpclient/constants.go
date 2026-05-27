@@ -81,4 +81,11 @@ const (
 
 	// errorTypeOther is the catch-all for unclassified errors.
 	errorTypeOther = "_OTHER"
+
+	// errorTypePanic is the error.type value used on the attempt span when
+	// executeAttempt recovers from a panic in user-supplied code
+	// (interceptors, custom RoundTripper). Distinguishing panics from other
+	// errors in dashboards is valuable: panics are programmer errors, not
+	// transient ones.
+	errorTypePanic = "panic"
 )

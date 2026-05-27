@@ -407,6 +407,16 @@ func (c *client) Do(ctx context.Context, method string, req *Request) (*Response
 		finalErr       error
 	)
 	defer func() {
+		// On panic, executeAttempt's recover-and-rethrow already closed the
+		// attempt span with errorTypePanic; we close the Do span with the
+		// same classification so the rollup span reflects the panic instead
+		// of silently ending as success (statusCode=0, err=nil → unset).
+		// Re-panic so caller-installed recover/log/middleware still sees it.
+		if r := recover(); r != nil {
+			panicErr := fmt.Errorf("httpclient: panic during Do: %v", r)
+			tracking.EndHTTPClientSpan(doSpan, 0, errorTypePanic, 0, panicErr)
+			panic(r)
+		}
 		tracking.EndHTTPClientSpan(doSpan, finalStatus, finalErrType, finalRespBytes, finalErr)
 	}()
 
@@ -451,6 +461,22 @@ func (c *client) executeAttempt(
 		URL:         httpReq.URL,
 		ResendCount: attempt,
 	})
+	// Panic safety: if anything between this point and the explicit span-end
+	// in processHTTPResponse / the transport-error branch panics (a panicking
+	// interceptor or RoundTripper, a body-read crash), end the attempt span
+	// with an error so the exporter doesn't see a dangling span. Re-panic so
+	// the caller's recovery semantics are preserved. OTel spans are
+	// idempotent on End(), so this is safe even if a normal exit already
+	// closed the span. Without this guard the parent Do span would still
+	// close (via Do's defer) but with zero finalStatus/finalErr, silently
+	// classifying a panic as success.
+	defer func() {
+		if r := recover(); r != nil {
+			panicErr := fmt.Errorf("httpclient: panic during attempt %d: %v", attempt, r)
+			tracking.EndHTTPClientSpan(attemptSpan, 0, errorTypePanic, 0, panicErr)
+			panic(r)
+		}
+	}()
 	httpReq = httpReq.WithContext(attemptCtx)
 	if c.config.EnableW3CTrace {
 		c.ensureTraceContextHeaders(httpReq)
@@ -795,27 +821,37 @@ func (c *client) ensureTraceIDHeader(httpReq *nethttp.Request) {
 
 // ensureTraceContextHeaders injects W3C trace-context headers per attempt.
 //
-// Precedence:
-//  1. When a recording span is active on the request context (the per-attempt
-//     span this package opens, or a surrounding span from upstream middleware),
-//     delegate to otel.GetTextMapPropagator().Inject — this writes a
-//     traceparent that carries the active span's trace/span IDs and joins the
-//     wider trace.
-//  2. Otherwise, fall back to the legacy synthetic path: use a traceparent
-//     inherited from context, or generate a fresh one. This preserves
-//     backward compatibility for callers that wire httpclient without OTel.
+// Precedence (highest first):
+//  1. An explicit `traceparent` already on the request — left untouched. This
+//     covers two cases: (a) a caller pinned a specific traceparent via
+//     `Request.Headers`, e.g. to thread a vendor-supplied trace through the
+//     client; (b) an upstream propagator wrapper (e.g. otelhttp.NewTransport)
+//     has already injected its own traceparent.
+//  2. A recording span is on ctx (the per-attempt span this package opens, or
+//     a surrounding span from upstream middleware) → delegate to
+//     `otel.GetTextMapPropagator().Inject`, which writes a traceparent that
+//     carries the active span's trace/span IDs and joins the wider trace.
+//  3. No span on ctx → legacy synthetic path: use a traceparent inherited
+//     from context, or generate a fresh one. Preserves backward compatibility
+//     for callers wiring httpclient without OTel.
+//
+// `tracestate` follows the same precedence — only set when not already on
+// the request.
 func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
 	ctx := httpReq.Context()
+	if httpReq.Header.Get(HeaderTraceParent) != "" {
+		// Caller-supplied or already-injected traceparent wins. Don't
+		// touch tracestate either — they're a pair.
+		return
+	}
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 		return
 	}
-	if httpReq.Header.Get(HeaderTraceParent) == "" {
-		if tp, ok := TraceParentFromContext(ctx); ok {
-			httpReq.Header.Set(HeaderTraceParent, tp)
-		} else {
-			httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
-		}
+	if tp, ok := TraceParentFromContext(ctx); ok {
+		httpReq.Header.Set(HeaderTraceParent, tp)
+	} else {
+		httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
 	}
 	if httpReq.Header.Get(HeaderTraceState) == "" {
 		if ts, ok := TraceStateFromContext(ctx); ok {

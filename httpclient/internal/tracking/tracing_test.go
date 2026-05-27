@@ -237,6 +237,83 @@ func TestEndHTTPClientSpanTransportErrorRecordsErrorAndAttr(t *testing.T) {
 	}
 }
 
+// TestEndHTTPClientSpanInterceptorErrorOn200RecordsError covers the response-build
+// failure path: the wire returned a 2xx but assembly failed (interceptor error
+// or body-read failure). The span must carry error.type, an exception event,
+// and codes.Error so callers don't see this as a successful 200. Symmetric
+// with how RecordHTTPClientMetrics records error.type in this same path.
+func TestEndHTTPClientSpanInterceptorErrorOn200RecordsError(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/foo")
+	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+	buildErr := errors.New("response interceptor failed: bad signature")
+	EndHTTPClientSpan(span, 200, "interceptor_failed", 0, buildErr)
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	obtest.AssertSpanAttribute(t, &got, "http.response.status_code", int64(200))
+	obtest.AssertSpanAttribute(t, &got, "error.type", "interceptor_failed")
+	obtest.AssertSpanStatus(t, &got, codes.Error)
+	obtest.AssertSpanStatusDescription(t, &got, "interceptor_failed")
+
+	foundException := false
+	for _, ev := range got.Events {
+		if ev.Name == "exception" {
+			foundException = true
+			break
+		}
+	}
+	assert.True(t, foundException,
+		"response-build failures must produce an exception event so the span doesn't look like a clean 200")
+}
+
+// TestEndHTTPClientSpan5xxWithErrorRecordsErrorTypeAndException covers the
+// parent Do-span path when the final result is a 5xx HTTPError after retries
+// are exhausted: finalErr carries the wrapped HTTPError, finalErrType is set.
+// The span must surface both alongside the "HTTP 5xx" status description.
+func TestEndHTTPClientSpan5xxWithErrorRecordsErrorTypeAndException(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/foo")
+	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+	terminalErr := errors.New("HTTP request failed with status 503")
+	EndHTTPClientSpan(span, 503, "_OTHER", 0, terminalErr)
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	obtest.AssertSpanStatus(t, &got, codes.Error)
+	obtest.AssertSpanStatusDescription(t, &got, "HTTP 503")
+	obtest.AssertSpanAttribute(t, &got, "error.type", "_OTHER")
+	foundException := false
+	for _, ev := range got.Events {
+		if ev.Name == "exception" {
+			foundException = true
+			break
+		}
+	}
+	assert.True(t, foundException,
+		"terminal 5xx with HTTPError must carry an exception event so Jaeger/Tempo surface the failure detail")
+}
+
+// TestEndHTTPClientSpan4xxWithErrorMarksError covers a 4xx response that
+// produced an error (e.g. terminal 404 after retries — though the framework
+// doesn't currently retry 4xx, this defends against future config drift and
+// matches the metric semantics: error.type is recorded when non-empty).
+func TestEndHTTPClientSpan4xxWithErrorMarksError(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/foo")
+	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+	terminalErr := errors.New("HTTP request failed with status 404")
+	EndHTTPClientSpan(span, 404, "_OTHER", 0, terminalErr)
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	obtest.AssertSpanStatus(t, &got, codes.Error)
+	obtest.AssertSpanAttribute(t, &got, "error.type", "_OTHER")
+}
+
 func TestEndHTTPClientSpanResponseBytes(t *testing.T) {
 	tp, cleanup := setupTestTraceProvider(t)
 	defer cleanup()
