@@ -16,12 +16,6 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
-// resetMeterForTesting is a package-internal alias for the exported ResetMeterForTesting
-// kept for test-file readability. Uses the exported function to avoid duplication.
-func resetMeterForTesting() {
-	ResetMeterForTesting()
-}
-
 // setupTestMeterProvider creates a test meter provider, sets it as the global provider,
 // resets meter state, and initialises the instruments. Returns the provider for metric
 // collection and a cleanup function.
@@ -29,7 +23,7 @@ func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup
 	t.Helper()
 	mp = obtest.NewTestMeterProvider()
 	otel.SetMeterProvider(mp)
-	resetMeterForTesting()
+	ResetMeterForTesting()
 	InitHTTPMeter()
 	cleanup = func() {
 		require.NoError(t, mp.Shutdown(context.Background()))
@@ -463,13 +457,13 @@ func TestNoopMeterProviderPath(t *testing.T) {
 	original := otel.GetMeterProvider()
 	t.Cleanup(func() {
 		otel.SetMeterProvider(original)
-		resetMeterForTesting()
+		ResetMeterForTesting()
 		// Re-initialize with real provider so other tests are unaffected.
 	})
 
 	// Install noop provider and reset cached meter.
 	otel.SetMeterProvider(metricnoop.NewMeterProvider())
-	resetMeterForTesting()
+	ResetMeterForTesting()
 
 	ctx := context.Background()
 

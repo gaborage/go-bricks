@@ -3929,6 +3929,20 @@ _ = fm.Migrate(ctx, mcfg)  // → AuditEvent fires on both OTel and sink paths
 
 Full guide: [wiki/migration-audit.md](wiki/migration-audit.md). Decision rationale: [ADR-019](wiki/adr-019-migration-audit-delivery.md).
 
+## Outbound HTTP Client
+
+```go
+// Outbound HTTP client with OpenTelemetry metrics (SLO attribution via peer.service)
+client := httpclient.NewBuilder(log).
+    WithTimeout(10 * time.Second).
+    WithPeerName("stripe").
+    Build()
+
+resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.stripe.com/v1/charges"})
+```
+
+`WithPeerName` sets the `peer.service` attribute on all emitted metrics (`http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, `http.client.request.resend.count`). Use it to attribute SLO budget consumption per upstream: `"stripe"`, `"visa-vts"`, `"payments-core"`, etc. When omitted the attribute is absent — metrics aggregate across all upstreams.
+
 ## Observability & Logging
 
 GoBricks ships **OpenTelemetry traces, metrics, and structured logs out of the box** — flip `observability.enabled: true` and the framework auto-instruments every external boundary (HTTP, database, AMQP, cache, outbound HTTP). No application code is required for the auto-instrumentation; custom spans/metrics/logs slot in on top.
