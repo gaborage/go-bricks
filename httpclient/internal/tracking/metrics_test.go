@@ -1,0 +1,414 @@
+package tracking
+
+import (
+	"context"
+	"net/url"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	obtest "github.com/gaborage/go-bricks/observability/testing"
+)
+
+// resetMeterForTesting resets package-level meter state so each test starts clean.
+func resetMeterForTesting() {
+	meterOnce = sync.Once{}
+	httpMeter = nil
+	requestDuration = nil
+	activeRequests = nil
+	requestBodySize = nil
+	responseBodySize = nil
+	retriesTotal = nil
+}
+
+// setupTestMeterProvider creates a test meter provider, sets it as the global provider,
+// resets meter state, and initialises the instruments. Returns the provider for metric
+// collection and a cleanup function.
+func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
+	t.Helper()
+	mp = obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	resetMeterForTesting()
+	InitHTTPMeter()
+	cleanup = func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}
+	return mp, cleanup
+}
+
+// mustParseURL is a test helper that panics if the URL string is invalid.
+func mustParseURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}
+
+// assertHasAttribute asserts that a string attribute with the given key exists and
+// equals the expected value in the provided attribute slice.
+func assertHasAttribute(t *testing.T, attrs []attribute.KeyValue, key, expected string) {
+	t.Helper()
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			assert.Equal(t, expected, a.Value.AsString(), "attribute %s value mismatch", key)
+			return
+		}
+	}
+	t.Errorf("attribute %s not found in attribute set", key)
+}
+
+// assertHasIntAttribute asserts that an integer attribute with the given key exists and
+// equals the expected value in the provided attribute slice.
+func assertHasIntAttribute(t *testing.T, attrs []attribute.KeyValue, key string, expected int64) {
+	t.Helper()
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			assert.Equal(t, expected, a.Value.AsInt64(), "attribute %s value mismatch", key)
+			return
+		}
+	}
+	t.Errorf("attribute %s not found in attribute set", key)
+}
+
+// assertNoAttribute asserts that no attribute with the given key appears in the slice.
+func assertNoAttribute(t *testing.T, attrs []attribute.KeyValue, key string) {
+	t.Helper()
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			t.Errorf("attribute %s should be absent but found value %v", key, a.Value)
+			return
+		}
+	}
+}
+
+// TestRecordHTTPClientMetricsSuccessPath verifies that a successful request emits the
+// duration histogram with all expected attributes and no error.type attribute.
+func TestRecordHTTPClientMetricsSuccessPath(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	m := HTTPClientMeasurement{
+		PeerName:    "payments-api",
+		Method:      "GET",
+		URL:         mustParseURL("https://api.example.com/v1/users"),
+		StatusCode:  200,
+		ErrorType:   "",
+		ResendCount: 0,
+		Elapsed:     150 * time.Millisecond,
+	}
+
+	RecordHTTPClientMetrics(context.Background(), &m)
+
+	rm := mp.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricRequestDuration)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+	require.NotEmpty(t, histData.DataPoints)
+
+	dp := histData.DataPoints[0]
+	assert.InDelta(t, 0.15, dp.Sum, 0.01, "duration should be ~0.15 seconds")
+	assert.Equal(t, uint64(1), dp.Count)
+
+	attrs := dp.Attributes.ToSlice()
+	assertHasAttribute(t, attrs, attrPeerService, "payments-api")
+	assertHasAttribute(t, attrs, attrHTTPMethod, "GET")
+	assertHasAttribute(t, attrs, attrServerAddress, "api.example.com")
+	assertHasAttribute(t, attrs, attrURLScheme, "https")
+	assertHasIntAttribute(t, attrs, attrHTTPStatusCode, 200)
+	assertHasIntAttribute(t, attrs, attrHTTPResendCount, 0)
+	assertNoAttribute(t, attrs, attrErrorType)
+}
+
+// TestRecordHTTPClientMetricsPerAttemptSemantics verifies that three sequential calls with
+// resend_count 0, 1, 2 each emit a separate OTel datapoint (distinct attribute sets),
+// for a total of 3 recorded measurements across all datapoints.
+func TestRecordHTTPClientMetricsPerAttemptSemantics(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/orders")
+	ctx := context.Background()
+
+	for i := range 3 {
+		RecordHTTPClientMetrics(ctx, &HTTPClientMeasurement{
+			Method:      "POST",
+			URL:         u,
+			StatusCode:  200,
+			ResendCount: i,
+			Elapsed:     10 * time.Millisecond,
+		})
+	}
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64]")
+
+	// Each resend_count value (0, 1, 2) produces a distinct attribute set → distinct datapoint.
+	// Sum their counts to get the total number of recorded measurements.
+	var totalCount uint64
+	for _, dp := range histData.DataPoints {
+		totalCount += dp.Count
+	}
+	assert.Equal(t, uint64(3), totalCount, "expected 3 total measurements, one per attempt")
+}
+
+// TestRecordHTTPClientMetricsTransportError verifies that when StatusCode is 0 (transport
+// error) the http.response.status_code attribute is omitted from all instruments.
+func TestRecordHTTPClientMetricsTransportError(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:      "GET",
+		URL:         mustParseURL("https://api.example.com"),
+		StatusCode:  0, // transport error — no response received
+		ErrorType:   "network_error",
+		ResendCount: 0,
+		Elapsed:     5 * time.Millisecond,
+	})
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+
+	attrs := histData.DataPoints[0].Attributes.ToSlice()
+	assertNoAttribute(t, attrs, attrHTTPStatusCode)
+}
+
+// TestRecordHTTPClientMetricsWithTimeout verifies that a timeout error sets the
+// error.type attribute and omits http.response.status_code when StatusCode is 0.
+func TestRecordHTTPClientMetricsWithTimeout(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:      "GET",
+		URL:         mustParseURL("https://api.example.com"),
+		StatusCode:  0,
+		ErrorType:   "timeout",
+		ResendCount: 0,
+		Elapsed:     30 * time.Second,
+	})
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+
+	attrs := histData.DataPoints[0].Attributes.ToSlice()
+	assertHasAttribute(t, attrs, attrErrorType, "timeout")
+	assertNoAttribute(t, attrs, attrHTTPStatusCode)
+}
+
+// TestRecordHTTPClientMetricsWithNonZeroBodySizes verifies that non-zero request and
+// response body sizes emit the corresponding body-size histograms.
+func TestRecordHTTPClientMetricsWithNonZeroBodySizes(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:        "POST",
+		URL:           mustParseURL("https://api.example.com/data"),
+		StatusCode:    201,
+		Elapsed:       20 * time.Millisecond,
+		RequestBytes:  512,
+		ResponseBytes: 1024,
+	})
+
+	rm := mp.Collect(t)
+
+	obtest.AssertMetricExists(t, rm, metricRequestBodySize)
+	obtest.AssertMetricExists(t, rm, metricResponseBodySize)
+
+	reqCount, err := obtest.GetMetricHistogramCount(rm, metricRequestBodySize)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), reqCount)
+
+	respCount, err := obtest.GetMetricHistogramCount(rm, metricResponseBodySize)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), respCount)
+}
+
+// TestRecordHTTPClientMetricsWithZeroBodySizes verifies that body-size histograms are
+// not emitted when RequestBytes and ResponseBytes are both 0.
+func TestRecordHTTPClientMetricsWithZeroBodySizes(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:        "GET",
+		URL:           mustParseURL("https://api.example.com/status"),
+		StatusCode:    200,
+		Elapsed:       5 * time.Millisecond,
+		RequestBytes:  0,
+		ResponseBytes: 0,
+	})
+
+	rm := mp.Collect(t)
+
+	// Body-size metrics must not appear when sizes are 0.
+	assert.Nil(t, obtest.FindMetric(rm, metricRequestBodySize), "request body size metric should not be emitted when 0")
+	assert.Nil(t, obtest.FindMetric(rm, metricResponseBodySize), "response body size metric should not be emitted when 0")
+}
+
+// TestIncDecActiveRequestsBalanced verifies that a paired Inc/Dec results in a net zero
+// active-request count.
+func TestIncDecActiveRequestsBalanced(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	IncActiveRequests(ctx, "svc", "GET")
+	DecActiveRequests(ctx, "svc", "GET")
+
+	rm := mp.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricActiveRequests)
+
+	activeMetric := obtest.FindMetric(rm, metricActiveRequests)
+	require.NotNil(t, activeMetric)
+
+	sumData, ok := activeMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] for active_requests")
+	// Paired inc/dec → net 0, meaning the sum across datapoints is 0.
+	var total int64
+	for _, dp := range sumData.DataPoints {
+		total += dp.Value
+	}
+	assert.Equal(t, int64(0), total, "net active requests should be 0 after balanced inc/dec")
+}
+
+// TestIncRetryWithVariousReasons verifies that IncRetry increments the retry counter
+// with the correct reason attribute for each call.
+func TestIncRetryWithVariousReasons(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	reasons := []string{"timeout", "5xx", "network", "build_response"}
+	for _, r := range reasons {
+		IncRetry(ctx, "svc", r)
+	}
+
+	rm := mp.Collect(t)
+	obtest.AssertMetricExists(t, rm, metricRetriesTotal)
+
+	retryMetric := obtest.FindMetric(rm, metricRetriesTotal)
+	require.NotNil(t, retryMetric)
+
+	sumData, ok := retryMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] for retries.total")
+
+	// Count total and collect distinct reasons seen.
+	var total int64
+	reasonsFound := make(map[string]bool)
+	for _, dp := range sumData.DataPoints {
+		total += dp.Value
+		for _, a := range dp.Attributes.ToSlice() {
+			if string(a.Key) == attrRetryReason {
+				reasonsFound[a.Value.AsString()] = true
+			}
+		}
+	}
+
+	assert.Equal(t, int64(4), total, "expected 4 total retries (one per reason)")
+	for _, r := range reasons {
+		assert.True(t, reasonsFound[r], "reason %q not found in retry attributes", r)
+	}
+}
+
+// TestEmptyPeerNameOmitsPeerServiceAttribute verifies that when PeerName is empty the
+// peer.service attribute is omitted across all instruments (duration, body size, active
+// requests, retries).
+func TestEmptyPeerNameOmitsPeerServiceAttribute(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	RecordHTTPClientMetrics(ctx, &HTTPClientMeasurement{
+		PeerName:      "", // must be omitted
+		Method:        "GET",
+		URL:           mustParseURL("https://api.example.com/ping"),
+		StatusCode:    200,
+		Elapsed:       10 * time.Millisecond,
+		RequestBytes:  100,
+		ResponseBytes: 50,
+	})
+	IncActiveRequests(ctx, "", "GET")
+	DecActiveRequests(ctx, "", "GET")
+	IncRetry(ctx, "", "timeout")
+
+	rm := mp.Collect(t)
+
+	// Duration histogram — no peer.service.
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+	assertNoAttribute(t, histData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
+
+	// Request body size — no peer.service.
+	reqBodyMetric := obtest.FindMetric(rm, metricRequestBodySize)
+	require.NotNil(t, reqBodyMetric)
+	reqHistData := reqBodyMetric.Data.(metricdata.Histogram[int64])
+	require.NotEmpty(t, reqHistData.DataPoints)
+	assertNoAttribute(t, reqHistData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
+
+	// Active requests — no peer.service.
+	activeMetric := obtest.FindMetric(rm, metricActiveRequests)
+	require.NotNil(t, activeMetric)
+	sumData := activeMetric.Data.(metricdata.Sum[int64])
+	if len(sumData.DataPoints) > 0 {
+		assertNoAttribute(t, sumData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
+	}
+
+	// Retries — no peer.service.
+	retryMetric := obtest.FindMetric(rm, metricRetriesTotal)
+	require.NotNil(t, retryMetric)
+	retrySumData := retryMetric.Data.(metricdata.Sum[int64])
+	require.NotEmpty(t, retrySumData.DataPoints)
+	assertNoAttribute(t, retrySumData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
+}
+
+// TestUnknownMethodNormalizedToOther verifies that an unrecognised HTTP method is
+// normalised to "_OTHER" in the http.request.method attribute.
+func TestUnknownMethodNormalizedToOther(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	RecordHTTPClientMetrics(context.Background(), &HTTPClientMeasurement{
+		Method:     "WEIRD",
+		URL:        mustParseURL("https://api.example.com/op"),
+		StatusCode: 200,
+		Elapsed:    10 * time.Millisecond,
+	})
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricRequestDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+
+	assertHasAttribute(t, histData.DataPoints[0].Attributes.ToSlice(), attrHTTPMethod, methodOther)
+}
