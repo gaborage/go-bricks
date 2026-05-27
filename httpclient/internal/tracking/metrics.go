@@ -226,18 +226,22 @@ func DecActiveRequests(ctx context.Context, peer, method string) {
 }
 
 // IncRetry increments the http.client.retries.total counter.
-// reason should be one of: "timeout", "5xx", "network", "build_response".
-func IncRetry(ctx context.Context, peer, reason string) {
+// peer is the peer.service value (omitted when empty); method is the HTTP method
+// (normalized via canonicalMethod); reason should be one of: "timeout", "5xx", "network",
+// "build_response".
+func IncRetry(ctx context.Context, peer, method, reason string) {
 	InitHTTPMeter()
 	if retriesTotal == nil {
 		return
 	}
-	attrs := []attribute.KeyValue{
-		attribute.String(attrRetryReason, reason),
-	}
+	attrs := make([]attribute.KeyValue, 0, 3)
 	if peer != "" {
-		attrs = append([]attribute.KeyValue{attribute.String(attrPeerService, peer)}, attrs...)
+		attrs = append(attrs, attribute.String(attrPeerService, peer))
 	}
+	attrs = append(attrs,
+		attribute.String(attrHTTPMethod, canonicalMethod(method)),
+		attribute.String(attrRetryReason, reason),
+	)
 	retriesTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 

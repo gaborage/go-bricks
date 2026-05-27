@@ -298,7 +298,7 @@ func TestIncDecActiveRequestsBalanced(t *testing.T) {
 }
 
 // TestIncRetryWithVariousReasons verifies that IncRetry increments the retry counter
-// with the correct reason attribute for each call.
+// with the correct reason and http.request.method attributes for each call.
 func TestIncRetryWithVariousReasons(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()
@@ -306,7 +306,7 @@ func TestIncRetryWithVariousReasons(t *testing.T) {
 	ctx := context.Background()
 	reasons := []string{"timeout", "5xx", "network", "build_response"}
 	for _, r := range reasons {
-		IncRetry(ctx, "svc", r)
+		IncRetry(ctx, "svc", "POST", r)
 	}
 
 	rm := mp.Collect(t)
@@ -323,17 +323,54 @@ func TestIncRetryWithVariousReasons(t *testing.T) {
 	reasonsFound := make(map[string]bool)
 	for _, dp := range sumData.DataPoints {
 		total += dp.Value
-		for _, a := range dp.Attributes.ToSlice() {
+		attrs := dp.Attributes.ToSlice()
+		for _, a := range attrs {
 			if string(a.Key) == attrRetryReason {
 				reasonsFound[a.Value.AsString()] = true
 			}
 		}
+		// Every datapoint must carry http.request.method canonicalized to "POST".
+		assertHasAttribute(t, attrs, attrHTTPMethod, "POST")
 	}
 
 	assert.Equal(t, int64(4), total, "expected 4 total retries (one per reason)")
 	for _, r := range reasons {
 		assert.True(t, reasonsFound[r], "reason %q not found in retry attributes", r)
 	}
+}
+
+// TestIncRetryMethodCanonicalization verifies that IncRetry canonicalizes the HTTP method:
+// lowercase "get" → "GET", unknown "WEIRD" → "_OTHER".
+func TestIncRetryMethodCanonicalization(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Lowercase method must be uppercased.
+	IncRetry(ctx, "svc", "get", "timeout")
+	// Unknown method must become _OTHER.
+	IncRetry(ctx, "svc", "WEIRD", "5xx")
+
+	rm := mp.Collect(t)
+
+	retryMetric := obtest.FindMetric(rm, metricRetriesTotal)
+	require.NotNil(t, retryMetric)
+
+	sumData, ok := retryMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] for retries.total")
+
+	methodsFound := make(map[string]bool)
+	for _, dp := range sumData.DataPoints {
+		for _, a := range dp.Attributes.ToSlice() {
+			if string(a.Key) == attrHTTPMethod {
+				methodsFound[a.Value.AsString()] = true
+			}
+		}
+	}
+
+	assert.True(t, methodsFound["GET"], "lowercase 'get' should be canonicalized to 'GET'")
+	assert.True(t, methodsFound[methodOther], "unknown 'WEIRD' should be canonicalized to '_OTHER'")
 }
 
 // TestEmptyPeerNameOmitsPeerServiceAttribute verifies that when PeerName is empty the
@@ -356,7 +393,7 @@ func TestEmptyPeerNameOmitsPeerServiceAttribute(t *testing.T) {
 	})
 	IncActiveRequests(ctx, "", "GET")
 	DecActiveRequests(ctx, "", "GET")
-	IncRetry(ctx, "", "timeout")
+	IncRetry(ctx, "", "GET", "timeout")
 
 	rm := mp.Collect(t)
 
@@ -373,6 +410,13 @@ func TestEmptyPeerNameOmitsPeerServiceAttribute(t *testing.T) {
 	reqHistData := reqBodyMetric.Data.(metricdata.Histogram[int64])
 	require.NotEmpty(t, reqHistData.DataPoints)
 	assertNoAttribute(t, reqHistData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
+
+	// Response body size — no peer.service.
+	respBodyMetric := obtest.FindMetric(rm, metricResponseBodySize)
+	require.NotNil(t, respBodyMetric)
+	respHistData := respBodyMetric.Data.(metricdata.Histogram[int64])
+	require.NotEmpty(t, respHistData.DataPoints)
+	assertNoAttribute(t, respHistData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
 
 	// Active requests — no peer.service.
 	activeMetric := obtest.FindMetric(rm, metricActiveRequests)
