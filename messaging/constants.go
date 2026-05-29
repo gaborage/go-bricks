@@ -28,6 +28,15 @@ const (
 	maxPrefetchCount = 1000
 )
 
+// Consumer log-field names. Shared by the consumer session, worker, and
+// re-subscribe log contexts so the structured field keys stay consistent
+// (and to satisfy goconst now that they appear in 3+ field maps).
+const (
+	genericQueue     = "queue"
+	genericConsumer  = "consumer"
+	genericEventType = "event_type"
+)
+
 // Registry readiness polling. Previously inline literals in registry.go's
 // "wait for AMQP client ready" loop.
 const (

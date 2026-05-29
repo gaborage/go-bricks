@@ -802,22 +802,21 @@ func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Use synchronization channels instead of sleep
-	handlerDone := make(chan struct{})
+	handlerDone := make(chan bool, 1)
 	handlerStarted := make(chan struct{})
 	go func() {
 		close(handlerStarted) // Signal handler is about to start
-		registry.handleMessages(ctx, consumer, deliveries)
-		close(handlerDone)
+		handlerDone <- registry.handleMessages(ctx, consumer, deliveries)
 	}()
 
 	// Wait for handler to start, then cancel context immediately
 	<-handlerStarted
 	cancel()
 
-	// Handler should stop
+	// Handler should stop and report "no re-subscribe" (shutdown, not a flap).
 	select {
-	case <-handlerDone:
-		// Expected
+	case reconnect := <-handlerDone:
+		assert.False(t, reconnect, "context cancellation must not signal re-subscribe")
 	case <-time.After(1 * time.Second):
 		t.Fatal("Handler did not stop after context cancellation")
 	}
@@ -842,22 +841,22 @@ func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
 	ctx := context.Background()
 
 	// Use synchronization channels instead of sleep
-	handlerDone := make(chan struct{})
+	handlerDone := make(chan bool, 1)
 	handlerStarted := make(chan struct{})
 	go func() {
 		close(handlerStarted) // Signal handler is about to start
-		registry.handleMessages(ctx, consumer, deliveries)
-		close(handlerDone)
+		handlerDone <- registry.handleMessages(ctx, consumer, deliveries)
 	}()
 
 	// Wait for handler to start, then close delivery channel immediately
 	<-handlerStarted
 	close(deliveries)
 
-	// Handler should stop
+	// Handler should stop and report "re-subscribe" (the broker closed the
+	// delivery channel; this is a flap, not a shutdown).
 	select {
-	case <-handlerDone:
-		// Expected
+	case reconnect := <-handlerDone:
+		assert.True(t, reconnect, "delivery-channel close must signal re-subscribe")
 	case <-time.After(1 * time.Second):
 		t.Fatal("Handler did not stop after channel closure")
 	}
@@ -1995,4 +1994,198 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 			registry.handleMessages(ctx, consumer, deliveries)
 		}
 	})
+}
+
+// ===== Consumer Re-subscribe After Reconnect Tests =====
+
+// consumeResult is one scripted return value for resubscribingMockClient.
+type consumeResult struct {
+	ch  <-chan amqp.Delivery
+	err error
+}
+
+// resubscribingMockClient hands out scripted ConsumeFromQueue results on
+// successive calls, so a test can simulate an AMQP flap by closing the active
+// delivery channel and assert the registry re-subscribes onto the next one.
+// Once the script is exhausted it returns exhaustedErr (keeping the supervisor
+// in the retry/backoff loop) or, if that is nil, a never-closing open channel.
+type resubscribingMockClient struct {
+	*simpleMockAMQPClient
+	callMu       sync.Mutex
+	results      []consumeResult
+	calls        int
+	exhaustedErr error
+}
+
+var _ AMQPClient = (*resubscribingMockClient)(nil)
+
+func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	idx := m.calls
+	m.calls++
+	if idx < len(m.results) {
+		return m.results[idx].ch, m.results[idx].err
+	}
+	if m.exhaustedErr != nil {
+		return nil, m.exhaustedErr // keep the supervisor in the retry/backoff loop
+	}
+	return make(chan amqp.Delivery), nil // park: open channel that never closes
+}
+
+func (m *resubscribingMockClient) consumeCallCount() int {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	return m.calls
+}
+
+// TestRegistryConsumerResubscribesAfterDeliveryChannelCloses is the regression
+// test for the consumer-not-resubscribing-after-reconnect bug: when the broker
+// closes the active delivery channel (a connection/channel flap), the registry
+// must acquire a fresh subscription instead of leaving the queue with zero
+// consumers until a process restart.
+func TestRegistryConsumerResubscribesAfterDeliveryChannelCloses(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	ch2 := make(chan amqp.Delivery, 1) // buffered so the post-reconnect send never blocks
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = 5 * time.Millisecond // fast re-subscribe for the test
+
+	handler := &countingTestHandler{}
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   handler,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	// Simulate an AMQP flap: the broker closes the active delivery channel.
+	close(ch1)
+
+	// The consumer must re-subscribe (acquire ch2) without a process restart.
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
+
+	// Prove the new subscription is live: a delivery on ch2 is processed.
+	ch2 <- amqp.Delivery{
+		MessageId:    testMessageID,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: &mockAcknowledger{},
+	}
+	require.Eventually(t, func() bool {
+		return handler.CallCount() >= 1
+	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
+
+	registry.StopConsumers()
+}
+
+// TestRegistryConsumerResubscribeRetriesUntilClientReady verifies the
+// re-subscribe loop backs off and retries while the AMQP client is still
+// re-establishing its connection (ConsumeFromQueue returns errNotConnected),
+// then succeeds once the client is ready again.
+func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	ch2 := make(chan amqp.Delivery, 1)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results: []consumeResult{
+			{ch: ch1},              // initial subscription
+			{err: errNotConnected}, // client still reconnecting
+			{err: errNotConnected}, // still reconnecting
+			{ch: ch2},              // client ready again
+		},
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = 5 * time.Millisecond
+
+	handler := &countingTestHandler{}
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   handler,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	close(ch1) // flap
+
+	// Must keep retrying through the two errNotConnected results to the success.
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 4
+	}, 2*time.Second, 2*time.Millisecond, "consumer did not retry re-subscribe until client ready")
+
+	ch2 <- amqp.Delivery{
+		MessageId:    testMessageID,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: &mockAcknowledger{},
+	}
+	require.Eventually(t, func() bool {
+		return handler.CallCount() >= 1
+	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
+
+	registry.StopConsumers()
+}
+
+// TestRegistryConsumerSupervisorStopsOnContextCancel verifies the consumer
+// supervisor exits cleanly when StopConsumers cancels the context mid-backoff,
+// and does not keep re-subscribing afterwards (no zombie goroutine).
+func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
+	ch1 := make(chan amqp.Delivery)
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}},
+		// After the first session every re-subscribe attempt fails, so the
+		// supervisor stays in the retry/backoff loop (rather than parking on a
+		// success channel) and we can cancel while it is actively retrying.
+		exhaustedErr: errNotConnected,
+	}
+	registry := NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = 5 * time.Millisecond
+
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	// Flap, then wait until the supervisor is actively retrying (it has called
+	// ConsumeFromQueue again and is failing into backoff) before cancelling, so
+	// this exercises cancellation from inside the retry/backoff path.
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, time.Second, 2*time.Millisecond, "supervisor did not enter the re-subscribe retry loop")
+
+	registry.StopConsumers() // cancel while the supervisor is retrying
+
+	// Cancellation interrupts resubscribe's backoff select immediately (it
+	// selects on ctx.Done alongside the backoff timer), so the supervisor exits
+	// after at most one already-dispatched ConsumeFromQueue rather than waiting
+	// out a backoff. Let that in-flight call settle, then require the count to
+	// stay frozen across a window much larger than the re-subscribe backoff: a
+	// still-alive supervisor would keep incrementing it. This avoids a
+	// re-polling check that could land inside a single jittered backoff gap.
+	time.Sleep(10 * registry.resubscribeDelay)
+	settled := client.consumeCallCount()
+	time.Sleep(20 * registry.resubscribeDelay)
+	assert.Equal(t, settled, client.consumeCallCount(),
+		"supervisor kept re-subscribing after StopConsumers")
 }
