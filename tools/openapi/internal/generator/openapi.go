@@ -34,7 +34,13 @@ const (
 
 // HTTP method names used in switch discriminants and operation generation.
 const (
-	httpMethodPost = "POST"
+	httpMethodGet     = "GET"
+	httpMethodPut     = "PUT"
+	httpMethodPost    = "POST"
+	httpMethodDelete  = "DELETE"
+	httpMethodPatch   = "PATCH"
+	httpMethodHead    = "HEAD"
+	httpMethodOptions = "OPTIONS"
 )
 
 // Go primitive type names matched against Go type identifiers when mapping to
@@ -61,13 +67,6 @@ const (
 const (
 	mediaJSON = "application/json"
 	mediaJOSE = "application/jose"
-)
-
-// YAML indent depths reused across emitter call sites (S1192). Named by depth
-// because the same depth occurs at multiple structural positions.
-const (
-	indent10 = "          "   // 10 spaces
-	indent12 = "            " // 12 spaces
 )
 
 // OpenAPIGenerator creates OpenAPI specifications from project models
@@ -110,6 +109,57 @@ type OpenAPIProperty struct {
 	Enum             []any            `yaml:"enum,omitempty"`
 }
 
+// The types below model the paths/operations half of an OpenAPI document as a
+// struct graph. The whole document — info, paths, and components — is emitted
+// through a single yaml.Marshal path (see marshalYAMLSection), so $ref, items,
+// and future schema fields serialize correctly whether inline (in an operation)
+// or under components, with no hand-rolled text writers to keep in sync.
+
+// OpenAPIPathItem holds the operations registered under one path. Method fields
+// are declared in canonical order so yaml.Marshal emits them deterministically;
+// omitempty drops the methods a path does not use.
+type OpenAPIPathItem struct {
+	Get     *OpenAPIOperation `yaml:"get,omitempty"`
+	Put     *OpenAPIOperation `yaml:"put,omitempty"`
+	Post    *OpenAPIOperation `yaml:"post,omitempty"`
+	Delete  *OpenAPIOperation `yaml:"delete,omitempty"`
+	Patch   *OpenAPIOperation `yaml:"patch,omitempty"`
+	Head    *OpenAPIOperation `yaml:"head,omitempty"`
+	Options *OpenAPIOperation `yaml:"options,omitempty"`
+}
+
+// OpenAPIOperation is a single HTTP operation. Field order matches the emitted
+// document: operationId, summary, description, tags, parameters, requestBody,
+// responses.
+type OpenAPIOperation struct {
+	OperationID string                      `yaml:"operationId"`
+	Summary     string                      `yaml:"summary"`
+	Description string                      `yaml:"description,omitempty"`
+	Tags        []string                    `yaml:"tags,omitempty"`
+	Parameters  []Parameter                 `yaml:"parameters,omitempty"`
+	RequestBody *OpenAPIRequestBody         `yaml:"requestBody,omitempty"`
+	Responses   map[string]*OpenAPIResponse `yaml:"responses"`
+}
+
+// OpenAPIRequestBody is a Request Body Object. Description carries the JOSE
+// compact-serialization note when the request type is jose-tagged.
+type OpenAPIRequestBody struct {
+	Required    bool                         `yaml:"required"`
+	Description string                       `yaml:"description,omitempty"`
+	Content     map[string]*OpenAPIMediaType `yaml:"content"`
+}
+
+// OpenAPIResponse is a Response Object.
+type OpenAPIResponse struct {
+	Description string                       `yaml:"description"`
+	Content     map[string]*OpenAPIMediaType `yaml:"content,omitempty"`
+}
+
+// OpenAPIMediaType is a Media Type Object (the value under a content-type key).
+type OpenAPIMediaType struct {
+	Schema *OpenAPIProperty `yaml:"schema"`
+}
+
 // New creates a new OpenAPI generator
 func New(title, version, description string) *OpenAPIGenerator {
 	return &OpenAPIGenerator{
@@ -143,14 +193,14 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(infoYAML)
 
-	// Paths
-	sb.WriteString("paths:\n")
+	// Paths — built as a struct graph and emitted through the same yaml.Marshal
+	// path as info/components (an empty project marshals to "paths: {}").
 	allRoutes := g.getAllRoutes(project)
-	if len(allRoutes) == 0 {
-		sb.WriteString("  {}\n")
-	} else {
-		g.writePaths(&sb, allRoutes)
+	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(allRoutes))
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal paths section: %w", err)
 	}
+	sb.WriteString(pathsYAML)
 
 	// Components with proper YAML marshaling
 	standardSchemas := g.createStandardSchemas()
@@ -221,170 +271,160 @@ func (g *OpenAPIGenerator) groupRoutesByPath(routes []models.Route) map[string][
 	return pathGroups
 }
 
-// writePaths writes all paths with grouped routes to avoid duplicate path keys
-func (g *OpenAPIGenerator) writePaths(sb *strings.Builder, routes []models.Route) {
+// buildPaths builds the paths object as a struct graph keyed by path. yaml.Marshal
+// sorts map keys, giving the same deterministic path ordering the previous
+// hand-rolled writer produced via sort.Strings.
+func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPIPathItem {
 	pathGroups := g.groupRoutesByPath(routes)
-
-	// Sort paths for consistent output
-	paths := make([]string, 0, len(pathGroups))
+	paths := make(map[string]*OpenAPIPathItem, len(pathGroups))
 	for path := range pathGroups {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	// Write each path with all its methods
-	for _, path := range paths {
-		fmt.Fprintf(sb, "  %s:\n", path)
-		routesForPath := pathGroups[path]
-		for i := range routesForPath {
-			g.writeMethod(sb, &routesForPath[i])
+		group := pathGroups[path]
+		item := &OpenAPIPathItem{}
+		for i := range group {
+			g.assignOperation(item, &group[i])
 		}
+		paths[path] = item
+	}
+	return paths
+}
+
+// assignOperation builds the operation for a route and attaches it to the path
+// item under the matching HTTP method. The analyzer only emits the standard
+// methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op.
+func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route) {
+	op := g.buildOperation(route)
+	switch strings.ToUpper(route.Method) {
+	case httpMethodGet:
+		item.Get = op
+	case httpMethodPut:
+		item.Put = op
+	case httpMethodPost:
+		item.Post = op
+	case httpMethodDelete:
+		item.Delete = op
+	case httpMethodPatch:
+		item.Patch = op
+	case httpMethodHead:
+		item.Head = op
+	case httpMethodOptions:
+		item.Options = op
 	}
 }
 
-// Parameter represents an OpenAPI parameter (path, query, or header)
+// Parameter represents an OpenAPI parameter (path, query, or header). Field
+// order matches the emitted document; Schema is always present, description and
+// example are omitted when empty.
 type Parameter struct {
-	Name        string
-	In          string // "path", "query", "header"
-	Required    bool
-	Description string
-	Schema      *OpenAPIProperty
-	Example     any
+	Name        string           `yaml:"name"`
+	In          string           `yaml:"in"` // "path", "query", "header"
+	Required    bool             `yaml:"required"`
+	Description string           `yaml:"description,omitempty"`
+	Schema      *OpenAPIProperty `yaml:"schema"`
+	Example     any              `yaml:"example,omitempty"`
 }
 
-// writeMethod writes a single HTTP method under a path
-func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route) {
-	method := strings.ToLower(route.Method)
-
-	fmt.Fprintf(sb, "    %s:\n", method)
-	fmt.Fprintf(sb, "      operationId: %s\n", g.getOperationID(route))
-	fmt.Fprintf(sb, "      summary: %s\n", g.getSummary(route))
-
-	if route.Description != "" {
-		fmt.Fprintf(sb, "      description: %s\n", route.Description)
+// buildOperation builds the Operation Object for a route. Empty tags/parameters
+// and an absent request body are dropped by the struct's omitempty tags, matching
+// the previous conditional text emission.
+func (g *OpenAPIGenerator) buildOperation(route *models.Route) *OpenAPIOperation {
+	op := &OpenAPIOperation{
+		OperationID: g.getOperationID(route),
+		Summary:     g.getSummary(route),
+		Description: route.Description,
+		Tags:        route.Tags,
+		Responses:   g.buildResponses(route),
 	}
 
-	if len(route.Tags) > 0 {
-		sb.WriteString("      tags:\n")
-		for _, tag := range route.Tags {
-			fmt.Fprintf(sb, "        - %s\n", tag)
-		}
-	}
-
-	// Extract and write parameters (path, query, header)
+	// Parameters (path, query, header) plus the remaining body fields.
 	params, bodyFields := g.extractParameters(route)
-	if len(params) > 0 {
-		g.writeParameters(sb, params)
-	}
+	op.Parameters = params
 
-	// Write request body if there are body fields, OR if the route is JOSE-tagged
-	// (a JOSE request type may have only the sentinel field, with all "plaintext"
-	// fields filtered into header/path/query params or simply absent — but the route
-	// still expects an application/jose payload on the wire).
+	// Emit a request body when there are body fields, OR when the route is
+	// JOSE-tagged (a JOSE request type may have only the sentinel field, with all
+	// "plaintext" fields filtered into header/path/query params or absent — but
+	// the route still expects an application/jose payload on the wire).
 	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
-		g.writeRequestBody(sb, route.Request)
+		op.RequestBody = g.buildRequestBody(route.Request)
 	}
 
-	// Responses
-	g.writeResponses(sb, route)
+	return op
 }
 
-// writeResponses emits the responses section. When the route's response carries a
-// jose: tag the success response uses Content-Type: application/jose; the 4xx
-// pre-trust failure path always uses application/json (peer is unauthenticated, so
-// the framework returns a plaintext minimal envelope, never JOSE-wrapped — see the
-// hybrid envelope contract in CLAUDE.md JOSE Middleware).
+// refComponentPrefix is the JSON-pointer prefix for component-schema $refs.
+const refComponentPrefix = "#/components/schemas/"
+
+// refPath returns the $ref pointer for a named component schema.
+func refPath(name string) string {
+	return refComponentPrefix + name
+}
+
+// joseTokenSchema is the Media Type schema for an application/jose payload. Per
+// OpenAPI 3.0.1 the Media Type schema describes the on-the-wire shape — a
+// base64url JOSE compact-serialization string token — NOT the decrypted
+// plaintext shape. The plaintext component schema is referenced from the parent
+// RequestBody/Response description instead.
+func joseTokenSchema() *OpenAPIProperty {
+	return &OpenAPIProperty{Type: typeString, Format: "jose"}
+}
+
+// joseDescription is the canonical RequestBody/Response description for a JOSE
+// route. RequestBody and Response objects allow a description field (Media Type
+// objects do not), so this is attached at the parent level. It names the
+// plaintext component schema the decrypted payload conforms to.
+func joseDescription(plaintextSchema string) string {
+	return fmt.Sprintf(
+		"JOSE compact serialization (signed-then-encrypted). The wire payload\n"+
+			"is a base64url-encoded JWE compact form whose plaintext, after\n"+
+			"decrypt+verify, conforms to the %s schema —\n"+
+			"see %s.\n",
+		plaintextSchema, refPath(plaintextSchema))
+}
+
+// jsonMediaRef builds a single-entry application/json content map whose schema is
+// a $ref to the named component.
+func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
+	return map[string]*OpenAPIMediaType{mediaJSON: {Schema: &OpenAPIProperty{Ref: refPath(name)}}}
+}
+
+// buildResponses builds the responses object for a route. When the route's
+// response carries a jose: tag the 200 success response uses Content-Type
+// application/jose; the 4xx pre-trust failure path always uses application/json
+// (peer is unauthenticated, so the framework returns a plaintext minimal
+// envelope, never JOSE-wrapped — see the hybrid envelope contract in CLAUDE.md
+// JOSE Middleware).
 //
 // 4xx schema selection is driven by EITHER side carrying jose tags. The runtime
-// enforces bidirectional symmetry at registration, but the analyzer runs statically
-// against source so we can encounter asymmetric setups; in any such case the
-// pre-trust failure path is still routed through the JOSE plaintext-minimal
-// envelope by the runtime, so the OpenAPI spec must reflect that.
-func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Route) {
+// enforces bidirectional symmetry at registration, but the analyzer runs
+// statically against source so we can encounter asymmetric setups; in any such
+// case the pre-trust failure path is still routed through the JOSE
+// plaintext-minimal envelope by the runtime, so the OpenAPI spec must reflect that.
+func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenAPIResponse {
 	joseResponse := route.Response != nil && route.Response.JOSE
 	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 
-	sb.WriteString("      responses:\n")
-	sb.WriteString("        '200':\n")
+	resp200 := &OpenAPIResponse{}
 	if joseResponse {
-		// Description on the Response Object (spec-compliant) — per OpenAPI 3.0.1,
-		// description is a fixed field on Response, but NOT on Media Type Object.
-		// The Media Type schema describes the WIRE shape (a string token); the
-		// plaintext component schema is referenced from the description text.
-		writeJOSEDescription(sb, indent10, "SuccessResponse")
-		writeContentLine(sb, indent10)
-		writeMediaSchemaJOSE(sb, indent12)
+		// Description on the Response Object names the plaintext schema; the Media
+		// Type schema describes the wire shape (a string token).
+		resp200.Description = joseDescription("SuccessResponse")
+		resp200.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
 	} else {
-		fmt.Fprintf(sb, "%sdescription: %s\n", indent10, g.getResponseDescription(route.Method))
-		writeContentLine(sb, indent10)
-		writeMediaSchemaRef(sb, indent12, mediaJSON, "SuccessResponse")
+		resp200.Description = g.getResponseDescription(route.Method)
+		resp200.Content = jsonMediaRef("SuccessResponse")
 	}
-	sb.WriteString("        '400':\n")
-	fmt.Fprintf(sb, "%sdescription: Bad Request\n", indent10)
-	writeContentLine(sb, indent10)
+
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
-	// security model: when decrypt/verify fails the peer is unauthenticated and the
-	// server leaks nothing beyond {code,message}.
+	// security model: when decrypt/verify fails the peer is unauthenticated and
+	// the server leaks nothing beyond {code,message}.
 	errorSchema := schemaErrorResponse
 	if joseRoute {
 		errorSchema = "JOSEErrorEnvelope"
 	}
-	writeMediaSchemaRef(sb, indent12, mediaJSON, errorSchema)
-}
 
-// writeJOSEDescription emits the canonical "JOSE compact serialization" description
-// block. Per OpenAPI 3.0.1, Media Type Objects (under content.<contentType>:) do NOT
-// allow a description field — fixed fields are limited to schema, example, examples,
-// encoding. RequestBody and Response objects DO allow description, so the helper is
-// invoked at the parent level (under requestBody: or under '200':), not nested inside
-// the content/media-type block.
-//
-// indent is the YAML depth of the description: line itself. plaintextSchema is the
-// component schema name to reference from the description so consumers know what
-// shape the decrypted payload conforms to.
-func writeJOSEDescription(sb *strings.Builder, indent, plaintextSchema string) {
-	fmt.Fprintf(sb, "%sdescription: |\n", indent)
-	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The wire payload\n", indent)
-	fmt.Fprintf(sb, "%s  is a base64url-encoded JWE compact form whose plaintext, after\n", indent)
-	fmt.Fprintf(sb, "%s  decrypt+verify, conforms to the %s schema —\n", indent, plaintextSchema)
-	fmt.Fprintf(sb, "%s  see #/components/schemas/%s.\n", indent, plaintextSchema)
-}
-
-// writeMediaSchemaRef emits a Media Type entry whose schema is a $ref to a component:
-//
-//	<indent><contentType>:
-//	<indent>  schema:
-//	<indent>    $ref: '#/components/schemas/<ref>'
-//
-// Used for application/json bodies where the wire shape IS the documented schema.
-func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
-	writeMediaTypeKey(sb, indent, contentType)
-	fmt.Fprintf(sb, "%s  schema:\n", indent)
-	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
-}
-
-// writeMediaSchemaJOSE emits a Media Type entry for application/jose where the schema
-// describes the on-the-wire payload as a string token (per OpenAPI 3.0.1 — the JOSE
-// compact serialization is a base64url-encoded string, NOT the decrypted plaintext
-// shape). The plaintext schema is still emitted as a component and referenced from
-// the parent RequestBody/Response description text via writeJOSEDescription.
-func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
-	writeMediaTypeKey(sb, indent, mediaJOSE)
-	fmt.Fprintf(sb, "%s  schema:\n", indent)
-	fmt.Fprintf(sb, "%s    type: string\n", indent)
-	fmt.Fprintf(sb, "%s    format: jose\n", indent)
-}
-
-// writeContentLine emits "<indent>content:\n" — the YAML key that opens a Media Type
-// map under either a Response Object or a RequestBody Object.
-func writeContentLine(sb *strings.Builder, indent string) {
-	fmt.Fprintf(sb, "%scontent:\n", indent)
-}
-
-// writeMediaTypeKey emits "<indent><mediaType>:\n" — the YAML key that opens a single
-// Media Type Object inside a content map (e.g. "application/json:" or "application/jose:").
-func writeMediaTypeKey(sb *strings.Builder, indent, mediaType string) {
-	fmt.Fprintf(sb, "%s%s:\n", indent, mediaType)
+	return map[string]*OpenAPIResponse{
+		"200": resp200,
+		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
+	}
 }
 
 // getOperationID generates an operation ID for a route
@@ -409,15 +449,15 @@ func (g *OpenAPIGenerator) getSummary(route *models.Route) string {
 // getResponseDescription returns a description based on HTTP method
 func (g *OpenAPIGenerator) getResponseDescription(method string) string {
 	switch method {
-	case "GET":
+	case httpMethodGet:
 		return respDescSuccess
 	case httpMethodPost:
 		return "Resource created successfully"
-	case "PUT":
+	case httpMethodPut:
 		return "Resource updated successfully"
-	case "DELETE":
+	case httpMethodDelete:
 		return "Resource deleted successfully"
-	case "PATCH":
+	case httpMethodPatch:
 		return "Resource partially updated"
 	default:
 		return respDescSuccess
@@ -734,7 +774,9 @@ func toFloat64Ptr(value any) *float64 {
 	case float64:
 		return &val
 	case string:
-		//nolint:S8148 // NOSONAR: Parse error intentional - non-numeric strings return nil (no default value)
+		// NOSONAR: Parse error intentional - non-numeric strings return nil (no default value).
+		// (S8148 is a SonarCloud rule; NOSONAR is the suppressor it reads — a //nolint
+		// directive would name a golangci-lint linter, which S8148 is not.)
 		if v, err := strconv.ParseFloat(val, 64); err == nil {
 			return &v
 		}
@@ -778,157 +820,32 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 	return params, bodyFields
 }
 
-// writeParameters writes the parameters array for an operation
-func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Parameter) {
-	sb.WriteString("      parameters:\n")
-	for i := range params {
-		param := &params[i]
-		sb.WriteString("        - name: ")
-		sb.WriteString(param.Name)
-		sb.WriteString("\n")
-
-		fmt.Fprintf(sb, "          in: %s\n", param.In)
-		fmt.Fprintf(sb, "          required: %t\n", param.Required)
-
-		if param.Description != "" {
-			fmt.Fprintf(sb, "          description: %s\n", param.Description)
-		}
-
-		// Write schema
-		sb.WriteString("          schema:\n")
-		g.writePropertySchema(sb, param.Schema, indent12)
-
-		if param.Example != nil {
-			// Marshal example value to YAML-compatible format
-			fmt.Fprintf(sb, "          example: %v\n", param.Example)
-		}
-	}
-}
-
-// writeRequestBody writes the request body for an operation. When the request type
-// carries a jose: tag the Content-Type is application/jose and the schema $ref still
-// points at the documented plaintext shape — the wire payload is the compact JOSE
-// serialization that wraps that plaintext on decrypt+verify. Takes the full TypeInfo
-// (rather than a positional bool) so future flags compose without signature churn.
-func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models.TypeInfo) {
+// buildRequestBody builds the Request Body Object for a request type. When the
+// request carries a jose: tag the Content-Type is application/jose with a
+// string-token wire schema and the plaintext shape is named in the description;
+// otherwise the schema is a $ref to the documented plaintext component. Takes the
+// full TypeInfo (rather than a positional bool) so future flags compose without
+// signature churn.
+func (g *OpenAPIGenerator) buildRequestBody(reqType *models.TypeInfo) *OpenAPIRequestBody {
 	schemaName := ""
 	isJOSE := false
 	if reqType != nil {
 		schemaName = reqType.Name
 		isJOSE = reqType.JOSE
 	}
-	contentType := mediaJSON
-	if isJOSE {
-		contentType = mediaJOSE
-	}
 
-	sb.WriteString("      requestBody:\n")
-	sb.WriteString("        required: true\n")
-	if isJOSE {
-		// Description on the RequestBody Object (spec-compliant) — sibling of content,
-		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
-		writeJOSEDescription(sb, "        ", schemaName)
-	}
-	writeContentLine(sb, "        ")
-
+	rb := &OpenAPIRequestBody{Required: true}
 	switch {
 	case isJOSE:
-		// JOSE wire payload is a string token, not the plaintext schema. The plaintext
-		// component schema is referenced from the description text above.
-		writeMediaSchemaJOSE(sb, indent10)
+		// Description on the RequestBody Object (spec-compliant) names the plaintext
+		// schema; the Media Type schema describes the JOSE string-token wire shape.
+		rb.Description = joseDescription(schemaName)
+		rb.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
 	case schemaName != "":
-		writeMediaSchemaRef(sb, indent10, contentType, schemaName)
+		rb.Content = jsonMediaRef(schemaName)
 	default:
-		// Inline schema (fallback — shouldn't happen with proper type extraction).
-		writeMediaTypeKey(sb, indent10, contentType)
-		sb.WriteString("            schema:\n")
-		sb.WriteString("              type: object\n")
+		// Inline fallback — shouldn't happen with proper type extraction.
+		rb.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: &OpenAPIProperty{Type: typeObject}}}
 	}
-}
-
-// writePropertySchema writes an OpenAPI property schema with proper indentation
-func (g *OpenAPIGenerator) writePropertySchema(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop == nil {
-		return
-	}
-
-	// Write all property components using focused writer functions
-	writeBasicType(sb, prop, indent)
-	writeStringConstraints(sb, prop, indent)
-	writeNumericConstraints(sb, prop, indent)
-	writeExclusiveBounds(sb, prop, indent)
-	writePattern(sb, prop, indent)
-	writeEnum(sb, prop, indent)
-	g.writeArrayItems(sb, prop, indent)
-}
-
-// writeBasicType writes the type and format fields
-func writeBasicType(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Type != "" {
-		fmt.Fprintf(sb, "%stype: %s\n", indent, prop.Type)
-	}
-	if prop.Format != "" {
-		fmt.Fprintf(sb, "%sformat: %s\n", indent, prop.Format)
-	}
-}
-
-// writeStringConstraints writes minLength and maxLength if present
-func writeStringConstraints(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.MinLength != nil {
-		fmt.Fprintf(sb, "%sminLength: %d\n", indent, *prop.MinLength)
-	}
-	if prop.MaxLength != nil {
-		fmt.Fprintf(sb, "%smaxLength: %d\n", indent, *prop.MaxLength)
-	}
-}
-
-// writeNumericConstraints writes minimum and maximum if present
-func writeNumericConstraints(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Minimum != nil {
-		fmt.Fprintf(sb, "%sminimum: %v\n", indent, *prop.Minimum)
-	}
-	if prop.Maximum != nil {
-		fmt.Fprintf(sb, "%smaximum: %v\n", indent, *prop.Maximum)
-	}
-}
-
-// writeExclusiveBounds writes exclusive minimum/maximum if true
-func writeExclusiveBounds(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum {
-		fmt.Fprintf(sb, "%sexclusiveMinimum: true\n", indent)
-	}
-	if prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum {
-		fmt.Fprintf(sb, "%sexclusiveMaximum: true\n", indent)
-	}
-}
-
-// writePattern writes the pattern field if present
-func writePattern(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Pattern != "" {
-		fmt.Fprintf(sb, "%spattern: %s\n", indent, prop.Pattern)
-	}
-}
-
-// writeEnum writes the enum array if present
-func writeEnum(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if len(prop.Enum) == 0 {
-		return
-	}
-
-	sb.WriteString(indent)
-	sb.WriteString("enum:\n")
-	for _, val := range prop.Enum {
-		fmt.Fprintf(sb, "%s  - %v\n", indent, val)
-	}
-}
-
-// writeArrayItems recursively writes array items if present
-func (g *OpenAPIGenerator) writeArrayItems(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Items == nil {
-		return
-	}
-
-	sb.WriteString(indent)
-	sb.WriteString("items:\n")
-	g.writePropertySchema(sb, prop.Items, indent+"  ")
+	return rb
 }

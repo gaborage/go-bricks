@@ -1,11 +1,13 @@
 package generator
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -190,11 +192,11 @@ func TestGenerateWithRoutes(t *testing.T) {
 		t.Error("Missing tags")
 	}
 
-	// Check standard responses
-	if !strings.Contains(spec, "'200':") {
+	// Check standard responses (status keys are quoted strings in the emitted YAML)
+	if !strings.Contains(spec, `"200":`) {
 		t.Error("Missing 200 response")
 	}
-	if !strings.Contains(spec, "'400':") {
+	if !strings.Contains(spec, `"400":`) {
 		t.Error("Missing 400 response")
 	}
 	if !strings.Contains(spec, "SuccessResponse") {
@@ -1349,6 +1351,23 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
+// mustMarshalYAML marshals v with the same 2-space indent the generator uses,
+// so tests can assert on the exact serialized form the single yaml.Marshal path
+// produces (replacing the old hand-rolled text-writer assertions).
+func mustMarshalYAML(t *testing.T, v any) string {
+	t.Helper()
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		t.Fatalf("marshal yaml: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("close yaml encoder: %v", err)
+	}
+	return buf.String()
+}
+
 // Changeset 6: Parameter Extraction Tests
 
 func TestExtractParameters(t *testing.T) {
@@ -1600,9 +1619,7 @@ func checkParameterWithExample(t *testing.T, params []Parameter) {
 	}
 }
 
-func TestWriteParameters(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
+func TestParameterMarshaling(t *testing.T) {
 	tests := []struct {
 		name           string
 		params         []Parameter
@@ -1653,7 +1670,9 @@ func TestWriteParameters(t *testing.T) {
 				"required: false",
 				"description: Page number",
 				"minimum: 1",
-				"example: 1",
+				// example values come from string struct tags, so the single
+				// yaml.Marshal path now (correctly) quotes them as strings.
+				"example: \"1\"",
 			},
 		},
 		{
@@ -1689,9 +1708,11 @@ func TestWriteParameters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writeParameters(&sb, tt.params)
-			output := sb.String()
+			// Parameters now serialize through the single yaml.Marshal path; marshal
+			// them under a "parameters:" key to mirror their position in an operation.
+			output := mustMarshalYAML(t, struct {
+				Parameters []Parameter `yaml:"parameters"`
+			}{Parameters: tt.params})
 
 			for _, expected := range tt.expectedOutput {
 				if !strings.Contains(output, expected) {
@@ -1708,7 +1729,7 @@ func TestWriteParameters(t *testing.T) {
 	}
 }
 
-func TestWriteRequestBody(t *testing.T) {
+func TestBuildRequestBody(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
@@ -1747,9 +1768,9 @@ func TestWriteRequestBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writeRequestBody(&sb, &models.TypeInfo{Name: tt.schemaName})
-			output := sb.String()
+			output := mustMarshalYAML(t, map[string]*OpenAPIRequestBody{
+				"requestBody": gen.buildRequestBody(&models.TypeInfo{Name: tt.schemaName}),
+			})
 
 			for _, expected := range tt.expectedOutput {
 				if !strings.Contains(output, expected) {
@@ -1760,115 +1781,96 @@ func TestWriteRequestBody(t *testing.T) {
 	}
 }
 
-func TestWritePropertySchema(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
+// TestPropertySchemaMarshaling proves the single yaml.Marshal path (PR2) honors
+// $ref, items.$ref, and the constraint fields the old hand-rolled writer emitted
+// by hand — both inline (in an operation/parameter) and under components, since
+// it is the same OpenAPIProperty type in either position.
+func TestPropertySchemaMarshaling(t *testing.T) {
 	tests := []struct {
-		name           string
-		prop           *OpenAPIProperty
-		indent         string
-		expectedOutput []string
+		name     string
+		prop     *OpenAPIProperty
+		expected []string
 	}{
 		{
-			name: "simple string",
-			prop: &OpenAPIProperty{
-				Type: "string",
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"  type: string",
-			},
+			name:     "ref",
+			prop:     &OpenAPIProperty{Ref: refPath("Address")},
+			expected: []string{"$ref: '#/components/schemas/Address'"},
 		},
 		{
-			name: "integer with format and constraints",
-			prop: &OpenAPIProperty{
-				Type:    "integer",
-				Format:  "int64",
-				Minimum: float64Ptr(1.0),
-				Maximum: float64Ptr(100.0),
-			},
-			indent: "    ",
-			expectedOutput: []string{
-				"    type: integer",
-				"    format: int64",
-				"    minimum: 1",
-				"    maximum: 100",
-			},
+			name:     "array of refs",
+			prop:     &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: refPath("Tag")}},
+			expected: []string{"type: array", "items:", "$ref: '#/components/schemas/Tag'"},
 		},
 		{
-			name: "string with length and pattern",
-			prop: &OpenAPIProperty{
-				Type:      "string",
-				MinLength: intPtr(3),
-				MaxLength: intPtr(50),
-				Pattern:   "^[a-zA-Z]+$",
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"minLength: 3",
-				"maxLength: 50",
-				"pattern: ^[a-zA-Z]+$",
-			},
+			name:     "integer with numeric constraints",
+			prop:     &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(1.0), Maximum: float64Ptr(100.0)},
+			expected: []string{"type: integer", "format: int64", "minimum: 1", "maximum: 100"},
 		},
 		{
-			name: "enum",
-			prop: &OpenAPIProperty{
-				Type: "string",
-				Enum: []any{"red", "green", "blue"},
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"enum:",
-				"- red",
-				"- green",
-				"- blue",
-			},
+			name:     "string length and exclusive bound",
+			prop:     &OpenAPIProperty{Type: typeString, MinLength: intPtr(3), MaxLength: intPtr(50), ExclusiveMinimum: boolPtr(true)},
+			expected: []string{"type: string", "minLength: 3", "maxLength: 50", "exclusiveMinimum: true"},
 		},
 		{
-			name: "array with items",
-			prop: &OpenAPIProperty{
-				Type: "array",
-				Items: &OpenAPIProperty{
-					Type:   "integer",
-					Format: "int32",
-				},
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"  type: array",
-				"  items:",
-				"    type: integer",
-				"    format: int32",
-			},
+			// Locks pattern serialization (the yaml tag) — split into two substrings
+			// so the assertion holds whether or not yaml.v3 quotes the regex.
+			name:     "pattern",
+			prop:     &OpenAPIProperty{Type: typeString, Pattern: "^[a-zA-Z]+$"},
+			expected: []string{"pattern:", "^[a-zA-Z]+$"},
 		},
 		{
-			name: "exclusive bounds",
-			prop: &OpenAPIProperty{
-				Type:             "number",
-				Minimum:          float64Ptr(0.0),
-				ExclusiveMinimum: boolPtr(true),
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"minimum: 0",
-				"exclusiveMinimum: true",
-			},
+			name:     "number with exclusive maximum",
+			prop:     &OpenAPIProperty{Type: typeNumber, Maximum: float64Ptr(100.0), ExclusiveMaximum: boolPtr(true)},
+			expected: []string{"type: number", "maximum: 100", "exclusiveMaximum: true"},
+		},
+		{
+			name:     "enum",
+			prop:     &OpenAPIProperty{Type: typeString, Enum: []any{"red", "green", "blue"}},
+			expected: []string{"enum:", "- red", "- green", "- blue"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writePropertySchema(&sb, tt.prop, tt.indent)
-			output := sb.String()
-
-			for _, expected := range tt.expectedOutput {
-				if !strings.Contains(output, expected) {
-					t.Errorf("Expected output to contain %q.\nOutput:\n%s", expected, output)
-				}
+			out := mustMarshalYAML(t, tt.prop)
+			for _, want := range tt.expected {
+				assert.Contains(t, out, want, "marshaled schema:\n%s", out)
 			}
 		})
 	}
+}
+
+// TestAssignOperationByMethod verifies each HTTP method routes to the correct
+// path-item field, and that an unrecognized method is a no-op (the analyzer only
+// emits the standard methods, but the switch must not panic on anything else).
+func TestAssignOperationByMethod(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	cases := []struct {
+		method string
+		op     func(*OpenAPIPathItem) *OpenAPIOperation
+	}{
+		{httpMethodGet, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Get }},
+		{httpMethodPut, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Put }},
+		{httpMethodPost, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Post }},
+		{httpMethodDelete, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Delete }},
+		{httpMethodPatch, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Patch }},
+		{httpMethodHead, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Head }},
+		{httpMethodOptions, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Options }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			item := &OpenAPIPathItem{}
+			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"})
+			assert.NotNil(t, tc.op(item), "operation should be attached under %s", tc.method)
+		})
+	}
+
+	t.Run("unknown_method_noop", func(t *testing.T) {
+		item := &OpenAPIPathItem{}
+		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"})
+		assert.Nil(t, item.Get)
+		assert.Nil(t, item.Post)
+	})
 }
 
 // TestToFloat64Ptr directly tests the toFloat64Ptr utility function
@@ -1904,20 +1906,6 @@ func TestToFloat64Ptr(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestWritePropertySchemaNilProp verifies nil property handling in writePropertySchema
-func TestWritePropertySchemaNilProp(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-
-	// Should not panic and should produce empty output
-	gen.writePropertySchema(&sb, nil, "  ")
-
-	output := sb.String()
-	if output != "" {
-		t.Errorf("Expected empty output for nil property, got %q", output)
 	}
 }
 
@@ -2057,11 +2045,11 @@ func TestGenerateWithParameters(t *testing.T) {
 	}
 }
 
-func TestWriteRequestBodyJOSEContentType(t *testing.T) {
+func TestBuildRequestBodyJOSEContentType(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeRequestBody(&sb, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
-	out := sb.String()
+	out := mustMarshalYAML(t, map[string]*OpenAPIRequestBody{
+		"requestBody": gen.buildRequestBody(&models.TypeInfo{Name: "CreateTokenRequest", JOSE: true}),
+	})
 
 	// Wire format: per OpenAPI 3.0.1, application/jose Media Type schema MUST describe
 	// the on-the-wire payload (a string token), not the decrypted plaintext shape.
@@ -2110,31 +2098,30 @@ func TestWriteMethodEmitsRequestBodyForJOSEEvenWithEmptyBodyFields(t *testing.T)
 	assert.Contains(t, spec, "application/jose:", "the JOSE requestBody must be present even with no plaintext body fields")
 }
 
-func TestWriteResponsesJOSEPath(t *testing.T) {
+func TestBuildResponsesJOSEResponse(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/tokens",
 		Response: &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
 	})
-	out := sb.String()
 
-	if !strings.Contains(out, "'200':") || !strings.Contains(out, "application/jose:") {
-		t.Error("JOSE-flagged 200 response must use application/jose")
-	}
+	// JOSE-flagged 200 response uses application/jose with a string-token schema.
+	// require the content-type key first so a regression fails cleanly here rather
+	// than panicking on a nil media-type deref below.
+	require.Contains(t, resps["200"].Content, mediaJOSE, "JOSE-flagged 200 response must use application/jose")
+	assert.Equal(t, typeString, resps["200"].Content[mediaJOSE].Schema.Type)
+	assert.Equal(t, "jose", resps["200"].Content[mediaJOSE].Schema.Format)
+
 	// Pre-trust failure path: peer is unauthenticated so the envelope must be the
 	// minimal JOSEErrorEnvelope, NOT the framework's standard ErrorResponse (which
 	// carries traceId/meta and would leak fingerprint information).
-	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
-		t.Error("JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
-	}
-	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("JOSE 4xx response must NOT reference ErrorResponse — leaks framework metadata to unauthenticated peers")
-	}
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath("JOSEErrorEnvelope"), resps["400"].Content[mediaJSON].Schema.Ref,
+		"JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
 }
 
-func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
+func TestBuildResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
 	// The runtime enforces bidirectional symmetry (request and response must both
 	// carry jose tags or neither). The analyzer runs statically against source —
 	// it can encounter asymmetric setups that a developer is in the middle of
@@ -2143,37 +2130,31 @@ func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testin
 	// the OpenAPI 4xx schema must reference JOSEErrorEnvelope, NOT the standard
 	// ErrorResponse (which would leak traceId/meta).
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/tokens",
 		Request:  &models.TypeInfo{Name: "TokenRequest", JOSE: true},
 		Response: &models.TypeInfo{Name: "TokenResponse", JOSE: false},
 	})
-	out := sb.String()
 
-	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
-		t.Error("4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
-	}
-	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("4xx path on JOSE-request route must NOT reference ErrorResponse — leaks traceId/meta to unauthenticated peers")
-	}
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath("JOSEErrorEnvelope"), resps["400"].Content[mediaJSON].Schema.Ref,
+		"4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
 }
 
-func TestWriteResponsesNonJOSEUnchanged(t *testing.T) {
+func TestBuildResponsesNonJOSE(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/users",
 		Response: &models.TypeInfo{Name: "User", JOSE: false},
 	})
-	out := sb.String()
 
-	if strings.Contains(out, "application/jose:") {
-		t.Error("non-JOSE response must NOT use application/jose")
-	}
-	if !strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("non-JOSE 4xx must reference standard ErrorResponse")
-	}
+	// Non-JOSE 200 uses application/json (the standard SuccessResponse envelope).
+	assert.NotContains(t, resps["200"].Content, mediaJOSE, "non-JOSE response must NOT use application/jose")
+	require.Contains(t, resps["200"].Content, mediaJSON)
+	assert.Equal(t, refPath("SuccessResponse"), resps["200"].Content[mediaJSON].Schema.Ref)
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath(schemaErrorResponse), resps["400"].Content[mediaJSON].Schema.Ref,
+		"non-JOSE 4xx must reference standard ErrorResponse")
 }
