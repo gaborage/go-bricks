@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"maps"
 	"testing"
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -247,6 +249,168 @@ func TestPublisherPublishNilTransaction(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "transaction must not be nil")
+}
+
+// The tests reuse the production mapHeaderAccessor (same package) to drive the
+// centralized trace inject/extract helpers exactly as the AMQP layer does. An
+// amqp.Delivery's Headers are an amqp.Table (also a map[string]any), so this is
+// faithful to the real relay/consumer path.
+
+// inboundTraceparent / inboundTraceID model an inbound W3C trace context: the
+// trace-id is the 32-hex middle segment that the HTTP handler logs (site 1).
+const (
+	inboundTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	inboundTraceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
+)
+
+// TestPublisherPublishPersistsTraceContext asserts that when the publish context
+// carries an inbound W3C traceparent (as placed by server.TraceContext), Publish
+// persists it into the outbox row's headers — the only place the originating
+// request context is still live. Without this, the detached relay job has no
+// trace to replay and the consumer sees a freshly generated id.
+func TestPublisherPublishPersistsTraceContext(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	ctx := gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent)
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeOrderCreated,
+		AggregateID: aggregateOrderID,
+		Payload:     []byte("{}"),
+	}
+	_, err := pub.Publish(ctx, &mockTx{}, event)
+	require.NoError(t, err)
+
+	require.Len(t, store.insertedRecords, 1)
+	record := store.insertedRecords[0]
+	require.NotEmpty(t, record.Headers, "trace context must be persisted in the outbox row")
+
+	var headers map[string]any
+	require.NoError(t, json.Unmarshal(record.Headers, &headers))
+	assert.Equal(t, inboundTraceparent, headers[gobrickstrace.HeaderTraceParent],
+		"persisted traceparent must match the inbound request traceparent")
+	assert.Equal(t, inboundTraceID, headers[gobrickstrace.HeaderXRequestID],
+		"persisted X-Request-ID must be force-aligned to the traceparent trace-id")
+}
+
+// TestPublisherPublishPreservesCallerHeadersWithTrace verifies trace capture does
+// not clobber application-supplied headers and does not mutate the caller's map.
+func TestPublisherPublishPreservesCallerHeadersWithTrace(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	callerHeaders := map[string]any{"x-priority": "high"}
+	event := &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+		Payload:     []byte("{}"),
+		Headers:     callerHeaders,
+	}
+	ctx := gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent)
+	_, err := pub.Publish(ctx, &mockTx{}, event)
+	require.NoError(t, err)
+
+	var headers map[string]any
+	require.NoError(t, json.Unmarshal(store.insertedRecords[0].Headers, &headers))
+	assert.Equal(t, "high", headers["x-priority"], "caller headers must survive trace capture")
+	assert.Equal(t, inboundTraceparent, headers[gobrickstrace.HeaderTraceParent])
+
+	// The caller's map must not gain framework keys as a side effect.
+	_, mutated := callerHeaders[gobrickstrace.HeaderTraceParent]
+	assert.False(t, mutated, "Publish must not mutate the caller-supplied headers map")
+}
+
+// TestPublisherPublishPersistsTracestate verifies the optional W3C tracestate
+// rides along with the traceparent into the persisted row when the inbound
+// request carries it — matching the behavior documented in wiki/outbox.md.
+func TestPublisherPublishPersistsTracestate(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	const tracestate = "vendor1=opaqueValue1,vendor2=opaqueValue2"
+	ctx := gobrickstrace.WithTraceState(
+		gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent),
+		tracestate,
+	)
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeOrderCreated,
+		AggregateID: aggregateOrderID,
+		Payload:     []byte("{}"),
+	}
+	_, err := pub.Publish(ctx, &mockTx{}, event)
+	require.NoError(t, err)
+
+	var headers map[string]any
+	require.NoError(t, json.Unmarshal(store.insertedRecords[0].Headers, &headers))
+	assert.Equal(t, inboundTraceparent, headers[gobrickstrace.HeaderTraceParent])
+	assert.Equal(t, tracestate, headers[gobrickstrace.HeaderTraceState],
+		"optional tracestate must be persisted alongside traceparent")
+}
+
+// TestPublisherPublishNoTraceLeavesHeadersUnchanged guards the untraced path:
+// a background publish with no trace context must not gain generated trace
+// headers, preserving existing behavior (nil headers for header-less events).
+func TestPublisherPublishNoTraceLeavesHeadersUnchanged(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+		Payload:     []byte("{}"),
+	}
+	_, err := pub.Publish(context.Background(), &mockTx{}, event)
+	require.NoError(t, err)
+
+	assert.Nil(t, store.insertedRecords[0].Headers,
+		"untraced publish must not persist generated trace headers")
+}
+
+// TestOutboxTracePropagationContinuityAcrossThreeSites is the end-to-end
+// continuity regression: the same trace id must appear at all three sites —
+// (1) the HTTP handler's context, (2) the persisted outbox row, and (3) the
+// consumer's message-scoped logger — even though the relay republishes from a
+// detached background context with no ambient trace. This reproduces the bug:
+// before the fix the consumer's correlation_id is a freshly generated random id.
+func TestOutboxTracePropagationContinuityAcrossThreeSites(t *testing.T) {
+	// Site 1 — HTTP handler: server.TraceContext places the inbound W3C
+	// traceparent into the request context; server logs its trace-id.
+	ctx := gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent)
+
+	// Site 2 — outbox publish persists the trace into the row.
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+	_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+		EventType:   eventTypeOrderCreated,
+		AggregateID: aggregateOrderID,
+		Payload:     []byte("{}"),
+	})
+	require.NoError(t, err)
+	require.Len(t, store.insertedRecords, 1)
+	record := store.insertedRecords[0]
+
+	// Relay replay: decode the persisted headers, add outbox metadata, then
+	// publish from a DETACHED background context. This mirrors
+	// outbox.Relay.publishRecord -> messaging.preparePublishing ->
+	// trace.InjectIntoHeaders, where the relay job carries no ambient trace.
+	stored := map[string]any{}
+	if len(record.Headers) > 0 {
+		require.NoError(t, json.Unmarshal(record.Headers, &stored))
+	}
+	wire := map[string]any{}
+	maps.Copy(wire, stored)
+	wire["x-outbox-event-id"] = record.ID
+	gobrickstrace.InjectIntoHeaders(context.Background(), &mapHeaderAccessor{headers: wire})
+
+	// Site 3 — consumer: messaging.Registry.processMessage derives the
+	// per-message logger's correlation_id via ExtractFromHeaders + EnsureTraceID.
+	consumerCtx := gobrickstrace.ExtractFromHeaders(context.Background(), &mapHeaderAccessor{headers: wire})
+	consumerCorrelationID := gobrickstrace.EnsureTraceID(consumerCtx)
+
+	assert.Equal(t, inboundTraceID, consumerCorrelationID,
+		"consumer correlation_id must equal the inbound traceparent trace-id, not a fresh random id")
 }
 
 func TestMarshalPayloadStruct(t *testing.T) {

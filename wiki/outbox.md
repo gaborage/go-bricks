@@ -92,6 +92,30 @@ outbox:
 | `Exchange` | string | No | Target AMQP exchange (falls back to `default_exchange` config) |
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
 
+## Trace Propagation
+
+Outbox publishes are **trace-equivalent to direct AMQP publishes**: the W3C trace
+context (`traceparent` / `X-Request-ID`, plus `tracestate` when the inbound
+request carries it) is propagated end-to-end so a single trace id spans the
+originating HTTP request, the persisted outbox row, and the downstream
+consumer's per-message log.
+
+This requires capture at two points, because the relay runs as a *detached*
+scheduled job whose context carries no inbound trace:
+
+1. **`Publish` captures** the trace context from the publish `ctx` into the row's
+   `headers` column — the only point where the originating request context is
+   still live. Untraced publishes (background jobs with no trace in context) are
+   left untouched and persist no synthetic trace headers.
+2. **The relay rehydrates** that trace context from the persisted headers into the
+   context it republishes with, so the AMQP `CorrelationId` (surfaced by the
+   consumer's failure-path log and the consume span) and the re-injected
+   `traceparent` all carry the originating trace id rather than a freshly
+   generated one.
+
+No application code is required — capture/rehydration is automatic. Custom
+`Headers` you set on the event are preserved alongside the trace keys.
+
 ## Outbox Defaults
 
 GoBricks applies production-safe outbox defaults when outbox is enabled:

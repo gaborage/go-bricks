@@ -137,6 +137,7 @@ type fakeAMQP struct {
 	LastPublishOpts messaging.PublishOptions
 	LastPublishData []byte
 	LastPublishHdrs map[string]any
+	LastPublishCtx  context.Context
 }
 
 func newFakeAMQP() *fakeAMQP {
@@ -147,13 +148,14 @@ func (f *fakeAMQP) IsReady() bool { return f.Ready }
 
 func (f *fakeAMQP) Publish(_ context.Context, _ string, _ []byte) error { return nil }
 
-func (f *fakeAMQP) PublishToExchange(_ context.Context, opts messaging.PublishOptions, data []byte) error {
+func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.PublishOptions, data []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.PublishCalls++
 	f.LastPublishOpts = opts
 	f.LastPublishData = data
 	f.LastPublishHdrs = opts.Headers
+	f.LastPublishCtx = ctx
 	key := opts.Exchange + ":" + opts.RoutingKey
 	if err, found := f.PublishErrFor[key]; found {
 		return err
