@@ -59,6 +59,14 @@ func (p *Policy) Validate() error {
 		}
 	}
 
+	if err := p.validateAlgorithms(); err != nil {
+		return err
+	}
+	return p.validateDirection()
+}
+
+// validateAlgorithms checks SigAlg/KeyAlg/Enc against the allowlists, in that order.
+func (p *Policy) validateAlgorithms() error {
 	if !IsAllowedSigAlg(p.SigAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
@@ -83,38 +91,16 @@ func (p *Policy) Validate() error {
 			Enc:      string(p.Enc),
 		}
 	}
+	return nil
+}
 
+// validateDirection dispatches to the per-direction kid checks.
+func (p *Policy) validateDirection() error {
 	switch p.Direction {
 	case DirectionInbound:
-		if p.DecryptKid == "" || p.VerifyKid == "" {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyIncomplete,
-				Message:  "inbound policy requires both decrypt and verify kids",
-			}
-		}
-		if p.SignKid != "" || p.EncryptKid != "" {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyDirectionMismatch,
-				Message:  "inbound policy must not declare sign/encrypt kids",
-			}
-		}
+		return p.validateInbound()
 	case DirectionOutbound:
-		if p.SignKid == "" || p.EncryptKid == "" {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyIncomplete,
-				Message:  "outbound policy requires both sign and encrypt kids",
-			}
-		}
-		if p.DecryptKid != "" || p.VerifyKid != "" {
-			return &Error{
-				Sentinel: ErrPolicyMismatch,
-				Code:     codePolicyDirectionMismatch,
-				Message:  "outbound policy must not declare decrypt/verify kids",
-			}
-		}
+		return p.validateOutbound()
 	default:
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
@@ -122,6 +108,42 @@ func (p *Policy) Validate() error {
 			Message:  "unknown direction",
 		}
 	}
+}
 
+// validateInbound requires decrypt+verify kids and forbids sign/encrypt kids.
+func (p *Policy) validateInbound() error {
+	if p.DecryptKid == "" || p.VerifyKid == "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyIncomplete,
+			Message:  "inbound policy requires both decrypt and verify kids",
+		}
+	}
+	if p.SignKid != "" || p.EncryptKid != "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "inbound policy must not declare sign/encrypt kids",
+		}
+	}
+	return nil
+}
+
+// validateOutbound requires sign+encrypt kids and forbids decrypt/verify kids.
+func (p *Policy) validateOutbound() error {
+	if p.SignKid == "" || p.EncryptKid == "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyIncomplete,
+			Message:  "outbound policy requires both sign and encrypt kids",
+		}
+	}
+	if p.DecryptKid != "" || p.VerifyKid != "" {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "outbound policy must not declare decrypt/verify kids",
+		}
+	}
 	return nil
 }
