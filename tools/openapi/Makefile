@@ -1,8 +1,15 @@
-.PHONY: help build test lint fmt update clean install demo check update test-coverage validate-cli dev-deps release-dry-run
+.PHONY: help build test lint fmt update clean install demo check update test-coverage validate-cli validate-spec dev-deps release-dry-run
 
 # Binary name
 BINARY_NAME := go-bricks-openapi
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+
+# Pinned redocly CLI version for the structural-validation gate. Pinned (not
+# @latest) so an upstream release cannot silently change the gate or break CI.
+REDOCLY_VERSION := 2.31.5
+# Fixture project the spec gate generates from, plus a throwaway output path.
+SPEC_FIXTURE := internal/spectest/testdata/path_param
+SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
 
 # Default target
 help: ## Show this help message
@@ -13,10 +20,10 @@ build: ## Build the CLI tool
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME) ./cmd/go-bricks-openapi
 
 test: ## Run all tests
-	go test -race ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/...
+	go test -race ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
 
 test-coverage: ## Run tests with coverage
-	go test -race -coverprofile=coverage.out ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/...
+	go test -race -coverprofile=coverage.out ./cmd/... ./internal/commands/... ./internal/generator/... ./internal/analyzer/... ./internal/spectest/...
 	go tool cover -html=coverage.out -o coverage.html
 
 lint: ## Run golangci-lint
@@ -31,7 +38,7 @@ update: ## Update dependencies to latest versions
 
 clean: ## Clean build cache and binaries
 	go clean -cache -testcache
-	rm -f $(BINARY_NAME) coverage.out coverage.html
+	rm -f $(BINARY_NAME) coverage.out coverage.html $(SPEC_TMP)
 
 install: build ## Install the CLI tool locally
 	go install -ldflags "-X main.version=$(VERSION)" ./cmd/go-bricks-openapi
@@ -47,6 +54,12 @@ validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) --help
 	./$(BINARY_NAME) doctor --project ../../
 	@echo "✓ CLI validation passed"
+
+validate-spec: build ## Generate a fixture spec and validate it with redocly (requires npx; CI/Unix)
+	./$(BINARY_NAME) generate --project $(SPEC_FIXTURE) --output $(SPEC_TMP)
+	npx -y @redocly/cli@$(REDOCLY_VERSION) lint $(SPEC_TMP) --config redocly.yaml
+	@rm -f $(SPEC_TMP)
+	@echo "✓ Spec validation passed"
 
 check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pre-commit checks)
 

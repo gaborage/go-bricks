@@ -19,7 +19,8 @@ import (
 const (
 	testModuleName         = "testmodule"
 	testModuleDescription  = "Test module for API operations"
-	getUserRoute           = "/users/:id"
+	getUserRoute           = "/users/:id"  // Echo syntax, as registered in source
+	getUserRouteNormalized = "/users/{id}" // OpenAPI templating, as stored on route.Path
 	createUserRoute        = "/users"
 	testHandlerName        = "getUser"
 	testSummary            = "Get user by ID"
@@ -302,9 +303,10 @@ func validateDiscoveredRoute(t *testing.T, route *models.Route) {
 		t.Error("Route path should not be empty")
 	}
 
-	// Check specific routes
+	// Check specific routes. route.Path is normalized to OpenAPI templating, so
+	// the GET route is matched by its "{id}" form, not the registered ":id".
 	switch route.Path {
-	case getUserRoute:
+	case getUserRouteNormalized:
 		assertGetRoute(t, route)
 	case createUserRoute:
 		assertCreateRoute(t, route)
@@ -314,7 +316,7 @@ func validateDiscoveredRoute(t *testing.T, route *models.Route) {
 func assertGetRoute(t *testing.T, route *models.Route) {
 	t.Helper()
 	if route.Method != "GET" {
-		t.Errorf("Expected GET method for %s, got %s", getUserRoute, route.Method)
+		t.Errorf("Expected GET method for %s, got %s", getUserRouteNormalized, route.Method)
 	}
 	if route.HandlerName != testHandlerName {
 		t.Errorf("Expected handler name '%s', got '%s'", testHandlerName, route.HandlerName)
@@ -2827,4 +2829,77 @@ func TestHasJOSESentinelTag(t *testing.T) {
 	t.Run("nil_fields", func(t *testing.T) {
 		assert.False(t, hasJOSESentinelTag(&ast.StructType{}), "hasJOSESentinelTag(empty struct)")
 	})
+}
+
+func TestNormalizePath(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "no_params_unchanged",
+			in:   "/users",
+			want: "/users",
+		},
+		{
+			name: "single_path_param",
+			in:   "/users/:id",
+			want: "/users/{id}",
+		},
+		{
+			name: "multiple_path_params",
+			in:   "/orgs/:orgID/users/:id",
+			want: "/orgs/{orgID}/users/{id}",
+		},
+		{
+			name: "param_then_literal_segment",
+			in:   "/users/:id/posts",
+			want: "/users/{id}/posts",
+		},
+		{
+			// Catch-all wildcards are deliberately NOT templated (see normalizePath
+			// doc): emitting "{path}" without a declared parameter is invalid OpenAPI.
+			name: "trailing_catch_all_wildcard_left_literal",
+			in:   "/files/*",
+			want: "/files/*",
+		},
+		{
+			name: "named_wildcard_left_literal",
+			in:   "/assets/*filepath",
+			want: "/assets/*filepath",
+		},
+		{
+			name: "root_path_unchanged",
+			in:   "/",
+			want: "/",
+		},
+		{
+			name: "empty_string_unchanged",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "trailing_slash_preserved",
+			in:   "/users/:id/",
+			want: "/users/{id}/",
+		},
+		{
+			// Defensive: a bare ":" carries no parameter name, so rewriting it would
+			// emit an invalid "{}" template. Leave such segments untouched.
+			name: "bare_colon_left_untouched",
+			in:   "/users/:",
+			want: "/users/:",
+		},
+		{
+			name: "wildcard_mixed_with_param",
+			in:   "/files/:bucket/*",
+			want: "/files/{bucket}/*",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizePath(tt.in))
+		})
+	}
 }

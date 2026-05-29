@@ -509,8 +509,8 @@ func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, astFile *ast.
 		Tags:   []string{},
 	}
 
-	// Extract route path
-	route.Path = a.extractPathFromArg(callExpr.Args[2])
+	// Extract route path, normalizing Echo-style params to OpenAPI templating.
+	route.Path = normalizePath(a.extractPathFromArg(callExpr.Args[2]))
 
 	// Extract handler information
 	route.HandlerName, route.Request, route.Response = a.extractHandlerInfo(
@@ -617,6 +617,39 @@ func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) string {
 		return expr.Name
 	}
 	return ""
+}
+
+// normalizePath converts an Echo-style route path into OpenAPI 3.0 path
+// templating. Echo names path parameters with a leading colon (":id"); OpenAPI
+// templates them with braces ("{id}"). Each "/"-delimited segment is rewritten
+// independently so literal segments and the leading/trailing slashes are
+// preserved verbatim:
+//
+//	/users/:id             -> /users/{id}
+//	/orgs/:orgID/users/:id -> /orgs/{orgID}/users/{id}
+//
+// A bare ":" with no name is left untouched (defensive — Echo would not register
+// such a route, and emitting "{}" would produce an invalid template).
+//
+// Echo catch-all wildcards ("/files/*", "/assets/*filepath") are intentionally
+// left as literal segments. Templating them ("{path}") would require a matching
+// declared path parameter to satisfy OpenAPI, but the generator derives path
+// parameters from request-struct tags, which a catch-all does not carry —
+// emitting "{path}" without that parameter yields an invalid document.
+// Synthesising the parameter is deferred to the parameter-fidelity work.
+func normalizePath(path string) string {
+	if !strings.Contains(path, ":") {
+		return path
+	}
+
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		if strings.HasPrefix(seg, ":") && len(seg) > 1 {
+			segments[i] = "{" + seg[1:] + "}"
+		}
+	}
+
+	return strings.Join(segments, "/")
 }
 
 // extractConstants finds constant declarations in the AST file
