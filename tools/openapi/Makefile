@@ -61,6 +61,9 @@ validate-spec: build ## Generate a fixture spec and validate it with redocly (re
 	@rm -f $(SPEC_TMP)
 	@echo "✓ Spec validation passed"
 
+# validate-spec is intentionally excluded from check: it requires npx/network
+# (redocly) and is a CI-only gate. The in-process kin-openapi validation in
+# internal/spectest already runs under `test`, so `check` stays offline/fast.
 check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pre-commit checks)
 
 # Development helpers

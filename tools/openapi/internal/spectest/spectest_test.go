@@ -41,11 +41,11 @@ func TestGoldenFixtures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(testdataDir, name)
 
-			spec, genErr := Generate(dir)
+			spec, genErr := Generate(t.Context(), dir)
 			require.NoError(t, genErr)
 
 			// Primary gate: the emitted document must be valid OpenAPI 3.0.
-			require.NoError(t, Validate([]byte(spec)), "emitted spec is not valid OpenAPI 3.0")
+			require.NoError(t, Validate(t.Context(), []byte(spec)), "emitted spec is not valid OpenAPI 3.0")
 
 			goldenPath := filepath.Join(dir, goldenFile)
 			if *update {
@@ -75,11 +75,11 @@ func normalizeEOL(s string) string {
 // harness cannot silently degrade into a no-op gate that passes everything.
 func TestValidateRejectsMalformedSpec(t *testing.T) {
 	t.Run("not_yaml", func(t *testing.T) {
-		require.Error(t, Validate([]byte(":\n  not: [valid")))
+		require.Error(t, Validate(t.Context(), []byte(":\n  not: [valid")))
 	})
 	t.Run("missing_required_fields", func(t *testing.T) {
 		// Parses as YAML but is not a valid OpenAPI document (no openapi/info/paths).
-		require.Error(t, Validate([]byte("foo: bar\n")))
+		require.Error(t, Validate(t.Context(), []byte("foo: bar\n")))
 	})
 }
 
@@ -88,7 +88,7 @@ func TestValidateRejectsMalformedSpec(t *testing.T) {
 // project with zero discovered modules is not an error at the analyzer layer
 // (the CLI surfaces that separately); the helper must still return a document.
 func TestGenerateEmptyProject(t *testing.T) {
-	spec, err := Generate(t.TempDir())
+	spec, err := Generate(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	require.NotEmpty(t, spec)
 }

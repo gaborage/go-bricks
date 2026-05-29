@@ -37,8 +37,15 @@ const (
 )
 
 // Generate runs the analyzer and generator over the project rooted at dir and
-// returns the emitted OpenAPI document as a string.
-func Generate(dir string) (string, error) {
+// returns the emitted OpenAPI document as a string. ctx is the first parameter
+// per the repo's context-first convention; it is honoured for early
+// cancellation and will thread into the analyzer/generator once those become
+// context-aware.
+func Generate(ctx context.Context, dir string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	project, err := analyzer.New(dir).AnalyzeProject()
 	if err != nil {
 		return "", fmt.Errorf("analyze %s: %w", dir, err)
@@ -53,9 +60,10 @@ func Generate(dir string) (string, error) {
 }
 
 // Validate parses spec data (YAML or JSON) and validates it against OpenAPI 3.0
-// in-process. This is the primary structural gate: it is deterministic and needs
-// no network or external toolchain, unlike the redocly step run in CI.
-func Validate(data []byte) error {
+// in-process, honouring ctx for cancellation. This is the primary structural
+// gate: it is deterministic and needs no network or external toolchain, unlike
+// the redocly step run in CI.
+func Validate(ctx context.Context, data []byte) error {
 	loader := openapi3.NewLoader()
 
 	doc, err := loader.LoadFromData(data)
@@ -63,7 +71,7 @@ func Validate(data []byte) error {
 		return fmt.Errorf("load spec: %w", err)
 	}
 
-	if err := doc.Validate(context.Background()); err != nil {
+	if err := doc.Validate(ctx); err != nil {
 		return fmt.Errorf("validate spec: %w", err)
 	}
 
