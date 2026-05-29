@@ -26,16 +26,26 @@ import (
 // AMQPClientImpl provides an AMQP implementation of the messaging client interface.
 // It includes automatic reconnection, retry logic, and AMQP-specific features.
 type AMQPClientImpl struct {
-	m               *sync.RWMutex
-	brokerURL       string
-	log             logger.Logger
-	connection      amqpConnection
-	channel         amqpChannel
-	done            chan bool
+	m          *sync.RWMutex
+	brokerURL  string
+	log        logger.Logger
+	connection amqpConnection
+	channel    amqpChannel
+	done       chan bool
+	// reconnectDone is closed by handleReconnect when it returns. Close does not
+	// block on it (Close stays non-blocking), but it lets tests confirm the
+	// reconnection goroutine has fully exited so a leaked goroutine can't race
+	// later tests through the shared dial func. Set only when NewAMQPClient
+	// starts the goroutine; nil for manually-constructed test clients.
+	reconnectDone   chan struct{}
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
 	notifyConfirm   chan amqp.Confirmation
 	isReady         bool
+	// closed marks that Close has run. It is distinct from isReady: a client
+	// that never finished connecting is not ready but is also not closed, and
+	// Close must still stop its reconnection goroutine. Guarded by c.m.
+	closed bool
 
 	// pendingPublishes correlates broker confirmations to the in-flight publish
 	// that issued them. Keyed by (channel generation, DeliveryTag) →
@@ -114,6 +124,7 @@ func NewAMQPClient(brokerURL string, log logger.Logger) *AMQPClientImpl {
 		brokerURL:         brokerURL,
 		log:               log,
 		done:              make(chan bool),
+		reconnectDone:     make(chan struct{}),
 		reconnectDelay:    defaultReconnectDelay,
 		reconnectMaxDelay: defaultReconnectMaxDelay,
 		reInitDelay:       defaultReInitDelay,
@@ -489,11 +500,15 @@ func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bo
 // Close gracefully shuts down the AMQP client.
 func (c *AMQPClientImpl) Close() error {
 	c.m.Lock()
-	defer c.m.Unlock()
 
-	if !c.isReady {
+	// Idempotency is keyed on closed, NOT isReady: a client whose initial
+	// connect never succeeded is still running a reconnection goroutine that
+	// Close must stop, even though it never became ready.
+	if c.closed {
+		c.m.Unlock()
 		return errAlreadyClosed
 	}
+	c.closed = true
 
 	close(c.done)
 	c.isReady = false
@@ -514,14 +529,38 @@ func (c *AMQPClientImpl) Close() error {
 		tracking.RecordConnectionEvent("close", nil)
 	}
 
+	c.m.Unlock()
+
+	// Close stays non-blocking: it signals the reconnection goroutine to stop
+	// (via close(c.done)) but does not wait for it. Waiting here would let an
+	// in-flight, uncancellable dial stall callers — and Manager invokes Close
+	// while holding pubMu/consMu (shutdown, LRU eviction, idle cleanup), so a
+	// blocking Close could wedge the publish path. The goroutine exits on its
+	// own at its next select; reconnectDone lets tests confirm that exit.
 	c.log.Info().Msg("AMQP client closed")
 	return err
 }
 
 // handleReconnect manages connection lifecycle and reconnection logic.
 func (c *AMQPClientImpl) handleReconnect() {
+	// Signal that this goroutine has fully exited (tests wait on reconnectDone
+	// to confirm teardown; Close itself does not block on it). Guarded because
+	// manually-constructed test clients may run handleReconnect without a
+	// reconnectDone channel.
+	if c.reconnectDone != nil {
+		defer close(c.reconnectDone)
+	}
+
 	attempt := 0
 	for {
+		// Stop before starting another connect attempt once Close has fired, so
+		// no connect/changeConnection runs while/after Close is tearing down.
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+
 		c.m.Lock()
 		c.isReady = false
 		c.m.Unlock()
@@ -668,7 +707,11 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 
 	c.changeChannel(ch)
 	c.m.Lock()
-	c.isReady = true
+	// Don't flip back to ready if Close already ran: a concurrent Close sets
+	// closed under c.m, and a closed client must stay not-ready.
+	if !c.closed {
+		c.isReady = true
+	}
 	c.m.Unlock()
 
 	// Record channel create event
@@ -679,10 +722,15 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 }
 
 // changeConnection updates the connection and sets up close notifications.
+// The connection/notify fields are written under c.m so a concurrent Close
+// (which reads c.connection under the same lock) cannot race this write.
 func (c *AMQPClientImpl) changeConnection(connection amqpConnection) {
+	c.m.Lock()
 	c.connection = connection
 	c.notifyConnClose = make(chan *amqp.Error, 1)
-	c.connection.NotifyClose(c.notifyConnClose)
+	notify := c.notifyConnClose
+	c.m.Unlock()
+	connection.NotifyClose(notify)
 }
 
 // confirmKey scopes a pending-publish entry to a single channel incarnation.
@@ -710,14 +758,20 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	c.generation++
 	newGen := c.generation
 
+	// Publish the channel pointer under c.m so a concurrent Close (which reads
+	// c.channel under c.m to tear it down) and the c.m-guarded readers in
+	// DeclareQueue/ConsumeFromQueue cannot race this write. Lock order is
+	// publishSerial → c.m, matching PublishToExchange.
+	c.m.Lock()
 	c.channel = channel
+	c.m.Unlock()
 	c.notifyChanClose = make(chan *amqp.Error, 1)
 	// Buffer sized for a reasonable concurrent-publish burst. The dispatcher
 	// goroutine drains it; the broker will block PublishWithContext if this
 	// fills up, providing natural backpressure.
 	c.notifyConfirm = make(chan amqp.Confirmation, defaultConfirmBufferSize)
-	c.channel.NotifyClose(c.notifyChanClose)
-	c.channel.NotifyPublish(c.notifyConfirm)
+	channel.NotifyClose(c.notifyChanClose)
+	channel.NotifyPublish(c.notifyConfirm)
 
 	// Start the dispatcher for this channel incarnation, pinned to newGen
 	// so late confirms from a previous channel (read by the previous
