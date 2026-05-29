@@ -321,6 +321,34 @@ func TestPublisherPublishPreservesCallerHeadersWithTrace(t *testing.T) {
 	assert.False(t, mutated, "Publish must not mutate the caller-supplied headers map")
 }
 
+// TestPublisherPublishPersistsTracestate verifies the optional W3C tracestate
+// rides along with the traceparent into the persisted row when the inbound
+// request carries it — matching the behavior documented in wiki/outbox.md.
+func TestPublisherPublishPersistsTracestate(t *testing.T) {
+	store := &mockStore{}
+	pub := newPublisher(store, "")
+
+	const tracestate = "vendor1=opaqueValue1,vendor2=opaqueValue2"
+	ctx := gobrickstrace.WithTraceState(
+		gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent),
+		tracestate,
+	)
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeOrderCreated,
+		AggregateID: aggregateOrderID,
+		Payload:     []byte("{}"),
+	}
+	_, err := pub.Publish(ctx, &mockTx{}, event)
+	require.NoError(t, err)
+
+	var headers map[string]any
+	require.NoError(t, json.Unmarshal(store.insertedRecords[0].Headers, &headers))
+	assert.Equal(t, inboundTraceparent, headers[gobrickstrace.HeaderTraceParent])
+	assert.Equal(t, tracestate, headers[gobrickstrace.HeaderTraceState],
+		"optional tracestate must be persisted alongside traceparent")
+}
+
 // TestPublisherPublishNoTraceLeavesHeadersUnchanged guards the untraced path:
 // a background publish with no trace context must not gain generated trace
 // headers, preserving existing behavior (nil headers for header-less events).

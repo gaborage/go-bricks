@@ -95,9 +95,10 @@ outbox:
 ## Trace Propagation
 
 Outbox publishes are **trace-equivalent to direct AMQP publishes**: the W3C trace
-context (`traceparent` / `X-Request-ID`) is propagated end-to-end so a single
-trace id spans the originating HTTP request, the persisted outbox row, and the
-downstream consumer's per-message log.
+context (`traceparent` / `X-Request-ID`, plus `tracestate` when the inbound
+request carries it) is propagated end-to-end so a single trace id spans the
+originating HTTP request, the persisted outbox row, and the downstream
+consumer's per-message log.
 
 This requires capture at two points, because the relay runs as a *detached*
 scheduled job whose context carries no inbound trace:
