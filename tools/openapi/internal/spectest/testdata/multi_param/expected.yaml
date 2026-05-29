@@ -1,0 +1,80 @@
+openapi: 3.0.1
+info:
+  title: Org API
+  version: 1.0.0
+  description: Generated API specification
+paths:
+  /orgs/{orgID}/projects/{projectID}:
+    get:
+      operationId: getProject
+      summary: GET /orgs/{orgID}/projects/{projectID}
+      tags:
+        - org
+      parameters:
+        - name: orgID
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          description: Error details with code and message
+        meta:
+          type: object
+          description: Response metadata
+      required:
+        - error
+    GetProjectReq:
+      type: object
+      properties:
+        orgID:
+          type: string
+        projectID:
+          type: string
+      required:
+        - orgID
+        - projectID
+    JOSEErrorEnvelope:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
+        message:
+          type: string
+          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
+      required:
+        - code
+        - message
+    SuccessResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          description: Response data
+        meta:
+          type: object
+          description: Response metadata
