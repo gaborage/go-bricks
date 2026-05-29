@@ -413,6 +413,19 @@ func TestOutboxTracePropagationContinuityAcrossThreeSites(t *testing.T) {
 		"consumer correlation_id must equal the inbound traceparent trace-id, not a fresh random id")
 }
 
+// TestMapHeaderAccessorNilMap exercises the defensive nil-map branches of the
+// accessor's Get/Set (unreachable via marshalHeaders, which always passes a
+// non-nil map, but part of the type's contract and mirrored from the AMQP
+// accessor): Get returns nil, and Set lazily initializes the backing map.
+func TestMapHeaderAccessorNilMap(t *testing.T) {
+	a := &mapHeaderAccessor{} // nil backing map
+
+	assert.Nil(t, a.Get("missing"), "Get on a nil map must return nil, not panic")
+
+	a.Set("k", "v") // must lazily allocate the map
+	assert.Equal(t, "v", a.Get("k"), "Set must initialize the map and store the value")
+}
+
 func TestMarshalPayloadStruct(t *testing.T) {
 	type TestPayload struct {
 		Name string `json:"name"`
