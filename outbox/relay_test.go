@@ -11,6 +11,7 @@ import (
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/scheduler"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 func TestDecodeHeadersEmpty(t *testing.T) {
@@ -221,6 +222,37 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	assert.Equal(t, 1, amqp.PublishCalls)
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls, "MarkFailed not called when only MarkPublished failed")
+}
+
+// TestPublishRecordRehydratesTraceContextForPublish asserts that the relay
+// reconstructs the originating trace context from the persisted row headers and
+// publishes with it. Without this, preparePublishing runs under the relay's
+// trace-less background context and stamps the AMQP CorrelationId (which the
+// consumer's failure-path logger and consume span surface as correlation_id)
+// with a freshly generated UUID, breaking continuity precisely on the error path.
+func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	// A row as persisted by Publish: headers carry the originating trace context.
+	rec := &Record{
+		ID:         "evt-trace",
+		EventType:  "order.created",
+		Exchange:   "orders",
+		RoutingKey: "created",
+		Headers:    []byte(`{"traceparent":"` + inboundTraceparent + `","X-Request-ID":"` + inboundTraceID + `"}`),
+	}
+	require.True(t, r.publishRecord(ctx, db, amqp, rec))
+
+	require.NotNil(t, amqp.LastPublishCtx, "publish context must be captured")
+	tp, ok := gobrickstrace.ParentFromContext(amqp.LastPublishCtx)
+	assert.True(t, ok, "publish context must carry the persisted traceparent")
+	assert.Equal(t, inboundTraceparent, tp)
+	assert.Equal(t, inboundTraceID, gobrickstrace.EnsureTraceID(amqp.LastPublishCtx),
+		"publish context trace id must be the originating trace id, not a fresh one")
 }
 
 func TestMarkRecordFailedLogsButDoesNotPanicOnStoreError(t *testing.T) {

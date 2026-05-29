@@ -703,8 +703,10 @@ func TestNewAMQPClientConstructsAndStarts(t *testing.T) {
 	if c == nil {
 		t.Fatalf("expected client instance")
 	}
-	// Ensure background goroutines are stopped
-	t.Cleanup(func() { _ = c.Close() })
+	// Ensure background goroutines are stopped before the test ends (and before
+	// the deferred setAmqpDialFunc restore), so the reconnect goroutine can't
+	// race a later test through the shared dial func.
+	t.Cleanup(func() { closeAndWaitForReconnect(c) })
 }
 
 // ===== Enhanced Connection Management Tests =====
@@ -1193,7 +1195,7 @@ func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 
 	client := NewAMQPClient(amqpHost, &stubLogger{})
-	defer client.Close() // Prevent goroutine leak
+	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
 	err := client.DeclareQueue(testQueue, true, false, false, false)
@@ -1209,7 +1211,7 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 
 	client := NewAMQPClient(amqpHost, &stubLogger{})
-	defer client.Close() // Prevent goroutine leak
+	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
 	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false)
@@ -1225,7 +1227,7 @@ func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 
 	client := NewAMQPClient(amqpHost, &stubLogger{})
-	defer client.Close() // Prevent goroutine leak
+	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
 	err := client.BindQueue(testQueue, "test-exchange", "test.key", false)
@@ -1241,7 +1243,7 @@ func TestAMQPClientConsumeFromQueueNotReadyError(t *testing.T) {
 	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 
 	client := NewAMQPClient(amqpHost, &stubLogger{})
-	defer client.Close() // Prevent goroutine leak
+	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
 	_, err := client.ConsumeFromQueue(context.Background(), ConsumeOptions{
@@ -1278,6 +1280,7 @@ func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 
 	client := NewAMQPClient(amqpHost, &stubLogger{})
+	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Test init with a connection that fails to create channels
 	mockConn := &stubConn{}
@@ -1286,4 +1289,21 @@ func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no channel")
 	assert.False(t, client.IsReady())
+}
+
+// closeAndWaitForReconnect closes the client and waits for its background
+// reconnection goroutine to fully exit. Without this wait a goroutine leaked
+// from one test can, via the package-global dial func, dial a later test's fake
+// connection and race it. Close itself stays non-blocking in production; this
+// deterministic wait lives only in tests. The timeout is a safety net — with
+// the in-test stub dialers the goroutine exits near-instantly once done closes.
+func closeAndWaitForReconnect(c *AMQPClientImpl) {
+	_ = c.Close()
+	if c.reconnectDone == nil {
+		return
+	}
+	select {
+	case <-c.reconnectDone:
+	case <-time.After(2 * time.Second):
+	}
 }

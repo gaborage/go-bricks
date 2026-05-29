@@ -53,9 +53,21 @@ func (s *stubAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (
 	s.closedMu.Lock()
 	s.consumers++
 	s.closedMu.Unlock()
-	ch := make(chan amqp.Delivery)
-	close(ch)
-	return ch, nil
+	// Return an open delivery channel (never closed) so the consumer supervisor
+	// parks waiting for deliveries instead of treating an immediately-closed
+	// channel as a flap and re-subscribing — which would make consumerCount()
+	// non-deterministic. Tests stop the supervisor via manager.Close().
+	return make(chan amqp.Delivery), nil
+}
+
+// consumerCount returns the number of ConsumeFromQueue calls observed, read
+// under the same lock the counter is written with. The registry's per-consumer
+// supervisor calls ConsumeFromQueue from a background goroutine, so tests must
+// not read s.consumers directly.
+func (s *stubAMQPClient) consumerCount() int {
+	s.closedMu.Lock()
+	defer s.closedMu.Unlock()
+	return s.consumers
 }
 
 func (s *stubAMQPClient) DeclareQueue(string, bool, bool, bool, bool) error            { return nil }
@@ -213,6 +225,7 @@ func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 	client := &stubAMQPClient{}
 	factory := func(string, logger.Logger) AMQPClient { return client }
 	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
 
 	decls := NewDeclarations()
 	decls.RegisterQueue(&QueueDeclaration{Name: genericQueue})
@@ -223,7 +236,7 @@ func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	assert.Equal(t, 1, client.consumers)
+	assert.Equal(t, 1, client.consumerCount())
 }
 
 type mockMessageHandler struct{}
@@ -252,6 +265,7 @@ func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	client := &stubAMQPClient{}
 	factory := func(string, logger.Logger) AMQPClient { return client }
 	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	defer func() { _ = manager.Close() }() // stop supervisor goroutines
 
 	decls := NewDeclarations()
 	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
@@ -261,7 +275,7 @@ func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify that consumer was started
-	assert.Equal(t, 1, client.consumers)
+	assert.Equal(t, 1, client.consumerCount())
 
 	// The actual verification of tenant context injection would require
 	// importing multitenant package and checking the context in the handler

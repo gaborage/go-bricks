@@ -15,6 +15,14 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
+// defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
+// attempts after the broker closes the delivery channel (a connection or
+// channel flap). It mirrors the AMQP client's reconnect delay so consumers do
+// not hammer ConsumeFromQueue while the client is still re-establishing its
+// connection. Overridable per-registry (see Registry.resubscribeDelay) for
+// fast test iteration.
+const defaultConsumerResubscribeDelay = 5 * time.Second
+
 // RegistryInterface defines the contract for messaging infrastructure management.
 // This interface allows for easy mocking and testing of messaging infrastructure.
 type RegistryInterface interface {
@@ -61,6 +69,10 @@ type Registry struct {
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
+	// resubscribeDelay is the backoff between consumer re-subscribe attempts
+	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
+	// tests lower it for fast iteration.
+	resubscribeDelay time.Duration
 }
 
 // ExchangeDeclaration defines an exchange to be declared
@@ -122,14 +134,15 @@ type ConsumerDeclaration struct {
 // NewRegistry creates a new messaging registry
 func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 	return &Registry{
-		client:        client,
-		logger:        log,
-		exchanges:     make(map[string]*ExchangeDeclaration),
-		queues:        make(map[string]*QueueDeclaration),
-		bindings:      make([]*BindingDeclaration, 0),
-		publishers:    make([]*PublisherDeclaration, 0),
-		consumerIndex: make(map[consumerKey]*ConsumerDeclaration),
-		consumerOrder: make([]consumerKey, 0),
+		client:           client,
+		logger:           log,
+		exchanges:        make(map[string]*ExchangeDeclaration),
+		queues:           make(map[string]*QueueDeclaration),
+		bindings:         make([]*BindingDeclaration, 0),
+		publishers:       make([]*PublisherDeclaration, 0),
+		consumerIndex:    make(map[consumerKey]*ConsumerDeclaration),
+		consumerOrder:    make([]consumerKey, 0),
+		resubscribeDelay: defaultConsumerResubscribeDelay,
 	}
 }
 
@@ -433,9 +446,12 @@ func (r *Registry) StopConsumers() {
 	r.logger.Info().Msg("All consumers stopped")
 }
 
-// startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
-func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDeclaration) error {
-	deliveries, err := r.client.ConsumeFromQueue(ctx, ConsumeOptions{
+// consumeOptionsFor builds the ConsumeOptions for a consumer declaration. It is
+// shared by the initial subscription and every re-subscription so the broker
+// re-applies identical settings (QoS/prefetch, consumer tag, ack mode) on the
+// new channel after a reconnect.
+func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptions {
+	return ConsumeOptions{
 		Queue:         consumer.Queue,
 		Consumer:      consumer.Consumer,
 		AutoAck:       consumer.AutoAck,
@@ -443,32 +459,145 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 		NoLocal:       consumer.NoLocal,
 		NoWait:        consumer.NoWait,
 		PrefetchCount: consumer.PrefetchCount,
-	})
+	}
+}
+
+// startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
+// The first subscription is established synchronously so an unreachable broker
+// fails startup (fail-fast); the supervisor goroutine then keeps the consumer
+// alive across broker reconnects (see superviseConsumer).
+func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDeclaration) error {
+	deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer))
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue %s: %w", consumer.Queue, err)
 	}
 
-	// Start goroutine to handle messages
-	go r.handleMessages(ctx, consumer, deliveries)
+	// Supervise the subscription so it survives AMQP reconnects: when the broker
+	// closes the delivery channel (connection/channel flap), superviseConsumer
+	// re-subscribes on the client's new channel instead of leaving the queue
+	// with zero consumers until a process restart.
+	go r.superviseConsumer(ctx, consumer, deliveries)
 
 	return nil
 }
 
-// handleMessages processes messages from a consumer and routes them to the handler.
-// v0.17+: Spawns a worker pool for concurrent message processing.
-func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
+// superviseConsumer runs consumer sessions back-to-back, re-subscribing after
+// the broker drops the delivery channel, until the consumer context is
+// cancelled (StopConsumers / shutdown). This is the consumer-side counterpart
+// to the client's reconnection supervisor: the publisher path recovers because
+// every publish re-reads the live channel under lock, whereas a consumer
+// captures its delivery channel once, so it needs an explicit re-subscribe.
+func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
+	for {
+		// Run one subscription session until the delivery channel closes
+		// (reconnect needed) or the context is cancelled (stop for good).
+		sessionStart := time.Now()
+		if !r.handleMessages(ctx, consumer, deliveries) {
+			return // context cancelled → stop for good
+		}
+
+		// Rapid-flap guard: if the session barely lasted, the broker is handing
+		// back channels that close almost immediately. Pace re-subscribes by the
+		// backoff floor so this can't become a tight loop. A healthy (long-lived)
+		// session falls through and re-subscribes immediately for fast recovery.
+		if elapsed := time.Since(sessionStart); elapsed < r.resubscribeDelay {
+			if !sleepCtx(ctx, r.resubscribeDelay-elapsed) {
+				return
+			}
+		}
+
+		next, ok := r.resubscribe(ctx, consumer)
+		if !ok {
+			return // context cancelled while waiting to re-subscribe
+		}
+		deliveries = next
+	}
+}
+
+// sleepCtx waits for d, or until ctx is cancelled, whichever comes first. It
+// returns true if the full duration elapsed and false if ctx was cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// consumerLogFields returns the base structured-log fields identifying a
+// consumer, shared by the session, worker, and re-subscribe log contexts so the
+// field keys are defined in exactly one place.
+func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
+	return map[string]any{
+		genericQueue:     consumer.Queue,
+		genericConsumer:  consumer.Consumer,
+		genericEventType: consumer.EventType,
+	}
+}
+
+// resubscribe re-establishes a consumer subscription after the delivery channel
+// closed. It attempts immediately so a routine channel-only flap (the client's
+// connection is still up) recovers without added downtime, then on failure
+// backs off with full jitter before retrying, until ConsumeFromQueue succeeds
+// or the context is cancelled. Returns (channel, true) on success and
+// (nil, false) on cancellation.
+//
+// A success-then-immediately-closing channel cannot become a tight spin: the
+// client only hands out a fresh usable channel via its own reconnect supervisor
+// (handleReInit, paced by reInitDelay), and while the client is not ready
+// ConsumeFromQueue returns errNotConnected, which takes the backoff path below.
+func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration) (<-chan amqp.Delivery, bool) {
+	log := r.logger.WithFields(consumerLogFields(consumer))
+
+	for attempt := 1; ; attempt++ {
+		// Stop promptly if we're shutting down before trying again.
+		if ctx.Err() != nil {
+			return nil, false
+		}
+
+		deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer))
+		if err == nil {
+			log.Info().Int("attempt", attempt).
+				Msg("Consumer re-subscribed after delivery channel closed")
+			return deliveries, true
+		}
+
+		// errNotConnected is expected while the client is still reconnecting;
+		// log at debug to avoid noise during a flap. Full-jitter backoff (the
+		// client's own computeBackoff) bounds the loop and, on a broker restart
+		// that drops every consumer at once, spreads the herd of re-subscribe
+		// attempts instead of having all consumers retry in lockstep.
+		backoff := computeBackoff(r.resubscribeDelay, defaultReconnectMaxDelay, attempt)
+		log.Debug().Err(err).Int("attempt", attempt).Dur("backoff", backoff).
+			Msg("Consumer re-subscribe attempt failed, will retry")
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// handleMessages runs a single consumer session: it spawns a worker pool
+// (v0.17+) and feeds deliveries to it until the session ends. It returns true
+// when the broker closed the delivery channel (the caller should re-subscribe)
+// and false when the context was cancelled (shut down for good).
+func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) bool {
 	workers := consumer.Workers
 	if workers <= 0 {
 		workers = 1 // Fallback (should not happen with smart defaults)
 	}
 
-	log := r.logger.WithFields(map[string]any{
-		"queue":      consumer.Queue,
-		"consumer":   consumer.Consumer,
-		"event_type": consumer.EventType,
-		"workers":    workers,
-		"prefetch":   consumer.PrefetchCount,
-	})
+	fields := consumerLogFields(consumer)
+	fields["workers"] = workers
+	fields["prefetch"] = consumer.PrefetchCount
+	log := r.logger.WithFields(fields)
 
 	log.Info().Msg("Message handler started with worker pool")
 
@@ -486,24 +615,34 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 		go r.worker(ctx, consumer, jobs, i, &wg)
 	}
 
-	// Main loop: feed jobs to worker pool
-	func() {
+	// Main loop: feed jobs to worker pool. reconnect=true means the broker
+	// closed the delivery channel (the caller should re-subscribe); false means
+	// the context was cancelled (shut down for good).
+	reconnect := func() bool {
 		for {
 			select {
 			case <-ctx.Done():
 				log.Info().Msg("Consumer context cancelled, stopping message handler")
-				return
+				return false
 
 			case delivery, ok := <-deliveries:
 				if !ok {
-					log.Warn().Msg("Delivery channel closed, stopping message handler")
-					return
+					log.Warn().Msg("Delivery channel closed, will re-subscribe")
+					return true
 				}
 
 				// Create local copy to avoid pointer capture bug (loop variable reuse)
 				d := delivery
-				// Send to worker pool (blocks if all workers busy)
-				jobs <- &d
+				// Send to the worker pool, but also honor cancellation: without
+				// the ctx.Done() arm the feed loop could block forever on a full
+				// buffer after workers have already exited on shutdown, leaking
+				// this goroutine (and the supervisor that owns it).
+				select {
+				case jobs <- &d:
+				case <-ctx.Done():
+					log.Info().Msg("Consumer context cancelled, stopping message handler")
+					return false
+				}
 			}
 		}
 	}()
@@ -512,6 +651,7 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 	close(jobs)
 	wg.Wait()
 	log.Info().Msg("All workers stopped gracefully")
+	return reconnect
 }
 
 // worker processes messages from the jobs channel concurrently.
@@ -519,12 +659,9 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jobs <-chan *amqp.Delivery, workerID int, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	log := r.logger.WithFields(map[string]any{
-		"queue":      consumer.Queue,
-		"consumer":   consumer.Consumer,
-		"event_type": consumer.EventType,
-		"worker_id":  workerID,
-	})
+	fields := consumerLogFields(consumer)
+	fields["worker_id"] = workerID
+	log := r.logger.WithFields(fields)
 
 	log.Debug().Msg("Worker started")
 

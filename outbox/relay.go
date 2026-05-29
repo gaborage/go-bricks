@@ -8,6 +8,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/scheduler"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // Relay is a scheduler.Executor that polls for pending outbox events
@@ -83,13 +84,20 @@ func (r *Relay) publishRecord(ctx scheduler.JobContext, db dbtypes.Interface, ms
 	headers["x-outbox-event-id"] = record.ID
 	headers["x-outbox-event-type"] = record.EventType
 
+	// Rehydrate the originating trace context (persisted by Publish) into the
+	// publish context. The relay job runs detached with no ambient trace, so
+	// without this the downstream preparePublishing would stamp a freshly
+	// generated CorrelationId — which the consumer's failure-path logger and
+	// consume span surface — breaking trace continuity on the error path.
+	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: headers})
+
 	opts := messaging.PublishOptions{
 		Exchange:   record.Exchange,
 		RoutingKey: record.RoutingKey,
 		Headers:    headers,
 	}
 
-	if err := msgClient.PublishToExchange(ctx, opts, record.Payload); err != nil {
+	if err := msgClient.PublishToExchange(pubCtx, opts, record.Payload); err != nil {
 		r.markRecordFailed(ctx, db, record.ID, err.Error())
 		return false
 	}

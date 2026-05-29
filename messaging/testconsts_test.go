@@ -100,11 +100,12 @@ const (
 	tenant2ID    = "tenant2"
 	testTenantID = "test-tenant"
 
-	// Generic identifiers (short forms)
-	genericQueue    = "queue"
-	genericConsumer = "consumer"
-	genericError    = "error"
-	genericEx       = "ex"
+	// Generic identifiers (short forms). genericQueue, genericConsumer, and
+	// genericEventType now live in constants.go (production) so registry.go
+	// shares the same structured-log field keys; tests still reference them via
+	// package scope.
+	genericError = "error"
+	genericEx    = "ex"
 
 	// Event types
 	eventTestEvent = "TestEvent"
