@@ -9,6 +9,14 @@ import (
 	"github.com/gaborage/go-bricks/jose"
 )
 
+// Fixed kid strings for the bidirectional fixture. Production VTS-style
+// integrations use matching kid names on both ends, so header kids on a sealed
+// payload must equal the receiver's expected kid for ExpectedKid validation.
+const (
+	clientKid = "client-key"
+	peerKid   = "peer-key"
+)
+
 // GenerateTestKeyPair returns a freshly-minted 2048-bit RSA key pair suitable for
 // JOSE round-trip tests. The smaller key size is chosen for test speed — production
 // keystores should use 3072+ bits.
@@ -75,8 +83,8 @@ func NewBidirectionalFixture(t testing.TB) *BidirectionalFixture {
 	clientPriv, _ := GenerateTestKeyPair(t)
 	peerPriv, _ := GenerateTestKeyPair(t)
 	resolver := NewTestResolver(map[string]any{
-		"client-key": clientPriv,
-		"peer-key":   peerPriv,
+		clientKid: clientPriv,
+		peerKid:   peerPriv,
 	})
 	mkOut := func(signKid, encKid string) *jose.Policy {
 		return &jose.Policy{
@@ -98,10 +106,10 @@ func NewBidirectionalFixture(t testing.TB) *BidirectionalFixture {
 		ClientPrivate:  clientPriv,
 		PeerPrivate:    peerPriv,
 		Resolver:       resolver,
-		ClientOutbound: mkOut("client-key", "peer-key"),
-		ClientInbound:  mkIn("client-key", "peer-key"),
-		PeerOutbound:   mkOut("peer-key", "client-key"),
-		PeerInbound:    mkIn("peer-key", "client-key"),
+		ClientOutbound: mkOut(clientKid, peerKid),
+		ClientInbound:  mkIn(clientKid, peerKid),
+		PeerOutbound:   mkOut(peerKid, clientKid),
+		PeerInbound:    mkIn(peerKid, clientKid),
 	}
 }
 

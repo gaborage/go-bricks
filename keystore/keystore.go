@@ -62,6 +62,10 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
+// errKeyNotFoundFmt is the fmt.Errorf format used by every accessor when a
+// logical key name is absent from the store (%q = the requested name).
+const errKeyNotFoundFmt = "keystore: key %q not found"
+
 // keyEntry holds the parsed material for one logical name: either an RSA pair
 // (public set, private optional) or a symmetric secret. The two are mutually
 // exclusive — the config layer rejects mixed entries before newStore runs.
@@ -81,7 +85,7 @@ type store struct {
 func (s *store) PublicKey(name string) (*rsa.PublicKey, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf("keystore: key %q not found", name)
+		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
 	}
 	if kp.public == nil {
 		return nil, fmt.Errorf("keystore: key %q has no public key configured", name)
@@ -93,7 +97,7 @@ func (s *store) PublicKey(name string) (*rsa.PublicKey, error) {
 func (s *store) PrivateKey(name string) (*rsa.PrivateKey, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf("keystore: key %q not found", name)
+		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
 	}
 	if kp.private == nil {
 		return nil, fmt.Errorf("keystore: key %q has no private key configured", name)
@@ -106,7 +110,7 @@ func (s *store) PrivateKey(name string) (*rsa.PrivateKey, error) {
 func (s *store) Secret(name string) ([]byte, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf("keystore: key %q not found", name)
+		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
 	}
 	if kp.secret == nil {
 		return nil, fmt.Errorf("keystore: key %q has no symmetric secret configured", name)
