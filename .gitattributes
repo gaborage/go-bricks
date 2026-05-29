@@ -1,0 +1,6 @@
+# Golden OpenAPI specs are compared by the openapi tool's round-trip harness
+# (tools/openapi/internal/spectest). The generator always emits LF, so pin the
+# goldens to LF on checkout to keep the comparison stable on Windows, where git
+# autocrlf would otherwise rewrite them to CRLF. The harness also normalizes
+# line endings defensively, but this keeps the working tree and diffs clean.
+tools/openapi/internal/spectest/testdata/**/*.yaml text eol=lf

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,9 +22,10 @@ const (
 
 // TestGoldenFixtures runs every testdata/<case>/ project through the full
 // analyze->generate pipeline, validates the emitted document as OpenAPI 3.0,
-// and compares it byte-for-byte against the checked-in golden file. This is the
-// regression net every later generator change relies on: a fidelity fix shows up
-// as a reviewable golden diff, and a structural regression fails Validate.
+// and compares it (line-ending-normalized) against the checked-in golden file.
+// This is the regression net every later generator change relies on: a fidelity
+// fix shows up as a reviewable golden diff, and a structural regression fails
+// Validate.
 func TestGoldenFixtures(t *testing.T) {
 	entries, err := os.ReadDir(testdataDir)
 	require.NoError(t, err)
@@ -53,12 +55,20 @@ func TestGoldenFixtures(t *testing.T) {
 
 			want, readErr := os.ReadFile(goldenPath)
 			require.NoError(t, readErr, "missing golden file; run `go test ./internal/spectest -update`")
-			assert.Equal(t, string(want), spec,
+			// Compare with line endings normalized: the generator always emits LF,
+			// but git may check the golden out with CRLF on Windows (autocrlf).
+			assert.Equal(t, normalizeEOL(string(want)), normalizeEOL(spec),
 				"generated spec drifted from golden; run `go test ./internal/spectest -update` to refresh")
 		})
 	}
 
 	require.Positive(t, ran, "no fixtures found under testdata/")
+}
+
+// normalizeEOL collapses CRLF to LF so golden comparisons are stable across
+// platforms. The generator emits LF; only the checked-out golden can carry CRLF.
+func normalizeEOL(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 // TestValidateRejectsMalformedSpec locks the negative arm of Validate so the
