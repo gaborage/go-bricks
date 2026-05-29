@@ -1,0 +1,21 @@
+# Redocly lint configuration for go-bricks-openapi generated specs.
+#
+# This is a belt-and-suspenders CI gate. The PRIMARY structural gate is the
+# in-process kin-openapi validation in internal/spectest (deterministic, no
+# network/toolchain). Redocly runs in CI on a generated fixture spec and fails
+# the build on ERRORs only.
+#
+# Rules covering spec features the generator does not emit YET are relaxed here
+# and re-enabled by the PR that implements the feature, so the gate tightens
+# over time without ever blocking an intermediate, self-contained PR:
+#   no-empty-servers    -> re-enable when a `servers:` block is emitted (PR10)
+#   security-defined     -> re-enable when security schemes are emitted (PR10)
+#   no-unused-components -> re-enable when JOSEErrorEnvelope is gated (PR10)
+#   info-license         -> re-enable when --license is supported (PR12)
+extends:
+  - recommended
+rules:
+  no-empty-servers: off
+  security-defined: off
+  no-unused-components: off
+  info-license: off
