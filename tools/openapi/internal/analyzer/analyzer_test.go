@@ -2387,7 +2387,7 @@ func (h *Handler) actualHandler() {}`,
 			require.NoError(t, err, "Failed to parse file")
 
 			analyzer := New(tempDir)
-			reqType, respType, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, false, tt.handlerName)
+			reqType, respType, _, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, false, tt.handlerName)
 
 			if tt.shouldFindHandler {
 				require.NoError(t, err, tt.description)
@@ -3546,4 +3546,143 @@ func (m *Module) h(ctx srv.HandlerContext) (srv.Result[int], srv.IAPIError) { re
 	got := routePathSet(routes)
 	assert.True(t, got["GET /a"], "route registered via an aliased server import is discovered")
 	assert.True(t, got["POST /b"], "helper with an aliased RouteRegistrar param is recursed")
+}
+
+// routeForPath returns the first route matching "METHOD /path", or fails.
+func routeForPath(t *testing.T, routes []models.Route, key string) models.Route {
+	t.Helper()
+	for i := range routes {
+		if routes[i].Method+" "+routes[i].Path == key {
+			return routes[i]
+		}
+	}
+	t.Fatalf("route %q not found", key)
+	return models.Route{}
+}
+
+// TestExtractSuccessStatusFromConstructors verifies the handler-body inspection
+// maps each result constructor to the right HTTP status, stamped on the route.
+func TestExtractSuccessStatusFromConstructors(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) created(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) accepted(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Accepted(Thing{}), nil }
+func (m *Module) okConst(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(http.StatusOK, Thing{}), nil }
+func (m *Module) acceptedConst(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(http.StatusAccepted, Thing{}), nil }
+func (m *Module) custom(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.NewResult(207, Thing{}), nil }
+func (m *Module) noContent(ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) { return server.NoContent(), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/created", m.created)
+	server.POST(hr, r, "/accepted", m.accepted)
+	server.GET(hr, r, "/ok", m.okConst)
+	server.POST(hr, r, "/accepted-const", m.acceptedConst)
+	server.PUT(hr, r, "/custom", m.custom)
+	server.DELETE(hr, r, "/no-content", m.noContent)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	assert.Equal(t, 201, routeForPath(t, routes, "POST /created").SuccessStatus)
+	assert.Equal(t, 202, routeForPath(t, routes, "POST /accepted").SuccessStatus)
+	// http.StatusXxx constants (the idiomatic real-world form) must resolve, not
+	// just bare integer literals.
+	assert.Equal(t, 200, routeForPath(t, routes, "GET /ok").SuccessStatus)
+	assert.Equal(t, 202, routeForPath(t, routes, "POST /accepted-const").SuccessStatus)
+	assert.Equal(t, 207, routeForPath(t, routes, "PUT /custom").SuccessStatus)
+	// NoContentResult is detected via the response type (signature), not the body;
+	// SuccessStatus stays 0 and the generator derives 204 from NoContent.
+	noContent := routeForPath(t, routes, "DELETE /no-content")
+	require.NotNil(t, noContent.Response)
+	assert.True(t, noContent.Response.NoContent, "NoContentResult response must carry NoContent=true")
+}
+
+// TestRawResponseAndHandlerNameMetadata verifies WithRawResponse and
+// WithHandlerName route options are parsed onto the route.
+func TestRawResponseAndHandlerNameMetadata(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) raw(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) named(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) { return server.Created(Thing{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/raw", m.raw, server.WithRawResponse())
+	server.GET(hr, r, "/named", m.named, server.WithHandlerName("customOp"))
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	raw := routeForPath(t, routes, "GET /raw")
+	assert.True(t, raw.RawResponse, "WithRawResponse() must set RawResponse")
+	assert.Equal(t, "customOp", routeForPath(t, routes, "GET /named").HandlerName,
+		"WithHandlerName must override the operationId source")
+}
+
+// TestExtractSuccessStatusLastWins confirms that when a handler returns a server
+// constructor from an early guard branch and a different one from the terminal
+// happy path, the terminal (last) return is the documented status.
+func TestExtractSuccessStatusLastWins(t *testing.T) {
+	src := `package mod
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Thing struct{ ID int64 ` + "`json:\"id\"`" + ` }
+func (m *Module) upsert(ctx server.HandlerContext) (server.Result[Thing], server.IAPIError) {
+	if false {
+		return server.NewResult(http.StatusOK, Thing{}), nil
+	}
+	return server.Created(Thing{}), nil
+}
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/upsert", m.upsert)
+}
+`
+	_, routes := analyzeSingleModule(t, src)
+	assert.Equal(t, 201, routeForPath(t, routes, "POST /upsert").SuccessStatus,
+		"terminal happy-path return (Created/201) wins over the earlier guard return")
+}
+
+// TestStatusForConstructorEdgeCases locks the non-route-driven branches of the
+// constructor->status mapping: unrecognized constructors and NewResult with a
+// non-resolvable status argument both fall through to 0 ("use the default").
+func TestStatusForConstructorEdgeCases(t *testing.T) {
+	intLit := &ast.BasicLit{Kind: token.INT, Value: "418"}
+	identArg := &ast.Ident{Name: "code"}
+	// http.StatusAccepted -> SelectorExpr{X: http, Sel: StatusAccepted}
+	httpConst := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusAccepted"}}
+	// fmt.Sprint -> a non-http selector must NOT be mistaken for a status constant.
+	otherConst := &ast.SelectorExpr{X: &ast.Ident{Name: "fmt"}, Sel: &ast.Ident{Name: "Sprint"}}
+	// http.StatusTeapot is not in the 2xx success map -> 0.
+	unknownHTTP := &ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "StatusTeapot"}}
+
+	assert.Equal(t, 0, statusForConstructor("Unknown", nil), "unrecognized constructor -> 0")
+	assert.Equal(t, 0, statusForConstructor("OK", nil), "server.OK does not exist -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", nil), "NewResult with no args -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{identArg}), "NewResult with a variable status -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{otherConst}), "non-http selector -> 0")
+	assert.Equal(t, 0, statusForConstructor("NewResult", []ast.Expr{unknownHTTP}), "non-2xx http constant -> 0")
+	assert.Equal(t, 418, statusForConstructor("NewResult", []ast.Expr{intLit}), "NewResult with int literal -> that status")
+	assert.Equal(t, 202, statusForConstructor("NewResultWithMeta", []ast.Expr{httpConst}), "NewResultWithMeta with http.StatusAccepted -> 202")
+	assert.Equal(t, 204, statusForConstructor("NoContent", nil))
 }

@@ -2,6 +2,8 @@
 package health
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -24,5 +26,5 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 func ping(ctx server.HandlerContext) (server.Result[PingResponse], server.IAPIError) {
-	return server.OK(PingResponse{}), nil
+	return server.NewResult(http.StatusOK, PingResponse{}), nil
 }

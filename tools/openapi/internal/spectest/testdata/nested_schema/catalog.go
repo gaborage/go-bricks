@@ -3,6 +3,8 @@
 package catalog
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -53,5 +55,5 @@ func (m *Module) createUser(req CreateUserReq, ctx server.HandlerContext) (serve
 }
 
 func (m *Module) listCategories(ctx server.HandlerContext) (server.Result[Category], server.IAPIError) {
-	return server.OK(Category{}), nil
+	return server.NewResult(http.StatusOK, Category{}), nil
 }

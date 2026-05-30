@@ -3,6 +3,8 @@
 package storefront
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -12,9 +14,9 @@ const apiBase = "/api"
 // Module is the storefront module.
 type Module struct{}
 
-func (m *Module) Name() string                    { return "storefront" }
-func (m *Module) Init(d *app.ModuleDeps) error    { return nil }
-func (m *Module) Shutdown() error                 { return nil }
+func (m *Module) Name() string                 { return "storefront" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error              { return nil }
 
 // Item is the storefront item resource.
 type Item struct {
@@ -49,10 +51,18 @@ func (m *Module) registerItemWrites(hr *server.HandlerRegistry, r server.RouteRe
 	server.POST(hr, r, "/items", m.createItem, server.WithTags("items"))
 }
 
-func (m *Module) listItems(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) { return server.OK(Item{}), nil }
-func (m *Module) stats(ctx server.HandlerContext) (server.Result[Item], server.IAPIError)     { return server.OK(Item{}), nil }
-func (m *Module) health(ctx server.HandlerContext) (server.Result[Item], server.IAPIError)    { return server.OK(Item{}), nil }
-func (m *Module) version(ctx server.HandlerContext) (server.Result[Item], server.IAPIError)   { return server.OK(Item{}), nil }
+func (m *Module) listItems(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Item{}), nil
+}
+func (m *Module) stats(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Item{}), nil
+}
+func (m *Module) health(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Item{}), nil
+}
+func (m *Module) version(ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
+	return server.NewResult(http.StatusOK, Item{}), nil
+}
 func (m *Module) createItem(req Item, ctx server.HandlerContext) (server.Result[Item], server.IAPIError) {
 	return server.Created(Item{}), nil
 }

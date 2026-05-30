@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
@@ -26,6 +27,7 @@ const (
 	frameworkTypeError          = "error"
 	frameworkPkgServer          = "server"
 	frameworkPkgApp             = "app"
+	stdlibPkgHTTP               = "http"
 	frameworkTypeModuleDeps     = "ModuleDeps"
 
 	// Framework response wrappers. Result[R] / ResultWithMeta[R] are unwrapped to
@@ -587,7 +589,7 @@ func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]stri
 		Tags:   []string{},
 		Path:   normalizePath(prefix + rawPath),
 	}
-	route.HandlerName, route.Request, route.Response = w.a.extractHandlerInfo(call, w.astFile, w.filePath, w.structName)
+	route.HandlerName, route.Request, route.Response, route.SuccessStatus = w.a.extractHandlerInfo(call, w.astFile, w.filePath, w.structName)
 	for i := 4; i < len(call.Args); i++ {
 		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
 	}
@@ -751,27 +753,27 @@ func (a *ProjectAnalyzer) extractHandlerInfo(
 	astFile *ast.File,
 	filePath string,
 	structName string,
-) (handlerName string, reqType, respType *models.TypeInfo) {
+) (handlerName string, reqType, respType *models.TypeInfo, successStatus int) {
 	if len(callExpr.Args) <= 3 {
-		return "", nil, nil
+		return "", nil, nil, 0
 	}
 
 	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(callExpr.Args[3], structName, astFile, filePath)
 	if !ok {
-		return "", nil, nil
+		return "", nil, nil, 0
 	}
 
 	// Extract handler signature if we have required context.
 	if astFile != nil && filePath != "" {
-		req, resp, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
+		req, resp, status, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
 		if err != nil {
 			// Don't fail — some routes use inline or external handlers.
-			return handlerName, nil, nil
+			return handlerName, nil, nil, 0
 		}
-		return handlerName, req, resp
+		return handlerName, req, resp, status
 	}
 
-	return handlerName, nil, nil
+	return handlerName, nil, nil, 0
 }
 
 // resolveHandler determines the handler name and where to find its signature from
@@ -875,6 +877,12 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 		route.Summary = a.extractStringFromFirstArg(callExpr)
 	case "WithDescription":
 		route.Description = a.extractStringFromFirstArg(callExpr)
+	case "WithHandlerName":
+		if name := a.extractStringFromFirstArg(callExpr); name != "" {
+			route.HandlerName = name
+		}
+	case "WithRawResponse":
+		route.RawResponse = true
 	}
 }
 
@@ -1495,7 +1503,7 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 	receiverType string,
 	isPackageFunc bool,
 	handlerName string,
-) (requestType, responseType *models.TypeInfo) {
+) (requestType, responseType *models.TypeInfo, successStatus int) {
 	for _, decl := range astFile.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
 		if !ok || funcDecl.Name.Name != handlerName {
@@ -1510,11 +1518,111 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 		// Extract types using helpers
 		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
 		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name)
+		status := extractSuccessStatus(funcDecl)
 
-		return requestType, responseType
+		return requestType, responseType, status
 	}
 
-	return nil, nil
+	return nil, nil, 0
+}
+
+// extractSuccessStatus inspects a handler body for the result constructor used in
+// its return statements and maps it to an HTTP success status: server.Created ->
+// 201, Accepted -> 202, NoContent -> 204, NewResult(s, ...)/
+// NewResultWithMeta(s, ...) -> s (when s is an integer literal or an http.StatusXxx
+// constant). Returns 0 ("use the default" -> 200) when no recognizable server
+// constructor is returned.
+//
+// The LAST recognized return wins: idiomatic handlers put the happy-path return
+// last and any earlier server-constructor returns are typically guard branches
+// (e.g. a cache-hit early return), so the terminal status is the documented one.
+// The "server" qualifier is matched literally, consistent with the rest of the
+// type-resolution path (isResultWrapper, NoContentResult).
+func extractSuccessStatus(funcDecl *ast.FuncDecl) int {
+	if funcDecl.Body == nil {
+		return 0
+	}
+	status := 0
+	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) == 0 {
+			return true
+		}
+		call, ok := ret.Results[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != frameworkPkgServer {
+			return true
+		}
+		if s := statusForConstructor(sel.Sel.Name, call.Args); s != 0 {
+			status = s // last-wins: keep scanning, terminal return is authoritative
+		}
+		return true
+	})
+	return status
+}
+
+// statusForConstructor maps a server result-constructor name to its HTTP status.
+// For NewResult/NewResultWithMeta the status is the first argument resolved via
+// statusFromArg (an integer literal or an http.StatusXxx constant). Returns 0 for
+// anything unrecognized.
+func statusForConstructor(name string, args []ast.Expr) int {
+	switch name {
+	case "Created":
+		return 201
+	case "Accepted":
+		return 202
+	case "NoContent":
+		return 204
+	case "NewResult", "NewResultWithMeta":
+		if len(args) > 0 {
+			return statusFromArg(args[0])
+		}
+	}
+	return 0
+}
+
+// statusFromArg resolves the status argument of NewResult/NewResultWithMeta. It
+// accepts a bare integer literal (NewResult(201, ...)) and the idiomatic
+// net/http status constant (NewResult(http.StatusCreated, ...)), which is the
+// dominant real-world form. Returns 0 when the argument is anything else (a
+// variable, a non-http constant), letting the caller fall back to the default.
+func statusFromArg(arg ast.Expr) int {
+	switch a := arg.(type) {
+	case *ast.BasicLit:
+		if a.Kind == token.INT {
+			if v, err := strconv.Atoi(a.Value); err == nil {
+				return v
+			}
+		}
+	case *ast.SelectorExpr:
+		if pkg, ok := a.X.(*ast.Ident); ok && pkg.Name == stdlibPkgHTTP {
+			return httpStatusConstants[a.Sel.Name]
+		}
+	}
+	return 0
+}
+
+// httpStatusConstants maps the net/http 2xx status-constant names to their codes.
+// Only success codes are needed: a handler returning a 4xx/5xx as a non-error
+// Result is a misuse the generator does not try to model as a success response.
+var httpStatusConstants = map[string]int{
+	"StatusOK":                   200,
+	"StatusCreated":              201,
+	"StatusAccepted":             202,
+	"StatusNonAuthoritativeInfo": 203,
+	"StatusNoContent":            204,
+	"StatusResetContent":         205,
+	"StatusPartialContent":       206,
+	"StatusMultiStatus":          207,
+	"StatusAlreadyReported":      208,
+	"StatusIMUsed":               226,
 }
 
 // handlerReceiverMatches reports whether a function declaration's receiver matches
@@ -1539,29 +1647,29 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	receiverType string,
 	isPackageFunc bool,
 	handlerName string,
-) (reqType, respType *models.TypeInfo, err error) {
+) (reqType, respType *models.TypeInfo, successStatus int, err error) {
 	// Try current file first
-	if reqType, respType := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
+	if reqType, respType, status := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 		a.populateTypeFields(reqType, astFile, filePath)
 		a.populateTypeFields(respType, astFile, filePath)
-		return reqType, respType, nil
+		return reqType, respType, status, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if reqType, respType := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
+			if reqType, respType, status := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 				a.populateTypeFields(reqType, file, filePath)
 				a.populateTypeFields(respType, file, filePath)
-				return reqType, respType, nil
+				return reqType, respType, status, nil
 			}
 		}
 	}
 
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
-	return nil, nil, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
+	return nil, nil, 0, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
 // populateTypeFields populates a request/response TypeInfo's fields and registers
