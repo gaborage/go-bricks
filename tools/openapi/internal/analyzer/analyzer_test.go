@@ -3746,3 +3746,177 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	assert.Empty(t, byJSON["addrs"].RefName, "a map field is never a whole-field $ref")
 	assert.Empty(t, byJSON["tags"].MapValueRefName, "primitive-valued map has no value ref")
 }
+
+// fieldJSONNames returns the set of JSON names on a registered type's fields.
+func fieldJSONNames(t *testing.T, a *ProjectAnalyzer, typeName string) map[string]bool {
+	t.Helper()
+	ti := a.typeRegistry[typeName]
+	require.NotNil(t, ti, "type %q must be registered", typeName)
+	out := map[string]bool{}
+	for i := range ti.Fields {
+		out[ti.Fields[i].JSONName] = true
+	}
+	return out
+}
+
+// TestEmbeddedPromotion covers value/pointer promotion and json-tagged nesting.
+func TestEmbeddedPromotion(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Base struct { ID int64 ` + "`json:\"id\"`" + `; CreatedAt string ` + "`json:\"createdAt\"`" + ` }
+type User struct { Base; Name string ` + "`json:\"name\"`" + ` }
+type Account struct { *Base; Balance int64 ` + "`json:\"balance\"`" + ` }
+type Wrapper struct { Base ` + "`json:\"base\"`" + `; Label string ` + "`json:\"label\"`" + ` }
+func (m *Module) u(ctx server.HandlerContext) (server.Result[User], server.IAPIError) { return server.Created(User{}), nil }
+func (m *Module) a(ctx server.HandlerContext) (server.Result[Account], server.IAPIError) { return server.Created(Account{}), nil }
+func (m *Module) w(ctx server.HandlerContext) (server.Result[Wrapper], server.IAPIError) { return server.Created(Wrapper{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/u", m.u)
+	server.GET(hr, r, "/a", m.a)
+	server.GET(hr, r, "/w", m.w)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+
+	user := fieldJSONNames(t, a, "User")
+	assert.True(t, user["id"] && user["createdAt"], "value-embedded Base fields must be promoted")
+	assert.True(t, user["name"], "own field present")
+
+	acct := fieldJSONNames(t, a, "Account")
+	assert.True(t, acct["id"] && acct["createdAt"], "pointer-embedded *Base fields must be promoted")
+	assert.True(t, acct["balance"])
+
+	wrap := fieldJSONNames(t, a, "Wrapper")
+	assert.True(t, wrap["base"], "json-tagged embedding nests under the tag name, not promoted")
+	assert.False(t, wrap["id"], "json-tagged embedding must NOT promote the embedded fields")
+	assert.True(t, wrap["label"])
+	wf := a.typeRegistry["Wrapper"]
+	var baseField *models.FieldInfo
+	for i := range wf.Fields {
+		if wf.Fields[i].JSONName == "base" {
+			baseField = &wf.Fields[i]
+		}
+	}
+	require.NotNil(t, baseField)
+	assert.Equal(t, "Base", baseField.RefName, "nested embedding is a $ref to the embedded type")
+	_, ok := a.typeRegistry["Base"]
+	assert.True(t, ok, "nested-embedded Base is registered as a component")
+}
+
+// TestEmbeddedSelfReferenceTerminates ensures a self-embedded type does not loop.
+func TestEmbeddedSelfReferenceTerminates(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Node struct { *Node; Val int ` + "`json:\"val\"`" + ` }
+func (m *Module) n(ctx server.HandlerContext) (server.Result[Node], server.IAPIError) { return server.Created(Node{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/n", m.n)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	node := fieldJSONNames(t, a, "Node")
+	assert.True(t, node["val"], "non-embedded field survives")
+	assert.Len(t, a.typeRegistry["Node"].Fields, 1, "self-embed is skipped (only Val remains), no infinite loop")
+}
+
+// TestEmbeddedCrossPackageDoesNotCrash ensures an unresolvable embedded type is
+// skipped gracefully (cross-package resolution is PR9).
+func TestEmbeddedCrossPackageDoesNotCrash(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+	"example.com/other"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Foo struct { other.Bar; X int ` + "`json:\"x\"`" + ` }
+func (m *Module) f(ctx server.HandlerContext) (server.Result[Foo], server.IAPIError) { return server.Created(Foo{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/f", m.f)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	foo := fieldJSONNames(t, a, "Foo")
+	assert.True(t, foo["x"], "own field present despite unresolvable embedded type")
+	assert.Len(t, a.typeRegistry["Foo"].Fields, 1, "unresolvable embedded type is skipped, not crashed")
+}
+
+// TestEmbeddedFieldPrecedence locks encoding/json's shallower-wins rule: a
+// parent's own field beats a promoted (embedded) field of the same JSON name,
+// regardless of declaration order. Also covers json:"-" exclusion and a
+// name-less (",omitempty") embed still promoting.
+func TestEmbeddedFieldPrecedence(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Base struct { Tag string ` + "`json:\"tag\"`" + `; Only string ` + "`json:\"only\"`" + ` }
+// EmbedFirst declares the embed BEFORE its own colliding field.
+type EmbedFirst struct { Base; Tag int ` + "`json:\"tag\"`" + ` }
+// OwnFirst declares its own colliding field BEFORE the embed.
+type OwnFirst struct { Tag int ` + "`json:\"tag\"`" + `; Base }
+// Skipped embeds Base with json:"-" -> excluded entirely.
+type Skipped struct { Base ` + "`json:\"-\"`" + `; Keep string ` + "`json:\"keep\"`" + ` }
+// OmitOnly embeds Base with a name-less tag -> still promotes.
+type OmitOnly struct { Base ` + "`json:\",omitempty\"`" + ` }
+func (m *Module) a(ctx server.HandlerContext) (server.Result[EmbedFirst], server.IAPIError) { return server.Created(EmbedFirst{}), nil }
+func (m *Module) b(ctx server.HandlerContext) (server.Result[OwnFirst], server.IAPIError) { return server.Created(OwnFirst{}), nil }
+func (m *Module) c(ctx server.HandlerContext) (server.Result[Skipped], server.IAPIError) { return server.Created(Skipped{}), nil }
+func (m *Module) d(ctx server.HandlerContext) (server.Result[OmitOnly], server.IAPIError) { return server.Created(OmitOnly{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/a", m.a)
+	server.GET(hr, r, "/b", m.b)
+	server.GET(hr, r, "/c", m.c)
+	server.GET(hr, r, "/d", m.d)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+
+	// The parent's own "tag" (int) must win over Base's promoted "tag" (string),
+	// in BOTH declaration orders.
+	for _, typeName := range []string{"EmbedFirst", "OwnFirst"} {
+		ti := a.typeRegistry[typeName]
+		require.NotNil(t, ti, typeName)
+		var tagType string
+		count := 0
+		for _, f := range ti.Fields {
+			if f.JSONName == "tag" {
+				tagType = f.Type
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "%s: exactly one 'tag' field after precedence merge", typeName)
+		assert.Equal(t, "int", tagType, "%s: parent's own int tag wins over promoted string tag", typeName)
+		// The non-colliding promoted field is still present.
+		assert.True(t, fieldJSONNames(t, a, typeName)["only"], "%s: non-colliding promoted field survives", typeName)
+	}
+
+	skipped := fieldJSONNames(t, a, "Skipped")
+	assert.False(t, skipped["tag"] || skipped["only"], "json:\"-\" embed must be fully excluded")
+	assert.True(t, skipped["keep"], "own field survives")
+
+	omit := fieldJSONNames(t, a, "OmitOnly")
+	assert.True(t, omit["tag"] && omit["only"], "name-less (,omitempty) embed still promotes")
+}
