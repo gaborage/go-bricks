@@ -714,46 +714,39 @@ func TestCreateStandardSchemas(t *testing.T) {
 		t.Errorf("Expected 4 schemas, got %d", len(schemas))
 	}
 
-	t.Run("RawErrorResponse schema", func(t *testing.T) {
-		schema, ok := schemas[schemaRawErrorResponse]
-		if !ok {
-			t.Fatal("RawErrorResponse schema missing — raw-response routes need a bare {code,message} error envelope")
-		}
-		if _, hasMeta := schema.Properties[propNameMeta]; hasMeta {
-			t.Error("RawErrorResponse must NOT carry meta — raw mode bypasses the envelope entirely")
-		}
-		for _, p := range []string{"code", "message"} {
-			if _, ok := schema.Properties[p]; !ok {
-				t.Errorf("RawErrorResponse must include %q property", p)
-			}
-		}
-	})
-
 	t.Run("SuccessResponse schema", func(t *testing.T) {
 		validateSuccessResponseSchema(t, schemas)
 	})
-
-	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
-		schema, ok := schemas["JOSEErrorEnvelope"]
-		if !ok {
-			t.Fatal("JOSEErrorEnvelope schema missing — pre-trust JOSE failures need a documented envelope distinct from ErrorResponse")
-		}
-		// The envelope MUST NOT include framework metadata fields (meta, traceId)
-		// — that's the whole security argument for having it as a separate schema.
-		if _, hasMeta := schema.Properties["meta"]; hasMeta {
-			t.Error("JOSEErrorEnvelope must NOT carry meta — peer is unauthenticated, leak nothing")
-		}
-		if _, hasCode := schema.Properties["code"]; !hasCode {
-			t.Error("JOSEErrorEnvelope must include 'code' property")
-		}
-		if _, hasMsg := schema.Properties["message"]; !hasMsg {
-			t.Error("JOSEErrorEnvelope must include 'message' property")
-		}
-	})
-
 	t.Run("ErrorResponse schema", func(t *testing.T) {
 		validateErrorResponseSchema(t, schemas)
 	})
+	// JOSEErrorEnvelope (pre-trust JOSE failures) and RawErrorResponse (raw-mode
+	// routes) are both minimal {code,message} envelopes that MUST NOT leak meta.
+	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
+		validateMinimalErrorEnvelope(t, schemas, schemaJOSEErrorEnvelope)
+	})
+	t.Run("RawErrorResponse schema", func(t *testing.T) {
+		validateMinimalErrorEnvelope(t, schemas, schemaRawErrorResponse)
+	})
+}
+
+// validateMinimalErrorEnvelope asserts a {code,message}-only error schema: the
+// named component exists, carries no meta (leaking nothing beyond code/message),
+// and includes both required properties.
+func validateMinimalErrorEnvelope(t *testing.T, schemas map[string]*OpenAPISchema, name string) {
+	t.Helper()
+	schema, ok := schemas[name]
+	if !ok {
+		t.Fatalf("%s schema missing — a minimal {code,message} error envelope is required", name)
+	}
+	if _, hasMeta := schema.Properties[propNameMeta]; hasMeta {
+		t.Errorf("%s must NOT carry meta — the minimal envelope leaks nothing beyond code/message", name)
+	}
+	for _, p := range []string{propNameCode, propNameMessage} {
+		if _, ok := schema.Properties[p]; !ok {
+			t.Errorf("%s must include %q property", name, p)
+		}
+	}
 }
 
 func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
