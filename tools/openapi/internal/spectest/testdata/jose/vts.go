@@ -2,6 +2,8 @@
 package vts
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -41,5 +43,5 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // will flip to application/jose and this fixture will exercise the full
 // JOSE-response round-trip end-to-end.
 func (m *Module) createToken(req CreateTokenRequest, ctx server.HandlerContext) (server.Result[CreateTokenResponse], server.IAPIError) {
-	return server.OK(CreateTokenResponse{}), nil
+	return server.NewResult(http.StatusOK, CreateTokenResponse{}), nil
 }

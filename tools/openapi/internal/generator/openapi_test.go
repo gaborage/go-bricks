@@ -297,7 +297,10 @@ func TestGetResponseDescription(t *testing.T) {
 		expected string
 	}{
 		{"GET", "Successful response"},
-		{"POST", "Resource created successfully"},
+		// POST maps to the generic phrase, NOT "created": a 201 is described as
+		// created by successDescription's status branch, so a POST returning 200 is
+		// not mislabeled as a creation.
+		{"POST", "Successful response"},
 		{"PUT", "Resource updated successfully"},
 		{"DELETE", "Resource deleted successfully"},
 		{"PATCH", "Resource partially updated"},
@@ -705,10 +708,26 @@ func TestCreateStandardSchemas(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 	schemas := gen.createStandardSchemas()
 
-	// Test that standard schemas are created correctly
-	if len(schemas) != 3 {
-		t.Errorf("Expected 3 schemas, got %d", len(schemas))
+	// Test that standard schemas are created correctly: SuccessResponse,
+	// ErrorResponse, JOSEErrorEnvelope, and RawErrorResponse (raw-mode routes).
+	if len(schemas) != 4 {
+		t.Errorf("Expected 4 schemas, got %d", len(schemas))
 	}
+
+	t.Run("RawErrorResponse schema", func(t *testing.T) {
+		schema, ok := schemas[schemaRawErrorResponse]
+		if !ok {
+			t.Fatal("RawErrorResponse schema missing — raw-response routes need a bare {code,message} error envelope")
+		}
+		if _, hasMeta := schema.Properties[propNameMeta]; hasMeta {
+			t.Error("RawErrorResponse must NOT carry meta — raw mode bypasses the envelope entirely")
+		}
+		for _, p := range []string{"code", "message"} {
+			if _, ok := schema.Properties[p]; !ok {
+				t.Errorf("RawErrorResponse must include %q property", p)
+			}
+		}
+	})
 
 	t.Run("SuccessResponse schema", func(t *testing.T) {
 		validateSuccessResponseSchema(t, schemas)
@@ -2194,11 +2213,117 @@ func TestBuildResponsesNonJOSE(t *testing.T) {
 		Response: &models.TypeInfo{Name: "User", JOSE: false},
 	})
 
-	// Non-JOSE 200 uses application/json (the standard SuccessResponse envelope).
+	// Non-JOSE success uses application/json and the inline {data,meta} envelope
+	// whose data is a $ref to the response component (closes the orphan-component
+	// window: the discovered User schema is finally referenced).
+	require.Contains(t, resps, "200")
 	assert.NotContains(t, resps["200"].Content, mediaJOSE, "non-JOSE response must NOT use application/jose")
 	require.Contains(t, resps["200"].Content, mediaJSON)
-	assert.Equal(t, refPath("SuccessResponse"), resps["200"].Content[mediaJSON].Schema.Ref)
+	envelope := resps["200"].Content[mediaJSON].Schema
+	require.NotNil(t, envelope)
+	assert.Equal(t, typeObject, envelope.Type)
+	require.Contains(t, envelope.Properties, propNameData)
+	assert.Equal(t, refPath("User"), envelope.Properties[propNameData].Ref, "data must $ref the response component")
+	require.Contains(t, envelope.Properties, propNameMeta)
+	require.Contains(t, envelope.Properties[propNameMeta].Properties, "timestamp")
+	require.Contains(t, envelope.Properties[propNameMeta].Properties, "traceId")
+
+	// Standard error set: 400 and 500 always present; both reference ErrorResponse.
 	require.Contains(t, resps["400"].Content, mediaJSON)
 	assert.Equal(t, refPath(schemaErrorResponse), resps["400"].Content[mediaJSON].Schema.Ref,
 		"non-JOSE 4xx must reference standard ErrorResponse")
+	require.Contains(t, resps, "500")
+	assert.Equal(t, refPath(schemaErrorResponse), resps["500"].Content[mediaJSON].Schema.Ref)
+
+	// No request validation -> no 422.
+	assert.NotContains(t, resps, "422", "route without a validated request must not advertise 422")
+}
+
+func TestBuildResponsesStatusCodes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("created_201", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{
+			Method:        "POST",
+			Response:      &models.TypeInfo{Name: "User"},
+			SuccessStatus: 201,
+		})
+		require.Contains(t, resps, "201")
+		assert.NotContains(t, resps, "200")
+		assert.Equal(t, "Resource created successfully", resps["201"].Description)
+	})
+
+	t.Run("accepted_202", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{Method: "POST", SuccessStatus: 202})
+		require.Contains(t, resps, "202")
+		assert.Equal(t, "Request accepted for processing", resps["202"].Description)
+	})
+
+	t.Run("no_content_204_has_no_body", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{
+			Method:   "DELETE",
+			Response: &models.TypeInfo{NoContent: true},
+		})
+		require.Contains(t, resps, "204")
+		assert.Nil(t, resps["204"].Content, "204 must not carry a response body")
+		assert.Equal(t, "No Content", resps["204"].Description)
+	})
+
+	t.Run("custom_status_from_NewResult", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{Method: "GET", SuccessStatus: 207})
+		require.Contains(t, resps, "207")
+	})
+}
+
+func TestBuildResponsesRawMode(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method:      "GET",
+		Response:    &models.TypeInfo{Name: "LegacyUser"},
+		RawResponse: true,
+	})
+
+	// Raw mode emits the bare payload schema ($ref), NOT the data/meta envelope.
+	schema := resps["200"].Content[mediaJSON].Schema
+	require.NotNil(t, schema)
+	assert.Equal(t, refPath("LegacyUser"), schema.Ref, "raw response must $ref the payload directly")
+	assert.NotContains(t, schema.Properties, propNameData, "raw response must NOT wrap in a data/meta envelope")
+
+	// Raw routes use the minimal RawErrorResponse for errors.
+	assert.Equal(t, refPath(schemaRawErrorResponse), resps["400"].Content[mediaJSON].Schema.Ref)
+	assert.Equal(t, refPath(schemaRawErrorResponse), resps["500"].Content[mediaJSON].Schema.Ref)
+}
+
+func TestResponsePayloadSchemaFallbacks(t *testing.T) {
+	// nil and unnamed responses fall back to a generic object (no $ref).
+	for _, ti := range []*models.TypeInfo{nil, {Name: ""}} {
+		schema := responsePayloadSchema(ti)
+		assert.Equal(t, typeObject, schema.Type)
+		assert.Empty(t, schema.Ref)
+	}
+	// Named responses become a $ref.
+	assert.Equal(t, refPath("Widget"), responsePayloadSchema(&models.TypeInfo{Name: "Widget"}).Ref)
+}
+
+func TestSuccessPlaintextSchemaFallsBackToSuccessResponse(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	// A JOSE response with no named type falls back to the generic envelope name.
+	got := gen.successPlaintextSchema(&models.Route{Response: &models.TypeInfo{JOSE: true}})
+	assert.Equal(t, schemaSuccessResponse, got)
+	// A named response is used verbatim.
+	got = gen.successPlaintextSchema(&models.Route{Response: &models.TypeInfo{Name: "TokenResponse"}})
+	assert.Equal(t, "TokenResponse", got)
+}
+
+func TestBuildResponsesValidationAdds422(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method: "POST",
+		Request: &models.TypeInfo{Name: "CreateReq", Fields: []models.FieldInfo{
+			{Name: "Email", Required: true},
+		}},
+		Response: &models.TypeInfo{Name: "User"},
+	})
+	require.Contains(t, resps, "422", "a validated request body must advertise 422")
+	assert.Equal(t, refPath(schemaErrorResponse), resps["422"].Content[mediaJSON].Schema.Ref)
 }

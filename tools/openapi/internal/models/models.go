@@ -36,6 +36,14 @@ type Route struct {
 	// component names across modules.
 	Module  string
 	Package string
+	// SuccessStatus is the HTTP status of the success response, derived from the
+	// handler's result constructor (server.Created -> 201, Accepted -> 202,
+	// NewResult(n) -> n). Zero means "use the default" (200).
+	SuccessStatus int
+	// RawResponse is true when the route is registered WithRawResponse(): the
+	// handler bypasses the standard data/meta envelope and returns its payload
+	// directly (Strangler-Fig migration).
+	RawResponse bool
 }
 
 // TypeInfo represents type metadata for requests and responses

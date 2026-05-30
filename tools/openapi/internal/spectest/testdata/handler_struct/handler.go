@@ -1,6 +1,10 @@
 package shop
 
-import "github.com/gaborage/go-bricks/server"
+import (
+	"net/http"
+
+	"github.com/gaborage/go-bricks/server"
+)
 
 // Handler holds the shop's HTTP handlers (separate from the Module struct).
 type Handler struct{}
@@ -28,14 +32,12 @@ func (h *Handler) createUser(req CreateUserReq, ctx server.HandlerContext) (serv
 }
 
 func (h *Handler) getUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	return server.OK(User{}), nil
+	return server.NewResult(http.StatusOK, User{}), nil
 }
 
 // deleteUser returns NoContentResult — a bodyless 204 response. The analyzer
-// marks the response TypeInfo with NoContent=true (no component is generated),
-// but rendering it as a 204 (instead of the current 200 with a SuccessResponse
-// body) is deferred to the response-envelope/status work; the golden therefore
-// still shows a 200 for this route today.
+// marks the response TypeInfo with NoContent=true (no component is generated)
+// and the generator renders it as a 204 with no response body.
 func (h *Handler) deleteUser(req GetUserReq, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
 	return server.NoContent(), nil
 }

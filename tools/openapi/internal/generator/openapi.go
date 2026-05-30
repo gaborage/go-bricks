@@ -29,7 +29,10 @@ const (
 
 // Schema component names referenced in multiple emitter sites.
 const (
-	schemaErrorResponse = "ErrorResponse"
+	schemaErrorResponse     = "ErrorResponse"
+	schemaJOSEErrorEnvelope = "JOSEErrorEnvelope"
+	schemaRawErrorResponse  = "RawErrorResponse"
+	schemaSuccessResponse   = "SuccessResponse"
 )
 
 // HTTP method names used in switch discriminants and operation generation.
@@ -57,8 +60,13 @@ const (
 // Response/parameter description text reused across operations.
 const (
 	respDescSuccess = "Successful response"
+	respDescCreated = "Resource created successfully"
 	paramTypePath   = "path"
 	propNameError   = "error"
+	propNameData    = "data"
+	propNameMeta    = "meta"
+	propNameCode    = "code"
+	propNameMessage = "message"
 )
 
 // Media type constants for the OpenAPI content map. Centralized so a future rename
@@ -93,20 +101,21 @@ type OpenAPISchema struct {
 
 // OpenAPIProperty represents a schema property
 type OpenAPIProperty struct {
-	Type             string           `yaml:"type,omitempty"`
-	Format           string           `yaml:"format,omitempty"`
-	Description      string           `yaml:"description,omitempty"`
-	Example          any              `yaml:"example,omitempty"`
-	Ref              string           `yaml:"$ref,omitempty"`
-	Items            *OpenAPIProperty `yaml:"items,omitempty"` // For arrays
-	MinLength        *int             `yaml:"minLength,omitempty"`
-	MaxLength        *int             `yaml:"maxLength,omitempty"`
-	Minimum          *float64         `yaml:"minimum,omitempty"`
-	Maximum          *float64         `yaml:"maximum,omitempty"`
-	ExclusiveMinimum *bool            `yaml:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum *bool            `yaml:"exclusiveMaximum,omitempty"`
-	Pattern          string           `yaml:"pattern,omitempty"`
-	Enum             []any            `yaml:"enum,omitempty"`
+	Type             string                      `yaml:"type,omitempty"`
+	Properties       map[string]*OpenAPIProperty `yaml:"properties,omitempty"` // For inline objects (e.g. the data/meta envelope)
+	Format           string                      `yaml:"format,omitempty"`
+	Description      string                      `yaml:"description,omitempty"`
+	Example          any                         `yaml:"example,omitempty"`
+	Ref              string                      `yaml:"$ref,omitempty"`
+	Items            *OpenAPIProperty            `yaml:"items,omitempty"` // For arrays
+	MinLength        *int                        `yaml:"minLength,omitempty"`
+	MaxLength        *int                        `yaml:"maxLength,omitempty"`
+	Minimum          *float64                    `yaml:"minimum,omitempty"`
+	Maximum          *float64                    `yaml:"maximum,omitempty"`
+	ExclusiveMinimum *bool                       `yaml:"exclusiveMinimum,omitempty"`
+	ExclusiveMaximum *bool                       `yaml:"exclusiveMaximum,omitempty"`
+	Pattern          string                      `yaml:"pattern,omitempty"`
+	Enum             []any                       `yaml:"enum,omitempty"`
 }
 
 // The types below model the paths/operations half of an OpenAPI document as a
@@ -421,45 +430,168 @@ func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
 	return map[string]*OpenAPIMediaType{mediaJSON: {Schema: &OpenAPIProperty{Ref: refPath(name)}}}
 }
 
-// buildResponses builds the responses object for a route. When the route's
-// response carries a jose: tag the 200 success response uses Content-Type
-// application/jose; the 4xx pre-trust failure path always uses application/json
-// (peer is unauthenticated, so the framework returns a plaintext minimal
-// envelope, never JOSE-wrapped — see the hybrid envelope contract in CLAUDE.md
-// JOSE Middleware).
+// buildResponses builds the responses object for a route.
 //
-// 4xx schema selection is driven by EITHER side carrying jose tags. The runtime
-// enforces bidirectional symmetry at registration, but the analyzer runs
+// Success response: the status code is the one the handler's result constructor
+// implies (server.Created -> 201, Accepted -> 202, NewResult(n) -> n,
+// NoContentResult -> 204), defaulting to 200. The body shape depends on the
+// route flavour:
+//   - NoContent       -> no body (204).
+//   - JOSE response    -> a single application/jose string token; the Response
+//     description names the plaintext component the decrypted payload conforms to.
+//   - RawResponse      -> the bare payload schema ($ref to the response component),
+//     bypassing the data/meta envelope (Strangler-Fig migration).
+//   - default          -> the standard envelope {data: <$ref to response>, meta},
+//     which is what finally references the response component the analyzer
+//     discovered (closing the "orphan component" window).
+//
+// Error responses: 400 and 500 are always present; 422 is added when the request
+// type carries validation tags (the framework returns 422 on validation
+// failure). The error schema is JOSEErrorEnvelope for JOSE routes (pre-trust
+// failures leak nothing beyond {code,message}), RawErrorResponse for raw routes,
+// and ErrorResponse otherwise.
+//
+// JOSE 4xx schema selection is driven by EITHER side carrying jose tags. The
+// runtime enforces bidirectional symmetry at registration, but the analyzer runs
 // statically against source so we can encounter asymmetric setups; in any such
 // case the pre-trust failure path is still routed through the JOSE
 // plaintext-minimal envelope by the runtime, so the OpenAPI spec must reflect that.
 func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenAPIResponse {
 	joseResponse := route.Response != nil && route.Response.JOSE
 	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
+	noContent := route.Response != nil && route.Response.NoContent
 
-	resp200 := &OpenAPIResponse{}
-	if joseResponse {
+	successCode := successStatusCode(route, noContent)
+	success := &OpenAPIResponse{Description: g.successDescription(route, successCode, noContent)}
+	switch {
+	case noContent:
+		// 204: no response body.
+	case joseResponse:
 		// Description on the Response Object names the plaintext schema; the Media
 		// Type schema describes the wire shape (a string token).
-		resp200.Description = joseDescription("SuccessResponse")
-		resp200.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
-	} else {
-		resp200.Description = g.getResponseDescription(route.Method)
-		resp200.Content = jsonMediaRef("SuccessResponse")
+		success.Description = joseDescription(g.successPlaintextSchema(route))
+		success.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
+	case route.RawResponse:
+		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: responsePayloadSchema(route.Response)}}
+	default:
+		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: successEnvelopeSchema(route.Response)}}
 	}
 
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and
 	// the server leaks nothing beyond {code,message}.
 	errorSchema := schemaErrorResponse
-	if joseRoute {
-		errorSchema = "JOSEErrorEnvelope"
+	switch {
+	case joseRoute:
+		errorSchema = schemaJOSEErrorEnvelope
+	case route.RawResponse:
+		errorSchema = schemaRawErrorResponse
 	}
 
-	return map[string]*OpenAPIResponse{
-		"200": resp200,
+	responses := map[string]*OpenAPIResponse{
 		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
+		"500": {Description: "Internal Server Error", Content: jsonMediaRef(errorSchema)},
 	}
+	if routeHasValidation(route.Request) {
+		responses["422"] = &OpenAPIResponse{Description: "Unprocessable Entity", Content: jsonMediaRef(errorSchema)}
+	}
+	// Assign the success entry LAST so a success status that overlaps an error code
+	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
+	// the documented success response rather than being clobbered by the 400 entry.
+	responses[successCode] = success
+	return responses
+}
+
+// successStatusCode resolves the success response code as a string key. A 204
+// (NoContent) wins outright; otherwise the constructor-derived SuccessStatus is
+// used when set, defaulting to 200.
+func successStatusCode(route *models.Route, noContent bool) string {
+	if noContent {
+		return "204"
+	}
+	if route.SuccessStatus != 0 {
+		return strconv.Itoa(route.SuccessStatus)
+	}
+	return "200"
+}
+
+// successDescription returns a human description for the success response,
+// preferring a status-specific phrase over the method-derived default.
+func (g *OpenAPIGenerator) successDescription(route *models.Route, code string, noContent bool) string {
+	switch {
+	case noContent:
+		return "No Content"
+	case code == "201":
+		return respDescCreated
+	case code == "202":
+		return "Request accepted for processing"
+	default:
+		return g.getResponseDescription(route.Method)
+	}
+}
+
+// successPlaintextSchema names the plaintext component a JOSE response decrypts
+// to, falling back to the generic SuccessResponse envelope when the handler
+// declares no typed response.
+func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
+	if route.Response != nil && route.Response.Name != "" {
+		return schemaName(route.Response)
+	}
+	return schemaSuccessResponse
+}
+
+// successEnvelopeSchema builds the inline {data, meta} success envelope. When the
+// route has a typed response, data is a $ref to its component schema; otherwise
+// data is a generic object (the handler returned an untyped/empty payload).
+func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
+	data := responsePayloadSchema(response)
+	if data.Ref == "" {
+		// Untyped fallback (generic object) — annotate it for readers.
+		data.Description = "Response data"
+	}
+	return &OpenAPIProperty{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameData: data,
+			propNameMeta: metaEnvelopeSchema(),
+		},
+	}
+}
+
+// metaEnvelopeSchema is the framework-authoritative envelope metadata block.
+// timestamp and traceId are always populated by the response writer.
+func metaEnvelopeSchema() *OpenAPIProperty {
+	return &OpenAPIProperty{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			"timestamp": {Type: typeString, Format: "date-time", Description: "RFC3339 response timestamp"},
+			"traceId":   {Type: typeString, Description: "W3C trace identifier for the request"},
+		},
+	}
+}
+
+// responsePayloadSchema returns the bare schema for a response component: a $ref
+// to the named type, or a generic object when the type is unnamed.
+func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
+	if response == nil || response.Name == "" {
+		return &OpenAPIProperty{Type: typeObject}
+	}
+	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
+}
+
+// routeHasValidation reports whether the request type carries any validation
+// constraints, which is what makes a 422 (Unprocessable Entity) reachable.
+func routeHasValidation(request *models.TypeInfo) bool {
+	if request == nil {
+		return false
+	}
+	for i := range request.Fields {
+		f := &request.Fields[i]
+		if f.Required || f.RawValidation != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // getOperationID generates an operation ID for a route
@@ -481,16 +613,18 @@ func (g *OpenAPIGenerator) getSummary(route *models.Route) string {
 	return fmt.Sprintf("%s %s", route.Method, route.Path)
 }
 
-// getResponseDescription returns a description based on HTTP method. The method
-// is normalized to upper-case (consistent with assignOperation) so a
-// lowercase/mixed-case input still maps to the right description rather than
-// silently falling through to the generic default.
+// getResponseDescription returns a description based on HTTP method, used for the
+// 200 success case. The method is normalized to upper-case (consistent with
+// assignOperation) so a lowercase/mixed-case input still maps to the right
+// description rather than silently falling through to the generic default.
+//
+// POST maps to the generic "Successful response", NOT "Resource created": a 201
+// is described as created by successDescription's status branch, so a POST that
+// returns 200 (e.g. a query-by-POST endpoint) is not mislabeled as a creation.
 func (g *OpenAPIGenerator) getResponseDescription(method string) string {
 	switch strings.ToUpper(method) {
-	case httpMethodGet:
+	case httpMethodGet, httpMethodPost:
 		return respDescSuccess
-	case httpMethodPost:
-		return "Resource created successfully"
 	case httpMethodPut:
 		return "Resource updated successfully"
 	case httpMethodDelete:
@@ -528,17 +662,18 @@ func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (str
 // createStandardSchemas creates common response schemas using proper structs
 func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 	return map[string]*OpenAPISchema{
-		"SuccessResponse": {
+		// SuccessResponse is the generic envelope used as the JOSE plaintext-schema
+		// fallback (a typed route emits an inline envelope instead). Its meta reuses
+		// metaEnvelopeSchema so the documented metadata shape never diverges from the
+		// inline envelopes.
+		schemaSuccessResponse: {
 			Type: typeObject,
 			Properties: map[string]*OpenAPIProperty{
-				"data": {
+				propNameData: {
 					Type:        typeObject,
 					Description: "Response data",
 				},
-				"meta": {
-					Type:        typeObject,
-					Description: "Response metadata",
-				},
+				propNameMeta: metaEnvelopeSchema(),
 			},
 		},
 		schemaErrorResponse: {
@@ -561,19 +696,36 @@ func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 		// etc.). The framework intentionally omits traceId/timestamp/framework
 		// metadata here — peer is unauthenticated and the envelope must leak
 		// nothing beyond the canonical {code,message} pair.
-		"JOSEErrorEnvelope": {
+		schemaJOSEErrorEnvelope: {
 			Type: typeObject,
 			Properties: map[string]*OpenAPIProperty{
-				"code": {
+				propNameCode: {
 					Type:        typeString,
 					Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)",
 				},
-				"message": {
+				propNameMessage: {
 					Type:        typeString,
 					Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure",
 				},
 			},
-			Required: []string{"code", "message"},
+			Required: []string{propNameCode, propNameMessage},
+		},
+		// RawErrorResponse is the bare {code,message} error payload returned by
+		// routes registered WithRawResponse(): no data/meta envelope, mirroring
+		// the framework's formatRawErrorResponse (details is dev-only, omitted).
+		schemaRawErrorResponse: {
+			Type: typeObject,
+			Properties: map[string]*OpenAPIProperty{
+				propNameCode: {
+					Type:        typeString,
+					Description: "Machine-readable error code",
+				},
+				propNameMessage: {
+					Type:        typeString,
+					Description: "Human-readable error message",
+				},
+			},
+			Required: []string{propNameCode, propNameMessage},
 		},
 	}
 }
