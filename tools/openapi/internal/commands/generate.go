@@ -40,8 +40,8 @@ and produces a comprehensive YAML API specification with validation constraints.
 
   # Generate spec for specific project
   go-bricks-openapi generate -project ./my-service -output docs/openapi.yaml`,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runGenerate(opts)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGenerate(cmd.Context(), opts)
 		},
 	}
 
@@ -53,7 +53,7 @@ and produces a comprehensive YAML API specification with validation constraints.
 	return cmd
 }
 
-func runGenerate(opts *GenerateOptions) error {
+func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	// Validate options
 	if err := validateGenerateOptions(opts); err != nil {
 		return err
@@ -78,7 +78,7 @@ func runGenerate(opts *GenerateOptions) error {
 
 	// Surface non-fatal analysis diagnostics (e.g. routes dropped due to an
 	// unresolvable path) on stderr so they don't corrupt the generated spec.
-	for _, w := range projectAnalyzer.Warnings(context.Background()) {
+	for _, w := range projectAnalyzer.Warnings(ctx) {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
