@@ -15,16 +15,19 @@ import (
 
 // OpenAPI type constants
 const (
-	typeInteger  = "integer"
-	typeObject   = "object"
-	typeString   = "string"
-	typeNumber   = "number"
-	typeBoolean  = "boolean"
-	typeArray    = "array"
-	formatInt32  = "int32"
-	formatInt64  = "int64"
-	formatFloat  = "float"
-	formatDouble = "double"
+	typeInteger    = "integer"
+	typeObject     = "object"
+	typeString     = "string"
+	typeNumber     = "number"
+	typeBoolean    = "boolean"
+	typeArray      = "array"
+	formatInt32    = "int32"
+	formatInt64    = "int64"
+	formatFloat    = "float"
+	formatDouble   = "double"
+	formatDateTime = "date-time"
+	formatBinary   = "binary"
+	formatUUID     = "uuid"
 )
 
 // Schema component names referenced in multiple emitter sites.
@@ -55,6 +58,14 @@ const (
 	goTypeBool    = "bool"
 	goTypeUint    = "uint"
 	goTypeUint64  = "uint64"
+
+	// Qualified/composite Go types with a well-known OpenAPI representation.
+	goTypeTimeTime     = "time.Time"
+	goTypeTimeDuration = "time.Duration"
+	goTypeByteSlice    = "[]byte"
+	goTypeUint8Slice   = "[]uint8"
+	goTypeUUID         = "uuid.UUID"
+	goTypeRawMessage   = "json.RawMessage"
 )
 
 // Response/parameter description text reused across operations.
@@ -101,21 +112,22 @@ type OpenAPISchema struct {
 
 // OpenAPIProperty represents a schema property
 type OpenAPIProperty struct {
-	Type             string                      `yaml:"type,omitempty"`
-	Properties       map[string]*OpenAPIProperty `yaml:"properties,omitempty"` // For inline objects (e.g. the data/meta envelope)
-	Format           string                      `yaml:"format,omitempty"`
-	Description      string                      `yaml:"description,omitempty"`
-	Example          any                         `yaml:"example,omitempty"`
-	Ref              string                      `yaml:"$ref,omitempty"`
-	Items            *OpenAPIProperty            `yaml:"items,omitempty"` // For arrays
-	MinLength        *int                        `yaml:"minLength,omitempty"`
-	MaxLength        *int                        `yaml:"maxLength,omitempty"`
-	Minimum          *float64                    `yaml:"minimum,omitempty"`
-	Maximum          *float64                    `yaml:"maximum,omitempty"`
-	ExclusiveMinimum *bool                       `yaml:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum *bool                       `yaml:"exclusiveMaximum,omitempty"`
-	Pattern          string                      `yaml:"pattern,omitempty"`
-	Enum             []any                       `yaml:"enum,omitempty"`
+	Type                 string                      `yaml:"type,omitempty"`
+	Properties           map[string]*OpenAPIProperty `yaml:"properties,omitempty"`           // For inline objects (e.g. the data/meta envelope)
+	AdditionalProperties *OpenAPIProperty            `yaml:"additionalProperties,omitempty"` // For maps (the value schema)
+	Format               string                      `yaml:"format,omitempty"`
+	Description          string                      `yaml:"description,omitempty"`
+	Example              any                         `yaml:"example,omitempty"`
+	Ref                  string                      `yaml:"$ref,omitempty"`
+	Items                *OpenAPIProperty            `yaml:"items,omitempty"` // For arrays
+	MinLength            *int                        `yaml:"minLength,omitempty"`
+	MaxLength            *int                        `yaml:"maxLength,omitempty"`
+	Minimum              *float64                    `yaml:"minimum,omitempty"`
+	Maximum              *float64                    `yaml:"maximum,omitempty"`
+	ExclusiveMinimum     *bool                       `yaml:"exclusiveMinimum,omitempty"`
+	ExclusiveMaximum     *bool                       `yaml:"exclusiveMaximum,omitempty"`
+	Pattern              string                      `yaml:"pattern,omitempty"`
+	Enum                 []any                       `yaml:"enum,omitempty"`
 }
 
 // The types below model the paths/operations half of an OpenAPI document as a
@@ -564,7 +576,7 @@ func metaEnvelopeSchema() *OpenAPIProperty {
 	return &OpenAPIProperty{
 		Type: typeObject,
 		Properties: map[string]*OpenAPIProperty{
-			"timestamp": {Type: typeString, Format: "date-time", Description: "RFC3339 response timestamp"},
+			"timestamp": {Type: typeString, Format: formatDateTime, Description: "RFC3339 response timestamp"},
 			"traceId":   {Type: typeString, Description: "W3C trace identifier for the request"},
 		},
 	}
@@ -845,6 +857,22 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 		prop.Example = field.Example
 	}
 
+	// A struct-valued map (map[string]Address) is an object whose
+	// additionalProperties is a $ref to the value component. Handle it here, where
+	// the analyzer-resolved MapValueRefName is available (setTypeAndFormat sees
+	// only the type string and so can only type primitive-valued maps). A map of
+	// slices (map[string][]Address) wraps the $ref in an array.
+	if valueType, isMap := analyzer.MapValueType(field.Type); isMap && field.MapValueRefName != "" {
+		ref := &OpenAPIProperty{Ref: refPath(field.MapValueRefName)}
+		prop.Type = typeObject
+		if isSliceType(valueType) {
+			prop.AdditionalProperties = &OpenAPIProperty{Type: typeArray, Items: ref}
+		} else {
+			prop.AdditionalProperties = ref
+		}
+		return prop
+	}
+
 	// Map Go type to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Type)
 
@@ -860,10 +888,50 @@ func isSliceType(goType string) bool {
 	return strings.HasPrefix(strings.TrimPrefix(goType, "*"), "[]")
 }
 
+// wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
+type wellKnownType struct {
+	typ    string
+	format string
+}
+
+// wellKnownFormats maps qualified Go types to their idiomatic OpenAPI schema.
+// These types are NOT local structs (so the registry never refs them), and the
+// default object fallback would lose their real wire shape:
+//   - time.Time      -> RFC3339 string
+//   - time.Duration  -> integer (int64): encoding/json (which go-bricks uses)
+//     marshals a Duration as its underlying int64 nanosecond count — a JSON
+//     number, NOT a string.
+//   - []byte/[]uint8 -> base64 string (encoding/json marshals byte slices base64)
+//   - uuid.UUID      -> uuid-formatted string
+//   - json.RawMessage-> arbitrary JSON object
+//
+// NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
+// "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
+// recognized and falls through to the object default. Alias/import-path
+// resolution lands with the cross-package resolver in PR9.
+var wellKnownFormats = map[string]wellKnownType{
+	goTypeTimeTime:     {typeString, formatDateTime},
+	goTypeTimeDuration: {typeInteger, formatInt64},
+	goTypeByteSlice:    {typeString, formatBinary},
+	goTypeUint8Slice:   {typeString, formatBinary},
+	goTypeUUID:         {typeString, formatUUID},
+	goTypeRawMessage:   {typeObject, ""},
+}
+
 // setTypeAndFormat maps Go types to OpenAPI type and format
 func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string) {
 	// Strip pointer prefix
 	goType = strings.TrimPrefix(goType, "*")
+
+	// Well-known types first: []byte must win over the generic []T array branch,
+	// and time.Time/uuid.UUID over the qualified-type object fallback.
+	if wk, ok := wellKnownFormats[goType]; ok {
+		prop.Type = wk.typ
+		if wk.format != "" {
+			prop.Format = wk.format
+		}
+		return
+	}
 
 	// Handle arrays
 	if strings.HasPrefix(goType, "[]") {
@@ -874,16 +942,34 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 		return
 	}
 
+	// Handle maps as objects with a typed additionalProperties (string-keyed).
+	// Struct-valued maps emit a $ref via fieldInfoToProperty; this nested path
+	// (maps inside slices/maps) recurses on the value type by string only.
+	if valueType, ok := analyzer.MapValueType(goType); ok {
+		prop.Type = typeObject
+		prop.AdditionalProperties = &OpenAPIProperty{}
+		g.setTypeAndFormat(prop.AdditionalProperties, valueType)
+		return
+	}
+
 	// Handle basic types
 	switch goType {
 	case goTypeString:
 		prop.Type = typeString
-	case "int", "int8", "int16", formatInt32, goTypeUint, "uint8", "uint16", "uint32":
+	case "int", "int8", "int16", formatInt32:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-	case formatInt64, goTypeUint64:
+	case goTypeUint, "uint8", "uint16", "uint32":
+		prop.Type = typeInteger
+		prop.Format = formatInt32
+		prop.Minimum = floatPtr(0) // unsigned: never negative
+	case formatInt64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
+	case goTypeUint64:
+		prop.Type = typeInteger
+		prop.Format = formatInt64
+		prop.Minimum = floatPtr(0) // unsigned: never negative (and may exceed int64 max)
 	case goTypeFloat32:
 		prop.Type = typeNumber
 		prop.Format = formatFloat
@@ -898,6 +984,9 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 		prop.Type = typeObject
 	}
 }
+
+// floatPtr returns a pointer to v, for the *float64 schema constraint fields.
+func floatPtr(v float64) *float64 { return &v }
 
 // applyConstraints applies validation constraints to an OpenAPI property
 func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {

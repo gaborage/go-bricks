@@ -3686,3 +3686,63 @@ func TestStatusForConstructorEdgeCases(t *testing.T) {
 	assert.Equal(t, 202, statusForConstructor("NewResultWithMeta", []ast.Expr{httpConst}), "NewResultWithMeta with http.StatusAccepted -> 202")
 	assert.Equal(t, 204, statusForConstructor("NoContent", nil))
 }
+
+// TestMapValueStructName covers the map value-type extraction helper.
+func TestMapValueStructName(t *testing.T) {
+	cases := []struct {
+		in    string
+		want  string
+		isMap bool
+	}{
+		{"map[string]Address", "Address", true},
+		{"map[string]string", "string", true},
+		{"*map[string]Address", "Address", true},
+		{"map[string][]Address", "Address", true}, // value slice unwrapped
+		{"map[string]*Address", "Address", true},  // value pointer unwrapped
+		{"[]Address", "", false},
+		{"Address", "", false},
+		{"*Address", "", false},
+	}
+	for _, c := range cases {
+		got, isMap := mapValueStructName(c.in)
+		assert.Equal(t, c.isMap, isMap, c.in)
+		assert.Equal(t, c.want, got, c.in)
+	}
+}
+
+// TestMapValueRefRegistration verifies a struct-valued map registers its value
+// type as a component and stamps MapValueRefName (not RefName) on the field.
+func TestMapValueRefRegistration(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Address struct{ City string ` + "`json:\"city\"`" + ` }
+type Book struct {
+	Tags  map[string]string  ` + "`json:\"tags\"`" + `
+	Addrs map[string]Address ` + "`json:\"addrs\"`" + `
+}
+func (m *Module) get(ctx server.HandlerContext) (server.Result[Book], server.IAPIError) { return server.Created(Book{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/b", m.get)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	book := a.typeRegistry["Book"]
+	require.NotNil(t, book, "Book must be registered")
+	_, ok := a.typeRegistry["Address"]
+	assert.True(t, ok, "Address (a map value struct) must be registered as a component")
+
+	byJSON := map[string]models.FieldInfo{}
+	for _, f := range book.Fields {
+		byJSON[f.JSONName] = f
+	}
+	assert.Equal(t, "Address", byJSON["addrs"].MapValueRefName, "struct-valued map stamps MapValueRefName")
+	assert.Empty(t, byJSON["addrs"].RefName, "a map field is never a whole-field $ref")
+	assert.Empty(t, byJSON["tags"].MapValueRefName, "primitive-valued map has no value ref")
+}

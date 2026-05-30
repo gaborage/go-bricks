@@ -1149,6 +1149,104 @@ func TestSetTypeAndFormat(t *testing.T) {
 	}
 }
 
+func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	tests := []struct {
+		name, goType, wantType, wantFormat string
+	}{
+		{"time.Time", goTypeTimeTime, typeString, formatDateTime},
+		{"pointer time.Time", "*" + goTypeTimeTime, typeString, formatDateTime},
+		// encoding/json marshals a Duration as its int64 ns count, NOT a string.
+		{"time.Duration", goTypeTimeDuration, typeInteger, formatInt64},
+		{"byte slice", goTypeByteSlice, typeString, formatBinary},
+		{"uint8 slice alias", goTypeUint8Slice, typeString, formatBinary},
+		{"uuid.UUID", goTypeUUID, typeString, formatUUID},
+		{"json.RawMessage", goTypeRawMessage, typeObject, ""},
+		// []byte must win over the generic []T array branch (not become an array).
+		{"byte slice not array", goTypeByteSlice, typeString, formatBinary},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := &OpenAPIProperty{}
+			gen.setTypeAndFormat(prop, tt.goType)
+			assert.Equal(t, tt.wantType, prop.Type)
+			assert.Equal(t, tt.wantFormat, prop.Format)
+			assert.Nil(t, prop.Items, "well-known types must not be modeled as arrays")
+		})
+	}
+}
+
+func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	// Unsigned integers carry minimum:0; signed integers do not.
+	for _, ut := range []struct {
+		goType, format string
+	}{{"uint", formatInt32}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt32}, {"uint64", formatInt64}} {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, ut.goType)
+		assert.Equal(t, typeInteger, prop.Type, ut.goType)
+		assert.Equal(t, ut.format, prop.Format, ut.goType)
+		if assert.NotNil(t, prop.Minimum, "%s must carry minimum:0", ut.goType) {
+			assert.Equal(t, 0.0, *prop.Minimum, ut.goType)
+		}
+	}
+	for _, st := range []string{"int", "int8", "int16", "int32", "int64"} {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, st)
+		assert.Nil(t, prop.Minimum, "%s (signed) must NOT carry minimum", st)
+	}
+}
+
+func TestSetTypeAndFormatMaps(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("primitive value", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]string")
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeString, prop.AdditionalProperties.Type)
+	})
+
+	t.Run("integer value carries format", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]int64")
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeInteger, prop.AdditionalProperties.Type)
+		assert.Equal(t, formatInt64, prop.AdditionalProperties.Format)
+	})
+}
+
+func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("struct value", func(t *testing.T) {
+		// object + additionalProperties.$ref (NOT a bare $ref for the whole field,
+		// which is the RefName path).
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Addrs", Type: "map[string]Address", JSONName: "addrs", MapValueRefName: "Address",
+		})
+		assert.Equal(t, typeObject, prop.Type)
+		assert.Empty(t, prop.Ref, "a map field must not be a whole-field $ref")
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, refPath("Address"), prop.AdditionalProperties.Ref)
+	})
+
+	t.Run("slice-of-struct value wraps in array", func(t *testing.T) {
+		// map[string][]Address -> additionalProperties is an ARRAY of $ref, not a
+		// bare $ref (the array layer must survive).
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "History", Type: "map[string][]Address", JSONName: "history", MapValueRefName: "Address",
+		})
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeArray, prop.AdditionalProperties.Type)
+		assert.Empty(t, prop.AdditionalProperties.Ref, "the array wrapper itself is not a $ref")
+		require.NotNil(t, prop.AdditionalProperties.Items)
+		assert.Equal(t, refPath("Address"), prop.AdditionalProperties.Items.Ref)
+	})
+}
+
 func TestApplyConstraints(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
