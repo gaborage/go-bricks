@@ -343,6 +343,29 @@ func TestGetAllRoutesStampsModuleIdentity(t *testing.T) {
 	assert.Empty(t, project.Modules[0].Routes[0].Module, "original route must remain unstamped")
 }
 
+func TestBuildPathsDropsNonRootedPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	paths := gen.buildPaths([]models.Route{
+		{Method: "GET", Path: "/ok"},
+		{Method: "GET", Path: "broken"}, // no leading slash
+	})
+	_, hasOK := paths["/ok"]
+	_, hasBroken := paths["broken"]
+	assert.True(t, hasOK)
+	assert.False(t, hasBroken, "a path key without a leading slash must be dropped")
+}
+
+func TestBuildPathsDedupesSameMethodAndPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	paths := gen.buildPaths([]models.Route{
+		{Method: "GET", Path: "/x", HandlerName: "first"},
+		{Method: "GET", Path: "/x", HandlerName: "second"}, // same (method,path)
+	})
+	require.NotNil(t, paths["/x"])
+	require.NotNil(t, paths["/x"].Get)
+	assert.Equal(t, "first", paths["/x"].Get.OperationID, "first registration wins on a duplicate (method,path)")
+}
+
 func TestGetAllRoutes(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 

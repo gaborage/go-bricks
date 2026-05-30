@@ -75,6 +75,12 @@ func runGenerate(opts *GenerateOptions) error {
 		}
 	}
 
+	// Surface non-fatal analysis diagnostics (e.g. routes dropped due to an
+	// unresolvable path) on stderr so they don't corrupt the generated spec.
+	for _, w := range projectAnalyzer.Warnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
+
 	// Generate OpenAPI spec
 	gen := generator.New("Go-Bricks API", "1.0.0", "Generated API specification")
 	specContent, err := gen.Generate(project)

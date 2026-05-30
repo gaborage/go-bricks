@@ -536,40 +536,66 @@ func TestExtractPathFromArg(t *testing.T) {
 		name     string
 		arg      ast.Expr
 		expected string
+		expectOK bool
 	}{
 		{
 			name:     "string literal",
 			arg:      &ast.BasicLit{Kind: token.STRING, Value: `"/direct/path"`},
 			expected: "/direct/path",
+			expectOK: true,
 		},
 		{
 			name:     "constant reference found",
 			arg:      &ast.Ident{Name: "testRoute"},
 			expected: "/api/test",
+			expectOK: true,
 		},
 		{
+			// Unresolved identifiers are no longer emitted as garbage path keys.
 			name:     "constant reference not found",
 			arg:      &ast.Ident{Name: "unknownRoute"},
-			expected: "unknownRoute",
+			expected: "",
+			expectOK: false,
 		},
 		{
 			name:     "non-string literal",
 			arg:      &ast.BasicLit{Kind: token.INT, Value: "123"},
 			expected: "",
+			expectOK: false,
 		},
 		{
 			name:     "unsupported expression",
 			arg:      &ast.BinaryExpr{Op: token.ADD},
 			expected: "",
+			expectOK: false,
+		},
+		{
+			name: "concatenation of constant and literal",
+			arg: &ast.BinaryExpr{
+				Op: token.ADD,
+				X:  &ast.Ident{Name: "testRoute"},
+				Y:  &ast.BasicLit{Kind: token.STRING, Value: `"/extra"`},
+			},
+			expected: "/api/test/extra",
+			expectOK: true,
+		},
+		{
+			name: "concatenation with an unresolved operand",
+			arg: &ast.BinaryExpr{
+				Op: token.ADD,
+				X:  &ast.Ident{Name: "unknownRoute"},
+				Y:  &ast.BasicLit{Kind: token.STRING, Value: `"/extra"`},
+			},
+			expected: "",
+			expectOK: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := analyzer.extractPathFromArg(tt.arg)
-			if result != tt.expected {
-				t.Errorf(expectedGotFormat, tt.expected, result)
-			}
+			result, ok := analyzer.extractPathFromArg(tt.arg)
+			assert.Equal(t, tt.expectOK, ok, "resolved")
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
@@ -928,8 +954,9 @@ func (m *Module) RegisterRoutes() {}`,
 	}
 }
 
-// TestExtractRouteFromStatementEdgeCases tests edge cases for extractRouteFromStatement
-func TestExtractRouteFromStatementEdgeCases(t *testing.T) {
+// TestExtractRoutesFromFuncBodyEdgeCases tests edge cases for route extraction
+// from a function body (invalid calls, wrong package, bad arg counts).
+func TestExtractRoutesFromFuncBodyEdgeCases(t *testing.T) {
 	analyzer := New("test")
 
 	tests := []struct {
@@ -959,7 +986,9 @@ func test() { server.GET() }`,
 			name: "server call with too many arguments",
 			content: `package test
 func test() { server.GET("/path", handler, extra1, extra2, extra3) }`,
-			expected: 1, // This actually creates a valid route since it has path and handler
+			// Args[2] (extra1) is an unresolved identifier, not a literal path, so
+			// the route is dropped rather than emitted with a garbage path key.
+			expected: 0,
 		},
 		{
 			name: "non-existent HTTP method",
@@ -3132,4 +3161,245 @@ func (m *Module) list(ctx server.HandlerContext) (server.Result[int], server.IAP
 		assert.Equal(t, "users", project.Modules[0].Routes[i].Module, "route %d Module", i)
 		assert.Equal(t, "users", project.Modules[0].Routes[i].Package, "route %d Package", i)
 	}
+}
+
+// analyzeSingleModule writes src as a module file under a temp project, runs
+// AnalyzeProject, and returns the analyzer (for Warnings) and the flattened routes.
+func analyzeSingleModule(t *testing.T, src string) (*ProjectAnalyzer, []models.Route) {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(src), 0600))
+
+	a := New(dir)
+	project, err := a.AnalyzeProject()
+	require.NoError(t, err)
+	var routes []models.Route
+	for i := range project.Modules {
+		routes = append(routes, project.Modules[i].Routes...)
+	}
+	return a, routes
+}
+
+func routePathSet(routes []models.Route) map[string]bool {
+	set := map[string]bool{}
+	for i := range routes {
+		set[routes[i].Method+" "+routes[i].Path] = true
+	}
+	return set
+}
+
+func TestRegistrationWalkDiscoversAllPatterns(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+const apiBase = "/api"
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	v1 := r.Group("/v1")
+	server.GET(hr, v1, "/items", m.h)
+	admin := v1.Group("/admin")
+	server.GET(hr, admin, "/stats", m.h)
+	if true {
+		server.GET(hr, r, "/health", m.h)
+	}
+	for i := 0; i < 1; i++ {
+		server.GET(hr, r, "/loop", m.h)
+	}
+	server.GET(hr, r, apiBase+"/version", m.h)
+	m.helper(hr, r)
+}
+func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/items", m.h)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	_, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	for _, want := range []string{
+		"GET /v1/items",       // group prefix
+		"GET /v1/admin/stats", // nested group
+		"GET /health",         // inside if-block
+		"GET /loop",           // inside for-block
+		"GET /api/version",    // concatenated const + literal
+		"POST /items",         // helper-registered
+	} {
+		assert.True(t, got[want], "expected route %q; got %v", want, got)
+	}
+}
+
+func TestRegistrationWalkCycleGuard(t *testing.T) {
+	// helperA -> helperB -> helperA: the visited guard must prevent infinite
+	// recursion (the test simply completing proves it) and walk each helper once.
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/a", m.h)
+	m.helperA(hr, r)
+}
+func (m *Module) helperA(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/b", m.h)
+	m.helperB(hr, r)
+}
+func (m *Module) helperB(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/c", m.h)
+	m.helperA(hr, r)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	_, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /a"])
+	assert.True(t, got["GET /b"])
+	assert.True(t, got["GET /c"])
+	assert.Len(t, routes, 3, "each helper walked exactly once despite the cycle")
+}
+
+func TestRegistrationWalkDropsUnresolvedPath(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/ok", m.h)
+	server.GET(hr, r, buildPath(), m.h)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	a, routes := analyzeSingleModule(t, src)
+	require.Len(t, routes, 1, "the route with an unresolvable path must be dropped")
+	assert.Equal(t, "/ok", routes[0].Path)
+	assert.NotEmpty(t, a.Warnings(), "a warning should be recorded for the dropped route")
+}
+
+func TestReceiverVarName(t *testing.T) {
+	named := &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{{Name: "m"}}, Type: &ast.Ident{Name: "Module"}}}}
+	assert.Equal(t, "m", receiverVarName(named))
+	assert.Empty(t, receiverVarName(nil), "nil receiver")
+	assert.Empty(t, receiverVarName(&ast.FieldList{}), "empty receiver list")
+	assert.Empty(t, receiverVarName(&ast.FieldList{List: []*ast.Field{{Type: &ast.Ident{Name: "Module"}}}}), "unnamed receiver")
+}
+
+func TestRegistrationWalkHelperInSiblingFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	moduleSrc := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/a", m.h)
+	m.helper(hr, r)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	// The helper method lives in a sibling file — exercises findMethodDecl's
+	// package-wide fallback search.
+	helperSrc := `package mod
+import "github.com/gaborage/go-bricks/server"
+func (m *Module) helper(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/b", m.h)
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(moduleSrc), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "helper.go"), []byte(helperSrc), 0600))
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	var routes []models.Route
+	for i := range project.Modules {
+		routes = append(routes, project.Modules[i].Routes...)
+	}
+	got := routePathSet(routes)
+	assert.True(t, got["GET /a"])
+	assert.True(t, got["POST /b"], "helper method in a sibling file must be discovered")
+}
+
+func TestRegistrationWalkThreadsGroupPrefixIntoHelper(t *testing.T) {
+	// A single helper invoked once per version group must be walked each time and
+	// inherit that group's prefix (exercises the recursion-stack guard allowing
+	// re-invocation, plus prefix threading into the helper's registrar param).
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	v1 := r.Group("/v1")
+	m.itemRoutes(hr, v1)
+	v2 := r.Group("/v2")
+	m.itemRoutes(hr, v2)
+}
+func (m *Module) itemRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/items", m.h)
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	_, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /v1/items"], "helper invoked with the v1 group inherits /v1")
+	assert.True(t, got["GET /v2/items"], "same helper invoked with the v2 group inherits /v2")
+	assert.Len(t, routes, 2, "the shared helper is walked once per invocation")
+}
+
+func TestRegistrationWalkIgnoresNonRegistrationMethods(t *testing.T) {
+	// A same-receiver method that is NOT a route-registration helper (no
+	// server.RouteRegistrar param) must not be recursed into, so a server.* call
+	// in its body is not harvested as a phantom route.
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/real", m.h)
+	if m.featureEnabled() {
+		server.GET(hr, r, "/gated", m.h)
+	}
+}
+func (m *Module) featureEnabled() bool {
+	server.GET(nil, nil, "/phantom", m.h)
+	return true
+}
+func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	_, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /real"])
+	assert.True(t, got["GET /gated"], "a route inside an if-block is still discovered")
+	assert.False(t, got["GET /phantom"], "a server call inside a non-registration method must not become a route")
 }
