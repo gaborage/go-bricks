@@ -1973,8 +1973,14 @@ func (a *ProjectAnalyzer) namedScalarKind(name string, astFile *ast.File, filePa
 	if !ok {
 		return ""
 	}
+	if k, known := knownUnderlyingKinds[underlying]; known {
+		return k // e.g. `type Timeout time.Duration` -> integer
+	}
 	if k := primitiveKind(underlying); k != "" {
 		return k // underlying is a builtin scalar
+	}
+	if strings.Contains(underlying, ".") {
+		return "" // unknown qualified underlying — not classified
 	}
 	return a.namedScalarKind(underlying, astFile, filePath, depth+1) // chained named type
 }
@@ -2028,10 +2034,15 @@ func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
 			if !ok || ts.Name.Name != name {
 				continue
 			}
-			if ident, isIdent := ts.Type.(*ast.Ident); isIdent {
-				return ident.Name, true
+			switch u := ts.Type.(type) {
+			case *ast.Ident:
+				return u.Name, true // `type Cents int64` -> "int64"
+			case *ast.SelectorExpr:
+				if pkg, isIdent := u.X.(*ast.Ident); isIdent {
+					return pkg.Name + "." + u.Sel.Name, true // `type Timeout time.Duration`
+				}
 			}
-			return "", false // underlying is not a bare ident
+			return "", false // underlying is a struct/slice/map/etc.
 		}
 	}
 	return "", false

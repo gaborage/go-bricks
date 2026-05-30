@@ -3948,10 +3948,16 @@ func (m *Module) Name() string { return "mod" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
 func (m *Module) Shutdown() error { return nil }
 type Cents int64
+type Alias Cents
+type Timeout time.Duration
+type Inner struct{ X int }
 type Money struct {
-	Amount Cents         ` + "`json:\"amount\"`" + `
-	TTL    time.Duration ` + "`json:\"ttl\"`" + `
-	Plain  int           ` + "`json:\"plain\"`" + `
+	Amount  Cents         ` + "`json:\"amount\"`" + `
+	Chained Alias         ` + "`json:\"chained\"`" + `
+	Wait    Timeout       ` + "`json:\"wait\"`" + `
+	TTL     time.Duration ` + "`json:\"ttl\"`" + `
+	Plain   int           ` + "`json:\"plain\"`" + `
+	Nested  Inner         ` + "`json:\"nested\"`" + `
 }
 func (m *Module) g(ctx server.HandlerContext) (server.Result[Money], server.IAPIError) { return server.Created(Money{}), nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
@@ -3962,12 +3968,19 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	money := a.typeRegistry["Money"]
 	require.NotNil(t, money)
 	kind := map[string]string{}
+	ref := map[string]string{}
 	for i := range money.Fields {
 		kind[money.Fields[i].JSONName] = money.Fields[i].UnderlyingKind
+		ref[money.Fields[i].JSONName] = money.Fields[i].RefName
 	}
 	assert.Equal(t, "integer", kind["amount"], "type Cents int64 -> integer")
+	assert.Equal(t, "integer", kind["chained"], "type Alias Cents -> chain to int64 -> integer")
+	assert.Equal(t, "integer", kind["wait"], "type Timeout time.Duration -> integer (selector underlying)")
 	assert.Equal(t, "integer", kind["ttl"], "time.Duration -> integer")
 	assert.Equal(t, "", kind["plain"], "a builtin used directly is not a named wrapper")
+	// A named STRUCT is a $ref, not a scalar underlying kind.
+	assert.Equal(t, "", kind["nested"], "named struct has no scalar underlying kind")
+	assert.Equal(t, "Inner", ref["nested"], "named struct is a $ref")
 }
 
 // TestSchemaKeyCollision locks the collision-qualification rule: same (pkg,type)
@@ -4046,4 +4059,32 @@ var _ = other.X
 	assert.Nil(t, a.registerQualifiedType("time.Duration", f), "stdlib import is not in-module -> nil")
 	assert.Nil(t, a.registerQualifiedType("missingpkg.Foo", f), "unknown alias -> nil")
 	assert.Nil(t, a.registerQualifiedType("other.Missing", f), "in-module but dir/type absent -> nil")
+}
+
+// TestLocalTypeUnderlyingSiblingFile covers resolving a named type whose
+// declaration lives in a SIBLING file of the same package (the parsePackageDir
+// fallback), and the not-found / non-ident arms.
+func TestLocalTypeUnderlyingSiblingFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"),
+		[]byte("package p\ntype User struct{ Amount Cents }\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"),
+		[]byte("package p\ntype Cents int64\ntype Wrapped struct{ X int }\n"), 0600))
+	a := New(dir)
+	aPath := filepath.Join(dir, "a.go")
+	af, err := parser.ParseFile(a.fileSet, aPath, nil, parser.ParseComments)
+	require.NoError(t, err)
+
+	// Cents is declared in b.go (a sibling file) — found via the per-dir parse.
+	u, ok := a.localTypeUnderlying("Cents", af, aPath)
+	assert.True(t, ok, "named type in a sibling file resolves")
+	assert.Equal(t, "int64", u)
+
+	// A named struct has no bare-ident underlying -> ok=false.
+	_, ok = a.localTypeUnderlying("Wrapped", af, aPath)
+	assert.False(t, ok, "a named struct is not a scalar underlying")
+
+	// Absent type -> ok=false.
+	_, ok = a.localTypeUnderlying("Missing", af, aPath)
+	assert.False(t, ok)
 }
