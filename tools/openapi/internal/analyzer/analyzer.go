@@ -234,7 +234,7 @@ func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 	slices.Sort(dirs)
 	for _, dir := range dirs {
 		c := d.nearMiss[dir]
-		a.addWarningf("struct %q in %s has Name and Init but an unrecognized %s signature; "+
+		a.addWarningf("struct %q in %s has Name, Init, and Shutdown but an unrecognized %s signature; "+
 			"it is skipped and its routes are omitted (want func(*server.HandlerRegistry, server.RouteRegistrar))",
 			c.structName, c.relFile, moduleMethodRegisterRoutes)
 	}
