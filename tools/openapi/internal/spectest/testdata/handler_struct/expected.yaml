@@ -1,28 +1,9 @@
 openapi: 3.0.1
 info:
-  title: Simple API
+  title: Shop API
   version: 1.0.0
   description: Generated API specification
 paths:
-  /ping:
-    get:
-      operationId: ping
-      summary: GET /ping
-      tags:
-        - health
-      responses:
-        "200":
-          description: Successful response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SuccessResponse'
-        "400":
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
   /users:
     post:
       operationId: createUser
@@ -48,6 +29,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: GET /users/{id}
+      tags:
+        - users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteUser
+      summary: DELETE /users/{id}
+      tags:
+        - users
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Resource deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
     CreateUserReq:
@@ -60,12 +92,6 @@ components:
           type: string
           minLength: 2
           maxLength: 50
-        role:
-          type: string
-          enum:
-            - admin
-            - member
-            - guest
       required:
         - email
         - name
@@ -80,6 +106,14 @@ components:
           description: Response metadata
       required:
         - error
+    GetUserReq:
+      type: object
+      properties:
+        iD:
+          type: integer
+          format: int64
+      required:
+        - iD
     JOSEErrorEnvelope:
       type: object
       properties:

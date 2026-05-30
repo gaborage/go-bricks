@@ -248,15 +248,27 @@ func (g *OpenAPIGenerator) getDescription(project *models.Project) string {
 	return g.description
 }
 
-// getAllRoutes flattens routes from all modules
+// getAllRoutes flattens routes from all modules, preserving each route's owning
+// module identity (stamping it when the analyzer did not — e.g. hand-built
+// projects in tests) so later passes can namespace by module.
 func (g *OpenAPIGenerator) getAllRoutes(project *models.Project) []models.Route {
 	totalRoutes := 0
-	for _, module := range project.Modules {
-		totalRoutes += len(module.Routes)
+	for i := range project.Modules {
+		totalRoutes += len(project.Modules[i].Routes)
 	}
 	routes := make([]models.Route, 0, totalRoutes)
-	for _, module := range project.Modules {
-		routes = append(routes, module.Routes...)
+	for mi := range project.Modules {
+		module := &project.Modules[mi]
+		for ri := range module.Routes {
+			route := module.Routes[ri]
+			if route.Module == "" {
+				route.Module = module.Name
+			}
+			if route.Package == "" {
+				route.Package = module.Package
+			}
+			routes = append(routes, route)
+		}
 	}
 	return routes
 }

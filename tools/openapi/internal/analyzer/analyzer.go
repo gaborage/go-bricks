@@ -27,6 +27,12 @@ const (
 	frameworkPkgApp             = "app"
 	frameworkTypeModuleDeps     = "ModuleDeps"
 
+	// Framework response wrappers. Result[R] / ResultWithMeta[R] are unwrapped to
+	// the inner response type R; NoContentResult marks a bodyless 204 response.
+	resultTypeName          = "Result"
+	resultWithMetaTypeName  = "ResultWithMeta"
+	noContentResultTypeName = "NoContentResult"
+
 	// Module interface method names
 	moduleMethodName           = "Name"
 	moduleMethodInit           = "Init"
@@ -243,6 +249,13 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error)
 
 	// Extract routes from the RegisterRoutes method, including other files in the package
 	module.Routes = a.extractRoutesFromPackage(astFile, filePath, structName)
+
+	// Stamp the owning module identity onto each route at discovery time so later
+	// passes (operationId namespacing, component-name disambiguation) can use it.
+	for i := range module.Routes {
+		module.Routes[i].Module = module.Name
+		module.Routes[i].Package = module.Package
+	}
 
 	return module, nil
 }
@@ -476,24 +489,92 @@ func (a *ProjectAnalyzer) extractHandlerInfo(
 		return "", nil, nil
 	}
 
-	selExpr, ok := callExpr.Args[3].(*ast.SelectorExpr)
+	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(callExpr.Args[3], structName, astFile, filePath)
 	if !ok {
 		return "", nil, nil
 	}
 
-	handlerName = selExpr.Sel.Name
-
-	// Extract handler signature if we have required context
-	if astFile != nil && filePath != "" && structName != "" {
-		var err error
-		reqType, respType, err = a.extractHandlerSignature(astFile, filePath, structName, handlerName)
+	// Extract handler signature if we have required context.
+	if astFile != nil && filePath != "" {
+		req, resp, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
 		if err != nil {
-			// Don't fail - some routes use inline handlers
-			reqType, respType = nil, nil
+			// Don't fail — some routes use inline or external handlers.
+			return handlerName, nil, nil
 		}
+		return handlerName, req, resp
 	}
 
-	return handlerName, reqType, respType
+	return handlerName, nil, nil
+}
+
+// resolveHandler determines the handler name and where to find its signature from
+// the handler argument of a route registration. It supports:
+//
+//	m.createUser    — a method on the module struct (receiver = the module)
+//	m.h.createUser   — a method on the type of a module field (the documented
+//	                   Enhanced Handler Pattern; receiver = the field's type)
+//	Ping             — a package-level function (isPackageFunc = true)
+//
+// Returns ok=false when the argument is not a recognizable handler reference
+// (e.g. an inline function literal).
+func (a *ProjectAnalyzer) resolveHandler(
+	arg ast.Expr, moduleStruct string, astFile *ast.File, filePath string,
+) (handlerName, receiverType string, isPackageFunc, ok bool) {
+	switch h := arg.(type) {
+	case *ast.Ident:
+		// Bare function reference: server.GET(hr, r, path, Ping).
+		return h.Name, "", true, true
+	case *ast.SelectorExpr:
+		handlerName = h.Sel.Name
+		switch x := h.X.(type) {
+		case *ast.Ident:
+			// m.createUser — the qualifier is the module receiver variable.
+			return handlerName, moduleStruct, false, true
+		case *ast.SelectorExpr:
+			// m.h.createUser — the qualifier is a module field; resolve its type.
+			// Only single-level field indirection is supported: x.Sel is taken as a
+			// field of the module struct. Deeper chains (m.a.b.createUser) resolve
+			// x.Sel against the module and fail closed (no types) if it is not a
+			// module field, rather than emitting a wrong schema.
+			return handlerName, a.resolveFieldType(moduleStruct, x.Sel.Name, astFile, filePath), false, true
+		}
+	}
+	return "", "", false, false
+}
+
+// resolveFieldType returns the base type name of field fieldName on structName
+// (leading pointer and package qualifier stripped), or "" if it cannot be
+// resolved (struct or field not found).
+func (a *ProjectAnalyzer) resolveFieldType(structName, fieldName string, astFile *ast.File, filePath string) string {
+	if structName == "" {
+		return ""
+	}
+	structType, err := a.findStructDefinition(astFile, filePath, structName)
+	if err != nil || structType.Fields == nil {
+		return ""
+	}
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			if name.Name == fieldName {
+				return baseTypeName(field.Type)
+			}
+		}
+	}
+	return ""
+}
+
+// baseTypeName returns the unqualified type name of an expression, stripping a
+// leading pointer and any package qualifier (e.g. *pkg.Handler -> Handler).
+func baseTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return baseTypeName(t.X)
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	}
+	return ""
 }
 
 // extractRouteFromStatement extracts a route from a statement like server.GET(...)
@@ -1023,9 +1104,41 @@ func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *m
 		return a.handleStarExprType(t, packageName)
 	case *ast.SelectorExpr:
 		return a.handleSelectorExprType(t)
+	case *ast.IndexExpr:
+		// Single-type-param generic, e.g. server.Result[User].
+		return a.handleResultWrapper(t.X, t.Index, packageName)
+	case *ast.IndexListExpr:
+		// Multi-type-param generic, e.g. Foo[A, B]; the response type is the first.
+		if len(t.Indices) > 0 {
+			return a.handleResultWrapper(t.X, t.Indices[0], packageName)
+		}
 	}
 
 	return nil
+}
+
+// handleResultWrapper unwraps a framework result wrapper (server.Result[R] /
+// server.ResultWithMeta[R]) to the inner response type R. Any other generic is
+// not a known response carrier, so it returns nil rather than guessing.
+func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName string) *models.TypeInfo {
+	if !isResultWrapper(x) {
+		return nil
+	}
+	return a.typeInfoFromExpr(index, packageName)
+}
+
+// isResultWrapper reports whether x is server.Result or server.ResultWithMeta.
+// (Matches the existing "server" qualifier assumption used by isFrameworkType.)
+func isResultWrapper(x ast.Expr) bool {
+	sel, ok := x.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != frameworkPkgServer {
+		return false
+	}
+	return sel.Sel.Name == resultTypeName || sel.Sel.Name == resultWithMetaTypeName
 }
 
 // handleIdentType processes simple identifier types (e.g., TypeName)
@@ -1078,6 +1191,13 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.Ty
 		return nil
 	}
 
+	// server.NoContentResult is a bodyless 204 response — carry a marker (no
+	// Name/Fields, so no component is generated) rather than treating it as a
+	// schema-bearing response type.
+	if pkg.Name == frameworkPkgServer && t.Sel.Name == noContentResultTypeName {
+		return &models.TypeInfo{NoContent: true}
+	}
+
 	if a.isFrameworkType(t.Sel.Name, pkg.Name) {
 		return nil
 	}
@@ -1123,7 +1243,8 @@ func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageNam
 // Returns request and response TypeInfo if found
 func (a *ProjectAnalyzer) findHandlerInFile(
 	astFile *ast.File,
-	structName string,
+	receiverType string,
+	isPackageFunc bool,
 	handlerName string,
 ) (requestType, responseType *models.TypeInfo) {
 	for _, decl := range astFile.Decls {
@@ -1132,8 +1253,8 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 			continue
 		}
 
-		// Check receiver matches the module struct
-		if !a.isMethodOnStruct(funcDecl.Recv, structName) {
+		// Check the receiver matches the resolved handler target.
+		if !a.handlerReceiverMatches(funcDecl.Recv, receiverType, isPackageFunc) {
 			continue
 		}
 
@@ -1147,17 +1268,31 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 	return nil, nil
 }
 
+// handlerReceiverMatches reports whether a function declaration's receiver matches
+// the resolved handler target: a package-level function must have no receiver,
+// otherwise the receiver type must equal receiverType.
+func (a *ProjectAnalyzer) handlerReceiverMatches(recv *ast.FieldList, receiverType string, isPackageFunc bool) bool {
+	if isPackageFunc {
+		return recv == nil
+	}
+	if receiverType == "" {
+		return false
+	}
+	return a.isMethodOnStruct(recv, receiverType)
+}
+
 // extractHandlerSignature extracts request and response type information from a handler method
 // Searches current file first, then falls back to other files in the package
 // Also populates struct fields for discovered types
 func (a *ProjectAnalyzer) extractHandlerSignature(
 	astFile *ast.File,
 	filePath string,
-	structName string,
+	receiverType string,
+	isPackageFunc bool,
 	handlerName string,
 ) (reqType, respType *models.TypeInfo, err error) {
 	// Try current file first
-	if reqType, respType := a.findHandlerInFile(astFile, structName, handlerName); reqType != nil || respType != nil {
+	if reqType, respType := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 		a.populateTypeFields(reqType, astFile, filePath)
 		a.populateTypeFields(respType, astFile, filePath)
 		return reqType, respType, nil
@@ -1167,7 +1302,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if reqType, respType := a.findHandlerInFile(file, structName, handlerName); reqType != nil || respType != nil {
+			if reqType, respType := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 				a.populateTypeFields(reqType, file, filePath)
 				a.populateTypeFields(respType, file, filePath)
 				return reqType, respType, nil
@@ -1177,7 +1312,7 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
-	return nil, nil, fmt.Errorf("handler %s not found for struct %s", handlerName, structName)
+	return nil, nil, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
 // populateTypeFields populates the Fields slice for a TypeInfo by finding its struct definition
@@ -1187,7 +1322,7 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 	}
 
 	// Find struct definition
-	structType, _, err := a.findStructDefinition(astFile, filePath, typeInfo.Name)
+	structType, err := a.findStructDefinition(astFile, filePath, typeInfo.Name)
 	if err != nil {
 		// Struct not found - might be a primitive type or external type
 		return
@@ -1239,30 +1374,28 @@ func (a *ProjectAnalyzer) findStructDefinition(
 	astFile *ast.File,
 	filePath string,
 	typeName string,
-) (*ast.StructType, string, error) {
+) (*ast.StructType, error) {
 	// Search current file first
-	if structType, pkgName := a.findStructInFile(astFile, typeName); structType != nil {
-		return structType, pkgName, nil
+	if structType := a.findStructInFile(astFile, typeName); structType != nil {
+		return structType, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if structType, pkgName := a.findStructInFile(file, typeName); structType != nil {
-				return structType, pkgName, nil
+			if structType := a.findStructInFile(file, typeName); structType != nil {
+				return structType, nil
 			}
 		}
 	}
 
-	return nil, "", fmt.Errorf("struct %s not found", typeName)
+	return nil, fmt.Errorf("struct %s not found", typeName)
 }
 
-// findStructInFile searches a single AST file for a struct type definition
-// Returns the struct type and package name if found
-//
-//nolint:gocritic // Named returns would reduce clarity in this AST traversal function
-func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) (*ast.StructType, string) {
+// findStructInFile searches a single AST file for a struct type definition,
+// returning the struct type or nil if not found.
+func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *ast.StructType {
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -1280,11 +1413,11 @@ func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) (
 				continue
 			}
 
-			return structType, astFile.Name.Name
+			return structType
 		}
 	}
 
-	return nil, ""
+	return nil
 }
 
 // extractStructFields extracts field information from a struct type including struct tags
