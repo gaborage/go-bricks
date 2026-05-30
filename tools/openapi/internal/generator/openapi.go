@@ -94,10 +94,6 @@ type OpenAPIGenerator struct {
 	title       string
 	version     string
 	description string
-	// operationIDs maps a route key ("METHOD /path") to its assigned, unique
-	// operationId. Populated once per Generate from a deterministic pass over all
-	// routes so ids are module-qualified and collision-free across modules.
-	operationIDs map[string]string
 }
 
 // OpenAPIInfo represents the info section of an OpenAPI specification
@@ -219,9 +215,13 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(infoYAML)
 
-	// Assign deterministic, collision-free operationIds before building paths.
+	// Reduce to the EMITTED route set (first-wins per method+path, matching
+	// assignOperation), then drive operationIds, schema gating, and path building
+	// from that one set so the gate, refs, and paths can never disagree. opIDs is
+	// request-scoped (threaded, not stored) so Generate is reentrant.
 	allRoutes := g.getAllRoutes(project)
-	g.operationIDs = g.assignOperationIDs(allRoutes)
+	emitted := emittedRoutes(allRoutes)
+	opIDs := g.assignOperationIDs(emitted)
 
 	// Servers: a relative-root default so the document is self-describing and
 	// passes the no-empty-servers gate (the concrete URL is a PR11 flag).
@@ -233,7 +233,7 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 
 	// Paths — built as a struct graph and emitted through the same yaml.Marshal
 	// path as info/components (an empty project marshals to "paths: {}").
-	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(allRoutes))
+	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(emitted, opIDs))
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal paths section: %w", err)
 	}
@@ -249,8 +249,8 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	// Standard schemas are gated to those actually referenced (so no-unused-components
 	// holds): ErrorResponse always; SuccessResponse/JOSEErrorEnvelope only for JOSE
 	// routes; RawErrorResponse only for raw routes.
-	standardSchemas := g.createStandardSchemas(allRoutes)
-	generatedSchemas := g.generateSchemasFromTypes(types, referencedSchemaNames(allRoutes, types))
+	standardSchemas := g.createStandardSchemas(emitted)
+	generatedSchemas := g.generateSchemasFromTypes(types, referencedSchemaNames(emitted, types))
 
 	// Merge schemas (generated schemas override standard if there's a conflict)
 	schemas := make(map[string]*OpenAPISchema)
@@ -379,7 +379,7 @@ func (g *OpenAPIGenerator) groupRoutesByPath(routes []models.Route) map[string][
 // buildPaths builds the paths object as a struct graph keyed by path. yaml.Marshal
 // sorts map keys, giving the same deterministic path ordering the previous
 // hand-rolled writer produced via sort.Strings.
-func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPIPathItem {
+func (g *OpenAPIGenerator) buildPaths(routes []models.Route, opIDs map[string]string) map[string]*OpenAPIPathItem {
 	pathGroups := g.groupRoutesByPath(routes)
 	paths := make(map[string]*OpenAPIPathItem, len(pathGroups))
 	for path := range pathGroups {
@@ -392,23 +392,41 @@ func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPI
 		group := pathGroups[path]
 		item := &OpenAPIPathItem{}
 		for i := range group {
-			g.assignOperation(item, &group[i])
+			g.assignOperation(item, &group[i], opIDs)
 		}
 		paths[path] = item
 	}
 	return paths
 }
 
+// emittedRoutes reduces routes to the set actually emitted: the first route per
+// (method, path), in discovery order, mirroring assignOperation's first-wins
+// de-dup. Schema gating, ref collection, and operationId assignment all run over
+// this set so they agree with the emitted paths.
+func emittedRoutes(routes []models.Route) []models.Route {
+	seen := make(map[string]struct{}, len(routes))
+	out := make([]models.Route, 0, len(routes))
+	for i := range routes {
+		k := routeKey(&routes[i])
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, routes[i])
+	}
+	return out
+}
+
 // assignOperation builds the operation for a route and attaches it to the path
 // item under the matching HTTP method. The analyzer only emits the standard
 // methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op. A
 // (method, path) already populated is left untouched (first-wins de-dup).
-func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route) {
+func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route, opIDs map[string]string) {
 	slot := item.methodSlot(strings.ToUpper(route.Method))
 	if slot == nil || *slot != nil {
 		return
 	}
-	*slot = g.buildOperation(route)
+	*slot = g.buildOperation(route, opIDs)
 }
 
 // methodSlot returns a pointer to the operation field for an HTTP method, or nil
@@ -448,9 +466,9 @@ type Parameter struct {
 // buildOperation builds the Operation Object for a route. Empty tags/parameters
 // and an absent request body are dropped by the struct's omitempty tags, matching
 // the previous conditional text emission.
-func (g *OpenAPIGenerator) buildOperation(route *models.Route) *OpenAPIOperation {
+func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]string) *OpenAPIOperation {
 	op := &OpenAPIOperation{
-		OperationID: g.getOperationID(route),
+		OperationID: g.getOperationID(route, opIDs),
 		Summary:     g.getSummary(route),
 		Description: route.Description,
 		Tags:        route.Tags,
@@ -667,8 +685,8 @@ func routeHasValidation(request *models.TypeInfo) bool {
 }
 
 // getOperationID generates an operation ID for a route
-func (g *OpenAPIGenerator) getOperationID(route *models.Route) string {
-	if id, ok := g.operationIDs[routeKey(route)]; ok {
+func (g *OpenAPIGenerator) getOperationID(route *models.Route, opIDs map[string]string) string {
+	if id, ok := opIDs[routeKey(route)]; ok {
 		return id
 	}
 	return g.baseOperationID(route) // defensive fallback (route not in the pre-pass)

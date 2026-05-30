@@ -253,7 +253,7 @@ func TestGetOperationID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := gen.getOperationID(tt.route)
+			result := gen.getOperationID(tt.route, nil)
 			if result != tt.expected {
 				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
@@ -360,7 +360,7 @@ func TestBuildPathsDropsNonRootedPath(t *testing.T) {
 	paths := gen.buildPaths([]models.Route{
 		{Method: "GET", Path: "/ok"},
 		{Method: "GET", Path: "broken"}, // no leading slash
-	})
+	}, nil)
 	_, hasOK := paths["/ok"]
 	_, hasBroken := paths["broken"]
 	assert.True(t, hasOK)
@@ -372,7 +372,7 @@ func TestBuildPathsDedupesSameMethodAndPath(t *testing.T) {
 	paths := gen.buildPaths([]models.Route{
 		{Method: "GET", Path: "/x", HandlerName: "first"},
 		{Method: "GET", Path: "/x", HandlerName: "second"}, // same (method,path)
-	})
+	}, nil)
 	require.NotNil(t, paths["/x"])
 	require.NotNil(t, paths["/x"].Get)
 	assert.Equal(t, "first", paths["/x"].Get.OperationID, "first registration wins on a duplicate (method,path)")
@@ -2050,14 +2050,14 @@ func TestAssignOperationByMethod(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
 			item := &OpenAPIPathItem{}
-			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"})
+			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"}, nil)
 			assert.NotNil(t, tc.op(item), "operation should be attached under %s", tc.method)
 		})
 	}
 
 	t.Run("unknown_method_noop", func(t *testing.T) {
 		item := &OpenAPIPathItem{}
-		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"})
+		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"}, nil)
 		assert.Nil(t, item.Get)
 		assert.Nil(t, item.Post)
 	})
@@ -2489,6 +2489,8 @@ func TestAssignOperationIDsDedup(t *testing.T) {
 		{Method: "GET", Path: "/b", Module: "m", HandlerName: "list"},
 	}
 	ids := gen.assignOperationIDs(routes)
-	got := []string{ids["GET /a"], ids["GET /b"]}
-	assert.ElementsMatch(t, []string{"mList", "mList2"}, got, "collision gets a deterministic suffix")
+	// Deterministic, sorted first-wins: "GET /a" sorts before "GET /b", so /a keeps
+	// the bare id and /b gets the suffix.
+	assert.Equal(t, "mList", ids["GET /a"], "first sorted key keeps the bare id")
+	assert.Equal(t, "mList2", ids["GET /b"], "later collision gets the numeric suffix")
 }
