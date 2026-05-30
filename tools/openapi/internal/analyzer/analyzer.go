@@ -82,18 +82,20 @@ const (
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
-	projectRoot string
-	fileSet     *token.FileSet
-	constants   map[string]string // Map of constant names to their values
-	warnings    []string          // Non-fatal diagnostics collected during analysis
+	projectRoot  string
+	fileSet      *token.FileSet
+	constants    map[string]string           // Map of constant names to their values
+	warnings     []string                    // Non-fatal diagnostics collected during analysis
+	typeRegistry map[string]*models.TypeInfo // Named struct types reachable from routes (by schema name)
 }
 
 // New creates a new project analyzer
 func New(projectRoot string) *ProjectAnalyzer {
 	return &ProjectAnalyzer{
-		projectRoot: projectRoot,
-		fileSet:     token.NewFileSet(),
-		constants:   make(map[string]string),
+		projectRoot:  projectRoot,
+		fileSet:      token.NewFileSet(),
+		constants:    make(map[string]string),
+		typeRegistry: make(map[string]*models.TypeInfo),
 	}
 }
 
@@ -138,9 +140,10 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 		Modules:     []models.Module{},
 	}
 
-	// Reset per-run diagnostics so repeated analyses on the same analyzer don't
-	// accumulate stale warnings.
+	// Reset per-run state so repeated analyses on the same analyzer don't
+	// accumulate stale warnings or type-registry entries.
 	a.warnings = nil
+	a.typeRegistry = make(map[string]*models.TypeInfo)
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -152,6 +155,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	}
 
 	project.Modules = modules
+	project.Types = a.typeRegistry
 	return project, nil
 }
 
@@ -1560,25 +1564,79 @@ func (a *ProjectAnalyzer) extractHandlerSignature(
 	return nil, nil, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
-// populateTypeFields populates the Fields slice for a TypeInfo by finding its struct definition
+// populateTypeFields populates a request/response TypeInfo's fields and registers
+// every named struct type reachable from it (nested, sliced, pointed-to, or
+// recursive) into the analyzer's type registry, so the generator can emit a
+// component per type and $ref between them.
 func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
 	if typeInfo == nil {
 		return
 	}
-
-	// Find struct definition
-	structType, err := a.findStructDefinition(astFile, filePath, typeInfo.Name)
-	if err != nil {
-		// Struct not found - might be a primitive type or external type
+	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)
+	if registered == nil {
 		return
 	}
+	// Mirror the registered fields onto the route's TypeInfo (request bodies and
+	// responses read Fields directly).
+	typeInfo.Fields = registered.Fields
+	typeInfo.JOSE = registered.JOSE
+}
 
-	// Extract fields from struct
-	typeInfo.Fields = a.extractStructFields(structType, typeInfo.Package)
-	// Scan for the JOSE sentinel field — the standard `_ struct{} `jose:"..."` ` pattern
-	// is filtered out of Fields by the unexported-name check, so JOSE detection runs as
-	// a separate pre-pass over raw struct fields.
-	typeInfo.JOSE = hasJOSESentinelTag(structType)
+// registerType resolves the struct named name in the package of astFile, adds it
+// to the type registry, and recurses into its struct-typed fields. It is
+// idempotent and registers a type BEFORE recursing so a self- or mutually-
+// referential type (e.g. Category{Parent *Category}) terminates. Returns nil when
+// name is not a resolvable local struct (a primitive, external, or unknown type).
+func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
+	if existing, ok := a.typeRegistry[name]; ok {
+		// Two packages contributing the same type name collide on one (name-keyed)
+		// component schema; surface it rather than silently first-winning.
+		// Package-qualified disambiguation is handled separately.
+		if pkg != "" && existing.Package != "" && existing.Package != pkg {
+			a.addWarningf("type name %q is defined in both %q and %q; they share one component schema", name, existing.Package, pkg)
+		}
+		return existing
+	}
+	structType, err := a.findStructDefinition(astFile, filePath, name)
+	if err != nil {
+		return nil
+	}
+
+	ti := &models.TypeInfo{Name: name, Package: pkg}
+	a.typeRegistry[name] = ti // register before recursing (cycle guard)
+	ti.Fields = a.extractStructFields(structType, pkg)
+	ti.JOSE = hasJOSESentinelTag(structType)
+
+	for i := range ti.Fields {
+		f := &ti.Fields[i]
+		// Skip fields excluded from JSON (mirrors typeInfoToSchema) so a type only
+		// reachable through a json:"-" field is not registered as an orphan/leaked
+		// component.
+		if f.JSONName == jsonSkipValue && f.ParamType == "" {
+			continue
+		}
+		if base := baseStructTypeName(f.Type); a.registerType(base, pkg, astFile, filePath) != nil {
+			f.RefName = base
+		}
+	}
+	return ti
+}
+
+// baseStructTypeName strips slice and pointer markers from a Go type string to
+// expose the underlying named type (e.g. "[]*Address" -> "Address"). Qualified
+// types (pkg.T) and maps are returned as-is and will not resolve to a local
+// struct (cross-package and map value resolution are handled separately).
+func baseStructTypeName(t string) string {
+	for {
+		switch {
+		case strings.HasPrefix(t, "*"):
+			t = t[1:]
+		case strings.HasPrefix(t, "[]"):
+			t = t[2:]
+		default:
+			return t
+		}
+	}
 }
 
 // hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field

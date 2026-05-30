@@ -202,9 +202,15 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(pathsYAML)
 
-	// Components with proper YAML marshaling
+	// Components with proper YAML marshaling. Prefer the analyzer-built type
+	// registry (which includes nested/recursive types); fall back to a flat
+	// registry of route request/response types for projects assembled without it.
+	types := project.Types
+	if types == nil {
+		types = routeTypeRegistry(project)
+	}
 	standardSchemas := g.createStandardSchemas()
-	generatedSchemas := g.generateSchemasFromTypes(allRoutes)
+	generatedSchemas := g.generateSchemasFromTypes(types)
 
 	// Merge schemas (generated schemas override standard if there's a conflict)
 	schemas := make(map[string]*OpenAPISchema)
@@ -573,31 +579,49 @@ func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 }
 
 // generateSchemasFromTypes creates OpenAPI schemas from discovered type information
-func (g *OpenAPIGenerator) generateSchemasFromTypes(routes []models.Route) map[string]*OpenAPISchema {
-	schemas := make(map[string]*OpenAPISchema)
-	seen := make(map[string]bool)
-
-	for i := range routes {
-		// Generate schema for request type
-		if routes[i].Request != nil && !seen[routes[i].Request.Name] {
-			schema := g.typeInfoToSchema(routes[i].Request)
-			if schema != nil {
-				schemas[routes[i].Request.Name] = schema
-				seen[routes[i].Request.Name] = true
-			}
-		}
-
-		// Generate schema for response type
-		if routes[i].Response != nil && !seen[routes[i].Response.Name] {
-			schema := g.typeInfoToSchema(routes[i].Response)
-			if schema != nil {
-				schemas[routes[i].Response.Name] = schema
-				seen[routes[i].Response.Name] = true
-			}
+// generateSchemasFromTypes emits one component schema per registered type. The
+// registry already contains every named struct reachable from a route's request
+// or response (including nested, sliced, and recursive types), so iterating it
+// produces a self-contained set of components with all $refs resolvable.
+func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.TypeInfo) map[string]*OpenAPISchema {
+	schemas := make(map[string]*OpenAPISchema, len(types))
+	for _, ti := range types {
+		if schema := g.typeInfoToSchema(ti); schema != nil {
+			schemas[schemaName(ti)] = schema
 		}
 	}
-
 	return schemas
+}
+
+// schemaName is the single source for a type's component-schema name (and the
+// $ref that points at it). Centralized so name disambiguation across packages
+// can be added in one place later.
+func schemaName(ti *models.TypeInfo) string {
+	return ti.Name
+}
+
+// routeTypeRegistry builds a flat type registry from the request/response types
+// of a project's routes. It is the fallback used when project.Types is unset
+// (e.g. a Project assembled directly rather than via the analyzer); it does not
+// resolve nested types, which the analyzer's registry already includes.
+func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
+	types := make(map[string]*models.TypeInfo)
+	add := func(ti *models.TypeInfo) {
+		if ti == nil || ti.Name == "" {
+			return
+		}
+		if _, ok := types[ti.Name]; !ok {
+			types[ti.Name] = ti
+		}
+	}
+	for mi := range project.Modules {
+		for ri := range project.Modules[mi].Routes {
+			route := &project.Modules[mi].Routes[ri]
+			add(route.Request)
+			add(route.Response)
+		}
+	}
+	return types
 }
 
 // typeInfoToSchema converts a TypeInfo to an OpenAPI schema
@@ -641,8 +665,25 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	return schema
 }
 
-// fieldInfoToProperty converts a FieldInfo to an OpenAPI property
+// fieldInfoToProperty converts a FieldInfo to an OpenAPI property.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
+	// A field whose underlying type is a registered struct is a $ref (or an array
+	// of $ref). A $ref must stand alone — it carries no sibling type/format or
+	// constraint keywords — so return early.
+	if field.RefName != "" {
+		ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
+		if isSliceType(field.Type) {
+			// The inner $ref must stand alone, but the array wrapper carries the
+			// field's documentation.
+			arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
+			if field.Example != "" {
+				arr.Example = field.Example
+			}
+			return arr
+		}
+		return ref
+	}
+
 	prop := &OpenAPIProperty{
 		Description: field.Description,
 	}
@@ -659,6 +700,12 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	g.applyConstraints(prop, field)
 
 	return prop
+}
+
+// isSliceType reports whether a Go type string denotes a slice (after an
+// optional leading pointer), e.g. "[]Address" or "*[]Address".
+func isSliceType(goType string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(goType, "*"), "[]")
 }
 
 // setTypeAndFormat maps Go types to OpenAPI type and format
