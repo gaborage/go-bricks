@@ -1996,38 +1996,42 @@ func primitiveKind(goType string) string {
 
 // localTypeUnderlying finds a local `type Name <ident>` declaration and returns
 // the underlying identifier (e.g. Cents -> "int64"). Returns ok=false when Name
-// is not a local non-struct named type.
+// is not a local non-struct named type. It searches the current file first, then
+// sibling files in the same package (via the cached per-dir parse).
 func (a *ProjectAnalyzer) localTypeUnderlying(name string, astFile *ast.File, filePath string) (string, bool) {
-	search := func(file *ast.File) (string, bool) {
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name.Name != name {
-					continue
-				}
-				if ident, ok := ts.Type.(*ast.Ident); ok {
-					return ident.Name, true
-				}
-				return "", false // underlying is not a bare ident (struct/slice/etc.)
-			}
-		}
-		return "", false
-	}
-	if u, ok := search(astFile); ok {
+	if u, ok := namedTypeUnderlyingInFile(astFile, name); ok {
 		return u, true
 	}
-	// Sibling files in the same package, via the cached per-dir parse.
 	files, err := a.parsePackageDir(filepath.Dir(filePath))
 	if err != nil {
 		return "", false
 	}
 	for _, file := range files {
-		if u, ok := search(file); ok {
+		if u, ok := namedTypeUnderlyingInFile(file, name); ok {
 			return u, true
+		}
+	}
+	return "", false
+}
+
+// namedTypeUnderlyingInFile returns the underlying identifier of a `type Name
+// <ident>` declaration in file, or ok=false when name is absent or its underlying
+// type is not a bare identifier (a struct/slice/map/etc.).
+func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != name {
+				continue
+			}
+			if ident, isIdent := ts.Type.(*ast.Ident); isIdent {
+				return ident.Name, true
+			}
+			return "", false // underlying is not a bare ident
 		}
 	}
 	return "", false
