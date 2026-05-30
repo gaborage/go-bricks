@@ -123,6 +123,8 @@ type OpenAPIProperty struct {
 	Items                *OpenAPIProperty            `yaml:"items,omitempty"` // For arrays
 	MinLength            *int                        `yaml:"minLength,omitempty"`
 	MaxLength            *int                        `yaml:"maxLength,omitempty"`
+	MinItems             *int                        `yaml:"minItems,omitempty"` // For arrays (slice cardinality)
+	MaxItems             *int                        `yaml:"maxItems,omitempty"`
 	Minimum              *float64                    `yaml:"minimum,omitempty"`
 	Maximum              *float64                    `yaml:"maximum,omitempty"`
 	ExclusiveMinimum     *bool                       `yaml:"exclusiveMinimum,omitempty"`
@@ -1069,11 +1071,13 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 		ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
 		if isSliceType(field.Type) {
 			// The inner $ref must stand alone, but the array wrapper carries the
-			// field's documentation.
+			// field's documentation and cardinality (minItems/maxItems). Element-scope
+			// (dive) rules have nowhere valid to go on a $ref element, so they drop.
 			arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
 			if field.Example != "" {
 				arr.Example = field.Example
 			}
+			g.applyConstraints(arr, field)
 			return arr
 		}
 		return ref
@@ -1116,10 +1120,31 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	// Map Go type to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Type)
 
-	// Apply constraints from validation tags
+	// Apply collection/scalar constraints (incl. minItems/maxItems for slices),
+	// then element-scope (dive) constraints onto the array's items.
 	g.applyConstraints(prop, field)
+	g.applyElementConstraints(prop, field)
 
 	return prop
+}
+
+// applyElementConstraints maps a slice field's element-scope (post-`dive`) rules
+// onto prop.Items (e.g. `dive,email` -> items.format:email). No-op for non-slice
+// fields or when there are no element constraints.
+func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
+	if len(field.ElementConstraints) == 0 || prop.Items == nil {
+		return
+	}
+	elemType := sliceElementType(field.Type)
+	for _, c := range analyzer.MapConstraintToOpenAPI(elemType, "", field.ElementConstraints) {
+		g.applyConstraint(prop.Items, c)
+	}
+}
+
+// sliceElementType strips a leading pointer and slice marker to expose the element
+// type ("[]string" -> "string", "*[]Address" -> "Address").
+func sliceElementType(goType string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(goType, "*"), "[]")
 }
 
 // isSliceType reports whether a Go type string denotes a slice (after an
@@ -1252,8 +1277,9 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 		return
 	}
 
-	// Use the constraint mapper from analyzer package
-	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Type, field.Constraints)
+	// Use the constraint mapper from analyzer package; UnderlyingKind lets named
+	// scalars (type Cents int64, time.Duration) map numeric/string constraints.
+	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Type, field.UnderlyingKind, field.Constraints)
 
 	// Apply each constraint using specialized applicators
 	for _, constraint := range openAPIConstraints {
@@ -1261,22 +1287,26 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 	}
 }
 
-// applyConstraint routes a constraint to its specialized applicator
-func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint analyzer.OpenAPIConstraint) {
-	// Map constraint names to applicator functions
-	applicators := map[string]func(*OpenAPIProperty, any){
-		"format":           applyFormatConstraint,
-		"minLength":        applyMinLengthConstraint,
-		"maxLength":        applyMaxLengthConstraint,
-		"minimum":          applyMinimumConstraint,
-		"maximum":          applyMaximumConstraint,
-		"exclusiveMinimum": applyExclusiveMinimumConstraint,
-		"exclusiveMaximum": applyExclusiveMaximumConstraint,
-		"pattern":          applyPatternConstraint,
-		"enum":             applyEnumConstraint,
-	}
+// constraintApplicators maps an OpenAPIConstraint name to the function that writes
+// it onto a property. Static — defined once rather than per applyConstraint call
+// (applyConstraint runs once per emitted constraint, incl. the per-element loop).
+var constraintApplicators = map[string]func(*OpenAPIProperty, any){
+	"format":           applyFormatConstraint,
+	"minLength":        applyMinLengthConstraint,
+	"maxLength":        applyMaxLengthConstraint,
+	"minItems":         applyMinItemsConstraint,
+	"maxItems":         applyMaxItemsConstraint,
+	"minimum":          applyMinimumConstraint,
+	"maximum":          applyMaximumConstraint,
+	"exclusiveMinimum": applyExclusiveMinimumConstraint,
+	"exclusiveMaximum": applyExclusiveMaximumConstraint,
+	"pattern":          applyPatternConstraint,
+	"enum":             applyEnumConstraint,
+}
 
-	if applicator, exists := applicators[constraint.Name]; exists {
+// applyConstraint routes a constraint to its specialized applicator.
+func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint analyzer.OpenAPIConstraint) {
+	if applicator, exists := constraintApplicators[constraint.Name]; exists {
 		applicator(prop, constraint.Value)
 	}
 }
@@ -1299,6 +1329,20 @@ func applyMinLengthConstraint(prop *OpenAPIProperty, value any) {
 func applyMaxLengthConstraint(prop *OpenAPIProperty, value any) {
 	if val, ok := value.(int); ok {
 		prop.MaxLength = &val
+	}
+}
+
+// applyMinItemsConstraint sets the minItems field (array cardinality)
+func applyMinItemsConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MinItems = &val
+	}
+}
+
+// applyMaxItemsConstraint sets the maxItems field (array cardinality)
+func applyMaxItemsConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MaxItems = &val
 	}
 }
 

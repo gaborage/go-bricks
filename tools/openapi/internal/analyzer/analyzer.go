@@ -1943,7 +1943,7 @@ func (a *ProjectAnalyzer) registerFieldRef(f *models.FieldInfo, pkg string, astF
 // scalar underlying type to their OpenAPI kind. (time.Time is a struct handled by
 // the generator's well-known map, so it is intentionally absent.)
 var knownUnderlyingKinds = map[string]string{
-	"time.Duration": "integer",
+	"time.Duration": kindInteger,
 }
 
 // resolveUnderlyingKind returns the OpenAPI 3-way kind ("integer"/"number"/
@@ -1994,7 +1994,7 @@ func (a *ProjectAnalyzer) namedScalarKind(name string, astFile *ast.File, filePa
 func primitiveKind(goType string) string {
 	switch {
 	case isIntegerType(goType):
-		return "integer"
+		return kindInteger
 	case isFloatType(goType):
 		return "number"
 	case isStringType(goType):
@@ -2336,10 +2336,10 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	fieldInfo.Example = tags.example
 	fieldInfo.RawValidation = tags.rawValidation
 
-	// Parse validation constraints
+	// Parse validation constraints (collection-scope) plus element-scope rules
+	// after a `dive`. Required is always collection-scope.
 	if tags.rawValidation != "" {
-		fieldInfo.Constraints = a.parseValidationTag(tags.rawValidation)
-		// Set Required flag based on constraints
+		fieldInfo.Constraints, fieldInfo.ElementConstraints = a.parseValidationTag(tags.rawValidation)
 		if fieldInfo.Constraints[constraintRequired] == boolTrueString {
 			fieldInfo.Required = true
 		}
@@ -2489,30 +2489,42 @@ func (a *ProjectAnalyzer) extractTag(tagStr, tagName string) string {
 
 // parseValidationTag parses a validation tag string into a constraints map
 // Example: "required,email,min=5,max=100" -> {"required": "true", "email": "true", "min": "5", "max": "100"}
-func (a *ProjectAnalyzer) parseValidationTag(validateTag string) map[string]string {
-	constraints := make(map[string]string)
+// parseValidationTag parses a validate tag into collection-scope constraints and
+// (when a `dive` token is present) element-scope constraints. Rules before `dive`
+// apply to the field/collection; rules after apply to each slice element. The
+// `dive` token itself is not stored. elementConstraints is nil when there is no
+// `dive`. A second (nested) `dive` is ignored — element scope is kept flat.
+func (a *ProjectAnalyzer) parseValidationTag(validateTag string) (constraints, elementConstraints map[string]string) {
+	constraints = make(map[string]string)
 	if validateTag == "" {
-		return constraints
+		return constraints, nil
 	}
 
-	// Split by comma
-	rules := strings.Split(validateTag, ",")
-	for _, rule := range rules {
+	inElement := false
+	for _, rule := range strings.Split(validateTag, ",") {
 		rule = strings.TrimSpace(rule)
 		if rule == "" {
 			continue
 		}
+		if rule == "dive" {
+			if !inElement {
+				inElement = true
+				elementConstraints = make(map[string]string)
+			}
+			continue
+		}
 
-		// Check if rule has a value (e.g., "min=5")
+		target := constraints
+		if inElement {
+			target = elementConstraints
+		}
+		// Check if rule has a value (e.g., "min=5"); else a boolean constraint.
 		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
-			key := rule[:equalIdx]
-			value := rule[equalIdx+1:]
-			constraints[key] = value
+			target[rule[:equalIdx]] = rule[equalIdx+1:]
 		} else {
-			// Boolean constraint (e.g., "required", "email")
-			constraints[rule] = boolTrueString
+			target[rule] = boolTrueString
 		}
 	}
 
-	return constraints
+	return constraints, elementConstraints
 }
