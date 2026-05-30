@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -157,7 +158,7 @@ func TestRunGenerate(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf(generateCmdFailedMsg, err)
 	}
@@ -202,7 +203,7 @@ func TestRunGenerateDirectoryCreation(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf(generateCmdFailedMsg, err)
 	}
@@ -229,7 +230,7 @@ func TestRunGenerateVerbose(t *testing.T) {
 	}
 
 	// This should work without panicking even in verbose mode
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runGenerate() failed in verbose mode: %v", err)
 	}
@@ -363,7 +364,7 @@ func TestRunGenerateErrorCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := tt.setup(t)
-			err := runGenerate(opts)
+			err := runGenerate(context.Background(), opts)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runGenerate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -381,7 +382,7 @@ func TestRunGenerateYAMLFormat(t *testing.T) {
 		Verbose:     true,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runGenerate() failed for YAML format: %v", err)
 	}
@@ -519,7 +520,7 @@ func (m *TestModule) Init(deps any) error { return nil }`
 			os.MkdirAll(testDir, 0755)
 
 			opts := tt.setup(testDir)
-			err := runGenerate(opts)
+			err := runGenerate(context.Background(), opts)
 			if err != nil {
 				t.Fatalf(generateCmdFailedMsg, err)
 			}
@@ -622,7 +623,7 @@ func TestRunGenerateWithWriteError(t *testing.T) {
 			Verbose:     false,
 		}
 
-		err := runGenerate(opts)
+		err := runGenerate(context.Background(), opts)
 		if err != nil {
 			t.Errorf("Expected successful generation, got error: %v", err)
 		}

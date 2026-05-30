@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -38,6 +39,10 @@ const (
 	moduleMethodInit           = "Init"
 	moduleMethodRegisterRoutes = "RegisterRoutes"
 	moduleMethodShutdown       = "Shutdown"
+
+	// RouteRegistrar.Group(prefix) — sub-router with a path prefix.
+	groupMethodName        = "Group"
+	routeRegistrarTypeName = "RouteRegistrar"
 
 	// Go primitive type names used in AST inspection
 	goTypeString = "string"
@@ -80,6 +85,7 @@ type ProjectAnalyzer struct {
 	projectRoot string
 	fileSet     *token.FileSet
 	constants   map[string]string // Map of constant names to their values
+	warnings    []string          // Non-fatal diagnostics collected during analysis
 }
 
 // New creates a new project analyzer
@@ -89,6 +95,19 @@ func New(projectRoot string) *ProjectAnalyzer {
 		fileSet:     token.NewFileSet(),
 		constants:   make(map[string]string),
 	}
+}
+
+// addWarningf records a non-fatal diagnostic (e.g. a route whose path could not
+// be resolved to a literal). Callers surface these to the user after analysis.
+func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
+	a.warnings = append(a.warnings, fmt.Sprintf(format, args...))
+}
+
+// Warnings returns a copy of the non-fatal diagnostics collected during the last
+// analysis. ctx is accepted per the repo's context-first convention for exported
+// APIs; the returned slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
+	return slices.Clone(a.warnings)
 }
 
 // isFrameworkType checks if a type should be filtered out as a framework type.
@@ -118,6 +137,10 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 		Description: "Generated API specification",
 		Modules:     []models.Module{},
 	}
+
+	// Reset per-run diagnostics so repeated analyses on the same analyzer don't
+	// accumulate stale warnings.
+	a.warnings = nil
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -418,63 +441,303 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 			continue
 		}
 
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, serverAliases)...)
+		recvVar := receiverVarName(funcDecl.Recv)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, serverAliases)...)
 	}
 
 	return routes
 }
 
-// extractRoutesFromFuncBody extracts route registrations from function statements
+// extractRoutesFromFuncBody extracts route registrations from a function body
+// using only the default "server" alias and no handler/helper context.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", map[string]struct{}{frameworkPkgServer: {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", map[string]struct{}{frameworkPkgServer: {}})
 }
 
-// extractRoutesFromFuncBodyWithAliases extracts route registrations with explicit server aliases
-func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockStmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) []models.Route {
-	var routes []models.Route
+// extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
+// same-receiver helper methods it calls) to collect every route registration,
+// including those nested inside if/for/range/blocks and those registered on a
+// r.Group(prefix) registrar.
+func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
+	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar string, serverAliases map[string]struct{},
+) []models.Route {
+	w := &routeWalker{
+		a:             a,
+		astFile:       astFile,
+		filePath:      filePath,
+		structName:    structName,
+		recvVar:       recvVar,
+		serverAliases: serverAliases,
+		// Seed the recursion stack with the entry method so a helper that calls
+		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
+		stack: map[string]bool{moduleMethodRegisterRoutes: true},
+	}
+	w.walkBody(body, nil)
+	return w.routes
+}
 
-	for _, stmt := range body.List {
-		if route := a.extractRouteFromStatement(stmt, astFile, filePath, structName, serverAliases); route != nil {
-			routes = append(routes, *route)
+// routeWalker collects routes from a RegisterRoutes method body and the
+// same-receiver helper methods it transitively calls.
+type routeWalker struct {
+	a             *ProjectAnalyzer
+	astFile       *ast.File
+	filePath      string
+	structName    string // module struct, for handler resolution
+	recvVar       string // module receiver var name (for helper calls); "" if none
+	serverAliases map[string]struct{}
+	stack         map[string]bool // helper methods currently on the walk stack (cycle guard)
+	routes        []models.Route
+}
+
+// walkBody collects server.METHOD route registrations from a body (with
+// r.Group(prefix) prefixes applied) and recurses into same-receiver helpers.
+// seed carries registrar->prefix bindings inherited from a caller (so a helper
+// invoked with a grouped registrar inherits that group's prefix).
+func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
+	if body == nil {
+		return
+	}
+	prefixes := w.collectGroupPrefixes(body)
+	for reg, prefix := range seed {
+		if _, ok := prefixes[reg]; !ok {
+			prefixes[reg] = prefix
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if route := w.routeFromCall(call, prefixes); route != nil {
+			w.routes = append(w.routes, *route)
+			return true
+		}
+		w.maybeRecurseHelper(call, prefixes)
+		return true
+	})
+}
+
+// collectGroupPrefixes maps each registrar variable assigned from <reg>.Group(p)
+// to its accumulated path prefix. Nested groups resolve because Go requires the
+// parent registrar to be declared (and thus visited) before the child.
+//
+// Limitation: the map is keyed by identifier name across the whole body, so it
+// is not scope-aware. A registrar var name shadowed in different branches with
+// DIFFERENT prefixes (e.g. an `if` and `else` both doing `api := r.Group(...)`
+// with distinct paths) collapses to the last assignment. The idiomatic pattern
+// declares each group once at body scope, which resolves correctly; a fully
+// scope-aware walk is deferred until a real case requires it.
+func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]string {
+	prefixes := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != groupMethodName || len(call.Args) < 1 {
+			return true
+		}
+		parent, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if prefix, pok := w.a.extractPathFromArg(call.Args[0]); pok {
+			prefixes[lhs.Name] = prefixes[parent.Name] + prefix
+		}
+		return true
+	})
+	return prefixes
+}
+
+// routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
+// is not a route registration. Unresolvable paths drop the route with a warning.
+func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
+	method, ok := w.a.validateServerCall(call, w.serverAliases)
+	if !ok {
+		return nil
+	}
+
+	rawPath, resolved := w.a.extractPathFromArg(call.Args[2])
+	if !resolved {
+		w.a.addWarningf("skipping a server.%s route: its path argument could not be resolved to a literal string", method)
+		return nil
+	}
+
+	// Prepend the group prefix bound to the registrar argument (Args[1]).
+	prefix := ""
+	if reg, ok := call.Args[1].(*ast.Ident); ok {
+		prefix = prefixes[reg.Name]
+	}
+
+	route := &models.Route{
+		Method: strings.ToUpper(method),
+		Tags:   []string{},
+		Path:   normalizePath(prefix + rawPath),
+	}
+	route.HandlerName, route.Request, route.Response = w.a.extractHandlerInfo(call, w.astFile, w.filePath, w.structName)
+	for i := 4; i < len(call.Args); i++ {
+		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
+	}
+	return route
+}
+
+// maybeRecurseHelper recurses into a same-receiver route-registration helper
+// (w.recvVar.method(...) where method takes a server.RouteRegistrar) so routes
+// registered in helpers are discovered. The RouteRegistrar requirement excludes
+// non-registration methods (e.g. predicates or handler factories) so their
+// internal server.* calls are not mistaken for routes. The stack guards against
+// infinite recursion on mutually-recursive helpers while still allowing a helper
+// to be invoked more than once. The prefix bound to the registrar argument is
+// threaded into the helper's registrar parameter.
+func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
+	if w.recvVar == "" || w.astFile == nil {
+		return
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	recv, ok := sel.X.(*ast.Ident)
+	if !ok || recv.Name != w.recvVar {
+		return
+	}
+	method := sel.Sel.Name
+	if w.stack[method] {
+		return
+	}
+	decl := w.a.findMethodDecl(w.astFile, w.filePath, w.structName, method)
+	idx, paramName := w.a.routeRegistrarParam(decl, w.serverAliases)
+	if idx < 0 {
+		return // not a route-registration helper
+	}
+
+	// Thread the prefix of the registrar argument into the helper's registrar
+	// parameter so routes inside the helper inherit the caller's group prefix.
+	seed := map[string]string{}
+	if paramName != "" && idx < len(call.Args) {
+		if argIdent, ok := call.Args[idx].(*ast.Ident); ok {
+			if prefix := prefixes[argIdent.Name]; prefix != "" {
+				seed[paramName] = prefix
+			}
 		}
 	}
 
-	return routes
+	w.stack[method] = true
+	w.walkBody(decl.Body, seed)
+	delete(w.stack, method)
 }
 
-// validateServerCall validates that a statement is a valid server.METHOD() call.
-// Returns the call expression, HTTP method name, and whether the validation succeeded.
-func (a *ProjectAnalyzer) validateServerCall(stmt ast.Stmt, serverAliases map[string]struct{}) (*ast.CallExpr, string, bool) {
-	exprStmt, ok := stmt.(*ast.ExprStmt)
-	if !ok {
-		return nil, "", false
+// routeRegistrarParam returns the positional index and name of a function's
+// server.RouteRegistrar parameter, or (-1, "") if it has none. The index is
+// counted over flattened parameter names so it lines up with call arguments.
+// serverAliases lets it recognize an aliased server import.
+func (a *ProjectAnalyzer) routeRegistrarParam(decl *ast.FuncDecl, serverAliases map[string]struct{}) (idx int, name string) {
+	if decl == nil || decl.Type.Params == nil {
+		return -1, ""
 	}
-
-	callExpr, ok := exprStmt.X.(*ast.CallExpr)
-	if !ok {
-		return nil, "", false
+	pos := 0
+	for _, field := range decl.Type.Params.List {
+		isReg := a.isRouteRegistrarType(field.Type, serverAliases)
+		if len(field.Names) == 0 {
+			if isReg {
+				return pos, ""
+			}
+			pos++
+			continue
+		}
+		for _, n := range field.Names {
+			if isReg {
+				return pos, n.Name
+			}
+			pos++
+		}
 	}
+	return -1, ""
+}
 
+// isRouteRegistrarType reports whether expr is server.RouteRegistrar (honoring an
+// aliased server import).
+func (a *ProjectAnalyzer) isRouteRegistrarType(expr ast.Expr, serverAliases map[string]struct{}) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) && sel.Sel.Name == routeRegistrarTypeName
+}
+
+// validateServerCall reports whether call is a server.METHOD(hr, r, path, ...)
+// route registration and returns the HTTP method name.
+func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAliases map[string]struct{}) (method string, ok bool) {
 	selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return nil, "", false
+		return "", false
 	}
 
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
 	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, frameworkPkgServer) {
-		return nil, "", false
+		return "", false
 	}
 
-	method := selExpr.Sel.Name
+	method = selExpr.Sel.Name
 	if !a.isHTTPMethod(method) {
-		return nil, "", false
+		return "", false
 	}
 
 	if len(callExpr.Args) < 3 {
-		return nil, "", false
+		return "", false
 	}
 
-	return callExpr, method, true
+	return method, true
+}
+
+// findMethodDecl finds the declaration of method methodName on structName,
+// searching the current file then the rest of the package.
+func (a *ProjectAnalyzer) findMethodDecl(astFile *ast.File, filePath, structName, methodName string) *ast.FuncDecl {
+	if decl := a.findMethodInFile(astFile, structName, methodName); decl != nil {
+		return decl
+	}
+	files, err := a.parsePackage(filePath, astFile.Name.Name)
+	if err == nil {
+		for _, file := range files {
+			if decl := a.findMethodInFile(file, structName, methodName); decl != nil {
+				return decl
+			}
+		}
+	}
+	return nil
+}
+
+// findMethodInFile finds a method named methodName on structName within one file.
+func (a *ProjectAnalyzer) findMethodInFile(astFile *ast.File, structName, methodName string) *ast.FuncDecl {
+	for _, decl := range astFile.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != methodName || fn.Body == nil {
+			continue
+		}
+		if a.isMethodOnStruct(fn.Recv, structName) {
+			return fn
+		}
+	}
+	return nil
+}
+
+// receiverVarName returns the receiver variable name of a method, or "" if the
+// receiver is unnamed (e.g. func (*Module) ...).
+func receiverVarName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 || len(recv.List[0].Names) == 0 {
+		return ""
+	}
+	return recv.List[0].Names[0].Name
 }
 
 // extractHandlerInfo extracts handler name and type information from a route call.
@@ -577,35 +840,6 @@ func baseTypeName(expr ast.Expr) string {
 	return ""
 }
 
-// extractRouteFromStatement extracts a route from a statement like server.GET(...)
-func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) *models.Route {
-	// Validate this is a server.METHOD() call
-	callExpr, method, valid := a.validateServerCall(stmt, serverAliases)
-	if !valid {
-		return nil
-	}
-
-	route := &models.Route{
-		Method: strings.ToUpper(method),
-		Tags:   []string{},
-	}
-
-	// Extract route path, normalizing Echo-style params to OpenAPI templating.
-	route.Path = normalizePath(a.extractPathFromArg(callExpr.Args[2]))
-
-	// Extract handler information
-	route.HandlerName, route.Request, route.Response = a.extractHandlerInfo(
-		callExpr, astFile, filePath, structName,
-	)
-
-	// Extract metadata from remaining arguments
-	for i := 4; i < len(callExpr.Args); i++ {
-		a.extractRouteMetadata(callExpr.Args[i], route, serverAliases)
-	}
-
-	return route
-}
-
 // isHTTPMethod checks if the method name is a valid HTTP method
 func (a *ProjectAnalyzer) isHTTPMethod(method string) bool {
 	httpMethods := []string{"GET", httpMethodPost, "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
@@ -681,23 +915,34 @@ func (a *ProjectAnalyzer) extractCommentDescription(commentGroup *ast.CommentGro
 	return strings.Join(lines, " ")
 }
 
-// extractPathFromArg extracts path string from AST argument (handles literals and constants)
-func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) string {
+// extractPathFromArg resolves a route path argument to a literal string. It
+// handles string literals, same-package string constants, and "+" concatenation
+// of resolvable operands. The bool result is false when the path could not be
+// fully resolved (an unknown identifier, a non-string expression, fmt.Sprintf,
+// etc.); the caller then drops the route rather than emitting a garbage path key.
+func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
 	switch expr := arg.(type) {
 	case *ast.BasicLit:
-		// Direct string literal
+		// Direct string literal.
 		if expr.Kind == token.STRING {
-			return strings.Trim(expr.Value, `"`)
+			return strings.Trim(expr.Value, `"`), true
 		}
 	case *ast.Ident:
-		// Constant reference - look up in constants map
+		// Same-package string constant.
 		if value, exists := a.constants[expr.Name]; exists {
-			return value
+			return value, true
 		}
-		// If not found, return the identifier name as a fallback
-		return expr.Name
+	case *ast.BinaryExpr:
+		// String concatenation: fold only when both operands resolve.
+		if expr.Op == token.ADD {
+			left, lok := a.extractPathFromArg(expr.X)
+			right, rok := a.extractPathFromArg(expr.Y)
+			if lok && rok {
+				return left + right, true
+			}
+		}
 	}
-	return ""
+	return "", false
 }
 
 // normalizePath converts an Echo-style route path into OpenAPI 3.0 path

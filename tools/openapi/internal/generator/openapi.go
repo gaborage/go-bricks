@@ -290,6 +290,12 @@ func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPI
 	pathGroups := g.groupRoutesByPath(routes)
 	paths := make(map[string]*OpenAPIPathItem, len(pathGroups))
 	for path := range pathGroups {
+		// Defensive guard: a valid OpenAPI path template must start with "/".
+		// The analyzer already drops unresolvable paths; this rejects anything
+		// that still slipped through rather than emitting an invalid document.
+		if !strings.HasPrefix(path, "/") {
+			continue
+		}
 		group := pathGroups[path]
 		item := &OpenAPIPathItem{}
 		for i := range group {
@@ -302,25 +308,36 @@ func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPI
 
 // assignOperation builds the operation for a route and attaches it to the path
 // item under the matching HTTP method. The analyzer only emits the standard
-// methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op.
+// methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op. A
+// (method, path) already populated is left untouched (first-wins de-dup).
 func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route) {
-	op := g.buildOperation(route)
-	switch strings.ToUpper(route.Method) {
-	case httpMethodGet:
-		item.Get = op
-	case httpMethodPut:
-		item.Put = op
-	case httpMethodPost:
-		item.Post = op
-	case httpMethodDelete:
-		item.Delete = op
-	case httpMethodPatch:
-		item.Patch = op
-	case httpMethodHead:
-		item.Head = op
-	case httpMethodOptions:
-		item.Options = op
+	slot := item.methodSlot(strings.ToUpper(route.Method))
+	if slot == nil || *slot != nil {
+		return
 	}
+	*slot = g.buildOperation(route)
+}
+
+// methodSlot returns a pointer to the operation field for an HTTP method, or nil
+// for an unrecognized method.
+func (item *OpenAPIPathItem) methodSlot(method string) **OpenAPIOperation {
+	switch method {
+	case httpMethodGet:
+		return &item.Get
+	case httpMethodPut:
+		return &item.Put
+	case httpMethodPost:
+		return &item.Post
+	case httpMethodDelete:
+		return &item.Delete
+	case httpMethodPatch:
+		return &item.Patch
+	case httpMethodHead:
+		return &item.Head
+	case httpMethodOptions:
+		return &item.Options
+	}
+	return nil
 }
 
 // Parameter represents an OpenAPI parameter (path, query, or header). Field
