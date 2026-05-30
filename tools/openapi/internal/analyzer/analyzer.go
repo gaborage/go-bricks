@@ -1755,13 +1755,17 @@ func baseStructTypeName(t string) string {
 	}
 }
 
-// MapValueType reports whether goType is a map (after an optional leading
+// mapValueType reports whether goType is a map (after an optional leading
 // pointer) and returns its value type string verbatim. For map[string]Address it
 // returns ("Address", true); for map[string][]Address it returns ("[]Address",
 // true). The key is assumed simple (no nested brackets), which holds for
-// JSON-serializable string-keyed maps. Exported so the generator shares one
-// map-parsing definition instead of drifting from a private copy.
-func MapValueType(goType string) (string, bool) {
+// JSON-serializable string-keyed maps.
+//
+// NOTE: the generator keeps a twin of this pure parser (generator.mapValueType);
+// it is intentionally NOT exported and shared, to avoid an exported cross-package
+// helper (which the repo convention would require to carry a context.Context the
+// pure parser has no use for). Keep the two in sync.
+func mapValueType(goType string) (string, bool) {
 	goType = strings.TrimPrefix(goType, "*")
 	if !strings.HasPrefix(goType, "map[") {
 		return "", false
@@ -1780,7 +1784,7 @@ func MapValueType(goType string) (string, bool) {
 // caller's registerType lookup then fails for the primitive, leaving
 // MapValueRefName empty.
 func mapValueStructName(t string) (string, bool) {
-	v, ok := MapValueType(t)
+	v, ok := mapValueType(t)
 	if !ok {
 		return "", false
 	}

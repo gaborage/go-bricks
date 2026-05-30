@@ -862,7 +862,7 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	// the analyzer-resolved MapValueRefName is available (setTypeAndFormat sees
 	// only the type string and so can only type primitive-valued maps). A map of
 	// slices (map[string][]Address) wraps the $ref in an array.
-	if valueType, isMap := analyzer.MapValueType(field.Type); isMap && field.MapValueRefName != "" {
+	if valueType, isMap := mapValueType(field.Type); isMap && field.MapValueRefName != "" {
 		ref := &OpenAPIProperty{Ref: refPath(field.MapValueRefName)}
 		prop.Type = typeObject
 		if isSliceType(valueType) {
@@ -918,6 +918,24 @@ var wellKnownFormats = map[string]wellKnownType{
 	goTypeRawMessage:   {typeObject, ""},
 }
 
+// mapValueType reports whether goType is a map (after an optional leading
+// pointer) and returns its value type string. Keys are assumed simple (no nested
+// brackets), which holds for JSON string-keyed maps. This is a deliberate twin of
+// analyzer.mapValueType (kept private in each package rather than shared as an
+// exported helper — see the note there); keep the two in sync.
+func mapValueType(goType string) (string, bool) {
+	goType = strings.TrimPrefix(goType, "*")
+	if !strings.HasPrefix(goType, "map[") {
+		return "", false
+	}
+	rest := goType[len("map["):]
+	i := strings.IndexByte(rest, ']')
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+1:], true
+}
+
 // setTypeAndFormat maps Go types to OpenAPI type and format
 func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string) {
 	// Strip pointer prefix
@@ -945,7 +963,7 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 	// Handle maps as objects with a typed additionalProperties (string-keyed).
 	// Struct-valued maps emit a $ref via fieldInfoToProperty; this nested path
 	// (maps inside slices/maps) recurses on the value type by string only.
-	if valueType, ok := analyzer.MapValueType(goType); ok {
+	if valueType, ok := mapValueType(goType); ok {
 		prop.Type = typeObject
 		prop.AdditionalProperties = &OpenAPIProperty{}
 		g.setTypeAndFormat(prop.AdditionalProperties, valueType)
