@@ -4091,3 +4091,34 @@ func TestLocalTypeUnderlyingSiblingFile(t *testing.T) {
 	_, ok = a.localTypeUnderlying("Missing", af, aPath)
 	assert.False(t, ok)
 }
+
+// TestParseValidationTagDive covers the collection/element scope split at `dive`.
+func TestParseValidationTagDive(t *testing.T) {
+	a := New(t.TempDir())
+
+	c, e := a.parseValidationTag("min=1,dive,email")
+	assert.Equal(t, map[string]string{"min": "1"}, c, "rules before dive are collection-scope")
+	assert.Equal(t, map[string]string{"email": "true"}, e, "rules after dive are element-scope")
+
+	c, e = a.parseValidationTag("dive,gte=0")
+	assert.Empty(t, c, "no collection rules")
+	assert.Equal(t, map[string]string{"gte": "0"}, e)
+
+	c, e = a.parseValidationTag("required,min=2")
+	assert.Equal(t, map[string]string{"required": "true", "min": "2"}, c)
+	assert.Nil(t, e, "no dive -> nil element constraints")
+
+	// Nested dive is ignored: element scope stays flat, no crash.
+	c, e = a.parseValidationTag("min=1,dive,dive,email")
+	assert.Equal(t, map[string]string{"min": "1"}, c)
+	assert.Equal(t, map[string]string{"email": "true"}, e)
+
+	// `required` is always collection-scope, even after dive (must not be lost).
+	c, e = a.parseValidationTag("dive,required,email")
+	assert.Equal(t, "true", c["required"], "required after dive stays collection-scope")
+	assert.Equal(t, map[string]string{"email": "true"}, e, "other post-dive rules stay element-scope")
+
+	c, e = a.parseValidationTag("")
+	assert.Empty(t, c)
+	assert.Nil(t, e)
+}

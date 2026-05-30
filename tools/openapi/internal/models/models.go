@@ -81,6 +81,10 @@ type FieldInfo struct {
 	Example       string            // Parsed from `example:"..."` tag
 	RawValidation string            // Raw validation tag string (e.g., "required,email,min=5")
 	Constraints   map[string]string // Parsed validation constraints for OpenAPI mapping
+	// ElementConstraints holds validate rules that appear AFTER a `dive` token, so
+	// they apply to each ELEMENT of a slice/array (e.g. `min=1,dive,email` puts min=1
+	// on the array and email on each element). Nil when the field has no `dive`.
+	ElementConstraints map[string]string
 	// RefName is the schema name of the field's underlying named struct type when
 	// the field (or its slice/pointer element) resolves to one in the registry.
 	// Set, the property is emitted as a $ref (or items.$ref for a slice) rather

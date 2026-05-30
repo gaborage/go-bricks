@@ -2494,3 +2494,73 @@ func TestAssignOperationIDsDedup(t *testing.T) {
 	assert.Equal(t, "mList", ids["GET /a"], "first sorted key keeps the bare id")
 	assert.Equal(t, "mList2", ids["GET /b"], "later collision gets the numeric suffix")
 }
+
+// TestFieldInfoToPropertyConstraintsPR11 covers PR11's constraint additions:
+// numeric exclusive bounds, string length comparisons, named-numeric via
+// UnderlyingKind, slice cardinality, and dive element constraints.
+func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("numeric lt -> maximum + exclusiveMaximum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "int", JSONName: "n", Constraints: map[string]string{"lt": "100"}})
+		require.NotNil(t, p.Maximum)
+		assert.Equal(t, 100.0, *p.Maximum)
+		require.NotNil(t, p.ExclusiveMaximum)
+		assert.True(t, *p.ExclusiveMaximum)
+	})
+
+	t.Run("string gt -> minLength, not minimum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "string", JSONName: "s", Constraints: map[string]string{"gt": "3"}})
+		require.NotNil(t, p.MinLength)
+		assert.Equal(t, 4, *p.MinLength)
+		assert.Nil(t, p.Minimum, "a string gt must not leak a numeric minimum")
+	})
+
+	t.Run("named numeric via UnderlyingKind -> minimum/maximum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "Cents", UnderlyingKind: "integer", JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 1.0, *p.Minimum)
+		require.NotNil(t, p.Maximum)
+		assert.Equal(t, 100.0, *p.Maximum)
+	})
+
+	t.Run("slice cardinality + dive element format", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]string", JSONName: "tags",
+			Constraints:        map[string]string{"min": "1", "max": "10"},
+			ElementConstraints: map[string]string{"email": "true"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.MinItems)
+		assert.Equal(t, 1, *p.MinItems)
+		require.NotNil(t, p.MaxItems)
+		assert.Equal(t, 10, *p.MaxItems)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, "email", p.Items.Format, "dive,email puts format:email under items")
+	})
+
+	t.Run("named-scalar slice element keeps numeric kind (dive)", func(t *testing.T) {
+		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
+		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]Cents", UnderlyingKind: "integer", JSONName: "amounts",
+			ElementConstraints: map[string]string{"gte": "0"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		require.NotNil(t, p.Items.Minimum, "element gte must map to a numeric minimum on items")
+		assert.Equal(t, 0.0, *p.Items.Minimum)
+	})
+
+	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]Address", RefName: "Address", JSONName: "addrs",
+			Constraints: map[string]string{"min": "1"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, refPath("Address"), p.Items.Ref, "$ref element stands alone")
+		require.NotNil(t, p.MinItems)
+		assert.Equal(t, 1, *p.MinItems)
+	})
+}
