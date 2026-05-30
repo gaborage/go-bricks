@@ -1716,18 +1716,30 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 	ti.JOSE = hasJOSESentinelTag(structType)
 
 	for i := range ti.Fields {
-		f := &ti.Fields[i]
-		// Skip fields excluded from JSON (mirrors typeInfoToSchema) so a type only
-		// reachable through a json:"-" field is not registered as an orphan/leaked
-		// component.
-		if f.JSONName == jsonSkipValue && f.ParamType == "" {
-			continue
-		}
-		if base := baseStructTypeName(f.Type); a.registerType(base, pkg, astFile, filePath) != nil {
-			f.RefName = base
-		}
+		a.registerFieldRef(&ti.Fields[i], pkg, astFile, filePath)
 	}
 	return ti
+}
+
+// registerFieldRef registers the named struct type(s) a field references and
+// stamps the matching ref name onto the field. A map field refs its value struct
+// via MapValueRefName (a map is never itself a $ref); any other field refs its
+// underlying struct (after pointer/slice unwrap) via RefName. Fields excluded
+// from JSON (json:"-") are skipped so a type reachable only through them is not
+// registered as an orphan component.
+func (a *ProjectAnalyzer) registerFieldRef(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string) {
+	if f.JSONName == jsonSkipValue && f.ParamType == "" {
+		return
+	}
+	if vName, isMap := mapValueStructName(f.Type); isMap {
+		if a.registerType(vName, pkg, astFile, filePath) != nil {
+			f.MapValueRefName = vName
+		}
+		return
+	}
+	if base := baseStructTypeName(f.Type); a.registerType(base, pkg, astFile, filePath) != nil {
+		f.RefName = base
+	}
 }
 
 // baseStructTypeName strips slice and pointer markers from a Go type string to
@@ -1745,6 +1757,42 @@ func baseStructTypeName(t string) string {
 			return t
 		}
 	}
+}
+
+// mapValueType reports whether goType is a map (after an optional leading
+// pointer) and returns its value type string verbatim. For map[string]Address it
+// returns ("Address", true); for map[string][]Address it returns ("[]Address",
+// true). The key is assumed simple (no nested brackets), which holds for
+// JSON-serializable string-keyed maps.
+//
+// NOTE: the generator keeps a twin of this pure parser (generator.mapValueType);
+// it is intentionally NOT exported and shared, to avoid an exported cross-package
+// helper (which the repo convention would require to carry a context.Context the
+// pure parser has no use for). Keep the two in sync.
+func mapValueType(goType string) (string, bool) {
+	goType = strings.TrimPrefix(goType, "*")
+	if !strings.HasPrefix(goType, "map[") {
+		return "", false
+	}
+	rest := goType[len("map["):]
+	i := strings.IndexByte(rest, ']')
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+1:], true
+}
+
+// mapValueStructName returns the base struct name of a map's value type (after
+// unwrapping a pointer/slice on the value). For map[string]Address ->
+// ("Address", true); for map[string]string -> ("string", true), where the
+// caller's registerType lookup then fails for the primitive, leaving
+// MapValueRefName empty.
+func mapValueStructName(t string) (string, bool) {
+	v, ok := mapValueType(t)
+	if !ok {
+		return "", false
+	}
+	return baseStructTypeName(v), true
 }
 
 // hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field

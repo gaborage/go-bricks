@@ -82,4 +82,9 @@ type FieldInfo struct {
 	// Set, the property is emitted as a $ref (or items.$ref for a slice) rather
 	// than an inline object.
 	RefName string
+	// MapValueRefName is the schema name of a map field's value struct type when
+	// it resolves to one in the registry (e.g. map[string]Address). Set, the
+	// property is an object whose additionalProperties is a $ref to that schema.
+	// Distinct from RefName: a map field is never itself a $ref.
+	MapValueRefName string
 }
