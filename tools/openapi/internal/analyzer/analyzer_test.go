@@ -3628,8 +3628,11 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	_, routes := analyzeSingleModule(t, src)
 	raw := routeForPath(t, routes, "GET /raw")
 	assert.True(t, raw.RawResponse, "WithRawResponse() must set RawResponse")
-	assert.Equal(t, "customOp", routeForPath(t, routes, "GET /named").HandlerName,
-		"WithHandlerName must override the operationId source")
+	named := routeForPath(t, routes, "GET /named")
+	assert.Equal(t, "customOp", named.OperationID,
+		"WithHandlerName sets the explicit OperationID (distinct from the handler method name)")
+	assert.Equal(t, "named", named.HandlerName,
+		"HandlerName stays the handler method name, so the generator can module-qualify the derived id")
 }
 
 // TestExtractSuccessStatusLastWins confirms that when a handler returns a server

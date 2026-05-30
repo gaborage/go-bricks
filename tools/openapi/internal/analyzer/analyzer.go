@@ -891,8 +891,11 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 	case "WithDescription":
 		route.Description = a.extractStringFromFirstArg(callExpr)
 	case "WithHandlerName":
+		// An explicit operationId override; kept distinct from the handler method
+		// name (HandlerName) so the generator module-qualifies the derived id but
+		// honors the explicit one verbatim.
 		if name := a.extractStringFromFirstArg(callExpr); name != "" {
-			route.HandlerName = name
+			route.OperationID = name
 		}
 	case "WithRawResponse":
 		route.RawResponse = true

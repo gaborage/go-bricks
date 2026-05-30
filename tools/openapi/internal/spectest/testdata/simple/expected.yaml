@@ -3,10 +3,13 @@ info:
   title: Simple API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /ping:
     get:
-      operationId: ping
+      operationId: apiPing
       summary: GET /ping
       tags:
         - health
@@ -44,7 +47,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /users:
     post:
-      operationId: createUser
+      operationId: apiCreateUser
       summary: Create a user
       tags:
         - users
@@ -124,46 +127,6 @@ components:
           description: Response metadata
       required:
         - error
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
     User:
       type: object
       properties:
@@ -174,3 +137,10 @@ components:
           format: int64
         name:
           type: string
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

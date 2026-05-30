@@ -3,10 +3,13 @@ info:
   title: Embed API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /accounts/{id}:
     get:
-      operationId: getAccount
+      operationId: embedGetAccount
       summary: GET /accounts/{id}
       tags:
         - embed
@@ -57,7 +60,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /users/{id}:
     get:
-      operationId: getUser
+      operationId: embedGetUser
       summary: GET /users/{id}
       tags:
         - embed
@@ -108,7 +111,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /wrappers/{id}:
     get:
-      operationId: getWrapper
+      operationId: embedGetWrapper
       summary: GET /wrappers/{id}
       tags:
         - embed
@@ -191,54 +194,6 @@ components:
           description: Response metadata
       required:
         - error
-    IDReq:
-      type: object
-      properties:
-        iD:
-          type: integer
-          format: int64
-      required:
-        - iD
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
     User:
       type: object
       properties:
@@ -257,3 +212,10 @@ components:
           $ref: '#/components/schemas/Base'
         label:
           type: string
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

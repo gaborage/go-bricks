@@ -3,10 +3,13 @@ info:
   title: Shop API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /users:
     post:
-      operationId: createUser
+      operationId: shopCreateUser
       summary: Create a user
       tags:
         - users
@@ -56,7 +59,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /users/{id}:
     get:
-      operationId: getUser
+      operationId: shopGetUser
       summary: GET /users/{id}
       tags:
         - users
@@ -106,7 +109,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
-      operationId: deleteUser
+      operationId: shopDeleteUser
       summary: DELETE /users/{id}
       tags:
         - users
@@ -164,54 +167,6 @@ components:
           description: Response metadata
       required:
         - error
-    GetUserReq:
-      type: object
-      properties:
-        iD:
-          type: integer
-          format: int64
-      required:
-        - iD
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
     User:
       type: object
       properties:
@@ -222,3 +177,10 @@ components:
           format: int64
         name:
           type: string
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

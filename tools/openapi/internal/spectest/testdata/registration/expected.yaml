@@ -3,10 +3,13 @@ info:
   title: Storefront API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /api/version:
     get:
-      operationId: version
+      operationId: storefrontVersion
       summary: GET /api/version
       tags:
         - ops
@@ -44,7 +47,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /health:
     get:
-      operationId: health
+      operationId: storefrontHealth
       summary: GET /health
       tags:
         - ops
@@ -82,7 +85,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /items:
     post:
-      operationId: createItem
+      operationId: storefrontCreateItem
       summary: POST /items
       tags:
         - items
@@ -126,7 +129,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /v1/admin/stats:
     get:
-      operationId: stats
+      operationId: storefrontStats
       summary: GET /v1/admin/stats
       tags:
         - admin
@@ -164,7 +167,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /v1/items:
     get:
-      operationId: listItems
+      operationId: storefrontListItems
       summary: GET /v1/items
       tags:
         - items
@@ -221,43 +224,10 @@ components:
           format: int64
         name:
           type: string
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []
