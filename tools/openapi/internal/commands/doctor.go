@@ -62,7 +62,7 @@ Checks include:
   go-bricks-openapi doctor
 
   # Check specific project
-  go-bricks-openapi doctor -project ./my-service`,
+  go-bricks-openapi doctor --project ./my-service`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runDoctor(opts)
 		},
@@ -414,10 +414,15 @@ type routeClassification struct {
 	handlerID   string
 }
 
-// classifyRoute determines the type information for a route
+// classifyRoute determines the type information for a route. A route counts as
+// "typed" when the analyzer resolved a *named* request or response type — the
+// same gate the generator uses to emit a component $ref (see
+// responsePayloadSchema). Keying off the name rather than the field count means
+// a named-but-fieldless type (e.g. `type Ack struct{}`) is correctly reported as
+// typed instead of triggering a false "no resolved type" / --strict failure.
 func classifyRoute(route *models.Route) routeClassification {
-	hasRequest := route.Request != nil && len(route.Request.Fields) > 0
-	hasResponse := route.Response != nil && len(route.Response.Fields) > 0
+	hasRequest := route.Request != nil && route.Request.Name != ""
+	hasResponse := route.Response != nil && route.Response.Name != ""
 
 	handlerID := route.HandlerName
 	if handlerID == "" {

@@ -89,18 +89,48 @@ const (
 	mediaJOSE = "application/jose"
 )
 
+// License is the optional info.license block.
+type License struct {
+	Name string
+	URL  string
+}
+
+// Config configures a generator's document-level metadata. Zero values fall back
+// to sensible defaults (title/version from the analyzer or the built-in default,
+// a relative-root server, tenant security on).
+type Config struct {
+	Title       string
+	Version     string
+	Description string
+	Servers     []string // server URLs; empty -> a single relative-root "/"
+	License     *License
+	// DisableTenantSecurity omits the X-Tenant-ID security scheme + root security
+	// (for single-tenant services).
+	DisableTenantSecurity bool
+}
+
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
 	title       string
 	version     string
 	description string
+	servers     []string
+	license     *License
+	tenantAuth  bool
+}
+
+// openAPILicense is the emitted info.license object.
+type openAPILicense struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url,omitempty"`
 }
 
 // OpenAPIInfo represents the info section of an OpenAPI specification
 type OpenAPIInfo struct {
-	Title       string `yaml:"title"`
-	Version     string `yaml:"version"`
-	Description string `yaml:"description"`
+	Title       string          `yaml:"title"`
+	Version     string          `yaml:"version"`
+	Description string          `yaml:"description"`
+	License     *openAPILicense `yaml:"license,omitempty"`
 }
 
 // OpenAPISchema represents a schema definition
@@ -184,12 +214,37 @@ type OpenAPIMediaType struct {
 	Schema *OpenAPIProperty `yaml:"schema"`
 }
 
-// New creates a new OpenAPI generator
+// New creates a new OpenAPI generator with default servers/security (tenant auth
+// on). Retained for callers that only need title/version/description.
 func New(title, version, description string) *OpenAPIGenerator {
+	return NewWithConfig(&Config{Title: title, Version: version, Description: description})
+}
+
+// NewWithConfig creates a generator from a full Config (CLI-driven metadata). A
+// nil cfg is treated as the zero Config. Reference-typed fields (Servers,
+// License) are copied so the generator is immutable after construction: a caller
+// mutating its Config later cannot alter output or race with a concurrent
+// Generate.
+func NewWithConfig(cfg *Config) *OpenAPIGenerator {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	var servers []string
+	if len(cfg.Servers) > 0 {
+		servers = append([]string(nil), cfg.Servers...)
+	}
+	var license *License
+	if cfg.License != nil {
+		copied := *cfg.License
+		license = &copied
+	}
 	return &OpenAPIGenerator{
-		title:       title,
-		version:     version,
-		description: description,
+		title:       cfg.Title,
+		version:     cfg.Version,
+		description: cfg.Description,
+		servers:     servers,
+		license:     license,
+		tenantAuth:  !cfg.DisableTenantSecurity,
 	}
 }
 
@@ -210,6 +265,9 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 		Version:     g.getVersion(project),
 		Description: g.getDescription(project),
 	}
+	if g.license != nil && g.license.Name != "" {
+		info.License = &openAPILicense{Name: g.license.Name, URL: g.license.URL}
+	}
 
 	infoYAML, err := g.marshalYAMLSection("info", info)
 	if err != nil {
@@ -225,9 +283,9 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	emitted := emittedRoutes(allRoutes)
 	opIDs := g.assignOperationIDs(emitted)
 
-	// Servers: a relative-root default so the document is self-describing and
-	// passes the no-empty-servers gate (the concrete URL is a PR11 flag).
-	serversYAML, err := g.marshalYAMLSection("servers", defaultServers())
+	// Servers: configured --server URLs, or a relative-root default so the document
+	// is self-describing and passes the no-empty-servers gate.
+	serversYAML, err := g.marshalYAMLSection("servers", g.configuredServers())
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal servers section: %w", err)
 	}
@@ -260,8 +318,12 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	maps.Copy(schemas, generatedSchemas)
 
 	components := map[string]any{
-		"schemas":         schemas,
-		"securitySchemes": securitySchemes(),
+		"schemas": schemas,
+	}
+	// Tenant security is opt-out (single-tenant services). When on, the scheme must
+	// be declared (security-defined) and referenced at the root.
+	if g.tenantAuth {
+		components["securitySchemes"] = securitySchemes()
 	}
 
 	componentsYAML, err := g.marshalYAMLSection("components", components)
@@ -273,13 +335,33 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	// Root-level security: the framework resolves tenancy from the X-Tenant-ID
 	// header, modeled as an apiKey scheme. Emitted last so security-defined sees
 	// the scheme already declared.
-	securityYAML, err := g.marshalYAMLSection("security", rootSecurity())
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal security section: %w", err)
+	if g.tenantAuth {
+		securityYAML, err := g.marshalYAMLSection("security", rootSecurity())
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal security section: %w", err)
+		}
+		sb.WriteString(securityYAML)
 	}
-	sb.WriteString(securityYAML)
 
 	return sb.String(), nil
+}
+
+// configuredServers returns the configured server URLs as Server Objects,
+// skipping blank or whitespace-only entries, and falling back to the
+// relative-root default when none remain. Filtering on content (not just slice
+// length) keeps a stray `--server ""` from emitting an invalid empty-URL Server
+// Object and bypassing the no-empty-servers default.
+func (g *OpenAPIGenerator) configuredServers() []openAPIServer {
+	out := make([]openAPIServer, 0, len(g.servers))
+	for _, url := range g.servers {
+		if trimmed := strings.TrimSpace(url); trimmed != "" {
+			out = append(out, openAPIServer{URL: trimmed})
+		}
+	}
+	if len(out) == 0 {
+		return defaultServers()
+	}
+	return out
 }
 
 // tenantSecurityScheme is the component name for the X-Tenant-ID apiKey scheme.
@@ -320,27 +402,46 @@ func rootSecurity() []map[string][]string {
 }
 
 // getTitle returns the project title or default
+// Built-in document defaults, the lowest-precedence fallback (used only when both
+// the explicit config value and the analyzer-derived project value are empty).
+const (
+	defaultDocTitle       = "Go-Bricks API"
+	defaultDocVersion     = "1.0.0"
+	defaultDocDescription = "Generated API specification"
+)
+
+// getTitle resolves info.title with precedence: explicit config (CLI --title) >
+// analyzer-derived project name (go.mod) > built-in default.
 func (g *OpenAPIGenerator) getTitle(project *models.Project) string {
+	if g.title != "" {
+		return g.title
+	}
 	if project.Name != "" {
 		return project.Name
 	}
-	return g.title
+	return defaultDocTitle
 }
 
 // getVersion returns the project version or default
 func (g *OpenAPIGenerator) getVersion(project *models.Project) string {
+	if g.version != "" {
+		return g.version
+	}
 	if project.Version != "" {
 		return project.Version
 	}
-	return g.version
+	return defaultDocVersion
 }
 
 // getDescription returns the project description or default
 func (g *OpenAPIGenerator) getDescription(project *models.Project) string {
+	if g.description != "" {
+		return g.description
+	}
 	if project.Description != "" {
 		return project.Description
 	}
-	return g.description
+	return defaultDocDescription
 }
 
 // getAllRoutes flattens routes from all modules, preserving each route's owning

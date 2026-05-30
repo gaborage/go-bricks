@@ -532,7 +532,7 @@ For Windows-specific test patterns, CI workflow internals, and operational issue
 ```bash
 cd tools/openapi
 make install                    # Install CLI tool
-go-bricks-openapi generate -project . -output docs/openapi.yaml
+go-bricks-openapi generate --project . --output docs/openapi.yaml
 go-bricks-openapi doctor        # Check compatibility
 make demo                       # Test on example service
 ```
