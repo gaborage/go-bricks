@@ -949,6 +949,18 @@ func TestFieldInfoToPropertyRef(t *testing.T) {
 		require.NotNil(t, prop.Items)
 		assert.Equal(t, refPath("User"), prop.Items.Ref)
 	})
+	t.Run("slice_of_ref_keeps_array_level_docs", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Addrs", Type: "[]Address", RefName: "Address",
+			Description: "the user's addresses", Example: "n/a",
+		})
+		assert.Equal(t, typeArray, prop.Type)
+		assert.Equal(t, "the user's addresses", prop.Description, "array wrapper keeps the field description")
+		assert.Equal(t, "n/a", prop.Example)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("Address"), prop.Items.Ref)
+		assert.Empty(t, prop.Items.Description, "the inner $ref must stand alone")
+	})
 	t.Run("non_ref_field_keeps_type_and_constraints", func(t *testing.T) {
 		prop := gen.fieldInfoToProperty(&models.FieldInfo{
 			Name: "Name", Type: "string",

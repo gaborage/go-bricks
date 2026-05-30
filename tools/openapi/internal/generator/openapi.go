@@ -673,7 +673,13 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 	if field.RefName != "" {
 		ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
 		if isSliceType(field.Type) {
-			return &OpenAPIProperty{Type: typeArray, Items: ref}
+			// The inner $ref must stand alone, but the array wrapper carries the
+			// field's documentation.
+			arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
+			if field.Example != "" {
+				arr.Example = field.Example
+			}
+			return arr
 		}
 		return ref
 	}

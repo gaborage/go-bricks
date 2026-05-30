@@ -3185,6 +3185,7 @@ func TestBaseStructTypeName(t *testing.T) {
 	assert.Equal(t, "Address", baseStructTypeName("*Address"))
 	assert.Equal(t, "Address", baseStructTypeName("[]Address"))
 	assert.Equal(t, "Address", baseStructTypeName("[]*Address"))
+	assert.Equal(t, "Address", baseStructTypeName("**[]*Address"), "double pointer before slice")
 	assert.Equal(t, "string", baseStructTypeName("[]string"))
 	assert.Equal(t, "map[string]Address", baseStructTypeName("map[string]Address"), "maps returned as-is")
 }

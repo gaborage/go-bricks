@@ -1627,10 +1627,16 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 // types (pkg.T) and maps are returned as-is and will not resolve to a local
 // struct (cross-package and map value resolution are handled separately).
 func baseStructTypeName(t string) string {
-	t = strings.TrimPrefix(t, "*")
-	t = strings.TrimPrefix(t, "[]")
-	t = strings.TrimPrefix(t, "*")
-	return t
+	for {
+		switch {
+		case strings.HasPrefix(t, "*"):
+			t = t[1:]
+		case strings.HasPrefix(t, "[]"):
+			t = t[2:]
+		default:
+			return t
+		}
+	}
 }
 
 // hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field
