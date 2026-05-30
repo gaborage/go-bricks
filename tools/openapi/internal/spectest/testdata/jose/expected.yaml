@@ -1,31 +1,30 @@
 openapi: 3.0.1
 info:
-  title: Catalog API
+  title: Vts API
   version: 1.0.0
   description: Generated API specification
 paths:
-  /products/{id}:
-    get:
-      operationId: getProduct
-      summary: GET /products/{id}
+  /v1/tokens:
+    post:
+      operationId: createToken
+      summary: POST /v1/tokens
       tags:
-        - catalog
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-        - name: page
-          in: query
-          required: false
-          schema:
-            type: integer
-            format: int32
+        - vts
+      requestBody:
+        required: true
+        description: |
+          JOSE compact serialization (signed-then-encrypted). The wire payload
+          is a base64url-encoded JWE compact form whose plaintext, after
+          decrypt+verify, conforms to the CreateTokenRequest schema —
+          see #/components/schemas/CreateTokenRequest.
+        content:
+          application/jose:
+            schema:
+              type: string
+              format: jose
       responses:
         "200":
-          description: Successful response
+          description: Resource created successfully
           content:
             application/json:
               schema:
@@ -35,9 +34,16 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
 components:
   schemas:
+    CreateTokenRequest:
+      type: object
+      properties:
+        pan:
+          type: string
+      required:
+        - pan
     ErrorResponse:
       type: object
       properties:
@@ -49,17 +55,6 @@ components:
           description: Response metadata
       required:
         - error
-    GetProductReq:
-      type: object
-      properties:
-        iD:
-          type: integer
-          format: int64
-        page:
-          type: integer
-          format: int32
-      required:
-        - iD
     JOSEErrorEnvelope:
       type: object
       properties:

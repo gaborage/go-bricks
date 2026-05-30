@@ -22,13 +22,13 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: Successful response
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
-        '400':
+        "400":
           description: Bad Request
           content:
             application/json:
