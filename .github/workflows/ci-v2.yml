@@ -670,8 +670,10 @@ jobs:
           # Validate CLI commands work (equivalent to make validate-cli)
           ./go-bricks-openapi.exe version
           ./go-bricks-openapi.exe --help
-          # Use absolute path to project root from tools/openapi working directory
-          $projectRoot = Resolve-Path "../../"
+          # doctor must run against a real go-bricks project (dependency + modules
+          # present); the framework root has neither, which the stricter doctor now
+          # fails. Mirror make validate-cli's SPEC_FIXTURE target.
+          $projectRoot = Resolve-Path "internal/spectest/testdata/nested_schema"
           ./go-bricks-openapi.exe doctor --project $projectRoot
           Write-Host "CLI validation passed"
 

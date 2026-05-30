@@ -380,32 +380,35 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 // (valid Name+Init but an unrecognized RegisterRoutes signature) so the caller can
 // surface it.
 func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) (moduleStruct, nearMiss string) {
+	for _, name := range structTypeNames(astFile) {
+		isModule, isNearMiss := a.hasModuleMethods(astFile, name, filePath)
+		if isModule {
+			return name, ""
+		}
+		if isNearMiss && nearMiss == "" {
+			nearMiss = name
+		}
+	}
+	return "", nearMiss
+}
+
+// structTypeNames returns the names of all struct type declarations in the file.
+func structTypeNames(astFile *ast.File) []string {
+	var names []string
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
 		}
-
 		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-
-			if _, ok := typeSpec.Type.(*ast.StructType); !ok {
-				continue
-			}
-
-			isModule, isNearMiss := a.hasModuleMethods(astFile, typeSpec.Name.Name, filePath)
-			if isModule {
-				return typeSpec.Name.Name, ""
-			}
-			if isNearMiss && nearMiss == "" {
-				nearMiss = typeSpec.Name.Name
+			if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+				if _, isStruct := typeSpec.Type.(*ast.StructType); isStruct {
+					names = append(names, typeSpec.Name.Name)
+				}
 			}
 		}
 	}
-	return "", nearMiss
+	return names
 }
 
 // hasModuleMethods reports whether a struct is a go-bricks module, and — when it
@@ -433,15 +436,19 @@ func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePa
 		a.collectMethodFlagsFromFile(file, structName, requiredMethods, serverAliases, appAliases)
 	}
 
-	// A module needs the core methods with valid signatures.
-	if requiredMethods[moduleMethodName] && requiredMethods[moduleMethodInit] && requiredMethods[moduleMethodRegisterRoutes] {
+	// A real module satisfies the go-bricks Module interface (Name + Init +
+	// Shutdown) and registers routes. Requiring Shutdown avoids treating a
+	// non-compliant struct as a module (which would also wrongly suppress a
+	// near-miss diagnostic for its package).
+	isCore := requiredMethods[moduleMethodName] &&
+		requiredMethods[moduleMethodInit] &&
+		requiredMethods[moduleMethodShutdown]
+	if isCore && requiredMethods[moduleMethodRegisterRoutes] {
 		return true, false
 	}
-	// Near miss: valid Name+Init, and a RegisterRoutes declared (by name) but with
-	// an unrecognized signature.
-	nearMiss := requiredMethods[moduleMethodName] &&
-		requiredMethods[moduleMethodInit] &&
-		a.structDeclaresMethod(files, structName, moduleMethodRegisterRoutes)
+	// Near miss: a complete module shape (Name + Init + Shutdown) that declares a
+	// RegisterRoutes method (by name) but with an unrecognized signature.
+	nearMiss := isCore && a.structDeclaresMethod(files, structName, moduleMethodRegisterRoutes)
 	return false, nearMiss
 }
 

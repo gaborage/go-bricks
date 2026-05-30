@@ -77,8 +77,8 @@ Checks include:
 
   # Check specific project
   go-bricks-openapi doctor --project ./my-service`,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runDoctor(opts)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runDoctor(cmd.Context(), opts)
 		},
 	}
 
@@ -89,7 +89,7 @@ Checks include:
 	return cmd
 }
 
-func runDoctor(opts *DoctorOptions) error {
+func runDoctor(ctx context.Context, opts *DoctorOptions) error {
 	fmt.Println("🏥 Running go-bricks-openapi health check...")
 	fmt.Println()
 
@@ -104,7 +104,7 @@ func runDoctor(opts *DoctorOptions) error {
 	// only print caveat noise that the error banner overrides anyway.
 	var hasWarnings bool
 	if !hasErrors {
-		hasWarnings = performDiagnosticsCheck(opts)
+		hasWarnings = performDiagnosticsCheck(ctx, opts)
 	}
 
 	// Final summary. Errors fail the run; warnings (e.g. no modules discovered,
@@ -172,11 +172,11 @@ func performGoModCheck(opts *DoctorOptions, hasErrors bool) bool {
 // performDiagnosticsCheck runs module diagnostics and displays build environment.
 // It returns whether any non-fatal caveat (no modules, unrecognized module
 // method, or analysis failure) was surfaced.
-func performDiagnosticsCheck(opts *DoctorOptions) bool {
+func performDiagnosticsCheck(ctx context.Context, opts *DoctorOptions) bool {
 	// Module diagnostics (analyze project structure)
 	fmt.Println()
 	fmt.Println("📊 Project Diagnostics:")
-	hasWarnings := runModuleDiagnostics(opts.ProjectRoot, opts.Verbose)
+	hasWarnings := runModuleDiagnostics(ctx, opts.ProjectRoot, opts.Verbose)
 
 	// Check build environment
 	fmt.Println()
@@ -391,7 +391,7 @@ func checkVersionCompatibility(ver string) error {
 // It returns whether a caveat was surfaced: an analysis failure, zero modules
 // discovered, or any analyzer diagnostic (e.g. a struct that looks like a module
 // but whose RegisterRoutes signature is unrecognized).
-func runModuleDiagnostics(projectRoot string, verbose bool) bool {
+func runModuleDiagnostics(ctx context.Context, projectRoot string, verbose bool) bool {
 	a := analyzer.New(projectRoot)
 
 	project, err := a.AnalyzeProject()
@@ -416,7 +416,7 @@ func runModuleDiagnostics(projectRoot string, verbose bool) bool {
 
 	// Surface analyzer diagnostics collected during analysis (unrecognized module
 	// methods, unresolvable route paths, etc.).
-	for _, w := range a.Warnings(context.Background()) {
+	for _, w := range a.Warnings(ctx) {
 		fmt.Printf("⚠️  %s\n", w)
 		warned = true
 	}

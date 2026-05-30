@@ -46,7 +46,6 @@ const (
 	msgFailedToCreate  = "Failed to create test file: %v"
 	testMainGoFile     = "main.go"
 	packageMainContent = "package main"
-	goVersion          = "go1.25.0" // the supported floor (matches minGoVersion)
 	msgUnexpectedError = "Unexpected error: %v"
 	msgBelowMinimum    = "below minimum"
 )
@@ -80,7 +79,7 @@ func TestIsGoVersionSupported(t *testing.T) {
 	}{
 		{
 			name:     "supported version - exactly the floor",
-			version:  goVersion, // go1.25.0
+			version:  minGoVersion, // the production floor const ("go1.25")
 			expected: true,
 		},
 		{
@@ -339,7 +338,7 @@ require go-bricks v1.0.0
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runDoctor(tt.opts)
+			err := runDoctor(t.Context(), tt.opts)
 			assertError(t, err, tt.expectError)
 		})
 	}
@@ -662,7 +661,7 @@ func TestRunDoctorMissingGoMod(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runDoctor(opts)
+	err := runDoctor(t.Context(), opts)
 	if err == nil {
 		t.Error("Expected error for missing go.mod, but got none")
 	}
@@ -729,7 +728,7 @@ require go-bricks v1.0.0
 		GoVersion:   "go1.20.5",
 	}
 
-	err = runDoctor(opts)
+	err = runDoctor(t.Context(), opts)
 	assertError(t, err, true)
 }
 
@@ -748,12 +747,12 @@ require github.com/spf13/cobra v1.8.0
 
 	opts := &DoctorOptions{
 		ProjectRoot: tempDir,
-		GoVersion:   goVersion,
+		GoVersion:   minGoVersion,
 		Verbose:     true,
 	}
 
 	// A missing go-bricks dependency is now a hard failure (PR13).
-	err = runDoctor(opts)
+	err = runDoctor(t.Context(), opts)
 	assertError(t, err, true)
 }
 
@@ -776,10 +775,10 @@ func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 		"module test\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.37.0\n",
 		packageMainContent) // package main, no go-bricks module
 
-	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: goVersion}
+	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := captureStdout(t, func() { runErr = runDoctor(opts) })
+	out := captureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
 
 	if runErr != nil {
 		t.Errorf("zero modules should be a caveat, not a hard error: %v", runErr)
@@ -802,10 +801,10 @@ func TestRunDoctorFailsBelowGoBricksFloor(t *testing.T) {
 		"module test\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.12.0\n",
 		packageMainContent)
 
-	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: goVersion}
+	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := captureStdout(t, func() { runErr = runDoctor(opts) })
+	out := captureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
 
 	assertError(t, runErr, true)
 	if !strings.Contains(out, msgBelowMinimum) {

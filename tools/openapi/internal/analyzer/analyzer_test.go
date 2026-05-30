@@ -1,7 +1,6 @@
 package analyzer
 
 import (
-	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -986,6 +985,7 @@ func TestUnrecognizedRegisterRoutesWarning(t *testing.T) {
 type Module struct{}
 func (m *Module) Name() string { return "widgets" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
 func (m *Module) RegisterRoutes() {}`) // missing (*server.HandlerRegistry, server.RouteRegistrar)
 
 	a := New(dir)
@@ -993,7 +993,7 @@ func (m *Module) RegisterRoutes() {}`) // missing (*server.HandlerRegistry, serv
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
 
-	warnings := a.Warnings(context.Background())
+	warnings := a.Warnings(t.Context())
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "Module") && strings.Contains(w, moduleMethodRegisterRoutes) && strings.Contains(w, "module.go") {
@@ -1014,20 +1014,22 @@ func TestNearMissSuppressedWhenValidModuleExists(t *testing.T) {
 type Widget struct{}
 func (w *Widget) Name() string { return "widget" }
 func (w *Widget) Init(deps *app.ModuleDeps) error { return nil }
+func (w *Widget) Shutdown() error { return nil }
 func (w *Widget) RegisterRoutes() {}
 
 type Module struct{}
 func (m *Module) Name() string { return "shop" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {}`)
 
 	a := New(dir)
 	if _, err := a.AnalyzeProject(); err != nil {
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
-	if hasRegisterRoutesWarning(a.Warnings(context.Background())) {
+	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
 		t.Errorf("no near-miss warning expected when the package has a valid module, got: %v",
-			a.Warnings(context.Background()))
+			a.Warnings(t.Context()))
 	}
 }
 
@@ -1038,15 +1040,16 @@ func TestNoWarningForNonModuleStruct(t *testing.T) {
 	dir := writeAnalyzerProject(t, "helper.go", `package helper
 type Module struct{}
 func (m *Module) Name() string { return "helper" }
-func (m *Module) Init(deps *app.ModuleDeps) error { return nil }`)
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }`)
 
 	a := New(dir)
 	if _, err := a.AnalyzeProject(); err != nil {
 		t.Fatalf("AnalyzeProject: %v", err)
 	}
-	if hasRegisterRoutesWarning(a.Warnings(context.Background())) {
+	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
 		t.Errorf("expected no near-miss diagnostic for a struct lacking RegisterRoutes, got: %v",
-			a.Warnings(context.Background()))
+			a.Warnings(t.Context()))
 	}
 }
 
@@ -1848,6 +1851,7 @@ type Module struct{}
 
 func (m *Module) Name() string { return "test" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {}`,
 			expected: true,
 		},
