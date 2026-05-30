@@ -909,35 +909,69 @@ func TestValidateGenerateOptionsLicenseURLRequiresName(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	// Both supplied together is fine.
+	// A whitespace-only --license is treated as missing (would otherwise emit a
+	// blank info.license.name).
 	if err := validateGenerateOptions(&GenerateOptions{
 		ProjectRoot: ".",
 		OutputFile:  "openapi.yaml",
-		License:     "MIT",
+		License:     "   ",
 		LicenseURL:  "https://opensource.org/licenses/MIT",
-	}); err != nil {
+	}); err == nil {
+		t.Error("expected whitespace-only --license to be rejected when --license-url is set")
+	}
+
+	// Both supplied together is fine, and surrounding whitespace is trimmed.
+	opts := &GenerateOptions{
+		ProjectRoot: ".",
+		OutputFile:  "openapi.yaml",
+		License:     "  MIT  ",
+		LicenseURL:  "  https://opensource.org/licenses/MIT  ",
+	}
+	if err := validateGenerateOptions(opts); err != nil {
 		t.Errorf("name+url should validate, got: %v", err)
+	}
+	if opts.License != "MIT" || opts.LicenseURL != "https://opensource.org/licenses/MIT" {
+		t.Errorf("license fields not trimmed: name=%q url=%q", opts.License, opts.LicenseURL)
 	}
 }
 
 // TestRunGenerateStrictNoArtifact pins that a failed --strict run neither writes
-// the output file nor prints the success line — the gate runs before persisting.
+// the output file nor prints the success line, AND that any stale artifact from
+// an earlier run is removed (so a downstream step can't consume it). The gate
+// runs before persisting.
 func TestRunGenerateStrictNoArtifact(t *testing.T) {
-	dir := t.TempDir()
-	out := filepath.Join(dir, "openapi.yaml")
-	// An empty project root yields no modules -> a content warning -> --strict fails.
-	err := runGenerate(context.Background(), &GenerateOptions{
-		ProjectRoot: dir,
-		OutputFile:  out,
-		Strict:      true,
+	strictFailErr := func(t *testing.T, out string) {
+		t.Helper()
+		// An empty project root yields no modules -> a content warning -> --strict fails.
+		err := runGenerate(context.Background(), &GenerateOptions{
+			ProjectRoot: filepath.Dir(out),
+			OutputFile:  out,
+			Strict:      true,
+		})
+		if err == nil {
+			t.Fatal("expected --strict to fail on a module-less project")
+		}
+		if !strings.Contains(err.Error(), "--strict is set") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+
+	t.Run("no pre-existing file is created", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		strictFailErr(t, out)
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must not create an artifact, but %s exists (stat err: %v)", out, statErr)
+		}
 	})
-	if err == nil {
-		t.Fatal("expected --strict to fail on a module-less project")
-	}
-	if !strings.Contains(err.Error(), "--strict is set") {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
-		t.Errorf("strict failure must not leave an artifact, but %s exists (stat err: %v)", out, statErr)
-	}
+
+	t.Run("stale pre-existing file is removed", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		if err := os.WriteFile(out, []byte("openapi: 3.0.1\n# stale\n"), 0600); err != nil {
+			t.Fatalf("seed stale file: %v", err)
+		}
+		strictFailErr(t, out)
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must remove the stale artifact, but %s still exists", out)
+		}
+	})
 }

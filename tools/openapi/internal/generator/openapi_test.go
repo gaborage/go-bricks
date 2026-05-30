@@ -2639,4 +2639,24 @@ func TestNewWithConfig(t *testing.T) {
 		assert.Contains(t, spec, "url: /", "default server restored when none valid")
 		assert.NotContains(t, spec, `url: ""`)
 	})
+
+	t.Run("generator is immutable after construction", func(t *testing.T) {
+		// Mutating the caller's Config (or the slice/license it shared) after
+		// construction must not change the generator's output.
+		cfg := &Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"https://orig.example.com"},
+			License: &License{Name: "MIT", URL: "https://mit"},
+		}
+		gen := NewWithConfig(cfg)
+		cfg.Servers[0] = "https://mutated.example.com"
+		cfg.License.Name = "MUTATED"
+
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: https://orig.example.com", "server slice must be copied")
+		assert.NotContains(t, spec, "mutated.example.com")
+		assert.Contains(t, spec, "name: MIT", "license must be copied")
+		assert.NotContains(t, spec, "MUTATED")
+	})
 }

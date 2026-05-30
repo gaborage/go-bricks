@@ -221,17 +221,29 @@ func New(title, version, description string) *OpenAPIGenerator {
 }
 
 // NewWithConfig creates a generator from a full Config (CLI-driven metadata). A
-// nil cfg is treated as the zero Config.
+// nil cfg is treated as the zero Config. Reference-typed fields (Servers,
+// License) are copied so the generator is immutable after construction: a caller
+// mutating its Config later cannot alter output or race with a concurrent
+// Generate.
 func NewWithConfig(cfg *Config) *OpenAPIGenerator {
 	if cfg == nil {
 		cfg = &Config{}
+	}
+	var servers []string
+	if len(cfg.Servers) > 0 {
+		servers = append([]string(nil), cfg.Servers...)
+	}
+	var license *License
+	if cfg.License != nil {
+		copied := *cfg.License
+		license = &copied
 	}
 	return &OpenAPIGenerator{
 		title:       cfg.Title,
 		version:     cfg.Version,
 		description: cfg.Description,
-		servers:     cfg.Servers,
-		license:     cfg.License,
+		servers:     servers,
+		license:     license,
 		tenantAuth:  !cfg.DisableTenantSecurity,
 	}
 }

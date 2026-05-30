@@ -129,10 +129,10 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 	}
 
 	// Content warnings (empty/untyped) on stderr. With --strict they are fatal
-	// BEFORE we persist, so a failed strict run never prints a success line or
-	// leaves a stale artifact on disk for a downstream step to consume.
+	// BEFORE we persist, so a failed strict run never prints a success line and
+	// leaves no consumable artifact (see failStrict).
 	if emitContentWarnings(project) && opts.Strict {
-		return fmt.Errorf("spec generated with warnings and --strict is set")
+		return failStrict(opts)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(opts.OutputFile), 0750); err != nil {
@@ -144,6 +144,16 @@ func runGenerate(ctx context.Context, opts *GenerateOptions) error {
 
 	fmt.Printf("✓ OpenAPI specification generated: %s\n", opts.OutputFile)
 	return nil
+}
+
+// failStrict removes any pre-existing output so a stale spec from an earlier run
+// can't be consumed by a downstream step that keys off file existence, then
+// returns the strict-mode failure error.
+func failStrict(opts *GenerateOptions) error {
+	if err := os.Remove(opts.OutputFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove stale output %s: %w", opts.OutputFile, err)
+	}
+	return fmt.Errorf("spec generated with warnings and --strict is set")
 }
 
 // buildGeneratorConfig maps CLI options to a generator.Config.
@@ -206,6 +216,10 @@ func validateGenerateOptions(opts *GenerateOptions) error {
 	if _, err := os.Stat(opts.ProjectRoot); os.IsNotExist(err) {
 		return fmt.Errorf("project root does not exist: %s", opts.ProjectRoot)
 	}
+	// Normalize so a whitespace-only --license is treated as missing and never
+	// emitted as a blank info.license.name.
+	opts.License = strings.TrimSpace(opts.License)
+	opts.LicenseURL = strings.TrimSpace(opts.LicenseURL)
 	if opts.LicenseURL != "" && opts.License == "" {
 		return fmt.Errorf("--license-url requires --license (OpenAPI license.url requires license.name)")
 	}
