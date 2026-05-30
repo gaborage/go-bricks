@@ -24,11 +24,16 @@ paths:
               format: jose
       responses:
         "200":
-          description: Resource created successfully
+          description: |
+            JOSE compact serialization (signed-then-encrypted). The wire payload
+            is a base64url-encoded JWE compact form whose plaintext, after
+            decrypt+verify, conforms to the SuccessResponse schema —
+            see #/components/schemas/SuccessResponse.
           content:
-            application/json:
+            application/jose:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
+                type: string
+                format: jose
         "400":
           description: Bad Request
           content:
@@ -44,6 +49,11 @@ components:
           type: string
       required:
         - pan
+    CreateTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
     ErrorResponse:
       type: object
       properties:

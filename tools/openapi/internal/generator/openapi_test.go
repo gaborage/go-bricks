@@ -314,6 +314,35 @@ func TestGetResponseDescription(t *testing.T) {
 	}
 }
 
+// TestGetAllRoutesStampsModuleIdentity verifies that flattening stamps each
+// route's owning module identity when absent, and preserves it when already set
+// (acceptance criterion: Module/Package survive the module->route flatten).
+func TestGetAllRoutesStampsModuleIdentity(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	project := &models.Project{
+		Modules: []models.Module{
+			{
+				Name:    "users",
+				Package: "users",
+				Routes: []models.Route{
+					{Method: "GET", Path: "/a"},                                         // unset -> stamped
+					{Method: "GET", Path: "/b", Module: "custom", Package: "custompkg"}, // preserved
+				},
+			},
+		},
+	}
+
+	routes := gen.getAllRoutes(project)
+	require.Len(t, routes, 2)
+	assert.Equal(t, "users", routes[0].Module)
+	assert.Equal(t, "users", routes[0].Package)
+	assert.Equal(t, "custom", routes[1].Module, "explicit Module must not be overwritten")
+	assert.Equal(t, "custompkg", routes[1].Package, "explicit Package must not be overwritten")
+
+	// The flatten must not mutate the originals (route values are copied).
+	assert.Empty(t, project.Modules[0].Routes[0].Module, "original route must remain unstamped")
+}
+
 func TestGetAllRoutes(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 

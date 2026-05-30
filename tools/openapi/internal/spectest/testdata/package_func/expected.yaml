@@ -1,26 +1,15 @@
 openapi: 3.0.1
 info:
-  title: Org API
+  title: Health API
   version: 1.0.0
   description: Generated API specification
 paths:
-  /orgs/{orgID}/projects/{projectID}:
+  /ping:
     get:
-      operationId: getProject
-      summary: GET /orgs/{orgID}/projects/{projectID}
+      operationId: ping
+      summary: GET /ping
       tags:
-        - org
-      parameters:
-        - name: orgID
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: projectID
-          in: path
-          required: true
-          schema:
-            type: string
+        - health
       responses:
         "200":
           description: Successful response
@@ -47,16 +36,6 @@ components:
           description: Response metadata
       required:
         - error
-    GetProjectReq:
-      type: object
-      properties:
-        orgID:
-          type: string
-        projectID:
-          type: string
-      required:
-        - orgID
-        - projectID
     JOSEErrorEnvelope:
       type: object
       properties:
@@ -69,12 +48,10 @@ components:
       required:
         - code
         - message
-    Project:
+    PingResponse:
       type: object
       properties:
-        id:
-          type: string
-        name:
+        status:
           type: string
     SuccessResponse:
       type: object

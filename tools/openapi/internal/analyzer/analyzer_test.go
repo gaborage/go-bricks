@@ -286,9 +286,9 @@ func validateDiscoveredModule(t *testing.T, module *models.Module) {
 		t.Errorf(expectedTwoRoutesFormat, len(module.Routes))
 	}
 
-	// Validate routes
-	for _, route := range module.Routes {
-		validateDiscoveredRoute(t, &route)
+	// Validate routes (index to avoid copying the Route value each iteration)
+	for i := range module.Routes {
+		validateDiscoveredRoute(t, &module.Routes[i])
 	}
 }
 
@@ -2358,7 +2358,7 @@ func (h *Handler) actualHandler() {}`,
 			require.NoError(t, err, "Failed to parse file")
 
 			analyzer := New(tempDir)
-			reqType, respType, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, tt.handlerName)
+			reqType, respType, err := analyzer.extractHandlerSignature(astFile, testFilePath, tt.structName, false, tt.handlerName)
 
 			if tt.shouldFindHandler {
 				require.NoError(t, err, tt.description)
@@ -2901,5 +2901,235 @@ func TestNormalizePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, normalizePath(tt.in))
 		})
+	}
+}
+
+// parseHandlerArgs parses module source and returns the parsed file, its path,
+// and the 4th argument (the handler) of every server.METHOD(...) call.
+func parseHandlerArgs(t *testing.T, src string) (*ast.File, string, []ast.Expr) {
+	t.Helper()
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "module.go")
+	require.NoError(t, os.WriteFile(fp, []byte(src), 0600))
+	astFile, err := parser.ParseFile(token.NewFileSet(), fp, nil, 0)
+	require.NoError(t, err)
+
+	methodCheck := New("")
+	var args []ast.Expr
+	ast.Inspect(astFile, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 4 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		// Only server.<HTTP method>(...) calls — not variadic server.WithTags(...)
+		// options, which would otherwise shift the collected-arg indices. Reuse the
+		// analyzer's own method list rather than duplicating it here.
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "server" && methodCheck.isHTTPMethod(sel.Sel.Name) {
+			args = append(args, call.Args[3])
+		}
+		return true
+	})
+	return astFile, fp, args
+}
+
+func TestResolveHandler(t *testing.T) {
+	src := `package shop
+import "github.com/gaborage/go-bricks/server"
+type Module struct { h *Handler }
+type Handler struct{}
+func (m *Module) reg(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/a", m.createUser)
+	server.POST(hr, r, "/b", m.h.createUser)
+	server.GET(hr, r, "/c", ping)
+}`
+	astFile, fp, args := parseHandlerArgs(t, src)
+	require.Len(t, args, 3)
+	a := New(filepath.Dir(fp))
+
+	t.Run("module_method", func(t *testing.T) {
+		name, recv, isPkg, ok := a.resolveHandler(args[0], "Module", astFile, fp)
+		assert.True(t, ok)
+		assert.Equal(t, "createUser", name)
+		assert.Equal(t, "Module", recv)
+		assert.False(t, isPkg)
+	})
+	t.Run("field_method_resolves_field_type", func(t *testing.T) {
+		name, recv, isPkg, ok := a.resolveHandler(args[1], "Module", astFile, fp)
+		assert.True(t, ok)
+		assert.Equal(t, "createUser", name)
+		assert.Equal(t, "Handler", recv) // m.h -> *Handler -> Handler
+		assert.False(t, isPkg)
+	})
+	t.Run("package_func", func(t *testing.T) {
+		name, recv, isPkg, ok := a.resolveHandler(args[2], "Module", astFile, fp)
+		assert.True(t, ok)
+		assert.Equal(t, "ping", name)
+		assert.Empty(t, recv)
+		assert.True(t, isPkg)
+	})
+	t.Run("unrecognized_arg", func(t *testing.T) {
+		_, _, _, ok := a.resolveHandler(&ast.FuncLit{}, "Module", astFile, fp)
+		assert.False(t, ok)
+	})
+	t.Run("selector_on_non_ident_non_selector", func(t *testing.T) {
+		// e.g. foo().method — the qualifier is a *ast.CallExpr, which the inner
+		// switch does not recognize, so resolution fails closed.
+		arg := &ast.SelectorExpr{X: &ast.CallExpr{Fun: &ast.Ident{Name: "foo"}}, Sel: &ast.Ident{Name: "method"}}
+		_, _, _, ok := a.resolveHandler(arg, "Module", astFile, fp)
+		assert.False(t, ok)
+	})
+}
+
+func TestResolveFieldType(t *testing.T) {
+	src := `package shop
+type Module struct { h *Handler; svc Service }
+type Handler struct{}
+type Service struct{}`
+	astFile, fp, _ := parseHandlerArgs(t, src)
+	a := New(filepath.Dir(fp))
+
+	assert.Equal(t, "Handler", a.resolveFieldType("Module", "h", astFile, fp), "pointer field -> base type")
+	assert.Equal(t, "Service", a.resolveFieldType("Module", "svc", astFile, fp), "value field")
+	assert.Empty(t, a.resolveFieldType("Module", "missing", astFile, fp), "field not found")
+	assert.Empty(t, a.resolveFieldType("Unknown", "h", astFile, fp), "struct not found")
+	assert.Empty(t, a.resolveFieldType("", "h", astFile, fp), "empty struct name")
+}
+
+func TestBaseTypeName(t *testing.T) {
+	tests := []struct {
+		name string
+		expr ast.Expr
+		want string
+	}{
+		{"ident", &ast.Ident{Name: "Handler"}, "Handler"},
+		{"pointer", &ast.StarExpr{X: &ast.Ident{Name: "Handler"}}, "Handler"},
+		{"qualified", &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Handler"}}, "Handler"},
+		{"pointer_qualified", &ast.StarExpr{X: &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Handler"}}}, "Handler"},
+		{"unsupported", &ast.ArrayType{Elt: &ast.Ident{Name: "x"}}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, baseTypeName(tt.expr))
+		})
+	}
+}
+
+func TestHandlerReceiverMatches(t *testing.T) {
+	a := New("")
+	recvOnHandler := &ast.FieldList{List: []*ast.Field{{Type: &ast.StarExpr{X: &ast.Ident{Name: "Handler"}}}}}
+
+	t.Run("package_func_no_receiver", func(t *testing.T) {
+		assert.True(t, a.handlerReceiverMatches(nil, "", true))
+	})
+	t.Run("package_func_but_has_receiver", func(t *testing.T) {
+		assert.False(t, a.handlerReceiverMatches(recvOnHandler, "", true))
+	})
+	t.Run("method_matches_receiver_type", func(t *testing.T) {
+		assert.True(t, a.handlerReceiverMatches(recvOnHandler, "Handler", false))
+	})
+	t.Run("method_wrong_receiver_type", func(t *testing.T) {
+		assert.False(t, a.handlerReceiverMatches(recvOnHandler, "Other", false))
+	})
+	t.Run("method_empty_receiver_type", func(t *testing.T) {
+		assert.False(t, a.handlerReceiverMatches(recvOnHandler, "", false))
+	})
+}
+
+func TestTypeInfoFromExprResultWrappers(t *testing.T) {
+	parseResult := func(t *testing.T, typeExpr string) *models.TypeInfo {
+		t.Helper()
+		code := "package test\nimport \"github.com/gaborage/go-bricks/server\"\nfunc f(p " + typeExpr + ") {}"
+		astFile, err := parser.ParseFile(token.NewFileSet(), testFileName, code, 0)
+		require.NoError(t, err)
+		var expr ast.Expr
+		for _, decl := range astFile.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Type.Params != nil && len(fn.Type.Params.List) > 0 {
+				expr = fn.Type.Params.List[0].Type
+				break
+			}
+		}
+		require.NotNil(t, expr)
+		return New("").typeInfoFromExpr(expr, "test")
+	}
+
+	t.Run("result_unwraps_to_inner", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+		assert.Equal(t, "test", ti.Package)
+		assert.False(t, ti.NoContent)
+	})
+	t.Run("result_with_meta_unwraps_to_inner", func(t *testing.T) {
+		ti := parseResult(t, "server.ResultWithMeta[User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+	})
+	t.Run("result_with_pointer_inner", func(t *testing.T) {
+		ti := parseResult(t, "server.Result[*User]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+		assert.True(t, ti.IsPointer)
+	})
+	t.Run("no_content_result_marks_no_body", func(t *testing.T) {
+		ti := parseResult(t, "server.NoContentResult")
+		require.NotNil(t, ti)
+		assert.True(t, ti.NoContent)
+		assert.Empty(t, ti.Name)
+	})
+	t.Run("non_result_generic_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "server.Box[User]"), "unknown server generic is not a response carrier")
+	})
+	t.Run("foreign_package_result_is_nil", func(t *testing.T) {
+		// A Result[T] from a non-server package must NOT be unwrapped (guards the
+		// pkg.Name == "server" check in isResultWrapper).
+		assert.Nil(t, parseResult(t, "other.Result[User]"))
+	})
+	t.Run("local_generic_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "Box[int]"), "non-framework generic is not a response carrier")
+	})
+	t.Run("index_list_result_unwraps_first", func(t *testing.T) {
+		// Multi-index generic syntax (IndexListExpr); parser does not type-check, so
+		// server.Result[A, B] exercises the multi-type-param branch -> first arg.
+		ti := parseResult(t, "server.Result[User, Meta]")
+		require.NotNil(t, ti)
+		assert.Equal(t, "User", ti.Name)
+	})
+	t.Run("index_list_non_result_is_nil", func(t *testing.T) {
+		assert.Nil(t, parseResult(t, "Pair[K, V]"))
+	})
+}
+
+func TestAnalyzeProjectStampsModuleIdentity(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "users")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	src := `package users
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "users" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/users", m.list)
+}
+func (m *Module) list(ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(src), 0600))
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	require.Len(t, project.Modules, 1)
+	require.NotEmpty(t, project.Modules[0].Routes)
+	for i := range project.Modules[0].Routes {
+		assert.Equal(t, "users", project.Modules[0].Routes[i].Module, "route %d Module", i)
+		assert.Equal(t, "users", project.Modules[0].Routes[i].Package, "route %d Package", i)
 	}
 }

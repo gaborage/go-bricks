@@ -72,6 +72,14 @@ components:
       required:
         - code
         - message
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
     SuccessResponse:
       type: object
       properties:
