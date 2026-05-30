@@ -110,7 +110,9 @@ func TestGenerateEmptyProject(t *testing.T) {
 }
 
 func TestGenerateWithProjectMetadata(t *testing.T) {
-	gen := New("Default API", "0.1.0", "Default description")
+	// No explicit document overrides, so analyzer-derived project metadata wins
+	// (precedence: explicit override > project metadata > built-in default).
+	gen := New("", "", "")
 	project := &models.Project{
 		Name:        "Custom API",
 		Version:     "2.0.0",
@@ -520,12 +522,10 @@ func TestGenerateWithMultipleMethodsPerPath(t *testing.T) {
 
 // TestGenerateWithProblematicValues verifies proper YAML escaping for special characters
 func TestGenerateWithProblematicValues(t *testing.T) {
-	// Test with values that could break manual YAML concatenation
-	gen := New(
-		"API: Special Characters Test", // Contains colon
-		"1.0.0-beta: yes",              // Contains colon and YAML boolean
-		"Multi-line description\nWith: colons and\n\"quotes\" and #comments",
-	)
+	// Test with values that could break manual YAML concatenation. No explicit
+	// overrides, so the problematic project-derived metadata flows through the
+	// escape path under test.
+	gen := New("", "", "")
 
 	project := &models.Project{
 		Name:        "Project: With Colons & Special \"Characters\"", // Problematic title
@@ -669,19 +669,19 @@ func TestGettersWithEmptyValues(t *testing.T) {
 			name:     "empty title with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getTitle(p) },
-			expected: "", // Empty title from generator should be preserved
+			expected: defaultDocTitle, // no override, no project name -> built-in default
 		},
 		{
 			name:     "empty version with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getVersion(p) },
-			expected: "", // Empty version from generator should be preserved
+			expected: defaultDocVersion, // no override, no project version -> built-in default
 		},
 		{
 			name:     "empty description with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getDescription(p) },
-			expected: "", // Empty description from generator should be preserved
+			expected: defaultDocDescription, // no override, no project description -> built-in default
 		},
 		{
 			name:     "project overrides empty generator title",
@@ -710,6 +710,28 @@ func TestGettersWithEmptyValues(t *testing.T) {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
 		})
+	}
+}
+
+// TestGetterPrecedenceExplicitOverride pins the top of the precedence chain:
+// an explicit document override (from --title/--api-version/--description)
+// wins over analyzer-derived project metadata.
+func TestGetterPrecedenceExplicitOverride(t *testing.T) {
+	gen := New("Override Title", "9.9.9", "Override description")
+	project := &models.Project{
+		Name:        "Project Title",
+		Version:     "2.0.0",
+		Description: "Project description",
+	}
+
+	if got := gen.getTitle(project); got != "Override Title" {
+		t.Errorf("title: explicit override should win, got %q", got)
+	}
+	if got := gen.getVersion(project); got != "9.9.9" {
+		t.Errorf("version: explicit override should win, got %q", got)
+	}
+	if got := gen.getDescription(project); got != "Override description" {
+		t.Errorf("description: explicit override should win, got %q", got)
 	}
 }
 
@@ -2562,5 +2584,59 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Equal(t, refPath("Address"), p.Items.Ref, "$ref element stands alone")
 		require.NotNil(t, p.MinItems)
 		assert.Equal(t, 1, *p.MinItems)
+	})
+}
+
+// TestNewWithConfig covers the CLI-driven document metadata: custom servers,
+// license, and the tenant-security opt-out.
+func TestNewWithConfig(t *testing.T) {
+	t.Run("custom servers + license", func(t *testing.T) {
+		gen := NewWithConfig(&Config{
+			Title: "My API", Version: "2.1.0", Description: "d",
+			Servers: []string{"https://api.example.com", "https://staging.example.com"},
+			License: &License{Name: "MIT", URL: "https://opensource.org/licenses/MIT"},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "title: My API")
+		assert.Contains(t, spec, "url: https://api.example.com")
+		assert.Contains(t, spec, "url: https://staging.example.com")
+		assert.Contains(t, spec, "name: MIT")
+		assert.Contains(t, spec, "url: https://opensource.org/licenses/MIT")
+		assert.Contains(t, spec, "X-Tenant-ID", "tenant security on by default")
+	})
+
+	t.Run("tenant security opt-out", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0", DisableTenantSecurity: true})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.NotContains(t, spec, "X-Tenant-ID", "opt-out omits the tenant scheme")
+		assert.NotContains(t, spec, "securitySchemes", "no schemes when security disabled")
+		// Default relative-root server still present.
+		assert.Contains(t, spec, "url: /")
+	})
+
+	t.Run("blank server is dropped, not emitted as empty url", func(t *testing.T) {
+		// A stray `--server ""` (e.g. an unset shell var) must not produce an
+		// invalid `url: ""` Server Object; the valid entry survives.
+		gen := NewWithConfig(&Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"  ", "https://api.example.com", ""},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: https://api.example.com")
+		assert.NotContains(t, spec, `url: ""`, "blank server must not be emitted")
+	})
+
+	t.Run("all-blank servers fall back to relative-root default", func(t *testing.T) {
+		gen := NewWithConfig(&Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"", "   "},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: /", "default server restored when none valid")
+		assert.NotContains(t, spec, `url: ""`)
 	})
 }

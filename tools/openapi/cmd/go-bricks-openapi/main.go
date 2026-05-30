@@ -20,6 +20,10 @@ func main() {
 This tool analyzes go-bricks services and generates OpenAPI specifications automatically
 from route registrations, type definitions, and validation tags.`,
 		Version: version,
+		// Errors and usage are reported once below (a single "Error:" line, no usage
+		// dump) rather than by cobra's default handler on a RunE error.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	// Add commands

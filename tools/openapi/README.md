@@ -9,10 +9,10 @@ Static analysis-based OpenAPI 3.0.1 specification generator for go-bricks servic
 go install ./tools/openapi/cmd/go-bricks-openapi
 
 # Generate OpenAPI spec
-go-bricks-openapi generate -project . -output docs/openapi.yaml
+go-bricks-openapi generate --project . --output docs/openapi.yaml
 
 # Check tool health and compatibility
-go-bricks-openapi doctor -project .
+go-bricks-openapi doctor --project .
 ```
 
 ## Commands
