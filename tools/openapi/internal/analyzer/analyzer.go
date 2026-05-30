@@ -1712,7 +1712,9 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 
 	ti := &models.TypeInfo{Name: name, Package: pkg}
 	a.typeRegistry[name] = ti // register before recursing (cycle guard)
-	ti.Fields = a.extractStructFields(structType, pkg)
+	// Seed the embedded-promotion ancestor set with this type so a self-embed
+	// (e.g. type Node struct{ *Node }) is not promoted into itself.
+	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{name: {}})
 	ti.JOSE = hasJOSESentinelTag(structType)
 
 	for i := range ti.Fields {
@@ -1879,40 +1881,115 @@ func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *
 	return nil
 }
 
-// extractStructFields extracts field information from a struct type including struct tags
-func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, _ string) []models.FieldInfo {
-	var fields []models.FieldInfo
-
+// extractStructFields extracts field information from a struct type including
+// struct tags. astFile/filePath locate sibling files for resolving embedded
+// struct types; visited is the embedded-promotion ancestor set (cycle guard).
+//
+// Direct named fields and json-tagged embeds (which nest at the parent's level)
+// are "shallow"; fields flattened from an untagged embed are "promoted" (deeper).
+// On a JSON-name collision the shallow field wins, mirroring encoding/json's
+// shallower-depth-wins rule (so a parent field is never silently overridden by a
+// promoted one, regardless of declaration order).
+func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) []models.FieldInfo {
 	if structType.Fields == nil {
-		return fields
-	}
-
-	for _, field := range structType.Fields.List {
-		fields = append(fields, a.processStructField(field)...)
-	}
-
-	return fields
-}
-
-// processStructField processes a single AST field and returns all associated FieldInfo entries
-func (a *ProjectAnalyzer) processStructField(field *ast.Field) []models.FieldInfo {
-	// Skip fields without names (embedded structs, for now)
-	if len(field.Names) == 0 {
 		return nil
 	}
 
-	fieldInfos := make([]models.FieldInfo, 0, len(field.Names))
+	var shallow, promoted []models.FieldInfo
+	for _, field := range structType.Fields.List {
+		if len(field.Names) == 0 {
+			fields, isPromotion := a.embeddedFields(field, pkg, astFile, filePath, visited)
+			if isPromotion {
+				promoted = append(promoted, fields...)
+			} else {
+				shallow = append(shallow, fields...)
+			}
+			continue
+		}
+		shallow = append(shallow, a.namedFields(field)...)
+	}
+
+	return mergeFieldsByPrecedence(shallow, promoted)
+}
+
+// namedFields builds FieldInfo entries for a single non-anonymous AST field
+// (one per exported name; unexported names are skipped).
+func (a *ProjectAnalyzer) namedFields(field *ast.Field) []models.FieldInfo {
+	out := make([]models.FieldInfo, 0, len(field.Names))
 	for _, fieldName := range field.Names {
-		// Skip unexported fields
 		if !fieldName.IsExported() {
 			continue
 		}
+		out = append(out, a.buildFieldInfo(fieldName.Name, field))
+	}
+	return out
+}
 
-		fieldInfo := a.buildFieldInfo(fieldName.Name, field)
-		fieldInfos = append(fieldInfos, fieldInfo)
+// mergeFieldsByPrecedence concatenates shallow then promoted fields, dropping any
+// promoted field whose JSON name already appears (so shallower wins). Among
+// promoted fields a colliding name keeps the first (equal-depth ambiguity is
+// rare; encoding/json would drop both, but documenting one is more useful).
+func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.FieldInfo {
+	seen := make(map[string]struct{}, len(shallow))
+	for i := range shallow {
+		if n := shallow[i].JSONName; n != "" {
+			seen[n] = struct{}{}
+		}
+	}
+	out := shallow
+	for i := range promoted {
+		if n := promoted[i].JSONName; n != "" {
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+		}
+		out = append(out, promoted[i])
+	}
+	return out
+}
+
+// embeddedFields handles an anonymous (embedded) struct field, mirroring
+// encoding/json promotion rules. It returns the resulting fields and whether they
+// were PROMOTED (flattened from the embed, i.e. deeper) vs nested at the parent
+// level:
+//   - With an explicit json name (Base `json:"base"`) it NESTS as a single field
+//     of the embedded type (rendered as a $ref) — returned as shallow.
+//   - With json:"-" it is excluded.
+//   - Otherwise its exported fields are PROMOTED (flattened) into the parent.
+//
+// Embedded pointers (*Base) are unwrapped. An embedded type that cannot be
+// resolved to a local struct — a cross-package type (PR9's resolver) or a named
+// non-struct like `type Code string` (named-type underlying-kind is also PR9) —
+// is skipped without crashing. The visited ancestor set (add-before-recurse /
+// delete-after backtracking) terminates self- and mutually-embedded cycles.
+func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) (fields []models.FieldInfo, promoted bool) {
+	typeName := baseStructTypeName(a.typeToString(field.Type))
+
+	// An explicit json name turns embedding into nesting (a parent-level field).
+	if field.Tag != nil {
+		jsonName := a.parseStructTags(strings.Trim(field.Tag.Value, "`")).jsonName
+		switch jsonName {
+		case jsonSkipValue:
+			return nil, false // json:"-" — excluded
+		case "":
+			// no explicit name — fall through to promotion
+		default:
+			return []models.FieldInfo{a.buildFieldInfo(typeName, field)}, false
+		}
 	}
 
-	return fieldInfos
+	if _, seen := visited[typeName]; seen {
+		return nil, false // cycle / self-embed guard
+	}
+	embedded, err := a.findStructDefinition(astFile, filePath, typeName)
+	if err != nil {
+		return nil, false // unresolvable (cross-package or non-struct) — skip, never crash
+	}
+	visited[typeName] = struct{}{}
+	fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited)
+	delete(visited, typeName) // backtrack: keep visited scoped to the current chain
+	return fields, true
 }
 
 // buildFieldInfo creates a FieldInfo from a field name and AST field
