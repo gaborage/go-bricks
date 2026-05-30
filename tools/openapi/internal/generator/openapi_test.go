@@ -178,9 +178,9 @@ func TestGenerateWithRoutes(t *testing.T) {
 		t.Error("Missing POST method")
 	}
 
-	// Check operation details
-	if !strings.Contains(spec, "operationId: getUser") {
-		t.Error("Missing operation ID")
+	// Check operation details: operationId is module-qualified (users + GetUser).
+	if !strings.Contains(spec, "operationId: usersGetUser") {
+		t.Error("Missing module-qualified operation ID")
 	}
 	if !strings.Contains(spec, "summary: Get user by ID") {
 		t.Error("Missing summary")
@@ -199,11 +199,20 @@ func TestGenerateWithRoutes(t *testing.T) {
 	if !strings.Contains(spec, `"400":`) {
 		t.Error("Missing 400 response")
 	}
-	if !strings.Contains(spec, "SuccessResponse") {
-		t.Error("Missing success response schema")
+	// Non-JOSE routes use the inline data/meta envelope (SuccessResponse is gated
+	// to JOSE-untyped fallbacks now), so assert the inline envelope + ErrorResponse.
+	if !strings.Contains(spec, "data:") {
+		t.Error("Missing inline data/meta success envelope")
 	}
 	if !strings.Contains(spec, "ErrorResponse") {
 		t.Error("Missing error response schema")
+	}
+	// Conformance additions: servers + tenant security.
+	if !strings.Contains(spec, "servers:") {
+		t.Error("Missing servers block")
+	}
+	if !strings.Contains(spec, "X-Tenant-ID") {
+		t.Error("Missing X-Tenant-ID security scheme")
 	}
 }
 
@@ -244,7 +253,7 @@ func TestGetOperationID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := gen.getOperationID(tt.route)
+			result := gen.getOperationID(tt.route, nil)
 			if result != tt.expected {
 				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
@@ -351,7 +360,7 @@ func TestBuildPathsDropsNonRootedPath(t *testing.T) {
 	paths := gen.buildPaths([]models.Route{
 		{Method: "GET", Path: "/ok"},
 		{Method: "GET", Path: "broken"}, // no leading slash
-	})
+	}, nil)
 	_, hasOK := paths["/ok"]
 	_, hasBroken := paths["broken"]
 	assert.True(t, hasOK)
@@ -363,7 +372,7 @@ func TestBuildPathsDedupesSameMethodAndPath(t *testing.T) {
 	paths := gen.buildPaths([]models.Route{
 		{Method: "GET", Path: "/x", HandlerName: "first"},
 		{Method: "GET", Path: "/x", HandlerName: "second"}, // same (method,path)
-	})
+	}, nil)
 	require.NotNil(t, paths["/x"])
 	require.NotNil(t, paths["/x"].Get)
 	assert.Equal(t, "first", paths["/x"].Get.OperationID, "first registration wins on a duplicate (method,path)")
@@ -706,10 +715,16 @@ func TestGettersWithEmptyValues(t *testing.T) {
 
 func TestCreateStandardSchemas(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	schemas := gen.createStandardSchemas()
+	// Routes that, between them, reference all four standard schemas: a normal
+	// route (ErrorResponse), a JOSE route with an untyped response (SuccessResponse
+	// + JOSEErrorEnvelope), and a raw route (RawErrorResponse).
+	routes := []models.Route{
+		{Method: "GET", Path: "/a", Response: &models.TypeInfo{Name: "Thing"}},
+		{Method: "POST", Path: "/j", Response: &models.TypeInfo{JOSE: true}},
+		{Method: "GET", Path: "/r", RawResponse: true, Response: &models.TypeInfo{Name: "Legacy"}},
+	}
+	schemas := gen.createStandardSchemas(routes)
 
-	// Test that standard schemas are created correctly: SuccessResponse,
-	// ErrorResponse, JOSEErrorEnvelope, and RawErrorResponse (raw-mode routes).
 	if len(schemas) != 4 {
 		t.Errorf("Expected 4 schemas, got %d", len(schemas))
 	}
@@ -727,6 +742,22 @@ func TestCreateStandardSchemas(t *testing.T) {
 	})
 	t.Run("RawErrorResponse schema", func(t *testing.T) {
 		validateMinimalErrorEnvelope(t, schemas, schemaRawErrorResponse)
+	})
+}
+
+func TestCreateStandardSchemasGating(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("normal routes only -> just ErrorResponse", func(t *testing.T) {
+		s := gen.createStandardSchemas([]models.Route{{Method: "GET", Path: "/a", Response: &models.TypeInfo{Name: "Thing"}}})
+		assert.Contains(t, s, schemaErrorResponse)
+		assert.NotContains(t, s, schemaJOSEErrorEnvelope, "no JOSE route -> no JOSEErrorEnvelope")
+		assert.NotContains(t, s, schemaRawErrorResponse, "no raw route -> no RawErrorResponse")
+		assert.NotContains(t, s, schemaSuccessResponse, "typed responses use inline envelopes")
+	})
+
+	t.Run("empty project -> no standard schemas", func(t *testing.T) {
+		assert.Empty(t, gen.createStandardSchemas(nil))
 	})
 }
 
@@ -834,7 +865,7 @@ func TestGenerateSchemasFromTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := gen.generateSchemasFromTypes(tt.types)
+			schemas := gen.generateSchemasFromTypes(tt.types, nil)
 			assert.Len(t, schemas, tt.expectedCount)
 			for _, name := range tt.expectedSchemas {
 				_, exists := schemas[name]
@@ -1472,12 +1503,17 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 		t.Fatal("Components/schemas should be a map")
 	}
 
-	// Check that generated schemas exist
-	schemaNames := []string{"CreateUserReq", "User", "SuccessResponse", "ErrorResponse"}
+	// Check that generated schemas exist. SuccessResponse is intentionally absent:
+	// typed routes use the inline data/meta envelope, and the generic SuccessResponse
+	// is gated to JOSE-untyped fallbacks (no-unused-components).
+	schemaNames := []string{"CreateUserReq", "User", "ErrorResponse"}
 	for _, name := range schemaNames {
 		if _, exists := components[name]; !exists {
 			t.Errorf("Missing schema: %s", name)
 		}
+	}
+	if _, exists := components["SuccessResponse"]; exists {
+		t.Error("SuccessResponse should be gated out for non-JOSE typed routes")
 	}
 
 	// Verify CreateUserReq schema has proper constraints
@@ -2014,14 +2050,14 @@ func TestAssignOperationByMethod(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
 			item := &OpenAPIPathItem{}
-			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"})
+			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"}, nil)
 			assert.NotNil(t, tc.op(item), "operation should be attached under %s", tc.method)
 		})
 	}
 
 	t.Run("unknown_method_noop", func(t *testing.T) {
 		item := &OpenAPIPathItem{}
-		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"})
+		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"}, nil)
 		assert.Nil(t, item.Get)
 		assert.Nil(t, item.Post)
 	})
@@ -2417,4 +2453,44 @@ func TestBuildResponsesValidationAdds422(t *testing.T) {
 	})
 	require.Contains(t, resps, "422", "a validated request body must advertise 422")
 	assert.Equal(t, refPath(schemaErrorResponse), resps["422"].Content[mediaJSON].Schema.Ref)
+}
+
+// TestAssignOperationIDs covers module-qualification, explicit WithHandlerName
+// override, and deterministic de-duplication.
+func TestAssignOperationIDs(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	routes := []models.Route{
+		{Method: "GET", Path: "/users/:id", Module: "users", HandlerName: "get"},
+		{Method: "GET", Path: "/orders/:id", Module: "orders", HandlerName: "get"},
+		{Method: "POST", Path: "/jobs", Module: "jobs", HandlerName: "create", OperationID: "enqueueJob"},
+		{Method: "GET", Path: "/bare"}, // no module/handler -> method+path fallback
+	}
+	ids := gen.assignOperationIDs(routes)
+
+	assert.Equal(t, "usersGet", ids["GET /users/:id"], "module-qualified")
+	assert.Equal(t, "ordersGet", ids["GET /orders/:id"], "different module -> distinct, no collision")
+	assert.Equal(t, "enqueueJob", ids["POST /jobs"], "explicit WithHandlerName wins verbatim")
+	assert.Equal(t, "get_bare", ids["GET /bare"], "no handler -> method+path fallback")
+
+	// All ids are unique.
+	seen := map[string]bool{}
+	for _, id := range ids {
+		assert.False(t, seen[id], "duplicate operationId %q", id)
+		seen[id] = true
+	}
+}
+
+// TestAssignOperationIDsDedup verifies a deterministic numeric suffix when two
+// routes derive the same base id (same module + handler).
+func TestAssignOperationIDsDedup(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	routes := []models.Route{
+		{Method: "GET", Path: "/a", Module: "m", HandlerName: "list"},
+		{Method: "GET", Path: "/b", Module: "m", HandlerName: "list"},
+	}
+	ids := gen.assignOperationIDs(routes)
+	// Deterministic, sorted first-wins: "GET /a" sorts before "GET /b", so /a keeps
+	// the bare id and /b gets the suffix.
+	assert.Equal(t, "mList", ids["GET /a"], "first sorted key keeps the bare id")
+	assert.Equal(t, "mList2", ids["GET /b"], "later collision gets the numeric suffix")
 }

@@ -3,10 +3,13 @@ info:
   title: Vts API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /v1/tokens:
     post:
-      operationId: createToken
+      operationId: vtsCreateToken
       summary: POST /v1/tokens
       tags:
         - vts
@@ -66,17 +69,6 @@ components:
       properties:
         token:
           type: string
-    ErrorResponse:
-      type: object
-      properties:
-        error:
-          type: object
-          description: Error details with code and message
-        meta:
-          type: object
-          description: Response metadata
-      required:
-        - error
     JOSEErrorEnvelope:
       type: object
       properties:
@@ -89,31 +81,10 @@ components:
       required:
         - code
         - message
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

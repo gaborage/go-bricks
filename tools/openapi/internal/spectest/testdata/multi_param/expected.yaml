@@ -3,10 +3,13 @@ info:
   title: Org API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /orgs/{orgID}/projects/{projectID}:
     get:
-      operationId: getProject
+      operationId: orgGetProject
       summary: GET /orgs/{orgID}/projects/{projectID}
       tags:
         - org
@@ -72,28 +75,6 @@ components:
           description: Response metadata
       required:
         - error
-    GetProjectReq:
-      type: object
-      properties:
-        orgID:
-          type: string
-        projectID:
-          type: string
-      required:
-        - orgID
-        - projectID
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
     Project:
       type: object
       properties:
@@ -101,31 +82,10 @@ components:
           type: string
         name:
           type: string
-    RawErrorResponse:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
-        message:
-          type: string
-          description: Human-readable error message
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

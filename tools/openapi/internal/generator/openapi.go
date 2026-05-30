@@ -73,6 +73,7 @@ const (
 	respDescSuccess = "Successful response"
 	respDescCreated = "Resource created successfully"
 	paramTypePath   = "path"
+	paramTypeHeader = "header"
 	propNameError   = "error"
 	propNameData    = "data"
 	propNameMeta    = "meta"
@@ -214,10 +215,25 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(infoYAML)
 
+	// Reduce to the EMITTED route set (first-wins per method+path, matching
+	// assignOperation), then drive operationIds, schema gating, and path building
+	// from that one set so the gate, refs, and paths can never disagree. opIDs is
+	// request-scoped (threaded, not stored) so Generate is reentrant.
+	allRoutes := g.getAllRoutes(project)
+	emitted := emittedRoutes(allRoutes)
+	opIDs := g.assignOperationIDs(emitted)
+
+	// Servers: a relative-root default so the document is self-describing and
+	// passes the no-empty-servers gate (the concrete URL is a PR11 flag).
+	serversYAML, err := g.marshalYAMLSection("servers", defaultServers())
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal servers section: %w", err)
+	}
+	sb.WriteString(serversYAML)
+
 	// Paths — built as a struct graph and emitted through the same yaml.Marshal
 	// path as info/components (an empty project marshals to "paths: {}").
-	allRoutes := g.getAllRoutes(project)
-	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(allRoutes))
+	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(emitted, opIDs))
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal paths section: %w", err)
 	}
@@ -230,8 +246,11 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	if types == nil {
 		types = routeTypeRegistry(project)
 	}
-	standardSchemas := g.createStandardSchemas()
-	generatedSchemas := g.generateSchemasFromTypes(types)
+	// Standard schemas are gated to those actually referenced (so no-unused-components
+	// holds): ErrorResponse always; SuccessResponse/JOSEErrorEnvelope only for JOSE
+	// routes; RawErrorResponse only for raw routes.
+	standardSchemas := g.createStandardSchemas(emitted)
+	generatedSchemas := g.generateSchemasFromTypes(types, referencedSchemaNames(emitted, types))
 
 	// Merge schemas (generated schemas override standard if there's a conflict)
 	schemas := make(map[string]*OpenAPISchema)
@@ -239,7 +258,8 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	maps.Copy(schemas, generatedSchemas)
 
 	components := map[string]any{
-		"schemas": schemas,
+		"schemas":         schemas,
+		"securitySchemes": securitySchemes(),
 	}
 
 	componentsYAML, err := g.marshalYAMLSection("components", components)
@@ -248,7 +268,53 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(componentsYAML)
 
+	// Root-level security: the framework resolves tenancy from the X-Tenant-ID
+	// header, modeled as an apiKey scheme. Emitted last so security-defined sees
+	// the scheme already declared.
+	securityYAML, err := g.marshalYAMLSection("security", rootSecurity())
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal security section: %w", err)
+	}
+	sb.WriteString(securityYAML)
+
 	return sb.String(), nil
+}
+
+// tenantSecurityScheme is the component name for the X-Tenant-ID apiKey scheme.
+const tenantSecurityScheme = "TenantID"
+
+// openAPIServer is a Server Object.
+type openAPIServer struct {
+	URL         string `yaml:"url"`
+	Description string `yaml:"description,omitempty"`
+}
+
+// securityScheme is a Security Scheme Object (apiKey form).
+type securityScheme struct {
+	Type string `yaml:"type"`
+	In   string `yaml:"in,omitempty"`
+	Name string `yaml:"name,omitempty"`
+}
+
+// defaultServers returns the default servers block: a single relative-root entry.
+// (A concrete --server URL is a PR11 flag.)
+func defaultServers() []openAPIServer {
+	return []openAPIServer{{URL: "/", Description: "Relative to the deployment host"}}
+}
+
+// securitySchemes returns the components.securitySchemes map. The framework
+// resolves the tenant from the X-Tenant-ID request header (apiKey-in-header);
+// bearer/oauth schemes can be added here later without restructuring.
+func securitySchemes() map[string]securityScheme {
+	return map[string]securityScheme{
+		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: "X-Tenant-ID"},
+	}
+}
+
+// rootSecurity returns the document-level security requirement referencing the
+// tenant apiKey scheme.
+func rootSecurity() []map[string][]string {
+	return []map[string][]string{{tenantSecurityScheme: {}}}
 }
 
 // getTitle returns the project title or default
@@ -313,7 +379,7 @@ func (g *OpenAPIGenerator) groupRoutesByPath(routes []models.Route) map[string][
 // buildPaths builds the paths object as a struct graph keyed by path. yaml.Marshal
 // sorts map keys, giving the same deterministic path ordering the previous
 // hand-rolled writer produced via sort.Strings.
-func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPIPathItem {
+func (g *OpenAPIGenerator) buildPaths(routes []models.Route, opIDs map[string]string) map[string]*OpenAPIPathItem {
 	pathGroups := g.groupRoutesByPath(routes)
 	paths := make(map[string]*OpenAPIPathItem, len(pathGroups))
 	for path := range pathGroups {
@@ -326,23 +392,41 @@ func (g *OpenAPIGenerator) buildPaths(routes []models.Route) map[string]*OpenAPI
 		group := pathGroups[path]
 		item := &OpenAPIPathItem{}
 		for i := range group {
-			g.assignOperation(item, &group[i])
+			g.assignOperation(item, &group[i], opIDs)
 		}
 		paths[path] = item
 	}
 	return paths
 }
 
+// emittedRoutes reduces routes to the set actually emitted: the first route per
+// (method, path), in discovery order, mirroring assignOperation's first-wins
+// de-dup. Schema gating, ref collection, and operationId assignment all run over
+// this set so they agree with the emitted paths.
+func emittedRoutes(routes []models.Route) []models.Route {
+	seen := make(map[string]struct{}, len(routes))
+	out := make([]models.Route, 0, len(routes))
+	for i := range routes {
+		k := routeKey(&routes[i])
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, routes[i])
+	}
+	return out
+}
+
 // assignOperation builds the operation for a route and attaches it to the path
 // item under the matching HTTP method. The analyzer only emits the standard
 // methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op. A
 // (method, path) already populated is left untouched (first-wins de-dup).
-func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route) {
+func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route, opIDs map[string]string) {
 	slot := item.methodSlot(strings.ToUpper(route.Method))
 	if slot == nil || *slot != nil {
 		return
 	}
-	*slot = g.buildOperation(route)
+	*slot = g.buildOperation(route, opIDs)
 }
 
 // methodSlot returns a pointer to the operation field for an HTTP method, or nil
@@ -382,9 +466,9 @@ type Parameter struct {
 // buildOperation builds the Operation Object for a route. Empty tags/parameters
 // and an absent request body are dropped by the struct's omitempty tags, matching
 // the previous conditional text emission.
-func (g *OpenAPIGenerator) buildOperation(route *models.Route) *OpenAPIOperation {
+func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]string) *OpenAPIOperation {
 	op := &OpenAPIOperation{
-		OperationID: g.getOperationID(route),
+		OperationID: g.getOperationID(route, opIDs),
 		Summary:     g.getSummary(route),
 		Description: route.Description,
 		Tags:        route.Tags,
@@ -470,7 +554,6 @@ func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
 // plaintext-minimal envelope by the runtime, so the OpenAPI spec must reflect that.
 func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenAPIResponse {
 	joseResponse := route.Response != nil && route.Response.JOSE
-	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
 	noContent := route.Response != nil && route.Response.NoContent
 
 	successCode := successStatusCode(route, noContent)
@@ -491,14 +574,9 @@ func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenA
 
 	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
 	// security model: when decrypt/verify fails the peer is unauthenticated and
-	// the server leaks nothing beyond {code,message}.
-	errorSchema := schemaErrorResponse
-	switch {
-	case joseRoute:
-		errorSchema = schemaJOSEErrorEnvelope
-	case route.RawResponse:
-		errorSchema = schemaRawErrorResponse
-	}
+	// the server leaks nothing beyond {code,message}. errorSchemaName is shared with
+	// the standard-schema gating so the two can never disagree.
+	errorSchema := errorSchemaName(route)
 
 	responses := map[string]*OpenAPIResponse{
 		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
@@ -607,14 +685,93 @@ func routeHasValidation(request *models.TypeInfo) bool {
 }
 
 // getOperationID generates an operation ID for a route
-func (g *OpenAPIGenerator) getOperationID(route *models.Route) string {
-	if route.HandlerName != "" {
-		return route.HandlerName
+func (g *OpenAPIGenerator) getOperationID(route *models.Route, opIDs map[string]string) string {
+	if id, ok := opIDs[routeKey(route)]; ok {
+		return id
 	}
-	// Fallback: create from method and path
-	cleanPath := strings.ReplaceAll(route.Path, "/", "_")
-	cleanPath = strings.ReplaceAll(cleanPath, ":", "")
-	return fmt.Sprintf("%s%s", strings.ToLower(route.Method), cleanPath)
+	return g.baseOperationID(route) // defensive fallback (route not in the pre-pass)
+}
+
+// routeKey identifies a route by its emitted slot (method + path); unique because
+// assignOperation de-dups duplicate (method, path) pairs first-wins.
+func routeKey(route *models.Route) string {
+	return strings.ToUpper(route.Method) + " " + route.Path
+}
+
+// assignOperationIDs assigns a deterministic, collision-free operationId to every
+// route: an explicit WithHandlerName id verbatim, else a module-qualified handler
+// name (usersGetUser), with a numeric suffix on any remaining collision. Routes
+// are processed in sorted key order so the assignment is stable across runs.
+func (g *OpenAPIGenerator) assignOperationIDs(routes []models.Route) map[string]string {
+	keys := make([]string, 0, len(routes))
+	byKey := make(map[string]*models.Route, len(routes))
+	for i := range routes {
+		k := routeKey(&routes[i])
+		// First-wins, mirroring assignOperation: the FIRST route for a (method,
+		// path) is the one emitted, so its handler must drive the operationId.
+		if _, seen := byKey[k]; seen {
+			continue
+		}
+		byKey[k] = &routes[i]
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	used := make(map[string]struct{}, len(routes))
+	out := make(map[string]string, len(routes))
+	for _, k := range keys {
+		if _, done := out[k]; done {
+			continue // duplicate (method, path) — one operation emitted
+		}
+		base := g.baseOperationID(byKey[k])
+		id := base
+		for n := 2; ; n++ {
+			if _, taken := used[id]; !taken {
+				break
+			}
+			id = base + strconv.Itoa(n)
+		}
+		used[id] = struct{}{}
+		out[k] = id
+	}
+	return out
+}
+
+// baseOperationID derives a route's un-deduplicated operationId: an explicit
+// WithHandlerName id is used as-is; otherwise the handler method name is
+// module-qualified (module "users" + "getUser" -> "usersGetUser"), falling back
+// to method+path when no handler name was resolved. The caller may still append a
+// numeric suffix if two routes produce the same base — operationIds must be
+// unique, so even an explicit id is suffixed on the (rare) explicit collision.
+func (g *OpenAPIGenerator) baseOperationID(route *models.Route) string {
+	if route.OperationID != "" {
+		return route.OperationID
+	}
+	name := route.HandlerName
+	if name == "" {
+		cleanPath := strings.ReplaceAll(route.Path, "/", "_")
+		cleanPath = strings.ReplaceAll(cleanPath, ":", "")
+		return strings.ToLower(route.Method) + cleanPath
+	}
+	if route.Module != "" {
+		return lowerFirst(route.Module) + upperFirst(name)
+	}
+	return name
+}
+
+// lowerFirst / upperFirst adjust the first rune's case for camelCase joining.
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // getSummary returns the route summary or generates one
@@ -671,74 +828,99 @@ func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (str
 	return buf.String(), nil
 }
 
-// createStandardSchemas creates common response schemas using proper structs
-func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
-	return map[string]*OpenAPISchema{
-		// SuccessResponse is the generic envelope used as the JOSE plaintext-schema
-		// fallback (a typed route emits an inline envelope instead). Its meta reuses
-		// metaEnvelopeSchema so the documented metadata shape never diverges from the
-		// inline envelopes.
-		schemaSuccessResponse: {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				propNameData: {
-					Type:        typeObject,
-					Description: "Response data",
-				},
-				propNameMeta: metaEnvelopeSchema(),
-			},
+// errorSchemaName returns the error-component name a route's 4xx/5xx responses
+// reference: JOSEErrorEnvelope for JOSE routes (request or response tagged),
+// RawErrorResponse for raw-response routes, else ErrorResponse. Shared by
+// buildResponses (emit) and createStandardSchemas (gate) so they cannot diverge.
+func errorSchemaName(route *models.Route) string {
+	joseRoute := (route.Response != nil && route.Response.JOSE) ||
+		(route.Request != nil && route.Request.JOSE)
+	switch {
+	case joseRoute:
+		return schemaJOSEErrorEnvelope
+	case route.RawResponse:
+		return schemaRawErrorResponse
+	default:
+		return schemaErrorResponse
+	}
+}
+
+// createStandardSchemas returns only the common schemas actually referenced by
+// the given routes, so the document carries no unused components. The error
+// schema per route is selected by errorSchemaName (shared with buildResponses);
+// SuccessResponse is added only when a JOSE route falls back to the generic
+// envelope (an untyped JOSE response, mirroring successPlaintextSchema).
+func (g *OpenAPIGenerator) createStandardSchemas(routes []models.Route) map[string]*OpenAPISchema {
+	builders := map[string]func() *OpenAPISchema{
+		schemaErrorResponse:     errorResponseSchema,
+		schemaJOSEErrorEnvelope: joseErrorEnvelopeSchema,
+		schemaRawErrorResponse:  rawErrorResponseSchema,
+		schemaSuccessResponse:   successResponseSchema,
+	}
+	used := make(map[string]bool, len(builders))
+	for i := range routes {
+		r := &routes[i]
+		used[errorSchemaName(r)] = true
+		if r.Response != nil && r.Response.JOSE && r.Response.Name == "" {
+			used[schemaSuccessResponse] = true
+		}
+	}
+
+	out := make(map[string]*OpenAPISchema, len(used))
+	for name := range used {
+		out[name] = builders[name]()
+	}
+	return out
+}
+
+// successResponseSchema is the generic data/meta envelope used as the JOSE
+// plaintext-schema fallback (a typed route emits an inline envelope instead). Its
+// meta reuses metaEnvelopeSchema so the documented shape never diverges.
+func successResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameData: {Type: typeObject, Description: "Response data"},
+			propNameMeta: metaEnvelopeSchema(),
 		},
-		schemaErrorResponse: {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				propNameError: {
-					Type: typeObject,
-					// Note: nested properties would need recursive handling for full OpenAPI spec
-					Description: "Error details with code and message",
-				},
-				"meta": {
-					Type:        typeObject,
-					Description: "Response metadata",
-				},
-			},
-			Required: []string{propNameError},
+	}
+}
+
+func errorResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameError: {Type: typeObject, Description: "Error details with code and message"},
+			propNameMeta:  {Type: typeObject, Description: "Response metadata"},
 		},
-		// JOSEErrorEnvelope is the minimal plaintext error envelope returned for
-		// pre-trust JOSE failures (decrypt failed, signature invalid, kid unknown,
-		// etc.). The framework intentionally omits traceId/timestamp/framework
-		// metadata here — peer is unauthenticated and the envelope must leak
-		// nothing beyond the canonical {code,message} pair.
-		schemaJOSEErrorEnvelope: {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				propNameCode: {
-					Type:        typeString,
-					Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)",
-				},
-				propNameMessage: {
-					Type:        typeString,
-					Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure",
-				},
-			},
-			Required: []string{propNameCode, propNameMessage},
+		Required: []string{propNameError},
+	}
+}
+
+// joseErrorEnvelopeSchema is the minimal plaintext error envelope for pre-trust
+// JOSE failures — it intentionally omits traceId/timestamp/framework metadata (the
+// peer is unauthenticated and must learn nothing beyond {code,message}).
+func joseErrorEnvelopeSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)"},
+			propNameMessage: {Type: typeString, Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure"},
 		},
-		// RawErrorResponse is the bare {code,message} error payload returned by
-		// routes registered WithRawResponse(): no data/meta envelope, mirroring
-		// the framework's formatRawErrorResponse (details is dev-only, omitted).
-		schemaRawErrorResponse: {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				propNameCode: {
-					Type:        typeString,
-					Description: "Machine-readable error code",
-				},
-				propNameMessage: {
-					Type:        typeString,
-					Description: "Human-readable error message",
-				},
-			},
-			Required: []string{propNameCode, propNameMessage},
+		Required: []string{propNameCode, propNameMessage},
+	}
+}
+
+// rawErrorResponseSchema is the bare {code,message} payload for WithRawResponse()
+// routes (no data/meta envelope), mirroring the framework's formatRawErrorResponse.
+func rawErrorResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameCode:    {Type: typeString, Description: "Machine-readable error code"},
+			propNameMessage: {Type: typeString, Description: "Human-readable error message"},
 		},
+		Required: []string{propNameCode, propNameMessage},
 	}
 }
 
@@ -747,14 +929,63 @@ func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
 // registry already contains every named struct reachable from a route's request
 // or response (including nested, sliced, and recursive types), so iterating it
 // produces a self-contained set of components with all $refs resolvable.
-func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.TypeInfo) map[string]*OpenAPISchema {
+func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.TypeInfo, referenced map[string]bool) map[string]*OpenAPISchema {
 	schemas := make(map[string]*OpenAPISchema, len(types))
 	for _, ti := range types {
+		// A params-only request type (every field a path/query/header param, no JSON
+		// body) is represented purely as OpenAPI parameters; it has no requestBody
+		// $ref, so emitting a component would leave an unused orphan — UNLESS it is
+		// also referenced elsewhere (e.g. reused as a response), in which case the
+		// $ref must resolve to an emitted component.
+		if isParamsOnlyType(ti) && !referenced[schemaName(ti)] {
+			continue
+		}
 		if schema := g.typeInfoToSchema(ti); schema != nil {
 			schemas[schemaName(ti)] = schema
 		}
 	}
 	return schemas
+}
+
+// referencedSchemaNames collects every component name reachable via a real $ref:
+// typed (non-JOSE) response payloads, and field/map-value refs across all types.
+// Used so a params-only type that is also referenced is not skipped (which would
+// leave a dangling $ref).
+func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeInfo) map[string]bool {
+	out := make(map[string]bool)
+	for i := range routes {
+		r := &routes[i]
+		// Typed, non-JOSE responses are emitted as data.$ref (or a raw $ref).
+		if r.Response != nil && r.Response.Name != "" && !r.Response.JOSE {
+			out[schemaName(r.Response)] = true
+		}
+	}
+	for _, ti := range types {
+		for j := range ti.Fields {
+			if n := ti.Fields[j].RefName; n != "" {
+				out[n] = true
+			}
+			if n := ti.Fields[j].MapValueRefName; n != "" {
+				out[n] = true
+			}
+		}
+	}
+	return out
+}
+
+// isParamsOnlyType reports whether a type's every field is a path/query/header
+// param (no JSON body field) and it is not JOSE-tagged — i.e. it is referenced
+// only as parameters, never as a body schema.
+func isParamsOnlyType(ti *models.TypeInfo) bool {
+	if ti == nil || ti.JOSE || len(ti.Fields) == 0 {
+		return false
+	}
+	for i := range ti.Fields {
+		if ti.Fields[i].ParamType == "" {
+			return false // a body field — needs a component schema
+		}
+	}
+	return true
 }
 
 // schemaName is the single source for a type's component-schema name (and the

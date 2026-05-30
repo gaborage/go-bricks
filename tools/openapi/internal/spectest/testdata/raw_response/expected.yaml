@@ -3,6 +3,9 @@ info:
   title: Legacy API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /jobs:
     post:
@@ -56,7 +59,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /legacy/users/{id}:
     get:
-      operationId: getLegacyUser
+      operationId: legacyGetLegacyUser
       summary: GET /legacy/users/{id}
       tags:
         - legacy
@@ -112,26 +115,6 @@ components:
           description: Response metadata
       required:
         - error
-    GetLegacyReq:
-      type: object
-      properties:
-        iD:
-          type: integer
-          format: int64
-      required:
-        - iD
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
     JobAck:
       type: object
       properties:
@@ -157,19 +140,10 @@ components:
       required:
         - code
         - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          properties:
-            timestamp:
-              type: string
-              format: date-time
-              description: RFC3339 response timestamp
-            traceId:
-              type: string
-              description: W3C trace identifier for the request
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

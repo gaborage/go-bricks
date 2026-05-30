@@ -25,6 +25,10 @@ type Route struct {
 	Method      string
 	Path        string
 	HandlerName string
+	// OperationID is an explicit operationId set via server.WithHandlerName(...).
+	// When set it is used verbatim (not module-qualified); otherwise the generator
+	// derives a module-qualified, de-duplicated id from Module + HandlerName.
+	OperationID string
 	Summary     string
 	Description string
 	Tags        []string
