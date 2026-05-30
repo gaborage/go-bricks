@@ -72,42 +72,36 @@ func MapConstraintToOpenAPI(fieldType, underlyingKind string, constraints map[st
 		// Slice fields: only cardinality (min/max/len -> minItems/maxItems) applies
 		// to the array itself; element rules arrive via ElementConstraints + dive.
 		if isSlice {
-			if h := handleSliceCardinality(key, value); h != nil {
-				result = append(result, h...)
-			}
+			result = append(result, handleSliceCardinality(key, value)...)
 			continue
 		}
-
-		handled := handleFormatConstraint(key, value)
-		if handled == nil {
-			handled = handlePatternFormatConstraint(key, value)
-		}
-		if handled == nil {
-			handled = handleMinConstraint(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handleMaxConstraint(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handleLenConstraint(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handleNumericComparison(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handleEnumConstraint(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handleEqConstraint(key, value, effKind)
-		}
-		if handled == nil {
-			handled = handlePatternConstraint(key, value)
-		}
-
-		result = append(result, handled...)
+		result = append(result, dispatchScalarConstraint(key, value, effKind)...)
 	}
 
 	return result
+}
+
+// dispatchScalarConstraint routes a single (non-slice) constraint key to the first
+// matching handler. Order matters: format/pattern tags are tried before the
+// numeric/string handlers so a key is claimed by exactly one handler.
+func dispatchScalarConstraint(key, value, effKind string) []OpenAPIConstraint {
+	handlers := []func() []OpenAPIConstraint{
+		func() []OpenAPIConstraint { return handleFormatConstraint(key, value) },
+		func() []OpenAPIConstraint { return handlePatternFormatConstraint(key, value) },
+		func() []OpenAPIConstraint { return handleMinConstraint(key, value, effKind) },
+		func() []OpenAPIConstraint { return handleMaxConstraint(key, value, effKind) },
+		func() []OpenAPIConstraint { return handleLenConstraint(key, value, effKind) },
+		func() []OpenAPIConstraint { return handleNumericComparison(key, value, effKind) },
+		func() []OpenAPIConstraint { return handleEnumConstraint(key, value, effKind) },
+		func() []OpenAPIConstraint { return handleEqConstraint(key, value, effKind) },
+		func() []OpenAPIConstraint { return handlePatternConstraint(key, value) },
+	}
+	for _, h := range handlers {
+		if c := h(); c != nil {
+			return c
+		}
+	}
+	return nil
 }
 
 // effectiveKind resolves the OpenAPI 3-way kind to drive string-vs-numeric

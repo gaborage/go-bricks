@@ -1110,8 +1110,17 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 
 	// A named, non-struct scalar (e.g. `type Cents int64`) carries its resolved
 	// OpenAPI kind from the analyzer; emit that instead of the object fallback
-	// setTypeAndFormat would pick for an unrecognized type name.
+	// setTypeAndFormat would pick for an unrecognized type name. For a slice of a
+	// named scalar ([]Cents) the resolved kind is the ELEMENT's, so emit an array
+	// whose items carry that kind (and the dive element constraints).
 	if field.UnderlyingKind != "" {
+		if isSliceType(field.Type) {
+			prop.Type = typeArray
+			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
+			g.applyConstraints(prop, field)        // minItems/maxItems on the array
+			g.applyElementConstraints(prop, field) // dive rules on items
+			return prop
+		}
 		prop.Type = field.UnderlyingKind
 		g.applyConstraints(prop, field)
 		return prop
@@ -1135,8 +1144,12 @@ func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field 
 	if len(field.ElementConstraints) == 0 || prop.Items == nil {
 		return
 	}
+	// field.UnderlyingKind is resolved from the slice's element type (the analyzer
+	// strips */[] before classifying), so it is the ELEMENT's kind for a
+	// slice-of-named-scalar (e.g. []Cents -> "integer"), letting element numeric
+	// constraints map. Empty for builtin elements, where the type string suffices.
 	elemType := sliceElementType(field.Type)
-	for _, c := range analyzer.MapConstraintToOpenAPI(elemType, "", field.ElementConstraints) {
+	for _, c := range analyzer.MapConstraintToOpenAPI(elemType, field.UnderlyingKind, field.ElementConstraints) {
 		g.applyConstraint(prop.Items, c)
 	}
 }

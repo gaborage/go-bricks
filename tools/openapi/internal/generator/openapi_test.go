@@ -2539,6 +2539,19 @@ func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
 		assert.Equal(t, "email", p.Items.Format, "dive,email puts format:email under items")
 	})
 
+	t.Run("named-scalar slice element keeps numeric kind (dive)", func(t *testing.T) {
+		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
+		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]Cents", UnderlyingKind: "integer", JSONName: "amounts",
+			ElementConstraints: map[string]string{"gte": "0"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		require.NotNil(t, p.Items.Minimum, "element gte must map to a numeric minimum on items")
+		assert.Equal(t, 0.0, *p.Items.Minimum)
+	})
+
 	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
 		p := gen.fieldInfoToProperty(&models.FieldInfo{
 			Type: "[]Address", RefName: "Address", JSONName: "addrs",

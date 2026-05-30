@@ -4113,6 +4113,11 @@ func TestParseValidationTagDive(t *testing.T) {
 	assert.Equal(t, map[string]string{"min": "1"}, c)
 	assert.Equal(t, map[string]string{"email": "true"}, e)
 
+	// `required` is always collection-scope, even after dive (must not be lost).
+	c, e = a.parseValidationTag("dive,required,email")
+	assert.Equal(t, "true", c["required"], "required after dive stays collection-scope")
+	assert.Equal(t, map[string]string{"email": "true"}, e, "other post-dive rules stay element-scope")
+
 	c, e = a.parseValidationTag("")
 	assert.Empty(t, c)
 	assert.Nil(t, e)

@@ -2514,16 +2514,18 @@ func (a *ProjectAnalyzer) parseValidationTag(validateTag string) (constraints, e
 			continue
 		}
 
+		key, value := rule, boolTrueString
+		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
+			key, value = rule[:equalIdx], rule[equalIdx+1:]
+		}
+		// `required` is always collection-scope (field presence), even after `dive`
+		// — OpenAPI has no per-element required, and Required must not be silently
+		// dropped onto the element map.
 		target := constraints
-		if inElement {
+		if inElement && key != constraintRequired {
 			target = elementConstraints
 		}
-		// Check if rule has a value (e.g., "min=5"); else a boolean constraint.
-		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
-			target[rule[:equalIdx]] = rule[equalIdx+1:]
-		} else {
-			target[rule] = boolTrueString
-		}
+		target[key] = value
 	}
 
 	return constraints, elementConstraints
