@@ -8,7 +8,9 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # @latest) so an upstream release cannot silently change the gate or break CI.
 REDOCLY_VERSION := 2.31.5
 # Fixture project the spec gate generates from, plus a throwaway output path.
-SPEC_FIXTURE := internal/spectest/testdata/path_param
+# nested_schema is the richest fixture (recursive $refs, nested + sliced structs),
+# so redocly validates the hardest case the generator produces.
+SPEC_FIXTURE := internal/spectest/testdata/nested_schema
 SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
 
 # Default target

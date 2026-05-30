@@ -783,104 +783,50 @@ func validateErrorResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema
 func TestGenerateSchemasFromTypes(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
+	createUserReq := &models.TypeInfo{
+		Name: "CreateUserReq", Package: "users",
+		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+	}
+	user := &models.TypeInfo{
+		Name: "User", Package: "users",
+		Fields: []models.FieldInfo{
+			{Name: "ID", Type: "int64", JSONName: "id"},
+			{Name: "Name", Type: "string", JSONName: "name"},
+		},
+	}
+
 	tests := []struct {
 		name            string
-		routes          []models.Route
+		types           map[string]*models.TypeInfo
 		expectedCount   int
 		expectedSchemas []string
 	}{
 		{
-			name:          "no routes",
-			routes:        []models.Route{},
+			name:          "no types",
+			types:         map[string]*models.TypeInfo{},
 			expectedCount: 0,
 		},
 		{
-			name: "single request type",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
+			name:            "single type",
+			types:           map[string]*models.TypeInfo{"CreateUserReq": createUserReq},
 			expectedCount:   1,
 			expectedSchemas: []string{"CreateUserReq"},
 		},
 		{
-			name: "request and response types",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-					Response: &models.TypeInfo{
-						Name:    "User",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "ID", Type: "int64", JSONName: "id"},
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
+			name:            "request and response types",
+			types:           map[string]*models.TypeInfo{"CreateUserReq": createUserReq, "User": user},
 			expectedCount:   2,
 			expectedSchemas: []string{"CreateUserReq", "User"},
-		},
-		{
-			name: "duplicate types across routes",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-				{
-					Method: "PUT",
-					Path:   usersIDAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq", // Same type as POST
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
-			expectedCount:   1, // Should deduplicate
-			expectedSchemas: []string{"CreateUserReq"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := gen.generateSchemasFromTypes(tt.routes)
-
-			if len(schemas) != tt.expectedCount {
-				t.Errorf("Expected %d schemas, got %d", tt.expectedCount, len(schemas))
-			}
-
+			schemas := gen.generateSchemasFromTypes(tt.types)
+			assert.Len(t, schemas, tt.expectedCount)
 			for _, name := range tt.expectedSchemas {
-				if _, exists := schemas[name]; !exists {
-					t.Errorf("Expected schema %q not found", name)
-				}
+				_, exists := schemas[name]
+				assert.True(t, exists, "expected schema %q", name)
 			}
 		})
 	}
@@ -979,6 +925,40 @@ func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, exp
 			t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
 		}
 	}
+}
+
+func TestFieldInfoToPropertyRef(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("struct_field_is_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addr", Type: "Address", RefName: "Address"})
+		assert.Equal(t, refPath("Address"), prop.Ref)
+		assert.Empty(t, prop.Type, "a $ref must not carry a sibling type")
+		assert.Nil(t, prop.Items)
+	})
+	t.Run("slice_of_struct_is_items_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addrs", Type: "[]Address", RefName: "Address"})
+		assert.Equal(t, typeArray, prop.Type)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("Address"), prop.Items.Ref)
+		assert.Empty(t, prop.Ref)
+	})
+	t.Run("slice_of_pointer_struct_is_items_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Reports", Type: "[]*User", RefName: "User"})
+		assert.Equal(t, typeArray, prop.Type)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("User"), prop.Items.Ref)
+	})
+	t.Run("non_ref_field_keeps_type_and_constraints", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Name", Type: "string",
+			Constraints: map[string]string{"min": "2"},
+		})
+		assert.Equal(t, typeString, prop.Type)
+		assert.Empty(t, prop.Ref)
+		require.NotNil(t, prop.MinLength)
+		assert.Equal(t, 2, *prop.MinLength)
+	})
 }
 
 func TestFieldInfoToProperty(t *testing.T) {

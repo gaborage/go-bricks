@@ -3132,6 +3132,122 @@ func TestTypeInfoFromExprResultWrappers(t *testing.T) {
 	})
 }
 
+func TestRegisterTypeBuildsRegistryWithRefsAndCycleGuard(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	// Node is self-referential through both a pointer and a slice; the cycle guard
+	// must register it exactly once.
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Address struct { Street string }
+type Node struct {
+	Addr     Address
+	Parent   *Node
+	Children []Node
+	Tags     []string
+}
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/n", m.create)
+}
+func (m *Module) create(req Node, ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(src), 0600))
+
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+
+	// Registry holds the request type and its reachable nested types, each once.
+	require.Contains(t, project.Types, "Node")
+	require.Contains(t, project.Types, "Address")
+	assert.Len(t, project.Types, 2, "Node + Address; the recursive Node is registered once")
+
+	fields := map[string]models.FieldInfo{}
+	for _, f := range project.Types["Node"].Fields {
+		fields[f.Name] = f
+	}
+	assert.Equal(t, "Address", fields["Addr"].RefName, "nested struct field -> RefName")
+	assert.Equal(t, "Node", fields["Parent"].RefName, "pointer self-ref -> RefName")
+	assert.Equal(t, "Node", fields["Children"].RefName, "slice self-ref -> RefName")
+	assert.Empty(t, fields["Tags"].RefName, "[]string field must not get a RefName")
+}
+
+func TestBaseStructTypeName(t *testing.T) {
+	assert.Equal(t, "Address", baseStructTypeName("Address"))
+	assert.Equal(t, "Address", baseStructTypeName("*Address"))
+	assert.Equal(t, "Address", baseStructTypeName("[]Address"))
+	assert.Equal(t, "Address", baseStructTypeName("[]*Address"))
+	assert.Equal(t, "string", baseStructTypeName("[]string"))
+	assert.Equal(t, "map[string]Address", baseStructTypeName("map[string]Address"), "maps returned as-is")
+}
+
+// analyzeModuleProject writes src as a module file under a temp project and runs
+// AnalyzeProject, returning the project (for inspecting project.Types).
+func analyzeModuleProject(t *testing.T, src string) *models.Project {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))
+	sub := filepath.Join(dir, "mod")
+	require.NoError(t, os.MkdirAll(sub, 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "module.go"), []byte(src), 0600))
+	project, err := New(dir).AnalyzeProject()
+	require.NoError(t, err)
+	return project
+}
+
+func TestRegisterTypeHandlesMutualRecursion(t *testing.T) {
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type A struct { Link *B }
+type B struct { Back *A }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.POST(hr, r, "/a", m.create)
+}
+func (m *Module) create(req A, ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }
+`
+	project := analyzeModuleProject(t, src)
+	require.Contains(t, project.Types, "A")
+	require.Contains(t, project.Types, "B")
+	assert.Len(t, project.Types, 2, "mutual recursion A<->B registers each type once")
+	assert.Equal(t, "B", project.Types["A"].Fields[0].RefName)
+	assert.Equal(t, "A", project.Types["B"].Fields[0].RefName)
+}
+
+func TestRegisterTypeSkipsJSONExcludedFields(t *testing.T) {
+	// A type reachable ONLY through a json:"-" field must not be registered as an
+	// (unreferenced, internal) component. Built via concatenation because the raw
+	// source needs backtick struct tags.
+	src := "package mod\n" +
+		"import (\n\t\"github.com/gaborage/go-bricks/app\"\n\t\"github.com/gaborage/go-bricks/server\"\n)\n" +
+		"type Module struct{}\n" +
+		"func (m *Module) Name() string { return \"mod\" }\n" +
+		"func (m *Module) Init(d *app.ModuleDeps) error { return nil }\n" +
+		"func (m *Module) Shutdown() error { return nil }\n" +
+		"type Secret struct { Token string }\n" +
+		"type Req struct {\n\tName   string `json:\"name\"`\n\tHidden Secret `json:\"-\"`\n}\n" +
+		"func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {\n" +
+		"\tserver.POST(hr, r, \"/r\", m.create)\n}\n" +
+		"func (m *Module) create(req Req, ctx server.HandlerContext) (server.Result[int], server.IAPIError) { return server.OK(0), nil }\n"
+	project := analyzeModuleProject(t, src)
+	require.Contains(t, project.Types, "Req")
+	assert.NotContains(t, project.Types, "Secret", `a type reachable only via a json:"-" field must not be registered`)
+}
+
 func TestAnalyzeProjectStampsModuleIdentity(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/app\n\ngo 1.25\n"), 0600))

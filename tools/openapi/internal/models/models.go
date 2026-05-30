@@ -6,6 +6,10 @@ type Project struct {
 	Description string
 	Version     string
 	Modules     []Module
+	// Types is the registry of every named struct type reachable from a route's
+	// request or response (including nested and recursively-referenced types),
+	// keyed by schema name. The generator emits one component schema per entry.
+	Types map[string]*TypeInfo
 }
 
 // Module represents a go-bricks module
@@ -65,4 +69,9 @@ type FieldInfo struct {
 	Example       string            // Parsed from `example:"..."` tag
 	RawValidation string            // Raw validation tag string (e.g., "required,email,min=5")
 	Constraints   map[string]string // Parsed validation constraints for OpenAPI mapping
+	// RefName is the schema name of the field's underlying named struct type when
+	// the field (or its slice/pointer element) resolves to one in the registry.
+	// Set, the property is emitted as a $ref (or items.$ref for a slice) rather
+	// than an inline object.
+	RefName string
 }
