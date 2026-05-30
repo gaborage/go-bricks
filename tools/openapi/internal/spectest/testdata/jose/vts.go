@@ -32,6 +32,14 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	server.POST(hr, r, "/v1/tokens", m.createToken, server.WithTags("vts"))
 }
 
+// createToken's response is wrapped in server.Result[T]. The analyzer does not
+// yet unwrap that generic (it parses as an *ast.IndexExpr — handled in a later
+// PR), so route.Response is nil today and the generated 200 shows the standard
+// application/json SuccessResponse envelope rather than application/jose. The
+// request side IS detected, so the requestBody is application/jose and the 4xx
+// references JOSEErrorEnvelope. When Result[T] unwrapping lands, the golden's 200
+// will flip to application/jose and this fixture will exercise the full
+// JOSE-response round-trip end-to-end.
 func (m *Module) createToken(req CreateTokenRequest, ctx server.HandlerContext) (server.Result[CreateTokenResponse], server.IAPIError) {
 	return server.OK(CreateTokenResponse{}), nil
 }

@@ -446,9 +446,12 @@ func (g *OpenAPIGenerator) getSummary(route *models.Route) string {
 	return fmt.Sprintf("%s %s", route.Method, route.Path)
 }
 
-// getResponseDescription returns a description based on HTTP method
+// getResponseDescription returns a description based on HTTP method. The method
+// is normalized to upper-case (consistent with assignOperation) so a
+// lowercase/mixed-case input still maps to the right description rather than
+// silently falling through to the generic default.
 func (g *OpenAPIGenerator) getResponseDescription(method string) string {
-	switch method {
+	switch strings.ToUpper(method) {
 	case httpMethodGet:
 		return respDescSuccess
 	case httpMethodPost:
