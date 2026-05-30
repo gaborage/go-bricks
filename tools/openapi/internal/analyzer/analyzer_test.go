@@ -3920,3 +3920,171 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	omit := fieldJSONNames(t, a, "OmitOnly")
 	assert.True(t, omit["tag"] && omit["only"], "name-less (,omitempty) embed still promotes")
 }
+
+// TestPrimitiveKind covers the 3-way mapping. The full integer/float/string
+// membership sets are exhaustively covered by constraints_test.go; here we only
+// assert primitiveKind's delegation and the non-primitive zero value.
+func TestPrimitiveKind(t *testing.T) {
+	assert.Equal(t, "integer", primitiveKind(goTypeInt64))
+	assert.Equal(t, "number", primitiveKind(goTypeFloat64))
+	assert.Equal(t, goTypeString, primitiveKind(goTypeString))
+	assert.Equal(t, "", primitiveKind("bool"))
+	assert.Equal(t, "", primitiveKind("Widget"))
+}
+
+// TestResolveUnderlyingKind covers named-scalar classification end-to-end:
+// local `type Cents int64`, the qualified time.Duration, and a plain builtin
+// (which is NOT a named wrapper, so empty).
+func TestResolveUnderlyingKind(t *testing.T) {
+	src := `package mod
+import (
+	"time"
+
+	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+type Cents int64
+type Alias Cents
+type Timeout time.Duration
+type Inner struct{ X int }
+type Money struct {
+	Amount  Cents         ` + "`json:\"amount\"`" + `
+	Chained Alias         ` + "`json:\"chained\"`" + `
+	Wait    Timeout       ` + "`json:\"wait\"`" + `
+	TTL     time.Duration ` + "`json:\"ttl\"`" + `
+	Plain   int           ` + "`json:\"plain\"`" + `
+	Nested  Inner         ` + "`json:\"nested\"`" + `
+}
+func (m *Module) g(ctx server.HandlerContext) (server.Result[Money], server.IAPIError) { return server.Created(Money{}), nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	server.GET(hr, r, "/m", m.g)
+}
+`
+	a, _ := analyzeSingleModule(t, src)
+	money := a.typeRegistry["Money"]
+	require.NotNil(t, money)
+	kind := map[string]string{}
+	ref := map[string]string{}
+	for i := range money.Fields {
+		kind[money.Fields[i].JSONName] = money.Fields[i].UnderlyingKind
+		ref[money.Fields[i].JSONName] = money.Fields[i].RefName
+	}
+	assert.Equal(t, "integer", kind["amount"], "type Cents int64 -> integer")
+	assert.Equal(t, "integer", kind["chained"], "type Alias Cents -> chain to int64 -> integer")
+	assert.Equal(t, "integer", kind["wait"], "type Timeout time.Duration -> integer (selector underlying)")
+	assert.Equal(t, "integer", kind["ttl"], "time.Duration -> integer")
+	assert.Equal(t, "", kind["plain"], "a builtin used directly is not a named wrapper")
+	// A named STRUCT is a $ref, not a scalar underlying kind.
+	assert.Equal(t, "", kind["nested"], "named struct has no scalar underlying kind")
+	assert.Equal(t, "Inner", ref["nested"], "named struct is a $ref")
+}
+
+// TestSchemaKeyCollision locks the collision-qualification rule: same (pkg,type)
+// is idempotent; a different package with the same type name is qualified.
+func TestSchemaKeyCollision(t *testing.T) {
+	a := New(t.TempDir())
+	assert.Equal(t, "Request", a.schemaKey("Request", "users"))
+	assert.Equal(t, "Request", a.schemaKey("Request", "users"), "idempotent for same (pkg,type)")
+	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders"), "collision qualified by package")
+	assert.Equal(t, "OrdersRequest", a.schemaKey("Request", "orders"), "qualified name is stable")
+	// A third package with the same name gets a further-qualified/distinct name.
+	got := a.schemaKey("Request", "billing")
+	assert.NotContains(t, []string{"Request", "OrdersRequest"}, got, "third collision is distinct")
+}
+
+// TestInModuleDir covers the import-path -> dir translation and the
+// stdlib/third-party fall-through.
+func TestInModuleDir(t *testing.T) {
+	root := t.TempDir()
+	a := New(root)
+	a.modulePath = "github.com/example/app"
+	dir, ok := a.inModuleDir("github.com/example/app/types")
+	assert.True(t, ok)
+	assert.Equal(t, filepath.Join(root, "types"), dir)
+	dir, ok = a.inModuleDir("github.com/example/app")
+	assert.True(t, ok)
+	assert.Equal(t, root, dir)
+	_, ok = a.inModuleDir("time")
+	assert.False(t, ok, "stdlib is not in-module")
+	_, ok = a.inModuleDir("github.com/google/uuid")
+	assert.False(t, ok, "third-party is not in-module")
+}
+
+// TestParsePackageDirCaches asserts the per-dir parse cache (miss then hit) and
+// graceful handling of a missing directory.
+func TestParsePackageDirCaches(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.go"), []byte("package x\ntype T struct{}\n"), 0600))
+	a := New(dir)
+
+	_, cachedBefore := a.pkgCache[dir]
+	assert.False(t, cachedBefore, "cache miss before first parse")
+	first, err := a.parsePackageDir(dir)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	cached, ok := a.pkgCache[dir]
+	assert.True(t, ok, "dir cached after first parse")
+	// Mutate the cached map; a cache HIT must return this same instance.
+	cached["sentinel-marker"] = nil
+	second, err := a.parsePackageDir(dir)
+	require.NoError(t, err)
+	_, sawSentinel := second["sentinel-marker"]
+	assert.True(t, sawSentinel, "second call is a cache hit (returns the stored map, not a re-parse)")
+
+	_, err = a.parsePackageDir(filepath.Join(dir, "does-not-exist"))
+	assert.Error(t, err, "missing dir returns an error, not a panic")
+}
+
+// TestRegisterQualifiedTypeFallThroughs covers the cross-package resolver's
+// non-resolving arms: no dot, stdlib import, unknown alias, and an in-module path
+// whose directory/type is absent.
+func TestRegisterQualifiedTypeFallThroughs(t *testing.T) {
+	a := New(t.TempDir())
+	a.modulePath = "example.com/app"
+	src := `package x
+import (
+	"time"
+	other "example.com/app/other"
+)
+var _ = time.Now
+var _ = other.X
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.ParseComments)
+	require.NoError(t, err)
+	assert.Nil(t, a.registerQualifiedType("NoDot", f), "no dot -> nil")
+	assert.Nil(t, a.registerQualifiedType("time.Duration", f), "stdlib import is not in-module -> nil")
+	assert.Nil(t, a.registerQualifiedType("missingpkg.Foo", f), "unknown alias -> nil")
+	assert.Nil(t, a.registerQualifiedType("other.Missing", f), "in-module but dir/type absent -> nil")
+}
+
+// TestLocalTypeUnderlyingSiblingFile covers resolving a named type whose
+// declaration lives in a SIBLING file of the same package (the parsePackageDir
+// fallback), and the not-found / non-ident arms.
+func TestLocalTypeUnderlyingSiblingFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"),
+		[]byte("package p\ntype User struct{ Amount Cents }\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"),
+		[]byte("package p\ntype Cents int64\ntype Wrapped struct{ X int }\n"), 0600))
+	a := New(dir)
+	aPath := filepath.Join(dir, "a.go")
+	af, err := parser.ParseFile(a.fileSet, aPath, nil, parser.ParseComments)
+	require.NoError(t, err)
+
+	// Cents is declared in b.go (a sibling file) — found via the per-dir parse.
+	u, ok := a.localTypeUnderlying("Cents", af, aPath)
+	assert.True(t, ok, "named type in a sibling file resolves")
+	assert.Equal(t, "int64", u)
+
+	// A named struct has no bare-ident underlying -> ok=false.
+	_, ok = a.localTypeUnderlying("Wrapped", af, aPath)
+	assert.False(t, ok, "a named struct is not a scalar underlying")
+
+	// Absent type -> ok=false.
+	_, ok = a.localTypeUnderlying("Missing", af, aPath)
+	assert.False(t, ok)
+}

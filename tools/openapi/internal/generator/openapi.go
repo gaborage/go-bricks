@@ -873,6 +873,15 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 		return prop
 	}
 
+	// A named, non-struct scalar (e.g. `type Cents int64`) carries its resolved
+	// OpenAPI kind from the analyzer; emit that instead of the object fallback
+	// setTypeAndFormat would pick for an unrecognized type name.
+	if field.UnderlyingKind != "" {
+		prop.Type = field.UnderlyingKind
+		g.applyConstraints(prop, field)
+		return prop
+	}
+
 	// Map Go type to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Type)
 

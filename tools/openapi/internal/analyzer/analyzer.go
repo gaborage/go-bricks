@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,10 +86,14 @@ const (
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
 	projectRoot  string
+	modulePath   string // go.mod module path; prefix for translating in-module imports to dirs
 	fileSet      *token.FileSet
-	constants    map[string]string           // Map of constant names to their values
-	warnings     []string                    // Non-fatal diagnostics collected during analysis
-	typeRegistry map[string]*models.TypeInfo // Named struct types reachable from routes (by schema name)
+	constants    map[string]string               // Map of constant names to their values
+	warnings     []string                        // Non-fatal diagnostics collected during analysis
+	typeRegistry map[string]*models.TypeInfo     // Named struct types reachable from routes (by final schema name)
+	pkgCache     map[string]map[string]*ast.File // dir -> (file path -> parsed AST), populated on demand
+	nameAssign   map[string]string               // "pkg\x00Type" -> final schema name (collision qualification)
+	usedNames    map[string]struct{}             // final schema names already taken
 }
 
 // New creates a new project analyzer
@@ -98,6 +103,9 @@ func New(projectRoot string) *ProjectAnalyzer {
 		fileSet:      token.NewFileSet(),
 		constants:    make(map[string]string),
 		typeRegistry: make(map[string]*models.TypeInfo),
+		pkgCache:     make(map[string]map[string]*ast.File),
+		nameAssign:   make(map[string]string),
+		usedNames:    make(map[string]struct{}),
 	}
 }
 
@@ -146,6 +154,9 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	// accumulate stale warnings or type-registry entries.
 	a.warnings = nil
 	a.typeRegistry = make(map[string]*models.TypeInfo)
+	a.pkgCache = make(map[string]map[string]*ast.File)
+	a.nameAssign = make(map[string]string)
+	a.usedNames = make(map[string]struct{})
 
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
@@ -179,18 +190,20 @@ func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, content []byte) {
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "module ") {
-			moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
-			// Extract just the last part as the project name
-			parts := strings.Split(moduleName, "/")
-			if len(parts) > 0 {
-				name := parts[len(parts)-1]
-				if name != "" {
-					project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
-				}
-			}
-			break
+		if !strings.HasPrefix(line, "module ") {
+			continue
 		}
+		moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
+		a.modulePath = moduleName // full module path for in-module import resolution
+		// Extract just the last part as the project name
+		parts := strings.Split(moduleName, "/")
+		if len(parts) > 0 {
+			name := parts[len(parts)-1]
+			if name != "" {
+				project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
+			}
+		}
+		break
 	}
 }
 
@@ -1681,40 +1694,54 @@ func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile 
 		return
 	}
 	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)
+	if registered == nil && typeInfo.Package != "" {
+		// A qualified request/response type (e.g. server.Result[types.Money]) arrives
+		// as Name="Money", Package="types" (the import alias). Resolve it
+		// cross-package using that alias against the handler file's imports.
+		registered = a.registerQualifiedType(typeInfo.Package+"."+typeInfo.Name, astFile)
+	}
 	if registered == nil {
 		return
 	}
 	// Mirror the registered fields onto the route's TypeInfo (request bodies and
-	// responses read Fields directly).
+	// responses read Fields directly). Adopt the final (collision-qualified) name
+	// too, so the response envelope's $ref points at the component actually emitted.
+	typeInfo.Name = registered.Name
 	typeInfo.Fields = registered.Fields
 	typeInfo.JOSE = registered.JOSE
 }
 
-// registerType resolves the struct named name in the package of astFile, adds it
-// to the type registry, and recurses into its struct-typed fields. It is
-// idempotent and registers a type BEFORE recursing so a self- or mutually-
-// referential type (e.g. Category{Parent *Category}) terminates. Returns nil when
-// name is not a resolvable local struct (a primitive, external, or unknown type).
+// registerType resolves the named type and registers it (and its struct-typed
+// fields) into the type registry, returning its TypeInfo (whose Name is the final,
+// possibly collision-qualified, schema name). A qualified name (pkg.Type) is
+// resolved cross-package when it points at an in-module package; stdlib and
+// third-party types return nil (left to the generator's well-known map / object
+// fallback). Returns nil when the name is not a resolvable struct.
 func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
-	if existing, ok := a.typeRegistry[name]; ok {
-		// Two packages contributing the same type name collide on one (name-keyed)
-		// component schema; surface it rather than silently first-winning.
-		// Package-qualified disambiguation is handled separately.
-		if pkg != "" && existing.Package != "" && existing.Package != pkg {
-			a.addWarningf("type name %q is defined in both %q and %q; they share one component schema", name, existing.Package, pkg)
-		}
-		return existing
+	if strings.Contains(name, ".") {
+		return a.registerQualifiedType(name, astFile)
 	}
 	structType, err := a.findStructDefinition(astFile, filePath, name)
 	if err != nil {
 		return nil
 	}
+	return a.registerStruct(name, pkg, structType, astFile, filePath)
+}
 
-	ti := &models.TypeInfo{Name: name, Package: pkg}
-	a.typeRegistry[name] = ti // register before recursing (cycle guard)
+// registerStruct registers a resolved struct under its collision-qualified schema
+// name and recurses into its fields. It registers BEFORE recursing so self- or
+// mutually-referential types (e.g. Category{Parent *Category}) terminate.
+func (a *ProjectAnalyzer) registerStruct(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string) *models.TypeInfo {
+	key := a.schemaKey(typeName, pkg)
+	if existing, ok := a.typeRegistry[key]; ok {
+		return existing
+	}
+
+	ti := &models.TypeInfo{Name: key, Package: pkg}
+	a.typeRegistry[key] = ti // register before recursing (cycle guard)
 	// Seed the embedded-promotion ancestor set with this type so a self-embed
 	// (e.g. type Node struct{ *Node }) is not promoted into itself.
-	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{name: {}})
+	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}})
 	ti.JOSE = hasJOSESentinelTag(structType)
 
 	for i := range ti.Fields {
@@ -1723,25 +1750,302 @@ func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, file
 	return ti
 }
 
+// schemaKey returns a stable, collision-free component name for (pkg, typeName).
+// It prefers the bare type name and falls back to <Pkg><TypeName> (then a numeric
+// suffix) when that bare name is already taken by a different package, so two
+// packages each defining e.g. Request get distinct components. Idempotent per
+// (pkg, typeName).
+//
+// On a collision the bare name goes to whichever (pkg, typeName) is registered
+// first; which one that is follows discovery order. Discovery walks the project
+// deterministically, so a given source tree yields a stable assignment, but the
+// emitted spec is always valid either way — every $ref resolves to the component
+// the field/response actually carries (RefName / TypeInfo.Name are the final
+// key). A future enhancement could make the choice order-independent (e.g. always
+// qualify by package), but that is a naming-policy change, not a correctness fix.
+func (a *ProjectAnalyzer) schemaKey(typeName, pkg string) string {
+	k := pkg + "\x00" + typeName
+	if name, ok := a.nameAssign[k]; ok {
+		return name
+	}
+	final := typeName
+	if _, taken := a.usedNames[final]; taken {
+		final = exportedPkgName(pkg) + typeName
+		for i := 2; ; i++ {
+			if _, dup := a.usedNames[final]; !dup {
+				break
+			}
+			final = exportedPkgName(pkg) + typeName + strconv.Itoa(i)
+		}
+	}
+	a.usedNames[final] = struct{}{}
+	a.nameAssign[k] = final
+	return final
+}
+
+// qualifiedStruct is a struct resolved from another in-module package, with the
+// context needed to recurse into it in its own package.
+type qualifiedStruct struct {
+	typeName string
+	pkg      string
+	st       *ast.StructType
+	file     *ast.File
+	filePath string
+}
+
+// resolveQualifiedStruct resolves a pkg.Type reference against astFile's imports.
+// It parses the in-module target package (with a per-dir cache) and finds the
+// named struct. Returns ok=false for stdlib/third-party imports, unknown aliases,
+// or names that are not a struct in the target package.
+func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.File) (qualifiedStruct, bool) {
+	dot := strings.LastIndex(qualified, ".")
+	if dot < 0 {
+		return qualifiedStruct{}, false
+	}
+	pkgAlias, typeName := qualified[:dot], qualified[dot+1:]
+	importPath, ok := a.fileImports(astFile)[pkgAlias]
+	if !ok {
+		return qualifiedStruct{}, false // unknown alias (e.g. dot/blank import)
+	}
+	dir, ok := a.inModuleDir(importPath)
+	if !ok {
+		return qualifiedStruct{}, false // stdlib/third-party — well-known map or object
+	}
+	files, err := a.parsePackageDir(dir)
+	if err != nil {
+		return qualifiedStruct{}, false
+	}
+	// Iterate files in a stable order so the resolved definition is deterministic
+	// even when several files in the dir could match (e.g. build-tagged variants).
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		file := files[path]
+		if st := a.findStructInFile(file, typeName); st != nil {
+			return qualifiedStruct{typeName: typeName, pkg: file.Name.Name, st: st, file: file, filePath: path}, true
+		}
+	}
+	return qualifiedStruct{}, false // not a struct in the target package (alias/interface)
+}
+
+// registerQualifiedType resolves and registers a cross-package struct as a
+// component, returning nil when it cannot be resolved in-module.
+func (a *ProjectAnalyzer) registerQualifiedType(qualified string, astFile *ast.File) *models.TypeInfo {
+	q, ok := a.resolveQualifiedStruct(qualified, astFile)
+	if !ok {
+		return nil
+	}
+	return a.registerStruct(q.typeName, q.pkg, q.st, q.file, q.filePath)
+}
+
+// inModuleDir translates an import path to a filesystem dir under projectRoot when
+// it is within this module, else reports false.
+func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
+	if a.modulePath == "" {
+		return "", false
+	}
+	if importPath == a.modulePath {
+		return a.projectRoot, true
+	}
+	prefix := a.modulePath + "/"
+	if !strings.HasPrefix(importPath, prefix) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(importPath, prefix)
+	return filepath.Join(a.projectRoot, filepath.FromSlash(rel)), true
+}
+
+// fileImports maps each import's local alias to its import path. The default alias
+// is the path's last segment (an approximation of the package name, correct for
+// the common case where they match); explicit aliases override it. Blank (_) and
+// dot (.) imports are skipped.
+func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
+	out := make(map[string]string, len(astFile.Imports))
+	for _, imp := range astFile.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		alias := filepath.Base(path)
+		if imp.Name != nil {
+			if imp.Name.Name == "_" || imp.Name.Name == "." {
+				continue
+			}
+			alias = imp.Name.Name
+		}
+		out[alias] = path
+	}
+	return out
+}
+
+// parsePackageDir parses all non-test Go files in a directory, caching the result
+// per directory so repeated cross-package lookups reuse one parse.
+func (a *ProjectAnalyzer) parsePackageDir(dir string) (map[string]*ast.File, error) {
+	if cached, ok := a.pkgCache[dir]; ok {
+		return cached, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[string]*ast.File)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, goFileExt) || strings.HasSuffix(name, testFileExt) {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		f, perr := parser.ParseFile(a.fileSet, full, nil, parser.ParseComments)
+		if perr != nil {
+			continue
+		}
+		files[full] = f
+	}
+	a.pkgCache[dir] = files
+	return files, nil
+}
+
+// exportedPkgName upper-cases the first letter of a package name for use as a
+// component-name qualifier (orders -> Orders). Returns "" unchanged.
+func exportedPkgName(pkg string) string {
+	if pkg == "" {
+		return ""
+	}
+	return strings.ToUpper(pkg[:1]) + pkg[1:]
+}
+
 // registerFieldRef registers the named struct type(s) a field references and
-// stamps the matching ref name onto the field. A map field refs its value struct
-// via MapValueRefName (a map is never itself a $ref); any other field refs its
-// underlying struct (after pointer/slice unwrap) via RefName. Fields excluded
-// from JSON (json:"-") are skipped so a type reachable only through them is not
-// registered as an orphan component.
+// stamps the matching (final, collision-qualified) ref name onto the field. A map
+// field refs its value struct via MapValueRefName (a map is never itself a $ref);
+// any other field refs its underlying struct (after pointer/slice unwrap) via
+// RefName. Fields excluded from JSON (json:"-") are skipped so a type reachable
+// only through them is not registered as an orphan component.
 func (a *ProjectAnalyzer) registerFieldRef(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string) {
 	if f.JSONName == jsonSkipValue && f.ParamType == "" {
 		return
 	}
 	if vName, isMap := mapValueStructName(f.Type); isMap {
-		if a.registerType(vName, pkg, astFile, filePath) != nil {
-			f.MapValueRefName = vName
+		if reg := a.registerType(vName, pkg, astFile, filePath); reg != nil {
+			f.MapValueRefName = reg.Name
 		}
 		return
 	}
-	if base := baseStructTypeName(f.Type); a.registerType(base, pkg, astFile, filePath) != nil {
-		f.RefName = base
+	if reg := a.registerType(baseStructTypeName(f.Type), pkg, astFile, filePath); reg != nil {
+		f.RefName = reg.Name
+		return // a struct ref carries no scalar underlying kind
 	}
+	// Not a struct: classify a named, non-struct scalar (Cents -> integer, etc.).
+	f.UnderlyingKind = a.resolveUnderlyingKind(f.Type, astFile, filePath)
+}
+
+// knownUnderlyingKinds maps qualified stdlib/library types with a non-struct
+// scalar underlying type to their OpenAPI kind. (time.Time is a struct handled by
+// the generator's well-known map, so it is intentionally absent.)
+var knownUnderlyingKinds = map[string]string{
+	"time.Duration": "integer",
+}
+
+// resolveUnderlyingKind returns the OpenAPI 3-way kind ("integer"/"number"/
+// "string") of a named, non-struct scalar type, or "" when the type is a builtin
+// primitive (handled directly), a struct, or unresolved. It strips pointer/slice
+// markers, recognizes a small set of qualified stdlib types, and resolves
+// local `type X <primitive>` declarations to their underlying kind.
+func (a *ProjectAnalyzer) resolveUnderlyingKind(typeStr string, astFile *ast.File, filePath string) string {
+	base := baseStructTypeName(typeStr)
+	if k, ok := knownUnderlyingKinds[base]; ok {
+		return k
+	}
+	if strings.Contains(base, ".") {
+		return "" // other qualified types: not classified here
+	}
+	if primitiveKind(base) != "" {
+		return "" // a builtin used directly is not a named wrapper
+	}
+	return a.namedScalarKind(base, astFile, filePath, 0)
+}
+
+// namedScalarKind resolves a LOCAL named type to its underlying primitive kind,
+// following alias chains (type Cents int64 -> integer; type A B; type B int -> A
+// resolves to integer). depth bounds pathological chains.
+func (a *ProjectAnalyzer) namedScalarKind(name string, astFile *ast.File, filePath string, depth int) string {
+	if depth > 8 {
+		return ""
+	}
+	underlying, ok := a.localTypeUnderlying(name, astFile, filePath)
+	if !ok {
+		return ""
+	}
+	if k, known := knownUnderlyingKinds[underlying]; known {
+		return k // e.g. `type Timeout time.Duration` -> integer
+	}
+	if k := primitiveKind(underlying); k != "" {
+		return k // underlying is a builtin scalar
+	}
+	if strings.Contains(underlying, ".") {
+		return "" // unknown qualified underlying — not classified
+	}
+	return a.namedScalarKind(underlying, astFile, filePath, depth+1) // chained named type
+}
+
+// primitiveKind maps a Go builtin scalar type name to its OpenAPI 3-way kind, or
+// "" if it is not one of them. It reuses the constraint mapper's type classifiers
+// so the integer/float/string sets live in one place.
+func primitiveKind(goType string) string {
+	switch {
+	case isIntegerType(goType):
+		return "integer"
+	case isFloatType(goType):
+		return "number"
+	case isStringType(goType):
+		return goTypeString
+	}
+	return ""
+}
+
+// localTypeUnderlying finds a local `type Name <ident>` declaration and returns
+// the underlying identifier (e.g. Cents -> "int64"). Returns ok=false when Name
+// is not a local non-struct named type. It searches the current file first, then
+// sibling files in the same package (via the cached per-dir parse).
+func (a *ProjectAnalyzer) localTypeUnderlying(name string, astFile *ast.File, filePath string) (string, bool) {
+	if u, ok := namedTypeUnderlyingInFile(astFile, name); ok {
+		return u, true
+	}
+	files, err := a.parsePackageDir(filepath.Dir(filePath))
+	if err != nil {
+		return "", false
+	}
+	for _, file := range files {
+		if u, ok := namedTypeUnderlyingInFile(file, name); ok {
+			return u, true
+		}
+	}
+	return "", false
+}
+
+// namedTypeUnderlyingInFile returns the underlying identifier of a `type Name
+// <ident>` declaration in file, or ok=false when name is absent or its underlying
+// type is not a bare identifier (a struct/slice/map/etc.).
+func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != name {
+				continue
+			}
+			switch u := ts.Type.(type) {
+			case *ast.Ident:
+				return u.Name, true // `type Cents int64` -> "int64"
+			case *ast.SelectorExpr:
+				if pkg, isIdent := u.X.(*ast.Ident); isIdent {
+					return pkg.Name + "." + u.Sel.Name, true // `type Timeout time.Duration`
+				}
+			}
+			return "", false // underlying is a struct/slice/map/etc.
+		}
+	}
+	return "", false
 }
 
 // baseStructTypeName strips slice and pointer markers from a Go type string to
@@ -1958,11 +2262,12 @@ func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.Fiel
 //   - With json:"-" it is excluded.
 //   - Otherwise its exported fields are PROMOTED (flattened) into the parent.
 //
-// Embedded pointers (*Base) are unwrapped. An embedded type that cannot be
-// resolved to a local struct — a cross-package type (PR9's resolver) or a named
-// non-struct like `type Code string` (named-type underlying-kind is also PR9) —
-// is skipped without crashing. The visited ancestor set (add-before-recurse /
-// delete-after backtracking) terminates self- and mutually-embedded cycles.
+// Embedded pointers (*Base) are unwrapped. A cross-package (in-module) embedded
+// struct is resolved and promoted from its own package. An embedded type that
+// still cannot be resolved to a struct — a stdlib/third-party type or a named
+// non-struct like `type Code string` — is skipped without crashing. The visited
+// ancestor set (add-before-recurse / delete-after backtracking) terminates self-
+// and mutually-embedded cycles.
 func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) (fields []models.FieldInfo, promoted bool) {
 	typeName := baseStructTypeName(a.typeToString(field.Type))
 
@@ -1982,14 +2287,22 @@ func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *
 	if _, seen := visited[typeName]; seen {
 		return nil, false // cycle / self-embed guard
 	}
-	embedded, err := a.findStructDefinition(astFile, filePath, typeName)
-	if err != nil {
-		return nil, false // unresolvable (cross-package or non-struct) — skip, never crash
+	// Local embed: promote the struct's fields from this package.
+	if embedded, err := a.findStructDefinition(astFile, filePath, typeName); err == nil {
+		visited[typeName] = struct{}{}
+		fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited)
+		delete(visited, typeName) // backtrack: keep visited scoped to the current chain
+		return fields, true
 	}
-	visited[typeName] = struct{}{}
-	fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited)
-	delete(visited, typeName) // backtrack: keep visited scoped to the current chain
-	return fields, true
+	// Cross-package (in-module) embed: resolve and promote from the target package
+	// so its fields are extracted in their own package context.
+	if q, ok := a.resolveQualifiedStruct(typeName, astFile); ok {
+		visited[typeName] = struct{}{}
+		fields = a.extractStructFields(q.st, q.pkg, q.file, q.filePath, visited)
+		delete(visited, typeName)
+		return fields, true
+	}
+	return nil, false // unresolvable (stdlib/third-party or non-struct) — skip, never crash
 }
 
 // buildFieldInfo creates a FieldInfo from a field name and AST field

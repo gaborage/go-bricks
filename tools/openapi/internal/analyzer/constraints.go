@@ -1,7 +1,6 @@
 package analyzer
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -31,6 +30,7 @@ const (
 
 	// Go primitive type names referenced for type discrimination
 	goTypeInt64   = "int64"
+	goTypeFloat32 = "float32"
 	goTypeFloat64 = "float64"
 )
 
@@ -232,15 +232,24 @@ func isStringType(typeName string) bool {
 	return typeName == goTypeString
 }
 
-// isNumericType checks if the type is a numeric type
-func isNumericType(typeName string) bool {
-	numericTypes := []string{
-		"int", "int8", "int16", "int32", goTypeInt64,
-		"uint", "uint8", "uint16", "uint32", "uint64",
-		"float32", goTypeFloat64,
+// isIntegerType reports whether the Go type name is a signed/unsigned integer.
+func isIntegerType(typeName string) bool {
+	switch typeName {
+	case "int", "int8", "int16", "int32", goTypeInt64,
+		"uint", "uint8", "uint16", "uint32", "uint64":
+		return true
 	}
+	return false
+}
 
-	return slices.Contains(numericTypes, typeName)
+// isFloatType reports whether the Go type name is a floating-point type.
+func isFloatType(typeName string) bool {
+	return typeName == goTypeFloat32 || typeName == goTypeFloat64
+}
+
+// isNumericType checks if the type is a numeric type (integer or float).
+func isNumericType(typeName string) bool {
+	return isIntegerType(typeName) || isFloatType(typeName)
 }
 
 // parseNumeric converts a string to a numeric value (int or float)

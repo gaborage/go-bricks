@@ -87,4 +87,10 @@ type FieldInfo struct {
 	// property is an object whose additionalProperties is a $ref to that schema.
 	// Distinct from RefName: a map field is never itself a $ref.
 	MapValueRefName string
+	// UnderlyingKind is the OpenAPI 3-way kind ("integer", "number", or "string")
+	// a named, non-struct scalar type resolves to — e.g. `type Cents int64` ->
+	// "integer", time.Duration -> "integer". Empty for builtin primitives (handled
+	// directly), structs, and unresolved types. Consumed by the type/constraint
+	// mappers so a named numeric is documented as its underlying kind.
+	UnderlyingKind string
 }

@@ -1,41 +1,57 @@
 openapi: 3.0.1
 info:
-  title: Events API
+  title: Coll API
   version: 1.0.0
   description: Generated API specification
 paths:
-  /events/{id}:
-    get:
-      operationId: getEvent
-      summary: GET /events/{id}
+  /orders:
+    post:
+      operationId: createOrder
+      summary: POST /orders
       tags:
-        - events
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+        - orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrdersRequest'
       responses:
-        "200":
-          description: Successful response
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    $ref: '#/components/schemas/Event'
-                  meta:
-                    type: object
-                    properties:
-                      timestamp:
-                        type: string
-                        format: date-time
-                        description: RFC3339 response timestamp
-                      traceId:
-                        type: string
-                        description: W3C trace identifier for the request
+                $ref: '#/components/schemas/ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /users:
+    post:
+      operationId: createUser
+      summary: POST /users
+      tags:
+        - users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Request'
+      responses:
+        "204":
+          description: No Content
         "400":
           description: Bad Request
           content:
@@ -56,13 +72,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
-    Address:
-      type: object
-      properties:
-        city:
-          type: string
-        street:
-          type: string
     ErrorResponse:
       type: object
       properties:
@@ -74,47 +83,6 @@ components:
           description: Response metadata
       required:
         - error
-    Event:
-      type: object
-      properties:
-        addrs:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/Address'
-        count:
-          type: integer
-          format: int64
-          minimum: 0
-        createdAt:
-          type: string
-          format: date-time
-        history:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              $ref: '#/components/schemas/Address'
-        id:
-          type: string
-          format: uuid
-        labels:
-          type: object
-          additionalProperties:
-            type: string
-        payload:
-          type: string
-          format: binary
-        raw:
-          type: object
-        ttl:
-          type: integer
-    GetEventReq:
-      type: object
-      properties:
-        iD:
-          type: string
-      required:
-        - iD
     JOSEErrorEnvelope:
       type: object
       properties:
@@ -127,6 +95,17 @@ components:
       required:
         - code
         - message
+    OrdersRequest:
+      type: object
+      properties:
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+        sku:
+          type: string
+      required:
+        - sku
     RawErrorResponse:
       type: object
       properties:
@@ -139,6 +118,14 @@ components:
       required:
         - code
         - message
+    Request:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+        - email
     SuccessResponse:
       type: object
       properties:
