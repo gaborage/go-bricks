@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -102,9 +103,11 @@ func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
 	a.warnings = append(a.warnings, fmt.Sprintf(format, args...))
 }
 
-// Warnings returns the non-fatal diagnostics collected during the last analysis.
-func (a *ProjectAnalyzer) Warnings() []string {
-	return a.warnings
+// Warnings returns a copy of the non-fatal diagnostics collected during the last
+// analysis. ctx is accepted per the repo's context-first convention for exported
+// APIs; the returned slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
+	return slices.Clone(a.warnings)
 }
 
 // isFrameworkType checks if a type should be filtered out as a framework type.
@@ -518,8 +521,12 @@ func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
 // to its accumulated path prefix. Nested groups resolve because Go requires the
 // parent registrar to be declared (and thus visited) before the child.
 //
-// Note: prefix context is per-body; a prefix established in a caller is not
-// threaded into a helper method invoked with the grouped registrar.
+// Limitation: the map is keyed by identifier name across the whole body, so it
+// is not scope-aware. A registrar var name shadowed in different branches with
+// DIFFERENT prefixes (e.g. an `if` and `else` both doing `api := r.Group(...)`
+// with distinct paths) collapses to the last assignment. The idiomatic pattern
+// declares each group once at body scope, which resolves correctly; a fully
+// scope-aware walk is deferred until a real case requires it.
 func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]string {
 	prefixes := map[string]string{}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -608,7 +615,7 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 		return
 	}
 	decl := w.a.findMethodDecl(w.astFile, w.filePath, w.structName, method)
-	idx, paramName := routeRegistrarParam(decl)
+	idx, paramName := w.a.routeRegistrarParam(decl, w.serverAliases)
 	if idx < 0 {
 		return // not a route-registration helper
 	}
@@ -632,13 +639,14 @@ func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string
 // routeRegistrarParam returns the positional index and name of a function's
 // server.RouteRegistrar parameter, or (-1, "") if it has none. The index is
 // counted over flattened parameter names so it lines up with call arguments.
-func routeRegistrarParam(decl *ast.FuncDecl) (idx int, name string) {
+// serverAliases lets it recognize an aliased server import.
+func (a *ProjectAnalyzer) routeRegistrarParam(decl *ast.FuncDecl, serverAliases map[string]struct{}) (idx int, name string) {
 	if decl == nil || decl.Type.Params == nil {
 		return -1, ""
 	}
 	pos := 0
 	for _, field := range decl.Type.Params.List {
-		isReg := isRouteRegistrarType(field.Type)
+		isReg := a.isRouteRegistrarType(field.Type, serverAliases)
 		if len(field.Names) == 0 {
 			if isReg {
 				return pos, ""
@@ -656,14 +664,15 @@ func routeRegistrarParam(decl *ast.FuncDecl) (idx int, name string) {
 	return -1, ""
 }
 
-// isRouteRegistrarType reports whether expr is server.RouteRegistrar.
-func isRouteRegistrarType(expr ast.Expr) bool {
+// isRouteRegistrarType reports whether expr is server.RouteRegistrar (honoring an
+// aliased server import).
+func (a *ProjectAnalyzer) isRouteRegistrarType(expr ast.Expr, serverAliases map[string]struct{}) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
 	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == frameworkPkgServer && sel.Sel.Name == routeRegistrarTypeName
+	return ok && a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) && sel.Sel.Name == routeRegistrarTypeName
 }
 
 // validateServerCall reports whether call is a server.METHOD(hr, r, path, ...)

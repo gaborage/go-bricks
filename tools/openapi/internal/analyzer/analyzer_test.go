@@ -3288,7 +3288,7 @@ func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	a, routes := analyzeSingleModule(t, src)
 	require.Len(t, routes, 1, "the route with an unresolvable path must be dropped")
 	assert.Equal(t, "/ok", routes[0].Path)
-	assert.NotEmpty(t, a.Warnings(), "a warning should be recorded for the dropped route")
+	assert.NotEmpty(t, a.Warnings(t.Context()), "a warning should be recorded for the dropped route")
 }
 
 func TestReceiverVarName(t *testing.T) {
@@ -3402,4 +3402,31 @@ func (m *Module) h(ctx server.HandlerContext) (server.Result[int], server.IAPIEr
 	assert.True(t, got["GET /real"])
 	assert.True(t, got["GET /gated"], "a route inside an if-block is still discovered")
 	assert.False(t, got["GET /phantom"], "a server call inside a non-registration method must not become a route")
+}
+
+func TestRegistrationWalkHandlesAliasedServerImport(t *testing.T) {
+	// The server package is imported under an alias; helper recursion must still
+	// recognize the aliased srv.RouteRegistrar parameter.
+	src := `package mod
+import (
+	"github.com/gaborage/go-bricks/app"
+	srv "github.com/gaborage/go-bricks/server"
+)
+type Module struct{}
+func (m *Module) Name() string { return "mod" }
+func (m *Module) Init(d *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *srv.HandlerRegistry, r srv.RouteRegistrar) {
+	srv.GET(hr, r, "/a", m.h)
+	m.helper(hr, r)
+}
+func (m *Module) helper(hr *srv.HandlerRegistry, r srv.RouteRegistrar) {
+	srv.POST(hr, r, "/b", m.h)
+}
+func (m *Module) h(ctx srv.HandlerContext) (srv.Result[int], srv.IAPIError) { return srv.OK(0), nil }
+`
+	_, routes := analyzeSingleModule(t, src)
+	got := routePathSet(routes)
+	assert.True(t, got["GET /a"], "route registered via an aliased server import is discovered")
+	assert.True(t, got["POST /b"], "helper with an aliased RouteRegistrar param is recursed")
 }
