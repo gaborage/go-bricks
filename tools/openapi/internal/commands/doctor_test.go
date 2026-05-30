@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +13,32 @@ import (
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
+// printed. The pipe is drained in a goroutine so a large (or fn-aborting) write
+// can't deadlock. NOTE: this mutates the global os.Stdout; do not call it from
+// parallel tests.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	fn()
+	_ = w.Close()
+	return <-done
+}
+
 // Test constants to avoid string duplication
 const (
 	msgExpectedError   = "Expected error but got none"
@@ -18,8 +46,9 @@ const (
 	msgFailedToCreate  = "Failed to create test file: %v"
 	testMainGoFile     = "main.go"
 	packageMainContent = "package main"
-	goVersion          = "go1.21.0"
+	goVersion          = "go1.25.0" // the supported floor (matches minGoVersion)
 	msgUnexpectedError = "Unexpected error: %v"
+	msgBelowMinimum    = "below minimum"
 )
 
 // Helper function to assert error expectations
@@ -50,18 +79,8 @@ func TestIsGoVersionSupported(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "supported version - go1.21.0",
-			version:  goVersion,
-			expected: true,
-		},
-		{
-			name:     "supported version - go1.21.5",
-			version:  "go1.21.5",
-			expected: true,
-		},
-		{
-			name:     "supported version - go1.22.0",
-			version:  "go1.22.0",
+			name:     "supported version - exactly the floor",
+			version:  goVersion, // go1.25.0
 			expected: true,
 		},
 		{
@@ -70,28 +89,28 @@ func TestIsGoVersionSupported(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "supported version - go1.26.0",
+			version:  "go1.26.0",
+			expected: true,
+		},
+		{
+			name:     "unsupported version - go1.24.5 (just below floor)",
+			version:  "go1.24.5",
+			expected: false,
+		},
+		{
+			name:     "unsupported version - go1.22.0",
+			version:  "go1.22.0",
+			expected: false,
+		},
+		{
 			name:     "unsupported version - go1.20.0",
 			version:  "go1.20.0",
 			expected: false,
 		},
 		{
-			name:     "unsupported version - go1.19.5",
-			version:  "go1.19.5",
-			expected: false,
-		},
-		{
-			name:     "unsupported version - go1.18.10",
-			version:  "go1.18.10",
-			expected: false,
-		},
-		{
-			name:     "edge case - exactly minimum version",
-			version:  goVersion, // semver requires patch version
-			expected: true,
-		},
-		{
 			name:     "invalid format - missing go prefix",
-			version:  "1.21.0",
+			version:  "1.25.0",
 			expected: false,
 		},
 		{
@@ -101,18 +120,20 @@ func TestIsGoVersionSupported(t *testing.T) {
 		},
 		{
 			name:     "invalid format - malformed version",
-			version:  "go1.21.x",
+			version:  "go1.25.x",
 			expected: false,
 		},
 		{
-			name:     "pre-release version - go1.22.0-rc1",
-			version:  "go1.22.0-rc1",
+			// Real Go RC toolchain format (no dot, no patch). A 1.25 RC IS the
+			// 1.25 line, so it must satisfy the floor.
+			name:     "release candidate of the floor - go1.25rc1",
+			version:  "go1.25rc1",
 			expected: true,
 		},
 		{
-			name:     "beta version - go1.23.0-beta1",
-			version:  "go1.23.0-beta1",
-			expected: true,
+			name:     "release candidate below floor - go1.24rc1",
+			version:  "go1.24rc1",
+			expected: false,
 		},
 	}
 
@@ -159,6 +180,30 @@ go 1.21
 require (
 	github.com/spf13/cobra v1.8.0
 )
+`,
+			verbose:     false,
+			expectError: true,
+		},
+		{
+			// Pseudo-version (e.g. `go get @main`) must NOT be floor-failed: it can
+			// track a commit ahead of the floor.
+			name: "pseudo-version skips the floor",
+			goModContent: `module test-project
+
+go 1.25
+
+require github.com/gaborage/go-bricks v0.0.0-20240101000000-abcdef123456
+`,
+			verbose:     false,
+			expectError: false,
+		},
+		{
+			name: "below-floor version fails",
+			goModContent: `module test-project
+
+go 1.25
+
+require github.com/gaborage/go-bricks v0.12.0
 `,
 			verbose:     false,
 			expectError: true,
@@ -688,12 +733,12 @@ require go-bricks v1.0.0
 	assertError(t, err, true)
 }
 
-func TestRunDoctorWarnsAboutMissingGoBricks(t *testing.T) {
+func TestRunDoctorFailsOnMissingGoBricks(t *testing.T) {
 	tempDir := t.TempDir()
 	createTestGoFile(t, tempDir, testMainGoFile, packageMainContent)
 	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(`module test
 
-go 1.21
+go 1.25
 
 require github.com/spf13/cobra v1.8.0
 `), 0644)
@@ -707,8 +752,65 @@ require github.com/spf13/cobra v1.8.0
 		Verbose:     true,
 	}
 
+	// A missing go-bricks dependency is now a hard failure (PR13).
 	err = runDoctor(opts)
-	assertError(t, err, false)
+	assertError(t, err, true)
+}
+
+// writeProject writes a go.mod and a single .go file into a fresh temp dir.
+func writeProject(t *testing.T, goMod, goSrc string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, goModFile), []byte(goMod), 0644); err != nil {
+		t.Fatalf(msgFailedToCreate, err)
+	}
+	createTestGoFile(t, dir, testMainGoFile, goSrc)
+	return dir
+}
+
+// TestRunDoctorZeroModulesIsCaveat verifies that a project with the dependency
+// present but no discovered modules emits a warning and the caveat banner —
+// not the unconditional green banner — yet does not fail the run (PR13 #2).
+func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
+	dir := writeProject(t,
+		"module test\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.37.0\n",
+		packageMainContent) // package main, no go-bricks module
+
+	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: goVersion}
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runDoctor(opts) })
+
+	if runErr != nil {
+		t.Errorf("zero modules should be a caveat, not a hard error: %v", runErr)
+	}
+	if !strings.Contains(out, "No go-bricks modules discovered") {
+		t.Errorf("expected a zero-modules warning, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Ready with caveats") {
+		t.Errorf("expected the caveat banner, got:\n%s", out)
+	}
+	if strings.Contains(out, "All checks passed") {
+		t.Errorf("unconditional green banner must not appear for a zero-module project:\n%s", out)
+	}
+}
+
+// TestRunDoctorFailsBelowGoBricksFloor verifies a below-floor go-bricks version
+// is a hard failure (PR13 #3).
+func TestRunDoctorFailsBelowGoBricksFloor(t *testing.T) {
+	dir := writeProject(t,
+		"module test\n\ngo 1.25\n\nrequire github.com/gaborage/go-bricks v0.12.0\n",
+		packageMainContent)
+
+	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: goVersion}
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runDoctor(opts) })
+
+	assertError(t, runErr, true)
+	if !strings.Contains(out, msgBelowMinimum) {
+		t.Errorf("expected a below-minimum version message, got:\n%s", out)
+	}
 }
 
 func TestCheckProjectStructureWalkError(t *testing.T) {
@@ -880,25 +982,31 @@ func TestCheckVersionCompatibility(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name:        "compatible version",
-			version:     "v0.5.0",
+			name:        "at the floor (v0.13.0)",
+			version:     "v0.13.0",
 			expectError: false,
 		},
 		{
-			name:        "newer version",
-			version:     "v1.0.0",
+			name:        "above the floor",
+			version:     "v0.37.0",
 			expectError: false,
 		},
 		{
-			name:        "version without v prefix",
-			version:     "0.5.0",
+			name:        "at the floor without v prefix",
+			version:     "0.13.0",
 			expectError: false,
 		},
 		{
-			name:        "below minimum",
+			name:        "just below the floor (v0.12.9)",
+			version:     "v0.12.9",
+			expectError: true,
+			errorMsg:    msgBelowMinimum,
+		},
+		{
+			name:        "well below the floor",
 			version:     "v0.4.0",
 			expectError: true,
-			errorMsg:    "below minimum",
+			errorMsg:    msgBelowMinimum,
 		},
 		{
 			name:        "invalid semver",
