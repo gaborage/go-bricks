@@ -12,7 +12,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 ## Workflow Rules
 
-- Always run `make check` (or `make check-all` for API changes) before committing and pushing. Never commit or push without a passing build.
+- Always run `make check` before committing and pushing. Never commit or push without a passing build.
 - When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
 - **Before pushing code, run BOTH `/code-review` AND `/security-audit`** on the staged diff. **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). `/code-review` (formerly `/simplify`, renamed 2026-05-23) catches reuse, quality, efficiency, and correctness issues that CodeRabbit and SonarCloud would otherwise flag; `/security-audit` catches credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about. Apply each skill's findings (sequentially is fine — `/code-review` first so its refactors are what `/security-audit` reviews), then push. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need both checks. When in doubt, run them.
 - After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
@@ -111,20 +111,13 @@ go test ./...                   # Run all tests
 go test -run TestName ./package # Run specific test
 
 # Pre-commit checks
-make check                      # Fast: framework only (fmt + lint + test)
-make check-all                  # Comprehensive: framework + tool (catches breaking changes)
+make check                      # Fast: fmt + lint + test with race detection
 
 # Testing
 make test                       # Unit tests with race detection
 make test-integration           # Integration tests (Docker required)
 make test-all                   # Unit + integration tests
 make test-coverage              # Coverage report
-
-# OpenAPI tool
-make build-tool                 # Build CLI binary
-make check-tool                 # Full tool validation
-make test-tool                  # Tool tests only
-make clean-tool                 # Clean artifacts
 
 # Other
 make build                      # Build project
@@ -491,36 +484,23 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 ### Pre-commit Workflow
 ```bash
 # Daily development (fast feedback)
-make check        # Framework only: fmt, lint, test with race detection
-
-# Before committing framework API changes (comprehensive validation)
-make check-all    # Framework + tool: catches breaking changes in tool
-
-# Tool-only development
-cd tools/openapi && make check
+make check        # fmt, lint, test with race detection
 ```
-
-**When to use `check-all`:**
-- Modifying public interfaces (server, database, config, observability).
-- Changing struct tags or validation logic.
-- Refactoring shared types or error handling.
-- Before creating PRs that touch framework APIs.
 
 ### Branch Model
 - Main branch: `main` (stable releases).
 - Feature branches: `feature/*`.
 
 ### CI/CD Pipeline
-- **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter@v3`.
-- Framework jobs run only when framework code changes (excludes `tools/**`); tool jobs run only when `tools/openapi/**` changes.
+- **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
+- Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
 - **Test Matrix:** Ubuntu/Windows × Go 1.25.
 - **Coverage:** Merged unit + integration coverage → SonarCloud.
 
 ### Tool Selection
 | Tool | Primary Use Case |
 |------|------------------|
-| `make check` | Daily development, pre-commit (fast feedback on framework code) |
-| `make check-all` | Before PRs that modify public interfaces |
+| `make check` | Daily development, pre-commit (fast feedback) |
 | `make test-integration` | Testing database/messaging vendor differences (requires Docker) |
 | `go test -run TestName` | Debugging specific failing tests |
 | SonarCloud | Coverage metrics (80% target), quality gate validation |
@@ -529,15 +509,7 @@ For Windows-specific test patterns, CI workflow internals, and operational issue
 
 ## OpenAPI Tool
 
-```bash
-cd tools/openapi
-make install                    # Install CLI tool
-go-bricks-openapi generate -project . -output docs/openapi.yaml
-go-bricks-openapi doctor        # Check compatibility
-make demo                       # Test on example service
-```
-
-Features: static analysis-based spec generation, automatic route discovery, typed request/response models.
+The OpenAPI generator now lives in its own repository: **[gaborage/go-bricks-openapi](https://github.com/gaborage/go-bricks-openapi)** — static-analysis spec generation, automatic route discovery, typed request/response models. Install with `go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest`.
 
 ## Breaking Changes
 
@@ -566,7 +538,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
 - **keystore/** — Named RSA key pairs + symmetric secrets (DER/raw files + base64 env vars).
 - **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
-- **tools/** — Development tooling (OpenAPI generator).
+- **tools/** — Development tooling (`migration` CLI / `go-bricks-migrate`).
 - **wiki/** — Architecture documentation and ADRs.
 - **.claude/tasks/** — Development task planning.
 - **llms.txt** — Quick reference examples for LLM code generation.

@@ -18,8 +18,6 @@ jobs:
       # yamllint: valid GitHub Actions context expression
       framework: ${{ steps.filter.outputs.framework }}
       # yamllint: valid GitHub Actions context expression
-      tool: ${{ steps.filter.outputs.tool }}
-      # yamllint: valid GitHub Actions context expression
       migrate_tool: ${{ steps.filter.outputs.migrate_tool }}
     steps:
       - uses: actions/checkout@v6
@@ -51,12 +49,6 @@ jobs:
               - 'go.sum'
               - 'Makefile'
               - '.golangci.yml'
-              - '.github/workflows/ci-v2.yml'
-            tool:
-              - 'tools/openapi/**/*.go'
-              - 'tools/openapi/go.mod'
-              - 'tools/openapi/go.sum'
-              - 'tools/openapi/Makefile'
               - '.github/workflows/ci-v2.yml'
             migrate_tool:
               - 'tools/migration/**/*.go'
@@ -97,7 +89,7 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
-          # Test all packages - tools/openapi excluded automatically (separate module)
+          # Test all packages - tools/* are separate modules, excluded automatically
           go test -race -cover -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Run tests (Windows)
@@ -252,14 +244,13 @@ jobs:
   framework-merge-coverage:
     permissions:
       contents: read
-    needs: [changes, framework-test, framework-integration-test, tool-test, migrate-tool-test]
+    needs: [changes, framework-test, framework-integration-test, migrate-tool-test]
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
       (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
-      (needs.tool-test.result == 'success' || needs.tool-test.result == 'skipped') &&
       (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
     runs-on: ubuntu-latest
 
@@ -287,14 +278,6 @@ jobs:
           name: coverage-integration
           path: .
 
-      - name: Download tool coverage
-        if: needs.changes.outputs.tool == 'true'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: openapi-tool-coverage-report
-          path: tools/openapi
-
       - name: Download migrate tool coverage
         if: needs.changes.outputs.migrate_tool == 'true'
         continue-on-error: true
@@ -313,7 +296,6 @@ jobs:
           # Check which coverage files exist
           has_framework_unit=false
           has_framework_integration=false
-          has_tool=false
           has_migrate_tool=false
 
           if [ -f coverage.out ]; then
@@ -326,18 +308,13 @@ jobs:
             has_framework_integration=true
           fi
 
-          if [ -f tools/openapi/coverage.out ]; then
-            echo "✓ Tool coverage found"
-            has_tool=true
-          fi
-
           if [ -f tools/migration/coverage.out ]; then
             echo "✓ Migrate tool coverage found"
             has_migrate_tool=true
           fi
 
           # Ensure at least one coverage file exists
-          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_tool" = false ] && [ "$has_migrate_tool" = false ]; then
+          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_migrate_tool" = false ]; then
             echo "Error: No coverage files found"
             exit 1
           fi
@@ -358,7 +335,7 @@ jobs:
 
             # Check first non-mode line to verify it's framework code (not tool code)
             first_package=$(sed -n '2p' coverage.out | cut -d':' -f1)
-            if echo "$first_package" | grep -q "tools/openapi"; then
+            if echo "$first_package" | grep -q "tools/"; then
               echo "❌ ERROR: Framework coverage file contains tool packages!"
               echo "    First package: $first_package"
               echo "    This indicates artifact download overwrote framework coverage"
@@ -378,13 +355,6 @@ jobs:
             else
               echo "✓ Integration coverage looks reasonable"
             fi
-          fi
-
-          # Validate tool coverage
-          if [ "$has_tool" = true ]; then
-            tool_lines=$(wc -l < tools/openapi/coverage.out)
-            echo "Tool coverage: $tool_lines lines"
-            echo "✓ Tool coverage validated"
           fi
 
           # Merge coverage files using simple concatenation
@@ -408,11 +378,6 @@ jobs:
             tail -n +2 coverage-integration.out >> coverage-merged.out
           fi
 
-          # Append tool coverage (skip mode line)
-          if [ "$has_tool" = true ]; then
-            tail -n +2 tools/openapi/coverage.out >> coverage-merged.out
-          fi
-
           # Append migrate tool coverage (skip mode line)
           if [ "$has_migrate_tool" = true ]; then
             tail -n +2 tools/migration/coverage.out >> coverage-merged.out
@@ -426,9 +391,6 @@ jobs:
           fi
           if [ "$has_framework_integration" = true ]; then
             wc -l coverage-integration.out | awk '{print "Framework integration:" $1 " lines"}'
-          fi
-          if [ "$has_tool" = true ]; then
-            wc -l tools/openapi/coverage.out | awk '{print "Tool coverage:        " $1 " lines"}'
           fi
           if [ "$has_migrate_tool" = true ]; then
             wc -l tools/migration/coverage.out | awk '{print "Migrate tool coverage:" $1 " lines"}'
@@ -494,186 +456,6 @@ jobs:
             exit 1
           }
           go build -v $packages
-
-      - name: Verify go mod (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
-
-  # ============================================================================
-  # OpenAPI Tool CI Jobs (conditional on tool changes)
-  # ============================================================================
-
-  tool-test:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.tool == 'true'
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: tools/openapi
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-          cache: true
-          cache-dependency-path: tools/openapi/go.sum
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Run tests (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          set -euo pipefail
-          # Run tests with coverage, but handle multiple packages properly
-          packages=$(go list ./... | grep -v models)
-          if [ -n "$packages" ]; then
-            # Test each package individually to avoid coverage profile conflicts
-            for pkg in $packages; do
-              echo "Testing package: $pkg"
-              go test -race "$pkg"
-            done
-            # Generate combined coverage for SonarCloud (Ubuntu only).
-            # Failures here fail the job — silent absence of coverage is what
-            # produced the SonarCloud-coverage gap the migrate tool addresses.
-            if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-              echo "Generating coverage report for SonarCloud"
-              go test -race -coverprofile=coverage.out -covermode=atomic $packages
-            fi
-          else
-            echo "No packages found to test"
-            exit 1
-          fi
-
-      - name: Run tests (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $packages = go list ./...
-
-          if (-not $packages) {
-            Write-Host "No packages found to test"
-            exit 1
-          }
-
-          $testOutput = go test -race $packages 2>&1
-          $exitCode = $LASTEXITCODE
-
-          if ($exitCode -eq 0) {
-            Write-Host $testOutput
-            exit 0
-          }
-
-          Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
-          $knownPatterns = @(
-            'Expected /tmp.*got D:'
-          )
-          $unexpectedFailure = $false
-
-          foreach ($pkg in $packages) {
-            Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
-            $pkgOutput = go test -race $pkg 2>&1
-            $pkgExitCode = $LASTEXITCODE
-
-            if ($pkgExitCode -eq 0) {
-              Write-Host $pkgOutput
-              continue
-            }
-
-            $isKnownIssue = $false
-            foreach ($pattern in $knownPatterns) {
-              if ($pkgOutput -match $pattern) {
-                Write-Host "Known Windows-specific issue detected in ${pkg}: $pattern" -ForegroundColor Yellow
-                $isKnownIssue = $true
-                break
-              }
-            }
-
-            if (-not $isKnownIssue) {
-              Write-Host "Unexpected test failure in $pkg" -ForegroundColor Red
-              Write-Host $pkgOutput
-              $unexpectedFailure = $true
-            } else {
-              Write-Host $pkgOutput
-            }
-          }
-
-          if ($unexpectedFailure) {
-            exit 1
-          }
-
-          Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
-          exit 0
-
-      - name: Upload coverage artifact for SonarCloud (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: openapi-tool-coverage-report
-          path: tools/openapi/coverage.out
-          retention-days: 1
-          if-no-files-found: ignore
-
-  tool-build:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.tool == 'true'
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: tools/openapi
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-          cache: true
-          cache-dependency-path: tools/openapi/go.sum
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build and validate CLI (Unix)
-        if: matrix.os != 'windows-latest'
-        run: make validate-cli
-
-      - name: Validate generated spec (redocly, Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: make validate-spec
-
-      - name: Build and validate CLI (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          # Build the CLI tool (equivalent to make build)
-          go build -ldflags "-X main.version=dev" -o go-bricks-openapi.exe ./cmd/go-bricks-openapi
-
-          # Validate CLI commands work (equivalent to make validate-cli)
-          ./go-bricks-openapi.exe version
-          ./go-bricks-openapi.exe --help
-          # Use absolute path to project root from tools/openapi working directory
-          $projectRoot = Resolve-Path "../../"
-          ./go-bricks-openapi.exe doctor --project $projectRoot
-          Write-Host "CLI validation passed"
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
@@ -883,30 +665,6 @@ jobs:
           version: v2.12.2
           args: --timeout=5m --skip-dirs=tools
 
-  lint-tool:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.tool == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-          cache: true
-          cache-dependency-path: tools/openapi/go.sum
-
-      - name: golangci-lint (tool)
-        uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
-        with:
-          version: v2.12.2
-          working-directory: tools/openapi
-          args: --timeout=5m
-
   security-framework:
     permissions:
       contents: read
@@ -938,40 +696,6 @@ jobs:
             exit 1
           fi
 
-  security-tool:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.tool == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tools/openapi
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-          cache: true
-          cache-dependency-path: tools/openapi/go.sum
-
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
-
-      - name: Run Gosec Security Scanner (tool)
-        run: |
-          set -euo pipefail
-          packages=$(go list ./... | grep -v models)
-          if [ -n "$packages" ]; then
-            gosec $packages
-          else
-            echo "No packages found to scan"
-            exit 1
-          fi
-
   # ============================================================================
   # SonarCloud (framework + tool coverage)
   # ============================================================================
@@ -984,7 +708,7 @@ jobs:
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.tool == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
+      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
       needs.framework-merge-coverage.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
