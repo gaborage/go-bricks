@@ -46,7 +46,7 @@ install: build ## Install the CLI tool locally
 	go install -ldflags "-X main.version=$(VERSION)" ./cmd/go-bricks-openapi
 
 demo: build ## Run demo generation on demo project (requires cloning demo repo)
-	./$(BINARY_NAME) doctor --project ../../
+	./$(BINARY_NAME) doctor --project $(SPEC_FIXTURE)
 	@echo "To run demo generation:"
 	@echo "1. Clone demo project: git clone https://github.com/gaborage/go-bricks-demo-project.git"
 	@echo "2. Generate spec: ./$(BINARY_NAME) generate --project ../go-bricks-demo-project/openapi-demo --output demo-spec.yaml"
@@ -54,7 +54,9 @@ demo: build ## Run demo generation on demo project (requires cloning demo repo)
 validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) version
 	./$(BINARY_NAME) --help
-	./$(BINARY_NAME) doctor --project ../../
+	# doctor must run against a real go-bricks project (dep + modules present);
+	# the framework root has neither, which the stricter PR13 doctor now fails.
+	./$(BINARY_NAME) doctor --project $(SPEC_FIXTURE)
 	@echo "✓ CLI validation passed"
 
 validate-spec: build ## Generate a fixture spec and validate it with redocly (requires npx; CI/Unix)

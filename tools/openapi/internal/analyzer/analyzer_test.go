@@ -364,7 +364,7 @@ func TestAnalyzeGoFile(t *testing.T) {
 	moduleFile := createTestModuleFile(t, tempDir)
 
 	analyzer := New(tempDir)
-	module, err := analyzer.analyzeGoFile(moduleFile)
+	module, _, err := analyzer.analyzeGoFile(moduleFile)
 
 	if err != nil {
 		t.Fatalf("analyzeGoFile() failed: %v", err)
@@ -383,7 +383,7 @@ func TestAnalyzeNonModuleFile(t *testing.T) {
 
 	utilFile := filepath.Join(tempDir, "util.go")
 	analyzer := New(tempDir)
-	module, err := analyzer.analyzeGoFile(utilFile)
+	module, _, err := analyzer.analyzeGoFile(utilFile)
 
 	if err != nil {
 		t.Fatalf("analyzeGoFile() failed: %v", err)
@@ -945,12 +945,111 @@ func (m *Module) RegisterRoutes() {}`,
 				t.Fatalf(parseFailedFormat, err)
 			}
 
-			result, _ := analyzer.extractModuleFromAST(astFile, "test")
+			result, _, _ := analyzer.extractModuleFromAST(astFile, "test")
 			found := (result != nil)
 			if found != tt.expected {
 				t.Errorf("Expected module found=%v, got %v", tt.expected, found)
 			}
 		})
+	}
+}
+
+// hasRegisterRoutesWarning reports whether any analyzer warning is the near-miss
+// RegisterRoutes diagnostic.
+func hasRegisterRoutesWarning(warnings []string) bool {
+	for _, w := range warnings {
+		if strings.Contains(w, moduleMethodRegisterRoutes) && strings.Contains(w, "unrecognized") {
+			return true
+		}
+	}
+	return false
+}
+
+// writeAnalyzerProject writes one .go file into a fresh temp dir and returns the
+// dir, for driving AnalyzeProject end-to-end.
+func writeAnalyzerProject(t *testing.T, fileName, src string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(src), 0o644); err != nil {
+		t.Fatalf("write %s: %v", fileName, err)
+	}
+	return dir
+}
+
+// TestUnrecognizedRegisterRoutesWarning verifies that, in a package with no valid
+// module, a struct which looks like a module (valid Name + Init) but whose
+// RegisterRoutes signature is unrecognized is surfaced with a package-qualified
+// diagnostic rather than silently dropped (PR13 acceptance #4).
+func TestUnrecognizedRegisterRoutesWarning(t *testing.T) {
+	dir := writeAnalyzerProject(t, "module.go", `package widgets
+type Module struct{}
+func (m *Module) Name() string { return "widgets" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes() {}`) // missing (*server.HandlerRegistry, server.RouteRegistrar)
+
+	a := New(dir)
+	if _, err := a.AnalyzeProject(); err != nil {
+		t.Fatalf("AnalyzeProject: %v", err)
+	}
+
+	warnings := a.Warnings(t.Context())
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "Module") && strings.Contains(w, moduleMethodRegisterRoutes) && strings.Contains(w, "module.go") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a package-qualified RegisterRoutes near-miss diagnostic, got: %v", warnings)
+	}
+}
+
+// TestNearMissSuppressedWhenValidModuleExists verifies the near-miss diagnostic is
+// NOT emitted when the package already contains a valid module — even when the
+// near-miss struct is declared first (the review's order-dependence / false-
+// positive concern).
+func TestNearMissSuppressedWhenValidModuleExists(t *testing.T) {
+	dir := writeAnalyzerProject(t, "shop.go", `package shop
+type Widget struct{}
+func (w *Widget) Name() string { return "widget" }
+func (w *Widget) Init(deps *app.ModuleDeps) error { return nil }
+func (w *Widget) Shutdown() error { return nil }
+func (w *Widget) RegisterRoutes() {}
+
+type Module struct{}
+func (m *Module) Name() string { return "shop" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
+func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {}`)
+
+	a := New(dir)
+	if _, err := a.AnalyzeProject(); err != nil {
+		t.Fatalf("AnalyzeProject: %v", err)
+	}
+	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
+		t.Errorf("no near-miss warning expected when the package has a valid module, got: %v",
+			a.Warnings(t.Context()))
+	}
+}
+
+// TestNoWarningForNonModuleStruct verifies the near-miss diagnostic is reserved
+// for genuine near-misses: a struct that simply has no RegisterRoutes method is
+// not a module and must not produce a warning.
+func TestNoWarningForNonModuleStruct(t *testing.T) {
+	dir := writeAnalyzerProject(t, "helper.go", `package helper
+type Module struct{}
+func (m *Module) Name() string { return "helper" }
+func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }`)
+
+	a := New(dir)
+	if _, err := a.AnalyzeProject(); err != nil {
+		t.Fatalf("AnalyzeProject: %v", err)
+	}
+	if hasRegisterRoutesWarning(a.Warnings(t.Context())) {
+		t.Errorf("expected no near-miss diagnostic for a struct lacking RegisterRoutes, got: %v",
+			a.Warnings(t.Context()))
 	}
 }
 
@@ -1068,7 +1167,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, e *echo.Echo) {}
 	}
 
 	// This should successfully analyze the file
-	_, err := analyzer.analyzeGoFile(moduleFile)
+	_, _, err := analyzer.analyzeGoFile(moduleFile)
 	if err != nil {
 		t.Errorf("analyzeGoFile should succeed for valid module: %v", err)
 	}
@@ -1146,7 +1245,7 @@ func (m *Module) createUser() {}
 
 	// Analyze the module file
 	analyzer := New(tempDir)
-	module, err := analyzer.analyzeGoFile(moduleFile)
+	module, _, err := analyzer.analyzeGoFile(moduleFile)
 
 	if err != nil {
 		t.Fatalf("Failed to analyze split module: %v", err)
@@ -1385,7 +1484,7 @@ func (m *Module) testHandler() {}`
 			t.Fatalf(parseFailedFormat, err)
 		}
 
-		result, structName := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, "testmodule.go"))
+		result, structName, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, "testmodule.go"))
 		if result == nil {
 			t.Error("Expected to find a valid module")
 		}
@@ -1410,7 +1509,7 @@ func (m *Module) Init(deps *config.Config) error { return nil }`
 		}
 
 		//nolint:S8148 // NOSONAR: Error intentionally ignored - test verifies module detection, not error conditions
-		result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, testFileName))
+		result, _, _ := analyzer.extractModuleFromAST(astFile, filepath.Join(tempDir, testFileName))
 		if result != nil {
 			t.Error("Expected no module found for wrong init parameter type")
 		}
@@ -1752,6 +1851,7 @@ type Module struct{}
 
 func (m *Module) Name() string { return "test" }
 func (m *Module) Init(deps *app.ModuleDeps) error { return nil }
+func (m *Module) Shutdown() error { return nil }
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {}`,
 			expected: true,
 		},
@@ -1790,7 +1890,7 @@ func (m *Module) Init(deps *app.ModuleDeps) string { return "" }`,
 			}
 
 			//nolint:S8148 // NOSONAR: Error intentionally ignored - test verifies module detection, not error conditions
-			result, _ := analyzer.extractModuleFromAST(astFile, filepath.Join("test", "file.go"))
+			result, _, _ := analyzer.extractModuleFromAST(astFile, filepath.Join("test", "file.go"))
 			found := (result != nil)
 			if found != tt.expected {
 				t.Errorf("Expected module found=%v, got %v", tt.expected, found)
@@ -1864,7 +1964,7 @@ func Helper() {
 			t.Fatalf("failed to write helper.go: %v", err)
 		}
 
-		module, err := analyzer.analyzeGoFile(nonModuleFile)
+		module, _, err := analyzer.analyzeGoFile(nonModuleFile)
 		if err != nil {
 			t.Errorf("analyzeGoFile should not error for non-module files: %v", err)
 		}
@@ -1896,7 +1996,7 @@ func (c *ComplexStruct) SomeMethod() string {
 			t.Fatalf("failed to write complex.go: %v", err)
 		}
 
-		module, err := analyzer.analyzeGoFile(complexFile)
+		module, _, err := analyzer.analyzeGoFile(complexFile)
 		if err != nil {
 			t.Errorf("analyzeGoFile should not error for complex structs: %v", err)
 		}

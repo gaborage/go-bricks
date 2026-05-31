@@ -1,8 +1,10 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"go/build"
+	"go/version"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,13 +13,30 @@ import (
 	"github.com/gaborage/go-bricks/tools/openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
 
+// errGoBricksMissing is the canonical error when go.mod has no go-bricks
+// dependency (a hard failure, distinct from a merely-outdated version).
+var errGoBricksMissing = fmt.Errorf("%s dependency not found in go.mod", goBricksDep)
+
 const (
-	goModFile      = "go.mod"
-	goBricksDep    = "go-bricks"
-	minGoBricksVer = "v0.5.0"
+	goModFile = "go.mod"
+	// goBricksDep is the short name used in user-facing messages; goBricksModulePath
+	// is the exact module path matched against go.mod (avoids matching lookalikes
+	// such as github.com/x/not-go-bricks-wrapper).
+	goBricksDep        = "go-bricks"
+	goBricksModulePath = "github.com/gaborage/go-bricks"
+
+	// Version floors, single-sourced to match go.mod (go 1.25) and the README.
+	// minGoVersion is the toolchain floor in Go's own version format (compared
+	// at language/minor granularity so 1.25.x patches and 1.25 RCs all qualify);
+	// minGoBricksVer is the semver floor for the go-bricks features the generator
+	// relies on.
+	minGoVersion   = "go1.25"
+	minGoBricksVer = "v0.13.0"
 
 	// File patterns
 	goFileExt   = ".go"
@@ -63,8 +82,8 @@ Checks include:
 
   # Check specific project
   go-bricks-openapi doctor --project ./my-service`,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runDoctor(opts)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runDoctor(cmd.Context(), opts)
 		},
 	}
 
@@ -75,7 +94,7 @@ Checks include:
 	return cmd
 }
 
-func runDoctor(opts *DoctorOptions) error {
+func runDoctor(ctx context.Context, opts *DoctorOptions) error {
 	fmt.Println("🏥 Running go-bricks-openapi health check...")
 	fmt.Println()
 
@@ -85,17 +104,29 @@ func runDoctor(opts *DoctorOptions) error {
 	hasErrors = performGoVersionCheck(opts, hasErrors)
 	hasErrors = performProjectStructureCheck(opts, hasErrors)
 	hasErrors = performGoModCheck(opts, hasErrors)
-	performDiagnosticsCheck(opts)
 
-	// Final summary
-	fmt.Println()
-	if hasErrors {
-		fmt.Println("❌ Health check failed - please fix the issues above")
-		return fmt.Errorf("health check failed")
+	// Skip the (full-tree) project analysis once a hard error is known: it would
+	// only print caveat noise that the error banner overrides anyway.
+	var hasWarnings bool
+	if !hasErrors {
+		hasWarnings = performDiagnosticsCheck(ctx, opts)
 	}
 
-	fmt.Println("✅ All checks passed - ready to generate OpenAPI specs!")
-	return nil
+	// Final summary. Errors fail the run; warnings (e.g. no modules discovered,
+	// or a module whose RegisterRoutes signature is unrecognized) still allow
+	// generation but flip the banner from unconditional green to a caveat.
+	fmt.Println()
+	switch {
+	case hasErrors:
+		fmt.Println("❌ Health check failed - please fix the issues above")
+		return fmt.Errorf("health check failed")
+	case hasWarnings:
+		fmt.Println("⚠️  Ready with caveats - review the warnings above before generating")
+		return nil
+	default:
+		fmt.Println("✅ All checks passed - ready to generate OpenAPI specs!")
+		return nil
+	}
 }
 
 // performGoVersionCheck validates Go version compatibility
@@ -106,7 +137,7 @@ func performGoVersionCheck(opts *DoctorOptions, hasErrors bool) bool {
 	}
 	fmt.Printf("📋 Go Version: %s\n", goVersion)
 	if !isGoVersionSupported(goVersion) {
-		fmt.Println("❌ Go version 1.21+ required")
+		fmt.Printf("❌ Go %s+ required\n", strings.TrimPrefix(minGoVersion, "go"))
 		return true
 	}
 	fmt.Println("✅ Go version compatible")
@@ -133,51 +164,41 @@ func performGoModCheck(opts *DoctorOptions, hasErrors bool) bool {
 	}
 	fmt.Println("✅ go.mod found")
 
-	// Basic go-bricks version check (expanded in Phase 1)
+	// A missing go-bricks dependency, a below-floor version, or an unreadable
+	// go.mod is fatal: without the framework at a supported version the generator
+	// can't produce a faithful spec. checkGoBricksCompatibility reports the
+	// specific reason (and only the version path mentions the floor).
 	if err := checkGoBricksCompatibility(goModPath, opts.Verbose); err != nil {
-		if opts.Verbose {
-			fmt.Printf("⚠️  go-bricks compatibility: %v\n", err)
-		}
-		// Non-fatal for now - just warn in verbose mode
+		return true
 	}
 	return hasErrors
 }
 
-// performDiagnosticsCheck runs module diagnostics and displays build environment
-func performDiagnosticsCheck(opts *DoctorOptions) {
+// performDiagnosticsCheck runs module diagnostics and displays build environment.
+// It returns whether any non-fatal caveat (no modules, unrecognized module
+// method, or analysis failure) was surfaced.
+func performDiagnosticsCheck(ctx context.Context, opts *DoctorOptions) bool {
 	// Module diagnostics (analyze project structure)
 	fmt.Println()
 	fmt.Println("📊 Project Diagnostics:")
-	if err := runModuleDiagnostics(opts.ProjectRoot, opts.Verbose); err != nil {
-		if opts.Verbose {
-			fmt.Printf("⚠️  Module diagnostics: %v\n", err)
-		}
-		// Non-fatal - just informational
-	}
+	hasWarnings := runModuleDiagnostics(ctx, opts.ProjectRoot, opts.Verbose)
 
 	// Check build environment
 	fmt.Println()
 	fmt.Printf("🔧 GOROOT: %s\n", build.Default.GOROOT)
 	fmt.Printf("🔧 GOPATH: %s\n", build.Default.GOPATH)
+	return hasWarnings
 }
 
-func isGoVersionSupported(version string) bool {
-	// Convert Go version (e.g., "go1.21.5") to semver format (e.g., "v1.21.5")
-	if !strings.HasPrefix(version, "go") {
+func isGoVersionSupported(goVer string) bool {
+	// Use Go's own version parser so real toolchain strings parse, including
+	// release candidates like "go1.25rc1" (which semver cannot represent).
+	if !version.IsValid(goVer) {
 		return false
 	}
-
-	// Remove "go" prefix and add "v" prefix for semver
-	semverVersion := "v" + strings.TrimPrefix(version, "go")
-
-	// Check if version is valid semver format
-	if !semver.IsValid(semverVersion) {
-		return false
-	}
-
-	// Compare with minimum required version (1.21.0)
-	minVersion := "v1.21.0"
-	return semver.Compare(semverVersion, minVersion) >= 0
+	// Compare at language (minor) granularity so any 1.25.x patch and the 1.25
+	// release candidates satisfy the floor, while 1.24.x and below do not.
+	return version.Compare(version.Lang(goVer), minGoVersion) >= 0
 }
 
 func checkProjectStructure(projectRoot string) error {
@@ -227,157 +248,149 @@ func checkProjectStructure(projectRoot string) error {
 	return nil
 }
 
-// checkGoBricksCompatibility performs compatibility check with go-bricks framework
+// checkGoBricksCompatibility reports go-bricks compatibility. It prints the
+// specific ❌ reason for each failure mode (so an I/O error never gets a
+// version-floor hint) and returns a non-nil error iff the run should fail.
 func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 	// Validate and resolve path securely to prevent path traversal
 	cleanPath, err := validateAndResolvePath(goModPath)
 	if err != nil {
+		fmt.Printf("❌ cannot resolve go.mod path: %v\n", err)
 		return err
 	}
 
 	content, err := readFileFn(cleanPath)
 	if err != nil {
+		fmt.Printf("❌ failed to read go.mod: %v\n", err)
 		return fmt.Errorf("failed to read go.mod: %w", err)
 	}
 
-	goModContent := string(content)
-
 	// Parse go-bricks version from go.mod
-	version, isReplace, err := parseGoBricksVersion(goModContent)
+	gbVer, isReplace, err := parseGoBricksVersion(cleanPath, content)
 	if err != nil {
+		fmt.Printf("❌ %v\n", err) // dependency not found
 		return err
 	}
 
-	// Handle local replace directives
+	// Local development: dependency is present via a replace directive, so the
+	// local checkout governs behavior — skip the version floor (but still report
+	// the dependency unconditionally).
 	if isReplace {
+		fmt.Printf("ℹ️  %s: local replace directive detected (%s)\n", goBricksDep, gbVer)
 		if verbose {
-			fmt.Printf("ℹ️  go-bricks: local replace directive detected (%s)\n", version)
 			fmt.Println("   → Skipping version compatibility check (using local development version)")
 		}
 		return nil
 	}
 
-	// Display version
-	fmt.Printf("📦 go-bricks version: %s\n", version)
+	// Display version unconditionally so the dependency status is always visible.
+	fmt.Printf("📦 %s version: %s\n", goBricksDep, gbVer)
 
-	// Check version compatibility
-	if err := checkVersionCompatibility(version); err != nil {
-		fmt.Printf("⚠️  Version compatibility: %v\n", err)
-		fmt.Printf("   → OpenAPI metadata features require %s %s+\n", goBricksDep, minGoBricksVer)
-		// Non-fatal warning
-	} else {
-		fmt.Printf("✅ %s version compatible\n", goBricksDep)
+	// Pseudo-versions (e.g. from `go get @main` / untagged or fork builds) sort
+	// below any tagged floor by semver rules yet may track a commit ahead of it —
+	// treat them like a replace directive and skip the floor rather than failing
+	// with a misleading "below minimum" message.
+	if module.IsPseudoVersion(gbVer) {
+		fmt.Printf("ℹ️  %s is a pseudo-version (untagged build) — skipping the version floor\n", gbVer)
+		return nil
 	}
 
+	// A below-floor (or unparseable) version is fatal.
+	if err := checkVersionCompatibility(gbVer); err != nil {
+		fmt.Printf("❌ %v\n   → OpenAPI generation requires %s %s+\n", err, goBricksDep, minGoBricksVer)
+		return err
+	}
+	fmt.Printf("✅ %s version compatible\n", goBricksDep)
 	return nil
 }
 
-// parseGoBricksVersion extracts the go-bricks version from go.mod content
-// Returns (version, isReplaceDirective, error)
-//
-//nolint:gocritic // Named returns would reduce clarity for boolean flag parameter
-func parseGoBricksVersion(goModContent string) (string, bool, error) {
-	lines := strings.Split(goModContent, "\n")
-
-	// First check for replace directives (local development)
-	if replacePath := findReplaceDirective(lines); replacePath != "" {
-		return replacePath, true, nil
+// parseGoBricksVersion parses go.mod and returns the go-bricks version.
+// It matches the exact module path (so lookalikes like
+// github.com/x/not-go-bricks-wrapper are ignored) and uses the structured
+// modfile parser (so block `require (...)` / `replace (...)` forms are handled).
+// A replace directive (single or block) reports isReplace=true with the target,
+// so the caller skips the version floor for local/fork development.
+func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isReplace bool, err error) {
+	mf, err := modfile.Parse(goModPath, content, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("parse go.mod: %w", err)
 	}
 
-	// Look for require directive with version
-	if version := findRequireVersion(lines); version != "" {
-		return version, false, nil
-	}
-
-	return "", false, fmt.Errorf("%s dependency not found in go.mod", goBricksDep)
-}
-
-// findReplaceDirective searches for a replace directive in go.mod lines
-func findReplaceDirective(lines []string) string {
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "replace") && strings.Contains(trimmed, goBricksDep) {
-			// Format: replace github.com/gaborage/go-bricks => ../local-path
-			parts := strings.Split(trimmed, "=>")
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
+	// Replace wins (local/fork development).
+	for _, r := range mf.Replace {
+		if r.Old.Path == goBricksModulePath {
+			target := r.New.Path
+			if r.New.Version != "" {
+				target += "@" + r.New.Version
 			}
+			return target, true, nil
 		}
 	}
-	return ""
-}
 
-// findRequireVersion searches for a require directive with version in go.mod lines
-func findRequireVersion(lines []string) string {
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, goBricksDep) || strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-
-		// Format: github.com/gaborage/go-bricks v0.5.0
-		// or:     github.com/gaborage/go-bricks v0.5.0 // indirect
-		fields := strings.Fields(trimmed)
-		if version := extractVersionFromFields(fields); version != "" {
-			return version
+	for _, req := range mf.Require {
+		if req.Mod.Path == goBricksModulePath {
+			return req.Mod.Version, false, nil
 		}
 	}
-	return ""
-}
 
-// extractVersionFromFields extracts version from go.mod require line fields
-func extractVersionFromFields(fields []string) string {
-	for i, field := range fields {
-		if strings.Contains(field, goBricksDep) && i+1 < len(fields) {
-			version := fields[i+1]
-			// Remove "// indirect" or other comments
-			if commentIdx := strings.Index(version, "//"); commentIdx != -1 {
-				version = strings.TrimSpace(version[:commentIdx])
-			}
-			return version
-		}
-	}
-	return ""
+	return "", false, errGoBricksMissing
 }
 
 // checkVersionCompatibility validates go-bricks version meets minimum requirements
-func checkVersionCompatibility(version string) error {
+func checkVersionCompatibility(ver string) error {
 	// Ensure version starts with 'v'
-	if !strings.HasPrefix(version, "v") {
-		version = "v" + version
+	if !strings.HasPrefix(ver, "v") {
+		ver = "v" + ver
 	}
 
 	// Validate semver format
-	if !semver.IsValid(version) {
-		return fmt.Errorf("invalid semantic version format: %s", version)
+	if !semver.IsValid(ver) {
+		return fmt.Errorf("invalid semantic version format: %s", ver)
 	}
 
 	// Check minimum version for OpenAPI metadata support
-	if semver.Compare(version, minGoBricksVer) < 0 {
-		return fmt.Errorf("version %s is below minimum %s", version, minGoBricksVer)
+	if semver.Compare(ver, minGoBricksVer) < 0 {
+		return fmt.Errorf("version %s is below minimum %s", ver, minGoBricksVer)
 	}
 
 	return nil
 }
 
-// runModuleDiagnostics analyzes the project and reports module/route statistics
-func runModuleDiagnostics(projectRoot string, verbose bool) error {
-	// Create analyzer
+// runModuleDiagnostics analyzes the project and reports module/route statistics.
+// It returns whether a caveat was surfaced: an analysis failure, zero modules
+// discovered, or any analyzer diagnostic (e.g. a struct that looks like a module
+// but whose RegisterRoutes signature is unrecognized).
+func runModuleDiagnostics(ctx context.Context, projectRoot string, verbose bool) bool {
 	a := analyzer.New(projectRoot)
 
-	// Analyze project
 	project, err := a.AnalyzeProject()
 	if err != nil {
-		return fmt.Errorf("failed to analyze project: %w", err)
+		fmt.Printf("⚠️  Module analysis failed: %v\n", err)
+		return true
 	}
 
-	// Calculate statistics
 	stats := calculateProjectStats(project)
-
-	// Display results
 	displayProjectStats(stats, verbose)
 
-	return nil
+	warned := false
+	if stats.ModuleCount == 0 {
+		fmt.Println("⚠️  No go-bricks modules discovered — the generated spec would have no operations")
+		warned = true
+	}
+	// displayProjectStats already printed a ⚠️ for untyped routes; fold it into the
+	// caveat flag so the banner stays consistent with what was printed.
+	if len(stats.UntypedRoutes) > 0 {
+		warned = true
+	}
+
+	// Surface analyzer diagnostics collected during analysis (unrecognized module
+	// methods, unresolvable route paths, etc.).
+	for _, w := range a.Warnings(ctx) {
+		fmt.Printf("⚠️  %s\n", w)
+		warned = true
+	}
+
+	return warned
 }
 
 // ProjectStats holds project analysis statistics

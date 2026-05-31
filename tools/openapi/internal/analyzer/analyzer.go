@@ -207,23 +207,56 @@ func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, cont
 	}
 }
 
-// discoverModules finds all go-bricks modules in the project
+// discoverModules finds all go-bricks modules in the project and, afterward,
+// surfaces near-miss diagnostics for packages that produced no real module.
 func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 	d := &moduleDiscoverer{
-		analyzer: a,
-		modules:  []models.Module{},
-		seen:     make(map[string]bool),
+		analyzer:   a,
+		modules:    []models.Module{},
+		seen:       make(map[string]bool),
+		moduleDirs: make(map[string]bool),
+		nearMiss:   make(map[string]nearMissCandidate),
 	}
 
 	err := filepath.Walk(a.projectRoot, d.walk)
+
+	// Surface a near-miss only for a directory (Go package) that produced no real
+	// module — so a struct that looks like a module but has a wrong RegisterRoutes
+	// signature does not silently drop its routes, while a package that does have a
+	// valid module (anywhere in it) is never falsely flagged. Sorted for
+	// deterministic output across the unordered walk.
+	dirs := make([]string, 0, len(d.nearMiss))
+	for dir := range d.nearMiss {
+		if !d.moduleDirs[dir] {
+			dirs = append(dirs, dir)
+		}
+	}
+	slices.Sort(dirs)
+	for _, dir := range dirs {
+		c := d.nearMiss[dir]
+		a.addWarningf("struct %q in %s has Name, Init, and Shutdown but an unrecognized %s signature; "+
+			"it is skipped and its routes are omitted (want func(*server.HandlerRegistry, server.RouteRegistrar))",
+			c.structName, c.relFile, moduleMethodRegisterRoutes)
+	}
+
 	return d.modules, err
+}
+
+// nearMissCandidate identifies a struct that looks like a module but has an
+// unrecognized RegisterRoutes signature, plus a project-relative file path so the
+// diagnostic can point the user at the right package.
+type nearMissCandidate struct {
+	structName string
+	relFile    string
 }
 
 // moduleDiscoverer holds the state for module discovery
 type moduleDiscoverer struct {
-	analyzer *ProjectAnalyzer
-	modules  []models.Module
-	seen     map[string]bool
+	analyzer   *ProjectAnalyzer
+	modules    []models.Module
+	seen       map[string]bool              // package names already added (dedup modules)
+	moduleDirs map[string]bool              // directories that produced a real module
+	nearMiss   map[string]nearMissCandidate // directory -> first near-miss struct
 }
 
 // walk is the callback function for filepath.Walk to discover modules
@@ -240,17 +273,30 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 		return nil
 	}
 
-	module, err := d.analyzer.analyzeGoFile(path)
+	module, nearMiss, err := d.analyzer.analyzeGoFile(path)
 	if err != nil {
 		// Log error but continue processing other files
 		return nil
 	}
 
+	dir := filepath.Dir(path)
 	if module != nil {
+		d.moduleDirs[dir] = true
 		key := module.Package
 		if !d.seen[key] {
 			d.modules = append(d.modules, *module)
 			d.seen[key] = true
+		}
+		return nil
+	}
+
+	if nearMiss != "" {
+		if _, ok := d.nearMiss[dir]; !ok {
+			rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
+			if relErr != nil {
+				rel = path
+			}
+			d.nearMiss[dir] = nearMissCandidate{structName: nearMiss, relFile: rel}
 		}
 	}
 
@@ -262,31 +308,34 @@ func shouldSkipDir(name string) bool {
 	return name == vendorDir || name == gitDir || strings.HasPrefix(name, ".") || name == nodeModulesDir
 }
 
-// analyzeGoFile parses a Go file and extracts module information
-func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error) {
+// analyzeGoFile parses a Go file and extracts module information. The second
+// return value is the name of a near-miss module struct found in the file (empty
+// if none); discoverModules resolves it against the set of packages that produced
+// a real module before deciding whether to warn.
+func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module, nearMiss string, err error) {
 	if err := a.validateGoFilePath(filePath); err != nil {
-		return nil, fmt.Errorf("invalid file path %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("invalid file path %s: %w", filePath, err)
 	}
 
 	// #nosec G304 - filePath is validated to be a .go file within project root
 	src, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
 	// Parse the Go file
 	astFile, err := parser.ParseFile(a.fileSet, filePath, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse file %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("failed to parse file %s: %w", filePath, err)
 	}
 
 	// Extract constants first (needed for route path resolution)
 	a.extractConstants(astFile)
 
 	// Check if this file contains a go-bricks module
-	module, structName := a.extractModuleFromAST(astFile, filePath)
+	module, structName, nearMiss := a.extractModuleFromAST(astFile, filePath)
 	if module == nil {
-		return nil, nil // Not a module file
+		return nil, nearMiss, nil // Not a module file (nearMiss may be set)
 	}
 
 	// Extract routes from the RegisterRoutes method, including other files in the package
@@ -299,14 +348,17 @@ func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error)
 		module.Routes[i].Package = module.Package
 	}
 
-	return module, nil
+	return module, "", nil
 }
 
-// extractModuleFromAST checks if the AST contains a go-bricks module
-func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath string) (module *models.Module, structName string) {
-	structName = a.findModuleStruct(astFile, filePath)
+// extractModuleFromAST checks if the AST contains a go-bricks module. It also
+// returns the name of a "near miss" struct (looks like a module but has an
+// unrecognized RegisterRoutes signature) found in this file, so discoverModules
+// can warn about it iff the package has no real module.
+func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath string) (module *models.Module, structName, nearMiss string) {
+	structName, nearMiss = a.findModuleStruct(astFile, filePath)
 	if structName == "" {
-		return nil, ""
+		return nil, "", nearMiss
 	}
 
 	// Use package name as module name and extract package-level description
@@ -319,38 +371,54 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 		Description: moduleDescription,
 		Routes:      []models.Route{},
 	}
-	return module, structName
+	return module, structName, ""
 }
 
-// findModuleStruct iterates through declarations to find a go-bricks module struct
-func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) string {
+// findModuleStruct iterates declarations to find a go-bricks module struct. It
+// returns the first valid module struct (and an empty nearMiss, since the package
+// then has a module); if no module is found it returns the first near-miss struct
+// (valid Name+Init but an unrecognized RegisterRoutes signature) so the caller can
+// surface it.
+func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) (moduleStruct, nearMiss string) {
+	for _, name := range structTypeNames(astFile) {
+		isModule, isNearMiss := a.hasModuleMethods(astFile, name, filePath)
+		if isModule {
+			return name, ""
+		}
+		if isNearMiss && nearMiss == "" {
+			nearMiss = name
+		}
+	}
+	return "", nearMiss
+}
+
+// structTypeNames returns the names of all struct type declarations in the file.
+func structTypeNames(astFile *ast.File) []string {
+	var names []string
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
 		}
-
 		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-
-			if _, ok := typeSpec.Type.(*ast.StructType); !ok {
-				continue
-			}
-
-			// Check if this struct has methods that indicate it's a Module
-			if a.hasModuleMethods(astFile, typeSpec.Name.Name, filePath) {
-				return typeSpec.Name.Name
+			if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+				if _, isStruct := typeSpec.Type.(*ast.StructType); isStruct {
+					names = append(names, typeSpec.Name.Name)
+				}
 			}
 		}
 	}
-	return ""
+	return names
 }
 
-// hasModuleMethods checks if the struct has methods indicating it's a go-bricks module
-func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePath string) bool {
+// hasModuleMethods reports whether a struct is a go-bricks module, and — when it
+// is not — whether it is a "near miss": it has a valid Name and Init and declares
+// a RegisterRoutes method, but that method's signature is unrecognized. A near
+// miss is a struct the developer almost certainly intended as a module; the
+// caller decides whether to surface it (only when the package has no real module,
+// resolved in discoverModules) so a single signature typo doesn't drop a module's
+// routes with no feedback.
+func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePath string) (isModule, isNearMiss bool) {
 	requiredMethods := map[string]bool{
 		moduleMethodName:           false,
 		moduleMethodInit:           false,
@@ -360,19 +428,45 @@ func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePa
 
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		serverAliases := a.extractImportAliases(astFile, serverImportPath)
-		appAliases := a.extractImportAliases(astFile, appImportPath)
-		a.collectMethodFlagsFromFile(astFile, structName, requiredMethods, serverAliases, appAliases)
-	} else {
-		for _, file := range files {
-			serverAliases := a.extractImportAliases(file, serverImportPath)
-			appAliases := a.extractImportAliases(file, appImportPath)
-			a.collectMethodFlagsFromFile(file, structName, requiredMethods, serverAliases, appAliases)
-		}
+		files = map[string]*ast.File{filePath: astFile}
+	}
+	for _, file := range files {
+		serverAliases := a.extractImportAliases(file, serverImportPath)
+		appAliases := a.extractImportAliases(file, appImportPath)
+		a.collectMethodFlagsFromFile(file, structName, requiredMethods, serverAliases, appAliases)
 	}
 
-	// Check if we have at least the core methods with valid signatures
-	return requiredMethods[moduleMethodName] && requiredMethods[moduleMethodInit] && requiredMethods[moduleMethodRegisterRoutes]
+	// A real module satisfies the go-bricks Module interface (Name + Init +
+	// Shutdown) and registers routes. Requiring Shutdown avoids treating a
+	// non-compliant struct as a module (which would also wrongly suppress a
+	// near-miss diagnostic for its package).
+	isCore := requiredMethods[moduleMethodName] &&
+		requiredMethods[moduleMethodInit] &&
+		requiredMethods[moduleMethodShutdown]
+	if isCore && requiredMethods[moduleMethodRegisterRoutes] {
+		return true, false
+	}
+	// Near miss: a complete module shape (Name + Init + Shutdown) that declares a
+	// RegisterRoutes method (by name) but with an unrecognized signature.
+	nearMiss := isCore && a.structDeclaresMethod(files, structName, moduleMethodRegisterRoutes)
+	return false, nearMiss
+}
+
+// structDeclaresMethod reports whether any file declares a method named
+// methodName on structName, regardless of the method's signature.
+func (a *ProjectAnalyzer) structDeclaresMethod(files map[string]*ast.File, structName, methodName string) bool {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Name.Name != methodName {
+				continue
+			}
+			if a.isMethodOnStruct(funcDecl.Recv, structName) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isMethodOnStruct checks if a function is a method on the specified struct
