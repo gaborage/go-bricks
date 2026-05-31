@@ -306,9 +306,9 @@ func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver)
 
 // joseHandleResponseWithObs wraps joseHandleResponse with an OTEL span and records
 // failures via obs. The wrapped form is the only call site exercised at runtime —
-// joseHandleResponse remains exported (without the trailing Obs suffix on the actual
-// implementation) for testability and so the rh.handleResponse-style signature is
-// preserved for any future direct callers.
+// joseHandleResponse remains a separate package-private method (without the trailing
+// Obs suffix on the actual implementation) for testability and so the
+// rh.handleResponse-style signature is preserved for any future direct callers.
 func (rh *responseHandler) joseHandleResponseWithObs(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) error {
 	_, span := obs.tracerOrNoop().Start(c.Request().Context(), "jose.encode_response",
 		trace.WithSpanKind(trace.SpanKindServer),

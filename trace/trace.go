@@ -33,7 +33,7 @@ func WithTraceID(ctx context.Context, traceID string) context.Context {
 	return context.WithValue(ctx, traceIDKey, traceID)
 }
 
-// TraceIDFromContext returns a trace ID from context if present
+// IDFromContext returns a trace ID from context if present
 func IDFromContext(ctx context.Context) (string, bool) {
 	if traceID, ok := ctx.Value(traceIDKey).(string); ok && traceID != "" {
 		return traceID, true
@@ -54,7 +54,7 @@ func WithTraceParent(ctx context.Context, traceParent string) context.Context {
 	return context.WithValue(ctx, traceParentKey, traceParent)
 }
 
-// TraceParentFromContext returns a traceparent from context if present
+// ParentFromContext returns a traceparent from context if present
 func ParentFromContext(ctx context.Context) (string, bool) {
 	if tp, ok := ctx.Value(traceParentKey).(string); ok && tp != "" {
 		return tp, true
@@ -67,7 +67,7 @@ func WithTraceState(ctx context.Context, traceState string) context.Context {
 	return context.WithValue(ctx, traceStateKey, traceState)
 }
 
-// TraceStateFromContext returns a tracestate from context if present
+// StateFromContext returns a tracestate from context if present
 func StateFromContext(ctx context.Context) (string, bool) {
 	if ts, ok := ctx.Value(traceStateKey).(string); ok && ts != "" {
 		return ts, true

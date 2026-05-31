@@ -88,7 +88,7 @@ func (d *DebugHandlers) handleHealthDebug(c *echo.Context) error {
 	// Add manager-specific health information if available
 	d.addManagerHealth(healthInfo)
 
-	// Calculate summary (incluyendo componentes añadidos)
+	// Summary is computed after addManagerHealth so manager components are included.
 	healthInfo.Summary = d.calculateHealthSummary(healthInfo.Components)
 	resp := d.newDebugResponse(start, healthInfo, nil)
 	return c.JSON(http.StatusOK, resp)

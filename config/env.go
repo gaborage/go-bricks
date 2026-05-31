@@ -6,7 +6,7 @@ import (
 )
 
 // envFormat catches structural typos in app.env; semantic branching is via
-// IsDevelopment / IsProduction. See ADR-021 for the policy rationale.
+// IsDevelopment / IsProduction. See ADR-022 for the policy rationale.
 var envFormat = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 const (

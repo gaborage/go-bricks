@@ -9,8 +9,9 @@ import (
 // Config represents the overall application configuration structure.
 // It includes sections for application settings, server parameters,
 // database connection details, logging preferences, and messaging options.
-// The embedded koanf.Koanf instance allows for flexible access to
-// additional custom configurations not explicitly defined in the struct.
+// The underlying koanf.Koanf instance (the unexported k field) allows for
+// flexible access to additional custom configurations not explicitly defined
+// in the struct.
 type Config struct {
 	App         AppConfig                 `koanf:"app" json:"app" yaml:"app" toml:"app" mapstructure:"app"`
 	Server      ServerConfig              `koanf:"server" json:"server" yaml:"server" toml:"server" mapstructure:"server"`

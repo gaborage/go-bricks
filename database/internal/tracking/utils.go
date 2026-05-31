@@ -56,9 +56,6 @@ const (
 	maxDBQueryAttrLen = 2000                 // Maximum length for db.query.text attribute
 )
 
-// TrackDBOperation logs database operation performance metrics and errors.
-// It provides centralized tracking for all database operations including queries,
-// statements, and transactions. The function handles slow query detection,
 // TrackDBOperation records metrics and emits a log event for a completed database operation.
 //
 // TrackDBOperation is a no-op if tc or its Logger is nil. It records the operation's duration to
@@ -144,10 +141,6 @@ func extractRowsAffected(result sql.Result, err error) int64 {
 	return affected
 }
 
-// TruncateString returns value truncated to at most maxLen characters.
-// If maxLen <= 0 or value is already shorter than or equal to maxLen, the
-// original string is returned. When maxLen <= 3 the function returns the
-// first maxLen characters (no ellipsis); otherwise it returns the first
 // TruncateString truncates value to at most maxLen runes, adding "..." when space allows to indicate truncation.
 //
 // If maxLen <= 0 the original value is returned unchanged. If the string's rune count is less than or equal to
@@ -194,8 +187,6 @@ func SanitizeArgs(args []any, maxLen int) []any {
 	return sanitized
 }
 
-// createDBSpan creates an OpenTelemetry span for a database operation.
-// It adds standard database semantic attributes per OTel spec v1.32.0 and records errors.
 // createDBSpan starts an OpenTelemetry span for a database operation using the provided start time.
 // It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
 // `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
@@ -265,7 +256,6 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 	span.End()
 }
 
-// extractDBOperation extracts the operation type from a SQL query.
 // extractDBOperation determines the database operation name from the given SQL query.
 // It returns a lowercase operation such as "select", "insert", "update", "delete",
 // "create", "drop", "alter", or "truncate". If the query is empty or the first token
@@ -322,10 +312,6 @@ func extractDBOperation(query string) string {
 	}
 }
 
-// normalizeDBVendor normalizes the database vendor name to match OTel semantic conventions.
-// Returns vendor-specific db.system.name values per OTel spec:
-// - "postgresql" for PostgreSQL
-// - "oracle.db" for Oracle (note the .db suffix required by spec)
 // normalizeDBVendor maps common database vendor identifiers to the OpenTelemetry
 // `db.system.name` values.
 // It lowercases the input and maps known aliases (for example: "postgres" or

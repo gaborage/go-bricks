@@ -12,9 +12,10 @@ var (
 	// This is not considered a fatal error - callers should handle cache misses gracefully.
 	ErrNotFound = errors.New("cache: key not found")
 
-	// ErrCASFailed is returned when a CompareAndSet operation fails because
-	// the current value doesn't match the expected value.
-	// This indicates a concurrent modification or lock contention.
+	// ErrCASFailed is reserved for callers that wish to surface a failed
+	// compare-and-set as an error. The Redis client and mock report a failed
+	// comparison via the boolean return value of CompareAndSet (not this error);
+	// a false result indicates the current value didn't match the expected value.
 	ErrCASFailed = errors.New("cache: compare-and-set failed")
 
 	// ErrClosed is returned when attempting to use a closed cache connection.

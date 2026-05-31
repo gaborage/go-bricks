@@ -134,7 +134,7 @@ func ensureCacheMeterInitialized() {
 //   - ctx: context for metric recording
 //   - operation: operation name (get, set, delete, cas, etc.)
 //   - duration: operation duration
-//   - hit: whether this was a cache hit (for Get operations)
+//   - hit: whether this was a cache hit (for lookup operations: get and getorset)
 //   - err: error if operation failed
 //   - namespace: optional tenant identifier
 func RecordCacheOperation(ctx context.Context, operation string, duration time.Duration, hit bool, err error, namespace string) {

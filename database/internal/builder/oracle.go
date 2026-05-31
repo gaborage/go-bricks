@@ -9,10 +9,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// quoteOracleColumn handles Oracle-specific column name quoting.
-// It identifies Oracle reserved words and applies appropriate quoting.
-// Reserved words are managed in the sqllex package to prevent duplication.
-
 func oracleNeedsQuoting(identifier string) bool {
 	if identifier == "" {
 		return false
@@ -341,8 +337,6 @@ func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
 	return quoted
 }
 
-// buildOraclePaginationClause builds an Oracle-compatible pagination suffix.
-// Oracle 12c+ supports OFFSET ... ROWS FETCH NEXT ... ROWS ONLY syntax.
 // buildOraclePaginationClause constructs an Oracle-compatible pagination clause using OFFSET and FETCH NEXT syntax.
 // The returned string contains "OFFSET {offset} ROWS" and/or "FETCH NEXT {limit} ROWS ONLY" as applicable; it is empty if both limit and offset are less than or equal to zero.
 func buildOraclePaginationClause(limit, offset int) string {

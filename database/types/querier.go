@@ -26,9 +26,9 @@ import (
 //	    execFunc     func(ctx context.Context, query string, args ...any) (sql.Result, error)
 //	}
 //
-//	// Inject via ModuleDeps.GetDB
+//	// Inject via ModuleDeps.DB
 //	deps := &app.ModuleDeps{
-//	    GetDB: func(ctx context.Context) (database.Interface, error) {
+//	    DB: func(ctx context.Context) (database.Interface, error) {
 //	        return mockQuerier, nil
 //	    },
 //	}

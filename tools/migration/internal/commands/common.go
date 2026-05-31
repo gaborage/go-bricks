@@ -34,7 +34,7 @@ const (
 	jsonKeyTenants = "tenants"
 )
 
-// resolveFlags applies env-var fallbacks and returns a validated copy of flags.
+// resolveFlags applies env-var fallbacks and validates flags in place.
 // cmd is consulted via Flags().Changed so an explicit --secrets-prefix on the
 // command line wins over the env override even when both equal the default.
 func resolveFlags(cmd *cobra.Command, flags *CommonFlags) error {

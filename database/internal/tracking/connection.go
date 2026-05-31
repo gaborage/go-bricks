@@ -21,13 +21,9 @@ type DB struct {
 	settings Settings
 }
 
-// NewDB creates a DB wrapper that tracks performance for the provided *sql.DB.
-// It records query and execution metrics (durations, truncated queries, optional parameter logging).
-// Uses log for emitting structured logs, vendor to identify the database type, and
 // NewDB returns a DB wrapper around the provided *sql.DB that records per-request
-// performance metrics, slow queries, and errors using the provided logger.
-// The wrapper is configured for the given vendor and derives per-connection
-// tracking settings from cfg when provided.
+// performance metrics, slow queries, and errors using log. The wrapper is configured
+// for the given vendor and derives per-connection tracking settings from cfg.
 func NewDB(db *sql.DB, log logger.Logger, vendor string, cfg *config.DatabaseConfig) *DB {
 	return &DB{
 		DB:       db,
@@ -111,13 +107,10 @@ type Connection struct {
 	namespace     string
 }
 
-// NewConnection returns a database.Interface that wraps conn and records query/operation
-// metrics and logs. The wrapper delegates all calls to the provided conn, uses conn.DatabaseType()
 // NewConnection returns a types.Interface that wraps conn and records per-operation
-// performance metrics, slow queries, and errors using the provided logger.
-//
-// The wrapper uses conn.DatabaseType() as the vendor identifier and derives
-// per-connection tracking settings from cfg via NewSettings.
+// performance metrics, slow queries, and errors using log. The wrapper uses
+// conn.DatabaseType() as the vendor identifier and derives per-connection tracking
+// settings from cfg via NewSettings.
 func NewConnection(conn types.Interface, log logger.Logger, cfg *config.DatabaseConfig) types.Interface {
 	return &Connection{
 		conn:     conn,

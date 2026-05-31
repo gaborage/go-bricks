@@ -29,7 +29,7 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 }
 
 // dependencies creates and configures all resource managers and dependencies.
-// Returns a bundle containing the database manager, messaging manager, resource provider, and observability.
+// Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
 func (b *appBootstrap) dependencies() *dependencyBundle {
 	// Create factory resolver and configuration builder
 	resolver := NewFactoryResolver(b.opts)

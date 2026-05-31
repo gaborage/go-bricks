@@ -158,17 +158,14 @@ func (s *postgresStore) DeletePublished(ctx context.Context, db dbtypes.Interfac
 }
 
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	// Create table
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreateTableSQL, s.tableName)); err != nil {
 		return fmt.Errorf("outbox postgres: create table failed: %w", err)
 	}
 
-	// Create pending index
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreatePendingIndexSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("outbox postgres: create pending index failed: %w", err)
 	}
 
-	// Create published index
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreatePublishedIndexSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("outbox postgres: create published index failed: %w", err)
 	}

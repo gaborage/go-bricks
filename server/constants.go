@@ -50,7 +50,6 @@ var reservedMetaKeys = map[string]struct{}{
 const (
 	// DefaultReadTimeout is the maximum duration for reading the entire request.
 	// This includes reading the request body and headers.
-	// Used in server.go and server_test.go (28+ occurrences).
 	DefaultReadTimeout = 15 * time.Second
 
 	// DefaultWriteTimeout is the maximum duration before timing out writes of the response.

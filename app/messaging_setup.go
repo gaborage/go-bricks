@@ -39,9 +39,8 @@ func (m *MessagingInitializer) CollectDeclarations(registry *ModuleRegistry) (*m
 	return declarations, nil
 }
 
-// SetupLazyConsumerInit modifies the resource provider's GetMessaging function
-// to include lazy consumer initialization. This ensures consumers are started
-// on-demand when messaging is first accessed.
+// SetupLazyConsumerInit wires the collected declarations into the resource
+// provider so consumers are started on-demand when messaging is first accessed.
 func (m *MessagingInitializer) SetupLazyConsumerInit(
 	provider ResourceProvider,
 	declarations *messaging.Declarations,

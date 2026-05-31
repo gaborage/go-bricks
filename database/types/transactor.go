@@ -20,7 +20,7 @@ import (
 // Usage in services:
 //
 //	func (s *OrderService) CreateWithPayment(ctx context.Context, order Order, payment Payment) error {
-//	    db, err := s.deps.GetDB(ctx)
+//	    db, err := s.deps.DB(ctx)
 //	    if err != nil {
 //	        return err
 //	    }

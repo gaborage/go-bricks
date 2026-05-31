@@ -23,7 +23,6 @@ const (
 
 const (
 	// TestHost is the standard localhost hostname for test environments.
-	// Used extensively across configuration, database, and integration tests (130+ occurrences).
 	TestHost = "localhost"
 
 	// TestHostWithPort is localhost with a common test port.

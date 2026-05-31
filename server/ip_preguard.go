@@ -18,7 +18,6 @@ const (
 // It uses a higher threshold than the main rate limiter and only protects against IP-based attacks.
 // If threshold is 0 or negative, IP pre-guard is disabled.
 func IPPreGuard(threshold int) echo.MiddlewareFunc {
-	// Disable IP pre-guard if threshold is 0 or negative
 	if threshold <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

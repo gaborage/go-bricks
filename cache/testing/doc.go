@@ -42,7 +42,7 @@
 //	}
 //
 //	deps := &app.ModuleDeps{
-//	    GetCache: func(ctx context.Context) (cache.Cache, error) {
+//	    Cache: func(ctx context.Context) (cache.Cache, error) {
 //	        tenantID := multitenant.GetTenant(ctx)
 //	        return tenantCaches[tenantID], nil
 //	    },

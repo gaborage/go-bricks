@@ -53,8 +53,8 @@ var globalColumnRegistry = &ColumnRegistry{
 //	}
 //
 //	cols := RegisterColumns(dbtypes.Oracle, &User{})
-//	cols.Get("ID")    // Returns: `"ID"` (Oracle, quoted)
-//	cols.Get("Level") // Returns: `"LEVEL"` (Oracle reserved word, quoted)
+//	cols.Col("ID")    // Returns: `"ID"` (Oracle, quoted)
+//	cols.Col("Level") // Returns: `"LEVEL"` (Oracle reserved word, quoted)
 func RegisterColumns(vendor string, structPtr any) *ColumnMetadata {
 	return globalColumnRegistry.Get(vendor, structPtr)
 }

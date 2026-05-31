@@ -125,8 +125,6 @@ func TraceStateFromContext(ctx context.Context) (string, bool) {
 // Format: version(2)-trace-id(32)-span-id(16)-flags(2), e.g., "00-<32>-<16>-01"
 func GenerateTraceParent() string { return gobrickstrace.GenerateTraceParent() }
 
-// allZero moved to trace; kept no-op here to avoid unused removal
-
 // NewTraceIDInterceptor creates a request interceptor that adds trace ID headers
 // This provides an alternative approach for users who want explicit control
 func NewTraceIDInterceptor() RequestInterceptor {

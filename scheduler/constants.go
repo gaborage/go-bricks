@@ -2,8 +2,7 @@ package scheduler
 
 import "time"
 
-// Lifecycle and observability defaults. Previously inline literals scattered
-// across module.go.
+// Lifecycle and observability defaults.
 const (
 	// defaultShutdownTimeout is the wall-clock budget for in-flight jobs to
 	// complete during graceful shutdown when cfg.Scheduler.Timeout.Shutdown

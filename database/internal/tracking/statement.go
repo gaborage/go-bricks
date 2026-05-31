@@ -48,7 +48,6 @@ type Statement struct {
 	settings Settings
 }
 
-// NewStatement creates a Statement wrapper that tracks performance for prepared statements.
 // NewStatement wraps the provided statement with a tracking implementation that records execution
 // metrics for Query, QueryRow, and Exec.
 //

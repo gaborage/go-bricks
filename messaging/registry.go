@@ -801,7 +801,7 @@ func (r *Registry) handlePanicRecovery(
 		Bytes("stack", stack).
 		Msg("Panic recovered in message handler - discarding without requeue")
 
-	// Record failed message metrics (inline recordFailedMessage)
+	// Record failed message metrics
 	panicErr := fmt.Errorf("panic in message handler: %v", recovered)
 	tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
 

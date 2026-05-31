@@ -14,8 +14,8 @@ import (
 //
 // Example:
 //
-//	scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))  // 3:00 AM
-//	scheduler.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:30"))  // Monday at 9:30 AM
+//	deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))  // 3:00 AM
+//	deps.Scheduler.WeeklyAt("report-job", &ReportJob{}, time.Monday, scheduler.ParseTime("09:30"))  // Monday at 9:30 AM
 //
 // Format: "HH:MM" where HH is 00-23 and MM is 00-59
 //

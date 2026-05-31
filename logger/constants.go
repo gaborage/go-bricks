@@ -1,6 +1,6 @@
 package logger
 
-// DefaultMaskValue es el valor utilizado para enmascarar datos sensibles
+// DefaultMaskValue is the value used to mask sensitive data.
 const DefaultMaskValue = "***"
 
 // Log level string constants matching zerolog level names.
