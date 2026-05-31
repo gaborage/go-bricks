@@ -493,7 +493,7 @@ make check        # fmt, lint, test with race detection
 
 ### CI/CD Pipeline
 - **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
-- Framework jobs run only when framework code changes (excludes `tools/**`); the `tools/migration` CLI has its own path-gated jobs.
+- Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
 - **Test Matrix:** Ubuntu/Windows × Go 1.25.
 - **Coverage:** Merged unit + integration coverage → SonarCloud.
 
