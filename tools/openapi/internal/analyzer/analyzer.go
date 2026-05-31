@@ -2131,15 +2131,25 @@ func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
 			if !ok || ts.Name.Name != name {
 				continue
 			}
-			switch u := ts.Type.(type) {
-			case *ast.Ident:
-				return u.Name, true // `type Cents int64` -> "int64"
-			case *ast.SelectorExpr:
-				if pkg, isIdent := u.X.(*ast.Ident); isIdent {
-					return pkg.Name + "." + u.Sel.Name, true // `type Timeout time.Duration`
-				}
-			}
-			return "", false // underlying is a struct/slice/map/etc.
+			return underlyingIdentString(ts.Type)
+		}
+	}
+	return "", false
+}
+
+// underlyingIdentString returns the identifier text of a type expression that is
+// a bare identifier (a `type Cents int64` underlying yields "int64") or a
+// qualified identifier (a `type T pkg.Name` underlying yields "pkg.Name"). It
+// reports ok=false for any composite underlying type (struct/slice/map/etc.) or
+// a selector whose base is not a plain package identifier, mirroring the
+// "scalar named type only" contract of its caller namedTypeUnderlyingInFile.
+func underlyingIdentString(t ast.Expr) (string, bool) {
+	switch u := t.(type) {
+	case *ast.Ident:
+		return u.Name, true
+	case *ast.SelectorExpr:
+		if pkg, isIdent := u.X.(*ast.Ident); isIdent {
+			return pkg.Name + "." + u.Sel.Name, true
 		}
 	}
 	return "", false

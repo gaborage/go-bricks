@@ -3147,6 +3147,28 @@ func TestBaseTypeName(t *testing.T) {
 	}
 }
 
+func TestUnderlyingIdentString(t *testing.T) {
+	tests := []struct {
+		name   string
+		expr   ast.Expr
+		want   string
+		wantOK bool
+	}{
+		{"bare_ident", &ast.Ident{Name: "int64"}, "int64", true},
+		{"qualified", &ast.SelectorExpr{X: &ast.Ident{Name: "pkg"}, Sel: &ast.Ident{Name: "Name"}}, "pkg.Name", true},
+		{"selector_base_not_ident", &ast.SelectorExpr{X: &ast.SelectorExpr{X: &ast.Ident{Name: "a"}, Sel: &ast.Ident{Name: "b"}}, Sel: &ast.Ident{Name: "C"}}, "", false},
+		{"composite_struct", &ast.StructType{Fields: &ast.FieldList{}}, "", false},
+		{"composite_slice", &ast.ArrayType{Elt: &ast.Ident{Name: "byte"}}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := underlyingIdentString(tt.expr)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestHandlerReceiverMatches(t *testing.T) {
 	a := New("")
 	recvOnHandler := &ast.FieldList{List: []*ast.Field{{Type: &ast.StarExpr{X: &ast.Ident{Name: "Handler"}}}}}
