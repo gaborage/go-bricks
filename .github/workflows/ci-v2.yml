@@ -675,6 +675,18 @@ jobs:
           # fails. Mirror make validate-cli's SPEC_FIXTURE target.
           $projectRoot = Resolve-Path "internal/spectest/testdata/nested_schema"
           ./go-bricks-openapi.exe doctor --project $projectRoot
+          # Exercise generate end-to-end and sanity-check the output (mirrors make
+          # validate-cli; network-free).
+          $specTmp = Join-Path $env:TEMP "openapi-cli-spec.yaml"
+          ./go-bricks-openapi.exe generate --project $projectRoot --output $specTmp
+          # PowerShell 5.1 does not abort on a native command's non-zero exit, so
+          # surface generate failures explicitly (matches this workflow's pattern).
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hasMarker = Select-String -Path $specTmp -Pattern "openapi: 3.0.1" -Quiet
+          Remove-Item -Force $specTmp
+          if (-not $hasMarker) {
+            Write-Error "generated spec missing the OpenAPI version marker"; exit 1
+          }
           Write-Host "CLI validation passed"
 
       - name: Verify go mod (Ubuntu only)

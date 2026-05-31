@@ -57,6 +57,11 @@ validate-cli: build ## Validate CLI commands work correctly
 	# doctor must run against a real go-bricks project (dep + modules present);
 	# the framework root has neither, which the stricter PR13 doctor now fails.
 	./$(BINARY_NAME) doctor --project $(SPEC_FIXTURE)
+	# Exercise generate end-to-end and sanity-check the output (network-free;
+	# full redocly lint lives in validate-spec).
+	./$(BINARY_NAME) generate --project $(SPEC_FIXTURE) --output $(SPEC_TMP)
+	@grep -q "openapi: 3.0.1" $(SPEC_TMP); status=$$?; rm -f $(SPEC_TMP); \
+		test $$status -eq 0 || (echo "generated spec missing the OpenAPI version marker" && exit 1)
 	@echo "✓ CLI validation passed"
 
 validate-spec: build ## Generate a fixture spec and validate it with redocly (requires npx; CI/Unix)
