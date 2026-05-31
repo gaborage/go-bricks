@@ -1,15 +1,18 @@
 package analyzer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
@@ -25,13 +28,24 @@ const (
 	frameworkTypeError          = "error"
 	frameworkPkgServer          = "server"
 	frameworkPkgApp             = "app"
+	stdlibPkgHTTP               = "http"
 	frameworkTypeModuleDeps     = "ModuleDeps"
+
+	// Framework response wrappers. Result[R] / ResultWithMeta[R] are unwrapped to
+	// the inner response type R; NoContentResult marks a bodyless 204 response.
+	resultTypeName          = "Result"
+	resultWithMetaTypeName  = "ResultWithMeta"
+	noContentResultTypeName = "NoContentResult"
 
 	// Module interface method names
 	moduleMethodName           = "Name"
 	moduleMethodInit           = "Init"
 	moduleMethodRegisterRoutes = "RegisterRoutes"
 	moduleMethodShutdown       = "Shutdown"
+
+	// RouteRegistrar.Group(prefix) — sub-router with a path prefix.
+	groupMethodName        = "Group"
+	routeRegistrarTypeName = "RouteRegistrar"
 
 	// Go primitive type names used in AST inspection
 	goTypeString = "string"
@@ -71,18 +85,41 @@ const (
 
 // ProjectAnalyzer analyzes Go-Bricks projects to extract module and route information
 type ProjectAnalyzer struct {
-	projectRoot string
-	fileSet     *token.FileSet
-	constants   map[string]string // Map of constant names to their values
+	projectRoot  string
+	modulePath   string // go.mod module path; prefix for translating in-module imports to dirs
+	fileSet      *token.FileSet
+	constants    map[string]string               // Map of constant names to their values
+	warnings     []string                        // Non-fatal diagnostics collected during analysis
+	typeRegistry map[string]*models.TypeInfo     // Named struct types reachable from routes (by final schema name)
+	pkgCache     map[string]map[string]*ast.File // dir -> (file path -> parsed AST), populated on demand
+	nameAssign   map[string]string               // "pkg\x00Type" -> final schema name (collision qualification)
+	usedNames    map[string]struct{}             // final schema names already taken
 }
 
 // New creates a new project analyzer
 func New(projectRoot string) *ProjectAnalyzer {
 	return &ProjectAnalyzer{
-		projectRoot: projectRoot,
-		fileSet:     token.NewFileSet(),
-		constants:   make(map[string]string),
+		projectRoot:  projectRoot,
+		fileSet:      token.NewFileSet(),
+		constants:    make(map[string]string),
+		typeRegistry: make(map[string]*models.TypeInfo),
+		pkgCache:     make(map[string]map[string]*ast.File),
+		nameAssign:   make(map[string]string),
+		usedNames:    make(map[string]struct{}),
 	}
+}
+
+// addWarningf records a non-fatal diagnostic (e.g. a route whose path could not
+// be resolved to a literal). Callers surface these to the user after analysis.
+func (a *ProjectAnalyzer) addWarningf(format string, args ...any) {
+	a.warnings = append(a.warnings, fmt.Sprintf(format, args...))
+}
+
+// Warnings returns a copy of the non-fatal diagnostics collected during the last
+// analysis. ctx is accepted per the repo's context-first convention for exported
+// APIs; the returned slice is cloned so callers cannot mutate analyzer state.
+func (a *ProjectAnalyzer) Warnings(_ context.Context) []string {
+	return slices.Clone(a.warnings)
 }
 
 // isFrameworkType checks if a type should be filtered out as a framework type.
@@ -113,6 +150,14 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 		Modules:     []models.Module{},
 	}
 
+	// Reset per-run state so repeated analyses on the same analyzer don't
+	// accumulate stale warnings or type-registry entries.
+	a.warnings = nil
+	a.typeRegistry = make(map[string]*models.TypeInfo)
+	a.pkgCache = make(map[string]map[string]*ast.File)
+	a.nameAssign = make(map[string]string)
+	a.usedNames = make(map[string]struct{})
+
 	// Discover project metadata from go.mod
 	a.discoverProjectMetadata(project)
 
@@ -123,6 +168,7 @@ func (a *ProjectAnalyzer) AnalyzeProject() (*models.Project, error) {
 	}
 
 	project.Modules = modules
+	project.Types = a.typeRegistry
 	return project, nil
 }
 
@@ -144,38 +190,73 @@ func (a *ProjectAnalyzer) discoverProjectMetadata(project *models.Project) {
 func (a *ProjectAnalyzer) parseGoModForProjectName(project *models.Project, content []byte) {
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "module ") {
-			moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
-			// Extract just the last part as the project name
-			parts := strings.Split(moduleName, "/")
-			if len(parts) > 0 {
-				name := parts[len(parts)-1]
-				if name != "" {
-					project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
-				}
-			}
-			break
+		if !strings.HasPrefix(line, "module ") {
+			continue
 		}
+		moduleName := strings.TrimSpace(strings.TrimPrefix(line, "module"))
+		a.modulePath = moduleName // full module path for in-module import resolution
+		// Extract just the last part as the project name
+		parts := strings.Split(moduleName, "/")
+		if len(parts) > 0 {
+			name := parts[len(parts)-1]
+			if name != "" {
+				project.Name = strings.ToUpper(name[:1]) + name[1:] + " API"
+			}
+		}
+		break
 	}
 }
 
-// discoverModules finds all go-bricks modules in the project
+// discoverModules finds all go-bricks modules in the project and, afterward,
+// surfaces near-miss diagnostics for packages that produced no real module.
 func (a *ProjectAnalyzer) discoverModules() ([]models.Module, error) {
 	d := &moduleDiscoverer{
-		analyzer: a,
-		modules:  []models.Module{},
-		seen:     make(map[string]bool),
+		analyzer:   a,
+		modules:    []models.Module{},
+		seen:       make(map[string]bool),
+		moduleDirs: make(map[string]bool),
+		nearMiss:   make(map[string]nearMissCandidate),
 	}
 
 	err := filepath.Walk(a.projectRoot, d.walk)
+
+	// Surface a near-miss only for a directory (Go package) that produced no real
+	// module — so a struct that looks like a module but has a wrong RegisterRoutes
+	// signature does not silently drop its routes, while a package that does have a
+	// valid module (anywhere in it) is never falsely flagged. Sorted for
+	// deterministic output across the unordered walk.
+	dirs := make([]string, 0, len(d.nearMiss))
+	for dir := range d.nearMiss {
+		if !d.moduleDirs[dir] {
+			dirs = append(dirs, dir)
+		}
+	}
+	slices.Sort(dirs)
+	for _, dir := range dirs {
+		c := d.nearMiss[dir]
+		a.addWarningf("struct %q in %s has Name, Init, and Shutdown but an unrecognized %s signature; "+
+			"it is skipped and its routes are omitted (want func(*server.HandlerRegistry, server.RouteRegistrar))",
+			c.structName, c.relFile, moduleMethodRegisterRoutes)
+	}
+
 	return d.modules, err
+}
+
+// nearMissCandidate identifies a struct that looks like a module but has an
+// unrecognized RegisterRoutes signature, plus a project-relative file path so the
+// diagnostic can point the user at the right package.
+type nearMissCandidate struct {
+	structName string
+	relFile    string
 }
 
 // moduleDiscoverer holds the state for module discovery
 type moduleDiscoverer struct {
-	analyzer *ProjectAnalyzer
-	modules  []models.Module
-	seen     map[string]bool
+	analyzer   *ProjectAnalyzer
+	modules    []models.Module
+	seen       map[string]bool              // package names already added (dedup modules)
+	moduleDirs map[string]bool              // directories that produced a real module
+	nearMiss   map[string]nearMissCandidate // directory -> first near-miss struct
 }
 
 // walk is the callback function for filepath.Walk to discover modules
@@ -192,17 +273,30 @@ func (d *moduleDiscoverer) walk(path string, info os.FileInfo, err error) error 
 		return nil
 	}
 
-	module, err := d.analyzer.analyzeGoFile(path)
+	module, nearMiss, err := d.analyzer.analyzeGoFile(path)
 	if err != nil {
 		// Log error but continue processing other files
 		return nil
 	}
 
+	dir := filepath.Dir(path)
 	if module != nil {
+		d.moduleDirs[dir] = true
 		key := module.Package
 		if !d.seen[key] {
 			d.modules = append(d.modules, *module)
 			d.seen[key] = true
+		}
+		return nil
+	}
+
+	if nearMiss != "" {
+		if _, ok := d.nearMiss[dir]; !ok {
+			rel, relErr := filepath.Rel(d.analyzer.projectRoot, path)
+			if relErr != nil {
+				rel = path
+			}
+			d.nearMiss[dir] = nearMissCandidate{structName: nearMiss, relFile: rel}
 		}
 	}
 
@@ -214,44 +308,57 @@ func shouldSkipDir(name string) bool {
 	return name == vendorDir || name == gitDir || strings.HasPrefix(name, ".") || name == nodeModulesDir
 }
 
-// analyzeGoFile parses a Go file and extracts module information
-func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (*models.Module, error) {
+// analyzeGoFile parses a Go file and extracts module information. The second
+// return value is the name of a near-miss module struct found in the file (empty
+// if none); discoverModules resolves it against the set of packages that produced
+// a real module before deciding whether to warn.
+func (a *ProjectAnalyzer) analyzeGoFile(filePath string) (module *models.Module, nearMiss string, err error) {
 	if err := a.validateGoFilePath(filePath); err != nil {
-		return nil, fmt.Errorf("invalid file path %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("invalid file path %s: %w", filePath, err)
 	}
 
 	// #nosec G304 - filePath is validated to be a .go file within project root
 	src, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
 	// Parse the Go file
 	astFile, err := parser.ParseFile(a.fileSet, filePath, src, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse file %s: %w", filePath, err)
+		return nil, "", fmt.Errorf("failed to parse file %s: %w", filePath, err)
 	}
 
 	// Extract constants first (needed for route path resolution)
 	a.extractConstants(astFile)
 
 	// Check if this file contains a go-bricks module
-	module, structName := a.extractModuleFromAST(astFile, filePath)
+	module, structName, nearMiss := a.extractModuleFromAST(astFile, filePath)
 	if module == nil {
-		return nil, nil // Not a module file
+		return nil, nearMiss, nil // Not a module file (nearMiss may be set)
 	}
 
 	// Extract routes from the RegisterRoutes method, including other files in the package
 	module.Routes = a.extractRoutesFromPackage(astFile, filePath, structName)
 
-	return module, nil
+	// Stamp the owning module identity onto each route at discovery time so later
+	// passes (operationId namespacing, component-name disambiguation) can use it.
+	for i := range module.Routes {
+		module.Routes[i].Module = module.Name
+		module.Routes[i].Package = module.Package
+	}
+
+	return module, "", nil
 }
 
-// extractModuleFromAST checks if the AST contains a go-bricks module
-func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath string) (module *models.Module, structName string) {
-	structName = a.findModuleStruct(astFile, filePath)
+// extractModuleFromAST checks if the AST contains a go-bricks module. It also
+// returns the name of a "near miss" struct (looks like a module but has an
+// unrecognized RegisterRoutes signature) found in this file, so discoverModules
+// can warn about it iff the package has no real module.
+func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath string) (module *models.Module, structName, nearMiss string) {
+	structName, nearMiss = a.findModuleStruct(astFile, filePath)
 	if structName == "" {
-		return nil, ""
+		return nil, "", nearMiss
 	}
 
 	// Use package name as module name and extract package-level description
@@ -264,38 +371,54 @@ func (a *ProjectAnalyzer) extractModuleFromAST(astFile *ast.File, filePath strin
 		Description: moduleDescription,
 		Routes:      []models.Route{},
 	}
-	return module, structName
+	return module, structName, ""
 }
 
-// findModuleStruct iterates through declarations to find a go-bricks module struct
-func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) string {
+// findModuleStruct iterates declarations to find a go-bricks module struct. It
+// returns the first valid module struct (and an empty nearMiss, since the package
+// then has a module); if no module is found it returns the first near-miss struct
+// (valid Name+Init but an unrecognized RegisterRoutes signature) so the caller can
+// surface it.
+func (a *ProjectAnalyzer) findModuleStruct(astFile *ast.File, filePath string) (moduleStruct, nearMiss string) {
+	for _, name := range structTypeNames(astFile) {
+		isModule, isNearMiss := a.hasModuleMethods(astFile, name, filePath)
+		if isModule {
+			return name, ""
+		}
+		if isNearMiss && nearMiss == "" {
+			nearMiss = name
+		}
+	}
+	return "", nearMiss
+}
+
+// structTypeNames returns the names of all struct type declarations in the file.
+func structTypeNames(astFile *ast.File) []string {
+	var names []string
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
 		}
-
 		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-
-			if _, ok := typeSpec.Type.(*ast.StructType); !ok {
-				continue
-			}
-
-			// Check if this struct has methods that indicate it's a Module
-			if a.hasModuleMethods(astFile, typeSpec.Name.Name, filePath) {
-				return typeSpec.Name.Name
+			if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+				if _, isStruct := typeSpec.Type.(*ast.StructType); isStruct {
+					names = append(names, typeSpec.Name.Name)
+				}
 			}
 		}
 	}
-	return ""
+	return names
 }
 
-// hasModuleMethods checks if the struct has methods indicating it's a go-bricks module
-func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePath string) bool {
+// hasModuleMethods reports whether a struct is a go-bricks module, and — when it
+// is not — whether it is a "near miss": it has a valid Name and Init and declares
+// a RegisterRoutes method, but that method's signature is unrecognized. A near
+// miss is a struct the developer almost certainly intended as a module; the
+// caller decides whether to surface it (only when the package has no real module,
+// resolved in discoverModules) so a single signature typo doesn't drop a module's
+// routes with no feedback.
+func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePath string) (isModule, isNearMiss bool) {
 	requiredMethods := map[string]bool{
 		moduleMethodName:           false,
 		moduleMethodInit:           false,
@@ -305,19 +428,45 @@ func (a *ProjectAnalyzer) hasModuleMethods(astFile *ast.File, structName, filePa
 
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err != nil || files == nil {
-		serverAliases := a.extractImportAliases(astFile, serverImportPath)
-		appAliases := a.extractImportAliases(astFile, appImportPath)
-		a.collectMethodFlagsFromFile(astFile, structName, requiredMethods, serverAliases, appAliases)
-	} else {
-		for _, file := range files {
-			serverAliases := a.extractImportAliases(file, serverImportPath)
-			appAliases := a.extractImportAliases(file, appImportPath)
-			a.collectMethodFlagsFromFile(file, structName, requiredMethods, serverAliases, appAliases)
-		}
+		files = map[string]*ast.File{filePath: astFile}
+	}
+	for _, file := range files {
+		serverAliases := a.extractImportAliases(file, serverImportPath)
+		appAliases := a.extractImportAliases(file, appImportPath)
+		a.collectMethodFlagsFromFile(file, structName, requiredMethods, serverAliases, appAliases)
 	}
 
-	// Check if we have at least the core methods with valid signatures
-	return requiredMethods[moduleMethodName] && requiredMethods[moduleMethodInit] && requiredMethods[moduleMethodRegisterRoutes]
+	// A real module satisfies the go-bricks Module interface (Name + Init +
+	// Shutdown) and registers routes. Requiring Shutdown avoids treating a
+	// non-compliant struct as a module (which would also wrongly suppress a
+	// near-miss diagnostic for its package).
+	isCore := requiredMethods[moduleMethodName] &&
+		requiredMethods[moduleMethodInit] &&
+		requiredMethods[moduleMethodShutdown]
+	if isCore && requiredMethods[moduleMethodRegisterRoutes] {
+		return true, false
+	}
+	// Near miss: a complete module shape (Name + Init + Shutdown) that declares a
+	// RegisterRoutes method (by name) but with an unrecognized signature.
+	nearMiss := isCore && a.structDeclaresMethod(files, structName, moduleMethodRegisterRoutes)
+	return false, nearMiss
+}
+
+// structDeclaresMethod reports whether any file declares a method named
+// methodName on structName, regardless of the method's signature.
+func (a *ProjectAnalyzer) structDeclaresMethod(files map[string]*ast.File, structName, methodName string) bool {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Name.Name != methodName {
+				continue
+			}
+			if a.isMethodOnStruct(funcDecl.Recv, structName) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isMethodOnStruct checks if a function is a method on the specified struct
@@ -405,63 +554,303 @@ func (a *ProjectAnalyzer) collectRoutesFromFile(astFile *ast.File, filePath, str
 			continue
 		}
 
-		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, serverAliases)...)
+		recvVar := receiverVarName(funcDecl.Recv)
+		routes = append(routes, a.extractRoutesFromFuncBodyWithAliases(funcDecl.Body, astFile, filePath, structName, recvVar, serverAliases)...)
 	}
 
 	return routes
 }
 
-// extractRoutesFromFuncBody extracts route registrations from function statements
+// extractRoutesFromFuncBody extracts route registrations from a function body
+// using only the default "server" alias and no handler/helper context.
 func (a *ProjectAnalyzer) extractRoutesFromFuncBody(body *ast.BlockStmt) []models.Route {
-	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", map[string]struct{}{frameworkPkgServer: {}})
+	return a.extractRoutesFromFuncBodyWithAliases(body, nil, "", "", "", map[string]struct{}{frameworkPkgServer: {}})
 }
 
-// extractRoutesFromFuncBodyWithAliases extracts route registrations with explicit server aliases
-func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(body *ast.BlockStmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) []models.Route {
-	var routes []models.Route
+// extractRoutesFromFuncBodyWithAliases walks a RegisterRoutes body (and the
+// same-receiver helper methods it calls) to collect every route registration,
+// including those nested inside if/for/range/blocks and those registered on a
+// r.Group(prefix) registrar.
+func (a *ProjectAnalyzer) extractRoutesFromFuncBodyWithAliases(
+	body *ast.BlockStmt, astFile *ast.File, filePath, structName, recvVar string, serverAliases map[string]struct{},
+) []models.Route {
+	w := &routeWalker{
+		a:             a,
+		astFile:       astFile,
+		filePath:      filePath,
+		structName:    structName,
+		recvVar:       recvVar,
+		serverAliases: serverAliases,
+		// Seed the recursion stack with the entry method so a helper that calls
+		// back into RegisterRoutes cannot re-walk it (cycle guard for the root).
+		stack: map[string]bool{moduleMethodRegisterRoutes: true},
+	}
+	w.walkBody(body, nil)
+	return w.routes
+}
 
-	for _, stmt := range body.List {
-		if route := a.extractRouteFromStatement(stmt, astFile, filePath, structName, serverAliases); route != nil {
-			routes = append(routes, *route)
+// routeWalker collects routes from a RegisterRoutes method body and the
+// same-receiver helper methods it transitively calls.
+type routeWalker struct {
+	a             *ProjectAnalyzer
+	astFile       *ast.File
+	filePath      string
+	structName    string // module struct, for handler resolution
+	recvVar       string // module receiver var name (for helper calls); "" if none
+	serverAliases map[string]struct{}
+	stack         map[string]bool // helper methods currently on the walk stack (cycle guard)
+	routes        []models.Route
+}
+
+// walkBody collects server.METHOD route registrations from a body (with
+// r.Group(prefix) prefixes applied) and recurses into same-receiver helpers.
+// seed carries registrar->prefix bindings inherited from a caller (so a helper
+// invoked with a grouped registrar inherits that group's prefix).
+func (w *routeWalker) walkBody(body *ast.BlockStmt, seed map[string]string) {
+	if body == nil {
+		return
+	}
+	prefixes := w.collectGroupPrefixes(body)
+	for reg, prefix := range seed {
+		if _, ok := prefixes[reg]; !ok {
+			prefixes[reg] = prefix
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if route := w.routeFromCall(call, prefixes); route != nil {
+			w.routes = append(w.routes, *route)
+			return true
+		}
+		w.maybeRecurseHelper(call, prefixes)
+		return true
+	})
+}
+
+// collectGroupPrefixes maps each registrar variable assigned from <reg>.Group(p)
+// to its accumulated path prefix. Nested groups resolve because Go requires the
+// parent registrar to be declared (and thus visited) before the child.
+//
+// Limitation: the map is keyed by identifier name across the whole body, so it
+// is not scope-aware. A registrar var name shadowed in different branches with
+// DIFFERENT prefixes (e.g. an `if` and `else` both doing `api := r.Group(...)`
+// with distinct paths) collapses to the last assignment. The idiomatic pattern
+// declares each group once at body scope, which resolves correctly; a fully
+// scope-aware walk is deferred until a real case requires it.
+func (w *routeWalker) collectGroupPrefixes(body *ast.BlockStmt) map[string]string {
+	prefixes := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != groupMethodName || len(call.Args) < 1 {
+			return true
+		}
+		parent, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if prefix, pok := w.a.extractPathFromArg(call.Args[0]); pok {
+			prefixes[lhs.Name] = prefixes[parent.Name] + prefix
+		}
+		return true
+	})
+	return prefixes
+}
+
+// routeFromCall builds a route from a server.METHOD(...) call, or nil if the call
+// is not a route registration. Unresolvable paths drop the route with a warning.
+func (w *routeWalker) routeFromCall(call *ast.CallExpr, prefixes map[string]string) *models.Route {
+	method, ok := w.a.validateServerCall(call, w.serverAliases)
+	if !ok {
+		return nil
+	}
+
+	rawPath, resolved := w.a.extractPathFromArg(call.Args[2])
+	if !resolved {
+		w.a.addWarningf("skipping a server.%s route: its path argument could not be resolved to a literal string", method)
+		return nil
+	}
+
+	// Prepend the group prefix bound to the registrar argument (Args[1]).
+	prefix := ""
+	if reg, ok := call.Args[1].(*ast.Ident); ok {
+		prefix = prefixes[reg.Name]
+	}
+
+	route := &models.Route{
+		Method: strings.ToUpper(method),
+		Tags:   []string{},
+		Path:   normalizePath(prefix + rawPath),
+	}
+	route.HandlerName, route.Request, route.Response, route.SuccessStatus = w.a.extractHandlerInfo(call, w.astFile, w.filePath, w.structName)
+	for i := 4; i < len(call.Args); i++ {
+		w.a.extractRouteMetadata(call.Args[i], route, w.serverAliases)
+	}
+	return route
+}
+
+// maybeRecurseHelper recurses into a same-receiver route-registration helper
+// (w.recvVar.method(...) where method takes a server.RouteRegistrar) so routes
+// registered in helpers are discovered. The RouteRegistrar requirement excludes
+// non-registration methods (e.g. predicates or handler factories) so their
+// internal server.* calls are not mistaken for routes. The stack guards against
+// infinite recursion on mutually-recursive helpers while still allowing a helper
+// to be invoked more than once. The prefix bound to the registrar argument is
+// threaded into the helper's registrar parameter.
+func (w *routeWalker) maybeRecurseHelper(call *ast.CallExpr, prefixes map[string]string) {
+	if w.recvVar == "" || w.astFile == nil {
+		return
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	recv, ok := sel.X.(*ast.Ident)
+	if !ok || recv.Name != w.recvVar {
+		return
+	}
+	method := sel.Sel.Name
+	if w.stack[method] {
+		return
+	}
+	decl := w.a.findMethodDecl(w.astFile, w.filePath, w.structName, method)
+	idx, paramName := w.a.routeRegistrarParam(decl, w.serverAliases)
+	if idx < 0 {
+		return // not a route-registration helper
+	}
+
+	// Thread the prefix of the registrar argument into the helper's registrar
+	// parameter so routes inside the helper inherit the caller's group prefix.
+	seed := map[string]string{}
+	if paramName != "" && idx < len(call.Args) {
+		if argIdent, ok := call.Args[idx].(*ast.Ident); ok {
+			if prefix := prefixes[argIdent.Name]; prefix != "" {
+				seed[paramName] = prefix
+			}
 		}
 	}
 
-	return routes
+	w.stack[method] = true
+	w.walkBody(decl.Body, seed)
+	delete(w.stack, method)
 }
 
-// validateServerCall validates that a statement is a valid server.METHOD() call.
-// Returns the call expression, HTTP method name, and whether the validation succeeded.
-func (a *ProjectAnalyzer) validateServerCall(stmt ast.Stmt, serverAliases map[string]struct{}) (*ast.CallExpr, string, bool) {
-	exprStmt, ok := stmt.(*ast.ExprStmt)
-	if !ok {
-		return nil, "", false
+// routeRegistrarParam returns the positional index and name of a function's
+// server.RouteRegistrar parameter, or (-1, "") if it has none. The index is
+// counted over flattened parameter names so it lines up with call arguments.
+// serverAliases lets it recognize an aliased server import.
+func (a *ProjectAnalyzer) routeRegistrarParam(decl *ast.FuncDecl, serverAliases map[string]struct{}) (idx int, name string) {
+	if decl == nil || decl.Type.Params == nil {
+		return -1, ""
 	}
-
-	callExpr, ok := exprStmt.X.(*ast.CallExpr)
-	if !ok {
-		return nil, "", false
+	pos := 0
+	for _, field := range decl.Type.Params.List {
+		isReg := a.isRouteRegistrarType(field.Type, serverAliases)
+		if len(field.Names) == 0 {
+			if isReg {
+				return pos, ""
+			}
+			pos++
+			continue
+		}
+		for _, n := range field.Names {
+			if isReg {
+				return pos, n.Name
+			}
+			pos++
+		}
 	}
+	return -1, ""
+}
 
+// isRouteRegistrarType reports whether expr is server.RouteRegistrar (honoring an
+// aliased server import).
+func (a *ProjectAnalyzer) isRouteRegistrarType(expr ast.Expr, serverAliases map[string]struct{}) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && a.aliasContains(serverAliases, pkg.Name, frameworkPkgServer) && sel.Sel.Name == routeRegistrarTypeName
+}
+
+// validateServerCall reports whether call is a server.METHOD(hr, r, path, ...)
+// route registration and returns the HTTP method name.
+func (a *ProjectAnalyzer) validateServerCall(callExpr *ast.CallExpr, serverAliases map[string]struct{}) (method string, ok bool) {
 	selExpr, ok := callExpr.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return nil, "", false
+		return "", false
 	}
 
 	pkgIdent, ok := selExpr.X.(*ast.Ident)
 	if !ok || !a.aliasContains(serverAliases, pkgIdent.Name, frameworkPkgServer) {
-		return nil, "", false
+		return "", false
 	}
 
-	method := selExpr.Sel.Name
+	method = selExpr.Sel.Name
 	if !a.isHTTPMethod(method) {
-		return nil, "", false
+		return "", false
 	}
 
 	if len(callExpr.Args) < 3 {
-		return nil, "", false
+		return "", false
 	}
 
-	return callExpr, method, true
+	return method, true
+}
+
+// findMethodDecl finds the declaration of method methodName on structName,
+// searching the current file then the rest of the package.
+func (a *ProjectAnalyzer) findMethodDecl(astFile *ast.File, filePath, structName, methodName string) *ast.FuncDecl {
+	if decl := a.findMethodInFile(astFile, structName, methodName); decl != nil {
+		return decl
+	}
+	files, err := a.parsePackage(filePath, astFile.Name.Name)
+	if err == nil {
+		for _, file := range files {
+			if decl := a.findMethodInFile(file, structName, methodName); decl != nil {
+				return decl
+			}
+		}
+	}
+	return nil
+}
+
+// findMethodInFile finds a method named methodName on structName within one file.
+func (a *ProjectAnalyzer) findMethodInFile(astFile *ast.File, structName, methodName string) *ast.FuncDecl {
+	for _, decl := range astFile.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != methodName || fn.Body == nil {
+			continue
+		}
+		if a.isMethodOnStruct(fn.Recv, structName) {
+			return fn
+		}
+	}
+	return nil
+}
+
+// receiverVarName returns the receiver variable name of a method, or "" if the
+// receiver is unnamed (e.g. func (*Module) ...).
+func receiverVarName(recv *ast.FieldList) string {
+	if recv == nil || len(recv.List) == 0 || len(recv.List[0].Names) == 0 {
+		return ""
+	}
+	return recv.List[0].Names[0].Name
 }
 
 // extractHandlerInfo extracts handler name and type information from a route call.
@@ -471,58 +860,97 @@ func (a *ProjectAnalyzer) extractHandlerInfo(
 	astFile *ast.File,
 	filePath string,
 	structName string,
-) (handlerName string, reqType, respType *models.TypeInfo) {
+) (handlerName string, reqType, respType *models.TypeInfo, successStatus int) {
 	if len(callExpr.Args) <= 3 {
-		return "", nil, nil
+		return "", nil, nil, 0
 	}
 
-	selExpr, ok := callExpr.Args[3].(*ast.SelectorExpr)
+	handlerName, receiverType, isPackageFunc, ok := a.resolveHandler(callExpr.Args[3], structName, astFile, filePath)
 	if !ok {
-		return "", nil, nil
+		return "", nil, nil, 0
 	}
 
-	handlerName = selExpr.Sel.Name
-
-	// Extract handler signature if we have required context
-	if astFile != nil && filePath != "" && structName != "" {
-		var err error
-		reqType, respType, err = a.extractHandlerSignature(astFile, filePath, structName, handlerName)
+	// Extract handler signature if we have required context.
+	if astFile != nil && filePath != "" {
+		req, resp, status, err := a.extractHandlerSignature(astFile, filePath, receiverType, isPackageFunc, handlerName)
 		if err != nil {
-			// Don't fail - some routes use inline handlers
-			reqType, respType = nil, nil
+			// Don't fail — some routes use inline or external handlers.
+			return handlerName, nil, nil, 0
 		}
+		return handlerName, req, resp, status
 	}
 
-	return handlerName, reqType, respType
+	return handlerName, nil, nil, 0
 }
 
-// extractRouteFromStatement extracts a route from a statement like server.GET(...)
-func (a *ProjectAnalyzer) extractRouteFromStatement(stmt ast.Stmt, astFile *ast.File, filePath, structName string, serverAliases map[string]struct{}) *models.Route {
-	// Validate this is a server.METHOD() call
-	callExpr, method, valid := a.validateServerCall(stmt, serverAliases)
-	if !valid {
-		return nil
+// resolveHandler determines the handler name and where to find its signature from
+// the handler argument of a route registration. It supports:
+//
+//	m.createUser    — a method on the module struct (receiver = the module)
+//	m.h.createUser   — a method on the type of a module field (the documented
+//	                   Enhanced Handler Pattern; receiver = the field's type)
+//	Ping             — a package-level function (isPackageFunc = true)
+//
+// Returns ok=false when the argument is not a recognizable handler reference
+// (e.g. an inline function literal).
+func (a *ProjectAnalyzer) resolveHandler(
+	arg ast.Expr, moduleStruct string, astFile *ast.File, filePath string,
+) (handlerName, receiverType string, isPackageFunc, ok bool) {
+	switch h := arg.(type) {
+	case *ast.Ident:
+		// Bare function reference: server.GET(hr, r, path, Ping).
+		return h.Name, "", true, true
+	case *ast.SelectorExpr:
+		handlerName = h.Sel.Name
+		switch x := h.X.(type) {
+		case *ast.Ident:
+			// m.createUser — the qualifier is the module receiver variable.
+			return handlerName, moduleStruct, false, true
+		case *ast.SelectorExpr:
+			// m.h.createUser — the qualifier is a module field; resolve its type.
+			// Only single-level field indirection is supported: x.Sel is taken as a
+			// field of the module struct. Deeper chains (m.a.b.createUser) resolve
+			// x.Sel against the module and fail closed (no types) if it is not a
+			// module field, rather than emitting a wrong schema.
+			return handlerName, a.resolveFieldType(moduleStruct, x.Sel.Name, astFile, filePath), false, true
+		}
 	}
+	return "", "", false, false
+}
 
-	route := &models.Route{
-		Method: strings.ToUpper(method),
-		Tags:   []string{},
+// resolveFieldType returns the base type name of field fieldName on structName
+// (leading pointer and package qualifier stripped), or "" if it cannot be
+// resolved (struct or field not found).
+func (a *ProjectAnalyzer) resolveFieldType(structName, fieldName string, astFile *ast.File, filePath string) string {
+	if structName == "" {
+		return ""
 	}
-
-	// Extract route path, normalizing Echo-style params to OpenAPI templating.
-	route.Path = normalizePath(a.extractPathFromArg(callExpr.Args[2]))
-
-	// Extract handler information
-	route.HandlerName, route.Request, route.Response = a.extractHandlerInfo(
-		callExpr, astFile, filePath, structName,
-	)
-
-	// Extract metadata from remaining arguments
-	for i := 4; i < len(callExpr.Args); i++ {
-		a.extractRouteMetadata(callExpr.Args[i], route, serverAliases)
+	structType, err := a.findStructDefinition(astFile, filePath, structName)
+	if err != nil || structType.Fields == nil {
+		return ""
 	}
+	for _, field := range structType.Fields.List {
+		for _, name := range field.Names {
+			if name.Name == fieldName {
+				return baseTypeName(field.Type)
+			}
+		}
+	}
+	return ""
+}
 
-	return route
+// baseTypeName returns the unqualified type name of an expression, stripping a
+// leading pointer and any package qualifier (e.g. *pkg.Handler -> Handler).
+func baseTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return baseTypeName(t.X)
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	}
+	return ""
 }
 
 // isHTTPMethod checks if the method name is a valid HTTP method
@@ -556,6 +984,15 @@ func (a *ProjectAnalyzer) extractRouteMetadata(arg ast.Expr, route *models.Route
 		route.Summary = a.extractStringFromFirstArg(callExpr)
 	case "WithDescription":
 		route.Description = a.extractStringFromFirstArg(callExpr)
+	case "WithHandlerName":
+		// An explicit operationId override; kept distinct from the handler method
+		// name (HandlerName) so the generator module-qualifies the derived id but
+		// honors the explicit one verbatim.
+		if name := a.extractStringFromFirstArg(callExpr); name != "" {
+			route.OperationID = name
+		}
+	case "WithRawResponse":
+		route.RawResponse = true
 	}
 }
 
@@ -600,23 +1037,34 @@ func (a *ProjectAnalyzer) extractCommentDescription(commentGroup *ast.CommentGro
 	return strings.Join(lines, " ")
 }
 
-// extractPathFromArg extracts path string from AST argument (handles literals and constants)
-func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) string {
+// extractPathFromArg resolves a route path argument to a literal string. It
+// handles string literals, same-package string constants, and "+" concatenation
+// of resolvable operands. The bool result is false when the path could not be
+// fully resolved (an unknown identifier, a non-string expression, fmt.Sprintf,
+// etc.); the caller then drops the route rather than emitting a garbage path key.
+func (a *ProjectAnalyzer) extractPathFromArg(arg ast.Expr) (string, bool) {
 	switch expr := arg.(type) {
 	case *ast.BasicLit:
-		// Direct string literal
+		// Direct string literal.
 		if expr.Kind == token.STRING {
-			return strings.Trim(expr.Value, `"`)
+			return strings.Trim(expr.Value, `"`), true
 		}
 	case *ast.Ident:
-		// Constant reference - look up in constants map
+		// Same-package string constant.
 		if value, exists := a.constants[expr.Name]; exists {
-			return value
+			return value, true
 		}
-		// If not found, return the identifier name as a fallback
-		return expr.Name
+	case *ast.BinaryExpr:
+		// String concatenation: fold only when both operands resolve.
+		if expr.Op == token.ADD {
+			left, lok := a.extractPathFromArg(expr.X)
+			right, rok := a.extractPathFromArg(expr.Y)
+			if lok && rok {
+				return left + right, true
+			}
+		}
 	}
-	return ""
+	return "", false
 }
 
 // normalizePath converts an Echo-style route path into OpenAPI 3.0 path
@@ -1023,9 +1471,41 @@ func (a *ProjectAnalyzer) typeInfoFromExpr(expr ast.Expr, packageName string) *m
 		return a.handleStarExprType(t, packageName)
 	case *ast.SelectorExpr:
 		return a.handleSelectorExprType(t)
+	case *ast.IndexExpr:
+		// Single-type-param generic, e.g. server.Result[User].
+		return a.handleResultWrapper(t.X, t.Index, packageName)
+	case *ast.IndexListExpr:
+		// Multi-type-param generic, e.g. Foo[A, B]; the response type is the first.
+		if len(t.Indices) > 0 {
+			return a.handleResultWrapper(t.X, t.Indices[0], packageName)
+		}
 	}
 
 	return nil
+}
+
+// handleResultWrapper unwraps a framework result wrapper (server.Result[R] /
+// server.ResultWithMeta[R]) to the inner response type R. Any other generic is
+// not a known response carrier, so it returns nil rather than guessing.
+func (a *ProjectAnalyzer) handleResultWrapper(x, index ast.Expr, packageName string) *models.TypeInfo {
+	if !isResultWrapper(x) {
+		return nil
+	}
+	return a.typeInfoFromExpr(index, packageName)
+}
+
+// isResultWrapper reports whether x is server.Result or server.ResultWithMeta.
+// (Matches the existing "server" qualifier assumption used by isFrameworkType.)
+func isResultWrapper(x ast.Expr) bool {
+	sel, ok := x.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != frameworkPkgServer {
+		return false
+	}
+	return sel.Sel.Name == resultTypeName || sel.Sel.Name == resultWithMetaTypeName
 }
 
 // handleIdentType processes simple identifier types (e.g., TypeName)
@@ -1078,6 +1558,13 @@ func (a *ProjectAnalyzer) handleSelectorExprType(t *ast.SelectorExpr) *models.Ty
 		return nil
 	}
 
+	// server.NoContentResult is a bodyless 204 response — carry a marker (no
+	// Name/Fields, so no component is generated) rather than treating it as a
+	// schema-bearing response type.
+	if pkg.Name == frameworkPkgServer && t.Sel.Name == noContentResultTypeName {
+		return &models.TypeInfo{NoContent: true}
+	}
+
 	if a.isFrameworkType(t.Sel.Name, pkg.Name) {
 		return nil
 	}
@@ -1123,28 +1610,142 @@ func (a *ProjectAnalyzer) extractResponseType(results *ast.FieldList, packageNam
 // Returns request and response TypeInfo if found
 func (a *ProjectAnalyzer) findHandlerInFile(
 	astFile *ast.File,
-	structName string,
+	receiverType string,
+	isPackageFunc bool,
 	handlerName string,
-) (requestType, responseType *models.TypeInfo) {
+) (requestType, responseType *models.TypeInfo, successStatus int) {
 	for _, decl := range astFile.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
 		if !ok || funcDecl.Name.Name != handlerName {
 			continue
 		}
 
-		// Check receiver matches the module struct
-		if !a.isMethodOnStruct(funcDecl.Recv, structName) {
+		// Check the receiver matches the resolved handler target.
+		if !a.handlerReceiverMatches(funcDecl.Recv, receiverType, isPackageFunc) {
 			continue
 		}
 
 		// Extract types using helpers
 		requestType := a.extractRequestType(funcDecl.Type.Params, astFile.Name.Name)
 		responseType := a.extractResponseType(funcDecl.Type.Results, astFile.Name.Name)
+		status := extractSuccessStatus(funcDecl)
 
-		return requestType, responseType
+		return requestType, responseType, status
 	}
 
-	return nil, nil
+	return nil, nil, 0
+}
+
+// extractSuccessStatus inspects a handler body for the result constructor used in
+// its return statements and maps it to an HTTP success status: server.Created ->
+// 201, Accepted -> 202, NoContent -> 204, NewResult(s, ...)/
+// NewResultWithMeta(s, ...) -> s (when s is an integer literal or an http.StatusXxx
+// constant). Returns 0 ("use the default" -> 200) when no recognizable server
+// constructor is returned.
+//
+// The LAST recognized return wins: idiomatic handlers put the happy-path return
+// last and any earlier server-constructor returns are typically guard branches
+// (e.g. a cache-hit early return), so the terminal status is the documented one.
+// The "server" qualifier is matched literally, consistent with the rest of the
+// type-resolution path (isResultWrapper, NoContentResult).
+func extractSuccessStatus(funcDecl *ast.FuncDecl) int {
+	if funcDecl.Body == nil {
+		return 0
+	}
+	status := 0
+	ast.Inspect(funcDecl.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) == 0 {
+			return true
+		}
+		call, ok := ret.Results[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != frameworkPkgServer {
+			return true
+		}
+		if s := statusForConstructor(sel.Sel.Name, call.Args); s != 0 {
+			status = s // last-wins: keep scanning, terminal return is authoritative
+		}
+		return true
+	})
+	return status
+}
+
+// statusForConstructor maps a server result-constructor name to its HTTP status.
+// For NewResult/NewResultWithMeta the status is the first argument resolved via
+// statusFromArg (an integer literal or an http.StatusXxx constant). Returns 0 for
+// anything unrecognized.
+func statusForConstructor(name string, args []ast.Expr) int {
+	switch name {
+	case "Created":
+		return 201
+	case "Accepted":
+		return 202
+	case "NoContent":
+		return 204
+	case "NewResult", "NewResultWithMeta":
+		if len(args) > 0 {
+			return statusFromArg(args[0])
+		}
+	}
+	return 0
+}
+
+// statusFromArg resolves the status argument of NewResult/NewResultWithMeta. It
+// accepts a bare integer literal (NewResult(201, ...)) and the idiomatic
+// net/http status constant (NewResult(http.StatusCreated, ...)), which is the
+// dominant real-world form. Returns 0 when the argument is anything else (a
+// variable, a non-http constant), letting the caller fall back to the default.
+func statusFromArg(arg ast.Expr) int {
+	switch a := arg.(type) {
+	case *ast.BasicLit:
+		if a.Kind == token.INT {
+			if v, err := strconv.Atoi(a.Value); err == nil {
+				return v
+			}
+		}
+	case *ast.SelectorExpr:
+		if pkg, ok := a.X.(*ast.Ident); ok && pkg.Name == stdlibPkgHTTP {
+			return httpStatusConstants[a.Sel.Name]
+		}
+	}
+	return 0
+}
+
+// httpStatusConstants maps the net/http 2xx status-constant names to their codes.
+// Only success codes are needed: a handler returning a 4xx/5xx as a non-error
+// Result is a misuse the generator does not try to model as a success response.
+var httpStatusConstants = map[string]int{
+	"StatusOK":                   200,
+	"StatusCreated":              201,
+	"StatusAccepted":             202,
+	"StatusNonAuthoritativeInfo": 203,
+	"StatusNoContent":            204,
+	"StatusResetContent":         205,
+	"StatusPartialContent":       206,
+	"StatusMultiStatus":          207,
+	"StatusAlreadyReported":      208,
+	"StatusIMUsed":               226,
+}
+
+// handlerReceiverMatches reports whether a function declaration's receiver matches
+// the resolved handler target: a package-level function must have no receiver,
+// otherwise the receiver type must equal receiverType.
+func (a *ProjectAnalyzer) handlerReceiverMatches(recv *ast.FieldList, receiverType string, isPackageFunc bool) bool {
+	if isPackageFunc {
+		return recv == nil
+	}
+	if receiverType == "" {
+		return false
+	}
+	return a.isMethodOnStruct(recv, receiverType)
 }
 
 // extractHandlerSignature extracts request and response type information from a handler method
@@ -1153,52 +1754,448 @@ func (a *ProjectAnalyzer) findHandlerInFile(
 func (a *ProjectAnalyzer) extractHandlerSignature(
 	astFile *ast.File,
 	filePath string,
-	structName string,
+	receiverType string,
+	isPackageFunc bool,
 	handlerName string,
-) (reqType, respType *models.TypeInfo, err error) {
+) (reqType, respType *models.TypeInfo, successStatus int, err error) {
 	// Try current file first
-	if reqType, respType := a.findHandlerInFile(astFile, structName, handlerName); reqType != nil || respType != nil {
+	if reqType, respType, status := a.findHandlerInFile(astFile, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 		a.populateTypeFields(reqType, astFile, filePath)
 		a.populateTypeFields(respType, astFile, filePath)
-		return reqType, respType, nil
+		return reqType, respType, status, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if reqType, respType := a.findHandlerInFile(file, structName, handlerName); reqType != nil || respType != nil {
+			if reqType, respType, status := a.findHandlerInFile(file, receiverType, isPackageFunc, handlerName); reqType != nil || respType != nil {
 				a.populateTypeFields(reqType, file, filePath)
 				a.populateTypeFields(respType, file, filePath)
-				return reqType, respType, nil
+				return reqType, respType, status, nil
 			}
 		}
 	}
 
 	// Handler not found - this is not necessarily an error
 	// Some routes might use inline handlers or external handlers
-	return nil, nil, fmt.Errorf("handler %s not found for struct %s", handlerName, structName)
+	return nil, nil, 0, fmt.Errorf("handler %s not found for receiver %q", handlerName, receiverType)
 }
 
-// populateTypeFields populates the Fields slice for a TypeInfo by finding its struct definition
+// populateTypeFields populates a request/response TypeInfo's fields and registers
+// every named struct type reachable from it (nested, sliced, pointed-to, or
+// recursive) into the analyzer's type registry, so the generator can emit a
+// component per type and $ref between them.
 func (a *ProjectAnalyzer) populateTypeFields(typeInfo *models.TypeInfo, astFile *ast.File, filePath string) {
 	if typeInfo == nil {
 		return
 	}
-
-	// Find struct definition
-	structType, _, err := a.findStructDefinition(astFile, filePath, typeInfo.Name)
-	if err != nil {
-		// Struct not found - might be a primitive type or external type
+	registered := a.registerType(typeInfo.Name, typeInfo.Package, astFile, filePath)
+	if registered == nil && typeInfo.Package != "" {
+		// A qualified request/response type (e.g. server.Result[types.Money]) arrives
+		// as Name="Money", Package="types" (the import alias). Resolve it
+		// cross-package using that alias against the handler file's imports.
+		registered = a.registerQualifiedType(typeInfo.Package+"."+typeInfo.Name, astFile)
+	}
+	if registered == nil {
 		return
 	}
+	// Mirror the registered fields onto the route's TypeInfo (request bodies and
+	// responses read Fields directly). Adopt the final (collision-qualified) name
+	// too, so the response envelope's $ref points at the component actually emitted.
+	typeInfo.Name = registered.Name
+	typeInfo.Fields = registered.Fields
+	typeInfo.JOSE = registered.JOSE
+}
 
-	// Extract fields from struct
-	typeInfo.Fields = a.extractStructFields(structType, typeInfo.Package)
-	// Scan for the JOSE sentinel field — the standard `_ struct{} `jose:"..."` ` pattern
-	// is filtered out of Fields by the unexported-name check, so JOSE detection runs as
-	// a separate pre-pass over raw struct fields.
-	typeInfo.JOSE = hasJOSESentinelTag(structType)
+// registerType resolves the named type and registers it (and its struct-typed
+// fields) into the type registry, returning its TypeInfo (whose Name is the final,
+// possibly collision-qualified, schema name). A qualified name (pkg.Type) is
+// resolved cross-package when it points at an in-module package; stdlib and
+// third-party types return nil (left to the generator's well-known map / object
+// fallback). Returns nil when the name is not a resolvable struct.
+func (a *ProjectAnalyzer) registerType(name, pkg string, astFile *ast.File, filePath string) *models.TypeInfo {
+	if strings.Contains(name, ".") {
+		return a.registerQualifiedType(name, astFile)
+	}
+	structType, err := a.findStructDefinition(astFile, filePath, name)
+	if err != nil {
+		return nil
+	}
+	return a.registerStruct(name, pkg, structType, astFile, filePath)
+}
+
+// registerStruct registers a resolved struct under its collision-qualified schema
+// name and recurses into its fields. It registers BEFORE recursing so self- or
+// mutually-referential types (e.g. Category{Parent *Category}) terminate.
+func (a *ProjectAnalyzer) registerStruct(typeName, pkg string, structType *ast.StructType, astFile *ast.File, filePath string) *models.TypeInfo {
+	key := a.schemaKey(typeName, pkg)
+	if existing, ok := a.typeRegistry[key]; ok {
+		return existing
+	}
+
+	ti := &models.TypeInfo{Name: key, Package: pkg}
+	a.typeRegistry[key] = ti // register before recursing (cycle guard)
+	// Seed the embedded-promotion ancestor set with this type so a self-embed
+	// (e.g. type Node struct{ *Node }) is not promoted into itself.
+	ti.Fields = a.extractStructFields(structType, pkg, astFile, filePath, map[string]struct{}{typeName: {}})
+	ti.JOSE = hasJOSESentinelTag(structType)
+
+	for i := range ti.Fields {
+		a.registerFieldRef(&ti.Fields[i], pkg, astFile, filePath)
+	}
+	return ti
+}
+
+// schemaKey returns a stable, collision-free component name for (pkg, typeName).
+// It prefers the bare type name and falls back to <Pkg><TypeName> (then a numeric
+// suffix) when that bare name is already taken by a different package, so two
+// packages each defining e.g. Request get distinct components. Idempotent per
+// (pkg, typeName).
+//
+// On a collision the bare name goes to whichever (pkg, typeName) is registered
+// first; which one that is follows discovery order. Discovery walks the project
+// deterministically, so a given source tree yields a stable assignment, but the
+// emitted spec is always valid either way — every $ref resolves to the component
+// the field/response actually carries (RefName / TypeInfo.Name are the final
+// key). A future enhancement could make the choice order-independent (e.g. always
+// qualify by package), but that is a naming-policy change, not a correctness fix.
+func (a *ProjectAnalyzer) schemaKey(typeName, pkg string) string {
+	k := pkg + "\x00" + typeName
+	if name, ok := a.nameAssign[k]; ok {
+		return name
+	}
+	final := typeName
+	if _, taken := a.usedNames[final]; taken {
+		final = exportedPkgName(pkg) + typeName
+		for i := 2; ; i++ {
+			if _, dup := a.usedNames[final]; !dup {
+				break
+			}
+			final = exportedPkgName(pkg) + typeName + strconv.Itoa(i)
+		}
+	}
+	a.usedNames[final] = struct{}{}
+	a.nameAssign[k] = final
+	return final
+}
+
+// qualifiedStruct is a struct resolved from another in-module package, with the
+// context needed to recurse into it in its own package.
+type qualifiedStruct struct {
+	typeName string
+	pkg      string
+	st       *ast.StructType
+	file     *ast.File
+	filePath string
+}
+
+// resolveQualifiedStruct resolves a pkg.Type reference against astFile's imports.
+// It parses the in-module target package (with a per-dir cache) and finds the
+// named struct. Returns ok=false for stdlib/third-party imports, unknown aliases,
+// or names that are not a struct in the target package.
+func (a *ProjectAnalyzer) resolveQualifiedStruct(qualified string, astFile *ast.File) (qualifiedStruct, bool) {
+	dot := strings.LastIndex(qualified, ".")
+	if dot < 0 {
+		return qualifiedStruct{}, false
+	}
+	pkgAlias, typeName := qualified[:dot], qualified[dot+1:]
+	importPath, ok := a.fileImports(astFile)[pkgAlias]
+	if !ok {
+		return qualifiedStruct{}, false // unknown alias (e.g. dot/blank import)
+	}
+	dir, ok := a.inModuleDir(importPath)
+	if !ok {
+		return qualifiedStruct{}, false // stdlib/third-party — well-known map or object
+	}
+	files, err := a.parsePackageDir(dir)
+	if err != nil {
+		return qualifiedStruct{}, false
+	}
+	// Iterate files in a stable order so the resolved definition is deterministic
+	// even when several files in the dir could match (e.g. build-tagged variants).
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		file := files[path]
+		if st := a.findStructInFile(file, typeName); st != nil {
+			return qualifiedStruct{typeName: typeName, pkg: file.Name.Name, st: st, file: file, filePath: path}, true
+		}
+	}
+	return qualifiedStruct{}, false // not a struct in the target package (alias/interface)
+}
+
+// registerQualifiedType resolves and registers a cross-package struct as a
+// component, returning nil when it cannot be resolved in-module.
+func (a *ProjectAnalyzer) registerQualifiedType(qualified string, astFile *ast.File) *models.TypeInfo {
+	q, ok := a.resolveQualifiedStruct(qualified, astFile)
+	if !ok {
+		return nil
+	}
+	return a.registerStruct(q.typeName, q.pkg, q.st, q.file, q.filePath)
+}
+
+// inModuleDir translates an import path to a filesystem dir under projectRoot when
+// it is within this module, else reports false.
+func (a *ProjectAnalyzer) inModuleDir(importPath string) (string, bool) {
+	if a.modulePath == "" {
+		return "", false
+	}
+	if importPath == a.modulePath {
+		return a.projectRoot, true
+	}
+	prefix := a.modulePath + "/"
+	if !strings.HasPrefix(importPath, prefix) {
+		return "", false
+	}
+	rel := strings.TrimPrefix(importPath, prefix)
+	return filepath.Join(a.projectRoot, filepath.FromSlash(rel)), true
+}
+
+// fileImports maps each import's local alias to its import path. The default alias
+// is the path's last segment (an approximation of the package name, correct for
+// the common case where they match); explicit aliases override it. Blank (_) and
+// dot (.) imports are skipped.
+func (a *ProjectAnalyzer) fileImports(astFile *ast.File) map[string]string {
+	out := make(map[string]string, len(astFile.Imports))
+	for _, imp := range astFile.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		alias := filepath.Base(path)
+		if imp.Name != nil {
+			if imp.Name.Name == "_" || imp.Name.Name == "." {
+				continue
+			}
+			alias = imp.Name.Name
+		}
+		out[alias] = path
+	}
+	return out
+}
+
+// parsePackageDir parses all non-test Go files in a directory, caching the result
+// per directory so repeated cross-package lookups reuse one parse.
+func (a *ProjectAnalyzer) parsePackageDir(dir string) (map[string]*ast.File, error) {
+	if cached, ok := a.pkgCache[dir]; ok {
+		return cached, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[string]*ast.File)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, goFileExt) || strings.HasSuffix(name, testFileExt) {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		f, perr := parser.ParseFile(a.fileSet, full, nil, parser.ParseComments)
+		if perr != nil {
+			continue
+		}
+		files[full] = f
+	}
+	a.pkgCache[dir] = files
+	return files, nil
+}
+
+// exportedPkgName upper-cases the first letter of a package name for use as a
+// component-name qualifier (orders -> Orders). Returns "" unchanged.
+func exportedPkgName(pkg string) string {
+	if pkg == "" {
+		return ""
+	}
+	return strings.ToUpper(pkg[:1]) + pkg[1:]
+}
+
+// registerFieldRef registers the named struct type(s) a field references and
+// stamps the matching (final, collision-qualified) ref name onto the field. A map
+// field refs its value struct via MapValueRefName (a map is never itself a $ref);
+// any other field refs its underlying struct (after pointer/slice unwrap) via
+// RefName. Fields excluded from JSON (json:"-") are skipped so a type reachable
+// only through them is not registered as an orphan component.
+func (a *ProjectAnalyzer) registerFieldRef(f *models.FieldInfo, pkg string, astFile *ast.File, filePath string) {
+	if f.JSONName == jsonSkipValue && f.ParamType == "" {
+		return
+	}
+	if vName, isMap := mapValueStructName(f.Type); isMap {
+		if reg := a.registerType(vName, pkg, astFile, filePath); reg != nil {
+			f.MapValueRefName = reg.Name
+		}
+		return
+	}
+	if reg := a.registerType(baseStructTypeName(f.Type), pkg, astFile, filePath); reg != nil {
+		f.RefName = reg.Name
+		return // a struct ref carries no scalar underlying kind
+	}
+	// Not a struct: classify a named, non-struct scalar (Cents -> integer, etc.).
+	f.UnderlyingKind = a.resolveUnderlyingKind(f.Type, astFile, filePath)
+}
+
+// knownUnderlyingKinds maps qualified stdlib/library types with a non-struct
+// scalar underlying type to their OpenAPI kind. (time.Time is a struct handled by
+// the generator's well-known map, so it is intentionally absent.)
+var knownUnderlyingKinds = map[string]string{
+	"time.Duration": kindInteger,
+}
+
+// resolveUnderlyingKind returns the OpenAPI 3-way kind ("integer"/"number"/
+// "string") of a named, non-struct scalar type, or "" when the type is a builtin
+// primitive (handled directly), a struct, or unresolved. It strips pointer/slice
+// markers, recognizes a small set of qualified stdlib types, and resolves
+// local `type X <primitive>` declarations to their underlying kind.
+func (a *ProjectAnalyzer) resolveUnderlyingKind(typeStr string, astFile *ast.File, filePath string) string {
+	base := baseStructTypeName(typeStr)
+	if k, ok := knownUnderlyingKinds[base]; ok {
+		return k
+	}
+	if strings.Contains(base, ".") {
+		return "" // other qualified types: not classified here
+	}
+	if primitiveKind(base) != "" {
+		return "" // a builtin used directly is not a named wrapper
+	}
+	return a.namedScalarKind(base, astFile, filePath, 0)
+}
+
+// namedScalarKind resolves a LOCAL named type to its underlying primitive kind,
+// following alias chains (type Cents int64 -> integer; type A B; type B int -> A
+// resolves to integer). depth bounds pathological chains.
+func (a *ProjectAnalyzer) namedScalarKind(name string, astFile *ast.File, filePath string, depth int) string {
+	if depth > 8 {
+		return ""
+	}
+	underlying, ok := a.localTypeUnderlying(name, astFile, filePath)
+	if !ok {
+		return ""
+	}
+	if k, known := knownUnderlyingKinds[underlying]; known {
+		return k // e.g. `type Timeout time.Duration` -> integer
+	}
+	if k := primitiveKind(underlying); k != "" {
+		return k // underlying is a builtin scalar
+	}
+	if strings.Contains(underlying, ".") {
+		return "" // unknown qualified underlying — not classified
+	}
+	return a.namedScalarKind(underlying, astFile, filePath, depth+1) // chained named type
+}
+
+// primitiveKind maps a Go builtin scalar type name to its OpenAPI 3-way kind, or
+// "" if it is not one of them. It reuses the constraint mapper's type classifiers
+// so the integer/float/string sets live in one place.
+func primitiveKind(goType string) string {
+	switch {
+	case isIntegerType(goType):
+		return kindInteger
+	case isFloatType(goType):
+		return "number"
+	case isStringType(goType):
+		return goTypeString
+	}
+	return ""
+}
+
+// localTypeUnderlying finds a local `type Name <ident>` declaration and returns
+// the underlying identifier (e.g. Cents -> "int64"). Returns ok=false when Name
+// is not a local non-struct named type. It searches the current file first, then
+// sibling files in the same package (via the cached per-dir parse).
+func (a *ProjectAnalyzer) localTypeUnderlying(name string, astFile *ast.File, filePath string) (string, bool) {
+	if u, ok := namedTypeUnderlyingInFile(astFile, name); ok {
+		return u, true
+	}
+	files, err := a.parsePackageDir(filepath.Dir(filePath))
+	if err != nil {
+		return "", false
+	}
+	for _, file := range files {
+		if u, ok := namedTypeUnderlyingInFile(file, name); ok {
+			return u, true
+		}
+	}
+	return "", false
+}
+
+// namedTypeUnderlyingInFile returns the underlying identifier of a `type Name
+// <ident>` declaration in file, or ok=false when name is absent or its underlying
+// type is not a bare identifier (a struct/slice/map/etc.).
+func namedTypeUnderlyingInFile(file *ast.File, name string) (string, bool) {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != name {
+				continue
+			}
+			switch u := ts.Type.(type) {
+			case *ast.Ident:
+				return u.Name, true // `type Cents int64` -> "int64"
+			case *ast.SelectorExpr:
+				if pkg, isIdent := u.X.(*ast.Ident); isIdent {
+					return pkg.Name + "." + u.Sel.Name, true // `type Timeout time.Duration`
+				}
+			}
+			return "", false // underlying is a struct/slice/map/etc.
+		}
+	}
+	return "", false
+}
+
+// baseStructTypeName strips slice and pointer markers from a Go type string to
+// expose the underlying named type (e.g. "[]*Address" -> "Address"). Qualified
+// types (pkg.T) and maps are returned as-is and will not resolve to a local
+// struct (cross-package and map value resolution are handled separately).
+func baseStructTypeName(t string) string {
+	for {
+		switch {
+		case strings.HasPrefix(t, "*"):
+			t = t[1:]
+		case strings.HasPrefix(t, "[]"):
+			t = t[2:]
+		default:
+			return t
+		}
+	}
+}
+
+// mapValueType reports whether goType is a map (after an optional leading
+// pointer) and returns its value type string verbatim. For map[string]Address it
+// returns ("Address", true); for map[string][]Address it returns ("[]Address",
+// true). The key is assumed simple (no nested brackets), which holds for
+// JSON-serializable string-keyed maps.
+//
+// NOTE: the generator keeps a twin of this pure parser (generator.mapValueType);
+// it is intentionally NOT exported and shared, to avoid an exported cross-package
+// helper (which the repo convention would require to carry a context.Context the
+// pure parser has no use for). Keep the two in sync.
+func mapValueType(goType string) (string, bool) {
+	goType = strings.TrimPrefix(goType, "*")
+	if !strings.HasPrefix(goType, "map[") {
+		return "", false
+	}
+	rest := goType[len("map["):]
+	i := strings.IndexByte(rest, ']')
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+1:], true
+}
+
+// mapValueStructName returns the base struct name of a map's value type (after
+// unwrapping a pointer/slice on the value). For map[string]Address ->
+// ("Address", true); for map[string]string -> ("string", true), where the
+// caller's registerType lookup then fails for the primitive, leaving
+// MapValueRefName empty.
+func mapValueStructName(t string) (string, bool) {
+	v, ok := mapValueType(t)
+	if !ok {
+		return "", false
+	}
+	return baseStructTypeName(v), true
 }
 
 // hasJOSESentinelTag reports whether the struct uses the JOSE sentinel-field
@@ -1239,30 +2236,28 @@ func (a *ProjectAnalyzer) findStructDefinition(
 	astFile *ast.File,
 	filePath string,
 	typeName string,
-) (*ast.StructType, string, error) {
+) (*ast.StructType, error) {
 	// Search current file first
-	if structType, pkgName := a.findStructInFile(astFile, typeName); structType != nil {
-		return structType, pkgName, nil
+	if structType := a.findStructInFile(astFile, typeName); structType != nil {
+		return structType, nil
 	}
 
 	// Try other files in the package
 	files, err := a.parsePackage(filePath, astFile.Name.Name)
 	if err == nil && files != nil {
 		for _, file := range files {
-			if structType, pkgName := a.findStructInFile(file, typeName); structType != nil {
-				return structType, pkgName, nil
+			if structType := a.findStructInFile(file, typeName); structType != nil {
+				return structType, nil
 			}
 		}
 	}
 
-	return nil, "", fmt.Errorf("struct %s not found", typeName)
+	return nil, fmt.Errorf("struct %s not found", typeName)
 }
 
-// findStructInFile searches a single AST file for a struct type definition
-// Returns the struct type and package name if found
-//
-//nolint:gocritic // Named returns would reduce clarity in this AST traversal function
-func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) (*ast.StructType, string) {
+// findStructInFile searches a single AST file for a struct type definition,
+// returning the struct type or nil if not found.
+func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) *ast.StructType {
 	for _, decl := range astFile.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -1280,47 +2275,131 @@ func (a *ProjectAnalyzer) findStructInFile(astFile *ast.File, typeName string) (
 				continue
 			}
 
-			return structType, astFile.Name.Name
+			return structType
 		}
 	}
 
-	return nil, ""
+	return nil
 }
 
-// extractStructFields extracts field information from a struct type including struct tags
-func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, _ string) []models.FieldInfo {
-	var fields []models.FieldInfo
-
+// extractStructFields extracts field information from a struct type including
+// struct tags. astFile/filePath locate sibling files for resolving embedded
+// struct types; visited is the embedded-promotion ancestor set (cycle guard).
+//
+// Direct named fields and json-tagged embeds (which nest at the parent's level)
+// are "shallow"; fields flattened from an untagged embed are "promoted" (deeper).
+// On a JSON-name collision the shallow field wins, mirroring encoding/json's
+// shallower-depth-wins rule (so a parent field is never silently overridden by a
+// promoted one, regardless of declaration order).
+func (a *ProjectAnalyzer) extractStructFields(structType *ast.StructType, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) []models.FieldInfo {
 	if structType.Fields == nil {
-		return fields
-	}
-
-	for _, field := range structType.Fields.List {
-		fields = append(fields, a.processStructField(field)...)
-	}
-
-	return fields
-}
-
-// processStructField processes a single AST field and returns all associated FieldInfo entries
-func (a *ProjectAnalyzer) processStructField(field *ast.Field) []models.FieldInfo {
-	// Skip fields without names (embedded structs, for now)
-	if len(field.Names) == 0 {
 		return nil
 	}
 
-	fieldInfos := make([]models.FieldInfo, 0, len(field.Names))
+	var shallow, promoted []models.FieldInfo
+	for _, field := range structType.Fields.List {
+		if len(field.Names) == 0 {
+			fields, isPromotion := a.embeddedFields(field, pkg, astFile, filePath, visited)
+			if isPromotion {
+				promoted = append(promoted, fields...)
+			} else {
+				shallow = append(shallow, fields...)
+			}
+			continue
+		}
+		shallow = append(shallow, a.namedFields(field)...)
+	}
+
+	return mergeFieldsByPrecedence(shallow, promoted)
+}
+
+// namedFields builds FieldInfo entries for a single non-anonymous AST field
+// (one per exported name; unexported names are skipped).
+func (a *ProjectAnalyzer) namedFields(field *ast.Field) []models.FieldInfo {
+	out := make([]models.FieldInfo, 0, len(field.Names))
 	for _, fieldName := range field.Names {
-		// Skip unexported fields
 		if !fieldName.IsExported() {
 			continue
 		}
+		out = append(out, a.buildFieldInfo(fieldName.Name, field))
+	}
+	return out
+}
 
-		fieldInfo := a.buildFieldInfo(fieldName.Name, field)
-		fieldInfos = append(fieldInfos, fieldInfo)
+// mergeFieldsByPrecedence concatenates shallow then promoted fields, dropping any
+// promoted field whose JSON name already appears (so shallower wins). Among
+// promoted fields a colliding name keeps the first (equal-depth ambiguity is
+// rare; encoding/json would drop both, but documenting one is more useful).
+func mergeFieldsByPrecedence(shallow, promoted []models.FieldInfo) []models.FieldInfo {
+	seen := make(map[string]struct{}, len(shallow))
+	for i := range shallow {
+		if n := shallow[i].JSONName; n != "" {
+			seen[n] = struct{}{}
+		}
+	}
+	out := shallow
+	for i := range promoted {
+		if n := promoted[i].JSONName; n != "" {
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+		}
+		out = append(out, promoted[i])
+	}
+	return out
+}
+
+// embeddedFields handles an anonymous (embedded) struct field, mirroring
+// encoding/json promotion rules. It returns the resulting fields and whether they
+// were PROMOTED (flattened from the embed, i.e. deeper) vs nested at the parent
+// level:
+//   - With an explicit json name (Base `json:"base"`) it NESTS as a single field
+//     of the embedded type (rendered as a $ref) — returned as shallow.
+//   - With json:"-" it is excluded.
+//   - Otherwise its exported fields are PROMOTED (flattened) into the parent.
+//
+// Embedded pointers (*Base) are unwrapped. A cross-package (in-module) embedded
+// struct is resolved and promoted from its own package. An embedded type that
+// still cannot be resolved to a struct — a stdlib/third-party type or a named
+// non-struct like `type Code string` — is skipped without crashing. The visited
+// ancestor set (add-before-recurse / delete-after backtracking) terminates self-
+// and mutually-embedded cycles.
+func (a *ProjectAnalyzer) embeddedFields(field *ast.Field, pkg string, astFile *ast.File, filePath string, visited map[string]struct{}) (fields []models.FieldInfo, promoted bool) {
+	typeName := baseStructTypeName(a.typeToString(field.Type))
+
+	// An explicit json name turns embedding into nesting (a parent-level field).
+	if field.Tag != nil {
+		jsonName := a.parseStructTags(strings.Trim(field.Tag.Value, "`")).jsonName
+		switch jsonName {
+		case jsonSkipValue:
+			return nil, false // json:"-" — excluded
+		case "":
+			// no explicit name — fall through to promotion
+		default:
+			return []models.FieldInfo{a.buildFieldInfo(typeName, field)}, false
+		}
 	}
 
-	return fieldInfos
+	if _, seen := visited[typeName]; seen {
+		return nil, false // cycle / self-embed guard
+	}
+	// Local embed: promote the struct's fields from this package.
+	if embedded, err := a.findStructDefinition(astFile, filePath, typeName); err == nil {
+		visited[typeName] = struct{}{}
+		fields = a.extractStructFields(embedded, pkg, astFile, filePath, visited)
+		delete(visited, typeName) // backtrack: keep visited scoped to the current chain
+		return fields, true
+	}
+	// Cross-package (in-module) embed: resolve and promote from the target package
+	// so its fields are extracted in their own package context.
+	if q, ok := a.resolveQualifiedStruct(typeName, astFile); ok {
+		visited[typeName] = struct{}{}
+		fields = a.extractStructFields(q.st, q.pkg, q.file, q.filePath, visited)
+		delete(visited, typeName)
+		return fields, true
+	}
+	return nil, false // unresolvable (stdlib/third-party or non-struct) — skip, never crash
 }
 
 // buildFieldInfo creates a FieldInfo from a field name and AST field
@@ -1351,10 +2430,10 @@ func (a *ProjectAnalyzer) parseFieldTags(fieldInfo *models.FieldInfo, tag *ast.B
 	fieldInfo.Example = tags.example
 	fieldInfo.RawValidation = tags.rawValidation
 
-	// Parse validation constraints
+	// Parse validation constraints (collection-scope) plus element-scope rules
+	// after a `dive`. Required is always collection-scope.
 	if tags.rawValidation != "" {
-		fieldInfo.Constraints = a.parseValidationTag(tags.rawValidation)
-		// Set Required flag based on constraints
+		fieldInfo.Constraints, fieldInfo.ElementConstraints = a.parseValidationTag(tags.rawValidation)
 		if fieldInfo.Constraints[constraintRequired] == boolTrueString {
 			fieldInfo.Required = true
 		}
@@ -1504,30 +2583,44 @@ func (a *ProjectAnalyzer) extractTag(tagStr, tagName string) string {
 
 // parseValidationTag parses a validation tag string into a constraints map
 // Example: "required,email,min=5,max=100" -> {"required": "true", "email": "true", "min": "5", "max": "100"}
-func (a *ProjectAnalyzer) parseValidationTag(validateTag string) map[string]string {
-	constraints := make(map[string]string)
+// parseValidationTag parses a validate tag into collection-scope constraints and
+// (when a `dive` token is present) element-scope constraints. Rules before `dive`
+// apply to the field/collection; rules after apply to each slice element. The
+// `dive` token itself is not stored. elementConstraints is nil when there is no
+// `dive`. A second (nested) `dive` is ignored — element scope is kept flat.
+func (a *ProjectAnalyzer) parseValidationTag(validateTag string) (constraints, elementConstraints map[string]string) {
+	constraints = make(map[string]string)
 	if validateTag == "" {
-		return constraints
+		return constraints, nil
 	}
 
-	// Split by comma
-	rules := strings.Split(validateTag, ",")
-	for _, rule := range rules {
+	inElement := false
+	for _, rule := range strings.Split(validateTag, ",") {
 		rule = strings.TrimSpace(rule)
 		if rule == "" {
 			continue
 		}
-
-		// Check if rule has a value (e.g., "min=5")
-		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
-			key := rule[:equalIdx]
-			value := rule[equalIdx+1:]
-			constraints[key] = value
-		} else {
-			// Boolean constraint (e.g., "required", "email")
-			constraints[rule] = boolTrueString
+		if rule == "dive" {
+			if !inElement {
+				inElement = true
+				elementConstraints = make(map[string]string)
+			}
+			continue
 		}
+
+		key, value := rule, boolTrueString
+		if equalIdx := strings.IndexByte(rule, '='); equalIdx != -1 {
+			key, value = rule[:equalIdx], rule[equalIdx+1:]
+		}
+		// `required` is always collection-scope (field presence), even after `dive`
+		// — OpenAPI has no per-element required, and Required must not be silently
+		// dropped onto the element map.
+		target := constraints
+		if inElement && key != constraintRequired {
+			target = elementConstraints
+		}
+		target[key] = value
 	}
 
-	return constraints
+	return constraints, elementConstraints
 }

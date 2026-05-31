@@ -8,7 +8,9 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 # @latest) so an upstream release cannot silently change the gate or break CI.
 REDOCLY_VERSION := 2.31.5
 # Fixture project the spec gate generates from, plus a throwaway output path.
-SPEC_FIXTURE := internal/spectest/testdata/path_param
+# nested_schema is the richest fixture (recursive $refs, nested + sliced structs),
+# so redocly validates the hardest case the generator produces.
+SPEC_FIXTURE := internal/spectest/testdata/nested_schema
 SPEC_TMP := $(CURDIR)/.openapi-fixture-spec.yaml
 
 # Default target
@@ -44,7 +46,7 @@ install: build ## Install the CLI tool locally
 	go install -ldflags "-X main.version=$(VERSION)" ./cmd/go-bricks-openapi
 
 demo: build ## Run demo generation on demo project (requires cloning demo repo)
-	./$(BINARY_NAME) doctor --project ../../
+	./$(BINARY_NAME) doctor --project $(SPEC_FIXTURE)
 	@echo "To run demo generation:"
 	@echo "1. Clone demo project: git clone https://github.com/gaborage/go-bricks-demo-project.git"
 	@echo "2. Generate spec: ./$(BINARY_NAME) generate --project ../go-bricks-demo-project/openapi-demo --output demo-spec.yaml"
@@ -52,7 +54,14 @@ demo: build ## Run demo generation on demo project (requires cloning demo repo)
 validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) version
 	./$(BINARY_NAME) --help
-	./$(BINARY_NAME) doctor --project ../../
+	# doctor must run against a real go-bricks project (dep + modules present);
+	# the framework root has neither, which the stricter PR13 doctor now fails.
+	./$(BINARY_NAME) doctor --project $(SPEC_FIXTURE)
+	# Exercise generate end-to-end and sanity-check the output (network-free;
+	# full redocly lint lives in validate-spec).
+	./$(BINARY_NAME) generate --project $(SPEC_FIXTURE) --output $(SPEC_TMP)
+	@grep -q "openapi: 3.0.1" $(SPEC_TMP); status=$$?; rm -f $(SPEC_TMP); \
+		test $$status -eq 0 || (echo "generated spec missing the OpenAPI version marker" && exit 1)
 	@echo "✓ CLI validation passed"
 
 validate-spec: build ## Generate a fixture spec and validate it with redocly (requires npx; CI/Unix)

@@ -2,6 +2,8 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -38,5 +40,5 @@ func (m *Module) createUser(req CreateUserReq, ctx server.HandlerContext) (serve
 }
 
 func (m *Module) ping(ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	return server.OK(User{}), nil
+	return server.NewResult(http.StatusOK, User{}), nil
 }
