@@ -57,7 +57,7 @@ type AuditEvent struct {
     CompletedAt        time.Time
     Outcome            AuditOutcome   // "success" / "failed" / "skipped"
 
-    Version            string         // conditional: migration.applied (currently empty — see "Known gaps")
+    Version            string         // conditional: migration.applied (parsed Flyway ending version)
     FromState, ToState string         // conditional: state.transitioned
     ErrorClass         ErrorClass     // conditional: Outcome == failed
     GitCommitSHA       string         // optional
@@ -144,7 +144,6 @@ Both counters fire alongside Warn-level log records — useful for grep-based de
 
 ## Known gaps
 
-- **`Version` is currently empty** on `migration.applied` events. Populating it requires parsing Flyway's JSON output; that work is part of the structured-`Result` retrofit tracked in [#376](https://github.com/gaborage/go-bricks/issues/376). The other AuditEvent fields are sufficient for compliance correlation today.
 - **State-machine and quiesce events** (`state.transitioned`, `quiesce.set`, `quiesce.cleared`) are not yet emitted. Their emission lands when [#379](https://github.com/gaborage/go-bricks/issues/379) and [#380](https://github.com/gaborage/go-bricks/issues/380) ship.
 - **CLI flag plumbing** for `--applied-by` / `--git-sha` / `--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up — for now, callers using the library API can populate `migration.Config.Audit` directly.
 

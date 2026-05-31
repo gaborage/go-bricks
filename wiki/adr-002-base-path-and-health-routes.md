@@ -4,6 +4,13 @@
 **Status**: Accepted
 **Decision Makers**: GoBricks Core Team
 
+> **Amended**: The configuration keys were restructured from a flat layout
+> (`server.base_path` / `server.health_route` / `server.ready_route`) into a
+> nested `server.path` sub-struct (`server.path.base` / `server.path.health` /
+> `server.path.ready`). The decision below is unchanged; only the key names and
+> struct shape differ. Examples in this document reflect the current nested
+> layout.
+
 ## Context
 
 GoBricks applications often need to be deployed behind proxies, load balancers, or in containerized environments where:
@@ -16,10 +23,10 @@ GoBricks applications often need to be deployed behind proxies, load balancers, 
 
 We will implement configurable base paths and health routes through:
 
-1. **Server Configuration Fields**:
-   - `base_path`: Global prefix applied to ALL routes including health endpoints
-   - `health_route`: Custom health endpoint path (default: `/health`)
-   - `ready_route`: Custom readiness endpoint path (default: `/ready`)
+1. **Server Configuration Fields** (under `server.path`):
+   - `base`: Global prefix applied to ALL routes including health endpoints
+   - `health`: Custom health endpoint path (default: `/health`)
+   - `ready`: Custom readiness endpoint path (default: `/ready`)
 
 2. **RouteRegistrar Abstraction**:
    - Create a `RouteRegistrar` interface to abstract Echo's routing capabilities
@@ -38,16 +45,20 @@ We will implement configurable base paths and health routes through:
 ```go
 type ServerConfig struct {
     // ... existing fields ...
-    BasePath    string `koanf:"base_path"`
-    HealthRoute string `koanf:"health_route"`
-    ReadyRoute  string `koanf:"ready_route"`
+    Path PathConfig `koanf:"path"`
+}
+
+type PathConfig struct {
+    Base   string `koanf:"base"`
+    Health string `koanf:"health"`
+    Ready  string `koanf:"ready"`
 }
 ```
 
 ### RouteRegistrar Interface
 ```go
 type RouteRegistrar interface {
-    Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) *echo.Route
+    Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo
     Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar
     Use(middleware ...echo.MiddlewareFunc)
     FullPath(path string) string
@@ -74,25 +85,26 @@ The `routeGroup` implementation includes:
 ### Basic Configuration
 ```yaml
 server:
-  base_path: "/api/v1"
-  health_route: "/health"
-  ready_route: "/ready"
+  path:
+    base: "/api/v1"
+    health: "/health"
+    ready: "/ready"
 ```
 
 ### Environment-Specific Configuration
 ```bash
 # Development
-SERVER_BASE_PATH="/dev/api"
-SERVER_HEALTH_ROUTE="/health"
+SERVER_PATH_BASE="/dev/api"
+SERVER_PATH_HEALTH="/health"
 
 # Production
-SERVER_BASE_PATH="/api/v1"
-SERVER_HEALTH_ROUTE="/status"
-SERVER_READY_ROUTE="/readiness"
+SERVER_PATH_BASE="/api/v1"
+SERVER_PATH_HEALTH="/status"
+SERVER_PATH_READY="/readiness"
 ```
 
 ### Route Resolution Examples
-With `base_path: "/api/v1"`:
+With `server.path.base: "/api/v1"`:
 - Module route `/users` → `/api/v1/users`
 - Health endpoint → `/api/v1/health` (or custom path)
 - Ready endpoint → `/api/v1/ready` (or custom path)

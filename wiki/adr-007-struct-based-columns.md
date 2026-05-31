@@ -4,6 +4,8 @@
 **Status:** Accepted
 **Context:** Query builder ergonomics and column management
 
+> **Amended (v2.4):** The column accessor API was renamed — `Get()` → `Col()`, `Fields()` → `Cols()` (now returns `[]string`), and `All()` now returns `[]string` (was `[]any`); added `As()`/`Alias()`/`FieldMap()`/`AllFields()`. The examples and signature table below reflect the current API. See `database/types/interfaces.go`.
+
 ## Problem Statement
 
 The query builder required developers to manually repeat column names across struct definitions and query operations:
@@ -84,11 +86,11 @@ BenchmarkColumnMetadata_Get-12          5.518 ns/op  (field lookup)
 ```go
 // Oracle
 cols := qb.Columns(&User{})
-cols.Get("Level")  // Returns: `"LEVEL"` (quoted for Oracle)
+cols.Col("Level")  // Returns: `"LEVEL"` (quoted for Oracle)
 
 // PostgreSQL
 cols := qb.Columns(&User{})
-cols.Get("Level")  // Returns: "level" (no quoting needed)
+cols.Col("Level")  // Returns: "level" (no quoting needed)
 ```
 
 ### 4. **Explicit API Over Implicit Magic**
@@ -103,7 +105,7 @@ cols.Get("Level")  // Returns: "level" (no quoting needed)
 **Error Handling:**
 ```go
 cols := qb.Columns(&User{})
-col := cols.Get("NonExistent")
+col := cols.Col("NonExistent")
 // panic: column field "NonExistent" not found in type User
 //        (available fields: ID, Name, Email, Level)
 ```
@@ -111,9 +113,9 @@ col := cols.Get("NonExistent")
 ### 5. **Backward Compatible Integration**
 - **Decision:** Additive API - existing string-based queries unchanged
 - **Method Signature:**
-  - `Get(fieldName string) string` - Single field
-  - `Fields(...string) []any` - Bulk helper (compatible with Select variadic)
-  - `All() []any` - All columns in declaration order
+  - `Col(fieldName string) string` - Single field
+  - `Cols(...string) []string` - Bulk helper (compatible with Select variadic)
+  - `All() []string` - All columns in declaration order
 - **Rationale:**
   - Zero breaking changes for existing code
   - Opt-in adoption per service/module

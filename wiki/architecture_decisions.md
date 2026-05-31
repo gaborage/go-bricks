@@ -84,8 +84,8 @@ Interface segregation for database testing utilities, enabling 73% less boilerpl
 
 ---
 
-### [ADR-009: Consumer Worker Pool Concurrency](adr-009-consumer-worker-pool-concurrency.md)
-**Date:** 2025-02-01 | **Status:** Accepted
+### [ADR-009: Consumer Worker Pool Concurrency with NumCPU × 4 Default](adr-009-consumer-worker-pool-concurrency.md)
+**Date:** 2025-01-13 | **Status:** Accepted
 
 Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-threaded message processing for 20-30x throughput improvement.
 
@@ -93,12 +93,12 @@ Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-t
 
 ---
 
-### [ADR-010: Panic-to-Error Conversion in Message Handlers](adr-010-panic-to-error-conversion.md)
-**Date:** 2025-02-15 | **Status:** Accepted
+### [ADR-010: Convert Panic-Based Validation to Error Returns](adr-010-panic-to-error-conversion.md)
+**Date:** 2025-11-29 | **Status:** Accepted
 
-Automatic panic recovery in AMQP message handlers with stack trace logging, consistent nack-without-requeue behavior, and service continuity.
+Converts panic-based fail-fast validation to idiomatic error returns for SonarCloud reliability compliance (S8148), improving the reliability rating from C to A.
 
-**Key Benefits:** Service resilience, consistent error semantics, observability integration
+**Key Benefits:** S8148 compliance, idiomatic error handling, improved reliability rating
 
 ---
 
@@ -121,7 +121,7 @@ Complete removal of MongoDB support to focus exclusively on PostgreSQL and Oracl
 ---
 
 ### [ADR-013: Interface Naming Conventions (S8196)](adr-013-interface-naming-conventions.md)
-**Date:** 2026-02-19 | **Status:** Accepted
+**Date:** 2026-03-11 | **Status:** Accepted
 
 Renames interfaces to follow Go's idiomatic naming per SonarCloud rule S8196. Interfaces renamed for clarity across scheduler, app, database, messaging, server, and cache packages.
 
@@ -219,7 +219,7 @@ Resolves issue #435. Replaces the strict `{development, staging, production}` al
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-011) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr-011-redis-cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-022) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr-011-redis-cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

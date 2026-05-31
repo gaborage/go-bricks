@@ -26,7 +26,7 @@ decls.DeclarePublisher(&messaging.PublisherOptions{
 
 decls.DeclareConsumer(&messaging.ConsumerOptions{
     Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
-    Handler: amqp.NewHandler(m.logger),
+    Handler: m.handler, // a value implementing messaging.MessageHandler (Handle + EventType)
 }, nil)
 ```
 

@@ -118,7 +118,7 @@ func main() {
         log.Fatal(err)
     }
 
-    framework, err := app.NewWithConfig(cfg, nil)
+    framework, _, err := app.NewWithConfig(cfg, nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -624,7 +624,7 @@ func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
 }
 ```
 
-**Schedule types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`.
+**Schedule types:** `FixedRate(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`.
 
 ### Transactional Outbox
 

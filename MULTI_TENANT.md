@@ -20,7 +20,7 @@ Configure multi-tenancy in your `config.yaml`:
 multitenant:
   enabled: true
   resolver:
-    type: "header"           # or "subdomain", "composite"
+    type: "header"           # or "subdomain", "path", "composite"
     header: "X-Tenant-ID"   # header name for tenant resolution
     domain: "api.example.com" # root domain for subdomain resolution
     proxies: true           # trust X-Forwarded-Host headers
@@ -51,10 +51,11 @@ multitenant:
 
 ## Custom Tenant Store Implementation
 
-Implement the `app.TenantStore` interface to integrate with external systems like AWS Secrets Manager, HashiCorp Vault, or custom databases. The interface requires implementing three methods:
+Implement the `app.TenantStore` interface to integrate with external systems like AWS Secrets Manager, HashiCorp Vault, or custom databases. The interface is composed of `database.DBConfigProvider`, `messaging.BrokerURLProvider`, and `cache.ConfigProvider` plus `IsDynamic()`, so it requires implementing four methods:
 
 - `DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)` - Returns database configuration for a specific tenant
 - `BrokerURL(ctx context.Context, key string) (string, error)` - Returns the tenant's messaging broker connection URL
+- `CacheConfig(ctx context.Context, key string) (*config.CacheConfig, error)` - Returns the tenant's cache configuration (nil when no cache is configured)
 - `IsDynamic() bool` - Returns true if tenant configuration can change at runtime (dynamic) or false if static
 
 The `IsDynamic()` flag controls framework behavior for caching and configuration refresh. Dynamic stores (external sources like AWS Secrets Manager) return `true`, while static stores (YAML-based) return `false`. The framework handles connection pooling, caching, and lifecycle management automatically once the store implementation returns the configuration.
@@ -65,6 +66,7 @@ The framework provides multiple built-in tenant resolution strategies:
 
 - **HeaderResolver**: Extracts tenant ID from HTTP headers (e.g., `X-Tenant-ID`)
 - **SubdomainResolver**: Derives tenant ID from request host subdomains with proxy support
+- **PathResolver**: Extracts tenant ID from a 1-indexed URL path segment, with an optional prefix gate (e.g. `/itsp/{tenantID}/...`)
 - **CompositeResolver**: Tries multiple resolvers sequentially until one succeeds, with optional regex validation
 - **ValidatingResolver**: Wraps any resolver with tenant ID format validation using regex patterns
 

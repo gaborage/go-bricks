@@ -324,7 +324,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 ```
 
-**Schedule Types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
+**Schedule Methods:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(day, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
 
 ### Messaging Architecture
 
@@ -587,7 +587,7 @@ type KeyStore interface {
 
 ## Dependencies
 
-- **Echo v4** — HTTP framework
+- **Echo v5** — HTTP framework
 - **zerolog** — Structured logging
 - **pgx/v5** — PostgreSQL driver
 - **go-ora/v2** — Oracle driver

@@ -27,11 +27,10 @@ func main() {
 	// - Metrics (HTTP, database, messaging)
 	// - Structured logging with trace correlation
 	// - HTTP request auto-instrumentation
-	fw, err := app.NewWithConfig(cfg, nil)
+	fw, _, err := app.NewWithConfig(cfg, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	fw.RegisterModules(/* modules */)
 
 	// Graceful shutdown: flushes pending spans/metrics before exit
@@ -44,12 +43,12 @@ func main() {
 ```yaml
 app:
   name: my-service
-  environment: development
+  env: development
 server:
   enabled: true
   port: 8080
 database:
-  type: postgres    # postgres | oracle
+  type: postgresql    # postgresql | oracle
   host: localhost
   port: 5432
   database: myapp_db
@@ -167,9 +166,9 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 	user, err := h.svc.Create(ctx.Echo.Request().Context(), req.Name, req.Email)
 	switch {
 	case errors.Is(err, ErrUserExists):
-		return server.Result[User]{}, server.Conflict(err)
+		return server.Result[User]{}, server.NewConflictError(err.Error())
 	case err != nil:
-		return server.Result[User]{}, server.InternalServerError(err)
+		return server.Result[User]{}, server.NewInternalServerError(err.Error())
 	}
 	return server.Created(user), nil
 }
@@ -222,7 +221,7 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil { log.Fatal(err) }
 
-	fw, err := app.NewWithConfig(cfg, nil)
+	fw, _, err := app.NewWithConfig(cfg, nil)
 	if err != nil { log.Fatal(err) }
 
 	usersMod  := &users.Module{}
@@ -308,7 +307,7 @@ Standard form — explicit fields (preferred for readability and pool tuning):
 
 ```yaml
 database:
-  type: postgres                          # postgres | oracle
+  type: postgresql                          # postgresql | oracle
   host: localhost
   port: 5432
   database: myapp_db
@@ -332,7 +331,7 @@ Alternative — pre-built connection string (useful when a secret manager inject
 
 ```yaml
 database:
-  type: postgres
+  type: postgresql
   connection_string: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
@@ -450,7 +449,7 @@ func (m *UserModule) FindActiveUsersBuilder(ctx context.Context) ([]User, error)
 | `Exec(ctx, sql, args...)` | `(sql.Result, error)` | INSERT / UPDATE / DELETE / DDL |
 | `Begin(ctx)` | `(types.Tx, error)` | Start a transaction — `defer tx.Rollback(ctx)`, then `tx.Commit(ctx)` |
 | `Health(ctx)` | `error` | Liveness check — auto-wired into `/health` endpoint |
-| `DatabaseType()` | `string` | `"postgres"` or `"oracle"` — feed into `database.NewQueryBuilder(...)` |
+| `DatabaseType()` | `string` | `"postgresql"` or `"oracle"` — feed into `database.NewQueryBuilder(...)` |
 
 Every method takes `context.Context` as the first argument so deadlines, cancellation, tenant ID, and W3C trace IDs propagate automatically into spans, logs, and metrics.
 
@@ -517,7 +516,7 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 	reqCtx := ctx.Echo.Request().Context()
 	user, err := h.svc.Create(reqCtx, req)
 	if err != nil {
-		return server.Result[User]{}, server.InternalServerError(err)
+		return server.Result[User]{}, server.NewInternalServerError(err.Error())
 	}
 	return server.Created(user), nil
 }
@@ -539,7 +538,7 @@ type GetUserReq struct {
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
 	user, err := h.svc.FindByID(ctx.Echo.Request().Context(), req.ID)
 	if err != nil {
-		return server.Result[User]{}, server.NotFound(errors.New("user not found"))
+		return server.Result[User]{}, server.NewNotFoundError("user")
 	}
 	return server.OK(user), nil
 }
@@ -560,7 +559,7 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 	}
 	users, err := h.svc.List(ctx.Echo.Request().Context(), req.Status, limit)
 	if err != nil {
-		return server.Result[[]User]{}, server.InternalServerError(err)
+		return server.Result[[]User]{}, server.NewInternalServerError(err.Error())
 	}
 	return server.OK(users), nil
 }
@@ -591,7 +590,7 @@ func (h *Handler) ListUsersPaginated(req ListUsersReq, hctx server.HandlerContex
 	ctx := hctx.Echo.Request().Context()
 	users, total, err := h.svc.ListPaged(ctx, req.Limit, req.Offset)
 	if err != nil {
-		return server.ResultWithMeta[ListUsersResp]{}, server.InternalServerError(err)
+		return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError(err.Error())
 	}
 	return server.ResultWithMeta[ListUsersResp]{
 		Data:   ListUsersResp{Items: users},
@@ -625,7 +624,7 @@ func (h *Handler) UploadFile(req *FileUploadRequest, ctx server.HandlerContext) 
 	reqCtx := ctx.Echo.Request().Context()
 	fileID, err := h.storageService.Store(reqCtx, req.Data, req.Filename, req.MimeType)
 	if err != nil {
-		return server.Result[UploadResponse]{}, server.InternalServerError(err)
+		return server.Result[UploadResponse]{}, server.NewInternalServerError(err.Error())
 	}
 	return server.Created(UploadResponse{FileID: fileID, Size: len(req.Data)}), nil
 }
@@ -641,7 +640,7 @@ func (h *Handler) ExportRecords(req ExportRequest, ctx server.HandlerContext) (*
 	reqCtx := ctx.Echo.Request().Context()
 	records, err := h.recordService.GetAll(reqCtx, req.Filter)
 	if err != nil {
-		return nil, server.InternalServerError(err)
+		return nil, server.NewInternalServerError(err.Error())
 	}
 	return &BulkExportResponse{
 		Records: records,
@@ -666,7 +665,7 @@ func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) 
 	reqCtx := ctx.Echo.Request().Context()
 	result, err := h.importService.ProcessBulk(reqCtx, req.Records, req.DryRun)
 	if err != nil {
-		return nil, server.InternalServerError(err)
+		return nil, server.NewInternalServerError(err.Error())
 	}
 	return &BulkImportResponse{
 		Imported: result.Imported,
@@ -867,7 +866,7 @@ func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Resul
 import (
 	"context"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/gaborage/go-bricks/server"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -968,7 +967,7 @@ func TenantMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // Access tenant in handler
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	tenantID := multitenant.GetTenant(ctx.Echo.Request().Context())
+	tenantID, _ := multitenant.GetTenant(ctx.Echo.Request().Context())
 	// tenantID is now available for tenant-specific logic
 	user, err := h.svc.GetUserForTenant(ctx.Echo.Request().Context(), tenantID, req.ID)
 	// ...
@@ -1860,7 +1859,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 
     deps := &app.ModuleDeps{
         Cache: func(ctx context.Context) (cache.Cache, error) {
-            tenantID := multitenant.GetTenant(ctx)
+            tenantID, _ := multitenant.GetTenant(ctx)
             switch tenantID {
             case "acme":
                 return acmeCache, nil
@@ -2090,7 +2089,7 @@ Example: 8 CPUs, 500 concurrent requests → PoolSize = 80
 
 **Cache Testing Utilities:**
 
-**Note:** GoBricks does not yet provide a `cache/testing` package (similar to `database/testing`). Use interface mocking for now.
+**Note:** GoBricks provides a `cache/testing` package (similar to `database/testing`) — see "Cache Testing Utilities" below.
 
 ```go
 import (
@@ -2229,7 +2228,7 @@ func TestUserService(t *testing.T) {
 ```go
 // Simulate cache failures
 mockCache := cachetest.NewMockCache().
-    WithGetFailure(cache.ErrConnectionError).
+    WithGetFailure(cache.ErrClosed).
     WithDelay(100 * time.Millisecond)
 
 // Service should gracefully degrade
@@ -2292,7 +2291,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 
     deps := &app.ModuleDeps{
         Cache: func(ctx context.Context) (cache.Cache, error) {
-            tenantID := multitenant.GetTenant(ctx)
+            tenantID, _ := multitenant.GetTenant(ctx)
             return tenantCaches[tenantID], nil
         },
     }
@@ -2321,7 +2320,7 @@ mock := cachetest.NewMockCacheWithID("test-cache-1")
 
 // Failure injection for specific operations
 mock := cachetest.NewMockCache().
-    WithGetFailure(cache.ErrConnectionError).
+    WithGetFailure(cache.ErrClosed).
     WithSetFailure(cache.ErrClosed).
     WithDeleteFailure(errors.New("custom error"))
 
@@ -2674,7 +2673,7 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil { log.Fatal(err) }
 
-	fw, err := app.NewWithConfig(cfg, nil)
+	fw, _, err := app.NewWithConfig(cfg, nil)
 	if err != nil { log.Fatal(err) }
 
 	if err := fw.RegisterModules(&orders.Module{}); err != nil {
@@ -3458,9 +3457,9 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
     if err != nil {
         // Map domain errors to HTTP responses
         if errors.Is(err, app.ErrNoTenantInContext) {
-            return server.Result[User]{}, server.BadRequest(errors.New("X-Tenant-ID header required"))
+            return server.Result[User]{}, server.NewBadRequestError("X-Tenant-ID header required")
         }
-        return server.Result[User]{}, server.InternalServerError(err)
+        return server.Result[User]{}, server.NewInternalServerError(err.Error())
     }
 
     return server.OK(user), nil
@@ -3529,7 +3528,7 @@ import (
     "errors"
 
     "github.com/gaborage/go-bricks/database"
-    "github.com/gaborage/go-bricks/database/internal/builder"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
     "github.com/gaborage/go-bricks/multitenant"
 )
 
@@ -3661,7 +3660,7 @@ multitenant:
 ```go
 // WithTenantFilter adds tenant isolation to any query
 // Returns a safe no-match condition if tenant context is missing (prevents data leaks)
-func WithTenantFilter(ctx context.Context, f *builder.Filter, cols dbtypes.ColumnMetadata) builder.Condition {
+func WithTenantFilter(ctx context.Context, f dbtypes.FilterFactory, cols dbtypes.Columns) dbtypes.Filter {
     tenantID, ok := multitenant.GetTenant(ctx)
     if !ok || tenantID == "" {
         // Return always-false condition to prevent returning any data
@@ -4226,7 +4225,7 @@ func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (serv
 			Err(err).
 			Str("email", req.Email).
 			Msg("User creation failed")
-		return server.Result[User]{}, server.InternalServerError(err)
+		return server.Result[User]{}, server.NewInternalServerError(err.Error())
 	}
 
 	log.Info().
@@ -4364,7 +4363,7 @@ Action logs derive severity automatically:
 
 ```go
 import (
-    "github.com/labstack/echo/v4"
+    "github.com/labstack/echo/v5"
     "github.com/rs/zerolog"
 
     "github.com/gaborage/go-bricks/server"
@@ -4430,7 +4429,7 @@ func main() {
     // 2. Sets it as the global OTel provider (otel.SetTracerProvider)
     // 3. Registers otelecho.Middleware → creates spans for every incoming HTTP request
     // 4. Registers W3C propagator → inbound traceparent headers create linked spans
-    fw, err := app.NewWithConfig(cfg, nil)
+    fw, _, err := app.NewWithConfig(cfg, nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -4934,7 +4933,7 @@ type IAPIError interface {
 | `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
 | `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
 
-All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.environment: development`), details are included in responses for all HTTP status codes. In production, details are hidden for 5xx errors to avoid leaking internals.
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.env: development`), details are included in responses for all HTTP status codes. In production, details are hidden for 5xx errors to avoid leaking internals.
 
 ### Step 1: Define Domain Errors
 
@@ -5023,7 +5022,7 @@ type CreateOrderReq struct {
     "message": "insufficient stock for requested quantity",
     "details": { "suggestion": "reduce quantity or wait for restock" }
   },
-  "meta": { "api_version": "1.0" }
+  "meta": { "timestamp": "2026-01-01T00:00:00Z", "traceId": "abc123" }
 }
 ```
 
@@ -5060,15 +5059,15 @@ func (h *OrderConsumer) Handle(ctx context.Context, delivery *amqp.Delivery) err
     if err != nil {
         // Business-rule violations: log and ACK (skip, don't retry)
         if errors.Is(err, ErrInsufficientStock) {
-            h.logger.Warn("Order skipped: insufficient stock",
-                "product_id", req.ProductID, "quantity", req.Quantity)
+            h.logger.Warn().Int64("product_id", req.ProductID).Int("quantity", req.Quantity).
+                Msg("Order skipped: insufficient stock")
             return nil // ACK — retrying won't change stock levels
         }
 
         var dupErr *DuplicateOrderError
         if errors.As(err, &dupErr) {
-            h.logger.Warn("Duplicate order ignored",
-                "order_id", dupErr.OrderID, "existing_id", dupErr.ExistingID)
+            h.logger.Warn().Str("order_id", dupErr.OrderID).Str("existing_id", dupErr.ExistingID).
+                Msg("Duplicate order ignored")
             return nil // ACK — idempotent, already processed
         }
 

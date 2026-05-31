@@ -104,7 +104,7 @@ tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
 tenants.ForTenant("globex").ExpectQuery("SELECT").WillReturnRows(...)
 
 deps := &app.ModuleDeps{
-    DB: tenants.AsDBFunc(),  // Resolves tenant from context
+    DB: tenants.AsGetDBFunc(),  // Resolves tenant from context
 }
 
 ctx := multitenant.SetTenant(context.Background(), "acme")
@@ -148,7 +148,7 @@ func TestUserServiceCaching(t *testing.T) {
 **Configurable Failures:**
 ```go
 mockCache := cachetest.NewMockCache().
-    WithGetFailure(cache.ErrConnectionError)
+    WithGetFailure(cache.ErrClosed)
 
 // Service should gracefully degrade
 user, err := svc.GetUser(ctx, 123)  // Falls back to database
@@ -167,7 +167,7 @@ tenantCaches := map[string]*cachetest.MockCache{
 
 deps := &app.ModuleDeps{
     Cache: func(ctx context.Context) (cache.Cache, error) {
-        tenantID := multitenant.GetTenant(ctx)
+        tenantID, _ := multitenant.GetTenant(ctx)
         return tenantCaches[tenantID], nil
     },
 }
@@ -200,7 +200,8 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 
     mockOutbox := outboxtest.NewMockOutbox()
 
-    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    getDB := func(ctx context.Context) (database.Interface, error) { return db, nil }
+    svc := NewOrderService(getDB, mockOutbox)
     err := svc.CreateOrder(ctx, order)
 
     assert.NoError(t, err)
