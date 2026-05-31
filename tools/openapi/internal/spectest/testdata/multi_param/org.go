@@ -2,6 +2,8 @@
 package org
 
 import (
+	"net/http"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -32,5 +34,5 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 }
 
 func (m *Module) getProject(req GetProjectReq, ctx server.HandlerContext) (server.Result[Project], server.IAPIError) {
-	return server.OK(Project{}), nil
+	return server.NewResult(http.StatusOK, Project{}), nil
 }

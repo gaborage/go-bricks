@@ -1,11 +1,13 @@
 package generator
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -108,7 +110,9 @@ func TestGenerateEmptyProject(t *testing.T) {
 }
 
 func TestGenerateWithProjectMetadata(t *testing.T) {
-	gen := New("Default API", "0.1.0", "Default description")
+	// No explicit document overrides, so analyzer-derived project metadata wins
+	// (precedence: explicit override > project metadata > built-in default).
+	gen := New("", "", "")
 	project := &models.Project{
 		Name:        "Custom API",
 		Version:     "2.0.0",
@@ -176,9 +180,9 @@ func TestGenerateWithRoutes(t *testing.T) {
 		t.Error("Missing POST method")
 	}
 
-	// Check operation details
-	if !strings.Contains(spec, "operationId: getUser") {
-		t.Error("Missing operation ID")
+	// Check operation details: operationId is module-qualified (users + GetUser).
+	if !strings.Contains(spec, "operationId: usersGetUser") {
+		t.Error("Missing module-qualified operation ID")
 	}
 	if !strings.Contains(spec, "summary: Get user by ID") {
 		t.Error("Missing summary")
@@ -190,18 +194,27 @@ func TestGenerateWithRoutes(t *testing.T) {
 		t.Error("Missing tags")
 	}
 
-	// Check standard responses
-	if !strings.Contains(spec, "'200':") {
+	// Check standard responses (status keys are quoted strings in the emitted YAML)
+	if !strings.Contains(spec, `"200":`) {
 		t.Error("Missing 200 response")
 	}
-	if !strings.Contains(spec, "'400':") {
+	if !strings.Contains(spec, `"400":`) {
 		t.Error("Missing 400 response")
 	}
-	if !strings.Contains(spec, "SuccessResponse") {
-		t.Error("Missing success response schema")
+	// Non-JOSE routes use the inline data/meta envelope (SuccessResponse is gated
+	// to JOSE-untyped fallbacks now), so assert the inline envelope + ErrorResponse.
+	if !strings.Contains(spec, "data:") {
+		t.Error("Missing inline data/meta success envelope")
 	}
 	if !strings.Contains(spec, "ErrorResponse") {
 		t.Error("Missing error response schema")
+	}
+	// Conformance additions: servers + tenant security.
+	if !strings.Contains(spec, "servers:") {
+		t.Error("Missing servers block")
+	}
+	if !strings.Contains(spec, "X-Tenant-ID") {
+		t.Error("Missing X-Tenant-ID security scheme")
 	}
 }
 
@@ -242,7 +255,7 @@ func TestGetOperationID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := gen.getOperationID(tt.route)
+			result := gen.getOperationID(tt.route, nil)
 			if result != tt.expected {
 				t.Errorf(resultNotExpectedErrorMsg, tt.expected, result)
 			}
@@ -295,7 +308,10 @@ func TestGetResponseDescription(t *testing.T) {
 		expected string
 	}{
 		{"GET", "Successful response"},
-		{"POST", "Resource created successfully"},
+		// POST maps to the generic phrase, NOT "created": a 201 is described as
+		// created by successDescription's status branch, so a POST returning 200 is
+		// not mislabeled as a creation.
+		{"POST", "Successful response"},
 		{"PUT", "Resource updated successfully"},
 		{"DELETE", "Resource deleted successfully"},
 		{"PATCH", "Resource partially updated"},
@@ -310,6 +326,58 @@ func TestGetResponseDescription(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGetAllRoutesStampsModuleIdentity verifies that flattening stamps each
+// route's owning module identity when absent, and preserves it when already set
+// (acceptance criterion: Module/Package survive the module->route flatten).
+func TestGetAllRoutesStampsModuleIdentity(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	project := &models.Project{
+		Modules: []models.Module{
+			{
+				Name:    "users",
+				Package: "users",
+				Routes: []models.Route{
+					{Method: "GET", Path: "/a"},                                         // unset -> stamped
+					{Method: "GET", Path: "/b", Module: "custom", Package: "custompkg"}, // preserved
+				},
+			},
+		},
+	}
+
+	routes := gen.getAllRoutes(project)
+	require.Len(t, routes, 2)
+	assert.Equal(t, "users", routes[0].Module)
+	assert.Equal(t, "users", routes[0].Package)
+	assert.Equal(t, "custom", routes[1].Module, "explicit Module must not be overwritten")
+	assert.Equal(t, "custompkg", routes[1].Package, "explicit Package must not be overwritten")
+
+	// The flatten must not mutate the originals (route values are copied).
+	assert.Empty(t, project.Modules[0].Routes[0].Module, "original route must remain unstamped")
+}
+
+func TestBuildPathsDropsNonRootedPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	paths := gen.buildPaths([]models.Route{
+		{Method: "GET", Path: "/ok"},
+		{Method: "GET", Path: "broken"}, // no leading slash
+	}, nil)
+	_, hasOK := paths["/ok"]
+	_, hasBroken := paths["broken"]
+	assert.True(t, hasOK)
+	assert.False(t, hasBroken, "a path key without a leading slash must be dropped")
+}
+
+func TestBuildPathsDedupesSameMethodAndPath(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	paths := gen.buildPaths([]models.Route{
+		{Method: "GET", Path: "/x", HandlerName: "first"},
+		{Method: "GET", Path: "/x", HandlerName: "second"}, // same (method,path)
+	}, nil)
+	require.NotNil(t, paths["/x"])
+	require.NotNil(t, paths["/x"].Get)
+	assert.Equal(t, "first", paths["/x"].Get.OperationID, "first registration wins on a duplicate (method,path)")
 }
 
 func TestGetAllRoutes(t *testing.T) {
@@ -454,12 +522,10 @@ func TestGenerateWithMultipleMethodsPerPath(t *testing.T) {
 
 // TestGenerateWithProblematicValues verifies proper YAML escaping for special characters
 func TestGenerateWithProblematicValues(t *testing.T) {
-	// Test with values that could break manual YAML concatenation
-	gen := New(
-		"API: Special Characters Test", // Contains colon
-		"1.0.0-beta: yes",              // Contains colon and YAML boolean
-		"Multi-line description\nWith: colons and\n\"quotes\" and #comments",
-	)
+	// Test with values that could break manual YAML concatenation. No explicit
+	// overrides, so the problematic project-derived metadata flows through the
+	// escape path under test.
+	gen := New("", "", "")
 
 	project := &models.Project{
 		Name:        "Project: With Colons & Special \"Characters\"", // Problematic title
@@ -603,19 +669,19 @@ func TestGettersWithEmptyValues(t *testing.T) {
 			name:     "empty title with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getTitle(p) },
-			expected: "", // Empty title from generator should be preserved
+			expected: defaultDocTitle, // no override, no project name -> built-in default
 		},
 		{
 			name:     "empty version with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getVersion(p) },
-			expected: "", // Empty version from generator should be preserved
+			expected: defaultDocVersion, // no override, no project version -> built-in default
 		},
 		{
 			name:     "empty description with empty project",
 			project:  &models.Project{},
 			testFunc: func(p *models.Project) string { return gen.getDescription(p) },
-			expected: "", // Empty description from generator should be preserved
+			expected: defaultDocDescription, // no override, no project description -> built-in default
 		},
 		{
 			name:     "project overrides empty generator title",
@@ -647,40 +713,93 @@ func TestGettersWithEmptyValues(t *testing.T) {
 	}
 }
 
+// TestGetterPrecedenceExplicitOverride pins the top of the precedence chain:
+// an explicit document override (from --title/--api-version/--description)
+// wins over analyzer-derived project metadata.
+func TestGetterPrecedenceExplicitOverride(t *testing.T) {
+	gen := New("Override Title", "9.9.9", "Override description")
+	project := &models.Project{
+		Name:        "Project Title",
+		Version:     "2.0.0",
+		Description: "Project description",
+	}
+
+	if got := gen.getTitle(project); got != "Override Title" {
+		t.Errorf("title: explicit override should win, got %q", got)
+	}
+	if got := gen.getVersion(project); got != "9.9.9" {
+		t.Errorf("version: explicit override should win, got %q", got)
+	}
+	if got := gen.getDescription(project); got != "Override description" {
+		t.Errorf("description: explicit override should win, got %q", got)
+	}
+}
+
 func TestCreateStandardSchemas(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	schemas := gen.createStandardSchemas()
+	// Routes that, between them, reference all four standard schemas: a normal
+	// route (ErrorResponse), a JOSE route with an untyped response (SuccessResponse
+	// + JOSEErrorEnvelope), and a raw route (RawErrorResponse).
+	routes := []models.Route{
+		{Method: "GET", Path: "/a", Response: &models.TypeInfo{Name: "Thing"}},
+		{Method: "POST", Path: "/j", Response: &models.TypeInfo{JOSE: true}},
+		{Method: "GET", Path: "/r", RawResponse: true, Response: &models.TypeInfo{Name: "Legacy"}},
+	}
+	schemas := gen.createStandardSchemas(routes)
 
-	// Test that standard schemas are created correctly
-	if len(schemas) != 3 {
-		t.Errorf("Expected 3 schemas, got %d", len(schemas))
+	if len(schemas) != 4 {
+		t.Errorf("Expected 4 schemas, got %d", len(schemas))
 	}
 
 	t.Run("SuccessResponse schema", func(t *testing.T) {
 		validateSuccessResponseSchema(t, schemas)
 	})
-
-	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
-		schema, ok := schemas["JOSEErrorEnvelope"]
-		if !ok {
-			t.Fatal("JOSEErrorEnvelope schema missing — pre-trust JOSE failures need a documented envelope distinct from ErrorResponse")
-		}
-		// The envelope MUST NOT include framework metadata fields (meta, traceId)
-		// — that's the whole security argument for having it as a separate schema.
-		if _, hasMeta := schema.Properties["meta"]; hasMeta {
-			t.Error("JOSEErrorEnvelope must NOT carry meta — peer is unauthenticated, leak nothing")
-		}
-		if _, hasCode := schema.Properties["code"]; !hasCode {
-			t.Error("JOSEErrorEnvelope must include 'code' property")
-		}
-		if _, hasMsg := schema.Properties["message"]; !hasMsg {
-			t.Error("JOSEErrorEnvelope must include 'message' property")
-		}
-	})
-
 	t.Run("ErrorResponse schema", func(t *testing.T) {
 		validateErrorResponseSchema(t, schemas)
 	})
+	// JOSEErrorEnvelope (pre-trust JOSE failures) and RawErrorResponse (raw-mode
+	// routes) are both minimal {code,message} envelopes that MUST NOT leak meta.
+	t.Run("JOSEErrorEnvelope schema", func(t *testing.T) {
+		validateMinimalErrorEnvelope(t, schemas, schemaJOSEErrorEnvelope)
+	})
+	t.Run("RawErrorResponse schema", func(t *testing.T) {
+		validateMinimalErrorEnvelope(t, schemas, schemaRawErrorResponse)
+	})
+}
+
+func TestCreateStandardSchemasGating(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("normal routes only -> just ErrorResponse", func(t *testing.T) {
+		s := gen.createStandardSchemas([]models.Route{{Method: "GET", Path: "/a", Response: &models.TypeInfo{Name: "Thing"}}})
+		assert.Contains(t, s, schemaErrorResponse)
+		assert.NotContains(t, s, schemaJOSEErrorEnvelope, "no JOSE route -> no JOSEErrorEnvelope")
+		assert.NotContains(t, s, schemaRawErrorResponse, "no raw route -> no RawErrorResponse")
+		assert.NotContains(t, s, schemaSuccessResponse, "typed responses use inline envelopes")
+	})
+
+	t.Run("empty project -> no standard schemas", func(t *testing.T) {
+		assert.Empty(t, gen.createStandardSchemas(nil))
+	})
+}
+
+// validateMinimalErrorEnvelope asserts a {code,message}-only error schema: the
+// named component exists, carries no meta (leaking nothing beyond code/message),
+// and includes both required properties.
+func validateMinimalErrorEnvelope(t *testing.T, schemas map[string]*OpenAPISchema, name string) {
+	t.Helper()
+	schema, ok := schemas[name]
+	if !ok {
+		t.Fatalf("%s schema missing — a minimal {code,message} error envelope is required", name)
+	}
+	if _, hasMeta := schema.Properties[propNameMeta]; hasMeta {
+		t.Errorf("%s must NOT carry meta — the minimal envelope leaks nothing beyond code/message", name)
+	}
+	for _, p := range []string{propNameCode, propNameMessage} {
+		if _, ok := schema.Properties[p]; !ok {
+			t.Errorf("%s must include %q property", name, p)
+		}
+	}
 }
 
 func validateSuccessResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema) {
@@ -729,104 +848,50 @@ func validateErrorResponseSchema(t *testing.T, schemas map[string]*OpenAPISchema
 func TestGenerateSchemasFromTypes(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
+	createUserReq := &models.TypeInfo{
+		Name: "CreateUserReq", Package: "users",
+		Fields: []models.FieldInfo{{Name: "Name", Type: "string", JSONName: "name"}},
+	}
+	user := &models.TypeInfo{
+		Name: "User", Package: "users",
+		Fields: []models.FieldInfo{
+			{Name: "ID", Type: "int64", JSONName: "id"},
+			{Name: "Name", Type: "string", JSONName: "name"},
+		},
+	}
+
 	tests := []struct {
 		name            string
-		routes          []models.Route
+		types           map[string]*models.TypeInfo
 		expectedCount   int
 		expectedSchemas []string
 	}{
 		{
-			name:          "no routes",
-			routes:        []models.Route{},
+			name:          "no types",
+			types:         map[string]*models.TypeInfo{},
 			expectedCount: 0,
 		},
 		{
-			name: "single request type",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
+			name:            "single type",
+			types:           map[string]*models.TypeInfo{"CreateUserReq": createUserReq},
 			expectedCount:   1,
 			expectedSchemas: []string{"CreateUserReq"},
 		},
 		{
-			name: "request and response types",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-					Response: &models.TypeInfo{
-						Name:    "User",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "ID", Type: "int64", JSONName: "id"},
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
+			name:            "request and response types",
+			types:           map[string]*models.TypeInfo{"CreateUserReq": createUserReq, "User": user},
 			expectedCount:   2,
 			expectedSchemas: []string{"CreateUserReq", "User"},
-		},
-		{
-			name: "duplicate types across routes",
-			routes: []models.Route{
-				{
-					Method: "POST",
-					Path:   usersAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq",
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-				{
-					Method: "PUT",
-					Path:   usersIDAPIPath,
-					Request: &models.TypeInfo{
-						Name:    "CreateUserReq", // Same type as POST
-						Package: "users",
-						Fields: []models.FieldInfo{
-							{Name: "Name", Type: "string", JSONName: "name"},
-						},
-					},
-				},
-			},
-			expectedCount:   1, // Should deduplicate
-			expectedSchemas: []string{"CreateUserReq"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schemas := gen.generateSchemasFromTypes(tt.routes)
-
-			if len(schemas) != tt.expectedCount {
-				t.Errorf("Expected %d schemas, got %d", tt.expectedCount, len(schemas))
-			}
-
+			schemas := gen.generateSchemasFromTypes(tt.types, nil)
+			assert.Len(t, schemas, tt.expectedCount)
 			for _, name := range tt.expectedSchemas {
-				if _, exists := schemas[name]; !exists {
-					t.Errorf("Expected schema %q not found", name)
-				}
+				_, exists := schemas[name]
+				assert.True(t, exists, "expected schema %q", name)
 			}
 		})
 	}
@@ -925,6 +990,52 @@ func assertSchemaShape(t *testing.T, expectedType string, expectedProps int, exp
 			t.Errorf("Expected required[%d] = %q, got %q", i, req, schema.Required[i])
 		}
 	}
+}
+
+func TestFieldInfoToPropertyRef(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("struct_field_is_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addr", Type: "Address", RefName: "Address"})
+		assert.Equal(t, refPath("Address"), prop.Ref)
+		assert.Empty(t, prop.Type, "a $ref must not carry a sibling type")
+		assert.Nil(t, prop.Items)
+	})
+	t.Run("slice_of_struct_is_items_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Addrs", Type: "[]Address", RefName: "Address"})
+		assert.Equal(t, typeArray, prop.Type)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("Address"), prop.Items.Ref)
+		assert.Empty(t, prop.Ref)
+	})
+	t.Run("slice_of_pointer_struct_is_items_ref", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{Name: "Reports", Type: "[]*User", RefName: "User"})
+		assert.Equal(t, typeArray, prop.Type)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("User"), prop.Items.Ref)
+	})
+	t.Run("slice_of_ref_keeps_array_level_docs", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Addrs", Type: "[]Address", RefName: "Address",
+			Description: "the user's addresses", Example: "n/a",
+		})
+		assert.Equal(t, typeArray, prop.Type)
+		assert.Equal(t, "the user's addresses", prop.Description, "array wrapper keeps the field description")
+		assert.Equal(t, "n/a", prop.Example)
+		require.NotNil(t, prop.Items)
+		assert.Equal(t, refPath("Address"), prop.Items.Ref)
+		assert.Empty(t, prop.Items.Description, "the inner $ref must stand alone")
+	})
+	t.Run("non_ref_field_keeps_type_and_constraints", func(t *testing.T) {
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Name", Type: "string",
+			Constraints: map[string]string{"min": "2"},
+		})
+		assert.Equal(t, typeString, prop.Type)
+		assert.Empty(t, prop.Ref)
+		require.NotNil(t, prop.MinLength)
+		assert.Equal(t, 2, *prop.MinLength)
+	})
 }
 
 func TestFieldInfoToProperty(t *testing.T) {
@@ -1089,6 +1200,104 @@ func TestSetTypeAndFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetTypeAndFormatWellKnownTypes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	tests := []struct {
+		name, goType, wantType, wantFormat string
+	}{
+		{"time.Time", goTypeTimeTime, typeString, formatDateTime},
+		{"pointer time.Time", "*" + goTypeTimeTime, typeString, formatDateTime},
+		// encoding/json marshals a Duration as its int64 ns count, NOT a string.
+		{"time.Duration", goTypeTimeDuration, typeInteger, formatInt64},
+		{"byte slice", goTypeByteSlice, typeString, formatBinary},
+		{"uint8 slice alias", goTypeUint8Slice, typeString, formatBinary},
+		{"uuid.UUID", goTypeUUID, typeString, formatUUID},
+		{"json.RawMessage", goTypeRawMessage, typeObject, ""},
+		// []byte must win over the generic []T array branch (not become an array).
+		{"byte slice not array", goTypeByteSlice, typeString, formatBinary},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prop := &OpenAPIProperty{}
+			gen.setTypeAndFormat(prop, tt.goType)
+			assert.Equal(t, tt.wantType, prop.Type)
+			assert.Equal(t, tt.wantFormat, prop.Format)
+			assert.Nil(t, prop.Items, "well-known types must not be modeled as arrays")
+		})
+	}
+}
+
+func TestSetTypeAndFormatUnsignedMinimum(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	// Unsigned integers carry minimum:0; signed integers do not.
+	for _, ut := range []struct {
+		goType, format string
+	}{{"uint", formatInt32}, {"uint8", formatInt32}, {"uint16", formatInt32}, {"uint32", formatInt32}, {"uint64", formatInt64}} {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, ut.goType)
+		assert.Equal(t, typeInteger, prop.Type, ut.goType)
+		assert.Equal(t, ut.format, prop.Format, ut.goType)
+		if assert.NotNil(t, prop.Minimum, "%s must carry minimum:0", ut.goType) {
+			assert.Equal(t, 0.0, *prop.Minimum, ut.goType)
+		}
+	}
+	for _, st := range []string{"int", "int8", "int16", "int32", "int64"} {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, st)
+		assert.Nil(t, prop.Minimum, "%s (signed) must NOT carry minimum", st)
+	}
+}
+
+func TestSetTypeAndFormatMaps(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("primitive value", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]string")
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeString, prop.AdditionalProperties.Type)
+	})
+
+	t.Run("integer value carries format", func(t *testing.T) {
+		prop := &OpenAPIProperty{}
+		gen.setTypeAndFormat(prop, "map[string]int64")
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeInteger, prop.AdditionalProperties.Type)
+		assert.Equal(t, formatInt64, prop.AdditionalProperties.Format)
+	})
+}
+
+func TestFieldInfoToPropertyMapValueRef(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("struct value", func(t *testing.T) {
+		// object + additionalProperties.$ref (NOT a bare $ref for the whole field,
+		// which is the RefName path).
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "Addrs", Type: "map[string]Address", JSONName: "addrs", MapValueRefName: "Address",
+		})
+		assert.Equal(t, typeObject, prop.Type)
+		assert.Empty(t, prop.Ref, "a map field must not be a whole-field $ref")
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, refPath("Address"), prop.AdditionalProperties.Ref)
+	})
+
+	t.Run("slice-of-struct value wraps in array", func(t *testing.T) {
+		// map[string][]Address -> additionalProperties is an ARRAY of $ref, not a
+		// bare $ref (the array layer must survive).
+		prop := gen.fieldInfoToProperty(&models.FieldInfo{
+			Name: "History", Type: "map[string][]Address", JSONName: "history", MapValueRefName: "Address",
+		})
+		assert.Equal(t, typeObject, prop.Type)
+		require.NotNil(t, prop.AdditionalProperties)
+		assert.Equal(t, typeArray, prop.AdditionalProperties.Type)
+		assert.Empty(t, prop.AdditionalProperties.Ref, "the array wrapper itself is not a $ref")
+		require.NotNil(t, prop.AdditionalProperties.Items)
+		assert.Equal(t, refPath("Address"), prop.AdditionalProperties.Items.Ref)
+	})
 }
 
 func TestApplyConstraints(t *testing.T) {
@@ -1316,12 +1525,17 @@ func TestGenerateWithTypedRequestResponse(t *testing.T) {
 		t.Fatal("Components/schemas should be a map")
 	}
 
-	// Check that generated schemas exist
-	schemaNames := []string{"CreateUserReq", "User", "SuccessResponse", "ErrorResponse"}
+	// Check that generated schemas exist. SuccessResponse is intentionally absent:
+	// typed routes use the inline data/meta envelope, and the generic SuccessResponse
+	// is gated to JOSE-untyped fallbacks (no-unused-components).
+	schemaNames := []string{"CreateUserReq", "User", "ErrorResponse"}
 	for _, name := range schemaNames {
 		if _, exists := components[name]; !exists {
 			t.Errorf("Missing schema: %s", name)
 		}
+	}
+	if _, exists := components["SuccessResponse"]; exists {
+		t.Error("SuccessResponse should be gated out for non-JOSE typed routes")
 	}
 
 	// Verify CreateUserReq schema has proper constraints
@@ -1347,6 +1561,23 @@ func float64Ptr(f float64) *float64 {
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// mustMarshalYAML marshals v with the same 2-space indent the generator uses,
+// so tests can assert on the exact serialized form the single yaml.Marshal path
+// produces (replacing the old hand-rolled text-writer assertions).
+func mustMarshalYAML(t *testing.T, v any) string {
+	t.Helper()
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		t.Fatalf("marshal yaml: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("close yaml encoder: %v", err)
+	}
+	return buf.String()
 }
 
 // Changeset 6: Parameter Extraction Tests
@@ -1600,9 +1831,7 @@ func checkParameterWithExample(t *testing.T, params []Parameter) {
 	}
 }
 
-func TestWriteParameters(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
+func TestParameterMarshaling(t *testing.T) {
 	tests := []struct {
 		name           string
 		params         []Parameter
@@ -1653,7 +1882,9 @@ func TestWriteParameters(t *testing.T) {
 				"required: false",
 				"description: Page number",
 				"minimum: 1",
-				"example: 1",
+				// example values come from string struct tags, so the single
+				// yaml.Marshal path now (correctly) quotes them as strings.
+				"example: \"1\"",
 			},
 		},
 		{
@@ -1689,9 +1920,11 @@ func TestWriteParameters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writeParameters(&sb, tt.params)
-			output := sb.String()
+			// Parameters now serialize through the single yaml.Marshal path; marshal
+			// them under a "parameters:" key to mirror their position in an operation.
+			output := mustMarshalYAML(t, struct {
+				Parameters []Parameter `yaml:"parameters"`
+			}{Parameters: tt.params})
 
 			for _, expected := range tt.expectedOutput {
 				if !strings.Contains(output, expected) {
@@ -1708,7 +1941,7 @@ func TestWriteParameters(t *testing.T) {
 	}
 }
 
-func TestWriteRequestBody(t *testing.T) {
+func TestBuildRequestBody(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
 
 	tests := []struct {
@@ -1747,9 +1980,9 @@ func TestWriteRequestBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writeRequestBody(&sb, &models.TypeInfo{Name: tt.schemaName})
-			output := sb.String()
+			output := mustMarshalYAML(t, map[string]*OpenAPIRequestBody{
+				"requestBody": gen.buildRequestBody(&models.TypeInfo{Name: tt.schemaName}),
+			})
 
 			for _, expected := range tt.expectedOutput {
 				if !strings.Contains(output, expected) {
@@ -1760,115 +1993,96 @@ func TestWriteRequestBody(t *testing.T) {
 	}
 }
 
-func TestWritePropertySchema(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-
+// TestPropertySchemaMarshaling proves the single yaml.Marshal path (PR2) honors
+// $ref, items.$ref, and the constraint fields the old hand-rolled writer emitted
+// by hand — both inline (in an operation/parameter) and under components, since
+// it is the same OpenAPIProperty type in either position.
+func TestPropertySchemaMarshaling(t *testing.T) {
 	tests := []struct {
-		name           string
-		prop           *OpenAPIProperty
-		indent         string
-		expectedOutput []string
+		name     string
+		prop     *OpenAPIProperty
+		expected []string
 	}{
 		{
-			name: "simple string",
-			prop: &OpenAPIProperty{
-				Type: "string",
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"  type: string",
-			},
+			name:     "ref",
+			prop:     &OpenAPIProperty{Ref: refPath("Address")},
+			expected: []string{"$ref: '#/components/schemas/Address'"},
 		},
 		{
-			name: "integer with format and constraints",
-			prop: &OpenAPIProperty{
-				Type:    "integer",
-				Format:  "int64",
-				Minimum: float64Ptr(1.0),
-				Maximum: float64Ptr(100.0),
-			},
-			indent: "    ",
-			expectedOutput: []string{
-				"    type: integer",
-				"    format: int64",
-				"    minimum: 1",
-				"    maximum: 100",
-			},
+			name:     "array of refs",
+			prop:     &OpenAPIProperty{Type: typeArray, Items: &OpenAPIProperty{Ref: refPath("Tag")}},
+			expected: []string{"type: array", "items:", "$ref: '#/components/schemas/Tag'"},
 		},
 		{
-			name: "string with length and pattern",
-			prop: &OpenAPIProperty{
-				Type:      "string",
-				MinLength: intPtr(3),
-				MaxLength: intPtr(50),
-				Pattern:   "^[a-zA-Z]+$",
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"minLength: 3",
-				"maxLength: 50",
-				"pattern: ^[a-zA-Z]+$",
-			},
+			name:     "integer with numeric constraints",
+			prop:     &OpenAPIProperty{Type: typeInteger, Format: formatInt64, Minimum: float64Ptr(1.0), Maximum: float64Ptr(100.0)},
+			expected: []string{"type: integer", "format: int64", "minimum: 1", "maximum: 100"},
 		},
 		{
-			name: "enum",
-			prop: &OpenAPIProperty{
-				Type: "string",
-				Enum: []any{"red", "green", "blue"},
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"enum:",
-				"- red",
-				"- green",
-				"- blue",
-			},
+			name:     "string length and exclusive bound",
+			prop:     &OpenAPIProperty{Type: typeString, MinLength: intPtr(3), MaxLength: intPtr(50), ExclusiveMinimum: boolPtr(true)},
+			expected: []string{"type: string", "minLength: 3", "maxLength: 50", "exclusiveMinimum: true"},
 		},
 		{
-			name: "array with items",
-			prop: &OpenAPIProperty{
-				Type: "array",
-				Items: &OpenAPIProperty{
-					Type:   "integer",
-					Format: "int32",
-				},
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"  type: array",
-				"  items:",
-				"    type: integer",
-				"    format: int32",
-			},
+			// Locks pattern serialization (the yaml tag) — split into two substrings
+			// so the assertion holds whether or not yaml.v3 quotes the regex.
+			name:     "pattern",
+			prop:     &OpenAPIProperty{Type: typeString, Pattern: "^[a-zA-Z]+$"},
+			expected: []string{"pattern:", "^[a-zA-Z]+$"},
 		},
 		{
-			name: "exclusive bounds",
-			prop: &OpenAPIProperty{
-				Type:             "number",
-				Minimum:          float64Ptr(0.0),
-				ExclusiveMinimum: boolPtr(true),
-			},
-			indent: "  ",
-			expectedOutput: []string{
-				"minimum: 0",
-				"exclusiveMinimum: true",
-			},
+			name:     "number with exclusive maximum",
+			prop:     &OpenAPIProperty{Type: typeNumber, Maximum: float64Ptr(100.0), ExclusiveMaximum: boolPtr(true)},
+			expected: []string{"type: number", "maximum: 100", "exclusiveMaximum: true"},
+		},
+		{
+			name:     "enum",
+			prop:     &OpenAPIProperty{Type: typeString, Enum: []any{"red", "green", "blue"}},
+			expected: []string{"enum:", "- red", "- green", "- blue"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sb strings.Builder
-			gen.writePropertySchema(&sb, tt.prop, tt.indent)
-			output := sb.String()
-
-			for _, expected := range tt.expectedOutput {
-				if !strings.Contains(output, expected) {
-					t.Errorf("Expected output to contain %q.\nOutput:\n%s", expected, output)
-				}
+			out := mustMarshalYAML(t, tt.prop)
+			for _, want := range tt.expected {
+				assert.Contains(t, out, want, "marshaled schema:\n%s", out)
 			}
 		})
 	}
+}
+
+// TestAssignOperationByMethod verifies each HTTP method routes to the correct
+// path-item field, and that an unrecognized method is a no-op (the analyzer only
+// emits the standard methods, but the switch must not panic on anything else).
+func TestAssignOperationByMethod(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	cases := []struct {
+		method string
+		op     func(*OpenAPIPathItem) *OpenAPIOperation
+	}{
+		{httpMethodGet, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Get }},
+		{httpMethodPut, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Put }},
+		{httpMethodPost, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Post }},
+		{httpMethodDelete, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Delete }},
+		{httpMethodPatch, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Patch }},
+		{httpMethodHead, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Head }},
+		{httpMethodOptions, func(p *OpenAPIPathItem) *OpenAPIOperation { return p.Options }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			item := &OpenAPIPathItem{}
+			gen.assignOperation(item, &models.Route{Method: tc.method, Path: "/x", HandlerName: "h"}, nil)
+			assert.NotNil(t, tc.op(item), "operation should be attached under %s", tc.method)
+		})
+	}
+
+	t.Run("unknown_method_noop", func(t *testing.T) {
+		item := &OpenAPIPathItem{}
+		gen.assignOperation(item, &models.Route{Method: "TRACE", Path: "/x", HandlerName: "h"}, nil)
+		assert.Nil(t, item.Get)
+		assert.Nil(t, item.Post)
+	})
 }
 
 // TestToFloat64Ptr directly tests the toFloat64Ptr utility function
@@ -1904,20 +2118,6 @@ func TestToFloat64Ptr(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestWritePropertySchemaNilProp verifies nil property handling in writePropertySchema
-func TestWritePropertySchemaNilProp(t *testing.T) {
-	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-
-	// Should not panic and should produce empty output
-	gen.writePropertySchema(&sb, nil, "  ")
-
-	output := sb.String()
-	if output != "" {
-		t.Errorf("Expected empty output for nil property, got %q", output)
 	}
 }
 
@@ -2057,11 +2257,11 @@ func TestGenerateWithParameters(t *testing.T) {
 	}
 }
 
-func TestWriteRequestBodyJOSEContentType(t *testing.T) {
+func TestBuildRequestBodyJOSEContentType(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeRequestBody(&sb, &models.TypeInfo{Name: "CreateTokenRequest", JOSE: true})
-	out := sb.String()
+	out := mustMarshalYAML(t, map[string]*OpenAPIRequestBody{
+		"requestBody": gen.buildRequestBody(&models.TypeInfo{Name: "CreateTokenRequest", JOSE: true}),
+	})
 
 	// Wire format: per OpenAPI 3.0.1, application/jose Media Type schema MUST describe
 	// the on-the-wire payload (a string token), not the decrypted plaintext shape.
@@ -2110,31 +2310,30 @@ func TestWriteMethodEmitsRequestBodyForJOSEEvenWithEmptyBodyFields(t *testing.T)
 	assert.Contains(t, spec, "application/jose:", "the JOSE requestBody must be present even with no plaintext body fields")
 }
 
-func TestWriteResponsesJOSEPath(t *testing.T) {
+func TestBuildResponsesJOSEResponse(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/tokens",
 		Response: &models.TypeInfo{Name: "CreateTokenResponse", JOSE: true},
 	})
-	out := sb.String()
 
-	if !strings.Contains(out, "'200':") || !strings.Contains(out, "application/jose:") {
-		t.Error("JOSE-flagged 200 response must use application/jose")
-	}
+	// JOSE-flagged 200 response uses application/jose with a string-token schema.
+	// require the content-type key first so a regression fails cleanly here rather
+	// than panicking on a nil media-type deref below.
+	require.Contains(t, resps["200"].Content, mediaJOSE, "JOSE-flagged 200 response must use application/jose")
+	assert.Equal(t, typeString, resps["200"].Content[mediaJOSE].Schema.Type)
+	assert.Equal(t, "jose", resps["200"].Content[mediaJOSE].Schema.Format)
+
 	// Pre-trust failure path: peer is unauthenticated so the envelope must be the
 	// minimal JOSEErrorEnvelope, NOT the framework's standard ErrorResponse (which
 	// carries traceId/meta and would leak fingerprint information).
-	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
-		t.Error("JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
-	}
-	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("JOSE 4xx response must NOT reference ErrorResponse — leaks framework metadata to unauthenticated peers")
-	}
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath("JOSEErrorEnvelope"), resps["400"].Content[mediaJSON].Schema.Ref,
+		"JOSE 4xx response must reference JOSEErrorEnvelope (security invariant)")
 }
 
-func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
+func TestBuildResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testing.T) {
 	// The runtime enforces bidirectional symmetry (request and response must both
 	// carry jose tags or neither). The analyzer runs statically against source —
 	// it can encounter asymmetric setups that a developer is in the middle of
@@ -2143,37 +2342,321 @@ func TestWriteResponsesAsymmetricJOSERequestStillUsesJOSEErrorEnvelope(t *testin
 	// the OpenAPI 4xx schema must reference JOSEErrorEnvelope, NOT the standard
 	// ErrorResponse (which would leak traceId/meta).
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/tokens",
 		Request:  &models.TypeInfo{Name: "TokenRequest", JOSE: true},
 		Response: &models.TypeInfo{Name: "TokenResponse", JOSE: false},
 	})
-	out := sb.String()
 
-	if !strings.Contains(out, "$ref: '#/components/schemas/JOSEErrorEnvelope'") {
-		t.Error("4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
-	}
-	if strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("4xx path on JOSE-request route must NOT reference ErrorResponse — leaks traceId/meta to unauthenticated peers")
-	}
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath("JOSEErrorEnvelope"), resps["400"].Content[mediaJSON].Schema.Ref,
+		"4xx path on JOSE-request route must reference JOSEErrorEnvelope (pre-trust failures fire on the request side)")
 }
 
-func TestWriteResponsesNonJOSEUnchanged(t *testing.T) {
+func TestBuildResponsesNonJOSE(t *testing.T) {
 	gen := New(defaultTitle, "1.0.0", defaultDescription)
-	var sb strings.Builder
-	gen.writeResponses(&sb, &models.Route{
+	resps := gen.buildResponses(&models.Route{
 		Method:   "POST",
 		Path:     "/v1/users",
 		Response: &models.TypeInfo{Name: "User", JOSE: false},
 	})
-	out := sb.String()
 
-	if strings.Contains(out, "application/jose:") {
-		t.Error("non-JOSE response must NOT use application/jose")
+	// Non-JOSE success uses application/json and the inline {data,meta} envelope
+	// whose data is a $ref to the response component (closes the orphan-component
+	// window: the discovered User schema is finally referenced).
+	require.Contains(t, resps, "200")
+	assert.NotContains(t, resps["200"].Content, mediaJOSE, "non-JOSE response must NOT use application/jose")
+	require.Contains(t, resps["200"].Content, mediaJSON)
+	envelope := resps["200"].Content[mediaJSON].Schema
+	require.NotNil(t, envelope)
+	assert.Equal(t, typeObject, envelope.Type)
+	require.Contains(t, envelope.Properties, propNameData)
+	assert.Equal(t, refPath("User"), envelope.Properties[propNameData].Ref, "data must $ref the response component")
+	require.Contains(t, envelope.Properties, propNameMeta)
+	require.Contains(t, envelope.Properties[propNameMeta].Properties, "timestamp")
+	require.Contains(t, envelope.Properties[propNameMeta].Properties, "traceId")
+
+	// Standard error set: 400 and 500 always present; both reference ErrorResponse.
+	require.Contains(t, resps["400"].Content, mediaJSON)
+	assert.Equal(t, refPath(schemaErrorResponse), resps["400"].Content[mediaJSON].Schema.Ref,
+		"non-JOSE 4xx must reference standard ErrorResponse")
+	require.Contains(t, resps, "500")
+	assert.Equal(t, refPath(schemaErrorResponse), resps["500"].Content[mediaJSON].Schema.Ref)
+
+	// No request validation -> no 422.
+	assert.NotContains(t, resps, "422", "route without a validated request must not advertise 422")
+}
+
+func TestBuildResponsesStatusCodes(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("created_201", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{
+			Method:        "POST",
+			Response:      &models.TypeInfo{Name: "User"},
+			SuccessStatus: 201,
+		})
+		require.Contains(t, resps, "201")
+		assert.NotContains(t, resps, "200")
+		assert.Equal(t, "Resource created successfully", resps["201"].Description)
+	})
+
+	t.Run("accepted_202", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{Method: "POST", SuccessStatus: 202})
+		require.Contains(t, resps, "202")
+		assert.Equal(t, "Request accepted for processing", resps["202"].Description)
+	})
+
+	t.Run("no_content_204_has_no_body", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{
+			Method:   "DELETE",
+			Response: &models.TypeInfo{NoContent: true},
+		})
+		require.Contains(t, resps, "204")
+		assert.Nil(t, resps["204"].Content, "204 must not carry a response body")
+		assert.Equal(t, "No Content", resps["204"].Description)
+	})
+
+	t.Run("custom_status_from_NewResult", func(t *testing.T) {
+		resps := gen.buildResponses(&models.Route{Method: "GET", SuccessStatus: 207})
+		require.Contains(t, resps, "207")
+	})
+}
+
+func TestBuildResponsesRawMode(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method:      "GET",
+		Response:    &models.TypeInfo{Name: "LegacyUser"},
+		RawResponse: true,
+	})
+
+	// Raw mode emits the bare payload schema ($ref), NOT the data/meta envelope.
+	schema := resps["200"].Content[mediaJSON].Schema
+	require.NotNil(t, schema)
+	assert.Equal(t, refPath("LegacyUser"), schema.Ref, "raw response must $ref the payload directly")
+	assert.NotContains(t, schema.Properties, propNameData, "raw response must NOT wrap in a data/meta envelope")
+
+	// Raw routes use the minimal RawErrorResponse for errors.
+	assert.Equal(t, refPath(schemaRawErrorResponse), resps["400"].Content[mediaJSON].Schema.Ref)
+	assert.Equal(t, refPath(schemaRawErrorResponse), resps["500"].Content[mediaJSON].Schema.Ref)
+}
+
+func TestResponsePayloadSchemaFallbacks(t *testing.T) {
+	// nil and unnamed responses fall back to a generic object (no $ref).
+	for _, ti := range []*models.TypeInfo{nil, {Name: ""}} {
+		schema := responsePayloadSchema(ti)
+		assert.Equal(t, typeObject, schema.Type)
+		assert.Empty(t, schema.Ref)
 	}
-	if !strings.Contains(out, "$ref: '#/components/schemas/ErrorResponse'") {
-		t.Error("non-JOSE 4xx must reference standard ErrorResponse")
+	// Named responses become a $ref.
+	assert.Equal(t, refPath("Widget"), responsePayloadSchema(&models.TypeInfo{Name: "Widget"}).Ref)
+}
+
+func TestSuccessPlaintextSchemaFallsBackToSuccessResponse(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	// A JOSE response with no named type falls back to the generic envelope name.
+	got := gen.successPlaintextSchema(&models.Route{Response: &models.TypeInfo{JOSE: true}})
+	assert.Equal(t, schemaSuccessResponse, got)
+	// A named response is used verbatim.
+	got = gen.successPlaintextSchema(&models.Route{Response: &models.TypeInfo{Name: "TokenResponse"}})
+	assert.Equal(t, "TokenResponse", got)
+}
+
+func TestBuildResponsesValidationAdds422(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	resps := gen.buildResponses(&models.Route{
+		Method: "POST",
+		Request: &models.TypeInfo{Name: "CreateReq", Fields: []models.FieldInfo{
+			{Name: "Email", Required: true},
+		}},
+		Response: &models.TypeInfo{Name: "User"},
+	})
+	require.Contains(t, resps, "422", "a validated request body must advertise 422")
+	assert.Equal(t, refPath(schemaErrorResponse), resps["422"].Content[mediaJSON].Schema.Ref)
+}
+
+// TestAssignOperationIDs covers module-qualification, explicit WithHandlerName
+// override, and deterministic de-duplication.
+func TestAssignOperationIDs(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	routes := []models.Route{
+		{Method: "GET", Path: "/users/:id", Module: "users", HandlerName: "get"},
+		{Method: "GET", Path: "/orders/:id", Module: "orders", HandlerName: "get"},
+		{Method: "POST", Path: "/jobs", Module: "jobs", HandlerName: "create", OperationID: "enqueueJob"},
+		{Method: "GET", Path: "/bare"}, // no module/handler -> method+path fallback
 	}
+	ids := gen.assignOperationIDs(routes)
+
+	assert.Equal(t, "usersGet", ids["GET /users/:id"], "module-qualified")
+	assert.Equal(t, "ordersGet", ids["GET /orders/:id"], "different module -> distinct, no collision")
+	assert.Equal(t, "enqueueJob", ids["POST /jobs"], "explicit WithHandlerName wins verbatim")
+	assert.Equal(t, "get_bare", ids["GET /bare"], "no handler -> method+path fallback")
+
+	// All ids are unique.
+	seen := map[string]bool{}
+	for _, id := range ids {
+		assert.False(t, seen[id], "duplicate operationId %q", id)
+		seen[id] = true
+	}
+}
+
+// TestAssignOperationIDsDedup verifies a deterministic numeric suffix when two
+// routes derive the same base id (same module + handler).
+func TestAssignOperationIDsDedup(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+	routes := []models.Route{
+		{Method: "GET", Path: "/a", Module: "m", HandlerName: "list"},
+		{Method: "GET", Path: "/b", Module: "m", HandlerName: "list"},
+	}
+	ids := gen.assignOperationIDs(routes)
+	// Deterministic, sorted first-wins: "GET /a" sorts before "GET /b", so /a keeps
+	// the bare id and /b gets the suffix.
+	assert.Equal(t, "mList", ids["GET /a"], "first sorted key keeps the bare id")
+	assert.Equal(t, "mList2", ids["GET /b"], "later collision gets the numeric suffix")
+}
+
+// TestFieldInfoToPropertyConstraintsPR11 covers PR11's constraint additions:
+// numeric exclusive bounds, string length comparisons, named-numeric via
+// UnderlyingKind, slice cardinality, and dive element constraints.
+func TestFieldInfoToPropertyConstraintsPR11(t *testing.T) {
+	gen := New(defaultTitle, "1.0.0", defaultDescription)
+
+	t.Run("numeric lt -> maximum + exclusiveMaximum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "int", JSONName: "n", Constraints: map[string]string{"lt": "100"}})
+		require.NotNil(t, p.Maximum)
+		assert.Equal(t, 100.0, *p.Maximum)
+		require.NotNil(t, p.ExclusiveMaximum)
+		assert.True(t, *p.ExclusiveMaximum)
+	})
+
+	t.Run("string gt -> minLength, not minimum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "string", JSONName: "s", Constraints: map[string]string{"gt": "3"}})
+		require.NotNil(t, p.MinLength)
+		assert.Equal(t, 4, *p.MinLength)
+		assert.Nil(t, p.Minimum, "a string gt must not leak a numeric minimum")
+	})
+
+	t.Run("named numeric via UnderlyingKind -> minimum/maximum", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{Type: "Cents", UnderlyingKind: "integer", JSONName: "amt", Constraints: map[string]string{"min": "1", "max": "100"}})
+		require.NotNil(t, p.Minimum)
+		assert.Equal(t, 1.0, *p.Minimum)
+		require.NotNil(t, p.Maximum)
+		assert.Equal(t, 100.0, *p.Maximum)
+	})
+
+	t.Run("slice cardinality + dive element format", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]string", JSONName: "tags",
+			Constraints:        map[string]string{"min": "1", "max": "10"},
+			ElementConstraints: map[string]string{"email": "true"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.MinItems)
+		assert.Equal(t, 1, *p.MinItems)
+		require.NotNil(t, p.MaxItems)
+		assert.Equal(t, 10, *p.MaxItems)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, "email", p.Items.Format, "dive,email puts format:email under items")
+	})
+
+	t.Run("named-scalar slice element keeps numeric kind (dive)", func(t *testing.T) {
+		// []Cents -> field.UnderlyingKind=="integer" (analyzer strips the slice), so
+		// dive,gte=0 maps to a numeric minimum on the items, not a dropped constraint.
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]Cents", UnderlyingKind: "integer", JSONName: "amounts",
+			ElementConstraints: map[string]string{"gte": "0"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		require.NotNil(t, p.Items.Minimum, "element gte must map to a numeric minimum on items")
+		assert.Equal(t, 0.0, *p.Items.Minimum)
+	})
+
+	t.Run("ref-slice carries minItems on the array wrapper", func(t *testing.T) {
+		p := gen.fieldInfoToProperty(&models.FieldInfo{
+			Type: "[]Address", RefName: "Address", JSONName: "addrs",
+			Constraints: map[string]string{"min": "1"},
+		})
+		assert.Equal(t, typeArray, p.Type)
+		require.NotNil(t, p.Items)
+		assert.Equal(t, refPath("Address"), p.Items.Ref, "$ref element stands alone")
+		require.NotNil(t, p.MinItems)
+		assert.Equal(t, 1, *p.MinItems)
+	})
+}
+
+// TestNewWithConfig covers the CLI-driven document metadata: custom servers,
+// license, and the tenant-security opt-out.
+func TestNewWithConfig(t *testing.T) {
+	t.Run("custom servers + license", func(t *testing.T) {
+		gen := NewWithConfig(&Config{
+			Title: "My API", Version: "2.1.0", Description: "d",
+			Servers: []string{"https://api.example.com", "https://staging.example.com"},
+			License: &License{Name: "MIT", URL: "https://opensource.org/licenses/MIT"},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "title: My API")
+		assert.Contains(t, spec, "url: https://api.example.com")
+		assert.Contains(t, spec, "url: https://staging.example.com")
+		assert.Contains(t, spec, "name: MIT")
+		assert.Contains(t, spec, "url: https://opensource.org/licenses/MIT")
+		assert.Contains(t, spec, "X-Tenant-ID", "tenant security on by default")
+	})
+
+	t.Run("tenant security opt-out", func(t *testing.T) {
+		gen := NewWithConfig(&Config{Title: "T", Version: "1.0.0", DisableTenantSecurity: true})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.NotContains(t, spec, "X-Tenant-ID", "opt-out omits the tenant scheme")
+		assert.NotContains(t, spec, "securitySchemes", "no schemes when security disabled")
+		// Default relative-root server still present.
+		assert.Contains(t, spec, "url: /")
+	})
+
+	t.Run("blank server is dropped, not emitted as empty url", func(t *testing.T) {
+		// A stray `--server ""` (e.g. an unset shell var) must not produce an
+		// invalid `url: ""` Server Object; the valid entry survives.
+		gen := NewWithConfig(&Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"  ", "https://api.example.com", ""},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: https://api.example.com")
+		assert.NotContains(t, spec, `url: ""`, "blank server must not be emitted")
+	})
+
+	t.Run("all-blank servers fall back to relative-root default", func(t *testing.T) {
+		gen := NewWithConfig(&Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"", "   "},
+		})
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: /", "default server restored when none valid")
+		assert.NotContains(t, spec, `url: ""`)
+	})
+
+	t.Run("generator is immutable after construction", func(t *testing.T) {
+		// Mutating the caller's Config (or the slice/license it shared) after
+		// construction must not change the generator's output.
+		cfg := &Config{
+			Title: "T", Version: "1.0.0",
+			Servers: []string{"https://orig.example.com"},
+			License: &License{Name: "MIT", URL: "https://mit"},
+		}
+		gen := NewWithConfig(cfg)
+		cfg.Servers[0] = "https://mutated.example.com"
+		cfg.License.Name = "MUTATED"
+
+		spec, err := gen.Generate(&models.Project{})
+		require.NoError(t, err)
+		assert.Contains(t, spec, "url: https://orig.example.com", "server slice must be copied")
+		assert.NotContains(t, spec, "mutated.example.com")
+		assert.Contains(t, spec, "name: MIT", "license must be copied")
+		assert.NotContains(t, spec, "MUTATED")
+	})
 }

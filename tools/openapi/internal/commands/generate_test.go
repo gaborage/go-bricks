@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -8,6 +10,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 )
 
 const (
@@ -157,7 +161,7 @@ func TestRunGenerate(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf(generateCmdFailedMsg, err)
 	}
@@ -202,7 +206,7 @@ func TestRunGenerateDirectoryCreation(t *testing.T) {
 		Verbose:     false,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf(generateCmdFailedMsg, err)
 	}
@@ -229,7 +233,7 @@ func TestRunGenerateVerbose(t *testing.T) {
 	}
 
 	// This should work without panicking even in verbose mode
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runGenerate() failed in verbose mode: %v", err)
 	}
@@ -363,7 +367,7 @@ func TestRunGenerateErrorCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := tt.setup(t)
-			err := runGenerate(opts)
+			err := runGenerate(context.Background(), opts)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runGenerate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -381,7 +385,7 @@ func TestRunGenerateYAMLFormat(t *testing.T) {
 		Verbose:     true,
 	}
 
-	err := runGenerate(opts)
+	err := runGenerate(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runGenerate() failed for YAML format: %v", err)
 	}
@@ -519,7 +523,7 @@ func (m *TestModule) Init(deps any) error { return nil }`
 			os.MkdirAll(testDir, 0755)
 
 			opts := tt.setup(testDir)
-			err := runGenerate(opts)
+			err := runGenerate(context.Background(), opts)
 			if err != nil {
 				t.Fatalf(generateCmdFailedMsg, err)
 			}
@@ -622,7 +626,7 @@ func TestRunGenerateWithWriteError(t *testing.T) {
 			Verbose:     false,
 		}
 
-		err := runGenerate(opts)
+		err := runGenerate(context.Background(), opts)
 		if err != nil {
 			t.Errorf("Expected successful generation, got error: %v", err)
 		}
@@ -733,4 +737,241 @@ func TestGenerateCommandFlagValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveFormat covers explicit, inferred, and invalid format resolution.
+func TestResolveFormatPR12(t *testing.T) {
+	cases := []struct {
+		name, format, output, want string
+		wantErr                    bool
+	}{
+		{name: "default_yaml", output: "openapi.yaml", want: "yaml"},
+		{name: "default_yaml_no_ext", output: "openapi", want: "yaml"},
+		{name: "inferred_json_from_ext", output: "openapi.json", want: "json"},
+		{name: "inferred_yaml_from_yml_ext", output: "openapi.yml", want: "yaml"},
+		{name: "explicit_json_agrees_with_ext", format: "json", output: "openapi.json", want: "json"},
+		{name: "explicit_json_no_ext", format: "json", output: "openapi", want: "json"},
+		{name: "explicit_yaml_agrees_with_ext", format: "yaml", output: "openapi.yaml", want: "yaml"},
+		// Explicit --format must not contradict a recognized extension: the file
+		// would otherwise lie about its contents (JSON bytes in a .yaml file).
+		{name: "explicit_json_conflicts_yaml_ext", format: "json", output: "openapi.yaml", wantErr: true},
+		{name: "explicit_yaml_conflicts_json_ext", format: "yaml", output: "x.json", wantErr: true},
+		// An unrecognized extension carries no format claim, so explicit wins.
+		{name: "explicit_json_unknown_ext_ok", format: "json", output: "x.txt", want: "json"},
+		{name: "invalid_format", format: "xml", output: "x.yaml", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveFormat(&GenerateOptions{Format: c.format, OutputFile: c.output})
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("expected error for invalid format")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("resolveFormat = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildGeneratorConfig maps CLI flags to a generator.Config.
+func TestBuildGeneratorConfig(t *testing.T) {
+	cfg := buildGeneratorConfig(&GenerateOptions{
+		Title: "My API", APIVersion: "2.0.0", Description: "d",
+		Servers: []string{"https://a", "https://b"},
+		License: "MIT", LicenseURL: "https://mit",
+		DisableTenantAuth: true,
+	})
+	if cfg.Title != "My API" || cfg.Version != "2.0.0" || cfg.Description != "d" {
+		t.Errorf("metadata not threaded: %+v", cfg)
+	}
+	if len(cfg.Servers) != 2 || cfg.Servers[0] != "https://a" {
+		t.Errorf("servers not threaded: %v", cfg.Servers)
+	}
+	if cfg.License == nil || cfg.License.Name != "MIT" || cfg.License.URL != "https://mit" {
+		t.Errorf("license not threaded: %+v", cfg.License)
+	}
+	if !cfg.DisableTenantSecurity {
+		t.Error("tenant-security opt-out not threaded")
+	}
+	// No --license -> nil license.
+	if got := buildGeneratorConfig(&GenerateOptions{}); got.License != nil {
+		t.Errorf("expected nil license when --license unset, got %+v", got.License)
+	}
+}
+
+// TestToJSON confirms the YAML spec re-renders as parseable JSON.
+func TestToJSON(t *testing.T) {
+	yamlSpec := "openapi: 3.0.1\ninfo:\n  title: T\n  version: 1.0.0\npaths: {}\n"
+	out, err := toJSON(yamlSpec)
+	if err != nil {
+		t.Fatalf("toJSON: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	if doc["openapi"] != "3.0.1" {
+		t.Errorf("openapi field not preserved: %v", doc["openapi"])
+	}
+	info, ok := doc["info"].(map[string]any)
+	if !ok || info["title"] != "T" {
+		t.Errorf("info.title not preserved: %v", doc["info"])
+	}
+}
+
+// TestEmitContentWarnings covers the empty/untyped warning detection.
+func TestEmitContentWarnings(t *testing.T) {
+	if !emitContentWarnings(&models.Project{}) {
+		t.Error("empty project (no modules) should warn")
+	}
+	withRoutes := &models.Project{Modules: []models.Module{{Name: "m"}}}
+	if !emitContentWarnings(withRoutes) {
+		t.Error("module with no routes should warn")
+	}
+	typed := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
+		{Method: "GET", Path: "/x", HandlerName: "h", Response: &models.TypeInfo{Name: "R", Fields: []models.FieldInfo{{Name: "ID", JSONName: "id"}}}},
+	}}}}
+	if emitContentWarnings(typed) {
+		t.Error("a typed route should not warn")
+	}
+
+	// A named-but-fieldless response (e.g. `type Ack struct{}`) still resolves to
+	// a component $ref, so it must not be reported as untyped (would false-fail
+	// --strict).
+	namedEmpty := &models.Project{Modules: []models.Module{{Name: "m", Routes: []models.Route{
+		{Method: "POST", Path: "/ack", HandlerName: "ack", Response: &models.TypeInfo{Name: "Ack"}},
+	}}}}
+	if emitContentWarnings(namedEmpty) {
+		t.Error("a named-but-fieldless response is resolved (gets a $ref) and should not warn")
+	}
+}
+
+// TestExampleUsesDoubleDashFlags guards against the single-dash trap regression:
+// cobra long flags need `--project`/`--output`, not `-project`/`-output`.
+func TestExampleUsesDoubleDashFlags(t *testing.T) {
+	for _, cmd := range []string{NewGenerateCommand().Example, NewDoctorCommand().Example} {
+		if strings.Contains(cmd, " -project ") || strings.Contains(cmd, " -output ") {
+			t.Errorf("Example uses a single-dash long flag (parses as -p -r -o ...): %s", cmd)
+		}
+	}
+}
+
+// TestToJSONPreservesKeyOrder pins that JSON output keeps the canonical OpenAPI
+// section order rather than the alphabetical order encoding/json imposes on a
+// map[string]any round-trip.
+func TestToJSONPreservesKeyOrder(t *testing.T) {
+	// Canonical order is openapi, info, servers, paths — none of which is
+	// alphabetical, so a map round-trip would visibly reorder them.
+	yamlSpec := "openapi: 3.0.1\n" +
+		"info:\n  title: T\n  version: 1.0.0\n" +
+		"servers:\n  - url: /\n" +
+		"paths: {}\n"
+	out, err := toJSON(yamlSpec)
+	if err != nil {
+		t.Fatalf("toJSON: %v", err)
+	}
+	order := []string{`"openapi"`, `"info"`, `"servers"`, `"paths"`}
+	prev := -1
+	for _, key := range order {
+		idx := strings.Index(out, key)
+		if idx < 0 {
+			t.Fatalf("key %s missing from JSON output:\n%s", key, out)
+		}
+		if idx <= prev {
+			t.Errorf("key %s out of canonical order (alphabetized?):\n%s", key, out)
+		}
+		prev = idx
+	}
+	// title before version within info (insertion order, not alphabetical).
+	if strings.Index(out, `"title"`) > strings.Index(out, `"version"`) {
+		t.Errorf("nested info keys reordered:\n%s", out)
+	}
+}
+
+// TestValidateGenerateOptionsLicenseURLRequiresName covers the fail-fast guard:
+// --license-url without --license is rejected rather than silently dropped.
+func TestValidateGenerateOptionsLicenseURLRequiresName(t *testing.T) {
+	err := validateGenerateOptions(&GenerateOptions{
+		ProjectRoot: ".",
+		OutputFile:  "openapi.yaml",
+		LicenseURL:  "https://opensource.org/licenses/MIT",
+	})
+	if err == nil {
+		t.Fatal("expected --license-url without --license to error")
+	}
+	if !strings.Contains(err.Error(), "--license-url requires --license") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// A whitespace-only --license is treated as missing (would otherwise emit a
+	// blank info.license.name).
+	if err := validateGenerateOptions(&GenerateOptions{
+		ProjectRoot: ".",
+		OutputFile:  "openapi.yaml",
+		License:     "   ",
+		LicenseURL:  "https://opensource.org/licenses/MIT",
+	}); err == nil {
+		t.Error("expected whitespace-only --license to be rejected when --license-url is set")
+	}
+
+	// Both supplied together is fine, and surrounding whitespace is trimmed.
+	opts := &GenerateOptions{
+		ProjectRoot: ".",
+		OutputFile:  "openapi.yaml",
+		License:     "  MIT  ",
+		LicenseURL:  "  https://opensource.org/licenses/MIT  ",
+	}
+	if err := validateGenerateOptions(opts); err != nil {
+		t.Errorf("name+url should validate, got: %v", err)
+	}
+	if opts.License != "MIT" || opts.LicenseURL != "https://opensource.org/licenses/MIT" {
+		t.Errorf("license fields not trimmed: name=%q url=%q", opts.License, opts.LicenseURL)
+	}
+}
+
+// TestRunGenerateStrictNoArtifact pins that a failed --strict run neither writes
+// the output file nor prints the success line, AND that any stale artifact from
+// an earlier run is removed (so a downstream step can't consume it). The gate
+// runs before persisting.
+func TestRunGenerateStrictNoArtifact(t *testing.T) {
+	strictFailErr := func(t *testing.T, out string) {
+		t.Helper()
+		// An empty project root yields no modules -> a content warning -> --strict fails.
+		err := runGenerate(context.Background(), &GenerateOptions{
+			ProjectRoot: filepath.Dir(out),
+			OutputFile:  out,
+			Strict:      true,
+		})
+		if err == nil {
+			t.Fatal("expected --strict to fail on a module-less project")
+		}
+		if !strings.Contains(err.Error(), "--strict is set") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+
+	t.Run("no pre-existing file is created", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		strictFailErr(t, out)
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must not create an artifact, but %s exists (stat err: %v)", out, statErr)
+		}
+	})
+
+	t.Run("stale pre-existing file is removed", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "openapi.yaml")
+		if err := os.WriteFile(out, []byte("openapi: 3.0.1\n# stale\n"), 0600); err != nil {
+			t.Fatalf("seed stale file: %v", err)
+		}
+		strictFailErr(t, out)
+		if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+			t.Errorf("strict failure must remove the stale artifact, but %s still exists", out)
+		}
+	})
 }
