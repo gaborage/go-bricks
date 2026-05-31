@@ -19,7 +19,7 @@ GoBricks supports accessing multiple databases in single-tenant mode, useful for
 **Configuration:**
 ```yaml
 database:                # Default database (unchanged - backward compatible)
-  type: postgres
+  type: postgresql
   host: primary.db.example.com
   port: 5432
   database: main_db
@@ -33,7 +33,7 @@ databases:               # Named databases — supports mixed vendors
     username: legacy_user
     password: ${LEGACY_DATABASE_PASSWORD}
   analytics:
-    type: postgres
+    type: postgresql
     host: analytics.db.example.com
     port: 5432
     database: analytics_db

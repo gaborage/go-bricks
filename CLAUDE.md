@@ -324,7 +324,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 ```
 
-**Schedule Methods:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(day, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
+**Schedule Methods:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(dayOfMonth, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
 
 ### Messaging Architecture
 

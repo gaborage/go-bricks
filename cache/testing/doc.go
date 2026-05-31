@@ -19,7 +19,7 @@
 // Chain configuration methods to simulate failures or delays:
 //
 //	mock := testing.NewMockCache().
-//	    WithGetFailure(cache.ErrConnectionError).
+//	    WithGetFailure(cache.ErrClosed).
 //	    WithDelay(100 * time.Millisecond)
 //
 // # Operation Tracking

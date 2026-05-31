@@ -287,6 +287,7 @@ func TestUserModule_Integration(t *testing.T) {
     // Test route registration. NewHandlerRegistry needs a *config.Config, and
     // RegisterRoutes takes a server.RouteRegistrar (from srv.ModuleGroup()), not
     // a raw *echo.Echo.
+    srv := server.New(mockConfig, mockLogger)
     hr := server.NewHandlerRegistry(mockConfig)
     module.RegisterRoutes(hr, srv.ModuleGroup())
 

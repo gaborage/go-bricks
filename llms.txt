@@ -3243,7 +3243,7 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 | Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` | pre-trust | `application/json` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` | pre-trust | `application/json` |
 | `enc`/`alg` not in allowlist | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
-| `alg=none` (downgrade) | 401 | `JOSE_NONE_ALG_REJECTED` | pre-trust | `application/json` |
+| `alg=none` (downgrade) | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
 | Header missing `kid` | 401 | `JOSE_KID_MISSING` | pre-trust | `application/json` |
 | Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` | pre-trust | `application/json` |
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` | pre-trust | `application/json` |
