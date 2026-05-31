@@ -1,9 +1,7 @@
 package commands
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,37 +9,8 @@ import (
 	"testing"
 
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
+	"github.com/gaborage/go-bricks/tools/openapi/internal/testutil"
 )
-
-// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
-// printed. The pipe is drained in a goroutine so a large write can't deadlock; the
-// write end is closed even if fn panics (so the drain goroutine terminates instead
-// of leaking), and the read end is closed once drained (no fd leak).
-// NOTE: mutates the global os.Stdout; do not call from parallel tests.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = orig }()
-
-	done := make(chan string, 1)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		_ = r.Close()
-		done <- buf.String()
-	}()
-
-	func() {
-		defer func() { _ = w.Close() }()
-		fn()
-	}()
-	return <-done
-}
 
 // Test constants to avoid string duplication
 const (
@@ -782,7 +751,7 @@ func TestRunDoctorZeroModulesIsCaveat(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := captureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
 
 	if runErr != nil {
 		t.Errorf("zero modules should be a caveat, not a hard error: %v", runErr)
@@ -808,7 +777,7 @@ func TestRunDoctorFailsBelowGoBricksFloor(t *testing.T) {
 	opts := &DoctorOptions{ProjectRoot: dir, GoVersion: minGoVersion}
 
 	var runErr error
-	out := captureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
+	out := testutil.CaptureStdout(t, func() { runErr = runDoctor(t.Context(), opts) })
 
 	assertError(t, runErr, true)
 	if !strings.Contains(out, msgBelowMinimum) {

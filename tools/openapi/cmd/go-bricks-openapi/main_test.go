@@ -2,47 +2,15 @@ package main
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/gaborage/go-bricks/tools/openapi/internal/testutil"
 )
-
-// captureStdout runs fn with os.Stdout redirected to a pipe and returns what was
-// printed there. The subcommands write progress via fmt.Printf (os.Stdout), which
-// cobra's SetOut does not intercept. The pipe is drained in a goroutine so a large
-// write can't deadlock; the write end is closed even if fn panics (so the drain
-// goroutine terminates), and the read end is closed once drained (no fd leak).
-// NOTE: mutates the global os.Stdout; do not call from parallel tests.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = orig }()
-
-	done := make(chan string, 1)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		_ = r.Close()
-		done <- buf.String()
-	}()
-
-	// Close the write end even if fn panics, so the drain goroutine reaches EOF
-	// and terminates instead of blocking forever.
-	func() {
-		defer func() { _ = w.Close() }()
-		fn()
-	}()
-	return <-done
-}
 
 // withVersion temporarily sets the build-injected version global for a test.
 // NOTE: mutates the package-level version; do not call from parallel tests.
@@ -91,12 +59,12 @@ func TestRunHelpListsSubcommands(t *testing.T) {
 }
 
 // TestRunVersionSubcommand verifies the version subcommand prints the injected
-// version (it writes via fmt.Printf to os.Stdout, hence captureStdout).
+// version (it writes via fmt.Printf to os.Stdout, hence testutil.CaptureStdout).
 func TestRunVersionSubcommand(t *testing.T) {
 	withVersion(t, "sub-1.2.3")
 	var out, errBuf bytes.Buffer
 	var code int
-	got := captureStdout(t, func() { code = run([]string{"version"}, &out, &errBuf) })
+	got := testutil.CaptureStdout(t, func() { code = run([]string{"version"}, &out, &errBuf) })
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -112,7 +80,7 @@ func TestRunGenerateHappyPath(t *testing.T) {
 	out := filepath.Join(dir, "spec.yaml")
 	var outBuf, errBuf bytes.Buffer
 	var code int
-	_ = captureStdout(t, func() {
+	_ = testutil.CaptureStdout(t, func() {
 		code = run([]string{"generate", "--project", dir, "--output", out}, &outBuf, &errBuf)
 	})
 	if code != 0 {
