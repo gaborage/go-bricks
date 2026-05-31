@@ -24,18 +24,6 @@ import (
 	"github.com/gaborage/go-bricks/tools/openapi/internal/generator"
 )
 
-// Document metadata passed to the generator. NOTE: the generator currently
-// derives the emitted spec title from project metadata (the go.mod module name,
-// or a built-in default for a module-less project), so harnessTitle is
-// overridden in practice — it is supplied only to satisfy the generator.New
-// signature and becomes meaningful once a title override lands. harnessVersion
-// and harnessDescription fill the corresponding info fields.
-const (
-	harnessTitle       = "Fixture API"
-	harnessVersion     = "1.0.0"
-	harnessDescription = "Generated API specification"
-)
-
 // Generate runs the analyzer and generator over the project rooted at dir and
 // returns the emitted OpenAPI document as a string. ctx is the first parameter
 // per the repo's context-first convention; it is honoured for early
@@ -51,7 +39,10 @@ func Generate(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("analyze %s: %w", dir, err)
 	}
 
-	spec, err := generator.New(harnessTitle, harnessVersion, harnessDescription).Generate(project)
+	// Empty metadata so the generator falls back to the analyzer-derived
+	// project name/version (from each fixture's go.mod) — the harness exercises the
+	// default path, not a CLI override.
+	spec, err := generator.New("", "", "").Generate(project)
 	if err != nil {
 		return "", fmt.Errorf("generate %s: %w", dir, err)
 	}

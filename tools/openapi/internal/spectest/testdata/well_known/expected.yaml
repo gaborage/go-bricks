@@ -1,0 +1,120 @@
+openapi: 3.0.1
+info:
+  title: Events API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /events/{id}:
+    get:
+      operationId: eventsGetEvent
+      summary: GET /events/{id}
+      tags:
+        - events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Event'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+        street:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          description: Error details with code and message
+        meta:
+          type: object
+          description: Response metadata
+      required:
+        - error
+    Event:
+      type: object
+      properties:
+        addrs:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Address'
+        count:
+          type: integer
+          format: int64
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        history:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/Address'
+        id:
+          type: string
+          format: uuid
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        payload:
+          type: string
+          format: binary
+        raw:
+          type: object
+        ttl:
+          type: integer
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

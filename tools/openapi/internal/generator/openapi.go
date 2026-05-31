@@ -15,26 +15,38 @@ import (
 
 // OpenAPI type constants
 const (
-	typeInteger  = "integer"
-	typeObject   = "object"
-	typeString   = "string"
-	typeNumber   = "number"
-	typeBoolean  = "boolean"
-	typeArray    = "array"
-	formatInt32  = "int32"
-	formatInt64  = "int64"
-	formatFloat  = "float"
-	formatDouble = "double"
+	typeInteger    = "integer"
+	typeObject     = "object"
+	typeString     = "string"
+	typeNumber     = "number"
+	typeBoolean    = "boolean"
+	typeArray      = "array"
+	formatInt32    = "int32"
+	formatInt64    = "int64"
+	formatFloat    = "float"
+	formatDouble   = "double"
+	formatDateTime = "date-time"
+	formatBinary   = "binary"
+	formatUUID     = "uuid"
 )
 
 // Schema component names referenced in multiple emitter sites.
 const (
-	schemaErrorResponse = "ErrorResponse"
+	schemaErrorResponse     = "ErrorResponse"
+	schemaJOSEErrorEnvelope = "JOSEErrorEnvelope"
+	schemaRawErrorResponse  = "RawErrorResponse"
+	schemaSuccessResponse   = "SuccessResponse"
 )
 
 // HTTP method names used in switch discriminants and operation generation.
 const (
-	httpMethodPost = "POST"
+	httpMethodGet     = "GET"
+	httpMethodPut     = "PUT"
+	httpMethodPost    = "POST"
+	httpMethodDelete  = "DELETE"
+	httpMethodPatch   = "PATCH"
+	httpMethodHead    = "HEAD"
+	httpMethodOptions = "OPTIONS"
 )
 
 // Go primitive type names matched against Go type identifiers when mapping to
@@ -46,13 +58,27 @@ const (
 	goTypeBool    = "bool"
 	goTypeUint    = "uint"
 	goTypeUint64  = "uint64"
+
+	// Qualified/composite Go types with a well-known OpenAPI representation.
+	goTypeTimeTime     = "time.Time"
+	goTypeTimeDuration = "time.Duration"
+	goTypeByteSlice    = "[]byte"
+	goTypeUint8Slice   = "[]uint8"
+	goTypeUUID         = "uuid.UUID"
+	goTypeRawMessage   = "json.RawMessage"
 )
 
 // Response/parameter description text reused across operations.
 const (
 	respDescSuccess = "Successful response"
+	respDescCreated = "Resource created successfully"
 	paramTypePath   = "path"
+	paramTypeHeader = "header"
 	propNameError   = "error"
+	propNameData    = "data"
+	propNameMeta    = "meta"
+	propNameCode    = "code"
+	propNameMessage = "message"
 )
 
 // Media type constants for the OpenAPI content map. Centralized so a future rename
@@ -63,25 +89,48 @@ const (
 	mediaJOSE = "application/jose"
 )
 
-// YAML indent depths reused across emitter call sites (S1192). Named by depth
-// because the same depth occurs at multiple structural positions.
-const (
-	indent10 = "          "   // 10 spaces
-	indent12 = "            " // 12 spaces
-)
+// License is the optional info.license block.
+type License struct {
+	Name string
+	URL  string
+}
+
+// Config configures a generator's document-level metadata. Zero values fall back
+// to sensible defaults (title/version from the analyzer or the built-in default,
+// a relative-root server, tenant security on).
+type Config struct {
+	Title       string
+	Version     string
+	Description string
+	Servers     []string // server URLs; empty -> a single relative-root "/"
+	License     *License
+	// DisableTenantSecurity omits the X-Tenant-ID security scheme + root security
+	// (for single-tenant services).
+	DisableTenantSecurity bool
+}
 
 // OpenAPIGenerator creates OpenAPI specifications from project models
 type OpenAPIGenerator struct {
 	title       string
 	version     string
 	description string
+	servers     []string
+	license     *License
+	tenantAuth  bool
+}
+
+// openAPILicense is the emitted info.license object.
+type openAPILicense struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url,omitempty"`
 }
 
 // OpenAPIInfo represents the info section of an OpenAPI specification
 type OpenAPIInfo struct {
-	Title       string `yaml:"title"`
-	Version     string `yaml:"version"`
-	Description string `yaml:"description"`
+	Title       string          `yaml:"title"`
+	Version     string          `yaml:"version"`
+	Description string          `yaml:"description"`
+	License     *openAPILicense `yaml:"license,omitempty"`
 }
 
 // OpenAPISchema represents a schema definition
@@ -94,28 +143,108 @@ type OpenAPISchema struct {
 
 // OpenAPIProperty represents a schema property
 type OpenAPIProperty struct {
-	Type             string           `yaml:"type,omitempty"`
-	Format           string           `yaml:"format,omitempty"`
-	Description      string           `yaml:"description,omitempty"`
-	Example          any              `yaml:"example,omitempty"`
-	Ref              string           `yaml:"$ref,omitempty"`
-	Items            *OpenAPIProperty `yaml:"items,omitempty"` // For arrays
-	MinLength        *int             `yaml:"minLength,omitempty"`
-	MaxLength        *int             `yaml:"maxLength,omitempty"`
-	Minimum          *float64         `yaml:"minimum,omitempty"`
-	Maximum          *float64         `yaml:"maximum,omitempty"`
-	ExclusiveMinimum *bool            `yaml:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum *bool            `yaml:"exclusiveMaximum,omitempty"`
-	Pattern          string           `yaml:"pattern,omitempty"`
-	Enum             []any            `yaml:"enum,omitempty"`
+	Type                 string                      `yaml:"type,omitempty"`
+	Properties           map[string]*OpenAPIProperty `yaml:"properties,omitempty"`           // For inline objects (e.g. the data/meta envelope)
+	AdditionalProperties *OpenAPIProperty            `yaml:"additionalProperties,omitempty"` // For maps (the value schema)
+	Format               string                      `yaml:"format,omitempty"`
+	Description          string                      `yaml:"description,omitempty"`
+	Example              any                         `yaml:"example,omitempty"`
+	Ref                  string                      `yaml:"$ref,omitempty"`
+	Items                *OpenAPIProperty            `yaml:"items,omitempty"` // For arrays
+	MinLength            *int                        `yaml:"minLength,omitempty"`
+	MaxLength            *int                        `yaml:"maxLength,omitempty"`
+	MinItems             *int                        `yaml:"minItems,omitempty"` // For arrays (slice cardinality)
+	MaxItems             *int                        `yaml:"maxItems,omitempty"`
+	Minimum              *float64                    `yaml:"minimum,omitempty"`
+	Maximum              *float64                    `yaml:"maximum,omitempty"`
+	ExclusiveMinimum     *bool                       `yaml:"exclusiveMinimum,omitempty"`
+	ExclusiveMaximum     *bool                       `yaml:"exclusiveMaximum,omitempty"`
+	Pattern              string                      `yaml:"pattern,omitempty"`
+	Enum                 []any                       `yaml:"enum,omitempty"`
 }
 
-// New creates a new OpenAPI generator
+// The types below model the paths/operations half of an OpenAPI document as a
+// struct graph. The whole document — info, paths, and components — is emitted
+// through a single yaml.Marshal path (see marshalYAMLSection), so $ref, items,
+// and future schema fields serialize correctly whether inline (in an operation)
+// or under components, with no hand-rolled text writers to keep in sync.
+
+// OpenAPIPathItem holds the operations registered under one path. Method fields
+// are declared in canonical order so yaml.Marshal emits them deterministically;
+// omitempty drops the methods a path does not use.
+type OpenAPIPathItem struct {
+	Get     *OpenAPIOperation `yaml:"get,omitempty"`
+	Put     *OpenAPIOperation `yaml:"put,omitempty"`
+	Post    *OpenAPIOperation `yaml:"post,omitempty"`
+	Delete  *OpenAPIOperation `yaml:"delete,omitempty"`
+	Patch   *OpenAPIOperation `yaml:"patch,omitempty"`
+	Head    *OpenAPIOperation `yaml:"head,omitempty"`
+	Options *OpenAPIOperation `yaml:"options,omitempty"`
+}
+
+// OpenAPIOperation is a single HTTP operation. Field order matches the emitted
+// document: operationId, summary, description, tags, parameters, requestBody,
+// responses.
+type OpenAPIOperation struct {
+	OperationID string                      `yaml:"operationId"`
+	Summary     string                      `yaml:"summary"`
+	Description string                      `yaml:"description,omitempty"`
+	Tags        []string                    `yaml:"tags,omitempty"`
+	Parameters  []Parameter                 `yaml:"parameters,omitempty"`
+	RequestBody *OpenAPIRequestBody         `yaml:"requestBody,omitempty"`
+	Responses   map[string]*OpenAPIResponse `yaml:"responses"`
+}
+
+// OpenAPIRequestBody is a Request Body Object. Description carries the JOSE
+// compact-serialization note when the request type is jose-tagged.
+type OpenAPIRequestBody struct {
+	Required    bool                         `yaml:"required"`
+	Description string                       `yaml:"description,omitempty"`
+	Content     map[string]*OpenAPIMediaType `yaml:"content"`
+}
+
+// OpenAPIResponse is a Response Object.
+type OpenAPIResponse struct {
+	Description string                       `yaml:"description"`
+	Content     map[string]*OpenAPIMediaType `yaml:"content,omitempty"`
+}
+
+// OpenAPIMediaType is a Media Type Object (the value under a content-type key).
+type OpenAPIMediaType struct {
+	Schema *OpenAPIProperty `yaml:"schema"`
+}
+
+// New creates a new OpenAPI generator with default servers/security (tenant auth
+// on). Retained for callers that only need title/version/description.
 func New(title, version, description string) *OpenAPIGenerator {
+	return NewWithConfig(&Config{Title: title, Version: version, Description: description})
+}
+
+// NewWithConfig creates a generator from a full Config (CLI-driven metadata). A
+// nil cfg is treated as the zero Config. Reference-typed fields (Servers,
+// License) are copied so the generator is immutable after construction: a caller
+// mutating its Config later cannot alter output or race with a concurrent
+// Generate.
+func NewWithConfig(cfg *Config) *OpenAPIGenerator {
+	if cfg == nil {
+		cfg = &Config{}
+	}
+	var servers []string
+	if len(cfg.Servers) > 0 {
+		servers = append([]string(nil), cfg.Servers...)
+	}
+	var license *License
+	if cfg.License != nil {
+		copied := *cfg.License
+		license = &copied
+	}
 	return &OpenAPIGenerator{
-		title:       title,
-		version:     version,
-		description: description,
+		title:       cfg.Title,
+		version:     cfg.Version,
+		description: cfg.Description,
+		servers:     servers,
+		license:     license,
+		tenantAuth:  !cfg.DisableTenantSecurity,
 	}
 }
 
@@ -136,6 +265,9 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 		Version:     g.getVersion(project),
 		Description: g.getDescription(project),
 	}
+	if g.license != nil && g.license.Name != "" {
+		info.License = &openAPILicense{Name: g.license.Name, URL: g.license.URL}
+	}
 
 	infoYAML, err := g.marshalYAMLSection("info", info)
 	if err != nil {
@@ -143,18 +275,42 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(infoYAML)
 
-	// Paths
-	sb.WriteString("paths:\n")
+	// Reduce to the EMITTED route set (first-wins per method+path, matching
+	// assignOperation), then drive operationIds, schema gating, and path building
+	// from that one set so the gate, refs, and paths can never disagree. opIDs is
+	// request-scoped (threaded, not stored) so Generate is reentrant.
 	allRoutes := g.getAllRoutes(project)
-	if len(allRoutes) == 0 {
-		sb.WriteString("  {}\n")
-	} else {
-		g.writePaths(&sb, allRoutes)
-	}
+	emitted := emittedRoutes(allRoutes)
+	opIDs := g.assignOperationIDs(emitted)
 
-	// Components with proper YAML marshaling
-	standardSchemas := g.createStandardSchemas()
-	generatedSchemas := g.generateSchemasFromTypes(allRoutes)
+	// Servers: configured --server URLs, or a relative-root default so the document
+	// is self-describing and passes the no-empty-servers gate.
+	serversYAML, err := g.marshalYAMLSection("servers", g.configuredServers())
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal servers section: %w", err)
+	}
+	sb.WriteString(serversYAML)
+
+	// Paths — built as a struct graph and emitted through the same yaml.Marshal
+	// path as info/components (an empty project marshals to "paths: {}").
+	pathsYAML, err := g.marshalYAMLSection("paths", g.buildPaths(emitted, opIDs))
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal paths section: %w", err)
+	}
+	sb.WriteString(pathsYAML)
+
+	// Components with proper YAML marshaling. Prefer the analyzer-built type
+	// registry (which includes nested/recursive types); fall back to a flat
+	// registry of route request/response types for projects assembled without it.
+	types := project.Types
+	if types == nil {
+		types = routeTypeRegistry(project)
+	}
+	// Standard schemas are gated to those actually referenced (so no-unused-components
+	// holds): ErrorResponse always; SuccessResponse/JOSEErrorEnvelope only for JOSE
+	// routes; RawErrorResponse only for raw routes.
+	standardSchemas := g.createStandardSchemas(emitted)
+	generatedSchemas := g.generateSchemasFromTypes(types, referencedSchemaNames(emitted, types))
 
 	// Merge schemas (generated schemas override standard if there's a conflict)
 	schemas := make(map[string]*OpenAPISchema)
@@ -164,6 +320,11 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	components := map[string]any{
 		"schemas": schemas,
 	}
+	// Tenant security is opt-out (single-tenant services). When on, the scheme must
+	// be declared (security-defined) and referenced at the root.
+	if g.tenantAuth {
+		components["securitySchemes"] = securitySchemes()
+	}
 
 	componentsYAML, err := g.marshalYAMLSection("components", components)
 	if err != nil {
@@ -171,42 +332,139 @@ func (g *OpenAPIGenerator) Generate(project *models.Project) (string, error) {
 	}
 	sb.WriteString(componentsYAML)
 
+	// Root-level security: the framework resolves tenancy from the X-Tenant-ID
+	// header, modeled as an apiKey scheme. Emitted last so security-defined sees
+	// the scheme already declared.
+	if g.tenantAuth {
+		securityYAML, err := g.marshalYAMLSection("security", rootSecurity())
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal security section: %w", err)
+		}
+		sb.WriteString(securityYAML)
+	}
+
 	return sb.String(), nil
 }
 
+// configuredServers returns the configured server URLs as Server Objects,
+// skipping blank or whitespace-only entries, and falling back to the
+// relative-root default when none remain. Filtering on content (not just slice
+// length) keeps a stray `--server ""` from emitting an invalid empty-URL Server
+// Object and bypassing the no-empty-servers default.
+func (g *OpenAPIGenerator) configuredServers() []openAPIServer {
+	out := make([]openAPIServer, 0, len(g.servers))
+	for _, url := range g.servers {
+		if trimmed := strings.TrimSpace(url); trimmed != "" {
+			out = append(out, openAPIServer{URL: trimmed})
+		}
+	}
+	if len(out) == 0 {
+		return defaultServers()
+	}
+	return out
+}
+
+// tenantSecurityScheme is the component name for the X-Tenant-ID apiKey scheme.
+const tenantSecurityScheme = "TenantID"
+
+// openAPIServer is a Server Object.
+type openAPIServer struct {
+	URL         string `yaml:"url"`
+	Description string `yaml:"description,omitempty"`
+}
+
+// securityScheme is a Security Scheme Object (apiKey form).
+type securityScheme struct {
+	Type string `yaml:"type"`
+	In   string `yaml:"in,omitempty"`
+	Name string `yaml:"name,omitempty"`
+}
+
+// defaultServers returns the default servers block: a single relative-root entry.
+// (A concrete --server URL is a PR11 flag.)
+func defaultServers() []openAPIServer {
+	return []openAPIServer{{URL: "/", Description: "Relative to the deployment host"}}
+}
+
+// securitySchemes returns the components.securitySchemes map. The framework
+// resolves the tenant from the X-Tenant-ID request header (apiKey-in-header);
+// bearer/oauth schemes can be added here later without restructuring.
+func securitySchemes() map[string]securityScheme {
+	return map[string]securityScheme{
+		tenantSecurityScheme: {Type: "apiKey", In: paramTypeHeader, Name: "X-Tenant-ID"},
+	}
+}
+
+// rootSecurity returns the document-level security requirement referencing the
+// tenant apiKey scheme.
+func rootSecurity() []map[string][]string {
+	return []map[string][]string{{tenantSecurityScheme: {}}}
+}
+
 // getTitle returns the project title or default
+// Built-in document defaults, the lowest-precedence fallback (used only when both
+// the explicit config value and the analyzer-derived project value are empty).
+const (
+	defaultDocTitle       = "Go-Bricks API"
+	defaultDocVersion     = "1.0.0"
+	defaultDocDescription = "Generated API specification"
+)
+
+// getTitle resolves info.title with precedence: explicit config (CLI --title) >
+// analyzer-derived project name (go.mod) > built-in default.
 func (g *OpenAPIGenerator) getTitle(project *models.Project) string {
+	if g.title != "" {
+		return g.title
+	}
 	if project.Name != "" {
 		return project.Name
 	}
-	return g.title
+	return defaultDocTitle
 }
 
 // getVersion returns the project version or default
 func (g *OpenAPIGenerator) getVersion(project *models.Project) string {
+	if g.version != "" {
+		return g.version
+	}
 	if project.Version != "" {
 		return project.Version
 	}
-	return g.version
+	return defaultDocVersion
 }
 
 // getDescription returns the project description or default
 func (g *OpenAPIGenerator) getDescription(project *models.Project) string {
+	if g.description != "" {
+		return g.description
+	}
 	if project.Description != "" {
 		return project.Description
 	}
-	return g.description
+	return defaultDocDescription
 }
 
-// getAllRoutes flattens routes from all modules
+// getAllRoutes flattens routes from all modules, preserving each route's owning
+// module identity (stamping it when the analyzer did not — e.g. hand-built
+// projects in tests) so later passes can namespace by module.
 func (g *OpenAPIGenerator) getAllRoutes(project *models.Project) []models.Route {
 	totalRoutes := 0
-	for _, module := range project.Modules {
-		totalRoutes += len(module.Routes)
+	for i := range project.Modules {
+		totalRoutes += len(project.Modules[i].Routes)
 	}
 	routes := make([]models.Route, 0, totalRoutes)
-	for _, module := range project.Modules {
-		routes = append(routes, module.Routes...)
+	for mi := range project.Modules {
+		module := &project.Modules[mi]
+		for ri := range module.Routes {
+			route := module.Routes[ri]
+			if route.Module == "" {
+				route.Module = module.Name
+			}
+			if route.Package == "" {
+				route.Package = module.Package
+			}
+			routes = append(routes, route)
+		}
 	}
 	return routes
 }
@@ -221,181 +479,402 @@ func (g *OpenAPIGenerator) groupRoutesByPath(routes []models.Route) map[string][
 	return pathGroups
 }
 
-// writePaths writes all paths with grouped routes to avoid duplicate path keys
-func (g *OpenAPIGenerator) writePaths(sb *strings.Builder, routes []models.Route) {
+// buildPaths builds the paths object as a struct graph keyed by path. yaml.Marshal
+// sorts map keys, giving the same deterministic path ordering the previous
+// hand-rolled writer produced via sort.Strings.
+func (g *OpenAPIGenerator) buildPaths(routes []models.Route, opIDs map[string]string) map[string]*OpenAPIPathItem {
 	pathGroups := g.groupRoutesByPath(routes)
-
-	// Sort paths for consistent output
-	paths := make([]string, 0, len(pathGroups))
+	paths := make(map[string]*OpenAPIPathItem, len(pathGroups))
 	for path := range pathGroups {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	// Write each path with all its methods
-	for _, path := range paths {
-		fmt.Fprintf(sb, "  %s:\n", path)
-		routesForPath := pathGroups[path]
-		for i := range routesForPath {
-			g.writeMethod(sb, &routesForPath[i])
+		// Defensive guard: a valid OpenAPI path template must start with "/".
+		// The analyzer already drops unresolvable paths; this rejects anything
+		// that still slipped through rather than emitting an invalid document.
+		if !strings.HasPrefix(path, "/") {
+			continue
 		}
+		group := pathGroups[path]
+		item := &OpenAPIPathItem{}
+		for i := range group {
+			g.assignOperation(item, &group[i], opIDs)
+		}
+		paths[path] = item
 	}
+	return paths
 }
 
-// Parameter represents an OpenAPI parameter (path, query, or header)
+// emittedRoutes reduces routes to the set actually emitted: the first route per
+// (method, path), in discovery order, mirroring assignOperation's first-wins
+// de-dup. Schema gating, ref collection, and operationId assignment all run over
+// this set so they agree with the emitted paths.
+func emittedRoutes(routes []models.Route) []models.Route {
+	seen := make(map[string]struct{}, len(routes))
+	out := make([]models.Route, 0, len(routes))
+	for i := range routes {
+		k := routeKey(&routes[i])
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, routes[i])
+	}
+	return out
+}
+
+// assignOperation builds the operation for a route and attaches it to the path
+// item under the matching HTTP method. The analyzer only emits the standard
+// methods (analyzer.isHTTPMethod), so an unrecognized method is a no-op. A
+// (method, path) already populated is left untouched (first-wins de-dup).
+func (g *OpenAPIGenerator) assignOperation(item *OpenAPIPathItem, route *models.Route, opIDs map[string]string) {
+	slot := item.methodSlot(strings.ToUpper(route.Method))
+	if slot == nil || *slot != nil {
+		return
+	}
+	*slot = g.buildOperation(route, opIDs)
+}
+
+// methodSlot returns a pointer to the operation field for an HTTP method, or nil
+// for an unrecognized method.
+func (item *OpenAPIPathItem) methodSlot(method string) **OpenAPIOperation {
+	switch method {
+	case httpMethodGet:
+		return &item.Get
+	case httpMethodPut:
+		return &item.Put
+	case httpMethodPost:
+		return &item.Post
+	case httpMethodDelete:
+		return &item.Delete
+	case httpMethodPatch:
+		return &item.Patch
+	case httpMethodHead:
+		return &item.Head
+	case httpMethodOptions:
+		return &item.Options
+	}
+	return nil
+}
+
+// Parameter represents an OpenAPI parameter (path, query, or header). Field
+// order matches the emitted document; Schema is always present, description and
+// example are omitted when empty.
 type Parameter struct {
-	Name        string
-	In          string // "path", "query", "header"
-	Required    bool
-	Description string
-	Schema      *OpenAPIProperty
-	Example     any
+	Name        string           `yaml:"name"`
+	In          string           `yaml:"in"` // "path", "query", "header"
+	Required    bool             `yaml:"required"`
+	Description string           `yaml:"description,omitempty"`
+	Schema      *OpenAPIProperty `yaml:"schema"`
+	Example     any              `yaml:"example,omitempty"`
 }
 
-// writeMethod writes a single HTTP method under a path
-func (g *OpenAPIGenerator) writeMethod(sb *strings.Builder, route *models.Route) {
-	method := strings.ToLower(route.Method)
-
-	fmt.Fprintf(sb, "    %s:\n", method)
-	fmt.Fprintf(sb, "      operationId: %s\n", g.getOperationID(route))
-	fmt.Fprintf(sb, "      summary: %s\n", g.getSummary(route))
-
-	if route.Description != "" {
-		fmt.Fprintf(sb, "      description: %s\n", route.Description)
+// buildOperation builds the Operation Object for a route. Empty tags/parameters
+// and an absent request body are dropped by the struct's omitempty tags, matching
+// the previous conditional text emission.
+func (g *OpenAPIGenerator) buildOperation(route *models.Route, opIDs map[string]string) *OpenAPIOperation {
+	op := &OpenAPIOperation{
+		OperationID: g.getOperationID(route, opIDs),
+		Summary:     g.getSummary(route),
+		Description: route.Description,
+		Tags:        route.Tags,
+		Responses:   g.buildResponses(route),
 	}
 
-	if len(route.Tags) > 0 {
-		sb.WriteString("      tags:\n")
-		for _, tag := range route.Tags {
-			fmt.Fprintf(sb, "        - %s\n", tag)
+	// Parameters (path, query, header) plus the remaining body fields.
+	params, bodyFields := g.extractParameters(route)
+	op.Parameters = params
+
+	// Emit a request body when there are body fields, OR when the route is
+	// JOSE-tagged (a JOSE request type may have only the sentinel field, with all
+	// "plaintext" fields filtered into header/path/query params or absent — but
+	// the route still expects an application/jose payload on the wire).
+	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
+		op.RequestBody = g.buildRequestBody(route.Request)
+	}
+
+	return op
+}
+
+// refComponentPrefix is the JSON-pointer prefix for component-schema $refs.
+const refComponentPrefix = "#/components/schemas/"
+
+// refPath returns the $ref pointer for a named component schema.
+func refPath(name string) string {
+	return refComponentPrefix + name
+}
+
+// joseTokenSchema is the Media Type schema for an application/jose payload. Per
+// OpenAPI 3.0.1 the Media Type schema describes the on-the-wire shape — a
+// base64url JOSE compact-serialization string token — NOT the decrypted
+// plaintext shape. The plaintext component schema is referenced from the parent
+// RequestBody/Response description instead.
+func joseTokenSchema() *OpenAPIProperty {
+	return &OpenAPIProperty{Type: typeString, Format: "jose"}
+}
+
+// joseDescription is the canonical RequestBody/Response description for a JOSE
+// route. RequestBody and Response objects allow a description field (Media Type
+// objects do not), so this is attached at the parent level. It names the
+// plaintext component schema the decrypted payload conforms to.
+func joseDescription(plaintextSchema string) string {
+	return fmt.Sprintf(
+		"JOSE compact serialization (signed-then-encrypted). The wire payload\n"+
+			"is a base64url-encoded JWE compact form whose plaintext, after\n"+
+			"decrypt+verify, conforms to the %s schema —\n"+
+			"see %s.\n",
+		plaintextSchema, refPath(plaintextSchema))
+}
+
+// jsonMediaRef builds a single-entry application/json content map whose schema is
+// a $ref to the named component.
+func jsonMediaRef(name string) map[string]*OpenAPIMediaType {
+	return map[string]*OpenAPIMediaType{mediaJSON: {Schema: &OpenAPIProperty{Ref: refPath(name)}}}
+}
+
+// buildResponses builds the responses object for a route.
+//
+// Success response: the status code is the one the handler's result constructor
+// implies (server.Created -> 201, Accepted -> 202, NewResult(n) -> n,
+// NoContentResult -> 204), defaulting to 200. The body shape depends on the
+// route flavour:
+//   - NoContent       -> no body (204).
+//   - JOSE response    -> a single application/jose string token; the Response
+//     description names the plaintext component the decrypted payload conforms to.
+//   - RawResponse      -> the bare payload schema ($ref to the response component),
+//     bypassing the data/meta envelope (Strangler-Fig migration).
+//   - default          -> the standard envelope {data: <$ref to response>, meta},
+//     which is what finally references the response component the analyzer
+//     discovered (closing the "orphan component" window).
+//
+// Error responses: 400 and 500 are always present; 422 is added when the request
+// type carries validation tags (the framework returns 422 on validation
+// failure). The error schema is JOSEErrorEnvelope for JOSE routes (pre-trust
+// failures leak nothing beyond {code,message}), RawErrorResponse for raw routes,
+// and ErrorResponse otherwise.
+//
+// JOSE 4xx schema selection is driven by EITHER side carrying jose tags. The
+// runtime enforces bidirectional symmetry at registration, but the analyzer runs
+// statically against source so we can encounter asymmetric setups; in any such
+// case the pre-trust failure path is still routed through the JOSE
+// plaintext-minimal envelope by the runtime, so the OpenAPI spec must reflect that.
+func (g *OpenAPIGenerator) buildResponses(route *models.Route) map[string]*OpenAPIResponse {
+	joseResponse := route.Response != nil && route.Response.JOSE
+	noContent := route.Response != nil && route.Response.NoContent
+
+	successCode := successStatusCode(route, noContent)
+	success := &OpenAPIResponse{Description: g.successDescription(route, successCode, noContent)}
+	switch {
+	case noContent:
+		// 204: no response body.
+	case joseResponse:
+		// Description on the Response Object names the plaintext schema; the Media
+		// Type schema describes the wire shape (a string token).
+		success.Description = joseDescription(g.successPlaintextSchema(route))
+		success.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
+	case route.RawResponse:
+		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: responsePayloadSchema(route.Response)}}
+	default:
+		success.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: successEnvelopeSchema(route.Response)}}
+	}
+
+	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
+	// security model: when decrypt/verify fails the peer is unauthenticated and
+	// the server leaks nothing beyond {code,message}. errorSchemaName is shared with
+	// the standard-schema gating so the two can never disagree.
+	errorSchema := errorSchemaName(route)
+
+	responses := map[string]*OpenAPIResponse{
+		"400": {Description: "Bad Request", Content: jsonMediaRef(errorSchema)},
+		"500": {Description: "Internal Server Error", Content: jsonMediaRef(errorSchema)},
+	}
+	if routeHasValidation(route.Request) {
+		responses["422"] = &OpenAPIResponse{Description: "Unprocessable Entity", Content: jsonMediaRef(errorSchema)}
+	}
+	// Assign the success entry LAST so a success status that overlaps an error code
+	// (e.g. a handler that returns NewResult(400, ...) as a non-error Result) keeps
+	// the documented success response rather than being clobbered by the 400 entry.
+	responses[successCode] = success
+	return responses
+}
+
+// successStatusCode resolves the success response code as a string key. A 204
+// (NoContent) wins outright; otherwise the constructor-derived SuccessStatus is
+// used when set, defaulting to 200.
+func successStatusCode(route *models.Route, noContent bool) string {
+	if noContent {
+		return "204"
+	}
+	if route.SuccessStatus != 0 {
+		return strconv.Itoa(route.SuccessStatus)
+	}
+	return "200"
+}
+
+// successDescription returns a human description for the success response,
+// preferring a status-specific phrase over the method-derived default.
+func (g *OpenAPIGenerator) successDescription(route *models.Route, code string, noContent bool) string {
+	switch {
+	case noContent:
+		return "No Content"
+	case code == "201":
+		return respDescCreated
+	case code == "202":
+		return "Request accepted for processing"
+	default:
+		return g.getResponseDescription(route.Method)
+	}
+}
+
+// successPlaintextSchema names the plaintext component a JOSE response decrypts
+// to, falling back to the generic SuccessResponse envelope when the handler
+// declares no typed response.
+func (g *OpenAPIGenerator) successPlaintextSchema(route *models.Route) string {
+	if route.Response != nil && route.Response.Name != "" {
+		return schemaName(route.Response)
+	}
+	return schemaSuccessResponse
+}
+
+// successEnvelopeSchema builds the inline {data, meta} success envelope. When the
+// route has a typed response, data is a $ref to its component schema; otherwise
+// data is a generic object (the handler returned an untyped/empty payload).
+func successEnvelopeSchema(response *models.TypeInfo) *OpenAPIProperty {
+	data := responsePayloadSchema(response)
+	if data.Ref == "" {
+		// Untyped fallback (generic object) — annotate it for readers.
+		data.Description = "Response data"
+	}
+	return &OpenAPIProperty{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameData: data,
+			propNameMeta: metaEnvelopeSchema(),
+		},
+	}
+}
+
+// metaEnvelopeSchema is the framework-authoritative envelope metadata block.
+// timestamp and traceId are always populated by the response writer.
+func metaEnvelopeSchema() *OpenAPIProperty {
+	return &OpenAPIProperty{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			"timestamp": {Type: typeString, Format: formatDateTime, Description: "RFC3339 response timestamp"},
+			"traceId":   {Type: typeString, Description: "W3C trace identifier for the request"},
+		},
+	}
+}
+
+// responsePayloadSchema returns the bare schema for a response component: a $ref
+// to the named type, or a generic object when the type is unnamed.
+func responsePayloadSchema(response *models.TypeInfo) *OpenAPIProperty {
+	if response == nil || response.Name == "" {
+		return &OpenAPIProperty{Type: typeObject}
+	}
+	return &OpenAPIProperty{Ref: refPath(schemaName(response))}
+}
+
+// routeHasValidation reports whether the request type carries any validation
+// constraints, which is what makes a 422 (Unprocessable Entity) reachable.
+func routeHasValidation(request *models.TypeInfo) bool {
+	if request == nil {
+		return false
+	}
+	for i := range request.Fields {
+		f := &request.Fields[i]
+		if f.Required || f.RawValidation != "" {
+			return true
 		}
 	}
-
-	// Extract and write parameters (path, query, header)
-	params, bodyFields := g.extractParameters(route)
-	if len(params) > 0 {
-		g.writeParameters(sb, params)
-	}
-
-	// Write request body if there are body fields, OR if the route is JOSE-tagged
-	// (a JOSE request type may have only the sentinel field, with all "plaintext"
-	// fields filtered into header/path/query params or simply absent — but the route
-	// still expects an application/jose payload on the wire).
-	if route.Request != nil && (len(bodyFields) > 0 || route.Request.JOSE) {
-		g.writeRequestBody(sb, route.Request)
-	}
-
-	// Responses
-	g.writeResponses(sb, route)
-}
-
-// writeResponses emits the responses section. When the route's response carries a
-// jose: tag the success response uses Content-Type: application/jose; the 4xx
-// pre-trust failure path always uses application/json (peer is unauthenticated, so
-// the framework returns a plaintext minimal envelope, never JOSE-wrapped — see the
-// hybrid envelope contract in CLAUDE.md JOSE Middleware).
-//
-// 4xx schema selection is driven by EITHER side carrying jose tags. The runtime
-// enforces bidirectional symmetry at registration, but the analyzer runs statically
-// against source so we can encounter asymmetric setups; in any such case the
-// pre-trust failure path is still routed through the JOSE plaintext-minimal
-// envelope by the runtime, so the OpenAPI spec must reflect that.
-func (g *OpenAPIGenerator) writeResponses(sb *strings.Builder, route *models.Route) {
-	joseResponse := route.Response != nil && route.Response.JOSE
-	joseRoute := joseResponse || (route.Request != nil && route.Request.JOSE)
-
-	sb.WriteString("      responses:\n")
-	sb.WriteString("        '200':\n")
-	if joseResponse {
-		// Description on the Response Object (spec-compliant) — per OpenAPI 3.0.1,
-		// description is a fixed field on Response, but NOT on Media Type Object.
-		// The Media Type schema describes the WIRE shape (a string token); the
-		// plaintext component schema is referenced from the description text.
-		writeJOSEDescription(sb, indent10, "SuccessResponse")
-		writeContentLine(sb, indent10)
-		writeMediaSchemaJOSE(sb, indent12)
-	} else {
-		fmt.Fprintf(sb, "%sdescription: %s\n", indent10, g.getResponseDescription(route.Method))
-		writeContentLine(sb, indent10)
-		writeMediaSchemaRef(sb, indent12, mediaJSON, "SuccessResponse")
-	}
-	sb.WriteString("        '400':\n")
-	fmt.Fprintf(sb, "%sdescription: Bad Request\n", indent10)
-	writeContentLine(sb, indent10)
-	// Pre-trust failures on JOSE routes are plaintext minimal envelopes per the
-	// security model: when decrypt/verify fails the peer is unauthenticated and the
-	// server leaks nothing beyond {code,message}.
-	errorSchema := schemaErrorResponse
-	if joseRoute {
-		errorSchema = "JOSEErrorEnvelope"
-	}
-	writeMediaSchemaRef(sb, indent12, mediaJSON, errorSchema)
-}
-
-// writeJOSEDescription emits the canonical "JOSE compact serialization" description
-// block. Per OpenAPI 3.0.1, Media Type Objects (under content.<contentType>:) do NOT
-// allow a description field — fixed fields are limited to schema, example, examples,
-// encoding. RequestBody and Response objects DO allow description, so the helper is
-// invoked at the parent level (under requestBody: or under '200':), not nested inside
-// the content/media-type block.
-//
-// indent is the YAML depth of the description: line itself. plaintextSchema is the
-// component schema name to reference from the description so consumers know what
-// shape the decrypted payload conforms to.
-func writeJOSEDescription(sb *strings.Builder, indent, plaintextSchema string) {
-	fmt.Fprintf(sb, "%sdescription: |\n", indent)
-	fmt.Fprintf(sb, "%s  JOSE compact serialization (signed-then-encrypted). The wire payload\n", indent)
-	fmt.Fprintf(sb, "%s  is a base64url-encoded JWE compact form whose plaintext, after\n", indent)
-	fmt.Fprintf(sb, "%s  decrypt+verify, conforms to the %s schema —\n", indent, plaintextSchema)
-	fmt.Fprintf(sb, "%s  see #/components/schemas/%s.\n", indent, plaintextSchema)
-}
-
-// writeMediaSchemaRef emits a Media Type entry whose schema is a $ref to a component:
-//
-//	<indent><contentType>:
-//	<indent>  schema:
-//	<indent>    $ref: '#/components/schemas/<ref>'
-//
-// Used for application/json bodies where the wire shape IS the documented schema.
-func writeMediaSchemaRef(sb *strings.Builder, indent, contentType, ref string) {
-	writeMediaTypeKey(sb, indent, contentType)
-	fmt.Fprintf(sb, "%s  schema:\n", indent)
-	fmt.Fprintf(sb, "%s    $ref: '#/components/schemas/%s'\n", indent, ref)
-}
-
-// writeMediaSchemaJOSE emits a Media Type entry for application/jose where the schema
-// describes the on-the-wire payload as a string token (per OpenAPI 3.0.1 — the JOSE
-// compact serialization is a base64url-encoded string, NOT the decrypted plaintext
-// shape). The plaintext schema is still emitted as a component and referenced from
-// the parent RequestBody/Response description text via writeJOSEDescription.
-func writeMediaSchemaJOSE(sb *strings.Builder, indent string) {
-	writeMediaTypeKey(sb, indent, mediaJOSE)
-	fmt.Fprintf(sb, "%s  schema:\n", indent)
-	fmt.Fprintf(sb, "%s    type: string\n", indent)
-	fmt.Fprintf(sb, "%s    format: jose\n", indent)
-}
-
-// writeContentLine emits "<indent>content:\n" — the YAML key that opens a Media Type
-// map under either a Response Object or a RequestBody Object.
-func writeContentLine(sb *strings.Builder, indent string) {
-	fmt.Fprintf(sb, "%scontent:\n", indent)
-}
-
-// writeMediaTypeKey emits "<indent><mediaType>:\n" — the YAML key that opens a single
-// Media Type Object inside a content map (e.g. "application/json:" or "application/jose:").
-func writeMediaTypeKey(sb *strings.Builder, indent, mediaType string) {
-	fmt.Fprintf(sb, "%s%s:\n", indent, mediaType)
+	return false
 }
 
 // getOperationID generates an operation ID for a route
-func (g *OpenAPIGenerator) getOperationID(route *models.Route) string {
-	if route.HandlerName != "" {
-		return route.HandlerName
+func (g *OpenAPIGenerator) getOperationID(route *models.Route, opIDs map[string]string) string {
+	if id, ok := opIDs[routeKey(route)]; ok {
+		return id
 	}
-	// Fallback: create from method and path
-	cleanPath := strings.ReplaceAll(route.Path, "/", "_")
-	cleanPath = strings.ReplaceAll(cleanPath, ":", "")
-	return fmt.Sprintf("%s%s", strings.ToLower(route.Method), cleanPath)
+	return g.baseOperationID(route) // defensive fallback (route not in the pre-pass)
+}
+
+// routeKey identifies a route by its emitted slot (method + path); unique because
+// assignOperation de-dups duplicate (method, path) pairs first-wins.
+func routeKey(route *models.Route) string {
+	return strings.ToUpper(route.Method) + " " + route.Path
+}
+
+// assignOperationIDs assigns a deterministic, collision-free operationId to every
+// route: an explicit WithHandlerName id verbatim, else a module-qualified handler
+// name (usersGetUser), with a numeric suffix on any remaining collision. Routes
+// are processed in sorted key order so the assignment is stable across runs.
+func (g *OpenAPIGenerator) assignOperationIDs(routes []models.Route) map[string]string {
+	keys := make([]string, 0, len(routes))
+	byKey := make(map[string]*models.Route, len(routes))
+	for i := range routes {
+		k := routeKey(&routes[i])
+		// First-wins, mirroring assignOperation: the FIRST route for a (method,
+		// path) is the one emitted, so its handler must drive the operationId.
+		if _, seen := byKey[k]; seen {
+			continue
+		}
+		byKey[k] = &routes[i]
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	used := make(map[string]struct{}, len(routes))
+	out := make(map[string]string, len(routes))
+	for _, k := range keys {
+		if _, done := out[k]; done {
+			continue // duplicate (method, path) — one operation emitted
+		}
+		base := g.baseOperationID(byKey[k])
+		id := base
+		for n := 2; ; n++ {
+			if _, taken := used[id]; !taken {
+				break
+			}
+			id = base + strconv.Itoa(n)
+		}
+		used[id] = struct{}{}
+		out[k] = id
+	}
+	return out
+}
+
+// baseOperationID derives a route's un-deduplicated operationId: an explicit
+// WithHandlerName id is used as-is; otherwise the handler method name is
+// module-qualified (module "users" + "getUser" -> "usersGetUser"), falling back
+// to method+path when no handler name was resolved. The caller may still append a
+// numeric suffix if two routes produce the same base — operationIds must be
+// unique, so even an explicit id is suffixed on the (rare) explicit collision.
+func (g *OpenAPIGenerator) baseOperationID(route *models.Route) string {
+	if route.OperationID != "" {
+		return route.OperationID
+	}
+	name := route.HandlerName
+	if name == "" {
+		cleanPath := strings.ReplaceAll(route.Path, "/", "_")
+		cleanPath = strings.ReplaceAll(cleanPath, ":", "")
+		return strings.ToLower(route.Method) + cleanPath
+	}
+	if route.Module != "" {
+		return lowerFirst(route.Module) + upperFirst(name)
+	}
+	return name
+}
+
+// lowerFirst / upperFirst adjust the first rune's case for camelCase joining.
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // getSummary returns the route summary or generates one
@@ -406,18 +885,23 @@ func (g *OpenAPIGenerator) getSummary(route *models.Route) string {
 	return fmt.Sprintf("%s %s", route.Method, route.Path)
 }
 
-// getResponseDescription returns a description based on HTTP method
+// getResponseDescription returns a description based on HTTP method, used for the
+// 200 success case. The method is normalized to upper-case (consistent with
+// assignOperation) so a lowercase/mixed-case input still maps to the right
+// description rather than silently falling through to the generic default.
+//
+// POST maps to the generic "Successful response", NOT "Resource created": a 201
+// is described as created by successDescription's status branch, so a POST that
+// returns 200 (e.g. a query-by-POST endpoint) is not mislabeled as a creation.
 func (g *OpenAPIGenerator) getResponseDescription(method string) string {
-	switch method {
-	case "GET":
+	switch strings.ToUpper(method) {
+	case httpMethodGet, httpMethodPost:
 		return respDescSuccess
-	case httpMethodPost:
-		return "Resource created successfully"
-	case "PUT":
+	case httpMethodPut:
 		return "Resource updated successfully"
-	case "DELETE":
+	case httpMethodDelete:
 		return "Resource deleted successfully"
-	case "PATCH":
+	case httpMethodPatch:
 		return "Resource partially updated"
 	default:
 		return respDescSuccess
@@ -447,85 +931,195 @@ func (g *OpenAPIGenerator) marshalYAMLSection(sectionName string, data any) (str
 	return buf.String(), nil
 }
 
-// createStandardSchemas creates common response schemas using proper structs
-func (g *OpenAPIGenerator) createStandardSchemas() map[string]*OpenAPISchema {
-	return map[string]*OpenAPISchema{
-		"SuccessResponse": {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				"data": {
-					Type:        typeObject,
-					Description: "Response data",
-				},
-				"meta": {
-					Type:        typeObject,
-					Description: "Response metadata",
-				},
-			},
-		},
-		schemaErrorResponse: {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				propNameError: {
-					Type: typeObject,
-					// Note: nested properties would need recursive handling for full OpenAPI spec
-					Description: "Error details with code and message",
-				},
-				"meta": {
-					Type:        typeObject,
-					Description: "Response metadata",
-				},
-			},
-			Required: []string{propNameError},
-		},
-		// JOSEErrorEnvelope is the minimal plaintext error envelope returned for
-		// pre-trust JOSE failures (decrypt failed, signature invalid, kid unknown,
-		// etc.). The framework intentionally omits traceId/timestamp/framework
-		// metadata here — peer is unauthenticated and the envelope must leak
-		// nothing beyond the canonical {code,message} pair.
-		"JOSEErrorEnvelope": {
-			Type: typeObject,
-			Properties: map[string]*OpenAPIProperty{
-				"code": {
-					Type:        typeString,
-					Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)",
-				},
-				"message": {
-					Type:        typeString,
-					Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure",
-				},
-			},
-			Required: []string{"code", "message"},
+// errorSchemaName returns the error-component name a route's 4xx/5xx responses
+// reference: JOSEErrorEnvelope for JOSE routes (request or response tagged),
+// RawErrorResponse for raw-response routes, else ErrorResponse. Shared by
+// buildResponses (emit) and createStandardSchemas (gate) so they cannot diverge.
+func errorSchemaName(route *models.Route) string {
+	joseRoute := (route.Response != nil && route.Response.JOSE) ||
+		(route.Request != nil && route.Request.JOSE)
+	switch {
+	case joseRoute:
+		return schemaJOSEErrorEnvelope
+	case route.RawResponse:
+		return schemaRawErrorResponse
+	default:
+		return schemaErrorResponse
+	}
+}
+
+// createStandardSchemas returns only the common schemas actually referenced by
+// the given routes, so the document carries no unused components. The error
+// schema per route is selected by errorSchemaName (shared with buildResponses);
+// SuccessResponse is added only when a JOSE route falls back to the generic
+// envelope (an untyped JOSE response, mirroring successPlaintextSchema).
+func (g *OpenAPIGenerator) createStandardSchemas(routes []models.Route) map[string]*OpenAPISchema {
+	builders := map[string]func() *OpenAPISchema{
+		schemaErrorResponse:     errorResponseSchema,
+		schemaJOSEErrorEnvelope: joseErrorEnvelopeSchema,
+		schemaRawErrorResponse:  rawErrorResponseSchema,
+		schemaSuccessResponse:   successResponseSchema,
+	}
+	used := make(map[string]bool, len(builders))
+	for i := range routes {
+		r := &routes[i]
+		used[errorSchemaName(r)] = true
+		if r.Response != nil && r.Response.JOSE && r.Response.Name == "" {
+			used[schemaSuccessResponse] = true
+		}
+	}
+
+	out := make(map[string]*OpenAPISchema, len(used))
+	for name := range used {
+		out[name] = builders[name]()
+	}
+	return out
+}
+
+// successResponseSchema is the generic data/meta envelope used as the JOSE
+// plaintext-schema fallback (a typed route emits an inline envelope instead). Its
+// meta reuses metaEnvelopeSchema so the documented shape never diverges.
+func successResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameData: {Type: typeObject, Description: "Response data"},
+			propNameMeta: metaEnvelopeSchema(),
 		},
 	}
 }
 
+func errorResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameError: {Type: typeObject, Description: "Error details with code and message"},
+			propNameMeta:  {Type: typeObject, Description: "Response metadata"},
+		},
+		Required: []string{propNameError},
+	}
+}
+
+// joseErrorEnvelopeSchema is the minimal plaintext error envelope for pre-trust
+// JOSE failures — it intentionally omits traceId/timestamp/framework metadata (the
+// peer is unauthenticated and must learn nothing beyond {code,message}).
+func joseErrorEnvelopeSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameCode:    {Type: typeString, Description: "Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)"},
+			propNameMessage: {Type: typeString, Description: "Constant-time generic message — never reveals which key was tried or which library detected the failure"},
+		},
+		Required: []string{propNameCode, propNameMessage},
+	}
+}
+
+// rawErrorResponseSchema is the bare {code,message} payload for WithRawResponse()
+// routes (no data/meta envelope), mirroring the framework's formatRawErrorResponse.
+func rawErrorResponseSchema() *OpenAPISchema {
+	return &OpenAPISchema{
+		Type: typeObject,
+		Properties: map[string]*OpenAPIProperty{
+			propNameCode:    {Type: typeString, Description: "Machine-readable error code"},
+			propNameMessage: {Type: typeString, Description: "Human-readable error message"},
+		},
+		Required: []string{propNameCode, propNameMessage},
+	}
+}
+
 // generateSchemasFromTypes creates OpenAPI schemas from discovered type information
-func (g *OpenAPIGenerator) generateSchemasFromTypes(routes []models.Route) map[string]*OpenAPISchema {
-	schemas := make(map[string]*OpenAPISchema)
-	seen := make(map[string]bool)
-
-	for i := range routes {
-		// Generate schema for request type
-		if routes[i].Request != nil && !seen[routes[i].Request.Name] {
-			schema := g.typeInfoToSchema(routes[i].Request)
-			if schema != nil {
-				schemas[routes[i].Request.Name] = schema
-				seen[routes[i].Request.Name] = true
-			}
+// generateSchemasFromTypes emits one component schema per registered type. The
+// registry already contains every named struct reachable from a route's request
+// or response (including nested, sliced, and recursive types), so iterating it
+// produces a self-contained set of components with all $refs resolvable.
+func (g *OpenAPIGenerator) generateSchemasFromTypes(types map[string]*models.TypeInfo, referenced map[string]bool) map[string]*OpenAPISchema {
+	schemas := make(map[string]*OpenAPISchema, len(types))
+	for _, ti := range types {
+		// A params-only request type (every field a path/query/header param, no JSON
+		// body) is represented purely as OpenAPI parameters; it has no requestBody
+		// $ref, so emitting a component would leave an unused orphan — UNLESS it is
+		// also referenced elsewhere (e.g. reused as a response), in which case the
+		// $ref must resolve to an emitted component.
+		if isParamsOnlyType(ti) && !referenced[schemaName(ti)] {
+			continue
 		}
+		if schema := g.typeInfoToSchema(ti); schema != nil {
+			schemas[schemaName(ti)] = schema
+		}
+	}
+	return schemas
+}
 
-		// Generate schema for response type
-		if routes[i].Response != nil && !seen[routes[i].Response.Name] {
-			schema := g.typeInfoToSchema(routes[i].Response)
-			if schema != nil {
-				schemas[routes[i].Response.Name] = schema
-				seen[routes[i].Response.Name] = true
+// referencedSchemaNames collects every component name reachable via a real $ref:
+// typed (non-JOSE) response payloads, and field/map-value refs across all types.
+// Used so a params-only type that is also referenced is not skipped (which would
+// leave a dangling $ref).
+func referencedSchemaNames(routes []models.Route, types map[string]*models.TypeInfo) map[string]bool {
+	out := make(map[string]bool)
+	for i := range routes {
+		r := &routes[i]
+		// Typed, non-JOSE responses are emitted as data.$ref (or a raw $ref).
+		if r.Response != nil && r.Response.Name != "" && !r.Response.JOSE {
+			out[schemaName(r.Response)] = true
+		}
+	}
+	for _, ti := range types {
+		for j := range ti.Fields {
+			if n := ti.Fields[j].RefName; n != "" {
+				out[n] = true
+			}
+			if n := ti.Fields[j].MapValueRefName; n != "" {
+				out[n] = true
 			}
 		}
 	}
+	return out
+}
 
-	return schemas
+// isParamsOnlyType reports whether a type's every field is a path/query/header
+// param (no JSON body field) and it is not JOSE-tagged — i.e. it is referenced
+// only as parameters, never as a body schema.
+func isParamsOnlyType(ti *models.TypeInfo) bool {
+	if ti == nil || ti.JOSE || len(ti.Fields) == 0 {
+		return false
+	}
+	for i := range ti.Fields {
+		if ti.Fields[i].ParamType == "" {
+			return false // a body field — needs a component schema
+		}
+	}
+	return true
+}
+
+// schemaName is the single source for a type's component-schema name (and the
+// $ref that points at it). Centralized so name disambiguation across packages
+// can be added in one place later.
+func schemaName(ti *models.TypeInfo) string {
+	return ti.Name
+}
+
+// routeTypeRegistry builds a flat type registry from the request/response types
+// of a project's routes. It is the fallback used when project.Types is unset
+// (e.g. a Project assembled directly rather than via the analyzer); it does not
+// resolve nested types, which the analyzer's registry already includes.
+func routeTypeRegistry(project *models.Project) map[string]*models.TypeInfo {
+	types := make(map[string]*models.TypeInfo)
+	add := func(ti *models.TypeInfo) {
+		if ti == nil || ti.Name == "" {
+			return
+		}
+		if _, ok := types[ti.Name]; !ok {
+			types[ti.Name] = ti
+		}
+	}
+	for mi := range project.Modules {
+		for ri := range project.Modules[mi].Routes {
+			route := &project.Modules[mi].Routes[ri]
+			add(route.Request)
+			add(route.Response)
+		}
+	}
+	return types
 }
 
 // typeInfoToSchema converts a TypeInfo to an OpenAPI schema
@@ -569,8 +1163,27 @@ func (g *OpenAPIGenerator) typeInfoToSchema(typeInfo *models.TypeInfo) *OpenAPIS
 	return schema
 }
 
-// fieldInfoToProperty converts a FieldInfo to an OpenAPI property
+// fieldInfoToProperty converts a FieldInfo to an OpenAPI property.
 func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPIProperty {
+	// A field whose underlying type is a registered struct is a $ref (or an array
+	// of $ref). A $ref must stand alone — it carries no sibling type/format or
+	// constraint keywords — so return early.
+	if field.RefName != "" {
+		ref := &OpenAPIProperty{Ref: refPath(field.RefName)}
+		if isSliceType(field.Type) {
+			// The inner $ref must stand alone, but the array wrapper carries the
+			// field's documentation and cardinality (minItems/maxItems). Element-scope
+			// (dive) rules have nowhere valid to go on a $ref element, so they drop.
+			arr := &OpenAPIProperty{Type: typeArray, Items: ref, Description: field.Description}
+			if field.Example != "" {
+				arr.Example = field.Example
+			}
+			g.applyConstraints(arr, field)
+			return arr
+		}
+		return ref
+	}
+
 	prop := &OpenAPIProperty{
 		Description: field.Description,
 	}
@@ -580,19 +1193,142 @@ func (g *OpenAPIGenerator) fieldInfoToProperty(field *models.FieldInfo) *OpenAPI
 		prop.Example = field.Example
 	}
 
+	// A struct-valued map (map[string]Address) is an object whose
+	// additionalProperties is a $ref to the value component. Handle it here, where
+	// the analyzer-resolved MapValueRefName is available (setTypeAndFormat sees
+	// only the type string and so can only type primitive-valued maps). A map of
+	// slices (map[string][]Address) wraps the $ref in an array.
+	if valueType, isMap := mapValueType(field.Type); isMap && field.MapValueRefName != "" {
+		ref := &OpenAPIProperty{Ref: refPath(field.MapValueRefName)}
+		prop.Type = typeObject
+		if isSliceType(valueType) {
+			prop.AdditionalProperties = &OpenAPIProperty{Type: typeArray, Items: ref}
+		} else {
+			prop.AdditionalProperties = ref
+		}
+		return prop
+	}
+
+	// A named, non-struct scalar (e.g. `type Cents int64`) carries its resolved
+	// OpenAPI kind from the analyzer; emit that instead of the object fallback
+	// setTypeAndFormat would pick for an unrecognized type name. For a slice of a
+	// named scalar ([]Cents) the resolved kind is the ELEMENT's, so emit an array
+	// whose items carry that kind (and the dive element constraints).
+	if field.UnderlyingKind != "" {
+		if isSliceType(field.Type) {
+			prop.Type = typeArray
+			prop.Items = &OpenAPIProperty{Type: field.UnderlyingKind}
+			g.applyConstraints(prop, field)        // minItems/maxItems on the array
+			g.applyElementConstraints(prop, field) // dive rules on items
+			return prop
+		}
+		prop.Type = field.UnderlyingKind
+		g.applyConstraints(prop, field)
+		return prop
+	}
+
 	// Map Go type to OpenAPI type and format
 	g.setTypeAndFormat(prop, field.Type)
 
-	// Apply constraints from validation tags
+	// Apply collection/scalar constraints (incl. minItems/maxItems for slices),
+	// then element-scope (dive) constraints onto the array's items.
 	g.applyConstraints(prop, field)
+	g.applyElementConstraints(prop, field)
 
 	return prop
+}
+
+// applyElementConstraints maps a slice field's element-scope (post-`dive`) rules
+// onto prop.Items (e.g. `dive,email` -> items.format:email). No-op for non-slice
+// fields or when there are no element constraints.
+func (g *OpenAPIGenerator) applyElementConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
+	if len(field.ElementConstraints) == 0 || prop.Items == nil {
+		return
+	}
+	// field.UnderlyingKind is resolved from the slice's element type (the analyzer
+	// strips */[] before classifying), so it is the ELEMENT's kind for a
+	// slice-of-named-scalar (e.g. []Cents -> "integer"), letting element numeric
+	// constraints map. Empty for builtin elements, where the type string suffices.
+	elemType := sliceElementType(field.Type)
+	for _, c := range analyzer.MapConstraintToOpenAPI(elemType, field.UnderlyingKind, field.ElementConstraints) {
+		g.applyConstraint(prop.Items, c)
+	}
+}
+
+// sliceElementType strips a leading pointer and slice marker to expose the element
+// type ("[]string" -> "string", "*[]Address" -> "Address").
+func sliceElementType(goType string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(goType, "*"), "[]")
+}
+
+// isSliceType reports whether a Go type string denotes a slice (after an
+// optional leading pointer), e.g. "[]Address" or "*[]Address".
+func isSliceType(goType string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(goType, "*"), "[]")
+}
+
+// wellKnownType holds the OpenAPI type/format for a recognized stdlib/library type.
+type wellKnownType struct {
+	typ    string
+	format string
+}
+
+// wellKnownFormats maps qualified Go types to their idiomatic OpenAPI schema.
+// These types are NOT local structs (so the registry never refs them), and the
+// default object fallback would lose their real wire shape:
+//   - time.Time      -> RFC3339 string
+//   - time.Duration  -> integer (int64): encoding/json (which go-bricks uses)
+//     marshals a Duration as its underlying int64 nanosecond count — a JSON
+//     number, NOT a string.
+//   - []byte/[]uint8 -> base64 string (encoding/json marshals byte slices base64)
+//   - uuid.UUID      -> uuid-formatted string
+//   - json.RawMessage-> arbitrary JSON object
+//
+// NOTE: matching is by the analyzer's qualified type string (pkg-local alias +
+// "." + name), so an aliased import (import t "time" -> "t.Time") is not yet
+// recognized and falls through to the object default. Alias/import-path
+// resolution lands with the cross-package resolver in PR9.
+var wellKnownFormats = map[string]wellKnownType{
+	goTypeTimeTime:     {typeString, formatDateTime},
+	goTypeTimeDuration: {typeInteger, formatInt64},
+	goTypeByteSlice:    {typeString, formatBinary},
+	goTypeUint8Slice:   {typeString, formatBinary},
+	goTypeUUID:         {typeString, formatUUID},
+	goTypeRawMessage:   {typeObject, ""},
+}
+
+// mapValueType reports whether goType is a map (after an optional leading
+// pointer) and returns its value type string. Keys are assumed simple (no nested
+// brackets), which holds for JSON string-keyed maps. This is a deliberate twin of
+// analyzer.mapValueType (kept private in each package rather than shared as an
+// exported helper — see the note there); keep the two in sync.
+func mapValueType(goType string) (string, bool) {
+	goType = strings.TrimPrefix(goType, "*")
+	if !strings.HasPrefix(goType, "map[") {
+		return "", false
+	}
+	rest := goType[len("map["):]
+	i := strings.IndexByte(rest, ']')
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+1:], true
 }
 
 // setTypeAndFormat maps Go types to OpenAPI type and format
 func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string) {
 	// Strip pointer prefix
 	goType = strings.TrimPrefix(goType, "*")
+
+	// Well-known types first: []byte must win over the generic []T array branch,
+	// and time.Time/uuid.UUID over the qualified-type object fallback.
+	if wk, ok := wellKnownFormats[goType]; ok {
+		prop.Type = wk.typ
+		if wk.format != "" {
+			prop.Format = wk.format
+		}
+		return
+	}
 
 	// Handle arrays
 	if strings.HasPrefix(goType, "[]") {
@@ -603,16 +1339,34 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 		return
 	}
 
+	// Handle maps as objects with a typed additionalProperties (string-keyed).
+	// Struct-valued maps emit a $ref via fieldInfoToProperty; this nested path
+	// (maps inside slices/maps) recurses on the value type by string only.
+	if valueType, ok := mapValueType(goType); ok {
+		prop.Type = typeObject
+		prop.AdditionalProperties = &OpenAPIProperty{}
+		g.setTypeAndFormat(prop.AdditionalProperties, valueType)
+		return
+	}
+
 	// Handle basic types
 	switch goType {
 	case goTypeString:
 		prop.Type = typeString
-	case "int", "int8", "int16", formatInt32, goTypeUint, "uint8", "uint16", "uint32":
+	case "int", "int8", "int16", formatInt32:
 		prop.Type = typeInteger
 		prop.Format = formatInt32
-	case formatInt64, goTypeUint64:
+	case goTypeUint, "uint8", "uint16", "uint32":
+		prop.Type = typeInteger
+		prop.Format = formatInt32
+		prop.Minimum = floatPtr(0) // unsigned: never negative
+	case formatInt64:
 		prop.Type = typeInteger
 		prop.Format = formatInt64
+	case goTypeUint64:
+		prop.Type = typeInteger
+		prop.Format = formatInt64
+		prop.Minimum = floatPtr(0) // unsigned: never negative (and may exceed int64 max)
 	case goTypeFloat32:
 		prop.Type = typeNumber
 		prop.Format = formatFloat
@@ -628,14 +1382,18 @@ func (g *OpenAPIGenerator) setTypeAndFormat(prop *OpenAPIProperty, goType string
 	}
 }
 
+// floatPtr returns a pointer to v, for the *float64 schema constraint fields.
+func floatPtr(v float64) *float64 { return &v }
+
 // applyConstraints applies validation constraints to an OpenAPI property
 func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models.FieldInfo) {
 	if len(field.Constraints) == 0 {
 		return
 	}
 
-	// Use the constraint mapper from analyzer package
-	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Type, field.Constraints)
+	// Use the constraint mapper from analyzer package; UnderlyingKind lets named
+	// scalars (type Cents int64, time.Duration) map numeric/string constraints.
+	openAPIConstraints := analyzer.MapConstraintToOpenAPI(field.Type, field.UnderlyingKind, field.Constraints)
 
 	// Apply each constraint using specialized applicators
 	for _, constraint := range openAPIConstraints {
@@ -643,22 +1401,26 @@ func (g *OpenAPIGenerator) applyConstraints(prop *OpenAPIProperty, field *models
 	}
 }
 
-// applyConstraint routes a constraint to its specialized applicator
-func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint analyzer.OpenAPIConstraint) {
-	// Map constraint names to applicator functions
-	applicators := map[string]func(*OpenAPIProperty, any){
-		"format":           applyFormatConstraint,
-		"minLength":        applyMinLengthConstraint,
-		"maxLength":        applyMaxLengthConstraint,
-		"minimum":          applyMinimumConstraint,
-		"maximum":          applyMaximumConstraint,
-		"exclusiveMinimum": applyExclusiveMinimumConstraint,
-		"exclusiveMaximum": applyExclusiveMaximumConstraint,
-		"pattern":          applyPatternConstraint,
-		"enum":             applyEnumConstraint,
-	}
+// constraintApplicators maps an OpenAPIConstraint name to the function that writes
+// it onto a property. Static — defined once rather than per applyConstraint call
+// (applyConstraint runs once per emitted constraint, incl. the per-element loop).
+var constraintApplicators = map[string]func(*OpenAPIProperty, any){
+	"format":           applyFormatConstraint,
+	"minLength":        applyMinLengthConstraint,
+	"maxLength":        applyMaxLengthConstraint,
+	"minItems":         applyMinItemsConstraint,
+	"maxItems":         applyMaxItemsConstraint,
+	"minimum":          applyMinimumConstraint,
+	"maximum":          applyMaximumConstraint,
+	"exclusiveMinimum": applyExclusiveMinimumConstraint,
+	"exclusiveMaximum": applyExclusiveMaximumConstraint,
+	"pattern":          applyPatternConstraint,
+	"enum":             applyEnumConstraint,
+}
 
-	if applicator, exists := applicators[constraint.Name]; exists {
+// applyConstraint routes a constraint to its specialized applicator.
+func (g *OpenAPIGenerator) applyConstraint(prop *OpenAPIProperty, constraint analyzer.OpenAPIConstraint) {
+	if applicator, exists := constraintApplicators[constraint.Name]; exists {
 		applicator(prop, constraint.Value)
 	}
 }
@@ -681,6 +1443,20 @@ func applyMinLengthConstraint(prop *OpenAPIProperty, value any) {
 func applyMaxLengthConstraint(prop *OpenAPIProperty, value any) {
 	if val, ok := value.(int); ok {
 		prop.MaxLength = &val
+	}
+}
+
+// applyMinItemsConstraint sets the minItems field (array cardinality)
+func applyMinItemsConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MinItems = &val
+	}
+}
+
+// applyMaxItemsConstraint sets the maxItems field (array cardinality)
+func applyMaxItemsConstraint(prop *OpenAPIProperty, value any) {
+	if val, ok := value.(int); ok {
+		prop.MaxItems = &val
 	}
 }
 
@@ -734,7 +1510,9 @@ func toFloat64Ptr(value any) *float64 {
 	case float64:
 		return &val
 	case string:
-		//nolint:S8148 // NOSONAR: Parse error intentional - non-numeric strings return nil (no default value)
+		// NOSONAR: Parse error intentional - non-numeric strings return nil (no default value).
+		// (S8148 is a SonarCloud rule; NOSONAR is the suppressor it reads — a //nolint
+		// directive would name a golangci-lint linter, which S8148 is not.)
 		if v, err := strconv.ParseFloat(val, 64); err == nil {
 			return &v
 		}
@@ -778,157 +1556,32 @@ func (g *OpenAPIGenerator) extractParameters(route *models.Route) ([]Parameter, 
 	return params, bodyFields
 }
 
-// writeParameters writes the parameters array for an operation
-func (g *OpenAPIGenerator) writeParameters(sb *strings.Builder, params []Parameter) {
-	sb.WriteString("      parameters:\n")
-	for i := range params {
-		param := &params[i]
-		sb.WriteString("        - name: ")
-		sb.WriteString(param.Name)
-		sb.WriteString("\n")
-
-		fmt.Fprintf(sb, "          in: %s\n", param.In)
-		fmt.Fprintf(sb, "          required: %t\n", param.Required)
-
-		if param.Description != "" {
-			fmt.Fprintf(sb, "          description: %s\n", param.Description)
-		}
-
-		// Write schema
-		sb.WriteString("          schema:\n")
-		g.writePropertySchema(sb, param.Schema, indent12)
-
-		if param.Example != nil {
-			// Marshal example value to YAML-compatible format
-			fmt.Fprintf(sb, "          example: %v\n", param.Example)
-		}
-	}
-}
-
-// writeRequestBody writes the request body for an operation. When the request type
-// carries a jose: tag the Content-Type is application/jose and the schema $ref still
-// points at the documented plaintext shape — the wire payload is the compact JOSE
-// serialization that wraps that plaintext on decrypt+verify. Takes the full TypeInfo
-// (rather than a positional bool) so future flags compose without signature churn.
-func (g *OpenAPIGenerator) writeRequestBody(sb *strings.Builder, reqType *models.TypeInfo) {
+// buildRequestBody builds the Request Body Object for a request type. When the
+// request carries a jose: tag the Content-Type is application/jose with a
+// string-token wire schema and the plaintext shape is named in the description;
+// otherwise the schema is a $ref to the documented plaintext component. Takes the
+// full TypeInfo (rather than a positional bool) so future flags compose without
+// signature churn.
+func (g *OpenAPIGenerator) buildRequestBody(reqType *models.TypeInfo) *OpenAPIRequestBody {
 	schemaName := ""
 	isJOSE := false
 	if reqType != nil {
 		schemaName = reqType.Name
 		isJOSE = reqType.JOSE
 	}
-	contentType := mediaJSON
-	if isJOSE {
-		contentType = mediaJOSE
-	}
 
-	sb.WriteString("      requestBody:\n")
-	sb.WriteString("        required: true\n")
-	if isJOSE {
-		// Description on the RequestBody Object (spec-compliant) — sibling of content,
-		// NOT nested inside content.<contentType> which would violate OpenAPI 3.0.1.
-		writeJOSEDescription(sb, "        ", schemaName)
-	}
-	writeContentLine(sb, "        ")
-
+	rb := &OpenAPIRequestBody{Required: true}
 	switch {
 	case isJOSE:
-		// JOSE wire payload is a string token, not the plaintext schema. The plaintext
-		// component schema is referenced from the description text above.
-		writeMediaSchemaJOSE(sb, indent10)
+		// Description on the RequestBody Object (spec-compliant) names the plaintext
+		// schema; the Media Type schema describes the JOSE string-token wire shape.
+		rb.Description = joseDescription(schemaName)
+		rb.Content = map[string]*OpenAPIMediaType{mediaJOSE: {Schema: joseTokenSchema()}}
 	case schemaName != "":
-		writeMediaSchemaRef(sb, indent10, contentType, schemaName)
+		rb.Content = jsonMediaRef(schemaName)
 	default:
-		// Inline schema (fallback — shouldn't happen with proper type extraction).
-		writeMediaTypeKey(sb, indent10, contentType)
-		sb.WriteString("            schema:\n")
-		sb.WriteString("              type: object\n")
+		// Inline fallback — shouldn't happen with proper type extraction.
+		rb.Content = map[string]*OpenAPIMediaType{mediaJSON: {Schema: &OpenAPIProperty{Type: typeObject}}}
 	}
-}
-
-// writePropertySchema writes an OpenAPI property schema with proper indentation
-func (g *OpenAPIGenerator) writePropertySchema(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop == nil {
-		return
-	}
-
-	// Write all property components using focused writer functions
-	writeBasicType(sb, prop, indent)
-	writeStringConstraints(sb, prop, indent)
-	writeNumericConstraints(sb, prop, indent)
-	writeExclusiveBounds(sb, prop, indent)
-	writePattern(sb, prop, indent)
-	writeEnum(sb, prop, indent)
-	g.writeArrayItems(sb, prop, indent)
-}
-
-// writeBasicType writes the type and format fields
-func writeBasicType(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Type != "" {
-		fmt.Fprintf(sb, "%stype: %s\n", indent, prop.Type)
-	}
-	if prop.Format != "" {
-		fmt.Fprintf(sb, "%sformat: %s\n", indent, prop.Format)
-	}
-}
-
-// writeStringConstraints writes minLength and maxLength if present
-func writeStringConstraints(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.MinLength != nil {
-		fmt.Fprintf(sb, "%sminLength: %d\n", indent, *prop.MinLength)
-	}
-	if prop.MaxLength != nil {
-		fmt.Fprintf(sb, "%smaxLength: %d\n", indent, *prop.MaxLength)
-	}
-}
-
-// writeNumericConstraints writes minimum and maximum if present
-func writeNumericConstraints(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Minimum != nil {
-		fmt.Fprintf(sb, "%sminimum: %v\n", indent, *prop.Minimum)
-	}
-	if prop.Maximum != nil {
-		fmt.Fprintf(sb, "%smaximum: %v\n", indent, *prop.Maximum)
-	}
-}
-
-// writeExclusiveBounds writes exclusive minimum/maximum if true
-func writeExclusiveBounds(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.ExclusiveMinimum != nil && *prop.ExclusiveMinimum {
-		fmt.Fprintf(sb, "%sexclusiveMinimum: true\n", indent)
-	}
-	if prop.ExclusiveMaximum != nil && *prop.ExclusiveMaximum {
-		fmt.Fprintf(sb, "%sexclusiveMaximum: true\n", indent)
-	}
-}
-
-// writePattern writes the pattern field if present
-func writePattern(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Pattern != "" {
-		fmt.Fprintf(sb, "%spattern: %s\n", indent, prop.Pattern)
-	}
-}
-
-// writeEnum writes the enum array if present
-func writeEnum(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if len(prop.Enum) == 0 {
-		return
-	}
-
-	sb.WriteString(indent)
-	sb.WriteString("enum:\n")
-	for _, val := range prop.Enum {
-		fmt.Fprintf(sb, "%s  - %v\n", indent, val)
-	}
-}
-
-// writeArrayItems recursively writes array items if present
-func (g *OpenAPIGenerator) writeArrayItems(sb *strings.Builder, prop *OpenAPIProperty, indent string) {
-	if prop.Items == nil {
-		return
-	}
-
-	sb.WriteString(indent)
-	sb.WriteString("items:\n")
-	g.writePropertySchema(sb, prop.Items, indent+"  ")
+	return rb
 }

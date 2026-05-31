@@ -6,11 +6,12 @@ import (
 
 func TestMapConstraintToOpenAPI(t *testing.T) {
 	tests := []struct {
-		name        string
-		fieldType   string
-		constraints map[string]string
-		expected    []OpenAPIConstraint
-		description string
+		name           string
+		fieldType      string
+		underlyingKind string
+		constraints    map[string]string
+		expected       []OpenAPIConstraint
+		description    string
 	}{
 		{
 			name:        "email format",
@@ -43,7 +44,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 		{
 			name:        "datetime format",
 			fieldType:   "string",
-			constraints: map[string]string{"datetime": "true"},
+			constraints: map[string]string{validatorDatetime: "true"},
 			expected:    []OpenAPIConstraint{{Name: "format", Value: "date-time"}},
 			description: "should map datetime to date-time format",
 		},
@@ -112,7 +113,7 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			constraints: map[string]string{"gt": "0"},
 			expected: []OpenAPIConstraint{
 				{Name: "minimum", Value: int64(0)},
-				{Name: "exclusiveMinimum", Value: true},
+				{Name: constraintExclusiveMinimum, Value: true},
 			},
 			description: "should map gt to exclusive minimum",
 		},
@@ -229,11 +230,183 @@ func TestMapConstraintToOpenAPI(t *testing.T) {
 			expected:    []OpenAPIConstraint{},
 			description: "should return empty array for no constraints",
 		},
+		// --- PR11: named-numeric via UnderlyingKind ---
+		{
+			name: "named integer min/max via UnderlyingKind", fieldType: "Cents", underlyingKind: kindInteger,
+			constraints: map[string]string{"min": "100", "max": "1000"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(100)}, {Name: "maximum", Value: int64(1000)}},
+			description: "type Cents int64 must map numeric constraints (was dropped)",
+		},
+		{
+			name: "time.Duration gte via UnderlyingKind", fieldType: "time.Duration", underlyingKind: kindInteger,
+			constraints: map[string]string{"gte": "1"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(1)}},
+			description: "time.Duration maps numeric constraints",
+		},
+		{
+			name: "named integer gt via UnderlyingKind", fieldType: "Cents", underlyingKind: kindInteger,
+			constraints: map[string]string{"gt": "0"},
+			expected:    []OpenAPIConstraint{{Name: "minimum", Value: int64(0)}, {Name: constraintExclusiveMinimum, Value: true}},
+			description: "gt on named numeric emits minimum + exclusiveMinimum",
+		},
+		{
+			name: "named integer oneof via UnderlyingKind", fieldType: "Status", underlyingKind: kindInteger,
+			constraints: map[string]string{"oneof": "1 2 3"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{int64(1), int64(2), int64(3)}}},
+			description: "oneof on named numeric yields numeric enum",
+		},
+		// --- PR11: string length comparisons ---
+		{
+			name: "string gt -> minLength+1", fieldType: "string",
+			constraints: map[string]string{"gt": "3"},
+			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 4}},
+			description: "gt on string constrains length",
+		},
+		{
+			name: "string gt=0 non-empty idiom", fieldType: "string",
+			constraints: map[string]string{"gt": "0"},
+			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 1}},
+			description: "gt=0 -> minLength 1",
+		},
+		{
+			name: "string lt -> maxLength-1", fieldType: "string",
+			constraints: map[string]string{"lt": "10"},
+			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 9}},
+			description: "lt on string constrains length",
+		},
+		{
+			name: "string gt negative clamps to 0", fieldType: "string",
+			constraints: map[string]string{"gt": "-5"},
+			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 0}},
+			description: "negative length clamps to non-negative",
+		},
+		// --- PR11: slice cardinality ---
+		{
+			name: "slice min -> minItems", fieldType: "[]string",
+			constraints: map[string]string{"min": "1"},
+			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 1}},
+			description: "min on []T maps to minItems",
+		},
+		{
+			name: "slice len -> minItems+maxItems", fieldType: "[]int",
+			constraints: map[string]string{"len": "3"},
+			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 3}, {Name: "maxItems", Value: 3}},
+			description: "len on []T maps to minItems == maxItems",
+		},
+		{
+			name: "pointer slice min -> minItems", fieldType: "*[]string",
+			constraints: map[string]string{"min": "2"},
+			expected:    []OpenAPIConstraint{{Name: "minItems", Value: 2}},
+			description: "pointer-to-slice stripped, cardinality applies",
+		},
+		{
+			name: "byte slice is not an array", fieldType: "[]byte",
+			constraints: map[string]string{"min": "10"},
+			expected:    []OpenAPIConstraint{},
+			description: "[]byte is a base64 string, not a cardinality-bearing array",
+		},
+		// --- PR11: oneof quoting, eq, ne, datetime, formats, patterns ---
+		{
+			name: "oneof quoted multi-word", fieldType: "string",
+			constraints: map[string]string{"oneof": "'New York' 'Los Angeles'"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"New York", "Los Angeles"}}},
+			description: "quote-aware oneof keeps spaces",
+		},
+		{
+			name: "oneof unquoted still splits", fieldType: "string",
+			constraints: map[string]string{"oneof": "active pending"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"active", "pending"}}},
+			description: "unquoted oneof splits on spaces",
+		},
+		{
+			name: "eq -> single-element enum", fieldType: "string",
+			constraints: map[string]string{"eq": "GOLD"},
+			expected:    []OpenAPIConstraint{{Name: "enum", Value: []any{"GOLD"}}},
+			description: "eq maps to a single-value enum",
+		},
+		{
+			name: "ne -> nothing", fieldType: "string",
+			constraints: map[string]string{"ne": "X"},
+			expected:    []OpenAPIConstraint{},
+			description: "ne has no clean OpenAPI representation",
+		},
+		{
+			name: "datetime date-only layout -> date", fieldType: "string",
+			constraints: map[string]string{validatorDatetime: "2006-01-02"},
+			expected:    []OpenAPIConstraint{{Name: "format", Value: "date"}},
+			description: "date-only layout maps to format date",
+		},
+		{
+			name: "datetime with clock -> date-time", fieldType: "string",
+			constraints: map[string]string{validatorDatetime: "2006-01-02T15:04:05Z07:00"},
+			expected:    []OpenAPIConstraint{{Name: "format", Value: "date-time"}},
+			description: "layout with clock tokens maps to date-time",
+		},
+		{
+			name: "ipv4 format", fieldType: "string",
+			constraints: map[string]string{formatIPv4: "true"},
+			expected:    []OpenAPIConstraint{{Name: "format", Value: formatIPv4}},
+			description: "ipv4 maps to format ipv4",
+		},
+		{
+			name: "base64 -> byte format", fieldType: "string",
+			constraints: map[string]string{"base64": "true"},
+			expected:    []OpenAPIConstraint{{Name: "format", Value: "byte"}},
+			description: "base64 maps to OpenAPI byte format",
+		},
+		{
+			name: "alpha -> anchored pattern", fieldType: "string",
+			constraints: map[string]string{"alpha": "true"},
+			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `^[a-zA-Z]+$`}},
+			description: "alpha maps to a letter-only pattern",
+		},
+		{
+			name: "startswith -> anchored escaped pattern", fieldType: "string",
+			constraints: map[string]string{"startswith": "a.b"},
+			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `^a\.b`}},
+			description: "startswith escapes metacharacters and anchors at start",
+		},
+		{
+			name: "bare ip -> no format/pattern (documented)", fieldType: "string",
+			constraints: map[string]string{"ip": "true"},
+			expected:    []OpenAPIConstraint{},
+			description: "bare ip has no single clean OpenAPI format; left unconstrained by design",
+		},
+		{
+			name: "contains -> unanchored escaped pattern", fieldType: "string",
+			constraints: map[string]string{"contains": "a.b"},
+			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `a\.b`}},
+			description: "contains escapes metacharacters, no anchors",
+		},
+		{
+			name: "endswith -> end-anchored escaped pattern", fieldType: "string",
+			constraints: map[string]string{"endswith": ".json"},
+			expected:    []OpenAPIConstraint{{Name: "pattern", Value: `\.json$`}},
+			description: "endswith escapes and anchors at end",
+		},
+		{
+			name: "string gte -> minLength", fieldType: "string",
+			constraints: map[string]string{"gte": "3"},
+			expected:    []OpenAPIConstraint{{Name: "minLength", Value: 3}},
+			description: "gte on string is a length floor",
+		},
+		{
+			name: "string lte -> maxLength", fieldType: "string",
+			constraints: map[string]string{"lte": "10"},
+			expected:    []OpenAPIConstraint{{Name: "maxLength", Value: 10}},
+			description: "lte on string is a length ceiling",
+		},
+		{
+			name: "slice max -> maxItems", fieldType: "[]string",
+			constraints: map[string]string{"max": "5"},
+			expected:    []OpenAPIConstraint{{Name: "maxItems", Value: 5}},
+			description: "max on []T maps to maxItems",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := MapConstraintToOpenAPI(tt.fieldType, tt.constraints)
+			result := MapConstraintToOpenAPI(tt.fieldType, tt.underlyingKind, tt.constraints)
 
 			if len(result) != len(tt.expected) {
 				t.Errorf("%s: expected %d constraints, got %d", tt.description, len(tt.expected), len(result))

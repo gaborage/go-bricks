@@ -3,10 +3,13 @@ info:
   title: Catalog API
   version: 1.0.0
   description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
 paths:
   /products/{id}:
     get:
-      operationId: getProduct
+      operationId: catalogGetProduct
       summary: GET /products/{id}
       tags:
         - catalog
@@ -24,14 +27,39 @@ paths:
             type: integer
             format: int32
       responses:
-        '200':
+        "200":
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SuccessResponse'
-        '400':
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Product'
+                  meta:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                        description: RFC3339 response timestamp
+                      traceId:
+                        type: string
+                        description: W3C trace identifier for the request
+        "400":
           description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Internal Server Error
           content:
             application/json:
               schema:
@@ -49,35 +77,18 @@ components:
           description: Response metadata
       required:
         - error
-    GetProductReq:
+    Product:
       type: object
       properties:
-        iD:
+        id:
           type: integer
           format: int64
-        page:
-          type: integer
-          format: int32
-      required:
-        - iD
-    JOSEErrorEnvelope:
-      type: object
-      properties:
-        code:
+        name:
           type: string
-          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
-        message:
-          type: string
-          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
-      required:
-        - code
-        - message
-    SuccessResponse:
-      type: object
-      properties:
-        data:
-          type: object
-          description: Response data
-        meta:
-          type: object
-          description: Response metadata
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []

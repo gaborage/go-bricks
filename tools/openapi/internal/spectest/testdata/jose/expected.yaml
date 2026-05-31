@@ -1,0 +1,90 @@
+openapi: 3.0.1
+info:
+  title: Vts API
+  version: 1.0.0
+  description: Generated API specification
+servers:
+  - url: /
+    description: Relative to the deployment host
+paths:
+  /v1/tokens:
+    post:
+      operationId: vtsCreateToken
+      summary: POST /v1/tokens
+      tags:
+        - vts
+      requestBody:
+        required: true
+        description: |
+          JOSE compact serialization (signed-then-encrypted). The wire payload
+          is a base64url-encoded JWE compact form whose plaintext, after
+          decrypt+verify, conforms to the CreateTokenRequest schema —
+          see #/components/schemas/CreateTokenRequest.
+        content:
+          application/jose:
+            schema:
+              type: string
+              format: jose
+      responses:
+        "200":
+          description: |
+            JOSE compact serialization (signed-then-encrypted). The wire payload
+            is a base64url-encoded JWE compact form whose plaintext, after
+            decrypt+verify, conforms to the CreateTokenResponse schema —
+            see #/components/schemas/CreateTokenResponse.
+          content:
+            application/jose:
+              schema:
+                type: string
+                format: jose
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "422":
+          description: Unprocessable Entity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JOSEErrorEnvelope'
+components:
+  schemas:
+    CreateTokenRequest:
+      type: object
+      properties:
+        pan:
+          type: string
+      required:
+        - pan
+    CreateTokenResponse:
+      type: object
+      properties:
+        token:
+          type: string
+    JOSEErrorEnvelope:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Machine-readable JOSE error code (e.g., JOSE_DECRYPT_FAILED, JOSE_SIGNATURE_INVALID, JOSE_KID_UNKNOWN)
+        message:
+          type: string
+          description: Constant-time generic message — never reveals which key was tried or which library detected the failure
+      required:
+        - code
+        - message
+  securitySchemes:
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+security:
+  - TenantID: []
