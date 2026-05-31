@@ -11,7 +11,6 @@
 
 # But not these files...
 !/.gitignore
-!/.gitattributes
 
 !*.go
 !go.sum
@@ -54,11 +53,8 @@
 # source they exercise.
 !**/testdata/**/*.json
 !**/testdata/**/*.sql
-# Golden OpenAPI specs for the openapi tool's round-trip harness.
+# Golden / fixture spec files under testdata/.
 !**/testdata/**/*.yaml
-
-# OpenAPI tool redocly lint config (referenced by `make validate-spec` in CI).
-!tools/openapi/redocly.yaml
 
 # ...even if they are in subdirectories
 !*/

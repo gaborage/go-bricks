@@ -176,9 +176,6 @@ observability:
 ## CI/CD Issues
 
 ```bash
-# Tool tests failing after framework changes
-make check-all
-
 # Windows-specific path failures
 # → Check for /tmp vs D:\temp in test assertions
 # → See: observability/provider_test.go for retry patterns
