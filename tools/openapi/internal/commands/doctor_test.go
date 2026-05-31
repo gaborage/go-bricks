@@ -14,9 +14,10 @@ import (
 )
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
-// printed. The pipe is drained in a goroutine so a large (or fn-aborting) write
-// can't deadlock. NOTE: this mutates the global os.Stdout; do not call it from
-// parallel tests.
+// printed. The pipe is drained in a goroutine so a large write can't deadlock; the
+// write end is closed even if fn panics (so the drain goroutine terminates instead
+// of leaking), and the read end is closed once drained (no fd leak).
+// NOTE: mutates the global os.Stdout; do not call from parallel tests.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stdout
@@ -31,11 +32,14 @@ func captureStdout(t *testing.T, fn func()) string {
 	go func() {
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, r)
+		_ = r.Close()
 		done <- buf.String()
 	}()
 
-	fn()
-	_ = w.Close()
+	func() {
+		defer func() { _ = w.Close() }()
+		fn()
+	}()
 	return <-done
 }
 
