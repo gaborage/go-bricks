@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/tools/openapi/internal/analyzer"
 	"github.com/gaborage/go-bricks/tools/openapi/internal/models"
 	"github.com/spf13/cobra"
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
@@ -22,8 +23,12 @@ import (
 var errGoBricksMissing = fmt.Errorf("%s dependency not found in go.mod", goBricksDep)
 
 const (
-	goModFile   = "go.mod"
-	goBricksDep = "go-bricks"
+	goModFile = "go.mod"
+	// goBricksDep is the short name used in user-facing messages; goBricksModulePath
+	// is the exact module path matched against go.mod (avoids matching lookalikes
+	// such as github.com/x/not-go-bricks-wrapper).
+	goBricksDep        = "go-bricks"
+	goBricksModulePath = "github.com/gaborage/go-bricks"
 
 	// Version floors, single-sourced to match go.mod (go 1.25) and the README.
 	// minGoVersion is the toolchain floor in Go's own version format (compared
@@ -261,7 +266,7 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 	}
 
 	// Parse go-bricks version from go.mod
-	gbVer, isReplace, err := parseGoBricksVersion(string(content))
+	gbVer, isReplace, err := parseGoBricksVersion(cleanPath, content)
 	if err != nil {
 		fmt.Printf("❌ %v\n", err) // dependency not found
 		return err
@@ -299,72 +304,36 @@ func checkGoBricksCompatibility(goModPath string, verbose bool) error {
 	return nil
 }
 
-// parseGoBricksVersion extracts the go-bricks version from go.mod content
-// Returns (version, isReplaceDirective, error)
-//
-//nolint:gocritic // Named returns would reduce clarity for boolean flag parameter
-func parseGoBricksVersion(goModContent string) (string, bool, error) {
-	lines := strings.Split(goModContent, "\n")
-
-	// First check for replace directives (local development)
-	if replacePath := findReplaceDirective(lines); replacePath != "" {
-		return replacePath, true, nil
+// parseGoBricksVersion parses go.mod and returns the go-bricks version.
+// It matches the exact module path (so lookalikes like
+// github.com/x/not-go-bricks-wrapper are ignored) and uses the structured
+// modfile parser (so block `require (...)` / `replace (...)` forms are handled).
+// A replace directive (single or block) reports isReplace=true with the target,
+// so the caller skips the version floor for local/fork development.
+func parseGoBricksVersion(goModPath string, content []byte) (gbVer string, isReplace bool, err error) {
+	mf, err := modfile.Parse(goModPath, content, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("parse go.mod: %w", err)
 	}
 
-	// Look for require directive with version
-	if ver := findRequireVersion(lines); ver != "" {
-		return ver, false, nil
+	// Replace wins (local/fork development).
+	for _, r := range mf.Replace {
+		if r.Old.Path == goBricksModulePath {
+			target := r.New.Path
+			if r.New.Version != "" {
+				target += "@" + r.New.Version
+			}
+			return target, true, nil
+		}
+	}
+
+	for _, req := range mf.Require {
+		if req.Mod.Path == goBricksModulePath {
+			return req.Mod.Version, false, nil
+		}
 	}
 
 	return "", false, errGoBricksMissing
-}
-
-// findReplaceDirective searches for a replace directive in go.mod lines
-func findReplaceDirective(lines []string) string {
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "replace") && strings.Contains(trimmed, goBricksDep) {
-			// Format: replace github.com/gaborage/go-bricks => ../local-path
-			parts := strings.Split(trimmed, "=>")
-			if len(parts) == 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
-}
-
-// findRequireVersion searches for a require directive with version in go.mod lines
-func findRequireVersion(lines []string) string {
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, goBricksDep) || strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-
-		// Format: github.com/gaborage/go-bricks v0.5.0
-		// or:     github.com/gaborage/go-bricks v0.5.0 // indirect
-		fields := strings.Fields(trimmed)
-		if ver := extractVersionFromFields(fields); ver != "" {
-			return ver
-		}
-	}
-	return ""
-}
-
-// extractVersionFromFields extracts version from go.mod require line fields
-func extractVersionFromFields(fields []string) string {
-	for i, field := range fields {
-		if strings.Contains(field, goBricksDep) && i+1 < len(fields) {
-			ver := fields[i+1]
-			// Remove "// indirect" or other comments
-			if commentIdx := strings.Index(ver, "//"); commentIdx != -1 {
-				ver = strings.TrimSpace(ver[:commentIdx])
-			}
-			return ver
-		}
-	}
-	return ""
 }
 
 // checkVersionCompatibility validates go-bricks version meets minimum requirements

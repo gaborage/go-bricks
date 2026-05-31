@@ -163,7 +163,7 @@ func TestCheckGoBricksCompatibility(t *testing.T) {
 go 1.21
 
 require (
-	go-bricks v1.0.0
+	github.com/gaborage/go-bricks v1.0.0
 	github.com/spf13/cobra v1.8.0
 )
 `,
@@ -214,7 +214,7 @@ require github.com/gaborage/go-bricks v0.12.0
 go 1.21
 
 require (
-	go-bricks v2.0.0
+	github.com/gaborage/go-bricks v0.20.0
 )
 `,
 			verbose:     true,
@@ -292,7 +292,7 @@ func TestRunDoctor(t *testing.T) {
 
 go 1.21
 
-require go-bricks v1.0.0
+require github.com/gaborage/go-bricks v1.0.0
 `
 	err := os.WriteFile(filepath.Join(tempDir, goModFile), []byte(goModContent), 0644)
 	if err != nil {
@@ -491,7 +491,7 @@ func TestCheckGoBricksCompatibilityWithRelativePaths(t *testing.T) {
 
 go 1.21
 
-require go-bricks v1.0.0
+require github.com/gaborage/go-bricks v1.0.0
 `
 	goModPath := filepath.Join(tempDir, goModFile)
 	err := os.WriteFile(goModPath, []byte(goModContent), 0644)
@@ -717,7 +717,7 @@ func TestRunDoctorUnsupportedGoVersion(t *testing.T) {
 
 go 1.21
 
-require go-bricks v1.0.0
+require github.com/gaborage/go-bricks v1.0.0
 `), 0644)
 	if err != nil {
 		t.Fatalf(msgFailedToCreate, err)
@@ -949,11 +949,45 @@ require github.com/other/package v1.0.0
 			expectedReplace: false,
 			expectError:     true,
 		},
+		{
+			// A lookalike module path must NOT be matched as go-bricks.
+			name: "lookalike module is not matched",
+			goModContent: `module test
+require github.com/example/not-go-bricks-wrapper v1.2.3
+`,
+			expectedVersion: "",
+			expectedReplace: false,
+			expectError:     true,
+		},
+		{
+			name: "block require form",
+			goModContent: `module test
+require (
+	github.com/gaborage/go-bricks v0.20.0
+	github.com/spf13/cobra v1.8.0
+)
+`,
+			expectedVersion: "v0.20.0",
+			expectedReplace: false,
+			expectError:     false,
+		},
+		{
+			name: "block replace form",
+			goModContent: `module test
+require github.com/gaborage/go-bricks v0.0.0
+replace (
+	github.com/gaborage/go-bricks => ../local-go-bricks
+)
+`,
+			expectedVersion: "../local-go-bricks",
+			expectedReplace: true,
+			expectError:     false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			version, isReplace, err := parseGoBricksVersion(tt.goModContent)
+			version, isReplace, err := parseGoBricksVersion("go.mod", []byte(tt.goModContent))
 
 			if tt.expectError && err == nil {
 				t.Error(msgExpectedError)
@@ -1029,93 +1063,6 @@ func TestCheckVersionCompatibility(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Errorf(msgUnexpectedError, err)
-			}
-		})
-	}
-}
-
-func TestFindReplaceDirective(t *testing.T) {
-	tests := []struct {
-		name     string
-		lines    []string
-		expected string
-	}{
-		{
-			name: "has replace",
-			lines: []string{
-				"module test",
-				"replace github.com/gaborage/go-bricks => ../local",
-			},
-			expected: "../local",
-		},
-		{
-			name: "no replace",
-			lines: []string{
-				"module test",
-				"require github.com/gaborage/go-bricks v0.5.0",
-			},
-			expected: "",
-		},
-		{
-			name: "replace with whitespace",
-			lines: []string{
-				"  replace  github.com/gaborage/go-bricks  =>  /absolute/path  ",
-			},
-			expected: "/absolute/path",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := findReplaceDirective(tt.lines)
-			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestFindRequireVersion(t *testing.T) {
-	tests := []struct {
-		name     string
-		lines    []string
-		expected string
-	}{
-		{
-			name: "simple require",
-			lines: []string{
-				"require github.com/gaborage/go-bricks v0.5.0",
-			},
-			expected: "v0.5.0",
-		},
-		{
-			name: "require with indirect",
-			lines: []string{
-				"require github.com/gaborage/go-bricks v0.6.0 // indirect",
-			},
-			expected: "v0.6.0",
-		},
-		{
-			name: "commented require",
-			lines: []string{
-				"// require github.com/gaborage/go-bricks v0.5.0",
-			},
-			expected: "",
-		},
-		{
-			name: "no go-bricks",
-			lines: []string{
-				"require github.com/other/package v1.0.0",
-			},
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := findRequireVersion(tt.lines)
-			if result != tt.expected {
-				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
 		})
 	}
