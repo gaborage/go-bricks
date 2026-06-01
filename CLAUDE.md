@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle), and clean architecture patterns.
 
 **Requirements:**
-- Go 1.25 required
+- Go 1.26 required
 - Docker Desktop or Docker Engine (integration tests only)
 
 ## Workflow Rules
@@ -127,7 +127,7 @@ make lint                       # Run golangci-lint
 ### Code Quality
 - Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
-- CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.25.
+- CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.26.
 - Race detection enabled on all platforms.
 
 ## Architecture
@@ -494,7 +494,7 @@ make check        # fmt, lint, test with race detection
 ### CI/CD Pipeline
 - **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
 - Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
-- **Test Matrix:** Ubuntu/Windows × Go 1.25.
+- **Test Matrix:** Ubuntu/Windows × Go 1.26.
 - **Coverage:** Merged unit + integration coverage → SonarCloud.
 
 ### Tool Selection

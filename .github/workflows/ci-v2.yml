@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC — weekly vuln re-scan of main
 
 jobs:
   # ============================================================================
@@ -13,6 +15,7 @@ jobs:
   changes:
     permissions:
       contents: read
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     outputs:
       # yamllint: valid GitHub Actions context expression
@@ -625,18 +628,8 @@ jobs:
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
-
-      - name: Run Gosec Security Scanner (migrate tool)
-        run: |
-          set -euo pipefail
-          packages=$(go list ./cmd/... ./internal/...)
-          if [ -z "$packages" ]; then
-            echo "No packages found to scan"
-            exit 1
-          fi
-          gosec $packages
+      - name: Run gosec (migrate tool)
+        run: make sec
 
   # ============================================================================
   # Shared Jobs (run for framework OR tool OR both)
@@ -682,17 +675,74 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
+      - name: Run gosec (framework)
+        run: make sec
 
-      - name: Run Gosec Security Scanner (framework)
+  vuln-framework:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run govulncheck (framework)
+        run: make vuln
+
+  vuln-migrate-tool:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/migration
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+      - name: Run govulncheck (migrate tool)
+        run: make vuln
+
+  vuln-weekly:
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/migration/go.sum
+      - name: Run govulncheck (both modules)
         run: |
-          set -euo pipefail
-          packages=$(go list ./... | grep -vE '/tools(/|$)')
-          if [ -n "$packages" ]; then
-            gosec $packages
-          else
-            echo "No packages found to scan"
+          set +e
+          make vuln; fw=$?
+          make -C tools/migration vuln; cli=$?
+          if [ "$fw" -ne 0 ] || [ "$cli" -ne 0 ]; then
+            echo "::error::govulncheck found vulnerabilities (framework exit=$fw, migrate-tool exit=$cli)"
             exit 1
           fi
 
