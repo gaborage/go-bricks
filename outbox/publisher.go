@@ -45,7 +45,6 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", fmt.Errorf("outbox: aggregate ID must not be empty")
 	}
 
-	// Marshal payload
 	payload, err := marshalPayload(event.Payload)
 	if err != nil {
 		return "", fmt.Errorf("outbox: failed to marshal payload: %w", err)
@@ -67,19 +66,16 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", fmt.Errorf("outbox: failed to marshal headers: %w", err)
 	}
 
-	// Resolve exchange
 	exchange := event.Exchange
 	if exchange == "" {
 		exchange = p.defaultExchange
 	}
 
-	// Resolve routing key
 	routingKey := event.RoutingKey
 	if routingKey == "" {
 		routingKey = event.EventType
 	}
 
-	// Generate event ID
 	eventID := uuid.New().String()
 
 	record := &Record{

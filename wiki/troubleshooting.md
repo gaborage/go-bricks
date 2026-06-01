@@ -222,7 +222,7 @@ observability:
 
 **Diagnostic commands:**
 ```bash
-grep "Starting AMQP consumers" logs/app.log
+grep "Starting message consumers" logs/app.log
 grep "Multiple consumers registered for same queue" logs/app.log
 grep "Panic recovered in message handler" logs/app.log
 ```

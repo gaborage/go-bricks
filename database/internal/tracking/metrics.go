@@ -150,8 +150,6 @@ func asInt64(v any) (int64, bool) {
 	}
 }
 
-// initDBMeter initializes the OpenTelemetry meter and metric instruments.
-// This function is called lazily and only once using sync.Once to ensure
 // initDBMeter initializes the package-level OpenTelemetry meter and the database
 // operation duration histogram.
 //

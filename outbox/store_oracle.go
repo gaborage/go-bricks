@@ -173,12 +173,10 @@ func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) err
 		return fmt.Errorf("outbox oracle: create table failed: %w", err)
 	}
 
-	// Create pending index
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreatePendingIndexSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("outbox oracle: create pending index failed: %w", err)
 	}
 
-	// Create published index
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreatePublishedIndexSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("outbox oracle: create published index failed: %w", err)
 	}

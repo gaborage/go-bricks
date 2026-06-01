@@ -7,7 +7,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 **Core Components:**
 - **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
-- **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements)
+- **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements, max nesting depth 16)
 - **Multi-tenant integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
 
 **Lifecycle Management (CacheManager):**
@@ -21,7 +21,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Latency**: <1ms for Get/Set (localhost), ~2ms for atomic operations (Lua scripts)
 - **Throughput**: 100k reads/sec, 80k writes/sec (single Redis instance)
 - **CBOR Serialization**: ~83ns/op marshal, ~167ns/op unmarshal (simple structs)
-- **Connection Pool**: Default `NumCPU * 2`, configurable via `cache.redis.pool_size`
+- **Connection Pool**: Default 10, configurable via `cache.redis.pool_size`
 - **Network Impact**: +0.5-1ms (same datacenter), +50-200ms (cross-region, not recommended)
 
 **Benchmark Results** (Apple M4 Pro, localhost Redis):
@@ -64,13 +64,13 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
-    cache, err := s.getCache(ctx)  // Resolves tenant from context
+    c, err := s.getCache(ctx)  // Resolves tenant from context
     if err != nil {
         return nil, err
     }
 
     // Try cache first
-    data, err := cache.Get(ctx, fmt.Sprintf("user:%d", id))
+    data, err := c.Get(ctx, fmt.Sprintf("user:%d", id))
     if err == nil {
         return cache.Unmarshal[User](data)
     }
@@ -80,7 +80,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 
     // Store in cache with TTL
     data, _ = cache.Marshal(user)
-    cache.Set(ctx, fmt.Sprintf("user:%d", id), data, 5*time.Minute)
+    c.Set(ctx, fmt.Sprintf("user:%d", id), data, 5*time.Minute)
 
     return user, nil
 }
@@ -92,7 +92,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 | Basic read | `Get(ctx, key)` | Query result caching | Single-key |
 | Basic write | `Set(ctx, key, value, ttl)` | Store computed result | Single-key |
 | Deduplication | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys | Atomic SET NX |
-| Distributed lock | `CompareAndSet(ctx, key, expected, new, ttl)` | Job coordination | Lua script CAS |
+| Distributed lock | `CompareAndSet(ctx, key, expectedValue, newValue, ttl)` | Job coordination | Lua script CAS |
 | Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
 
 **Multi-Tenant Isolation:**

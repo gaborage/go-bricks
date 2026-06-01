@@ -69,9 +69,6 @@ func makeKeepAliveDialer(keepAliveCfg config.PoolKeepAliveConfig, log logger.Log
 	}
 }
 
-// quoteDSN quotes a DSN value according to libpq rules:
-// - Returns double single quotes for empty strings (empty value)
-// - Escapes backslashes and single quotes
 // quoteDSN returns a DSN-safe representation of value, wrapping it in single quotes
 // and escaping backslashes and single quotes when value contains characters other
 // than letters, digits, dot (.), underscore (_) or hyphen (-). If value is empty

@@ -30,7 +30,7 @@ type LoginRequest struct {
 
 func (h *Handler) login(req LoginRequest, ctx server.HandlerContext) (Result[Token], server.IAPIError) {
     token := h.authService.Authenticate(req)
-    return server.OK(token), nil
+    return server.NewResult(http.StatusOK, token), nil
 }
 
 // Large request - use pointer type for performance
@@ -142,7 +142,7 @@ func (h *Handler) listUsers(req ListUsersReq, hctx server.HandlerContext) (serve
     ctx := hctx.Echo.Request().Context()
     users, total, err := h.svc.List(ctx, req.Limit, req.Offset)
     if err != nil {
-        return server.ResultWithMeta[ListUsersResp]{}, server.InternalServerError(err)
+        return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError("failed to list users")
     }
     return server.ResultWithMeta[ListUsersResp]{
         Data:   ListUsersResp{Items: users},

@@ -40,9 +40,6 @@ type Context struct {
 	Namespace     string // db.namespace attribute (vendor-specific format)
 }
 
-// NewSettings creates Settings populated from the provided database configuration.
-// If cfg is nil or a numeric field is non-positive, sensible defaults are used:
-// DefaultSlowQueryThreshold for slowQueryThreshold and DefaultMaxQueryLength for maxQueryLength.
 // NewSettings creates a Settings configured from the provided DatabaseConfig.
 //
 // It initializes defaults from DefaultSlowQueryThreshold, DefaultMaxQueryLength,

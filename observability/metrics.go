@@ -104,7 +104,6 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 	}
 
 	// Create OTLP exporter based on protocol
-	// Metrics use the same protocol configuration as traces
 	protocol, useInsecure, headers := p.metricsTransportSettings()
 	debugLogger.Printf("Metrics transport settings: protocol=%s, insecure=%v, headers_count=%d",
 		protocol, useInsecure, len(headers))

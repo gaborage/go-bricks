@@ -267,13 +267,14 @@ func TestUserModule_Integration(t *testing.T) {
     mockDB := fixtures.NewHealthyDatabase()
     mockMessaging := fixtures.NewWorkingMessagingClient()
     mockRegistry := fixtures.NewWorkingRegistry()
-    mockLogger := &mocks.MockLogger{} // Assuming you have a logger mock
-    mockConfig := &config.Config{}   // Use real config or mock
+    mockLogger := logger.New("info", true) // Use a real logger (no framework logger mock exists)
+    mockConfig := &config.Config{}         // Use real config or mock
 
-    // Create module dependencies
+    // Create module dependencies. DB and Messaging are accessor functions
+    // (tenant-aware), so wrap the mocks in closures rather than assigning directly.
     deps := &app.ModuleDeps{
-        DB:        mockDB,
-        Messaging: mockMessaging,
+        DB:        func(context.Context) (database.Interface, error) { return mockDB, nil },
+        Messaging: func(context.Context) (messaging.AMQPClient, error) { return mockMessaging, nil },
         Logger:    mockLogger,
         Config:    mockConfig,
     }
@@ -283,10 +284,12 @@ func TestUserModule_Integration(t *testing.T) {
     err := module.Init(deps)
     assert.NoError(t, err)
 
-    // Test route registration
-    echo := echo.New()
-    hr := server.NewHandlerRegistry()
-    module.RegisterRoutes(hr, echo)
+    // Test route registration. NewHandlerRegistry needs a *config.Config, and
+    // RegisterRoutes takes a server.RouteRegistrar (from srv.ModuleGroup()), not
+    // a raw *echo.Echo.
+    srv := server.New(mockConfig, mockLogger)
+    hr := server.NewHandlerRegistry(mockConfig)
+    module.RegisterRoutes(hr, srv.ModuleGroup())
 
     // Test messaging registration
     module.DeclareMessaging(mockDeclarations)
@@ -401,15 +404,22 @@ func TestExample(t *testing.T) {
 
 ### 5. Test Configuration Injection
 
+`config.Config` has no runtime `Set` method — supply test values through a
+source the loader reads (an env var or a test YAML) before calling `config.Load`:
+
 ```go
 func TestService_ConfigInjection(t *testing.T) {
-    cfg := &config.Config{}
-    cfg.Set("custom.service.timeout", "30s")
+    // Provide the value via an env var the loader reads (CUSTOM_SERVICE_TIMEOUT
+    // maps to the config key "custom.service.timeout").
+    t.Setenv("CUSTOM_SERVICE_TIMEOUT", "30s")
+
+    cfg, err := config.Load()
+    require.NoError(t, err)
 
     deps := &app.ModuleDeps{Config: cfg}
 
     service := &MyService{}
-    err := service.Init(deps) // This should inject config
+    err = service.Init(deps) // This should inject config
     assert.NoError(t, err)
 
     assert.Equal(t, 30*time.Second, service.config.Timeout)

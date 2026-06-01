@@ -63,7 +63,7 @@ fw.RegisterModules(
 | Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` |
 | `enc`/`alg` not allowed | 400 | `JOSE_ALGORITHM_DISALLOWED` |
-| `alg=none` (downgrade attempt) | 401 | `JOSE_NONE_ALG_REJECTED` (rejected by allowlist parse) |
+| `alg=none` (downgrade attempt) | 400 | `JOSE_ALGORITHM_DISALLOWED` (rejected by allowlist parse) |
 | Header missing `kid` | 401 | `JOSE_KID_MISSING` |
 | Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` |
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |

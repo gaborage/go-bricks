@@ -69,7 +69,7 @@ type consumerEntry struct {
 	key      string
 }
 
-// ManagerOptions configures the MessagingManager
+// ManagerOptions configures the Manager
 type ManagerOptions struct {
 	MaxPublishers int           // Maximum number of publisher clients to keep cached
 	IdleTTL       time.Duration // Time after which idle publishers are evicted

@@ -140,9 +140,9 @@ func (c *Config) applyTraceDefaults() {
 
 	// Trace.Insecure intentionally left at its zero value (false) when unset.
 	// The stdout trace exporter never opens a network connection and ignores
-	// the flag. Logs.Insecure defaults independently (see applyLogsDefaults);
-	// the prior coupling was removed in this PR to avoid silently downgrading
-	// an unrelated remote OTLP logs endpoint when traces target stdout.
+	// the flag. Logs.Insecure defaults independently (see applyLogsDefaults)
+	// so targeting stdout traces does not silently downgrade an unrelated
+	// remote OTLP logs endpoint.
 
 	// Compression default - gzip for bandwidth reduction (New Relic recommendation)
 	if c.Trace.Compression == "" {

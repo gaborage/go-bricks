@@ -43,7 +43,6 @@ func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
 		}
 	}
 
-	// Default factory function that creates AMQPClient instances
 	return func(url string, log logger.Logger) messaging.AMQPClient {
 		return messaging.NewAMQPClient(url, log)
 	}
@@ -57,7 +56,6 @@ func (f *FactoryResolver) CacheConnector(resourceSource TenantStore, log logger.
 		return f.opts.CacheConnector
 	}
 
-	// Default connector creates Redis cache instances from config
 	return newRedisConnector(resourceSource, log)
 }
 

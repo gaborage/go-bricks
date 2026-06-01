@@ -5,8 +5,9 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// Module implements the GoBricks app.Module interface for RSA key pair management.
-// It loads named RSA key pairs at startup and provides them to other modules via deps.KeyStore.
+// Module implements the GoBricks app.Module interface for named key-material management.
+// It loads named RSA key pairs and raw symmetric secrets at startup and provides them to
+// other modules via deps.KeyStore.
 //
 // Register before modules that need keys:
 //
@@ -30,7 +31,7 @@ func (m *Module) Name() string {
 }
 
 // Init implements app.Module.
-// Loads all configured key pairs and validates them. Fails fast on any error.
+// Loads all configured key material (RSA pairs and symmetric secrets) and validates it. Fails fast on any error.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 

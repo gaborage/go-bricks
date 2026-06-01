@@ -118,7 +118,7 @@ func main() {
         log.Fatal(err)
     }
 
-    framework, err := app.NewWithConfig(cfg, nil)
+    framework, _, err := app.NewWithConfig(cfg, nil)
     if err != nil {
         log.Fatal(err)
     }
@@ -313,7 +313,7 @@ func register(framework *app.App) error {
 
 ## HTTP Server
 
-Echo v4-based server with typed handlers, standardized response envelopes, and comprehensive middleware (logging, recovery, rate limiting, CORS).
+Echo v5-based server with typed handlers, standardized response envelopes, and comprehensive middleware (logging, recovery, rate limiting, CORS).
 
 ### Typed Handlers
 ```go
@@ -624,7 +624,7 @@ func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
 }
 ```
 
-**Schedule types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`.
+**Schedule types:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(dayOfMonth, time)`.
 
 ### Transactional Outbox
 

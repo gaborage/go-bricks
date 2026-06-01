@@ -48,6 +48,7 @@
 !.claude/hooks/*
 !.claude/agents/*
 !.claude/skills/**
+!.claude/workflows/*
 
 # Test fixtures (JSON / SQL / golden files) live under testdata/ alongside the
 # source they exercise.

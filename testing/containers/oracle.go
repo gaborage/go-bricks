@@ -24,7 +24,7 @@ type OracleContainerConfig struct {
 	ImageTag string
 	// Password for SYSTEM, SYS, and APP users (default: "testpass")
 	Password string
-	// Database name (default: "FREE" for Oracle Free)
+	// Database name (default: "FREEPDB1", the Oracle Free default PDB)
 	Database string
 	// AppUser is the application user to create (default: "testuser")
 	AppUser string

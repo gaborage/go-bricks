@@ -154,20 +154,40 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 }
 ```
 
-**6. Deterministic Sampling** (`observability/logs.go`)
+**6. Deterministic Sampling** (`observability/dual_processor.go`)
+
 ```go
-func (e *severityFilterExporter) shouldExport(rec *sdklog.Record) bool {
-    // Always export high-severity (WARN/ERROR/FATAL)
-    if e.alwaysSampleHigh && severity >= 13 {
+// shouldSample determines if an INFO/DEBUG log should be sampled based on trace ID.
+// All logs in the same trace are sampled together (deterministic per-trace decision).
+func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
+    // Fast path: rate 0 drops all, rate 1 keeps all
+    if p.samplingRate <= 0 {
+        return false
+    }
+    if p.samplingRate >= 1.0 {
         return true
     }
 
-    // Deterministic hash-based sampling for INFO/DEBUG
-    hash := rec.Timestamp().UnixNano() % 100
-    threshold := int64(e.sampleRate * 100)
-    return hash < threshold
+    // Deterministic sampling on the first 8 bytes of the trace ID
+    traceID := rec.TraceID()
+    if !traceID.IsValid() {
+        // No trace ID: fall back to record timestamp
+        ts := rec.Timestamp().UnixNano()
+        if ts < 0 {
+            ts = 0
+        }
+        return uint64(ts)%100 < uint64(p.samplingRate*100)
+    }
+
+    traceBytes := traceID[:]
+    hash := uint64(traceBytes[0]) | uint64(traceBytes[1])<<8 | uint64(traceBytes[2])<<16 | uint64(traceBytes[3])<<24 |
+        uint64(traceBytes[4])<<32 | uint64(traceBytes[5])<<40 | uint64(traceBytes[6])<<48 | uint64(traceBytes[7])<<56
+
+    return hash%100 < uint64(p.samplingRate*100)
 }
 ```
+
+*(WARN and above are always exported before sampling is consulted; see `OnEmit` in `observability/dual_processor.go`.)*
 
 ## Implementation Details
 
@@ -188,8 +208,7 @@ func (e *severityFilterExporter) shouldExport(rec *sdklog.Record) bool {
 │  1. Load observability config (YAML + env)     │
 │  2. initLogProvider() [if logs.enabled=true]   │
 │     ├─ createLogExporter() [HTTP/gRPC/stdout]  │
-│     ├─ wrapWithSeverityFilter()                │
-│     └─ createLogProcessor() [batching]         │
+│     └─ createDualModeProcessor() [route+batch] │
 │  3. enhanceLoggerWithOTel(provider)            │
 │     ├─ Fail-fast: panic if pretty=true         │
 │     ├─ NewOTelBridge(loggerProvider)           │

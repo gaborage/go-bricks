@@ -108,12 +108,10 @@ func (m *MockRegistry) StopConsumers() {
 
 // Exchanges implements messaging.RegistryInterface
 func (m *MockRegistry) Exchanges() map[string]*messaging.ExchangeDeclaration {
-	// Check if expectation exists for this method
 	if m.hasExpectation("Exchanges") {
 		arguments := m.Called()
 		return arguments.Get(0).(map[string]*messaging.ExchangeDeclaration)
 	}
-	// Return copy of internal storage
 	result := make(map[string]*messaging.ExchangeDeclaration, len(m.exchanges))
 	maps.Copy(result, m.exchanges)
 	return result
@@ -121,12 +119,10 @@ func (m *MockRegistry) Exchanges() map[string]*messaging.ExchangeDeclaration {
 
 // Queues implements messaging.RegistryInterface
 func (m *MockRegistry) Queues() map[string]*messaging.QueueDeclaration {
-	// Check if expectation exists for this method
 	if m.hasExpectation("Queues") {
 		arguments := m.Called()
 		return arguments.Get(0).(map[string]*messaging.QueueDeclaration)
 	}
-	// Return copy of internal storage
 	result := make(map[string]*messaging.QueueDeclaration, len(m.queues))
 	maps.Copy(result, m.queues)
 	return result
@@ -134,12 +130,10 @@ func (m *MockRegistry) Queues() map[string]*messaging.QueueDeclaration {
 
 // Bindings implements messaging.RegistryInterface
 func (m *MockRegistry) Bindings() []*messaging.BindingDeclaration {
-	// Check if expectation exists for this method
 	if m.hasExpectation("Bindings") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.BindingDeclaration)
 	}
-	// Return copy of internal storage
 	result := make([]*messaging.BindingDeclaration, len(m.bindings))
 	copy(result, m.bindings)
 	return result
@@ -147,12 +141,10 @@ func (m *MockRegistry) Bindings() []*messaging.BindingDeclaration {
 
 // Publishers implements messaging.RegistryInterface
 func (m *MockRegistry) Publishers() []*messaging.PublisherDeclaration {
-	// Check if expectation exists for this method
 	if m.hasExpectation("Publishers") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.PublisherDeclaration)
 	}
-	// Return copy of internal storage
 	result := make([]*messaging.PublisherDeclaration, len(m.publishers))
 	copy(result, m.publishers)
 	return result
@@ -160,12 +152,10 @@ func (m *MockRegistry) Publishers() []*messaging.PublisherDeclaration {
 
 // Consumers implements messaging.RegistryInterface
 func (m *MockRegistry) Consumers() []*messaging.ConsumerDeclaration {
-	// Check if expectation exists for this method
 	if m.hasExpectation("Consumers") {
 		arguments := m.Called()
 		return arguments.Get(0).([]*messaging.ConsumerDeclaration)
 	}
-	// Return copy of internal storage
 	result := make([]*messaging.ConsumerDeclaration, len(m.consumers))
 	copy(result, m.consumers)
 	return result

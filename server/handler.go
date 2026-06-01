@@ -104,13 +104,11 @@ func newRequestAllocator[T any]() *requestAllocator[T] {
 func (ra *requestAllocator[T]) allocate() (request T, requestPtr any) {
 	if ra.isPointer {
 		// T is a pointer type (e.g., *Request)
-		// Allocate the underlying type and get pointer
 		elem := reflect.New(ra.elemType.Elem())
 		requestPtr = elem.Interface()
 		request = elem.Interface().(T)
 	} else {
 		// T is a value type (e.g., Request)
-		// Use zero value and take address
 		requestPtr = &request
 	}
 	return request, requestPtr
@@ -979,7 +977,6 @@ func getTraceID(c *echo.Context) string {
 			return requestID
 		}
 	}
-	// Generate a new UUID if none provided
 	newID := uuid.New().String()
 	// Set it so downstream might pick it up (only if response is still valid)
 	if resp := c.Response(); resp != nil {
@@ -1053,7 +1050,6 @@ func RegisterHandler[T any, R any](
 	handler HandlerFunc[T, R],
 	opts ...RouteOption,
 ) {
-	// Extract type information
 	var reqType T
 	var respType R
 

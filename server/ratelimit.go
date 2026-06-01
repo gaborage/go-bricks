@@ -19,7 +19,6 @@ const (
 // It limits the number of requests from each IP address to prevent abuse.
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
 func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
-	// Disable rate limiting if requestsPerSecond is 0 or negative
 	if requestsPerSecond <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

@@ -19,7 +19,7 @@
 // Chain configuration methods to simulate failures or delays:
 //
 //	mock := testing.NewMockCache().
-//	    WithGetFailure(cache.ErrConnectionError).
+//	    WithGetFailure(cache.ErrClosed).
 //	    WithDelay(100 * time.Millisecond)
 //
 // # Operation Tracking
@@ -42,8 +42,8 @@
 //	}
 //
 //	deps := &app.ModuleDeps{
-//	    GetCache: func(ctx context.Context) (cache.Cache, error) {
-//	        tenantID := multitenant.GetTenant(ctx)
+//	    Cache: func(ctx context.Context) (cache.Cache, error) {
+//	        tenantID, _ := multitenant.GetTenant(ctx)
 //	        return tenantCaches[tenantID], nil
 //	    },
 //	}

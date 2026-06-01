@@ -304,11 +304,11 @@ func AssertGetValue(t *testing.T, c cache.Cache, key string) []byte {
 //
 // Example:
 //
-//	mock := NewMockCache().WithGetFailure(cache.ErrConnectionError)
+//	mock := NewMockCache().WithGetFailure(cache.ErrClosed)
 //	AssertError(t, func() error {
 //	    _, err := mock.Get(context.Background(), "key")
 //	    return err
-//	}, cache.ErrConnectionError)
+//	}, cache.ErrClosed)
 func AssertError(t *testing.T, operation func() error, expected error) {
 	t.Helper()
 

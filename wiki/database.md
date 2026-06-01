@@ -19,7 +19,7 @@ GoBricks supports accessing multiple databases in single-tenant mode, useful for
 **Configuration:**
 ```yaml
 database:                # Default database (unchanged - backward compatible)
-  type: postgres
+  type: postgresql
   host: primary.db.example.com
   port: 5432
   database: main_db
@@ -33,7 +33,7 @@ databases:               # Named databases — supports mixed vendors
     username: legacy_user
     password: ${LEGACY_DATABASE_PASSWORD}
   analytics:
-    type: postgres
+    type: postgresql
     host: analytics.db.example.com
     port: 5432
     database: analytics_db
@@ -89,7 +89,8 @@ type User struct {
 cols := qb.Columns(&User{})  // Cached per vendor
 
 query := qb.Select(cols.All()...).From("users")
-query := qb.Select(cols.Fields("ID", "Name")...).From("users")
+// or select specific fields:
+query = qb.Select(cols.Cols("ID", "Name")...).From("users")
 
 query := qb.Select(cols.All()...).
     From("users").
@@ -105,7 +106,7 @@ qb.Update("users").
 ```go
 type ProductService struct {
     qb   *builder.QueryBuilder
-    cols dbtypes.ColumnMetadata
+    cols dbtypes.Columns
 }
 
 func NewProductService(db database.Interface) *ProductService {
@@ -148,8 +149,8 @@ u := userCols.As("u")
 p := profileCols.As("p")
 
 query := qb.Select(u.Col("ID"), u.Col("Name"), p.Col("Bio")).
-    From(dbtypes.Table("users").As("u")).
-    LeftJoinOn(dbtypes.Table("profiles").As("p"),
+    From(dbtypes.MustTable("users").MustAs("u")).
+    LeftJoinOn(dbtypes.MustTable("profiles").MustAs("p"),
         jf.EqColumn(u.Col("ID"), p.Col("UserID"))).
     Where(f.Eq(u.Col("Status"), "active"))
 // Oracle: SELECT u."ID", u."NAME", p."BIO" FROM users u LEFT JOIN profiles p ON u."ID" = p."USER_ID" WHERE u."STATUS" = :1
@@ -162,15 +163,15 @@ jf := qb.JoinFilter()
 f := qb.Filter()
 
 query := qb.Select("*").
-    From(dbtypes.Table("orders").As("o")).
-    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
+    From(dbtypes.MustTable("orders").MustAs("o")).
+    JoinOn(dbtypes.MustTable("customers").MustAs("c"), jf.And(
         jf.EqColumn("c.id", "o.customer_id"),         // Column-to-column
         jf.Eq("c.status", "active"),                  // Column-to-value
         jf.In("c.tier", []string{"gold", "platinum"}),
     )).
-    JoinOn(dbtypes.Table("products").As("p"), jf.And(
+    JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
-        jf.Eq("p.price", qb.Expr("TO_NUMBER(o.max_price)")),
+        jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")),
     )).
     Where(f.Eq("o.status", "pending"))
 ```
@@ -201,7 +202,7 @@ subquery := qb.Select("1").From("reviews").
     ))
 
 query := qb.Select(p.Col("Name")).
-    From(dbtypes.Table("products").As("p")).
+    From(dbtypes.MustTable("products").MustAs("p")).
     Where(f.Exists(subquery))
 ```
 
@@ -212,16 +213,18 @@ query := qb.Select(p.Col("Name")).
 ```go
 query := qb.Select(
     cols.Col("Category"),
-    qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price"),
+    qb.MustExpr("COUNT(*)", "product_count"),
+    qb.MustExpr("AVG(price)", "avg_price"),
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
 **SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
+
 ```go
-qb.Expr("COUNT(*)", "total")                  // SAFE
-qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
+qb.MustExpr("COUNT(*)", "total")                  // SAFE
+qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
 ```
+
 Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`.
 
 ## Connection Pool Defaults

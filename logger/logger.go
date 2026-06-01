@@ -186,7 +186,8 @@ func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
 	// Create OTel bridge to convert zerolog JSON to OTel log records
 	bridge := NewOTelBridge(provider.LoggerProvider())
 	if bridge == nil {
-		// Bridge creation failed gracefully (e.g., nil provider)
+		// Defensive: NewOTelBridge returns nil only for a nil provider, which is already
+		// guaranteed non-nil above; kept as a belt-and-suspenders guard.
 		return l
 	}
 

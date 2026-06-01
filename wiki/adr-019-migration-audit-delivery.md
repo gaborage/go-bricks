@@ -38,7 +38,7 @@ Require every consumer to provide an `AuditRecorder` implementation. Ship one or
 
 ### Option 3: Hybrid — OTel default, opt-in `AuditRecorder` override (Chosen)
 
-Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditRecorder` interface; when configured on `migration.Runner` (or via `ModuleDeps`), every emitted event is dispatched to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue) so the sink cannot stall the migration. Sink failures log a warning but do not abort the migration.
+Always emit to the OpenTelemetry seam: a span per audit event (with the full attribute set) plus a structured log record via the `LoggerProvider`. Additionally, expose a `migration.AuditRecorder` interface; when configured on `migration.FlywayMigrator` via `WithAuditRecorder`, every emitted event is dispatched to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue) so the sink cannot stall the migration. Sink failures log a warning but do not abort the migration.
 
 **Chosen because:**
 
@@ -96,14 +96,14 @@ Conditional fields:
 package migration
 
 type AuditRecorder interface {
-    Record(ctx context.Context, event AuditEvent) error
+    Record(ctx context.Context, event *AuditEvent) error
 }
 ```
 
-Wired on the `Runner` (or via `ModuleDeps.AuditRecorder`). When set:
+Wired on the `FlywayMigrator` via `WithAuditRecorder(sink)`. When set:
 
 - Every event fires to the sink **after** the OTel emission, in a non-blocking fan-out (separate goroutine with a bounded send queue).
-- A sink-side error logs a warning and increments an internal `audit_sink_failures_total` metric, but **does not** abort the migration. Audit must not block business work; that's a deliberate trade-off — the sink owner is responsible for backing it with a durable buffer (Kafka commit-log, S3 staging, etc.) if zero-loss is required.
+- A sink-side error logs a warning and increments an internal `migration.audit.sink_failures` metric, but **does not** abort the migration. Audit must not block business work; that's a deliberate trade-off — the sink owner is responsible for backing it with a durable buffer (Kafka commit-log, S3 staging, etc.) if zero-loss is required.
 - The sink is invoked with the same `AuditEvent` struct that OTel sees — schemas can't drift.
 
 ### Stable error-class taxonomy
@@ -136,7 +136,7 @@ This list is part of the public API (additive changes only) so downstream alerti
 
 ## Migration
 
-No breaking changes. The interface is new in [#382](https://github.com/gaborage/go-bricks/issues/382)'s implementation PR. Existing `FlywayMigrator` callers see no behavioural change — audit emission is wired into the new `Runner` contract from [#376](https://github.com/gaborage/go-bricks/issues/376), not retrofitted onto `FlywayMigrator`.
+No breaking changes. The interface is new in [#382](https://github.com/gaborage/go-bricks/issues/382)'s implementation PR. Existing `FlywayMigrator` callers see no behavioural change — the always-on OTel audit emission and the optional `AuditRecorder` sink are wired onto `FlywayMigrator` via `WithAuditRecorder`, an opt-in builder method.
 
 ## Stakeholder check
 

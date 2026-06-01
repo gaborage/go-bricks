@@ -264,7 +264,7 @@ func validateDatabase(cfg *DatabaseConfig) error {
 // an invalid optional Port, and negative values for Pool/Query fields.
 // Pool.Max.Connections defaults to 25 when 0; Query.Log.MaxLength and Query.Slow.Threshold
 // default to the respective constants when 0. Negative values are rejected.
-// respectively. The cfg argument is mutated for those default assignments.
+// The cfg argument is mutated for those default assignments.
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	if cfg.Type != "" {
 		if err := validateDatabaseType(cfg.Type); err != nil {

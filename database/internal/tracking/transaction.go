@@ -21,7 +21,6 @@ type Transaction struct {
 	tc       *Context // cached context for tracking
 }
 
-// NewTransaction creates a Transaction wrapper that tracks performance for database transactions.
 // NewTransaction creates a Transaction wrapper around the provided tx that records execution
 // metrics for all transaction operations. The wrapper delegates calls to the given tx while
 // capturing timing and error information, stores the provided logger, vendor, and settings,

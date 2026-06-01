@@ -39,4 +39,4 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 }
 ```
 
-**Schedule Types:** `Every(duration)`, `Cron(expression)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`
+**Schedule Types:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(dayOfMonth, time)`

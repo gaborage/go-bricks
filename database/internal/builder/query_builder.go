@@ -160,7 +160,7 @@ func (qb *QueryBuilder) MustExpr(sql string, alias ...string) dbtypes.RawExpress
 //   - structPtr: Pointer to a struct with `db:"column_name"` tags
 //
 // Returns:
-//   - dbtypes.ColumnMetadata: Interface providing Get(), Fields(), and All() methods
+//   - dbtypes.Columns: Interface providing Col(), Cols(), and All() methods
 //
 // Panics if:
 //   - structPtr is not a pointer to a struct

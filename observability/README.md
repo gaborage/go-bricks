@@ -37,13 +37,19 @@ package main
 
 import (
     "context"
+    "log"
+    "time"
+
     "github.com/gaborage/go-bricks/config"
     "github.com/gaborage/go-bricks/observability"
 )
 
 func main() {
     // Load configuration
-    cfg := config.New()
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
     var obsCfg observability.Config
     if err := cfg.InjectInto(&obsCfg); err != nil {
         panic(err)
@@ -54,7 +60,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer observability.Shutdown(provider, 5)
+    defer observability.Shutdown(provider, 5*time.Second)
 
     // Create tracer
     tracer := provider.TracerProvider().Tracer("my-service")
@@ -225,38 +231,55 @@ observability:
 ### Custom Provider Configuration
 
 ```go
-import "github.com/gaborage/go-bricks/observability"
+import (
+    "time"
+
+    "github.com/gaborage/go-bricks/observability"
+)
 
 // Create custom configuration
 cfg := &observability.Config{
     Enabled:     true,
-    ServiceName: "my-service",
-    ServiceVersion: "1.0.0",
+    Service: observability.ServiceConfig{
+        Name:    "my-service",
+        Version: "1.0.0",
+    },
     Environment: "production",
     Trace: observability.TraceConfig{
-        Enabled:  true,
+        Enabled:  observability.BoolPtr(true),
         Endpoint: "localhost:4318",
         Protocol: "http",
         Insecure: true,
         Headers: map[string]string{
             "Authorization": "Bearer token",
         },
-        SampleRate:    0.1,
-        BatchTimeout:  5 * time.Second,
-        ExportTimeout: 30 * time.Second,
-        MaxQueueSize:  2048,
-        MaxBatchSize:  512,
+        Sample: observability.SampleConfig{
+            Rate: observability.Float64Ptr(0.1),
+        },
+        Batch: observability.BatchConfig{
+            Timeout: 5 * time.Second,
+            Size:    512,
+        },
+        Export: observability.ExportConfig{
+            Timeout: 30 * time.Second,
+        },
+        Max: observability.MaxConfig{
+            Queue: observability.QueueConfig{Size: 2048},
+            Batch: observability.MaxBatchConfig{Size: 512},
+        },
     },
     Metrics: observability.MetricsConfig{
-        Enabled:  true,
+        Enabled:  observability.BoolPtr(true),
         Endpoint: "https://api.datadoghq.com",
         Protocol: "http",
         Insecure: observability.BoolPtr(false),
         Headers: map[string]string{
             "DD-API-KEY": "your-api-key",
         },
-        Interval:      15 * time.Second,
-        ExportTimeout: 45 * time.Second,
+        Interval: 15 * time.Second,
+        Export: observability.MetricsExportConfig{
+            Timeout: 45 * time.Second,
+        },
     },
 }
 
@@ -265,7 +288,7 @@ provider, err := observability.NewProvider(cfg)
 if err != nil {
     panic(err)
 }
-defer observability.Shutdown(provider, 5)
+defer observability.Shutdown(provider, 5*time.Second)
 ```
 
 ### Graceful Shutdown
@@ -273,11 +296,11 @@ defer observability.Shutdown(provider, 5)
 ```go
 import "github.com/gaborage/go-bricks/observability"
 
-// Shutdown with custom timeout (in seconds)
-observability.Shutdown(provider, 10)
+// Shutdown with custom timeout
+observability.Shutdown(provider, 10*time.Second)
 
 // Or panic on shutdown failure
-observability.MustShutdown(provider, 10)
+observability.MustShutdown(provider, 10*time.Second)
 
 // Manual shutdown with context
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

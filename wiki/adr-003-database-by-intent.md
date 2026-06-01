@@ -23,7 +23,7 @@ Implement "database by intent" configuration with the following principles:
 
 ### Configuration Changes
 - **Removed**: All database defaults from `loadDefaults()` in `config/config.go`
-- **Added**: `IsDatabaseConfigured()` function in `config/validation.go`
+- **Added**: `IsDatabaseConfigured(cfg *DatabaseConfig) bool` function in `config/validation.go`
 - **Logic**: Database enabled when `ConnectionString != ""` OR `Host != ""` OR `Type != ""`
 
 ### Validation Changes
@@ -32,7 +32,7 @@ Implement "database by intent" configuration with the following principles:
 - **Consistency**: Shared logic between validation and runtime via `IsDatabaseConfigured()`
 
 ### Runtime Integration
-- **Updated**: `app.isDatabaseEnabled()` to use shared `config.IsDatabaseConfigured()`
+- **Updated**: The app builder checks `config.IsDatabaseConfigured(&cfg.Database)` directly (`app/app_builder.go`)
 - **Behavior**: Module dependency injection skips database when not configured
 
 ## Consequences

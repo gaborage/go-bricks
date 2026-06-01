@@ -260,7 +260,7 @@ func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
 	return nil
 }
 
-// Stats returns statistics about the declarations.
+// DeclarationStats holds counts of each declaration type.
 type DeclarationStats struct {
 	Exchanges  int
 	Queues     int

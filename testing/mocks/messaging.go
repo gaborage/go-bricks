@@ -48,7 +48,6 @@ func (m *MockMessagingClient) Publish(ctx context.Context, destination string, d
 func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
 	arguments := m.MethodCalled("Consume", ctx, destination)
 
-	// Create a channel for this destination if it doesn't exist
 	m.mu.Lock()
 	if _, exists := m.messageChannels[destination]; !exists {
 		m.messageChannels[destination] = make(chan amqp.Delivery, 100)
@@ -66,7 +65,6 @@ func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (
 func (m *MockMessagingClient) Close() error {
 	m.mu.Lock()
 	m.closed = true
-	// Close all message channels
 	for _, ch := range m.messageChannels {
 		close(ch)
 	}
@@ -83,7 +81,6 @@ func (m *MockMessagingClient) IsReady() bool {
 	closed := m.closed
 	m.mu.RUnlock()
 
-	// If closed, not ready
 	if closed {
 		return false
 	}
@@ -123,7 +120,6 @@ func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, bod
 		// Send the message in a non-blocking way
 		select {
 		case ch <- delivery:
-			// Message sent successfully
 		default:
 			// Channel is full, ignore
 		}

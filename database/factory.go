@@ -11,7 +11,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// NewConnection creates a tracked database connection for the provided configuration.
 // NewConnection creates a tracked database connection based on the provided configuration.
 //
 // It initializes a concrete driver connection for the configured database type, wraps it with

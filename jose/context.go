@@ -39,14 +39,16 @@ func ClaimsFromContext(ctx context.Context) *Claims {
 	return c
 }
 
-// WithPolicy attaches the active outbound Policy for this request so the response
-// formatter can find it after the handler returns. Set by the inbound middleware
-// branch (or by the route-registration scaffolding for outbound-only routes).
+// WithPolicy attaches the given outbound Policy to the context for later retrieval
+// via PolicyFromContext. The current server wiring threads the outbound policy as an
+// explicit parameter and stores it on the route descriptor rather than on the context,
+// so this helper has no callers today; it remains as a context-key accessor pair.
 func WithPolicy(ctx context.Context, p *Policy) context.Context {
 	return context.WithValue(ctx, keyPolicy, p)
 }
 
-// PolicyFromContext returns the outbound Policy attached for this request, or nil.
+// PolicyFromContext returns the outbound Policy attached via WithPolicy, or nil if
+// none was attached (the default in the current wiring).
 func PolicyFromContext(ctx context.Context) *Policy {
 	p, _ := ctx.Value(keyPolicy).(*Policy)
 	return p

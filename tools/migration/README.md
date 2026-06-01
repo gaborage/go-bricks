@@ -109,7 +109,6 @@ object. Both are newline-delimited; pipe through `jq -c .` to consume.
   "duration": "152ms",
   "status": "ok",
   "applied_versions": ["1", "2"],
-  "starting_version": "",
   "ending_version": "2",
   "duration_millis": 142,
   "flyway_version": "10.22.0"
