@@ -64,21 +64,19 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 - Run specific package tests: `go test ./package-name`
 - Check coverage: `make test-coverage`
 
-### Commit Messages
+### Commit messages, changelog & breaking changes
 
-Use clear, descriptive commit messages:
-- Start with a verb in imperative mood
-- Keep the first line under 72 characters
-- Add details in the body if needed
+PRs are **squash-merged**, so the **PR title becomes the commit** — and the PR title is the
+source of truth for releases. It MUST be a Conventional Commit:
 
-Examples:
-```
-feat: Add support for Oracle connection pooling
+- `feat(scope): ...` → MINOR · `fix(scope): ...` → PATCH · `refactor:`/`perf:`/`docs:`/`chore:`/`test:`/`build:`/`ci:`
+- **Breaking changes MUST use `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer.** This is the
+  primary, enforced signal: `release-please` reads it to compute the bump and emit the
+  `### ⚠ BREAKING CHANGES` banner. A new breaking change also requires a new ADR (file **and**
+  index entry in `wiki/architecture_decisions.md`) and a `wiki/migrations.md` row.
 
-fix: Fix race condition in logger context handling
-
-docs: Update README with new configuration options
-```
+You do **not** edit `CHANGELOG.md` by hand — `release-please` generates it from PR titles.
+See [RELEASING.md](RELEASING.md).
 
 ## Submitting Changes
 
