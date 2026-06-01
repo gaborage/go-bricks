@@ -3,6 +3,7 @@
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS :=
+# Keep in sync with the other module's Makefile.
 GOVULNCHECK_VERSION := v1.1.4
 # Default target
 help: ## Show this help message

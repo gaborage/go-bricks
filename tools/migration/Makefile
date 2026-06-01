@@ -2,6 +2,7 @@
 
 BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Keep in sync with the other module's Makefile.
 GOVULNCHECK_VERSION := v1.1.4
 
 help: ## Show this help message
