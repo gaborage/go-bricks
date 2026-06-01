@@ -12,7 +12,7 @@ Architecture Decision Records help us:
 
 ## ADR Index
 
-### [ADR-001: Enhanced Handler System Implementation](adr-001-enhanced-handler-system.md)
+### [ADR-001: Enhanced Handler System Implementation](adr_001_enhanced_handler_system.md)
 **Date:** 2025-09-12 | **Status:** Accepted
 
 Type-safe HTTP handler system with automatic binding, validation, and standardized response envelopes. Introduces generic handler wrappers, comprehensive request binding via struct tags, and hierarchical error handling.
@@ -21,7 +21,7 @@ Type-safe HTTP handler system with automatic binding, validation, and standardiz
 
 ---
 
-### [ADR-002: Custom Base Path and Health Route Configuration](adr-002-base-path-and-health-routes.md)
+### [ADR-002: Custom Base Path and Health Route Configuration](adr_002_base_path_and_health_routes.md)
 **Date:** 2025-09-15 | **Status:** Accepted
 
 Configurable base paths for all routes and customizable health check endpoints. Implements RouteRegistrar abstraction with intelligent path handling and nested group support.
@@ -30,7 +30,7 @@ Configurable base paths for all routes and customizable health check endpoints. 
 
 ---
 
-### [ADR-003: Database by Intent Configuration](adr-003-database-by-intent.md)
+### [ADR-003: Database by Intent Configuration](adr_003_database_by_intent.md)
 **Date:** 2025-09-17 | **Status:** Accepted
 
 Explicit database configuration requirement with no framework defaults. Database functionality only enabled when explicitly configured, supporting database-free applications.
@@ -39,7 +39,7 @@ Explicit database configuration requirement with no framework defaults. Database
 
 ---
 
-### [ADR-004: Lazy Messaging Registry Creation in ModuleRegistry](adr-004-lazy-messaging-registry.md)
+### [ADR-004: Lazy Messaging Registry Creation in ModuleRegistry](adr_004_lazy_messaging_registry.md)
 **Date:** 2025-09-24 | **Status:** Accepted
 
 Lazy initialization of messaging registry to support context-aware dependency resolution in multi-tenant architecture. Uses singleflight protection for thread-safe initialization.
@@ -48,7 +48,7 @@ Lazy initialization of messaging registry to support context-aware dependency re
 
 ---
 
-### [ADR-005: Type-Safe WHERE Clause Construction](adr-005-type-safe-where-clauses.md)
+### [ADR-005: Type-Safe WHERE Clause Construction](adr_005_type_safe_where_clauses.md)
 **Date:** 2025-09-27 | **Status:** Accepted
 
 Compile-time safe WHERE clause construction replacing string-based API. Introduces type-safe methods (`WhereEq`, `WhereLt`, etc.) with automatic Oracle identifier quoting.
@@ -57,7 +57,7 @@ Compile-time safe WHERE clause construction replacing string-based API. Introduc
 
 ---
 
-### [ADR-006: OpenTelemetry Protocol (OTLP) Log Export Integration](adr-006-otlp-log-export.md)
+### [ADR-006: OpenTelemetry Protocol (OTLP) Log Export Integration](adr_006_otlp_log_export.md)
 **Date:** 2025-10-10 | **Status:** Accepted
 
 Unified observability with OTLP log export via io.Writer bridge pattern. Automatic trace correlation, dual-mode logging (action logs 100%, trace logs WARN+), and deterministic sampling.
@@ -66,7 +66,7 @@ Unified observability with OTLP log export via io.Writer bridge pattern. Automat
 
 ---
 
-### [ADR-007: Struct-Based Column Extraction](adr-007-struct-based-columns.md)
+### [ADR-007: Struct-Based Column Extraction](adr_007_struct_based_columns.md)
 **Date:** 2025-10-28 | **Status:** Accepted
 
 Reflection-based column extraction from struct tags with lazy caching. Eliminates column name repetition, provides vendor-aware quoting, and enables refactor-friendly queries.
@@ -75,7 +75,7 @@ Reflection-based column extraction from struct tags with lazy caching. Eliminate
 
 ---
 
-### [ADR-008: Database Testing with Interface Segregation](adr-008-database-testing-interface-segregation.md)
+### [ADR-008: Database Testing with Interface Segregation](adr_008_database_testing_interface_segregation.md)
 **Date:** 2025-01-10 | **Status:** Accepted
 
 Interface segregation for database testing utilities, enabling 73% less boilerplate with fluent expectation APIs, multi-tenant support, and vendor-agnostic row builders.
@@ -84,7 +84,7 @@ Interface segregation for database testing utilities, enabling 73% less boilerpl
 
 ---
 
-### [ADR-009: Consumer Worker Pool Concurrency with NumCPU × 4 Default](adr-009-consumer-worker-pool-concurrency.md)
+### [ADR-009: Consumer Worker Pool Concurrency with NumCPU × 4 Default](adr_009_consumer_worker_pool_concurrency.md)
 
 **Date:** 2025-01-13 | **Status:** Accepted
 
@@ -94,7 +94,7 @@ Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-t
 
 ---
 
-### [ADR-010: Convert Panic-Based Validation to Error Returns](adr-010-panic-to-error-conversion.md)
+### [ADR-010: Convert Panic-Based Validation to Error Returns](adr_010_panic_to_error_conversion.md)
 
 **Date:** 2025-11-29 | **Status:** Accepted
 
@@ -104,7 +104,7 @@ Converts panic-based fail-fast validation to idiomatic error returns for SonarCl
 
 ---
 
-### [ADR-011: Redis Cache Backend with CBOR Serialization (ModuleDeps Extension)](adr-011-redis-cache.md)
+### [ADR-011: Redis Cache Backend with CBOR Serialization (ModuleDeps Extension)](adr_011_redis_cache.md)
 **Date:** 2025-11-09 | **Status:** Accepted
 
 Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation via CacheManager, and automatic lifecycle management (LRU eviction, idle cleanup, singleflight). Breaking change: introduces `ModuleDeps` extension (`Cache` field) which is a breaking API change and may require dependent modules to be updated.
@@ -113,7 +113,7 @@ Redis-backed caching with type-safe CBOR serialization, multi-tenant isolation v
 
 ---
 
-### [ADR-012: Remove MongoDB Support](adr-012-remove-mongodb-support.md)
+### [ADR-012: Remove MongoDB Support](adr_012_remove_mongodb_support.md)
 **Date:** 2026-02-06 | **Status:** Accepted
 
 Complete removal of MongoDB support to focus exclusively on PostgreSQL and Oracle. Eliminates ~5,000 lines of code, document-oriented interfaces, and MongoDB driver dependency.
@@ -122,7 +122,7 @@ Complete removal of MongoDB support to focus exclusively on PostgreSQL and Oracl
 
 ---
 
-### [ADR-013: Interface Naming Conventions (S8196)](adr-013-interface-naming-conventions.md)
+### [ADR-013: Interface Naming Conventions (S8196)](adr_013_interface_naming_conventions.md)
 **Date:** 2026-03-11 | **Status:** Accepted
 
 Renames interfaces to follow Go's idiomatic naming per SonarCloud rule S8196. Interfaces renamed for clarity across scheduler, app, database, messaging, server, and cache packages.
@@ -131,7 +131,7 @@ Renames interfaces to follow Go's idiomatic naming per SonarCloud rule S8196. In
 
 ---
 
-### [ADR-014: Slim Module Interface + Remove Stutter](adr-014-slim-module-interface.md)
+### [ADR-014: Slim Module Interface + Remove Stutter](adr_014_slim_module_interface.md)
 **Date:** 2026-03-16 | **Status:** Accepted
 
 Slims the `app.Module` interface from 5 methods to 3, making `RegisterRoutes` and `DeclareMessaging` optional via `RouteRegisterer` and `MessagingDeclarer` interfaces. Removes stuttered framework module names (`OutboxModule` → `Module`, etc.).
@@ -140,7 +140,7 @@ Slims the `app.Module` interface from 5 methods to 3, making `RegisterRoutes` an
 
 ---
 
-### [ADR-015: Echo v4 to v5 Migration](adr-015-echo-v5-migration.md)
+### [ADR-015: Echo v4 to v5 Migration](adr_015_echo_v5_migration.md)
 **Date:** 2026-04-06 | **Status:** Accepted
 
 Migrates the HTTP framework foundation from Echo v4 to v5 (~92 files affected) to stay within the supported window, unlock `otelecho` v5 support, and align with the Echo ecosystem.
@@ -149,7 +149,7 @@ Migrates the HTTP framework foundation from Echo v4 to v5 (~92 files affected) t
 
 ---
 
-### [ADR-016: Database Session Timezone Configuration](adr-016-database-session-timezone.md)
+### [ADR-016: Database Session Timezone Configuration](adr_016_database_session_timezone.md)
 **Date:** 2026-04-23 | **Status:** Accepted
 
 Establishes a session-level timezone setting (default `UTC`) applied to every PostgreSQL/Oracle connection in the pool, eliminating cross-environment time-zone drift. Opt out with `database.timezone: "-"`.
@@ -158,7 +158,7 @@ Establishes a session-level timezone setting (default `UTC`) applied to every Po
 
 ---
 
-### [ADR-017: Standardize on `ToSQL()` Across All Query Builders](adr-017-insert-query-builder.md)
+### [ADR-017: Standardize on `ToSQL()` Across All Query Builders](adr_017_insert_query_builder.md)
 **Date:** 2026-05-01 | **Status:** Accepted
 
 Introduces `types.InsertQueryBuilder` so `qb.Insert*` constructors return a go-bricks-owned interface exposing idiomatic `ToSQL()` (S8179) instead of the upstream `squirrel.InsertBuilder` with lowercase `ToSql()`. Aligns the INSERT surface with `Select`/`Update`/`Delete`.
@@ -167,7 +167,7 @@ Introduces `types.InsertQueryBuilder` so `qb.Insert*` constructors return a go-b
 
 ---
 
-### [ADR-018: Multi-Tenant Migration CLI](adr-018-multi-tenant-migration-cli.md)
+### [ADR-018: Multi-Tenant Migration CLI](adr_018_multi_tenant_migration_cli.md)
 **Date:** 2026-05-09 | **Status:** Accepted
 
 Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migration/`) so CI/CD can roll out new Flyway migrations to every existing tenant. Defines a pre-defined HTTP listing contract using the standard go-bricks `APIResponse` envelope and an AWS Secrets Manager naming convention (`gobricks/migrate/<tenant_id>`) for credentials. Reuses `database.DBConfigProvider` so the existing tenant-store abstraction works unchanged.
@@ -176,7 +176,7 @@ Introduces `migration.MigrateAll` plus the `go-bricks-migrate` CLI (`tools/migra
 
 ---
 
-### [ADR-019: Migration Audit-Event Delivery — OpenTelemetry-first with Pluggable Sink Override](adr-019-migration-audit-delivery.md)
+### [ADR-019: Migration Audit-Event Delivery — OpenTelemetry-first with Pluggable Sink Override](adr_019_migration_audit_delivery.md)
 **Date:** 2026-05-12 | **Status:** Accepted
 
 Resolves issue #381. Migration audit events (`migration.applied`, `state.transitioned`, `quiesce.set/cleared`) emit via the existing OpenTelemetry seam by default (span + structured log record); compliance-grade durability is opt-in via a `migration.AuditRecorder` interface that fans out in parallel. Publishes a stable `ErrorClass` taxonomy so downstream alerting can pin on string identifiers.
@@ -185,7 +185,7 @@ Resolves issue #381. Migration audit events (`migration.applied`, `state.transit
 
 ---
 
-### [ADR-020: Shared Oracle Container for Integration Tests with Per-Test Schema Isolation](adr-020-oracle-integration-test-container-reuse.md)
+### [ADR-020: Shared Oracle Container for Integration Tests with Per-Test Schema Isolation](adr_020_oracle_integration_test_container_reuse.md)
 **Date:** 2026-05-12 | **Status:** Accepted
 
 Resolves the investigation in issue #402. The `database/oracle` integration suite consumes ~80% of integration-test wall time (572s of ~700s) because every test starts a fresh Oracle container (31 sequential cold starts × ~18.5s = ~573s, matching the measurement to within rounding). Replaces the per-test container with one container per test binary execution, plus per-test schema isolation via `CREATE USER` / `DROP USER ... CASCADE`. PostgreSQL is out of scope (PG cold-starts in ~3s, so the same anti-pattern costs ~60s — not worth changing).
@@ -194,7 +194,7 @@ Resolves the investigation in issue #402. The `database/oracle` integration suit
 
 ---
 
-### [ADR-021: Provisioning State Machine — Diverge on the Model, Mirror the Patterns](adr-021-provisioning-state-machine.md)
+### [ADR-021: Provisioning State Machine — Diverge on the Model, Mirror the Patterns](adr_021_provisioning_state_machine.md)
 **Date:** 2026-05-13 | **Status:** Accepted
 
 Resolves issue #379. Per-tenant provisioning state machine with durable, crash-recoverable persistence (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches). New `migration/provisioning/` package borrows the engineering patterns from `outbox/` (vendor-pluggable Store, bundled DDL, in-memory mock under `testing/`) but diverges on the data model: outbox is a fire-and-forget event queue; provisioning is a finite-state graph with blocking transitions and per-tenant scope. Rejects the alternatives of sharing storage tables, the Store interface, or extending the outbox package because the consumer APIs and table shapes don't overlap.
@@ -203,7 +203,7 @@ Resolves issue #379. Per-tenant provisioning state machine with durable, crash-r
 
 ---
 
-### [ADR-022: Environment Policy — Free-Form `app.env` with Predicate-Based Branching](adr-022-env-policy.md)
+### [ADR-022: Environment Policy — Free-Form `app.env` with Predicate-Based Branching](adr_022_env_policy.md)
 **Date:** 2026-05-14 | **Status:** Accepted
 
 Resolves issue #435. Replaces the strict `{development, staging, production}` allowlist in `config.validateApp` with a format check (lowercase alphanumeric + hyphen, ≤32 chars). Behavior switches in the framework's six call sites move from string equality against `EnvDevelopment` / `EnvProduction` to predicates (`config.IsDevelopment` / `config.IsProduction`) backed by documented alias maps (`{development, dev, local}` / `{production, prod, prd}`). Consumer projects can now use their own env conventions (e.g. `local/tst/stg/prd`) without forking the validator. Eliminates a latent dead-code path in `server/env.go` and the duplicated inline alias logic in `app/app.go`'s bootstrap logger.
@@ -221,7 +221,7 @@ Resolves issue #435. Replaces the strict `{development, staging, production}` al
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-022) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr-011-redis-cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-022) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
@@ -236,7 +236,7 @@ When creating a new ADR:
    - Migration Impact
    - Related ADRs
 
-2. **Create individual file**: `adr-XXX-short-title.md`
+2. **Create individual file**: `adr_XXX_short_title.md`
 
 3. **Update this index**: Add entry with summary and key benefits
 

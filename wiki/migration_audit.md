@@ -2,14 +2,14 @@
 
 Every Flyway migration application emits a structured audit event so operators and compliance reviewers can answer the basic "who applied which version to which target, when, with what outcome?" question without grep-by-hand through logs.
 
-Implements [ADR-019](adr-019-migration-audit-delivery.md). See also [wiki/multi-tenant-migration.md](multi-tenant-migration.md) for the multi-tenant operator workflow.
+Implements [ADR-019](adr_019_migration_audit_delivery.md). See also [wiki/multi_tenant_migration.md](multi_tenant_migration.md) for the multi-tenant operator workflow.
 
 ## Quick start
 
 The default emission path is on by default — no wiring required. Every `FlywayMigrator.Migrate*` call against a target produces:
 
 1. An OpenTelemetry span named `migration.audit.migration.applied` with the event payload as span attributes.
-2. A structured log record at `INFO` (or `ERROR` when the migration failed) via the framework's `LoggerProvider`, routed to OTLP per [ADR-006](adr-006-otlp-log-export.md).
+2. A structured log record at `INFO` (or `ERROR` when the migration failed) via the framework's `LoggerProvider`, routed to OTLP per [ADR-006](adr_006_otlp_log_export.md).
 
 To get audit-grade durability (Kafka, S3, your own append-only store), implement `migration.AuditRecorder` and wire it via `FlywayMigrator.WithAuditRecorder(sink)`.
 

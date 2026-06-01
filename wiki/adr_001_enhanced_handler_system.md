@@ -116,7 +116,7 @@ Implement an enhanced handler system with the following characteristics (updated
   - Enables gradual migration strategy
 - **Alternative Considered:** Replace Echo entirely in interface
 - **Trade-offs:** Breaking change, but maintains flexibility
-- **Superseded in part by [ADR-002](adr-002-base-path-and-health-routes.md):** the second parameter is no longer the raw `*echo.Echo`; the current signature is `RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)`.
+- **Superseded in part by [ADR-002](adr_002_base_path_and_health_routes.md):** the second parameter is no longer the raw `*echo.Echo`; the current signature is `RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)`.
 
 ### 8. **Context Access Design**
 - **Decision:** Provide optional HandlerContext for advanced scenarios

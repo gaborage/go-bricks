@@ -3,7 +3,7 @@
 This guide explains how to roll out Flyway migrations to every tenant in a
 go-bricks deployment using the `go-bricks-migrate` CLI or the
 `migration.MigrateAll` library entry point. Background and design rationale
-live in [ADR-018](adr-018-multi-tenant-migration-cli.md).
+live in [ADR-018](adr_018_multi_tenant_migration_cli.md).
 
 ## Architecture at a glance
 

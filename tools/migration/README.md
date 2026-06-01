@@ -7,12 +7,12 @@ go-bricks framework so the runtime engine and the CLI honor the same contract
 tenant, advisory-lock concurrency provided by Flyway natively).
 
 Deep dives:
-- [wiki/multi-tenant-migration.md](../../wiki/multi-tenant-migration.md) — full
+- [wiki/multi_tenant_migration.md](../../wiki/multi_tenant_migration.md) — full
   architecture, control-plane response shape, AWS Secrets Manager layout.
-- [wiki/migration-audit.md](../../wiki/migration-audit.md) — `migration.applied`
+- [wiki/migration_audit.md](../../wiki/migration_audit.md) — `migration.applied`
   audit event schema, OTel emission, `AuditRecorder` opt-in.
-- [ADR-018](../../wiki/adr-018-multi-tenant-migration-cli.md) — design rationale.
-- [ADR-019](../../wiki/adr-019-migration-audit-delivery.md) — audit delivery
+- [ADR-018](../../wiki/adr_018_multi_tenant_migration_cli.md) — design rationale.
+- [ADR-019](../../wiki/adr_019_migration_audit_delivery.md) — audit delivery
   guarantees.
 
 ## Install
@@ -65,7 +65,7 @@ go-bricks-migrate migrate \
 | Flag | When to use |
 |---|---|
 | `--tenant ID` | One-shot operator run against a single tenant. |
-| `--source-url URL` | Fleet run; lists tenants from a control-plane API matching the [HTTP listing contract](../../wiki/multi-tenant-migration.md#pre-defined-http-listing-contract). |
+| `--source-url URL` | Fleet run; lists tenants from a control-plane API matching the [HTTP listing contract](../../wiki/multi_tenant_migration.md#pre-defined-http-listing-contract). |
 | `--source-config PATH` | Fleet run from a YAML file containing a `multitenant.tenants` block. |
 
 ### Credentials
@@ -169,7 +169,7 @@ optional `AuditRecorder` durable-delivery seam. The event carries
 `Version` (the schema version after the run), `Outcome`, `ErrorClass` on
 failure, and `Attributes` (Flyway engine version, applied versions CSV,
 vendor, dry-run flag). See
-[wiki/migration-audit.md](../../wiki/migration-audit.md) for the full schema.
+[wiki/migration_audit.md](../../wiki/migration_audit.md) for the full schema.
 
 `--applied-by`, `--git-sha`, and `--pipeline-run-id` CLI flag plumbing for
 ADR-019's `AuditContext` is a separate follow-up; today the audit pipeline

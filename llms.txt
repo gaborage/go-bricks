@@ -3370,7 +3370,7 @@ multitenant:
       prefix: /itsp
 ```
 
-For the full resolver reference (segment-indexing semantics, prefix-gate behavior, trailing-slash and query-string handling, when to choose each type), see `wiki/multi-tenant-resolvers.md`.
+For the full resolver reference (segment-indexing semantics, prefix-gate behavior, trailing-slash and query-string handling, when to choose each type), see `wiki/multi_tenant_resolvers.md`.
 
 **Multi-Tenant Service Implementation:**
 
@@ -3703,7 +3703,7 @@ sql, args := qb.Select(cols.All()...).
 
 ## Multi-Tenant Migrations (CI/CD)
 
-For multi-tenant fleets, GoBricks ships a CLI (`go-bricks-migrate` in `tools/migration/`) and a library entry point (`migration.MigrateAll`) that fan Flyway migrations across every tenant. Tenant IDs come from a control-plane HTTP API; tenant DB credentials come from AWS Secrets Manager. Full guide: [wiki/multi-tenant-migration.md](wiki/multi-tenant-migration.md). Architecture rationale: [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
+For multi-tenant fleets, GoBricks ships a CLI (`go-bricks-migrate` in `tools/migration/`) and a library entry point (`migration.MigrateAll`) that fan Flyway migrations across every tenant. Tenant IDs come from a control-plane HTTP API; tenant DB credentials come from AWS Secrets Manager. Full guide: [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md). Architecture rationale: [ADR-018](wiki/adr_018_multi_tenant_migration_cli.md).
 
 ### Pre-defined HTTP listing contract
 
@@ -3926,7 +3926,7 @@ _ = fm.Migrate(ctx, mcfg)  // → AuditEvent fires on both OTel and sink paths
 - `AuditRecorder.Record` errors log warnings + increment `migration.audit.sink_failures`; they do NOT abort the migration. For zero-loss audit, back the sink with a durable buffer.
 - `Outcome == failed` carries a stable `ErrorClass` string from a 7-value taxonomy (`checksum_mismatch`, `lock_timeout`, `schema_history_corrupt`, `target_unreachable`, `target_not_ready`, `quiesce_blocked`, `internal_error`).
 
-Full guide: [wiki/migration-audit.md](wiki/migration-audit.md). Decision rationale: [ADR-019](wiki/adr-019-migration-audit-delivery.md).
+Full guide: [wiki/migration_audit.md](wiki/migration_audit.md). Decision rationale: [ADR-019](wiki/adr_019_migration_audit_delivery.md).
 
 ## Outbound HTTP Client
 

@@ -108,6 +108,6 @@ Single mechanical rename: `.ToSql()` → `.ToSQL()` on insert builder chains. CL
 
 ## Related ADRs
 
-- [ADR-005: Type-Safe WHERE Clause Construction](adr-005-type-safe-where-clauses.md) — established the `Filter`/`JoinFilter` pattern of wrapping squirrel with go-bricks-owned interfaces.
-- [ADR-007: Struct-Based Column Extraction](adr-007-struct-based-columns.md) — introduced the `Columns` helper used heavily with `InsertStruct`/`InsertFields`.
-- [ADR-013: Interface Naming Conventions (S8196)](adr-013-interface-naming-conventions.md) — the parallel public-API consistency push for interface names.
+- [ADR-005: Type-Safe WHERE Clause Construction](adr_005_type_safe_where_clauses.md) — established the `Filter`/`JoinFilter` pattern of wrapping squirrel with go-bricks-owned interfaces.
+- [ADR-007: Struct-Based Column Extraction](adr_007_struct_based_columns.md) — introduced the `Columns` helper used heavily with `InsertStruct`/`InsertFields`.
+- [ADR-013: Interface Naming Conventions (S8196)](adr_013_interface_naming_conventions.md) — the parallel public-API consistency push for interface names.

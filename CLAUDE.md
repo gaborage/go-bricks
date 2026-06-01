@@ -43,11 +43,11 @@ go test -bench=.        # Run benchmarks
 - [.golangci.yml](.golangci.yml) — Linting configuration
 
 **Wiki (deep dives — read on demand):**
-- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md)
-- Patterns: [handler-patterns.md](wiki/handler-patterns.md) · [context-deadlines.md](wiki/context-deadlines.md) · [testing.md](wiki/testing.md)
-- Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup-defaults.md](wiki/startup-defaults.md)
-- ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr-NNN-*.md`
-- Vendor docs: [observability-headers-auth.md](wiki/observability-headers-auth.md) · [new-relic-otlp.md](wiki/new-relic-otlp.md) · [otel-collector.md](wiki/otel-collector.md)
+- Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
+- Patterns: [handler_patterns.md](wiki/handler_patterns.md) · [context_deadlines.md](wiki/context_deadlines.md) · [testing.md](wiki/testing.md)
+- Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup_defaults.md](wiki/startup_defaults.md)
+- ADRs: [wiki/architecture_decisions.md](wiki/architecture_decisions.md), files `wiki/adr_NNN_*.md`
+- Vendor docs: [observability_headers_auth.md](wiki/observability_headers_auth.md) · [new_relic_otlp.md](wiki/new_relic_otlp.md) · [otel_collector.md](wiki/otel_collector.md)
 
 **External Resources:**
 - [Demo Project](https://github.com/gaborage/go-bricks-demo-project) — Complete examples
@@ -67,7 +67,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **Robustness** → Handle errors idiomatically, wrap once at boundaries. No silent failures.
 - **Patterns, not Over-Design** → Use them only when they solve real problems. Justify abstractions.
 - **Security First** → Input validation mandatory, secrets from env/vault, audit raw-SQL escape hatches (see Security Guidelines below).
-- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. See [wiki/context-deadlines.md](wiki/context-deadlines.md).
+- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. See [wiki/context_deadlines.md](wiki/context_deadlines.md).
 - **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`).
 - **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks).
 
@@ -142,8 +142,8 @@ make lint                       # Run golangci-lint
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
 - **server/** — Echo-based HTTP server
-- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". The `migration/provisioning/` subpackage carries a durable, crash-recoverable per-tenant state machine (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches) for dynamic tenant provisioning. See [multi-tenant-migration.md](wiki/multi-tenant-migration.md), [migration-roles.md](wiki/migration-roles.md), [migration-provisioning.md](wiki/migration-provisioning.md), [migration-audit.md](wiki/migration-audit.md), [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md), [ADR-019](wiki/adr-019-migration-audit-delivery.md), and [ADR-021](wiki/adr-021-provisioning-state-machine.md).
-- **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi-tenant-resolvers.md](wiki/multi-tenant-resolvers.md).
+- **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". The `migration/provisioning/` subpackage carries a durable, crash-recoverable per-tenant state machine (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches) for dynamic tenant provisioning. See [multi_tenant_migration.md](wiki/multi_tenant_migration.md), [migration_roles.md](wiki/migration_roles.md), [migration_provisioning.md](wiki/migration_provisioning.md), [migration_audit.md](wiki/migration_audit.md), [ADR-018](wiki/adr_018_multi_tenant_migration_cli.md), [ADR-019](wiki/adr_019_migration_audit_delivery.md), and [ADR-021](wiki/adr_021_provisioning_state_machine.md).
+- **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
 - **keystore/** — Named key-material management: RSA key pairs and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
@@ -228,7 +228,7 @@ Benefits: automatic binding/validation, standardized response envelopes, type sa
 
 Use `server.ResultWithMeta[R]` when a handler needs to contribute extra entries to the response envelope's `meta` map (pagination `total`/`limit`/`offset`/`hasMore`, deprecation notices, rate-limit headroom). Framework keys `timestamp` and `traceId` remain authoritative — handler values for those keys are dropped with a structured WARN.
 
-For pointer-vs-value request/response trade-offs (file uploads, bulk exports), **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), and the `ResultWithMeta` envelope-meta extension hook, see [wiki/handler-patterns.md](wiki/handler-patterns.md).
+For pointer-vs-value request/response trade-offs (file uploads, bulk exports), **Raw Response Mode** for Strangler Fig migrations (legacy-shape JSON without the `data`/`meta` envelope), and the `ResultWithMeta` envelope-meta extension hook, see [wiki/handler_patterns.md](wiki/handler_patterns.md).
 
 ### Database Architecture
 
@@ -427,7 +427,7 @@ func (m *OrderModule) Init(deps *app.ModuleDeps) error {
 
 For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authentication (New Relic/Honeycomb/Datadog), and OTLP collector deployment, see [wiki/observability.md](wiki/observability.md).
 
-**Migration audit events**: every Flyway `migrate` invocation emits a `migration.applied` audit event via the OTel seam (one span + one structured log record). Compliance-grade durability is opt-in via `FlywayMigrator.WithAuditRecorder(sink)`; the sink runs on a bounded-queue goroutine so it cannot stall migrations, and sink errors log but don't abort. Operators MUST supply `Config.Audit.Principal` explicitly via the library call argument — the framework refuses to infer it from IAM/OS and emits `<unspecified>` with a warning when empty. CLI flag plumbing for `--applied-by`/`--git-sha`/`--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up. State-machine and quiesce events are pending #379/#380. See [wiki/migration-audit.md](wiki/migration-audit.md) for the event schema, `ErrorClass` taxonomy, and `AuditRecorder` examples; [ADR-019](wiki/adr-019-migration-audit-delivery.md) for the design rationale.
+**Migration audit events**: every Flyway `migrate` invocation emits a `migration.applied` audit event via the OTel seam (one span + one structured log record). Compliance-grade durability is opt-in via `FlywayMigrator.WithAuditRecorder(sink)`; the sink runs on a bounded-queue goroutine so it cannot stall migrations, and sink errors log but don't abort. Operators MUST supply `Config.Audit.Principal` explicitly via the library call argument — the framework refuses to infer it from IAM/OS and emits `<unspecified>` with a warning when empty. CLI flag plumbing for `--applied-by`/`--git-sha`/`--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up. State-machine and quiesce events are pending #379/#380. See [wiki/migration_audit.md](wiki/migration_audit.md) for the event schema, `ErrorClass` taxonomy, and `AuditRecorder` examples; [ADR-019](wiki/adr_019_migration_audit_delivery.md) for the design rationale.
 
 ## Context Deadlines & Timeouts
 
@@ -445,7 +445,7 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
-For the full deep dive (when to shorten, when to detach, common pitfalls, why context-only timeouts), see [wiki/context-deadlines.md](wiki/context-deadlines.md).
+For the full deep dive (when to shorten, when to detach, common pitfalls, why context-only timeouts), see [wiki/context_deadlines.md](wiki/context_deadlines.md).
 
 ## Testing
 

@@ -20,7 +20,7 @@ Every operation that crosses an external boundary already has a configured timeo
 | Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC |
 
-**Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idle_ttl`), [messaging.md](messaging.md) (`reconnect.max_delay`, `publisher.idle_ttl`), [outbox.md](outbox.md), and [startup-defaults.md](startup-defaults.md).
+**Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idle_ttl`), [messaging.md](messaging.md) (`reconnect.max_delay`, `publisher.idle_ttl`), [outbox.md](outbox.md), and [startup_defaults.md](startup_defaults.md).
 
 ## The default pattern: do nothing
 
