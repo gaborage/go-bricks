@@ -1,0 +1,3 @@
+# OpenSSH allowed_signers — trust root for CI tag-signature verification (release.yml).
+# Protected by branch protection on main. 'git tag -v' binds the KEY, not the email principal.
+gabo.rage@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFjo40eAeUwWSDewImhnX0Wp5j1bjd/nUcbBXXWlJxuu
