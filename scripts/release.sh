@@ -75,7 +75,7 @@ esac
 make check
 make vuln
 make sec
-( cd tools/migration && go build ./... && go test ./... )
+make -C tools/migration check
 make -C tools/migration vuln
 make -C tools/migration sec
 

@@ -17,7 +17,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.ref }}
-          fetch-depth: 0
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -27,13 +26,9 @@ jobs:
           cache-dependency-path: go.sum
       - run: go mod download
       - name: Build framework
-        run: |
-          set -euo pipefail
-          packages=$(go list ./... | grep -vE '/tools(/|$)')
-          test -n "$packages" || { echo 'no framework packages'; exit 1; }
-          go build -v $packages
+        run: make build
       - name: Test framework
-        run: go test -race ./...
+        run: make test
       - name: Verify go.mod tidy
         run: |
           go mod tidy
