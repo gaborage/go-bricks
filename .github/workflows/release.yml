@@ -1,0 +1,150 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify-framework:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go mod download
+      - name: Build framework
+        run: make build
+      - name: Test framework
+        run: make test
+      - name: Verify go.mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: Vulnerability + security scan
+        run: |
+          make vuln
+          make sec
+
+  verify-cli:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: tools/migration
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+      - name: Build + validate CLI
+        run: |
+          go mod download
+          make validate-cli
+      - name: Vulnerability + security scan
+        run: |
+          make vuln
+          make sec
+
+  publish:
+    needs: [verify-framework, verify-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Re-fetch the real tag object (actions/checkout #882 can downgrade it)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+      - name: Assert tag is annotated and on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [ "$(git cat-file -t "$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag (use 'make release')"; exit 1; }
+          # The tagged commit MUST be on main — defends against a tag that points at a
+          # commit which adds an attacker key to .github/allowed_signers in the tag's own tree.
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$TAG^{commit}" origin/main \
+            || { echo "::error::$TAG does not point at a commit on main"; exit 1; }
+      - name: Verify SSH signature against the allowlist on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Trust root = .github/allowed_signers AS ON MAIN (branch-protected), NOT the tag's own copy.
+          git show origin/main:.github/allowed_signers > /tmp/allowed_signers
+          if grep -qiE 'REPLACE|PASTE_REAL|<.*public.*key.*>' /tmp/allowed_signers; then
+            echo "::error::.github/allowed_signers on main has a placeholder"; exit 1
+          fi
+          git config gpg.format ssh
+          git -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers tag -v "$TAG"
+      - name: Assemble release notes from the CHANGELOG section
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          notes="$(mktemp)"
+          awk -v v="$ver" '
+            BEGIN { gsub(/[.]/, "\\.", v) }
+            $0 ~ ("^## \\[v?" v "\\]") {grab=1; next}
+            grab && /^## \[/ {exit}
+            grab {print}
+          ' CHANGELOG.md > "$notes"
+          test -s "$notes" || { echo "::error::no CHANGELOG section for $TAG"; exit 1; }
+          echo "file=$notes" >> "$GITHUB_OUTPUT"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — skipping create (idempotent re-run)"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "${{ steps.notes.outputs.file }}"
+          fi
+      - name: Clear release-please autorelease:pending label (#1561)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Removing 'autorelease: pending' is the deadlock-breaker. A single combined
+          # remove+add would fail atomically if the 'tagged' label doesn't exist
+          # (release-please never creates it under skip-github-release), re-deadlocking #1561.
+          prs="$(gh pr list --state merged --label 'autorelease: pending' --json number --jq '.[].number')"
+          if [ -z "$prs" ]; then echo "No merged autorelease:pending PR found (ok)"; fi
+          for pr in $prs; do
+            gh pr edit "$pr" --remove-label 'autorelease: pending'
+            gh pr edit "$pr" --add-label 'autorelease: tagged' 2>/dev/null \
+              || echo "note: 'autorelease: tagged' label missing on PR #$pr (non-fatal)"
+            echo "Cleared autorelease:pending on PR #$pr"
+          done

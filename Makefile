@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec release
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -78,3 +78,7 @@ vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) $(PKGS)
+
+release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
+	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }
+	@VERSION=$(VERSION) ./scripts/release.sh
