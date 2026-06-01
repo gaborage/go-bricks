@@ -1,9 +1,11 @@
-.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln
+.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec
 
 BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 # Keep in sync with the other module's Makefile.
 GOVULNCHECK_VERSION := v1.1.4
+# Keep in sync with the other module's Makefile.
+GOSEC_VERSION := v2.26.1
 
 help: ## Show this help message
 	@echo "go-bricks-migrate tool commands:"
@@ -48,6 +50,9 @@ dev-deps: ## Install development dependencies
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+sec: ## Run gosec security scanner (pinned; identical to CI)
+	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) ./cmd/... ./internal/...
 
 release-dry-run: ## Test release build without publishing
 	@echo "Testing release build for version: $(VERSION)"

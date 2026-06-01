@@ -628,18 +628,8 @@ jobs:
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
-
-      - name: Run Gosec Security Scanner (migrate tool)
-        run: |
-          set -euo pipefail
-          packages=$(go list ./cmd/... ./internal/...)
-          if [ -z "$packages" ]; then
-            echo "No packages found to scan"
-            exit 1
-          fi
-          gosec $packages
+      - name: Run gosec (migrate tool)
+        run: make sec
 
   # ============================================================================
   # Shared Jobs (run for framework OR tool OR both)
@@ -685,19 +675,8 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
-
-      - name: Run Gosec Security Scanner (framework)
-        run: |
-          set -euo pipefail
-          packages=$(go list ./... | grep -vE '/tools(/|$)')
-          if [ -n "$packages" ]; then
-            gosec $packages
-          else
-            echo "No packages found to scan"
-            exit 1
-          fi
+      - name: Run gosec (framework)
+        run: make sec
 
   vuln-framework:
     permissions:
