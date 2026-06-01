@@ -188,7 +188,7 @@ database/
 
 **CI/CD:**
 - `make check-all` validates framework + tool compatibility
-- Multi-platform (Ubuntu/Windows) × Go 1.25
+- Multi-platform (Ubuntu/Windows) × Go 1.26
 - SonarCloud: 80% coverage target maintained
 
 ## Future Considerations

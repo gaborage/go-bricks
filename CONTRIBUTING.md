@@ -12,7 +12,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 ## Development Workflow
 
 ### Prerequisites
-- Go 1.25 or later
+- Go 1.26 or later
 - golangci-lint for linting
 - Make for build automation
 
