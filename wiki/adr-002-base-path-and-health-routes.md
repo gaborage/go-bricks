@@ -56,6 +56,7 @@ type PathConfig struct {
 ```
 
 ### RouteRegistrar Interface
+
 ```go
 type RouteRegistrar interface {
     Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo
@@ -92,6 +93,7 @@ server:
 ```
 
 ### Environment-Specific Configuration
+
 ```bash
 # Development
 SERVER_PATH_BASE="/dev/api"
@@ -104,6 +106,7 @@ SERVER_PATH_READY="/readiness"
 ```
 
 ### Route Resolution Examples
+
 With `server.path.base: "/api/v1"`:
 - Module route `/users` → `/api/v1/users`
 - Health endpoint → `/api/v1/health` (or custom path)

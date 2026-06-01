@@ -155,6 +155,7 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 ```
 
 **6. Deterministic Sampling** (`observability/dual_processor.go`)
+
 ```go
 // shouldSample determines if an INFO/DEBUG log should be sampled based on trace ID.
 // All logs in the same trace are sampled together (deterministic per-trace decision).
@@ -185,6 +186,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
     return hash%100 < uint64(p.samplingRate*100)
 }
 ```
+
 *(WARN and above are always exported before sampling is consulted; see `OnEmit` in `observability/dual_processor.go`.)*
 
 ## Implementation Details

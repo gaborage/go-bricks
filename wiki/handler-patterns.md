@@ -142,7 +142,7 @@ func (h *Handler) listUsers(req ListUsersReq, hctx server.HandlerContext) (serve
     ctx := hctx.Echo.Request().Context()
     users, total, err := h.svc.List(ctx, req.Limit, req.Offset)
     if err != nil {
-        return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError(err.Error())
+        return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError("failed to list users")
     }
     return server.ResultWithMeta[ListUsersResp]{
         Data:   ListUsersResp{Items: users},

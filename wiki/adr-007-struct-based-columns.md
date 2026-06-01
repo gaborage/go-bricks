@@ -111,6 +111,7 @@ col := cols.Col("NonExistent")
 ```
 
 ### 5. **Backward Compatible Integration**
+
 - **Decision:** Additive API - existing string-based queries unchanged
 - **Method Signature:**
   - `Col(fieldName string) string` - Single field

@@ -108,7 +108,7 @@ database:
 # Cache timeout errors
 # → Increase operation timeout: ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 # → Check network latency if Redis on different host
-# → Verify pool size adequate: cache.redis.poolsize >= NumCPU * 2
+# → Verify pool size adequate: cache.redis.pool_size >= NumCPU * 2
 
 # CacheManager eviction issues
 # → Increase max_size if seeing unexpected evictions: cache.manager.max_size

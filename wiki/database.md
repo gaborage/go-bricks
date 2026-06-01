@@ -89,7 +89,8 @@ type User struct {
 cols := qb.Columns(&User{})  // Cached per vendor
 
 query := qb.Select(cols.All()...).From("users")
-query := qb.Select(cols.Cols("ID", "Name")...).From("users")
+// or select specific fields:
+query = qb.Select(cols.Cols("ID", "Name")...).From("users")
 
 query := qb.Select(cols.All()...).
     From("users").
@@ -218,10 +219,12 @@ query := qb.Select(
 ```
 
 **SECURITY WARNING:** Raw SQL expressions are NOT escaped. Never interpolate user input:
+
 ```go
 qb.MustExpr("COUNT(*)", "total")                  // SAFE
 qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
 ```
+
 Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`.
 
 ## Connection Pool Defaults

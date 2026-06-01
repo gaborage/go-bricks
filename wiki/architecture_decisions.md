@@ -85,6 +85,7 @@ Interface segregation for database testing utilities, enabling 73% less boilerpl
 ---
 
 ### [ADR-009: Consumer Worker Pool Concurrency with NumCPU × 4 Default](adr-009-consumer-worker-pool-concurrency.md)
+
 **Date:** 2025-01-13 | **Status:** Accepted
 
 Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-threaded message processing for 20-30x throughput improvement.
@@ -94,6 +95,7 @@ Auto-scaling consumer worker pools with `NumCPU * 4` default, replacing single-t
 ---
 
 ### [ADR-010: Convert Panic-Based Validation to Error Returns](adr-010-panic-to-error-conversion.md)
+
 **Date:** 2025-11-29 | **Status:** Accepted
 
 Converts panic-based fail-fast validation to idiomatic error returns for SonarCloud reliability compliance (S8148), improving the reliability rating from C to A.
