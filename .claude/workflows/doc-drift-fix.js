@@ -56,7 +56,7 @@ CONSERVATIVE COMMENT RULES (.go files): only remove or rewrite a comment when it
   - comments that explain WHY (rationale, trade-offs, gotchas, ADR/issue links).
   When in doubt, SKIP. Do not change code logic — comments only (plus, for the rare doc-comment-as-example case, keep it compilable).
 
-DOC RULES (.md/.txt): apply the corrected text; keep all code examples COMPILABLE and consistent with the doc's existing style. For ADR files (wiki/adr-*.md) do NOT rewrite historical decisions — only apply the specific corrective the finding asks for (fix a wrong Status/cross-reference, or add a "Superseded by …" note).
+DOC RULES (.md/.txt): apply the corrected text; keep all code examples COMPILABLE and consistent with the doc's existing style. For ADR files (wiki/adr*.md) do NOT rewrite historical decisions — only apply the specific corrective the finding asks for (fix a wrong Status/cross-reference, or add a "Superseded by …" note).
 
 Make NO unrelated changes. Then return: file, appliedCount, skipped (one {detail} per skipped finding with the reason), notes.`
 }
