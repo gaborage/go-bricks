@@ -13,6 +13,21 @@ Release PR and cut a **signed** tag locally; CI re-verifies and publishes.
   `0.x` (project convention; SemVer §4 permits anything pre-1.0). Mark breaking changes with
   `feat!:` / `BREAKING CHANGE:` so the bump + the ⚠ banner are correct.
 
+## 0. One-time setup
+
+- **`RELEASE_PLEASE_TOKEN`** — a fine-grained PAT (repo `gaborage/go-bricks`; permissions
+  **Contents: Read and write** + **Pull requests: Read and write**), stored as a repo secret.
+  release-please uses it so its Release PR triggers CI and its label edits are reliable — the
+  default `GITHUB_TOKEN` does neither. Create it once:
+  `gh secret set RELEASE_PLEASE_TOKEN --repo gaborage/go-bricks`.
+- **Squash setting** — Settings → General → Pull Requests → **"Default to PR title for squash
+  merge commits"** must be ON (release-please parses the PR title as the commit subject).
+- **Tag/branch protection** — `.github/allowed_signers` is the CI trust root for release-tag
+  signatures. `release.yml` verifies a tag's signature against the copy of `allowed_signers`
+  **on `main`** and requires the tagged commit to be an ancestor of `main`, so the trust root is
+  exactly what branch protection guards. For defense-in-depth, add a **tag-protection ruleset**
+  on `v*` restricting tag creation to the maintainer.
+
 ## 1. release-please keeps a standing Release PR
 
 On every push to `main`, `release-please` opens/updates a `chore(main): release vX.Y.Z` PR
@@ -31,9 +46,10 @@ make release VERSION=v0.38.0
 ```
 
 `make release` is **read-and-verify-only**: it asserts `VERSION == .release-please-manifest.json
-== CHANGELOG top section`, runs the full gate (`make check` + `make vuln` + `make sec` for **both**
-modules), probes signing, creates a **signed annotated** tag (`git tag -s`), verifies the
-signature locally, and pushes the tag. It does **not** edit `CHANGELOG.md` (release-please owns it).
+== CHANGELOG top section`, runs the full gate — `make check` + `make vuln` + `make sec` for the
+root module, and build + test + `make vuln` + `make sec` for the `tools/migration` module — probes
+signing, creates a **signed annotated** tag (`git tag -s`), verifies the signature locally, and
+pushes the tag. It does **not** edit `CHANGELOG.md` (release-please owns it).
 
 > **Rule (release-please #1561):** never merge a Release PR you are not ready to `make release`
 > immediately. A merged-but-untagged Release PR keeps its `autorelease: pending` label and
@@ -41,10 +57,11 @@ signature locally, and pushes the tag. It does **not** edit `CHANGELOG.md` (rele
 
 ## 3. What `release.yml` does (on tag push)
 
-Re-verifies the **tagged commit** independently (build + `go test -race ./...` + `go mod tidy`
-+ `make vuln`/`make sec`, framework + CLI), asserts the tag is annotated + SSH-signature-valid
-against `.github/allowed_signers`, publishes the GitHub Release using the `CHANGELOG.md` section
-as the body, then clears the merged Release PR's `autorelease: pending` label. CI never signs.
+Re-verifies the **tagged commit** independently — **framework**: build + `go test -race ./...` +
+`go mod tidy` + `make vuln`/`make sec`; **CLI**: build + `validate-cli` + `make vuln`/`make sec`
+— asserts the tag is annotated + SSH-signature-valid against `.github/allowed_signers` on `main`,
+publishes the GitHub Release using the `CHANGELOG.md` section as the body, then clears the merged
+Release PR's `autorelease: pending` label. CI never signs.
 
 ## 4. If the release fails
 

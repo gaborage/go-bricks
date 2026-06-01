@@ -87,22 +87,29 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
-      - name: Reject unfilled allowed_signers placeholder
-        run: |
-          set -euo pipefail
-          test -f .github/allowed_signers || { echo "::error::.github/allowed_signers missing"; exit 1; }
-          if grep -qiE 'REPLACE|PASTE_REAL|<.*public.*key.*>' .github/allowed_signers; then
-            echo "::error::.github/allowed_signers still has a placeholder"; exit 1
-          fi
-      - name: Assert annotated + verify SSH signature
+      - name: Assert tag is annotated and on main
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           [ "$(git cat-file -t "$TAG")" = tag ] || { echo "::error::$TAG is not an annotated tag (use 'make release')"; exit 1; }
+          # The tagged commit MUST be on main — defends against a tag that points at a
+          # commit which adds an attacker key to .github/allowed_signers in the tag's own tree.
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$TAG^{commit}" origin/main \
+            || { echo "::error::$TAG does not point at a commit on main"; exit 1; }
+      - name: Verify SSH signature against the allowlist on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Trust root = .github/allowed_signers AS ON MAIN (branch-protected), NOT the tag's own copy.
+          git show origin/main:.github/allowed_signers > /tmp/allowed_signers
+          if grep -qiE 'REPLACE|PASTE_REAL|<.*public.*key.*>' /tmp/allowed_signers; then
+            echo "::error::.github/allowed_signers on main has a placeholder"; exit 1
+          fi
           git config gpg.format ssh
-          git config gpg.ssh.allowedSignersFile .github/allowed_signers
-          git tag -v "$TAG"
+          git -c gpg.ssh.allowedSignersFile=/tmp/allowed_signers tag -v "$TAG"
       - name: Assemble release notes from the CHANGELOG section
         id: notes
         env:
@@ -112,6 +119,7 @@ jobs:
           ver="${TAG#v}"
           notes="$(mktemp)"
           awk -v v="$ver" '
+            BEGIN { gsub(/[.]/, "\\.", v) }
             $0 ~ ("^## \\[v?" v "\\]") {grab=1; next}
             grab && /^## \[/ {exit}
             grab {print}
@@ -122,16 +130,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "${{ steps.notes.outputs.file }}"
-      - name: Clear release-please autorelease:pending label (#1561)
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           set -euo pipefail
-          pr="$(gh pr list --state merged --label 'autorelease: pending' --json number --jq '.[0].number // empty')"
-          if [ -n "$pr" ]; then
-            gh pr edit "$pr" --remove-label 'autorelease: pending' --add-label 'autorelease: tagged'
-            echo "Cleared autorelease:pending on PR #$pr"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — skipping create (idempotent re-run)"
           else
-            echo "No merged autorelease:pending PR found (ok)"
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "${{ steps.notes.outputs.file }}"
           fi
+      - name: Clear release-please autorelease:pending label (#1561)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Removing 'autorelease: pending' is the deadlock-breaker. A single combined
+          # remove+add would fail atomically if the 'tagged' label doesn't exist
+          # (release-please never creates it under skip-github-release), re-deadlocking #1561.
+          prs="$(gh pr list --state merged --label 'autorelease: pending' --json number --jq '.[].number')"
+          if [ -z "$prs" ]; then echo "No merged autorelease:pending PR found (ok)"; fi
+          for pr in $prs; do
+            gh pr edit "$pr" --remove-label 'autorelease: pending'
+            gh pr edit "$pr" --add-label 'autorelease: tagged' 2>/dev/null \
+              || echo "note: 'autorelease: tagged' label missing on PR #$pr (non-fatal)"
+            echo "Cleared autorelease:pending on PR #$pr"
+          done
