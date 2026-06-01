@@ -76,8 +76,10 @@ git tag -d v0.38.0
 git push origin :refs/tags/v0.38.0
 gh release delete v0.38.0 --yes   # if a release was created
 ```
+
 A tag delete does NOT recall a version already pulled via `go get`. Ship a follow-up release
 adding a `retract` directive to `go.mod`:
+
 ```go
 retract v0.38.0 // <reason>; use v0.38.1+
 ```
@@ -86,6 +88,7 @@ retract v0.38.0 // <reason>; use v0.38.1+
 
 Released manually at the same number as the framework, **after** the framework tag is on the
 module proxy:
+
 ```bash
 go list -m github.com/gaborage/go-bricks@v0.38.0          # wait until this resolves
 GOWORK=off go -C tools/migration get github.com/gaborage/go-bricks@v0.38.0
