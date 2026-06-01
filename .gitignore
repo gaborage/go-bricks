@@ -43,6 +43,14 @@
 
 !sonar-project.properties
 
+!CHANGELOG.md
+!RELEASING.md
+!/scripts/
+!/scripts/*.sh
+!.github/allowed_signers
+!release-please-config.json
+!.release-please-manifest.json
+
 !.claude/commands/*
 !.claude/settings.json
 !.claude/hooks/*

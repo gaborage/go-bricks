@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "package-name": "go-bricks",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "skip-github-release": true,
+      "changelog-sections": [
+        { "type": "feat", "section": "Added" },
+        { "type": "fix", "section": "Fixed" },
+        { "type": "perf", "section": "Changed" },
+        { "type": "refactor", "section": "Changed" },
+        { "type": "deprecate", "section": "Deprecated" },
+        { "type": "remove", "section": "Removed" },
+        { "type": "revert", "section": "Fixed" },
+        { "type": "docs", "section": "Documentation", "hidden": true },
+        { "type": "chore", "hidden": true },
+        { "type": "test", "hidden": true },
+        { "type": "build", "hidden": true },
+        { "type": "ci", "hidden": true }
+      ]
+    }
+  }
+}
