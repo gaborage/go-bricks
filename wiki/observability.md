@@ -234,7 +234,7 @@ observability:
 
 **Supported vendors:** New Relic, Honeycomb, Datadog, Grafana Cloud, generic Bearer tokens.
 
-For complete configuration examples, security best practices, and vendor-specific headers, see [Headers & Authentication](observability-headers-auth.md).
+For complete configuration examples, security best practices, and vendor-specific headers, see [Headers & Authentication](observability_headers_auth.md).
 
 ## New Relic OTLP Integration (Optimized)
 
@@ -251,7 +251,7 @@ GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandw
 - `https://otlp.nr-data.net:4317` with `protocol: grpc` → ERROR
 - `otlp.nr-data.net:4317` with `protocol: grpc` → Correct
 
-For complete gRPC/HTTP configs, port 443 alternatives, and performance benchmarks, see [New Relic OTLP](new-relic-otlp.md).
+For complete gRPC/HTTP configs, port 443 alternatives, and performance benchmarks, see [New Relic OTLP](new_relic_otlp.md).
 
 ## OpenTelemetry Collector (Recommended for Production)
 
@@ -259,4 +259,4 @@ For high-volume production, use an OTEL Collector as a vendor-agnostic proxy. Be
 
 **Deployment patterns:** Sidecar (per-pod), DaemonSet (per-node), Gateway (centralized). When using a collector, the GoBricks app points to the collector endpoint with `insecure: true` and no vendor headers.
 
-For deployment patterns, collector configs, and when-to-use guidance, see [OTEL Collector](otel-collector.md).
+For deployment patterns, collector configs, and when-to-use guidance, see [OTEL Collector](otel_collector.md).

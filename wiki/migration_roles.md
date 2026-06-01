@@ -116,7 +116,7 @@ deployment. Treat its credentials accordingly:
   secret is sufficient.
 
 For the AWS Secrets Manager naming convention used by `go-bricks-migrate`,
-see [multi-tenant-migration.md](multi-tenant-migration.md#aws-secrets-manager-convention).
+see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-convention).
 
 ## Provisioning flow
 

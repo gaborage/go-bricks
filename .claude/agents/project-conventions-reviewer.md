@@ -49,7 +49,7 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    `*_extra_test.go` / `*_uncovered_test.go` (only `testhelpers_test.go` is
    the shared-helper exception).
 
-5. **ADR index sync.** If the diff adds/renames any `wiki/adr-NNN-*.md`,
+5. **ADR index sync.** If the diff adds/renames any `wiki/adr_NNN_*.md`,
    verify `wiki/architecture_decisions.md` has a matching index entry. This
    pair fell out of sync historically — flag any mismatch.
 

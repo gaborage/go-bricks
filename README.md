@@ -478,7 +478,7 @@ go-bricks-migrate migrate \
   --secrets-prefix gobricks/migrate/
 ```
 
-See [wiki/multi-tenant-migration.md](wiki/multi-tenant-migration.md) for the full HTTP contract, IAM policy, secret payload formats (canonical and AWS RDS rotation fallback), CI/CD recipe, and library usage. Architectural rationale lives in [ADR-018](wiki/adr-018-multi-tenant-migration-cli.md).
+See [wiki/multi_tenant_migration.md](wiki/multi_tenant_migration.md) for the full HTTP contract, IAM policy, secret payload formats (canonical and AWS RDS rotation fallback), CI/CD recipe, and library usage. Architectural rationale lives in [ADR-018](wiki/adr_018_multi_tenant_migration_cli.md).
 
 ---
 

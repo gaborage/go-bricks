@@ -3,7 +3,7 @@
 This guide documents the durable, crash-recoverable state machine that
 provisions per-tenant resources (schema, runtime role, migrations, seed
 data) under the multi-tenant migration model. Implementation tracked under
-issue #379; design rationale in [ADR-021](adr-021-provisioning-state-machine.md).
+issue #379; design rationale in [ADR-021](adr_021_provisioning_state_machine.md).
 
 **Scope:** PostgreSQL only in v1. Oracle support is tracked under #385.
 
@@ -22,7 +22,7 @@ Every transition is **durably persisted** by a `StateStore` *before* the
 next forward step runs. If the worker crashes mid-flow, the next `Run`
 call reloads the persisted state and resumes from there. Steps must be
 idempotent so re-invocation after a crash is safe; the framework's
-`migration.ProvisionPGRoles` (see [migration-roles.md](migration-roles.md))
+`migration.ProvisionPGRoles` (see [migration_roles.md](migration_roles.md))
 and Flyway's `flyway_schema_history` give the first three forward steps
 idempotency for free. The consumer is responsible for designing the
 `Seed` step idempotently (typical pattern: `INSERT ... ON CONFLICT DO
@@ -199,12 +199,12 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 
 ## Related
 
-- [migration-roles.md](migration-roles.md) — the role-separation model
+- [migration_roles.md](migration_roles.md) — the role-separation model
   the `CreateSchema` / `CreateRole` steps invoke.
-- [multi-tenant-migration.md](multi-tenant-migration.md) — the `MigrateAll`
+- [multi_tenant_migration.md](multi_tenant_migration.md) — the `MigrateAll`
   orchestrator the `Migrate` step typically calls.
-- [migration-audit.md](migration-audit.md) — the audit-event seam future
+- [migration_audit.md](migration_audit.md) — the audit-event seam future
   state-transition events will use.
-- [ADR-021](adr-021-provisioning-state-machine.md) — the reuse-vs-divergence
+- [ADR-021](adr_021_provisioning_state_machine.md) — the reuse-vs-divergence
   decision that put this package in `migration/provisioning/` rather than
   inside `outbox/`.

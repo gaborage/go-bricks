@@ -162,5 +162,5 @@ Rejects: empty, `Production` (uppercase), `prd eu` (space), `1prod` (leading dig
 
 ## Related ADRs
 
-- [ADR-006: OTLP Log Export](adr-006-otlp-log-export.md) — the bootstrap logger consolidated in this change uses the same env signal to pick log levels before OTLP wiring runs.
-- [ADR-019: Migration Audit-Event Delivery](adr-019-migration-audit-delivery.md) — `migration.applied` audit events include `app.env` as an attribute; the new free-form policy means audit consumers should treat this field as opaque rather than enum-bounded.
+- [ADR-006: OTLP Log Export](adr_006_otlp_log_export.md) — the bootstrap logger consolidated in this change uses the same env signal to pick log levels before OTLP wiring runs.
+- [ADR-019: Migration Audit-Event Delivery](adr_019_migration_audit_delivery.md) — `migration.applied` audit events include `app.env` as an attribute; the new free-form policy means audit consumers should treat this field as opaque rather than enum-bounded.

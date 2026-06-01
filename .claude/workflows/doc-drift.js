@@ -201,7 +201,7 @@ Use rg/grep and read the relevant source to confirm. ${FINDING_FIELDS_NOTE}`
   if (cluster.lens === 'index') {
     return `You are auditing the ADR index file: ${fileList}, against the actual ADR files in wiki/.
 
-Run \`ls wiki/adr-*.md\` and read the index. Report findings where: an ADR file exists but is missing from the index; the index lists an ADR that does not exist; a title or number in the index disagrees with the ADR file's own heading; or the index has numbering gaps/duplicates. (This index has fallen out of sync before, so be thorough.) ${FINDING_FIELDS_NOTE}`
+Run \`ls wiki/adr*.md\` and read the index. Report findings where: an ADR file exists but is missing from the index; the index lists an ADR that does not exist; a title or number in the index disagrees with the ADR file's own heading; or the index has numbering gaps/duplicates. (This index has fallen out of sync before, so be thorough.) ${FINDING_FIELDS_NOTE}`
   }
 
   // living
@@ -270,7 +270,7 @@ phase('Discover')
 const inv = await agent(
   `Enumerate this repository's tracked documentation and Go source for a drift analysis. Use git, wc, and ls. Return structured data.
 
-DOCS: list tracked doc files with \`git ls-files | grep -E '\\.(md|txt)$'\`. EXCLUDE anything under \`.claude/\` or \`docs/superpowers/\` (those are tooling/spec artifacts, not project docs) and EXCLUDE \`WARP.md\` (it is a symlink to CLAUDE.md). For each remaining file: get its line count with \`wc -l\`, and classify lens — "adr" if the path matches wiki/adr-*.md, "index" if the path is exactly wiki/architecture_decisions.md, otherwise "living".
+DOCS: list tracked doc files with \`git ls-files | grep -E '\\.(md|txt)$'\`. EXCLUDE anything under \`.claude/\` or \`docs/superpowers/\` (those are tooling/spec artifacts, not project docs) and EXCLUDE \`WARP.md\` (it is a symlink to CLAUDE.md). For each remaining file: get its line count with \`wc -l\`, and classify lens — "adr" if the path matches wiki/adr*.md, "index" if the path is exactly wiki/architecture_decisions.md, otherwise "living".
 
 CODE: list tracked non-test Go files with \`git ls-files '*.go' | grep -v '_test\\.go$'\`. Return them all in codeFiles.
 

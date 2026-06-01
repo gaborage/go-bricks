@@ -26,7 +26,7 @@ The trade-off matrix from [#381](https://github.com/gaborage/go-bricks/issues/38
 
 ### Option 1: OpenTelemetry-only (Rejected)
 
-Emit a `migration.audit.*` span on every application + transition, attach event-shape attributes (`target`, `version`, `applied_by_principal`, …), and write the same payload through the existing zerolog → OTLP log pipeline (per [ADR-006](adr-006-otlp-log-export.md)). No new package surface.
+Emit a `migration.audit.*` span on every application + transition, attach event-shape attributes (`target`, `version`, `applied_by_principal`, …), and write the same payload through the existing zerolog → OTLP log pipeline (per [ADR-006](adr_006_otlp_log_export.md)). No new package surface.
 
 **Rejected because:** OTLP collectors (OTel Collector, vendor agents) are designed for telemetry, not durable audit. The default Collector batch processor buffers up to `send_batch_size` records in memory and drops on backpressure or restart. That's appropriate for traces/metrics where some loss is acceptable; it is **not** appropriate as the sole record-of-truth for PCI / SOC 2 evidence retention. Customers operating under those regimes need an audit trail that survives collector outages.
 
@@ -152,6 +152,6 @@ These answers don't change the ADR's decision (hybrid is the right shape regardl
 
 - Issue [#381](https://github.com/gaborage/go-bricks/issues/381) — decision-only tracking issue.
 - Issue [#382](https://github.com/gaborage/go-bricks/issues/382) — implementation, depends on this ADR.
-- [ADR-006](adr-006-otlp-log-export.md) — OTLP log export; describes the existing `LoggerProvider` seam this ADR builds on.
+- [ADR-006](adr_006_otlp_log_export.md) — OTLP log export; describes the existing `LoggerProvider` seam this ADR builds on.
 - [wiki/observability.md](observability.md) — full observability deep-dive.
-- [wiki/multi-tenant-migration.md](multi-tenant-migration.md) — multi-tenant migration operator/developer guide.
+- [wiki/multi_tenant_migration.md](multi_tenant_migration.md) — multi-tenant migration operator/developer guide.

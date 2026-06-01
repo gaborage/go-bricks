@@ -147,7 +147,7 @@ external library callers cannot import it directly.** Library users who want
 AWS SM in-process implement the `migration.SecretFetcher` function type
 themselves (typically ~30 lines wrapping `secretsmanager.Client`) or plug in
 HashiCorp Vault / Google Secret Manager / etc. with the same contract — see
-`wiki/multi-tenant-migration.md` for a public-API example.
+`wiki/multi_tenant_migration.md` for a public-API example.
 
 ### Sequential, fail-fast by default
 
@@ -199,4 +199,4 @@ don't enable multi-tenancy keep working unchanged.
 - `migration/source/http/source.go` — listing client (envelope-aware).
 - `tools/migration/cmd/go-bricks-migrate` — CLI binary.
 - `tools/migration/internal/awssm/fetcher.go` — AWS SM `SecretFetcher`.
-- `wiki/multi-tenant-migration.md` — operator/developer guide.
+- `wiki/multi_tenant_migration.md` — operator/developer guide.

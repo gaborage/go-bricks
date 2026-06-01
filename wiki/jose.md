@@ -82,7 +82,7 @@ fw.RegisterModules(
 | `ResultWithMeta[R]` / any `ResultEnvelopeProvider` | Standard `{data, meta}` envelope with framework-managed `timestamp` and `traceId` merged in |
 | `IAPIError` (post-trust handler failure) | Standard `{error, meta}` envelope (`buildErrorEnvelope`) |
 
-Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed JSON shapes work unchanged. Handlers explicitly opt into envelope semantics by returning `ResultWithMeta` (see [handler-patterns.md](handler-patterns.md#custom-envelope-meta-resultwithmetar)).
+Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed JSON shapes work unchanged. Handlers explicitly opt into envelope semantics by returning `ResultWithMeta` (see [handler_patterns.md](handler_patterns.md#custom-envelope-meta-resultwithmetar)).
 
 **Replay protection**: the framework verifies the JWS signature and exposes verified claims via `jose.ClaimsFromContext(ctx)`. Applications enforce `iat`/`exp`/`jti` policies (Visa skew rules vary by product).
 

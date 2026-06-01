@@ -39,7 +39,7 @@ db, err := deps.DB(ctx)
 
 ## Interface Naming Conventions (S8196)
 
-Per [SonarCloud rule S8196](https://rules.sonarsource.com/go/RSPEC-8196/) and [ADR-013](adr-013-interface-naming-conventions.md).
+Per [SonarCloud rule S8196](https://rules.sonarsource.com/go/RSPEC-8196/) and [ADR-013](adr_013_interface_naming_conventions.md).
 
 | Package | Old Interface | New Interface |
 |---------|---------------|---------------|
@@ -52,7 +52,7 @@ Per [SonarCloud rule S8196](https://rules.sonarsource.com/go/RSPEC-8196/) and [A
 
 ## Standardized `ToSQL()` Across Query Builders (S8179)
 
-Per [ADR-017](adr-017-insert-query-builder.md), `qb.Insert*` constructors return `types.InsertQueryBuilder` (a go-bricks-owned interface) instead of `squirrel.InsertBuilder` directly. The render method is renamed from `ToSql()` to `ToSQL()` — matching `Select`/`Update`/`Delete`.
+Per [ADR-017](adr_017_insert_query_builder.md), `qb.Insert*` constructors return `types.InsertQueryBuilder` (a go-bricks-owned interface) instead of `squirrel.InsertBuilder` directly. The render method is renamed from `ToSql()` to `ToSQL()` — matching `Select`/`Update`/`Delete`.
 
 | Constructor | Old return | New return | Render method |
 |---|---|---|---|
