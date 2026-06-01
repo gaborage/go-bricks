@@ -48,15 +48,27 @@ if [ -n "$LATEST" ]; then
     || die "VERSION ($VERSION) must be strictly greater than latest tag ($LATEST)"
 fi
 
-# 7. CI green for THIS exact commit; accept path-filtered skip for release-please commits
+# 7. CI green for THIS exact commit. Tolerate a missing/skipped/in-progress run ONLY when
+#    this commit is CHANGELOG/manifest-only (the release-please merge); release.yml + the
+#    local gate (step 8) re-verify the actual code regardless.
 CI_STATUS="$(gh run list --workflow ci-v2.yml --branch main --commit "$LOCAL_SHA" --limit 20 \
   --json headSha,status,conclusion \
-  --jq '[.[] | select(.headSha=="'"$LOCAL_SHA"'")] | (map(select(.status=="completed")) | first) // .[0] | "\(.status):\(.conclusion // "none")"' 2>/dev/null || echo "")"
+  --jq '[.[] | select(.headSha=="'"$LOCAL_SHA"'")] | (map(select(.status=="completed")) | first) // .[0] | if . == null then "absent" else "\(.status):\(.conclusion // "none")" end' 2>/dev/null || echo "absent")"
 case "$CI_STATUS" in
-  completed:success) echo "CI green for $LOCAL_SHA" ;;
-  "") echo "WARN: no CI run for $LOCAL_SHA (expected for a CHANGELOG/manifest-only release-please commit; release.yml re-verifies the tagged commit)" ;;
-  completed:*) die "CI for $LOCAL_SHA is '$CI_STATUS' (not success) — fix before releasing" ;;
-  *) die "CI for $LOCAL_SHA is still '$CI_STATUS' — wait for it to finish" ;;
+  completed:success)
+    echo "CI green for $LOCAL_SHA"
+    ;;
+  completed:failure|completed:cancelled|completed:timed_out|completed:startup_failure|completed:action_required)
+    die "CI for $LOCAL_SHA is '$CI_STATUS' — fix before releasing"
+    ;;
+  *)
+    # absent / queued / in_progress / skipped: OK only if HEAD changed nothing but CHANGELOG/manifest.
+    EXTRA="$(git diff --name-only HEAD~1..HEAD | grep -vE '^(CHANGELOG\.md|\.release-please-manifest\.json)$' || true)"
+    [ -z "$EXTRA" ] || die "no successful CI for $LOCAL_SHA and it changed code beyond CHANGELOG/manifest:
+$EXTRA
+Wait for CI to pass, then retry."
+    echo "WARN: CI status '$CI_STATUS' for $LOCAL_SHA — proceeding (CHANGELOG/manifest-only commit; release.yml re-verifies the tagged commit)"
+    ;;
 esac
 
 # 8. full local gate, BOTH modules (same commands CI runs via the Makefile targets)
@@ -69,7 +81,7 @@ make -C tools/migration sec
 
 # 9. signing probe BEFORE mutating refs (cleans up even if interrupted)
 PROBE="_release-sign-probe-$$"
-trap 'git tag -d "$PROBE" >/dev/null 2>&1 || true' EXIT
+trap 'git tag -d "$PROBE" >/dev/null 2>&1 || true' EXIT INT TERM
 git tag -s -m "signing probe" "$PROBE" HEAD \
   || die "signing failed — unlock 1Password / start the SSH agent and retry. NEVER use --no-sign."
 git tag -d "$PROBE" >/dev/null 2>&1
@@ -78,12 +90,11 @@ trap - EXIT
 # 10. signed annotated tag on HEAD (the merged release-please commit). -s is MANDATORY.
 git tag -s "$VERSION" -m "Release $VERSION"
 
-# 11. BLOCKING local signature verify when an allowlist is configured
-if [ -n "$(git config --get gpg.ssh.allowedSignersFile || true)" ]; then
-  git tag -v "$VERSION" \
-    || { git tag -d "$VERSION"; die "tag signature failed local verify (key/principal mismatch?) — tag deleted"; }
-fi
+# 11. BLOCKING local signature verify (always; fall back to the committed allowlist)
+SIGNERS="$(git config --get gpg.ssh.allowedSignersFile || echo .github/allowed_signers)"
+git -c gpg.ssh.allowedSignersFile="$SIGNERS" tag -v "$VERSION" \
+  || { git tag -d "$VERSION"; die "tag signature failed local verify (key/principal mismatch?) — tag deleted"; }
 
 # 12. push the tag (fires release.yml). main is already at HEAD (release-please PR merge).
-git push origin "$VERSION" || die "tag push failed; retry: git push origin $VERSION"
+git push origin "$VERSION" || { git tag -d "$VERSION"; die "tag push failed; local tag removed — re-run: make release VERSION=$VERSION"; }
 echo "Pushed $VERSION. release.yml will re-verify + publish. Watch: gh run watch"
