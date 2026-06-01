@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC — weekly vuln re-scan of main
 
 jobs:
   # ============================================================================
@@ -13,6 +15,7 @@ jobs:
   changes:
     permissions:
       contents: read
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     outputs:
       # yamllint: valid GitHub Actions context expression
@@ -695,6 +698,61 @@ jobs:
             echo "No packages found to scan"
             exit 1
           fi
+
+  vuln-framework:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.framework == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run govulncheck (framework)
+        run: make vuln
+
+  vuln-migrate-tool:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.migrate_tool == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/migration
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: tools/migration/go.sum
+      - name: Run govulncheck (migrate tool)
+        run: make vuln
+
+  vuln-weekly:
+    permissions:
+      contents: read
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run govulncheck (framework)
+        run: make vuln
+      - name: Run govulncheck (migrate tool)
+        run: make -C tools/migration vuln
 
   # ============================================================================
   # SonarCloud (framework + tool coverage)

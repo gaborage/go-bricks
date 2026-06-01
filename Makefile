@@ -1,8 +1,9 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS :=
+GOVULNCHECK_VERSION := v1.1.4
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -68,3 +69,6 @@ clean: ## Clean build cache and test artifacts
 	rm -f *.test
 
 check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
+
+vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
