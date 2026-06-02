@@ -36,15 +36,17 @@ mcfg := &migration.Config{
 
 ## Event taxonomy
 
-ADR-019 defines four event types. v1 ships only the engine-layer event:
+ADR-019 defines four event types:
 
 | Type | Emitter | Status |
 |---|---|---|
 | `migration.applied` | `FlywayMigrator` | ✅ Shipped |
-| `state.transitioned` | Provisioning state machine | Pending [#379](https://github.com/gaborage/go-bricks/issues/379) |
+| `state.transitioned` | `provisioning.Executor` | ✅ Shipped |
 | `quiesce.set` / `quiesce.cleared` | Deployment quiesce gate | Pending [#380](https://github.com/gaborage/go-bricks/issues/380) |
 
 `migration.applied` fires on every `migrate` invocation regardless of outcome. `info` and `validate` invocations do NOT emit `migration.applied` — they read state, they don't apply migrations.
+
+`state.transitioned` fires once per persisted provisioning-state-machine edge (`pending → schema_created → … → ready`, plus the `cleanup → failed` branch). The transition into `failed` carries `Outcome=failed` with `ErrorClass=internal_error`; all other edges are `Outcome=success`. The job's idempotency key travels in the `provisioning.job_id` attribute. The raw step-error string is deliberately **not** attached to the event — like the engine layer, failures are reduced to an `ErrorClass` so that driver errors embedding DSNs/credentials can't leak into telemetry (which bypasses the logger's field-name `SensitiveDataFilter`); the detailed error stays in the operational log and the persisted job.
 
 ## AuditEvent schema
 
@@ -131,6 +133,24 @@ _ = migrator.Close(shutdownCtx)
 - **Sink errors do not abort the migration.** `AuditRecorder.Record` returning an error logs a warning and increments `migration.audit.sink_failures`; the migration proceeds. Sink owners requiring zero-loss audit must back their implementation with a durable buffer (Kafka commit-log, S3 staging, etc.). The framework does not retry on the sink's behalf.
 - **Shutdown drains.** `FlywayMigrator.Close(ctx)` waits for the queue to drain before returning. Events still buffered when `ctx` expires are dropped (their OTel emission already succeeded).
 
+## Auditing provisioning state transitions
+
+The provisioning state machine (`migration/provisioning`) emits `state.transitioned` through the **same** `Emitter` machinery as the engine layer, so the OTel + sink schema cannot drift. Build a public `Emitter` with `migration.NewEmitter` (a `nil` sink gives OTel-only emission) and attach it to the `Executor` with `WithAudit`:
+
+```go
+emitter := migration.NewEmitter(log, &kafkaAuditRecorder{ /* ... */ }) // sink may be nil for OTel-only
+defer emitter.Close(context.Background())                              // drains the sink queue
+
+exec, _ := provisioning.NewExecutor(store, steps, log)
+exec.WithAudit(emitter, provisioning.AuditContext{
+    Principal:     "deployer@ci",   // explicit — never inferred (ADR-019)
+    GitCommitSHA:  gitSHA,
+    PipelineRunID: runID,
+})
+```
+
+Audit is opt-in: an `Executor` built without `WithAudit` emits nothing and behaves exactly as before. The caller owns the emitter's lifecycle — call `Close` to drain the sink. One `AuditRecorder` can serve both a `FlywayMigrator` and an `Executor`, but each subsystem builds its **own** `Emitter` over that shared sink (`FlywayMigrator` does so internally via `WithAuditRecorder`; the `Executor` via `NewEmitter`) — don't share a single `Emitter` instance across both, so each owns its own drain.
+
 ## Metrics
 
 The migration audit emitter publishes two counters via the global OTel meter:
@@ -144,8 +164,8 @@ Both counters fire alongside Warn-level log records — useful for grep-based de
 
 ## Known gaps
 
-- **State-machine and quiesce events** (`state.transitioned`, `quiesce.set`, `quiesce.cleared`) are not yet emitted. Their emission lands when [#379](https://github.com/gaborage/go-bricks/issues/379) and [#380](https://github.com/gaborage/go-bricks/issues/380) ship.
-- **CLI flag plumbing** for `--applied-by` / `--git-sha` / `--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up — for now, callers using the library API can populate `migration.Config.Audit` directly.
+- **Quiesce events** (`quiesce.set`, `quiesce.cleared`) are not yet emitted. Their emission lands when the deployment quiesce gate ([#380](https://github.com/gaborage/go-bricks/issues/380)) ships.
+- **CLI flag plumbing** for `--applied-by` / `--git-sha` / `--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up — for now, callers using the library API can populate `migration.Config.Audit` (engine) and `provisioning.AuditContext` (orchestrator) directly.
 
 ## Stakeholder checklist
 

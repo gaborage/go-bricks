@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/migration"
 )
 
 // State enumerates the per-tenant provisioning states defined in issue #379.
@@ -134,7 +135,7 @@ type Job struct {
 	TenantID  string            // Logical tenant identifier the job provisions.
 	State     State             // Current state. Updated by every Transition.
 	Attempts  int               // Number of forward-step attempts on the current state, used for retry bookkeeping.
-	LastError string            // Most recent step error, surfaced in audit events. Empty on success paths.
+	LastError string            // Most recent step error; persisted for diagnostics and drives the failed-outcome audit classification (the raw text is NOT placed in audit events). Empty on success paths.
 	Metadata  map[string]string // Step-specific data that must survive a crash. Consumer-owned shape; see SECURITY note above.
 	CreatedAt time.Time         // First persistence timestamp; set by Upsert.
 	UpdatedAt time.Time         // Most recent persistence timestamp; updated on every Transition.
@@ -209,6 +210,11 @@ type Executor struct {
 	Store  StateStore
 	Steps  Steps
 	Logger logger.Logger
+
+	// audit is the optional state.transitioned emission seam, wired via
+	// WithAudit. Nil means audit is disabled (the default); see audit.go.
+	audit    migration.Emitter
+	auditCfg AuditContext
 }
 
 // NewExecutor constructs an Executor and validates its dependencies. Returns
@@ -323,11 +329,13 @@ func (e *Executor) runForwardStep(ctx context.Context, job *Job) error {
 // advanced state. Errors are wrapped with the failing edge for diagnostics.
 func (e *Executor) transitionAndAdvance(ctx context.Context, job *Job, to State, lastError string) error {
 	from := job.State
+	startedAt := time.Now().UTC()
 	if err := e.Store.Transition(ctx, job.ID, from, to, job.Metadata, lastError); err != nil {
 		return fmt.Errorf("provisioning: transition %s -> %s: %w", from, to, err)
 	}
 	job.State = to
 	job.LastError = lastError
+	e.emitTransition(ctx, job, from, to, startedAt)
 	return nil
 }
 

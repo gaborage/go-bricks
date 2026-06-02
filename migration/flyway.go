@@ -385,7 +385,7 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 		ev.Outcome = AuditOutcomeSuccess
 	}
 
-	fm.audit.emit(ctx, ev)
+	fm.audit.Emit(ctx, ev)
 }
 
 // dbVendor returns the database vendor string from the supplied config, falling
