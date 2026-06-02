@@ -42,9 +42,11 @@ ADR-019 defines four event types:
 |---|---|---|
 | `migration.applied` | `FlywayMigrator` | ✅ Shipped |
 | `state.transitioned` | `provisioning.Executor` | ✅ Shipped |
-| `quiesce.set` / `quiesce.cleared` | Deployment quiesce gate | Pending [#380](https://github.com/gaborage/go-bricks/issues/380) |
+| `quiesce.set` / `quiesce.cleared` | `QuiesceController` | ✅ Shipped |
 
 `migration.applied` fires on every `migrate` invocation regardless of outcome. `info` and `validate` invocations do NOT emit `migration.applied` — they read state, they don't apply migrations.
+
+`quiesce.set` / `quiesce.cleared` fire when an operator sets / clears the deployment quiesce flag through a `QuiesceController` wired with `WithAudit`. The audited principal is the operator who performed the action (never inferred); attributes carry `quiesce.scope`, `quiesce.reason`, and (on set) `quiesce.expires_at`. See [migration_quiesce.md](migration_quiesce.md).
 
 `state.transitioned` fires once per persisted provisioning-state-machine edge (`pending → schema_created → … → ready`, plus the `cleanup → failed` branch). The transition into `failed` carries `Outcome=failed` with `ErrorClass=internal_error`; all other edges are `Outcome=success`. The job's idempotency key travels in the `provisioning.job_id` attribute. The raw step-error string is deliberately **not** attached to the event — like the engine layer, failures are reduced to an `ErrorClass` so that driver errors embedding DSNs/credentials can't leak into telemetry (which bypasses the logger's field-name `SensitiveDataFilter`); the detailed error stays in the operational log and the persisted job.
 
@@ -170,7 +172,6 @@ Both counters fire alongside Warn-level log records — useful for grep-based de
 
 ## Known gaps
 
-- **Quiesce events** (`quiesce.set`, `quiesce.cleared`) are not yet emitted. Their emission lands when the deployment quiesce gate ([#380](https://github.com/gaborage/go-bricks/issues/380)) ships.
 - **CLI flag plumbing** for `--applied-by` / `--git-sha` / `--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up — for now, callers using the library API can populate `migration.Config.Audit` (engine) and `provisioning.AuditContext` (orchestrator) directly.
 
 ## Stakeholder checklist

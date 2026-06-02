@@ -383,3 +383,72 @@ func TestMergeConfigs(t *testing.T) {
 		assert.Equal(t, defaults.ConfigPath, out.ConfigPath, "non-Audit fields should still inherit from base")
 	})
 }
+
+func TestMigrateAllStopsWhenQuiesced(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t)
+	base := makeBaseConfig(t, stub)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+	})
+	gate := NewMemoryQuiesceController()
+	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
+	require.NoError(t, err)
+
+	res, err := MigrateAll(
+		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}}, provider, ActionMigrate,
+		MigrateAllOptions{BaseConfig: base, Quiesce: gate},
+	)
+	require.ErrorIs(t, err, ErrQuiesceBlocked)
+	assert.Empty(t, res.Results, "no tenant is dispatched while quiesced at start")
+}
+
+func TestMigrateAllProceedsWhenNotQuiesced(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t)
+	base := makeBaseConfig(t, stub)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+	})
+	gate := NewMemoryQuiesceController() // never set
+
+	res, err := MigrateAll(
+		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}}, provider, ActionMigrate,
+		MigrateAllOptions{BaseConfig: base, Quiesce: gate},
+	)
+	require.NoError(t, err)
+	assert.Len(t, res.Results, 2)
+}
+
+func TestMigrateAllParallelStopsWhenQuiesced(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t)
+	base := makeBaseConfig(t, stub)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
+		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "p4"},
+	})
+	gate := NewMemoryQuiesceController()
+	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
+	require.NoError(t, err)
+
+	res, err := MigrateAll(
+		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3", "t4"}}, provider, ActionMigrate,
+		MigrateAllOptions{BaseConfig: base, Parallelism: 4, Quiesce: gate},
+	)
+	require.ErrorIs(t, err, ErrQuiesceBlocked, "the parallel dispatch path must surface ErrQuiesceBlocked")
+	assert.Empty(t, res.Results, "no tenant is dispatched when quiesced before the first dispatch")
+}

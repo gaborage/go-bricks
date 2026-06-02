@@ -215,6 +215,10 @@ type Executor struct {
 	// WithAudit. Nil means audit is disabled (the default); see audit.go.
 	audit    migration.Emitter
 	auditCfg AuditContext
+
+	// quiesce is the optional deployment-pause gate, wired via WithQuiesce.
+	// Nil means never quiesced (the default); see quiesce.go.
+	quiesce migration.QuiesceGate
 }
 
 // NewExecutor constructs an Executor and validates its dependencies. Returns
@@ -250,6 +254,16 @@ func (e *Executor) Run(ctx context.Context, jobID string) error {
 	for !job.State.IsTerminal() {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// Quiesce gate: checked before advancing, so a job picked up while
+		// quiesced never runs a step (parks at its current state), and a job
+		// already running drains its current transition then parks here on the
+		// next iteration. No step is interrupted. StateCleanup is exempt: a job
+		// mid-rollback must finish dropping its partially-provisioned resources
+		// (cleanup -> failed) rather than park, or it would strand exactly the
+		// partial provision quiesce is meant to avoid orphaning.
+		if job.State != StateCleanup && e.quiesced(ctx) {
+			return ErrQuiesced
 		}
 		if err := e.advance(ctx, job); err != nil {
 			return err
