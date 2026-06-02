@@ -18,11 +18,17 @@ Deep dives:
 ## Install
 
 ```bash
-cd tools/migration
-make build               # produces ./go-bricks-migrate
-# or
-make install             # go install via $GOBIN
+# Pin to a specific release (recommended):
+go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.38.0
+
+# Latest CLI release (after the first tools/migration/vX.Y.Z tag exists):
+go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@latest
+
+# From a clone (contributors):
+cd tools/migration && make build   # produces ./go-bricks-migrate
 ```
+
+> `@latest` resolves the latest `tools/migration/vX.Y.Z` tag. Until the first such tag is published it installs an unversioned default-branch pseudo-version, so prefer pinning `@vX.Y.Z`.
 
 ## Quick start
 
