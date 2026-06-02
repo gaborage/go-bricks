@@ -144,7 +144,7 @@ func TestEmitterEmitsSpanWithExpectedAttributes(t *testing.T) {
 	exporter := setupTestTracer(t)
 	emitter := newAuditEmitter(disabledLogger(), nil)
 
-	emitter.emit(context.Background(), baseEvent())
+	emitter.Emit(context.Background(), baseEvent())
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
@@ -171,7 +171,7 @@ func TestEmitterFanOutsToSink(t *testing.T) {
 	emitter := newAuditEmitter(disabledLogger(), sink)
 	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
 
-	emitter.emit(context.Background(), baseEvent())
+	emitter.Emit(context.Background(), baseEvent())
 
 	sink.waitForFirst(t, time.Second)
 	events := sink.snapshot()
@@ -188,7 +188,7 @@ func TestEmitterSinkErrorIsNotPropagated(t *testing.T) {
 	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
 
 	// emit must not panic, must not block, must not propagate sink failure.
-	emitter.emit(context.Background(), baseEvent())
+	emitter.Emit(context.Background(), baseEvent())
 
 	sink.waitForFirst(t, time.Second)
 	assert.Len(t, sink.snapshot(), 1, "sink should have received the event despite returning an error")
@@ -213,7 +213,7 @@ func TestEmitterMissingPrincipalSubstitutesSentinel(t *testing.T) {
 
 	ev := baseEvent()
 	ev.AppliedByPrincipal = ""
-	emitter.emit(context.Background(), ev)
+	emitter.Emit(context.Background(), ev)
 
 	sink.waitForFirst(t, time.Second)
 	events := sink.snapshot()
@@ -229,7 +229,7 @@ func TestEmitterFailedOutcomeMarksSpanError(t *testing.T) {
 	ev := baseEvent()
 	ev.Outcome = AuditOutcomeFailed
 	ev.ErrorClass = ErrorClassChecksumMismatch
-	emitter.emit(context.Background(), ev)
+	emitter.Emit(context.Background(), ev)
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
@@ -243,7 +243,7 @@ func TestEmitterDoesNotPanicWithoutSink(t *testing.T) {
 	emitter := newAuditEmitter(disabledLogger(), nil)
 
 	require.NotPanics(t, func() {
-		emitter.emit(context.Background(), baseEvent())
+		emitter.Emit(context.Background(), baseEvent())
 	})
 }
 
@@ -255,7 +255,7 @@ func TestEmitterCloseDrainsQueue(t *testing.T) {
 	// Emit a handful of events, then close — the consumer goroutine should
 	// finish draining before Close returns.
 	for i := 0; i < 5; i++ {
-		emitter.emit(context.Background(), baseEvent())
+		emitter.Emit(context.Background(), baseEvent())
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -530,7 +530,7 @@ func TestEmitterEmitAfterCloseDoesNotPanic(t *testing.T) {
 	// emit after Close must not panic; the OTel emission still happens, the
 	// sink delivery is dropped silently.
 	require.NotPanics(t, func() {
-		emitter.emit(context.Background(), baseEvent())
+		emitter.Emit(context.Background(), baseEvent())
 	})
 }
 
@@ -550,7 +550,7 @@ func TestEmitterConcurrentEmitAndCloseDoesNotPanic(t *testing.T) {
 		go func() {
 			defer emitWG.Done()
 			for j := 0; j < perWriter; j++ {
-				emitter.emit(context.Background(), baseEvent())
+				emitter.Emit(context.Background(), baseEvent())
 			}
 		}()
 	}
@@ -581,7 +581,7 @@ func TestEmitterQueueFullDropsRatherThanBlocks(t *testing.T) {
 	overflow := 8
 	start := time.Now()
 	for i := 0; i < auditSinkQueueCap+overflow; i++ {
-		emitter.emit(context.Background(), baseEvent())
+		emitter.Emit(context.Background(), baseEvent())
 	}
 	elapsed := time.Since(start)
 
@@ -590,4 +590,37 @@ func TestEmitterQueueFullDropsRatherThanBlocks(t *testing.T) {
 	// well under one second.
 	require.Less(t, elapsed, time.Second,
 		"emit() must not block on a slow sink; took %s", elapsed)
+}
+
+// --- Public Emitter seam (issue #382) ----------------------------------------
+
+// TestNewEmitterEmitsStateTransitionedToSink verifies a state.transitioned
+// event constructed by an out-of-package caller flows through the public
+// Emitter into the same AuditRecorder fan-out the engine layer uses, so the
+// audit schema cannot drift between migration.applied and state.transitioned.
+func TestNewEmitterEmitsStateTransitionedToSink(t *testing.T) {
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := NewEmitter(disabledLogger(), sink)
+	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
+
+	now := time.Now()
+	emitter.Emit(context.Background(), &AuditEvent{
+		Type:               AuditEventTypeStateTransitioned,
+		Target:             "tenant_acme",
+		AppliedByPrincipal: testPrincipal,
+		FromState:          "pending",
+		ToState:            "schema_created",
+		Outcome:            AuditOutcomeSuccess,
+		StartedAt:          now,
+		CompletedAt:        now.Add(time.Millisecond),
+	})
+
+	sink.waitForFirst(t, time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, AuditEventTypeStateTransitioned, events[0].Type)
+	assert.Equal(t, "pending", events[0].FromState)
+	assert.Equal(t, "schema_created", events[0].ToState)
+	assert.Equal(t, testPrincipal, events[0].AppliedByPrincipal)
 }

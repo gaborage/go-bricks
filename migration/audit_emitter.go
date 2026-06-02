@@ -89,10 +89,27 @@ func eventKVs(ev *AuditEvent) []auditKV {
 	return pairs
 }
 
+// Emitter is the public emission seam for migration audit events. Both the
+// engine layer (FlywayMigrator) and the orchestrator layer
+// (provisioning.Executor) route AuditEvents through an Emitter so the OTel
+// span + structured-log + optional-sink schema can never drift between
+// migration.applied and state.transitioned events.
+//
+// Construct one with NewEmitter. The zero value is not usable.
+type Emitter interface {
+	// Emit dispatches a single AuditEvent through the always-on OpenTelemetry
+	// path and the optional AuditRecorder fan-out. Safe for concurrent use;
+	// never blocks on the sink.
+	Emit(ctx context.Context, ev *AuditEvent)
+	// Close drains the optional AuditRecorder queue and tears down the
+	// background consumer. Safe to call when no sink is configured (no-op).
+	Close(ctx context.Context) error
+}
+
 // auditEmitter delivers AuditEvents via two paths: always-on OpenTelemetry
 // (one span + one structured log record per event) and an optional AuditRecorder
 // fan-out on a separate goroutine with a bounded send queue. Zero value is
-// not usable; construct via newAuditEmitter.
+// not usable; construct via newAuditEmitter. It satisfies the Emitter interface.
 type auditEmitter struct {
 	logger logger.Logger
 	tracer trace.Tracer
@@ -156,12 +173,24 @@ func newAuditEmitter(log logger.Logger, sink AuditRecorder) *auditEmitter {
 	return e
 }
 
-// emit dispatches a single AuditEvent through both delivery paths. ev must
+// NewEmitter constructs the public Emitter backing both audit layers. log must
+// be non-nil; sink may be nil for OTel-only emission (span + structured log).
+// When sink is non-nil it receives every event after the OTel emission, on a
+// bounded-queue background goroutine per ADR-019 — call Close to drain it.
+func NewEmitter(log logger.Logger, sink AuditRecorder) Emitter {
+	return newAuditEmitter(log, sink)
+}
+
+// Emit dispatches a single AuditEvent through both delivery paths. ev must
 // be non-nil. Safe to call from any goroutine. Does not block on the sink
 // path. Callers should supply StartedAt/CompletedAt; the emitter normalizes
 // missing principals to PrincipalUnspecified and logs a warning so the gap
 // is itself auditable.
-func (e *auditEmitter) emit(ctx context.Context, ev *AuditEvent) {
+//
+// Emit satisfies the exported Emitter interface so out-of-package callers
+// (e.g. provisioning.Executor) route events through the same OTel + sink
+// machinery as the engine layer.
+func (e *auditEmitter) Emit(ctx context.Context, ev *AuditEvent) {
 	if e == nil || ev == nil {
 		return
 	}

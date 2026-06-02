@@ -7,8 +7,8 @@ import (
 
 // AuditEventType enumerates the four migration audit-event types defined by
 // ADR-019. Engine-layer emission covers migration.applied; orchestrator-layer
-// events (state.transitioned, quiesce.*) are emitted by their respective
-// subsystems when those land (#379, #380).
+// emission covers state.transitioned (provisioning.Executor); quiesce.* events
+// land with the deployment quiesce gate (#380).
 type AuditEventType string
 
 const (
@@ -16,7 +16,7 @@ const (
 	// (successful or failed) against a target.
 	AuditEventTypeMigrationApplied AuditEventType = "migration.applied"
 	// AuditEventTypeStateTransitioned marks a provisioning-state-machine
-	// transition. Emitted by #379 (not in this PR).
+	// transition. Emitted by provisioning.Executor for every persisted edge.
 	AuditEventTypeStateTransitioned AuditEventType = "state.transitioned"
 	// AuditEventTypeQuiesceSet marks an operator setting the deployment
 	// quiesce flag. Emitted by #380 (not in this PR).
