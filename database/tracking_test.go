@@ -811,6 +811,22 @@ func TestTrackedStmtExec(t *testing.T) {
 	assertDBCounter(ctx, t, 2)
 }
 
+// TestWithRepositoryMethodReExport verifies the public database.WithRepositoryMethod
+// / database.RepositoryMethodFromContext re-exports are wired to the tracking
+// implementation and round-trip a method name (issue #510).
+func TestWithRepositoryMethodReExport(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithRepositoryMethod(context.Background(), "InsertTransaction")
+	method, ok := RepositoryMethodFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "InsertTransaction", method)
+
+	// Absent by default.
+	_, ok = RepositoryMethodFromContext(context.Background())
+	assert.False(t, ok)
+}
+
 func TestTrackedConnectionClose(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

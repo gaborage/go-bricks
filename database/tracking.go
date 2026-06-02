@@ -23,6 +23,20 @@ var (
 	TrackDBOperation              = tracking.TrackDBOperation
 	NewTrackingSettings           = tracking.NewSettings
 	RegisterConnectionPoolMetrics = tracking.RegisterConnectionPoolMetrics
+
+	// WithRepositoryMethod records the business-operation (repository) method name
+	// on ctx so the tracking layer emits it as the `repository.method` attribute on
+	// the db.client.operation.duration metric. Pass the resulting context to the
+	// database call:
+	//
+	//	ctx = database.WithRepositoryMethod(ctx, "GetCustomer")
+	//	rows, err := db.Query(ctx, query, args...)
+	//
+	// The method name must be a static, low-cardinality identifier.
+	WithRepositoryMethod = tracking.WithRepositoryMethod
+	// RepositoryMethodFromContext returns the repository method name stored on ctx
+	// by WithRepositoryMethod, and whether one was set.
+	RepositoryMethodFromContext = tracking.RepositoryMethodFromContext
 )
 
 // Re-export internal constants

@@ -434,6 +434,47 @@ func TestExtractTableName(t *testing.T) {
 	}
 }
 
+// TestRecordDBMetricsRepositoryMethodAttribute verifies that the caller-supplied
+// repository method (issue #510) is emitted as the repository.method attribute on
+// the db.client.operation.duration histogram.
+func TestRecordDBMetricsRepositoryMethodAttribute(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	log := newDisabledTestLogger()
+	tc := &Context{Logger: log, Vendor: "postgresql", Settings: NewSettings(nil)}
+
+	ctx := WithRepositoryMethod(context.Background(), "GetCustomer")
+	recordDBMetrics(ctx, tc, TestQuerySelectUsers, 10*time.Millisecond, 0, nil)
+
+	rm := mp.Collect(t)
+	require.True(t, findMetricAttributeValue(rm, metricDBDuration, attrRepositoryMethod, "GetCustomer"),
+		"db.client.operation.duration should carry repository.method=GetCustomer")
+}
+
+// TestRecordDBMetricsWithoutRepositoryMethod verifies the repository.method
+// attribute is absent when the caller did not set it (no empty-string series).
+func TestRecordDBMetricsWithoutRepositoryMethod(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	log := newDisabledTestLogger()
+	tc := &Context{Logger: log, Vendor: "postgresql", Settings: NewSettings(nil)}
+
+	recordDBMetrics(context.Background(), tc, TestQuerySelectUsers, 10*time.Millisecond, 0, nil)
+
+	rm := mp.Collect(t)
+	m := obtest.FindMetric(rm, metricDBDuration)
+	require.NotNil(t, m)
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected histogram data for %s", metricDBDuration)
+	require.NotEmpty(t, hist.DataPoints)
+	for _, attr := range hist.DataPoints[0].Attributes.ToSlice() {
+		assert.NotEqual(t, attrRepositoryMethod, string(attr.Key),
+			"repository.method must be absent when not set via WithRepositoryMethod")
+	}
+}
+
 func TestRecordDBMetricsWithTableAttribute(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()

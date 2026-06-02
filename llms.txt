@@ -3969,7 +3969,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Family | Metric | Type | Attributes |
 |---|---|---|---|
 | HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
-| Database | `db.client.operation.duration` | Histogram (s) | `db.system`, `db.operation`, `error.type` |
+| Database | `db.client.operation.duration` | Histogram (s) | `db.system.name`, `db.operation.name`, `db.collection.name`, `db.namespace`, `repository.method` (opt-in via `database.WithRepositoryMethod`) |
 | Database pool | `db.client.connection.count` | UpDownCounter | `state` (`open`/`idle`) |
 | Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | UpDownCounter | — |
 | Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
