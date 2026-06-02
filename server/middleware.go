@@ -34,8 +34,9 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// the global provider at middleware setup time. The middleware caches the tracer
 	// provider when called, NOT at request time.
 	//
-	// Custom attributes (url.scheme, error.type) are added via MetricAttributes to
-	// enhance the built-in metrics without duplicating metric collection.
+	// MetricAttributes seeds from the library's default semconv attribute set and
+	// then appends custom attributes (proxy-aware url.scheme, error.type). This
+	// extends — rather than replaces — the standard HTTP server metric attributes.
 	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 		ServerName:     cfg.App.Name,
@@ -44,16 +45,26 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 			return probeSkipper(c)
 		},
 		MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
-			attrs := []attribute.KeyValue{}
+			// echo-opentelemetry treats a non-empty MetricAttributes return as a
+			// REPLACEMENT for its default attribute set: Metrics.Record falls back to
+			// v.MetricAttributes() only when the returned slice is empty. Seeding from
+			// the defaults preserves the standard semconv metric attributes
+			// (http.request.method, http.response.status_code, http.route,
+			// server.address, server.port, url.scheme, network.protocol.*) that would
+			// otherwise be dropped, while still letting us append custom attributes.
+			attrs := v.MetricAttributes()
 
-			// Add url.scheme (proxy-aware)
+			// Override url.scheme with a proxy-aware value. The library derives
+			// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
+			// Appended after the defaults so our value wins attribute.Set's
+			// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
 			scheme := "http"
 			if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
 				scheme = "https"
 			}
 			attrs = append(attrs, attribute.String("url.scheme", scheme))
 
-			// Add error.type for 4xx/5xx responses
+			// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
 			if v.HTTPResponseStatusCode >= 400 {
 				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
 			}

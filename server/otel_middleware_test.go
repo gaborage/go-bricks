@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -19,7 +20,12 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
+
+// httpServerDurationMetric is the OTel semconv name for the HTTP server request
+// duration histogram emitted by the echo-opentelemetry middleware.
+const httpServerDurationMetric = "http.server.request.duration"
 
 const (
 	testServiceName     = "test-service"
@@ -487,4 +493,139 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, "GET /api/v1/users/:id", spans[0].Name)
+}
+
+// setupTestServerWithMetrics creates a test Echo server with the OTel middleware
+// wired to an in-memory metric reader so recorded HTTP server metrics can be
+// asserted. echo-opentelemetry captures otel.GetMeterProvider() at middleware
+// construction time, so the test meter provider is installed before
+// SetupMiddlewares runs. Global state is saved and restored to avoid pollution.
+func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProvider) {
+	t.Helper()
+
+	originalMP := otel.GetMeterProvider()
+	mp := obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	t.Cleanup(func() {
+		if err := mp.Shutdown(context.Background()); err != nil {
+			t.Logf("Failed to shutdown test meter provider: %v", err)
+		}
+		otel.SetMeterProvider(originalMP)
+	})
+
+	e := echo.New()
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name: testServiceName,
+		},
+	}
+	log := logger.New("disabled", false)
+
+	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+
+	return e, mp
+}
+
+// durationDataPoints collects the data points of the http.server.request.duration
+// histogram from the test meter provider, failing the test if the metric is absent.
+func durationDataPoints(t *testing.T, mp *obtest.TestMeterProvider) []metricdata.HistogramDataPoint[float64] {
+	t.Helper()
+	rm := mp.Collect(t)
+	m := obtest.FindMetric(rm, httpServerDurationMetric)
+	require.NotNil(t, m, "metric %s not found in collected metrics", httpServerDurationMetric)
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected histogram data for %s", httpServerDurationMetric)
+	return hist.DataPoints
+}
+
+// dataPointAttrs flattens a histogram data point's attribute set into a key→value
+// map (values rendered via attribute.Value.String) for convenient assertions.
+func dataPointAttrs(dp metricdata.HistogramDataPoint[float64]) map[string]string {
+	attrs := make(map[string]string)
+	for _, kv := range dp.Attributes.ToSlice() {
+		attrs[string(kv.Key)] = kv.Value.String()
+	}
+	return attrs
+}
+
+// TestOTelMiddlewareMetricAttributesIncludeDefaults is the regression guard for
+// issue #508: the custom MetricAttributes callback must EXTEND the library's
+// default semconv attribute set, not replace it. Before the fix, the standard
+// attributes (http.request.method, http.response.status_code, http.route,
+// server.address, url.scheme) were dropped from the duration histogram.
+func TestOTelMiddlewareMetricAttributesIncludeDefaults(t *testing.T) {
+	e, mp := setupTestServerWithMetrics(t)
+
+	e.GET(testUserAPIEndpoint, func(c *echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/users/123", http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	dps := durationDataPoints(t, mp)
+	require.Len(t, dps, 1, "expected exactly one duration data point for a single request")
+	attrs := dataPointAttrs(dps[0])
+
+	// Standard semconv attributes — these were dropped by the pre-fix callback.
+	assert.Equal(t, "GET", attrs["http.request.method"], "http.request.method must be present")
+	assert.Equal(t, "200", attrs["http.response.status_code"], "http.response.status_code must be present")
+	assert.Equal(t, testUserAPIEndpoint, attrs["http.route"], "http.route must be present")
+	assert.Equal(t, testServiceName, attrs["server.address"], "server.address must be present")
+	// Custom attribute (proxy-aware), preserved alongside the defaults.
+	assert.Equal(t, "http", attrs["url.scheme"], "url.scheme must be present")
+	// No error.type on a 2xx response.
+	_, hasErrorType := attrs["error.type"]
+	assert.False(t, hasErrorType, "error.type must be absent for 2xx responses")
+}
+
+// TestOTelMiddlewareMetricAttributesErrorType verifies that 4xx/5xx responses add
+// error.type (status code string) on top of the preserved default attributes.
+func TestOTelMiddlewareMetricAttributesErrorType(t *testing.T) {
+	e, mp := setupTestServerWithMetrics(t)
+
+	e.GET(testAPIEndpoint, func(c *echo.Context) error {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "bad request"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	dps := durationDataPoints(t, mp)
+	require.Len(t, dps, 1)
+	attrs := dataPointAttrs(dps[0])
+
+	assert.Equal(t, "GET", attrs["http.request.method"])
+	assert.Equal(t, "400", attrs["http.response.status_code"])
+	assert.Equal(t, "400", attrs["error.type"], "error.type must equal the status code for 4xx/5xx")
+}
+
+// TestOTelMiddlewareMetricAttributesProxyScheme verifies that the proxy-aware
+// url.scheme override wins over the library default. Because the callback appends
+// url.scheme after seeding from v.MetricAttributes() (which derives scheme from
+// r.TLS only), attribute.Set's last-value-wins de-duplication yields our value.
+func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
+	e, mp := setupTestServerWithMetrics(t)
+
+	e.GET(testAPIEndpoint, func(c *echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	dps := durationDataPoints(t, mp)
+	require.Len(t, dps, 1)
+	attrs := dataPointAttrs(dps[0])
+
+	assert.Equal(t, "https", attrs["url.scheme"], "X-Forwarded-Proto=https must override the default scheme")
+	assert.Equal(t, "GET", attrs["http.request.method"], "default attributes must still be present")
 }
