@@ -898,3 +898,41 @@ func TestExtractTableNameBackwardCompatibility(t *testing.T) {
 		assert.Equal(t, tc.expected, result, "Legacy query should still extract table correctly: %s", tc.query)
 	}
 }
+
+// TestRegisterConnectionPoolMetricsSemconvNames is the regression guard for issues
+// #509 and #511: the pool gauges must be emitted under the OTEL semantic-convention
+// names db.client.connection.pending_requests and db.client.connection.idle.min
+// (previously the non-standard .pending_count and .idle.configured, which produced
+// no data in dashboards keyed on the semconv names).
+func TestRegisterConnectionPoolMetricsSemconvNames(t *testing.T) {
+	mp, cleanup := setupTestMeterProvider(t)
+	defer cleanup()
+
+	mockConn := &mockStatsConnection{stats: map[string]any{
+		"in_use":                      int(2),
+		"idle":                        int(3),
+		"max_idle_connections":        int(5),
+		"configured_idle_connections": int(5),
+		"max_open_connections":        int(25),
+		"pending_count":               int(7),
+	}}
+
+	connCleanup := RegisterConnectionPoolMetrics(mockConn, "postgresql", "localhost", 5432, "testdb.public")
+	defer connCleanup()
+
+	rm := mp.Collect(t)
+
+	// The gauges must be emitted under the exact OTEL semconv wire names with their
+	// source values. Hard-coding the literal names (rather than the package constants)
+	// pins the observable wire contract against an accidental constant change.
+	obtest.AssertMetricExists(t, rm, "db.client.connection.idle.min")
+	obtest.AssertMetricExists(t, rm, "db.client.connection.pending_requests")
+	obtest.AssertMetricValue(t, rm, "db.client.connection.idle.min", int64(5))
+	obtest.AssertMetricValue(t, rm, "db.client.connection.pending_requests", int64(7))
+
+	// The old non-standard names must no longer be emitted.
+	assert.Nil(t, obtest.FindMetric(rm, "db.client.connection.idle.configured"),
+		"legacy idle.configured metric must not be emitted")
+	assert.Nil(t, obtest.FindMetric(rm, "db.client.connection.pending_count"),
+		"legacy pending_count metric must not be emitted")
+}
