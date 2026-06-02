@@ -132,6 +132,11 @@ func runQuiesceSet(ctx context.Context, out io.Writer, ctrl migration.QuiesceCon
 func runQuiesceClear(ctx context.Context, out io.Writer, ctrl migration.QuiesceController, by string, asJSON bool) error {
 	st, err := ctrl.Clear(ctx, by)
 	if errors.Is(err, migration.ErrQuiesceNotSet) {
+		// No-op clear: still emit machine-readable output under --json (a
+		// zero/not-quiesced status), matching the status command's shape.
+		if asJSON {
+			return renderStatus(out, &migration.QuiesceStatus{}, true, "")
+		}
 		_, werr := fmt.Fprintln(out, "No active quiesce flag to clear.")
 		return werr
 	}

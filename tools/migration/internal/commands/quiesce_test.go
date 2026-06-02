@@ -280,3 +280,10 @@ func TestWithControlPlaneControllerCreateTableError(t *testing.T) {
 	cmd.SetErr(&out)
 	require.Error(t, cmd.Execute(), "a CreateTable failure must abort the command")
 }
+
+func TestRunQuiesceClearNoOpEmitsJSON(t *testing.T) {
+	ctrl := migration.NewMemoryQuiesceController() // nothing set
+	var out bytes.Buffer
+	require.NoError(t, runQuiesceClear(context.Background(), &out, ctrl, "ops", true))
+	assert.Contains(t, out.String(), `"active": false`, "clear --json must emit machine-readable output on the no-op path")
+}
