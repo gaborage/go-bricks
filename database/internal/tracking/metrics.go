@@ -26,15 +26,20 @@ const (
 
 	// Connection pool metrics per OTel spec
 	// Note: Changed from Gauge to UpDownCounter per OTEL semconv recommendation
-	metricDBConnectionCount          = "db.client.connection.count"           // UpDownCounter with state attribute
-	metricDBConnectionIdleMax        = "db.client.connection.idle.max"        // Max configured idle connections
-	metricDBConnectionIdleConfigured = "db.client.connection.idle.configured" // Configured idle connections target (Go's sql.DB does not enforce a minimum)
-	metricDBConnectionMax            = "db.client.connection.max"             // Max configured connections
+	metricDBConnectionCount   = "db.client.connection.count"    // UpDownCounter with state attribute
+	metricDBConnectionIdleMax = "db.client.connection.idle.max" // Max configured idle connections
+	// metricDBConnectionIdleMin maps to OTEL semconv "db.client.connection.idle.min".
+	// Go's database/sql exposes a single idle knob (SetMaxIdleConns), so this gauge
+	// shares its source value (Pool.Idle.Connections) with idle.max; it is emitted under
+	// the semconv idle.min name because the framework treats Pool.Idle.Connections as the
+	// configured warm-pool target. See config.PoolIdleConfig.
+	metricDBConnectionIdleMin = "db.client.connection.idle.min" // Configured idle-connection target (semconv idle.min)
+	metricDBConnectionMax     = "db.client.connection.max"      // Max configured connections
 
-	// New pool saturation metrics per OTEL semconv
-	metricDBConnectionWaitCount    = "db.client.connection.wait_count"    // Counter: cumulative wait count
-	metricDBConnectionTimeouts     = "db.client.connection.timeouts"      // Counter: timeout events
-	metricDBConnectionPendingCount = "db.client.connection.pending_count" // UpDownCounter: currently waiting
+	// Pool saturation metrics per OTEL semconv
+	metricDBConnectionWaitCount       = "db.client.connection.wait_count"       // Counter: cumulative wait count
+	metricDBConnectionTimeouts        = "db.client.connection.timeouts"         // Counter: timeout events
+	metricDBConnectionPendingRequests = "db.client.connection.pending_requests" // UpDownCounter: requests currently waiting for a connection
 
 	// Attribute keys per OTel semantic conventions
 	attrDBSystem         = "db.system.name"
@@ -405,7 +410,7 @@ type poolMetricsRegistration struct {
 	// Connection state metrics (UpDownCounter per OTEL spec)
 	connectionCountCounter metric.Int64ObservableUpDownCounter // Current connections with state attribute
 	idleMaxCounter         metric.Int64ObservableUpDownCounter // Max configured idle connections
-	idleConfiguredCounter  metric.Int64ObservableUpDownCounter // Configured idle connections target (not enforced as minimum)
+	idleMinCounter         metric.Int64ObservableUpDownCounter // Configured idle-connection target, emitted as semconv idle.min
 	maxCounter             metric.Int64ObservableUpDownCounter // Max configured connections
 
 	// Pool saturation metrics (Counters for cumulative values)
@@ -413,7 +418,7 @@ type poolMetricsRegistration struct {
 	timeoutsCounter  metric.Int64ObservableCounter // Cumulative timeout count
 
 	// Pool pressure metric
-	pendingCountCounter metric.Int64ObservableUpDownCounter // Current number of pending requests
+	pendingRequestsCounter metric.Int64ObservableUpDownCounter // Current number of pending requests
 
 	// Base attributes for all metrics
 	baseAttrs []attribute.KeyValue
@@ -448,8 +453,8 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 	if r.idleMaxCounter != nil {
 		observer.ObserveInt64(r.idleMaxCounter, ps.MaxIdle, metric.WithAttributes(r.baseAttrs...))
 	}
-	if r.idleConfiguredCounter != nil {
-		observer.ObserveInt64(r.idleConfiguredCounter, ps.ConfiguredIdle, metric.WithAttributes(r.baseAttrs...))
+	if r.idleMinCounter != nil {
+		observer.ObserveInt64(r.idleMinCounter, ps.ConfiguredIdle, metric.WithAttributes(r.baseAttrs...))
 	}
 	if r.maxCounter != nil {
 		observer.ObserveInt64(r.maxCounter, ps.MaxOpen, metric.WithAttributes(r.baseAttrs...))
@@ -466,8 +471,8 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 	}
 
 	// Record current pending request count
-	if r.pendingCountCounter != nil {
-		observer.ObserveInt64(r.pendingCountCounter, ps.PendingCount, metric.WithAttributes(r.baseAttrs...))
+	if r.pendingRequestsCounter != nil {
+		observer.ObserveInt64(r.pendingRequestsCounter, ps.PendingCount, metric.WithAttributes(r.baseAttrs...))
 	}
 
 	return nil
@@ -482,11 +487,11 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // - db.client.connection.count{state="used"}: Active connections in use
 // - db.client.connection.count{state="idle"}: Idle connections in pool
 // - db.client.connection.idle.max: Maximum configured idle connections
-// - db.client.connection.idle.configured: Configured idle connection target (not enforced as minimum)
+// - db.client.connection.idle.min: Configured idle-connection target (shares Pool.Idle.Connections with idle.max; Go's sql.DB has a single idle knob)
 // - db.client.connection.max: Maximum configured connections
 // - db.client.connection.wait_count: Cumulative count of waits for connections from pool
 // - db.client.connection.timeouts: Cumulative count of connection wait timeouts
-// - db.client.connection.pending_count: Number of pending connection requests
+// - db.client.connection.pending_requests: Number of connection requests currently waiting
 //
 // Server Metadata Attributes:
 // All metrics include server.address, server.port, and db.namespace (when available) in addition
@@ -531,8 +536,8 @@ func RegisterConnectionPoolMetrics(conn interface {
 		"Number of connections that are currently in state described by the state attribute")
 	reg.idleMaxCounter = createObservableUpDownCounter(meter, metricDBConnectionIdleMax,
 		"The maximum number of idle open connections allowed")
-	reg.idleConfiguredCounter = createObservableUpDownCounter(meter, metricDBConnectionIdleConfigured,
-		"The configured idle connections target (Go's sql.DB does not enforce a minimum)")
+	reg.idleMinCounter = createObservableUpDownCounter(meter, metricDBConnectionIdleMin,
+		"The configured idle-connection target; Go's database/sql applies it via SetMaxIdleConns and does not actively maintain a minimum")
 	reg.maxCounter = createObservableUpDownCounter(meter, metricDBConnectionMax,
 		"The maximum number of open connections allowed")
 
@@ -545,18 +550,18 @@ func RegisterConnectionPoolMetrics(conn interface {
 		"The total number of times a connection request timed out")
 
 	// Create up-down counter for current pending requests
-	reg.pendingCountCounter = createObservableUpDownCounter(meter, metricDBConnectionPendingCount,
+	reg.pendingRequestsCounter = createObservableUpDownCounter(meter, metricDBConnectionPendingRequests,
 		"The number of connection requests currently waiting for a connection")
 
 	// Collect non-nil instruments for callback registration
 	instruments := collectObservables(
 		reg.connectionCountCounter,
 		reg.idleMaxCounter,
-		reg.idleConfiguredCounter,
+		reg.idleMinCounter,
 		reg.maxCounter,
 		reg.waitCountCounter,
 		reg.timeoutsCounter,
-		reg.pendingCountCounter,
+		reg.pendingRequestsCounter,
 	)
 	if len(instruments) == 0 {
 		return noOpCleanup()

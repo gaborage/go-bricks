@@ -3971,9 +3971,9 @@ When `observability.enabled: true`, the framework auto-emits:
 | HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
 | Database | `db.client.operation.duration` | Histogram (s) | `db.system`, `db.operation`, `error.type` |
 | Database pool | `db.client.connection.count` | UpDownCounter | `state` (`open`/`idle`) |
-| Database pool | `db.client.connection.max` / `.idle.max` / `.idle.configured` | Gauge | — |
+| Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | Gauge | — |
 | Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
-| Database pool | `db.client.connection.pending_count` | UpDownCounter | — |
+| Database pool | `db.client.connection.pending_requests` | UpDownCounter | — |
 | Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `error.type` |
 | Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name` |
 | Messaging | `messaging.client.publish.retries` | Counter | `messaging.destination.name` |
