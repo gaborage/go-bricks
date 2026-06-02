@@ -26,6 +26,14 @@ func TestWithRepositoryMethodEmptyIsNoOp(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestWithRepositoryMethodNilContext(t *testing.T) {
+	t.Parallel()
+	var ctx context.Context // nil context — must not panic
+	var out context.Context
+	assert.NotPanics(t, func() { out = WithRepositoryMethod(ctx, "GetCustomer") })
+	assert.Nil(t, out, "nil ctx is returned unchanged")
+}
+
 func TestWithRepositoryMethodOverwrite(t *testing.T) {
 	t.Parallel()
 	ctx := WithRepositoryMethod(context.Background(), "First")

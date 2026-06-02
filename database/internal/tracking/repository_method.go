@@ -17,9 +17,11 @@ type repositoryMethodKey struct{}
 // The value MUST be a static, low-cardinality identifier such as a method or
 // function name. Because it becomes a metric attribute, interpolating
 // per-request data (IDs, emails, ...) would explode metric cardinality. An empty
-// method is ignored and ctx is returned unchanged.
+// method, or a nil ctx, is ignored and ctx is returned unchanged (the nil guard
+// mirrors RepositoryMethodFromContext and avoids context.WithValue's
+// "cannot create context from nil parent" panic).
 func WithRepositoryMethod(ctx context.Context, method string) context.Context {
-	if method == "" {
+	if ctx == nil || method == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, repositoryMethodKey{}, method)
