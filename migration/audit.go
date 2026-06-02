@@ -19,10 +19,10 @@ const (
 	// transition. Emitted by provisioning.Executor for every persisted edge.
 	AuditEventTypeStateTransitioned AuditEventType = "state.transitioned"
 	// AuditEventTypeQuiesceSet marks an operator setting the deployment
-	// quiesce flag. Emitted by #380 (not in this PR).
+	// quiesce flag. Emitted by a QuiesceController wired with WithAudit.
 	AuditEventTypeQuiesceSet AuditEventType = "quiesce.set"
 	// AuditEventTypeQuiesceCleared marks an operator clearing the deployment
-	// quiesce flag. Emitted by #380 (not in this PR).
+	// quiesce flag. Emitted by a QuiesceController wired with WithAudit.
 	AuditEventTypeQuiesceCleared AuditEventType = "quiesce.cleared"
 )
 

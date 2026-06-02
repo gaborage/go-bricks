@@ -99,6 +99,12 @@ type MigrateAllOptions struct {
 	// Hook is invoked after each tenant completes (success or failure).
 	// Useful for streaming progress to the CLI / CI logs. May be nil.
 	Hook func(TenantResult)
+
+	// Quiesce, when set, gates tenant dispatch on the deployment quiesce flag:
+	// once the flag is observed set, no further tenants are dispatched (in-flight
+	// tenants drain) and MigrateAll returns ErrQuiesceBlocked with the partial
+	// result. Nil disables the check (fully opt-in). Check errors fail open.
+	Quiesce QuiesceGate
 }
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.
@@ -169,6 +175,9 @@ func runSequential(
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
+		if quiesceBlocks(ctx, opts.Quiesce, opts.Logger) {
+			return out, ErrQuiesceBlocked
+		}
 		res := runOne(ctx, migrator, configs, action, id, opts.BaseConfig)
 		out.Results = append(out.Results, res)
 
@@ -217,9 +226,14 @@ func runParallel(
 	}
 	sem := make(chan struct{}, parallelism)
 	dispatched := 0
+	quiesced := false
 
 dispatch:
 	for i, id := range tenantIDs {
+		if quiesceBlocks(runCtx, opts.Quiesce, opts.Logger) {
+			quiesced = true
+			break dispatch
+		}
 		select {
 		case <-runCtx.Done():
 			break dispatch
@@ -245,6 +259,9 @@ dispatch:
 
 	if state.firstErr != nil {
 		return out, state.firstErr
+	}
+	if quiesced {
+		return out, ErrQuiesceBlocked
 	}
 	if err := ctx.Err(); err != nil {
 		return out, err
