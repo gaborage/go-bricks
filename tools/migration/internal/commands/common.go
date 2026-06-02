@@ -216,6 +216,23 @@ func buildBaseConfig(flags *CommonFlags) *migration.Config {
 	}
 }
 
+// Embedded-logger verbosity levels.
+const (
+	logLevelInfo  = "info"
+	logLevelDebug = "debug"
+)
+
+// newCLILogger builds the embedded logger at the verbosity the operator
+// selected. Shared by runAction and the quiesce command so the level strings
+// live in one place.
+func newCLILogger(flags *CommonFlags) logger.Logger {
+	level := logLevelInfo
+	if flags.Verbose {
+		level = logLevelDebug
+	}
+	return logger.New(level, false)
+}
+
 // runAction is the shared entry point for migrate/validate/info subcommands.
 func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) error {
 	if err := resolveFlags(cmd, flags); err != nil {
@@ -242,10 +259,7 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		return fmt.Errorf("build config provider: %w", err)
 	}
 
-	log := logger.New("info", false)
-	if flags.Verbose {
-		log = logger.New("debug", false)
-	}
+	log := newCLILogger(flags)
 
 	// Construct a minimal *config.Config to satisfy FlywayMigrator's needs.
 	// Per-tenant DatabaseConfig is supplied via MigrateAll.
