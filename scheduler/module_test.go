@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -476,4 +477,100 @@ func (j *spanCapturingJob) count() int {
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	require.Eventually(t, cond, time.Second, 10*time.Millisecond)
+}
+
+func TestSchedulerConfiguredTimezone(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *config.Config
+		expected string
+	}{
+		{name: "nil_config_defaults_to_utc", cfg: nil, expected: "UTC"},
+		{name: "empty_defaults_to_utc", cfg: &config.Config{}, expected: "UTC"},
+		{name: "iana_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "America/New_York"}}, expected: "America/New_York"},
+		{name: "sentinel_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}, expected: "-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Module{config: tt.cfg}
+			assert.Equal(t, tt.expected, m.configuredTimezone())
+		})
+	}
+}
+
+func TestSchedulerLocationOptions(t *testing.T) {
+	t.Run("sentinel_yields_no_option", func(t *testing.T) {
+		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}}
+		opts, err := m.schedulerLocationOptions()
+		require.NoError(t, err)
+		assert.Empty(t, opts)
+	})
+	t.Run("iana_yields_one_option", func(t *testing.T) {
+		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "America/New_York"}}}
+		opts, err := m.schedulerLocationOptions()
+		require.NoError(t, err)
+		assert.Len(t, opts, 1)
+	})
+	t.Run("default_utc_yields_one_option", func(t *testing.T) {
+		m := &Module{config: &config.Config{}}
+		opts, err := m.schedulerLocationOptions()
+		require.NoError(t, err)
+		assert.Len(t, opts, 1)
+	})
+}
+
+func TestSchedulerTimezoneLabel(t *testing.T) {
+	t.Run("iana_returns_name", func(t *testing.T) {
+		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "Asia/Tokyo"}}}
+		assert.Equal(t, "Asia/Tokyo", m.timezoneLabel())
+	})
+	t.Run("sentinel_returns_host_local", func(t *testing.T) {
+		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}}
+		assert.Equal(t, "host-local", m.timezoneLabel())
+	})
+	t.Run("empty_returns_utc", func(t *testing.T) {
+		m := &Module{config: &config.Config{}}
+		assert.Equal(t, "UTC", m.timezoneLabel())
+	})
+}
+
+func TestSchedulerAppliesConfiguredTimezoneToJobs(t *testing.T) {
+	module, registrar := newTestScheduler(t, 5*time.Second, withTimezone("America/New_York"))
+
+	err := registrar.DailyAt("tz-job", &counterJob{}, ParseTime("14:30"))
+	require.NoError(t, err)
+
+	module.mu.RLock()
+	entry := module.jobs["tz-job"]
+	module.mu.RUnlock()
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.gocronJob)
+
+	nextRun, err := entry.gocronJob.NextRun()
+	require.NoError(t, err)
+	require.False(t, nextRun.IsZero())
+
+	// The scheduler must interpret 14:30 in the configured zone, not host-local.
+	assert.Equal(t, "America/New_York", nextRun.Location().String())
+	assert.Equal(t, 14, nextRun.Hour())
+	assert.Equal(t, 30, nextRun.Minute())
+}
+
+func TestSchedulerDefaultsToUTCTimezoneForJobs(t *testing.T) {
+	module, registrar := newTestScheduler(t, 5*time.Second) // no withTimezone → UTC default
+
+	err := registrar.DailyAt("utc-job", &counterJob{}, ParseTime("09:00"))
+	require.NoError(t, err)
+
+	module.mu.RLock()
+	entry := module.jobs["utc-job"]
+	module.mu.RUnlock()
+	require.NotNil(t, entry)
+	require.NotNil(t, entry.gocronJob)
+
+	nextRun, err := entry.gocronJob.NextRun()
+	require.NoError(t, err)
+	require.False(t, nextRun.IsZero())
+
+	assert.Equal(t, "UTC", nextRun.Location().String())
 }

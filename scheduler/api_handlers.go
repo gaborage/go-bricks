@@ -62,7 +62,8 @@ func (m *Module) listJobsHandler(_ EmptyRequest, _ server.HandlerContext) (serve
 	response := JobListResponse{
 		Data: jobs,
 		Meta: map[string]interface{}{
-			"total": len(jobs),
+			"total":    len(jobs),
+			"timezone": m.timezoneLabel(),
 		},
 	}
 

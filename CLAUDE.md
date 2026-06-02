@@ -312,7 +312,8 @@ For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpcli
 
 ### Scheduler
 
-gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention, panic recovery, system APIs at `GET /_sys/jobs` and `POST /_sys/job/:jobId` (CIDR-restricted), OpenTelemetry instrumentation per job.
+gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention, panic recovery, system APIs at `GET /_sys/job` and `POST /_sys/job/:jobId` (CIDR-restricted), OpenTelemetry instrumentation per job.
+Jobs run in **UTC** by default; set `scheduler.timezone` (IANA name; `-` = host-local) to change the zone for all wall-clock schedules.
 
 ```go
 type Executor interface {

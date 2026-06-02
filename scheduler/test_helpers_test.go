@@ -37,6 +37,10 @@ func withSlowJobThreshold(threshold time.Duration) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timeout.SlowJob = threshold }
 }
 
+func withTimezone(tz string) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timezone = tz }
+}
+
 // newTestScheduler creates and initializes a scheduler module for testing.
 func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testSchedulerOption) (*Module, app.JobRegistrar) {
 	module := NewModule()

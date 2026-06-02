@@ -22,11 +22,14 @@ const (
 
 // Database session defaults
 const (
-	// DefaultDatabaseTimezone is the IANA timezone applied to every new database
-	// session when DatabaseConfig.Timezone is unset. UTC is opinionated to keep
-	// app-side time handling consistent with stored timestamps. Exported so
-	// connection layers can reference the same value without redefining it.
-	DefaultDatabaseTimezone = "UTC"
+	// DefaultTimezone is the IANA timezone applied when a timezone config field
+	// (database.timezone, scheduler.timezone) is unset. UTC is opinionated to keep
+	// behavior identical across environments regardless of host or server defaults.
+	DefaultTimezone = "UTC"
+	// DefaultDatabaseTimezone is the default IANA timezone for database sessions.
+	// Retained as a domain-named alias of DefaultTimezone for readability at
+	// database call sites.
+	DefaultDatabaseTimezone = DefaultTimezone
 	// TimezoneDisabledSentinel opts out of session-level timezone enforcement,
 	// preserving the database server's default timezone (legacy behavior).
 	// Connection layers compare against this constant to decide whether to
@@ -106,6 +109,10 @@ func Validate(cfg *Config) error {
 
 	if err := validateServer(&cfg.Server); err != nil {
 		return fmt.Errorf("server config: %w", err)
+	}
+
+	if err := validateScheduler(&cfg.Scheduler); err != nil {
+		return fmt.Errorf("scheduler config: %w", err)
 	}
 
 	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
@@ -410,25 +417,45 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
+// normalizeIANATimezone defaults an empty timezone to UTC and validates it as a
+// loadable IANA name. The "-" sentinel passes through unchanged so callers can
+// treat it as "disabled". field labels the validation error. Shared by config
+// sections that carry IANA timezone fields (currently database and scheduler)
+// so the contracts cannot drift.
+func normalizeIANATimezone(field, value string) (string, error) {
+	if value == "" {
+		value = DefaultTimezone
+	}
+	if value == TimezoneDisabledSentinel {
+		return value, nil
+	}
+	if _, err := time.LoadLocation(value); err != nil {
+		return value, NewInvalidFieldError(
+			field,
+			fmt.Sprintf("invalid IANA timezone %q: %v", value, err),
+			[]string{`a valid IANA timezone (e.g. "UTC", "America/New_York") or "-" to disable`},
+		)
+	}
+	return value, nil
+}
+
 // applyDatabaseTimezoneDefault sets cfg.Timezone to the default ("UTC") when unset
 // and validates the configured value as a loadable IANA timezone. The opt-out
 // sentinel "-" skips validation and tells the connection layer to leave session
 // timezone untouched.
 func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
-	if cfg.Timezone == "" {
-		cfg.Timezone = DefaultDatabaseTimezone
-	}
-	if cfg.Timezone == TimezoneDisabledSentinel {
-		return nil
-	}
-	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
-		return NewInvalidFieldError(
-			"database.timezone",
-			fmt.Sprintf("invalid IANA timezone %q: %v", cfg.Timezone, err),
-			[]string{`a valid IANA timezone (e.g. "UTC", "America/New_York") or "-" to disable`},
-		)
-	}
-	return nil
+	normalized, err := normalizeIANATimezone("database.timezone", cfg.Timezone)
+	cfg.Timezone = normalized
+	return err
+}
+
+// validateScheduler applies defaults and validates scheduler configuration.
+// Currently it normalizes scheduler.timezone (default "UTC", "-" opt-out for
+// host-local, IANA validation) so an invalid zone fails fast at startup.
+func validateScheduler(cfg *SchedulerConfig) error {
+	normalized, err := normalizeIANATimezone("scheduler.timezone", cfg.Timezone)
+	cfg.Timezone = normalized
+	return err
 }
 
 // validateNamedDatabases validates the named databases configuration.

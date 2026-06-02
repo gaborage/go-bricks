@@ -232,6 +232,17 @@ Resolves issue #435. Replaces the strict `{development, staging, production}` al
 
 ---
 
+### [ADR-023: Scheduler Timezone Configuration](adr_023_scheduler_timezone.md)
+
+Adds `scheduler.timezone`, a single config field applied scheduler-wide via
+gocron's `WithLocation`, mirroring the `database.timezone` contract from ADR-016
+(default UTC, `"-"` opt-out for host-local, IANA-validated, fail-fast). Resolves
+the absence of any timezone knob for scheduled jobs and removes the vestigial
+`ScheduleConfiguration.Timezone` field. Breaking: an unset zone now means UTC
+instead of host-local.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -241,7 +252,7 @@ Resolves issue #435. Replaces the strict `{development, staging, production}` al
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-022) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-023) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

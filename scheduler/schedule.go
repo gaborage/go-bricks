@@ -41,11 +41,6 @@ type ScheduleConfiguration struct {
 
 	// MonthlyAt field
 	DayOfMonth int // 1-31
-
-	// Timezone (nil = system local time per ASSUME-001)
-	// For MVP, this is always nil (local time).
-	// Future enhancement: allow explicit timezone specification.
-	Timezone *time.Location
 }
 
 // Validate checks the ScheduleConfiguration for validity according to its Type

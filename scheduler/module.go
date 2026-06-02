@@ -227,8 +227,16 @@ func (m *Module) ensureSchedulerInitialized() error {
 		return nil // Already initialized
 	}
 
+	// Resolve the configured timezone into a gocron option (default UTC; "-" =
+	// host-local). An invalid zone here would already have failed config
+	// validation at startup; this is defense in depth.
+	opts, err := m.schedulerLocationOptions()
+	if err != nil {
+		return err
+	}
+
 	// Create gocron scheduler
-	s, err := gocron.NewScheduler()
+	s, err := gocron.NewScheduler(opts...)
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to create gocron scheduler: %w", err)
 	}
@@ -238,9 +246,52 @@ func (m *Module) ensureSchedulerInitialized() error {
 	// Start the scheduler
 	m.scheduler.Start()
 
-	m.logger.Info().Msg("Scheduler initialized and started")
+	m.logger.Info().
+		Str("timezone", m.timezoneLabel()).
+		Msg("Scheduler initialized and started")
 
 	return nil
+}
+
+// configuredTimezone returns the raw scheduler timezone string from config,
+// defaulting to UTC when config is absent or the field is empty. In production
+// config.Validate() has already normalized this value (default UTC, "-" opt-out,
+// IANA-validated); the fallback only matters for tests that bypass validation.
+func (m *Module) configuredTimezone() string {
+	if m.config != nil && m.config.Scheduler.Timezone != "" {
+		return m.config.Scheduler.Timezone
+	}
+	return config.DefaultTimezone // "UTC" — shared framework timezone default
+}
+
+// schedulerLocationOptions translates the configured timezone into gocron
+// scheduler options. The "-" sentinel yields no option so gocron keeps its
+// time.Local default (legacy/host-local behavior). Any other value is loaded as
+// an IANA location and applied via gocron.WithLocation, which gocron threads into
+// every wall-clock schedule type (daily/weekly/monthly via at-times, hourly via a
+// CRON_TZ prefix). FixedRate is interval-based and unaffected.
+func (m *Module) schedulerLocationOptions() ([]gocron.SchedulerOption, error) {
+	tz := m.configuredTimezone()
+	if tz == config.TimezoneDisabledSentinel {
+		return nil, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: invalid timezone %q: %w", tz, err)
+	}
+	return []gocron.SchedulerOption{gocron.WithLocation(loc)}, nil
+}
+
+// timezoneLabel returns an operator-facing label for the effective scheduler
+// timezone, used in the startup log and the /_sys/job response. The "-" sentinel
+// returns "host-local" rather than time.Local.String(), which is just "Local" in
+// Go and tells operators nothing useful about the host's actual zone.
+func (m *Module) timezoneLabel() string {
+	tz := m.configuredTimezone()
+	if tz == config.TimezoneDisabledSentinel {
+		return "host-local"
+	}
+	return tz
 }
 
 // JobRegistrar interface implementation
@@ -278,7 +329,8 @@ func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error 
 	})
 }
 
-// DailyAt implements JobRegistrar per FR-004
+// DailyAt implements JobRegistrar per FR-004. localTime is interpreted in the
+// scheduler's configured timezone (scheduler.timezone, default UTC).
 func (m *Module) DailyAt(jobID string, job any, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
@@ -294,7 +346,8 @@ func (m *Module) DailyAt(jobID string, job any, localTime time.Time) error {
 	})
 }
 
-// WeeklyAt implements JobRegistrar per FR-005
+// WeeklyAt implements JobRegistrar per FR-005. localTime is interpreted in the
+// scheduler's configured timezone (default UTC).
 func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
@@ -311,7 +364,8 @@ func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTi
 	})
 }
 
-// HourlyAt implements JobRegistrar per FR-006
+// HourlyAt implements JobRegistrar per FR-006. The minute is taken within the
+// scheduler's configured timezone (matters only for sub-hour-offset zones).
 func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {
@@ -332,7 +386,8 @@ func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	})
 }
 
-// MonthlyAt implements JobRegistrar per FR-007
+// MonthlyAt implements JobRegistrar per FR-007. localTime is interpreted in the
+// scheduler's configured timezone (default UTC).
 func (m *Module) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {

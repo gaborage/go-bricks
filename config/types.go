@@ -508,6 +508,12 @@ type OutboxConfig struct {
 type SchedulerConfig struct {
 	Security SchedulerSecurityConfig `koanf:"security" json:"security" yaml:"security" toml:"security" mapstructure:"security"`
 	Timeout  SchedulerTimeoutConfig  `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
+
+	// Timezone is the IANA timezone name the scheduler uses to interpret
+	// wall-clock schedules (DailyAt/WeeklyAt/MonthlyAt/HourlyAt). Validated via
+	// time.LoadLocation at startup (fail-fast on invalid names).
+	// Default: "UTC". Set to "-" to use the host's local time (legacy behavior).
+	Timezone string `koanf:"timezone" json:"timezone" yaml:"timezone" toml:"timezone" mapstructure:"timezone"`
 }
 
 // SchedulerSecurityConfig holds security settings for scheduler system APIs.
