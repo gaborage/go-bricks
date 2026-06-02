@@ -152,3 +152,15 @@ func TestTriggerJobHandlerShuttingDown(t *testing.T) {
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusServiceUnavailable, apiErr.HTTPStatus())
 }
+
+// TestListJobsHandlerExposesTimezone verifies GET /_sys/job reports the active zone
+func TestListJobsHandlerExposesTimezone(t *testing.T) {
+	module, registrar := newTestScheduler(t, 5*time.Second, withTimezone("America/New_York"))
+
+	err := registrar.FixedRate(testJobID, &counterJob{}, 10*time.Second)
+	require.NoError(t, err)
+
+	result, apiErr := module.listJobsHandler(EmptyRequest{}, server.HandlerContext{Config: &config.Config{}})
+	require.Nil(t, apiErr)
+	assert.Equal(t, "America/New_York", result.Data.Meta["timezone"])
+}
