@@ -452,3 +452,49 @@ func TestMigrateAllParallelStopsWhenQuiesced(t *testing.T) {
 	require.ErrorIs(t, err, ErrQuiesceBlocked, "the parallel dispatch path must surface ErrQuiesceBlocked")
 	assert.Empty(t, res.Results, "no tenant is dispatched when quiesced before the first dispatch")
 }
+
+// countingQuiesceGate reports "not set" for the first blockAfter IsSet calls,
+// then "set" — letting a test deterministically flip quiesce mid-dispatch.
+type countingQuiesceGate struct {
+	mu         sync.Mutex
+	calls      int
+	blockAfter int
+}
+
+func (g *countingQuiesceGate) IsSet(context.Context) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls++
+	return g.calls > g.blockAfter, nil
+}
+
+func (g *countingQuiesceGate) Query(context.Context) (*QuiesceStatus, error) {
+	return &QuiesceStatus{}, nil
+}
+
+func TestMigrateAllParallelStopsDispatchWhenQuiesceFlipsMidRun(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell stubs not supported on windows CI")
+	}
+	stub := createFlywayStub(t, "postgresql")
+	fm := newFlywayMigratorForTest(t)
+	base := makeBaseConfig(t, stub)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
+		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "p4"},
+	})
+	// First dispatch iteration sees not-quiesced; the flag flips before the
+	// second, so dispatch stops after exactly one tenant.
+	gate := &countingQuiesceGate{blockAfter: 1}
+
+	res, err := MigrateAll(
+		context.Background(), fm, &fakeLister{ids: []string{"t1", "t2", "t3", "t4"}}, provider, ActionMigrate,
+		MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate},
+	)
+	require.ErrorIs(t, err, ErrQuiesceBlocked)
+	require.Len(t, res.Results, 1, "dispatch must stop after the flag flips; in-flight tenant is in the partial result")
+	assert.Equal(t, "t1", res.Results[0].TenantID)
+	assert.NoError(t, res.Results[0].Err, "the already-dispatched tenant completes normally")
+}

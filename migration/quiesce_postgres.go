@@ -97,7 +97,11 @@ func (c *PostgresQuiesceController) CreateTable(ctx context.Context) error {
 // row is updated (renewing expires_at and un-clearing it).
 func (c *PostgresQuiesceController) Set(ctx context.Context, opts QuiesceSetOptions) (*QuiesceStatus, error) {
 	now := c.timestamp()
-	expires := now.Add(resolveTTL(opts.TTL))
+	ttl, err := resolveTTL(opts.TTL)
+	if err != nil {
+		return nil, err
+	}
+	expires := now.Add(ttl)
 	// #nosec G201 -- c.quotedTable is the validated, quoted identifier captured
 	// at construction; all value-side input flows through $N placeholders.
 	stmt := fmt.Sprintf(
@@ -121,16 +125,18 @@ func (c *PostgresQuiesceController) Set(ctx context.Context, opts QuiesceSetOpti
 	return statusFrom(rec, now), nil
 }
 
-// Clear deactivates the active flag. Returns ErrQuiesceNotSet when no active
-// (uncleared and unexpired) flag exists. Unconditional operator override —
-// keyed on scope, not the setter's session.
+// Clear deactivates an uncleared flag (active OR auto-released by TTL) — the
+// unconditional operator override, keyed on scope, not the setter's session.
+// Returns ErrQuiesceNotSet only when no row exists or it was already cleared;
+// an expired-but-uncleared row is still clearable so operators can tidy a
+// crashed deploy's flag and produce the quiesce.cleared audit trail.
 func (c *PostgresQuiesceController) Clear(ctx context.Context, by string) (*QuiesceStatus, error) {
 	now := c.timestamp()
 	// #nosec G201 -- c.quotedTable is the validated, quoted identifier; all
 	// value-side input flows through $N placeholders.
 	stmt := fmt.Sprintf(
 		`UPDATE %s SET cleared_at = $1
-		 WHERE id = $2 AND cleared_at IS NULL AND expires_at > $1
+		 WHERE id = $2 AND cleared_at IS NULL
 		 RETURNING set_at, set_by, reason, expires_at, cleared_at`,
 		c.quotedTable,
 	)

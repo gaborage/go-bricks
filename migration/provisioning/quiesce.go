@@ -33,7 +33,10 @@ func (e *Executor) quiesced(ctx context.Context) bool {
 	}
 	set, err := e.quiesce.IsSet(ctx)
 	if err != nil {
-		e.Logger.Warn().Err(err).Msg("quiesce check failed; proceeding (fail-open)")
+		// Raw error intentionally omitted — a control-plane gate-check error can
+		// carry connection details, and log payloads bypass the field-name
+		// SensitiveDataFilter. Operators inspect the control plane directly.
+		e.Logger.Warn().Msg("quiesce check failed; proceeding (fail-open)")
 		return false
 	}
 	return set

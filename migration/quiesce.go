@@ -43,6 +43,12 @@ var ErrQuiesceNotSet = errors.New("migration: no active quiesce flag")
 // supplied table name fails the safe-identifier check.
 var ErrInvalidQuiesceTable = errors.New("migration: invalid quiesce table name")
 
+// ErrInvalidQuiesceTTL is returned by Set when QuiesceSetOptions.TTL is
+// negative. Zero is valid (means DefaultQuiesceTTL); negative is rejected
+// rather than silently defaulted, so a bad operator input fails loudly instead
+// of pausing provisioning for an unintended duration.
+var ErrInvalidQuiesceTTL = errors.New("migration: quiesce TTL must not be negative")
+
 // validateAndQuoteQuiesceTable validates an optionally schema-qualified table
 // name ("schema.table" or "table") — matching the per-table behavior of the
 // provisioning store — by checking each segment against the conservative
@@ -78,8 +84,12 @@ func quiesceBlocks(ctx context.Context, gate QuiesceGate, log logger.Logger) boo
 	}
 	set, err := gate.IsSet(ctx)
 	if err != nil {
+		// Intentionally omit the raw error: a control-plane gate-check error can
+		// carry connection details (host/user), and audit/log payloads bypass
+		// the field-name SensitiveDataFilter. Operators inspect the control
+		// plane directly; here we only signal that the check failed.
 		if log != nil {
-			log.Warn().Err(err).Msg("quiesce check failed; proceeding (fail-open)")
+			log.Warn().Msg("quiesce check failed; proceeding (fail-open)")
 		}
 		return false
 	}
@@ -145,13 +155,18 @@ type QuiesceController interface {
 	CreateTable(ctx context.Context) error
 }
 
-// resolveTTL applies the zero-default and the ceiling clamp.
-func resolveTTL(ttl time.Duration) time.Duration {
-	if ttl <= 0 {
-		return DefaultQuiesceTTL
+// resolveTTL validates ttl and applies the zero-default and ceiling clamp.
+// Negative is rejected (ErrInvalidQuiesceTTL); zero means DefaultQuiesceTTL;
+// values above MaxQuiesceTTL are clamped down.
+func resolveTTL(ttl time.Duration) (time.Duration, error) {
+	switch {
+	case ttl < 0:
+		return 0, fmt.Errorf("%w: %s", ErrInvalidQuiesceTTL, ttl)
+	case ttl == 0:
+		return DefaultQuiesceTTL, nil
+	case ttl > MaxQuiesceTTL:
+		return MaxQuiesceTTL, nil
+	default:
+		return ttl, nil
 	}
-	if ttl > MaxQuiesceTTL {
-		return MaxQuiesceTTL
-	}
-	return ttl
 }

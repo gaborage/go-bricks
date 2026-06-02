@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -35,4 +37,21 @@ func TestQuiesceBlocksFailsOpenOnCheckError(t *testing.T) {
 	// With a logger (WARN path) and without (nil-logger branch): both fail open.
 	assert.False(t, quiesceBlocks(context.Background(), stubGate{err: boom}, logger.New("disabled", true)))
 	assert.False(t, quiesceBlocks(context.Background(), stubGate{err: boom}, nil))
+}
+
+func TestResolveTTL(t *testing.T) {
+	d, err := resolveTTL(0)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultQuiesceTTL, d, "zero defaults")
+
+	d, err = resolveTTL(5 * time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Minute, d, "in-range passes through")
+
+	d, err = resolveTTL(100 * time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, MaxQuiesceTTL, d, "over-ceiling clamps")
+
+	_, err = resolveTTL(-time.Second)
+	assert.ErrorIs(t, err, ErrInvalidQuiesceTTL, "negative is rejected")
 }

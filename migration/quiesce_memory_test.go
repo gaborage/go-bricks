@@ -163,3 +163,24 @@ func TestMemoryQuiesceControllerFreshQueryAndCreateTable(t *testing.T) {
 	assert.False(t, st.Expired)
 	require.NoError(t, c.CreateTable(context.Background()), "memory CreateTable is a no-op")
 }
+
+func TestMemoryQuiesceControllerClearAfterExpirySucceeds(t *testing.T) {
+	now := time.Now().UTC()
+	c := NewMemoryQuiesceController().WithClock(fixedClock(now))
+	_, err := c.Set(context.Background(), QuiesceSetOptions{By: "op", TTL: time.Minute})
+	require.NoError(t, err)
+
+	c.WithClock(fixedClock(now.Add(2 * time.Minute))) // past expiry (auto-released)
+	st, err := c.Clear(context.Background(), "ops")
+	require.NoError(t, err, "an expired-but-uncleared flag stays clearable (operator override + audit trail)")
+	require.NotNil(t, st.ClearedAt)
+
+	_, err = c.Clear(context.Background(), "ops")
+	assert.ErrorIs(t, err, ErrQuiesceNotSet, "a second clear finds nothing uncleared")
+}
+
+func TestMemoryQuiesceControllerRejectsNegativeTTL(t *testing.T) {
+	c := NewMemoryQuiesceController()
+	_, err := c.Set(context.Background(), QuiesceSetOptions{By: "op", TTL: -time.Second})
+	assert.ErrorIs(t, err, ErrInvalidQuiesceTTL, "negative TTL must fail loudly, not silently default")
+}

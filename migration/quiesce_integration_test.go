@@ -133,3 +133,27 @@ func TestPostgresQuiesceControllerSetRenewsTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, set, "Set renews expires_at (heartbeat for long deploys)")
 }
+
+func TestPostgresQuiesceControllerClearAfterExpiry(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	now := time.Now().UTC()
+	ctrl, err := NewPostgresQuiesceController(env.adminDB(t), "quiesce_flags_clearexp")
+	require.NoError(t, err)
+	ctrl.WithClock(fixedClock(now))
+	require.NoError(t, ctrl.CreateTable(ctx))
+
+	_, err = ctrl.Set(ctx, QuiesceSetOptions{By: "op", TTL: time.Minute})
+	require.NoError(t, err)
+
+	// Past expiry (auto-released): the operator override must still clear it.
+	ctrl.WithClock(fixedClock(now.Add(2 * time.Minute)))
+	st, err := ctrl.Clear(ctx, "ops-oncall")
+	require.NoError(t, err, "expired-but-uncleared flag stays clearable via the PG override")
+	require.NotNil(t, st.ClearedAt)
+
+	_, err = ctrl.Clear(ctx, "ops-oncall")
+	assert.ErrorIs(t, err, ErrQuiesceNotSet)
+}

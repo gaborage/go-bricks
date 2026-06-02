@@ -99,11 +99,15 @@ func (c *MemoryQuiesceController) Query(_ context.Context) (*QuiesceStatus, erro
 // Set activates (or renews) the flag.
 func (c *MemoryQuiesceController) Set(ctx context.Context, opts QuiesceSetOptions) (*QuiesceStatus, error) {
 	now := c.timestamp()
+	ttl, err := resolveTTL(opts.TTL)
+	if err != nil {
+		return nil, err
+	}
 	rec := &quiesceRecord{
 		setAt:     now,
 		setBy:     opts.By,
 		reason:    opts.Reason,
-		expiresAt: now.Add(resolveTTL(opts.TTL)),
+		expiresAt: now.Add(ttl),
 	}
 	c.mu.Lock()
 	c.rec = rec
@@ -113,11 +117,15 @@ func (c *MemoryQuiesceController) Set(ctx context.Context, opts QuiesceSetOption
 	return statusFrom(rec, now), nil
 }
 
-// Clear deactivates the active flag.
+// Clear deactivates an uncleared flag (active OR auto-released by TTL) — the
+// unconditional operator override. Returns ErrQuiesceNotSet only when nothing
+// has ever been set or the row was already explicitly cleared; an expired-but-
+// uncleared row is still clearable so operators can tidy a crashed deploy's
+// flag and emit the quiesce.cleared audit trail.
 func (c *MemoryQuiesceController) Clear(ctx context.Context, by string) (*QuiesceStatus, error) {
 	now := c.timestamp()
 	c.mu.Lock()
-	if c.rec == nil || c.rec.clearedAt != nil || !now.Before(c.rec.expiresAt) {
+	if c.rec == nil || c.rec.clearedAt != nil {
 		c.mu.Unlock()
 		return nil, ErrQuiesceNotSet
 	}
