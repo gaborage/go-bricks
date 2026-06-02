@@ -20,7 +20,10 @@ func resolveVersion(ldflags string, read func() (*debug.BuildInfo, bool)) string
 	if bi, ok := read(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		return bi.Main.Version
 	}
-	return ldflags
+	if ldflags != "" {
+		return ldflags
+	}
+	return "dev"
 }
 
 func init() {

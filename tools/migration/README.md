@@ -17,6 +17,8 @@ Deep dives:
 
 ## Install
 
+> CLI releases are tagged `tools/migration/vX.Y.Z` (published with each framework release). `@vX.Y.Z` resolves that tag; `@latest` resolves the newest one (and falls back to an unversioned pseudo-version until the first such tag exists).
+
 ```bash
 # Pin to a specific release (recommended):
 go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.38.0
@@ -27,8 +29,6 @@ go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@l
 # From a clone (contributors):
 cd tools/migration && make build   # produces ./go-bricks-migrate
 ```
-
-> `@latest` resolves the latest `tools/migration/vX.Y.Z` tag. Until the first such tag is published it installs an unversioned default-branch pseudo-version, so prefer pinning `@vX.Y.Z`.
 
 ## Quick start
 

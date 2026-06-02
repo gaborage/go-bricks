@@ -1,7 +1,7 @@
 .PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec
 
 BINARY_NAME := go-bricks-migrate
-VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s\#^tools/migration/\#\#" || echo "dev")
+VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s\#^tools/migration/\#\#" | grep . || echo "dev")
 # Keep in sync with the other module's Makefile.
 GOVULNCHECK_VERSION := v1.1.4
 # Keep in sync with the other module's Makefile.

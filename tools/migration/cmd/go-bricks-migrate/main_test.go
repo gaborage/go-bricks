@@ -23,6 +23,8 @@ func TestResolveVersion(t *testing.T) {
 		{name: "buildinfo_when_dev", ldflags: "dev", read: bi("v0.39.0"), want: "v0.39.0"},
 		{name: "ignore_devel_pseudo", ldflags: "dev", read: bi("(devel)"), want: "dev"},
 		{name: "no_buildinfo", ldflags: "dev", read: none, want: "dev"},
+		{name: "empty_ldflags_buildinfo", ldflags: "", read: bi("v0.39.0"), want: "v0.39.0"},
+		{name: "empty_ldflags_no_buildinfo", ldflags: "", read: none, want: "dev"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
