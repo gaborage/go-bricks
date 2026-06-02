@@ -26,11 +26,8 @@ func resolveVersion(ldflags string, read func() (*debug.BuildInfo, bool)) string
 	return "dev"
 }
 
-func init() {
-	version = resolveVersion(version, debug.ReadBuildInfo)
-}
-
 func main() {
+	version = resolveVersion(version, debug.ReadBuildInfo)
 	root := commands.NewRootCommand()
 	root.Version = version
 	root.AddCommand(
