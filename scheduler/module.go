@@ -227,8 +227,16 @@ func (m *Module) ensureSchedulerInitialized() error {
 		return nil // Already initialized
 	}
 
+	// Resolve the configured timezone into a gocron option (default UTC; "-" =
+	// host-local). An invalid zone here would already have failed config
+	// validation at startup; this is defense in depth.
+	opts, err := m.schedulerLocationOptions()
+	if err != nil {
+		return err
+	}
+
 	// Create gocron scheduler
-	s, err := gocron.NewScheduler()
+	s, err := gocron.NewScheduler(opts...)
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to create gocron scheduler: %w", err)
 	}
@@ -238,9 +246,51 @@ func (m *Module) ensureSchedulerInitialized() error {
 	// Start the scheduler
 	m.scheduler.Start()
 
-	m.logger.Info().Msg("Scheduler initialized and started")
+	m.logger.Info().
+		Str("timezone", m.timezoneLabel()).
+		Msg("Scheduler initialized and started")
 
 	return nil
+}
+
+// configuredTimezone returns the raw scheduler timezone string from config,
+// defaulting to UTC when config is absent or the field is empty. In production
+// config.Validate() has already normalized this value (default UTC, "-" opt-out,
+// IANA-validated); the fallback only matters for tests that bypass validation.
+func (m *Module) configuredTimezone() string {
+	if m.config != nil && m.config.Scheduler.Timezone != "" {
+		return m.config.Scheduler.Timezone
+	}
+	return config.DefaultTimezone // "UTC" — shared framework timezone default
+}
+
+// schedulerLocationOptions translates the configured timezone into gocron
+// scheduler options. The "-" sentinel yields no option so gocron keeps its
+// time.Local default (legacy/host-local behavior). Any other value is loaded as
+// an IANA location and applied via gocron.WithLocation, which gocron threads into
+// every wall-clock schedule type (daily/weekly/monthly via at-times, hourly via a
+// CRON_TZ prefix). FixedRate is interval-based and unaffected.
+func (m *Module) schedulerLocationOptions() ([]gocron.SchedulerOption, error) {
+	tz := m.configuredTimezone()
+	if tz == config.TimezoneDisabledSentinel {
+		return nil, nil
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: invalid timezone %q: %w", tz, err)
+	}
+	return []gocron.SchedulerOption{gocron.WithLocation(loc)}, nil
+}
+
+// timezoneLabel returns an operator-facing label for the effective scheduler
+// timezone, used in the startup log and the /_sys/job response. The "-" sentinel
+// resolves to the host's local zone name.
+func (m *Module) timezoneLabel() string {
+	tz := m.configuredTimezone()
+	if tz == config.TimezoneDisabledSentinel {
+		return time.Local.String()
+	}
+	return tz
 }
 
 // JobRegistrar interface implementation

@@ -22,11 +22,14 @@ const (
 
 // Database session defaults
 const (
-	// DefaultDatabaseTimezone is the IANA timezone applied to every new database
-	// session when DatabaseConfig.Timezone is unset. UTC is opinionated to keep
-	// app-side time handling consistent with stored timestamps. Exported so
-	// connection layers can reference the same value without redefining it.
-	DefaultDatabaseTimezone = "UTC"
+	// DefaultTimezone is the IANA timezone applied when a timezone config field
+	// (database.timezone, scheduler.timezone) is unset. UTC is opinionated to keep
+	// behavior identical across environments regardless of host or server defaults.
+	DefaultTimezone = "UTC"
+	// DefaultDatabaseTimezone is the default IANA timezone for database sessions.
+	// Retained as a domain-named alias of DefaultTimezone for readability at
+	// database call sites.
+	DefaultDatabaseTimezone = DefaultTimezone
 	// TimezoneDisabledSentinel opts out of session-level timezone enforcement,
 	// preserving the database server's default timezone (legacy behavior).
 	// Connection layers compare against this constant to decide whether to
@@ -421,7 +424,7 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 // so the contracts cannot drift.
 func normalizeIANATimezone(field, value string) (string, error) {
 	if value == "" {
-		value = DefaultDatabaseTimezone
+		value = DefaultTimezone
 	}
 	if value == TimezoneDisabledSentinel {
 		return value, nil
