@@ -64,7 +64,27 @@ go-bricks-migrate migrate \
 | `validate` | Validate the locally-checked-in migration set against the schema history without applying anything. |
 | `info` | Print Flyway's migration status table for each target. Operator-facing; not for CI parsing. |
 | `list` | List tenant IDs the configured source would target. Useful for dry-running the rollout shape. |
+| `quiesce set\|clear\|status` | Manage the deployment quiesce flag in the control-plane database (pause/resume provisioning). |
 | `version` | Print the CLI version. |
+
+### Quiesce
+
+While the quiesce flag is set, provisioning workers park pending jobs and `MigrateAll` stops dispatching new tenants; in-flight work drains, nothing is interrupted. The flag **auto-releases at its TTL** (crash-safe — no sweeper) and can be cleared by any operator. It lives in a control-plane PostgreSQL table located via the standard `--tenant` + credential resolution.
+
+```bash
+# Pause (default 30m TTL, max 2h):
+go-bricks-migrate quiesce set --tenant control-plane --source-config tenants.yaml \
+  --credentials-from config-file --applied-by "$USER" --reason "deploy 2026.06" --ttl 1h
+
+# Inspect (--json for machine output):
+go-bricks-migrate quiesce status --tenant control-plane --source-config tenants.yaml --credentials-from config-file
+
+# Resume:
+go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.yaml \
+  --credentials-from config-file --applied-by "$USER"
+```
+
+`set` and `clear` emit `quiesce.set` / `quiesce.cleared` audit events (the `--applied-by` principal is the audited actor). PostgreSQL-only in v1.
 
 ## Flag groups
 

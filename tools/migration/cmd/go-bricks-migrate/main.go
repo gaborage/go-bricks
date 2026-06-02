@@ -35,6 +35,7 @@ func main() {
 		commands.NewValidateCommand(),
 		commands.NewInfoCommand(),
 		commands.NewListCommand(),
+		commands.NewQuiesceCommand(),
 		commands.NewVersionCommand(version),
 	)
 

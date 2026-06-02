@@ -172,7 +172,9 @@ Both counters fire alongside Warn-level log records — useful for grep-based de
 
 ## Known gaps
 
-- **CLI flag plumbing** for `--applied-by` / `--git-sha` / `--pipeline-run-id` in `go-bricks-migrate` is a separate follow-up — for now, callers using the library API can populate `migration.Config.Audit` (engine) and `provisioning.AuditContext` (orchestrator) directly.
+- **Oracle parity** — audit emission rides the same vendor-neutral OTel seam, but the quiesce control-plane table and the provisioning state machine that drive the orchestrator-layer events are PostgreSQL-only in v1 ([#385](https://github.com/gaborage/go-bricks/issues/385)).
+
+The `go-bricks-migrate` CLI exposes the principal/correlation context via `--applied-by` / `--git-sha` / `--pipeline-run-id` (with `GOBRICKS_MIGRATE_*` env fallbacks), and manages the quiesce flag via `quiesce set|clear|status` — see [tools/migration/README.md](../tools/migration/README.md).
 
 ## Stakeholder checklist
 
