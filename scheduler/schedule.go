@@ -41,7 +41,6 @@ type ScheduleConfiguration struct {
 
 	// MonthlyAt field
 	DayOfMonth int // 1-31
-
 }
 
 // Validate checks the ScheduleConfiguration for validity according to its Type

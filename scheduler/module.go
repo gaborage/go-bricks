@@ -363,7 +363,8 @@ func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTi
 	})
 }
 
-// HourlyAt implements JobRegistrar per FR-006
+// HourlyAt implements JobRegistrar per FR-006. The minute is taken within the
+// scheduler's configured timezone (matters only for sub-hour-offset zones).
 func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	schedulerJob, err := validateExecutor(job)
 	if err != nil {

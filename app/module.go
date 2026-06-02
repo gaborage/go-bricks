@@ -56,7 +56,8 @@ type JobRegistrar interface {
 	// time, interpreted in the scheduler's configured timezone.
 	WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error
 
-	// HourlyAt schedules a job to run hourly at the specified minute
+	// HourlyAt schedules a job to run hourly at the specified minute, within the
+	// scheduler's configured timezone (matters only for sub-hour-offset zones).
 	HourlyAt(jobID string, job any, minute int) error
 
 	// MonthlyAt schedules a job to run monthly on the given day and wall-clock
