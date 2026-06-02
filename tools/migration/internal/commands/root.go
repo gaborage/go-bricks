@@ -27,6 +27,12 @@ type CommonFlags struct {
 	MigrationsDir string
 	FlywayPath    string
 
+	// Audit (ADR-019). Recorded on every migration.applied event; the principal
+	// is never inferred — operators / pipelines pass it explicitly.
+	AppliedBy     string
+	GitSHA        string
+	PipelineRunID string
+
 	// Behavior.
 	ContinueOnError bool
 	Parallel        int
@@ -81,6 +87,11 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().StringVar(&flags.FlywayConfig, "flyway-config", "", "Path to flyway.conf (per-vendor default when empty)")
 	cmd.Flags().StringVar(&flags.MigrationsDir, "migrations-dir", "", "Path to migrations directory (per-vendor default when empty)")
 	cmd.Flags().StringVar(&flags.FlywayPath, "flyway-path", "flyway", "Path to flyway executable")
+
+	// Audit (ADR-019).
+	cmd.Flags().StringVar(&flags.AppliedBy, "applied-by", "", "Principal recorded in migration.applied audit events; never inferred (env: GOBRICKS_MIGRATE_APPLIED_BY)")
+	cmd.Flags().StringVar(&flags.GitSHA, "git-sha", "", "Source commit SHA recorded in the audit event (env: GOBRICKS_MIGRATE_GIT_SHA)")
+	cmd.Flags().StringVar(&flags.PipelineRunID, "pipeline-run-id", "", "CI/CD run identifier recorded in the audit event (env: GOBRICKS_MIGRATE_PIPELINE_RUN_ID)")
 
 	// Behavior.
 	cmd.Flags().BoolVar(&flags.ContinueOnError, "continue-on-error", false, "Continue iterating tenants after a per-tenant failure")

@@ -308,3 +308,52 @@ func TestBuildBaseConfig(t *testing.T) {
 	// Timeout left zero so per-vendor default wins inside MigrateAll.
 	assert.Zero(t, cfg.Timeout)
 }
+
+func TestBuildBaseConfigPopulatesAudit(t *testing.T) {
+	cfg := buildBaseConfig(&CommonFlags{
+		AppliedBy:     "deployer@ci",
+		GitSHA:        "abc123",
+		PipelineRunID: "run-7",
+	})
+	assert.Equal(t, "deployer@ci", cfg.Audit.Principal)
+	assert.Equal(t, "abc123", cfg.Audit.GitCommitSHA)
+	assert.Equal(t, "run-7", cfg.Audit.PipelineRunID)
+}
+
+func TestActionCommandsHaveAuditFlags(t *testing.T) {
+	for _, ctor := range []func() *cobra.Command{NewMigrateCommand, NewValidateCommand, NewInfoCommand} {
+		cmd := ctor()
+		t.Run(cmd.Use, func(t *testing.T) {
+			for _, name := range []string{"applied-by", "git-sha", "pipeline-run-id"} {
+				assert.NotNil(t, cmd.Flags().Lookup(name), "flag --%s must be registered", name)
+			}
+		})
+	}
+}
+
+func TestResolveFlagsAuditEnvFallbacks(t *testing.T) {
+	t.Setenv("GOBRICKS_MIGRATE_APPLIED_BY", "ci-bot")
+	t.Setenv("GOBRICKS_MIGRATE_GIT_SHA", "envsha")
+	t.Setenv("GOBRICKS_MIGRATE_PIPELINE_RUN_ID", "envrun")
+
+	cmd := &cobra.Command{}
+	flags := addCommonFlags(cmd)
+	flags.Tenant = "t1" // satisfy the source requirement
+	require.NoError(t, resolveFlags(cmd, flags))
+
+	assert.Equal(t, "ci-bot", flags.AppliedBy)
+	assert.Equal(t, "envsha", flags.GitSHA)
+	assert.Equal(t, "envrun", flags.PipelineRunID)
+}
+
+func TestResolveFlagsAuditExplicitWinsOverEnv(t *testing.T) {
+	t.Setenv("GOBRICKS_MIGRATE_APPLIED_BY", "ci-bot")
+
+	cmd := &cobra.Command{}
+	flags := addCommonFlags(cmd)
+	require.NoError(t, cmd.Flags().Set("applied-by", "explicit@op"))
+	flags.Tenant = "t1"
+	require.NoError(t, resolveFlags(cmd, flags))
+
+	assert.Equal(t, "explicit@op", flags.AppliedBy, "an explicit --applied-by must win over the env fallback")
+}

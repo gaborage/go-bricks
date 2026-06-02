@@ -30,6 +30,9 @@ const (
 
 	envSourceToken   = "GOBRICKS_MIGRATE_SOURCE_TOKEN"
 	envSecretsPrefix = "GOBRICKS_MIGRATE_SECRETS_PREFIX"
+	envAppliedBy     = "GOBRICKS_MIGRATE_APPLIED_BY"
+	envGitSHA        = "GOBRICKS_MIGRATE_GIT_SHA"
+	envPipelineRunID = "GOBRICKS_MIGRATE_PIPELINE_RUN_ID"
 
 	jsonKeyTenants = "tenants"
 )
@@ -44,6 +47,11 @@ func resolveFlags(cmd *cobra.Command, flags *CommonFlags) error {
 	if v := os.Getenv(envSecretsPrefix); v != "" && !cmd.Flags().Changed("secrets-prefix") {
 		flags.SecretsPrefix = v
 	}
+
+	// Audit env fallbacks — an explicit flag always wins (Changed check).
+	applyEnvFallback(cmd, "applied-by", envAppliedBy, &flags.AppliedBy)
+	applyEnvFallback(cmd, "git-sha", envGitSHA, &flags.GitSHA)
+	applyEnvFallback(cmd, "pipeline-run-id", envPipelineRunID, &flags.PipelineRunID)
 
 	if flags.Tenant == "" && flags.SourceURL == "" && flags.SourceConfig == "" {
 		return errors.New("one of --source-url, --source-config, or --tenant is required")
@@ -65,6 +73,17 @@ func resolveFlags(cmd *cobra.Command, flags *CommonFlags) error {
 		flags.Parallel = 1
 	}
 	return nil
+}
+
+// applyEnvFallback sets *dst from envVar when the operator did not pass flagName
+// explicitly (an explicit flag always wins, even when it equals the default).
+func applyEnvFallback(cmd *cobra.Command, flagName, envVar string, dst *string) {
+	if cmd.Flags().Changed(flagName) {
+		return
+	}
+	if v := os.Getenv(envVar); v != "" {
+		*dst = v
+	}
 }
 
 // maybeLoadFileStore parses the YAML config file once when either the listing
@@ -187,6 +206,13 @@ func buildBaseConfig(flags *CommonFlags) *migration.Config {
 		FlywayPath:    flags.FlywayPath,
 		ConfigPath:    flags.FlywayConfig,
 		MigrationPath: flags.MigrationsDir,
+		Audit: migration.AuditContext{
+			Principal:     flags.AppliedBy,
+			GitCommitSHA:  flags.GitSHA,
+			PipelineRunID: flags.PipelineRunID,
+			// Target left empty → the audit emitter falls back to each tenant's
+			// db.Database when it emits migration.applied.
+		},
 	}
 }
 

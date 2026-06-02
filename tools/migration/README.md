@@ -95,12 +95,25 @@ go-bricks-migrate migrate \
 | `--migrations-dir PATH` | Override Flyway's `-locations=filesystem:` argument. |
 | `--verbose` | Switch the embedded logger from `info` to `debug`. |
 
+### Audit context (ADR-019)
+
+Recorded on every `migration.applied` audit event. The principal is **never inferred** — pass it explicitly or it emits `<unspecified>` with a warning.
+
+| Flag | Purpose |
+|---|---|
+| `--applied-by` | Principal that triggered the run (operator, service account, pipeline). |
+| `--git-sha` | Source commit SHA, for correlating an event to a deployment. |
+| `--pipeline-run-id` | CI/CD run identifier. |
+
 ### Environment variable overrides
 
 | Variable | Meaning |
 |---|---|
 | `GOBRICKS_MIGRATE_SOURCE_TOKEN` | Bearer token passed to the control-plane API. Used when `--source-url` is set. |
 | `GOBRICKS_MIGRATE_SECRETS_PREFIX` | Default `--secrets-prefix`. An explicit flag still wins. |
+| `GOBRICKS_MIGRATE_APPLIED_BY` | Default `--applied-by`. An explicit flag still wins. |
+| `GOBRICKS_MIGRATE_GIT_SHA` | Default `--git-sha` (e.g. `--git-sha "$GITHUB_SHA"`). |
+| `GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | Default `--pipeline-run-id` (e.g. `--pipeline-run-id "$GITHUB_RUN_ID"`). |
 
 ## JSON output (for CI consumers)
 
@@ -179,9 +192,18 @@ failure, and `Attributes` (Flyway engine version, applied versions CSV,
 vendor, dry-run flag). See
 [wiki/migration_audit.md](../../wiki/migration_audit.md) for the full schema.
 
-`--applied-by`, `--git-sha`, and `--pipeline-run-id` CLI flag plumbing for
-ADR-019's `AuditContext` is a separate follow-up; today the audit pipeline
-emits `<unspecified>` for principal when the library caller leaves it empty.
+Pass `--applied-by` (and optionally `--git-sha` / `--pipeline-run-id`) to stamp
+ADR-019's `AuditContext` on every event. The principal is never inferred — when
+left empty the pipeline emits `<unspecified>` with a warning, so the gap is
+itself auditable. Example:
+
+```bash
+go-bricks-migrate migrate \
+  --source-url https://control-plane.example.com/api \
+  --applied-by "$GITHUB_ACTOR" \
+  --git-sha "$GITHUB_SHA" \
+  --pipeline-run-id "$GITHUB_RUN_ID"
+```
 
 ## Development
 
