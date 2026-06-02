@@ -139,7 +139,6 @@ The provisioning state machine (`migration/provisioning`) emits `state.transitio
 
 ```go
 emitter := migration.NewEmitter(log, &kafkaAuditRecorder{ /* ... */ }) // sink may be nil for OTel-only
-defer emitter.Close(context.Background())                              // drains the sink queue
 
 exec, _ := provisioning.NewExecutor(store, steps, log)
 exec.WithAudit(emitter, provisioning.AuditContext{
@@ -147,6 +146,13 @@ exec.WithAudit(emitter, provisioning.AuditContext{
     GitCommitSHA:  gitSHA,
     PipelineRunID: runID,
 })
+
+// On shutdown, drain the sink queue with a bounded deadline (same idiom as
+// FlywayMigrator.Close above) — a plain context.Background() would sever
+// trace/tenant attribution and impose no drain deadline.
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+_ = emitter.Close(shutdownCtx)
 ```
 
 Audit is opt-in: an `Executor` built without `WithAudit` emits nothing and behaves exactly as before. The caller owns the emitter's lifecycle — call `Close` to drain the sink. One `AuditRecorder` can serve both a `FlywayMigrator` and an `Executor`, but each subsystem builds its **own** `Emitter` over that shared sink (`FlywayMigrator` does so internally via `WithAuditRecorder`; the `Executor` via `NewEmitter`) — don't share a single `Emitter` instance across both, so each owns its own drain.
