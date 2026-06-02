@@ -71,3 +71,15 @@ sql, args, err := qb.Insert("users").Columns("name").Values("Alice").ToSQL()
 ```
 
 The new interface preserves all common chaining methods (`Columns`, `Values`, `SetMap`, `Options`, `Prefix`, `Suffix`, `Select`). For specialized squirrel-only methods (e.g., `RunWith`, `PlaceholderFormat`), keep the rendered SQL via `ToSQL()` and execute with `db.Exec(ctx, sql, args...)`.
+
+## Scheduler Default Timezone → UTC (ADR-023)
+
+Previously the scheduler ran jobs in the host's local time (`time.Local`). It now
+defaults to **UTC**. Deployments that relied on host-local job times must set
+`scheduler.timezone: "-"` to preserve the old behavior, or set an explicit IANA
+zone.
+
+```yaml
+scheduler:
+  timezone: "-"   # preserve pre-upgrade host-local behavior
+```
