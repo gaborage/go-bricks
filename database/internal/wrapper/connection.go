@@ -102,6 +102,10 @@ func (c *Connection) Stats() (map[string]any, error) {
 	}
 
 	if c.Config != nil {
+		// Go's database/sql exposes a single idle knob (SetMaxIdleConns). The tracking
+		// layer surfaces it under both OTEL semconv gauges -- idle.max (hard cap) and
+		// idle.min (configured warm-pool target) -- so both keys intentionally carry the
+		// same configured value. See database/internal/tracking/metrics.go.
 		result["max_idle_connections"] = int(c.Config.Pool.Idle.Connections)
 		result["configured_idle_connections"] = int(c.Config.Pool.Idle.Connections)
 	}
