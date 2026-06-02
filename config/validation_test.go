@@ -3769,3 +3769,54 @@ func TestValidateKeyStoreSecretMinLengthZeroAllowed(t *testing.T) {
 	}
 	assert.NoError(t, validateKeyStore(cfg))
 }
+
+func TestValidateSchedulerTimezoneDefault(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		expectedTimezone string
+	}{
+		{name: "empty_defaults_to_utc", input: "", expectedTimezone: "UTC"},
+		{name: "explicit_utc_preserved", input: "UTC", expectedTimezone: "UTC"},
+		{name: "iana_name_preserved", input: "America/New_York", expectedTimezone: "America/New_York"},
+		{name: "asia_iana_preserved", input: "Asia/Tokyo", expectedTimezone: "Asia/Tokyo"},
+		{name: "europe_iana_preserved", input: "Europe/London", expectedTimezone: "Europe/London"},
+		{name: "dash_sentinel_preserved", input: "-", expectedTimezone: "-"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SchedulerConfig{Timezone: tt.input}
+			err := validateScheduler(cfg)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
+		})
+	}
+}
+
+func TestValidateSchedulerTimezoneRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "unknown_iana_name", input: "Not/AZone"},
+		{name: "garbage_string", input: "xyz"},
+		{name: "numeric_offset_not_iana", input: "+05:30"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SchedulerConfig{Timezone: tt.input}
+			err := validateScheduler(cfg)
+			assertValidationError(t, err, "scheduler.timezone")
+		})
+	}
+}
+
+func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Scheduler.Timezone = "Not/AZone"
+	err := Validate(cfg)
+	assert.ErrorContains(t, err, "scheduler config:")
+	assert.ErrorContains(t, err, "scheduler.timezone")
+}
