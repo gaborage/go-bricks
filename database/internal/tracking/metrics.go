@@ -43,6 +43,11 @@ const (
 	attrDBNamespace      = "db.namespace"
 	attrConnectionState  = "state" // Values: "idle", "used"
 
+	// attrRepositoryMethod is a custom (non-semconv) attribute carrying the
+	// business-operation method name that issued the query. It is supplied by the
+	// caller via WithRepositoryMethod and must be low-cardinality.
+	attrRepositoryMethod = "repository.method"
+
 	// Special values for table/collection name
 	unknownTable = "unknown"
 )
@@ -200,6 +205,7 @@ func getDBMeter() metric.Meter {
 // - db.operation.name: Operation type (select, insert, update, delete, etc.) - always included
 // - db.collection.name: Table/collection name - optional, included when available
 // - db.namespace: Vendor-specific namespace format - optional, included when available
+// - repository.method: Caller-supplied business-operation name - optional, set via WithRepositoryMethod
 //
 // Non-blocking Behavior:
 // If the global meter or histogram is not initialized, the function is a no-op and returns
@@ -232,6 +238,11 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 	}
 	if tc.Namespace != "" {
 		attrs = append(attrs, attribute.String(attrDBNamespace, tc.Namespace))
+	}
+	// Add the caller-supplied repository method when present (low-cardinality
+	// business-operation label set via WithRepositoryMethod).
+	if method, ok := RepositoryMethodFromContext(ctx); ok {
+		attrs = append(attrs, attribute.String(attrRepositoryMethod, method))
 	}
 
 	// Record histogram with duration in seconds (not milliseconds)

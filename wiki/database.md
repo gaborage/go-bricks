@@ -258,6 +258,30 @@ database:
       interval: 30s
 ```
 
+## Repository Method Attribution
+
+The `db.client.operation.duration` metric carries `db.operation.name` (the SQL verb:
+`select`, `insert`, …) but not which application method issued the query. To attribute
+query latency to a business operation in dashboards (e.g. `GetCustomer` vs
+`InsertTransaction`), tag the context before the call with `database.WithRepositoryMethod`:
+
+```go
+func (r *CustomerRepo) GetCustomer(ctx context.Context, id int64) (*Customer, error) {
+    ctx = database.WithRepositoryMethod(ctx, "GetCustomer")
+    row := r.db.QueryRow(ctx, query, id)
+    // ...
+}
+```
+
+The tracking layer reads the value and adds it as the `repository.method` attribute on
+the duration histogram. The attribute is omitted entirely when unset (no empty-string
+series). `database.RepositoryMethodFromContext(ctx)` reads the value back for custom
+instrumentation.
+
+**Cardinality contract:** the method name MUST be a static, low-cardinality identifier
+(a method or function name). Because it becomes a metric attribute, interpolating
+per-request data such as IDs or emails would explode metric cardinality.
+
 ## Session Timezone (Breaking Change — ADR-016)
 
 | Setting | Default | Purpose |
