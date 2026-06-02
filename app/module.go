@@ -48,16 +48,19 @@ type JobRegistrar interface {
 	// FixedRate schedules a job to run every interval duration
 	FixedRate(jobID string, job any, interval time.Duration) error
 
-	// DailyAt schedules a job to run daily at the specified local time
+	// DailyAt schedules a job to run daily at the given wall-clock time,
+	// interpreted in the scheduler's configured timezone (scheduler.timezone, default UTC).
 	DailyAt(jobID string, job any, localTime time.Time) error
 
-	// WeeklyAt schedules a job to run weekly on the specified day and time
+	// WeeklyAt schedules a job to run weekly on the given day and wall-clock
+	// time, interpreted in the scheduler's configured timezone.
 	WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTime time.Time) error
 
 	// HourlyAt schedules a job to run hourly at the specified minute
 	HourlyAt(jobID string, job any, minute int) error
 
-	// MonthlyAt schedules a job to run monthly on the specified day and time
+	// MonthlyAt schedules a job to run monthly on the given day and wall-clock
+	// time, interpreted in the scheduler's configured timezone.
 	MonthlyAt(jobID string, job any, dayOfMonth int, localTime time.Time) error
 }
 
