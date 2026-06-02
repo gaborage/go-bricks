@@ -284,11 +284,12 @@ func (m *Module) schedulerLocationOptions() ([]gocron.SchedulerOption, error) {
 
 // timezoneLabel returns an operator-facing label for the effective scheduler
 // timezone, used in the startup log and the /_sys/job response. The "-" sentinel
-// resolves to the host's local zone name.
+// returns "host-local" rather than time.Local.String(), which is just "Local" in
+// Go and tells operators nothing useful about the host's actual zone.
 func (m *Module) timezoneLabel() string {
 	tz := m.configuredTimezone()
 	if tz == config.TimezoneDisabledSentinel {
-		return time.Local.String()
+		return "host-local"
 	}
 	return tz
 }

@@ -524,9 +524,9 @@ func TestSchedulerTimezoneLabel(t *testing.T) {
 		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "Asia/Tokyo"}}}
 		assert.Equal(t, "Asia/Tokyo", m.timezoneLabel())
 	})
-	t.Run("sentinel_returns_local", func(t *testing.T) {
+	t.Run("sentinel_returns_host_local", func(t *testing.T) {
 		m := &Module{config: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}}
-		assert.Equal(t, time.Local.String(), m.timezoneLabel())
+		assert.Equal(t, "host-local", m.timezoneLabel())
 	})
 	t.Run("empty_returns_utc", func(t *testing.T) {
 		m := &Module{config: &config.Config{}}

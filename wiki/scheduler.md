@@ -10,7 +10,7 @@ The `scheduler` package provides gocron-based job scheduling integrated with the
 - **Lazy initialization**: Scheduler created only when first job is registered
 - **Overlapping prevention**: Mutex-based lock per job (skips trigger if already running)
 - **Panic recovery**: Automatic recovery with stack trace logging and metrics
-- **System APIs**: `GET /_sys/jobs` (list), `POST /_sys/job/:jobId` (manual trigger), secured via CIDR middleware
+- **System APIs**: `GET /_sys/job` (list), `POST /_sys/job/:jobId` (manual trigger), secured via CIDR middleware
 - **OpenTelemetry**: Counter, histogram, and panic tracking per job
 
 **Executor Interface:**

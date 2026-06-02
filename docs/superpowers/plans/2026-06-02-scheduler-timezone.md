@@ -648,7 +648,7 @@ Also update the closing note in the same file: change `ADR numbers (ADR-001 thro
 
 Append to `wiki/scheduler.md`:
 
-```markdown
+````markdown
 ## Timezone
 
 By default the scheduler interprets all wall-clock schedules
@@ -673,13 +673,13 @@ Invalid IANA names fail fast at startup. The active zone appears in the
 `GET /_sys/job`. This mirrors the `database.timezone` contract — see
 [ADR-016](adr_016_database_session_timezone.md) and
 [ADR-023](adr_023_scheduler_timezone.md).
-```
+````
 
 - [ ] **Step 4: Add the breaking-change entry to `wiki/migrations.md`**
 
 Read the existing section structure of `wiki/migrations.md`, then add an entry matching its format. Content:
 
-```markdown
+````markdown
 ### Scheduler default timezone → UTC (ADR-023)
 
 Previously the scheduler ran jobs in the host's local time (`time.Local`). It now
@@ -691,7 +691,7 @@ zone.
 scheduler:
   timezone: "-"   # preserve pre-upgrade host-local behavior
 ```
-```
+````
 
 - [ ] **Step 5: Update `CLAUDE.md` and `llms.txt`**
 
