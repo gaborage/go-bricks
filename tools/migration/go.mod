@@ -2,6 +2,8 @@ module github.com/gaborage/go-bricks/tools/migration
 
 go 1.26.0
 
+toolchain go1.26.4
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.10
 	github.com/aws/aws-sdk-go-v2/config v1.32.21
