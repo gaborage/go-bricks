@@ -81,8 +81,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -176,8 +175,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -265,8 +263,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -433,8 +430,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -494,8 +490,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
@@ -563,8 +558,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
@@ -603,8 +597,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
@@ -631,8 +624,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
@@ -656,8 +648,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -680,8 +671,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
 
@@ -701,8 +691,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
       - name: Run govulncheck (framework)
@@ -724,8 +713,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
       - name: Run govulncheck (migrate tool)
@@ -743,8 +731,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: |
             go.sum

@@ -21,8 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: go.sum
       - run: go mod download
@@ -55,8 +54,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.26'
-          check-latest: true
+          go-version: '1.26.4'
           cache: true
           cache-dependency-path: tools/migration/go.sum
       - name: Build + validate CLI
