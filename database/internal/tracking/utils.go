@@ -112,10 +112,15 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	}
 
 	if err != nil {
-		// Treat sql.ErrNoRows specially - not an actual error, log as debug
-		if errors.Is(err, sql.ErrNoRows) {
+		// Treat sql.ErrNoRows and sql.ErrTxDone specially - not actual errors,
+		// log as debug. ErrTxDone is returned by the deferred Rollback of an
+		// already-committed transaction (e.g. the WithTx helper), which is benign.
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			logEvent.Debug().Msg("Database operation returned no rows")
-		} else {
+		case errors.Is(err, sql.ErrTxDone):
+			logEvent.Debug().Msg("Database transaction already finalized")
+		default:
 			logEvent.Error().Err(err).Msg("Database operation error")
 		}
 	} else if elapsed > tc.Settings.SlowQueryThreshold() {
@@ -245,8 +250,9 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 
 	// Record error status
 	if err != nil {
-		// sql.ErrNoRows is not an actual error - it's a normal empty result
-		if !errors.Is(err, sql.ErrNoRows) {
+		// sql.ErrNoRows (empty result) and sql.ErrTxDone (deferred rollback after
+		// commit) are not actual errors - do not mark the span as failed.
+		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, sql.ErrTxDone) {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 		}
