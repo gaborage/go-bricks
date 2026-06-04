@@ -303,6 +303,29 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 	}
 }
 
+func TestTrackDBOperationHandlesSqlErrTxDone(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLogger()
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	start := time.Now().Add(-10 * time.Millisecond)
+	// A deferred Rollback after a successful Commit returns sql.ErrTxDone; it must
+	// be treated as benign (debug), not logged at error level.
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "ROLLBACK", nil, start, 0, sql.ErrTxDone)
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelDebug {
+		t.Fatalf("expected debug level for sql.ErrTxDone, got %s", event.Level)
+	}
+	if event.Msg != "Database transaction already finalized" {
+		t.Fatalf("unexpected message: %q", event.Msg)
+	}
+}
+
 func TestTrackDBOperationLogsErrors(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	recLogger := newRecordingLogger()
