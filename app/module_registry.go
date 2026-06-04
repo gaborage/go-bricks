@@ -73,6 +73,15 @@ func (r *ModuleRegistry) Register(module Module) error {
 			Msg("Outbox module registered - available to other modules via deps.Outbox")
 	}
 
+	// Special case: If this module is an InboxProvider (inbox module),
+	// make it available to other modules via deps.Inbox
+	if inboxProvider, ok := module.(InboxProvider); ok {
+		r.deps.Inbox = inboxProvider.InboxProcessor()
+		r.logger.Info().
+			Str("module", moduleName).
+			Msg("Inbox module registered - available to other modules via deps.Inbox")
+	}
+
 	// Special case: If this module is a KeyStoreProvider (keystore module),
 	// make it available to other modules via deps.KeyStore
 	if ksProvider, ok := module.(KeyStoreProvider); ok {
