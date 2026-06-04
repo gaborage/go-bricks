@@ -38,17 +38,24 @@ func TestIsUniqueViolation(t *testing.T) {
 }
 
 func TestIsForeignKeyViolation(t *testing.T) {
-	if !IsForeignKeyViolation(&pgconn.PgError{Code: "23503"}) {
-		t.Fatal("pg 23503 should be FK violation")
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"pg_fk", &pgconn.PgError{Code: "23503"}, true},
+		{"pg_fk_wrapped", fmt.Errorf("insert: %w", &pgconn.PgError{Code: "23503"}), true},
+		{"pg_unique_not_fk", &pgconn.PgError{Code: "23505"}, false},
+		{"oracle_fk", &oranet.OracleError{ErrCode: 2291}, true},
+		{"oracle_unique_not_fk", &oranet.OracleError{ErrCode: 1}, false},
 	}
-	if !IsForeignKeyViolation(&oranet.OracleError{ErrCode: 2291}) {
-		t.Fatal("ORA-02291 should be FK violation")
-	}
-	if IsForeignKeyViolation(&pgconn.PgError{Code: "23505"}) {
-		t.Fatal("pg 23505 is not FK violation")
-	}
-	if IsForeignKeyViolation(nil) {
-		t.Fatal("nil is not FK violation")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsForeignKeyViolation(tc.err); got != tc.want {
+				t.Fatalf("IsForeignKeyViolation(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
