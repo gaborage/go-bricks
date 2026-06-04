@@ -25,6 +25,7 @@ type Config struct {
 	Source      SourceConfig              `koanf:"source" json:"source" yaml:"source" toml:"source" mapstructure:"source"`
 	Scheduler   SchedulerConfig           `koanf:"scheduler" json:"scheduler" yaml:"scheduler" toml:"scheduler" mapstructure:"scheduler"`
 	Outbox      OutboxConfig              `koanf:"outbox" json:"outbox" yaml:"outbox" toml:"outbox" mapstructure:"outbox"`
+	Inbox       InboxConfig               `koanf:"inbox" json:"inbox" yaml:"inbox" toml:"inbox" mapstructure:"inbox"`
 	KeyStore    KeyStoreConfig            `koanf:"keystore" json:"keystore" yaml:"keystore" toml:"keystore" mapstructure:"keystore"`
 
 	// k holds the underlying Koanf instance for flexible access to custom configurations
@@ -463,7 +464,7 @@ type SourceConfig struct {
 // OutboxConfig holds transactional outbox settings.
 // Production-safe defaults are applied automatically when outbox is enabled:
 //   - TableName: "gobricks_outbox"
-//   - AutoCreateTable: true (create table on first use)
+//   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - PollInterval: 5s (relay poll frequency)
 //   - BatchSize: 100 (events per relay cycle)
 //   - MaxRetries: 5 (max publish attempts before giving up)
@@ -478,7 +479,8 @@ type OutboxConfig struct {
 	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
 
 	// AutoCreateTable creates the outbox table on first use if it doesn't exist.
-	// Default: true. Set false for production environments with managed migrations.
+	// Default: false (opt-in). Set true to auto-create (e.g. in development); leave
+	// false in production with managed migrations.
 	AutoCreateTable bool `koanf:"auto_create_table" json:"auto_create_table" yaml:"auto_create_table" toml:"auto_create_table" mapstructure:"auto_create_table"`
 
 	// DefaultExchange is the fallback AMQP exchange when Event.Exchange is empty.
@@ -501,6 +503,34 @@ type OutboxConfig struct {
 	// RetentionPeriod is how long published events are kept before cleanup.
 	// Set to 0 to disable automatic cleanup.
 	// Default: 72h.
+	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
+}
+
+// InboxConfig holds consumer-side idempotency (inbox) settings.
+// The inbox is the durable complement to the outbox: it records processed event
+// ids in a ledger so redeliveries are skipped. Production-safe defaults are
+// applied automatically when inbox is enabled:
+//   - TableName: "gobricks_inbox"
+//   - AutoCreateTable: false (opt-in; set true to create the table on first use)
+//   - RetentionPeriod: 168h / 7d (must exceed the broker's max redelivery window)
+type InboxConfig struct {
+	// Enabled activates the consumer-side inbox.
+	// When false, the inbox module is a no-op and deps.Inbox is nil.
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	// TableName is the inbox ledger table name in the database.
+	// Default: "gobricks_inbox". Must be unqualified (no schema prefix).
+	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
+
+	// AutoCreateTable creates the inbox table on first use if it doesn't exist.
+	// Default: false (opt-in). Set true to auto-create (e.g. in development); leave
+	// false in production with managed migrations.
+	AutoCreateTable bool `koanf:"auto_create_table" json:"auto_create_table" yaml:"auto_create_table" toml:"auto_create_table" mapstructure:"auto_create_table"`
+
+	// RetentionPeriod is how long processed-event records are kept before cleanup.
+	// It MUST exceed the broker's maximum redelivery window, or a late redelivery
+	// could be reprocessed. Set to 0 to disable automatic cleanup (keep forever).
+	// Default: 168h (7 days).
 	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
 }
 
