@@ -5,6 +5,7 @@
 package sqlid
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -22,7 +23,7 @@ var validIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$#]*$`)
 // with their own prefix (e.g. fmt.Errorf("outbox: %w", err)).
 func ValidateTableName(name string) error {
 	if name == "" {
-		return fmt.Errorf("table name must not be empty")
+		return errors.New("table name must not be empty")
 	}
 
 	for _, dangerous := range []string{";", "--", "/*", "*/"} {
