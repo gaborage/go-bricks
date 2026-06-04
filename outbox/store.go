@@ -3,43 +3,19 @@ package outbox
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
-// validIdentifierPattern matches safe SQL identifiers (letters, digits, underscore, $, #).
-// Mirrors the pattern in database/internal/columns/parser.go for consistency.
-var validIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$#]*$`)
-
-// validateTableName checks that name is a safe SQL identifier.
+// validateTableName checks that name is a safe SQL identifier, delegating to the
+// shared sqlid validator and wrapping its error with the outbox package prefix.
 // Supports optional schema-qualified names (e.g., "myschema.outbox_events").
 func validateTableName(name string) error {
-	if name == "" {
-		return fmt.Errorf("outbox: table name must not be empty")
+	if err := sqlid.ValidateTableName(name); err != nil {
+		return fmt.Errorf("outbox: %w", err)
 	}
-
-	// Check for dangerous SQL fragments
-	for _, dangerous := range []string{";", "--", "/*", "*/"} {
-		if strings.Contains(name, dangerous) {
-			return fmt.Errorf("outbox: table name %q contains dangerous SQL characters", name)
-		}
-	}
-
-	// Split on "." for optional schema.table format
-	parts := strings.Split(name, ".")
-	if len(parts) > 2 {
-		return fmt.Errorf("outbox: table name %q has too many dot-separated parts (expected schema.table or table)", name)
-	}
-
-	for _, part := range parts {
-		if !validIdentifierPattern.MatchString(part) {
-			return fmt.Errorf("outbox: table name part %q contains invalid identifier characters", part)
-		}
-	}
-
 	return nil
 }
 
