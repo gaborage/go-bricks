@@ -72,6 +72,40 @@ func TestWithTxReturnsBeginError(t *testing.T) {
 	assert.False(t, called, "fn must not run when Begin fails")
 }
 
+// panicRollbackTx wraps a Tx and panics on Rollback, to exercise the case where
+// a rollback during panic recovery itself panics.
+type panicRollbackTx struct {
+	dbtypes.Tx
+}
+
+func (panicRollbackTx) Rollback(context.Context) error { panic("rollback boom") }
+
+// panicRollbackDB wraps an Interface so Begin yields a panicRollbackTx.
+type panicRollbackDB struct {
+	dbtypes.Interface
+}
+
+func (d panicRollbackDB) Begin(ctx context.Context) (dbtypes.Tx, error) {
+	tx, err := d.Interface.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return panicRollbackTx{tx}, nil
+}
+
+func TestWithTxRepanicsOriginalEvenWhenRollbackPanics(t *testing.T) {
+	base := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	base.ExpectTransaction()
+	db := panicRollbackDB{Interface: base}
+
+	// The original panic must propagate, not the rollback's "rollback boom".
+	assert.PanicsWithValue(t, "original", func() {
+		_ = database.WithTx(t.Context(), db, func(_ context.Context, _ dbtypes.Tx) error {
+			panic("original")
+		})
+	})
+}
+
 func TestWithTxOptionsCommitsOnSuccess(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	db.ExpectTransaction().ExpectExec(`INSERT INTO t`).WillReturnRowsAffected(1)

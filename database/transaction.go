@@ -37,7 +37,12 @@ func WithTxOptions(ctx context.Context, db Interface, opts *sql.TxOptions, fn fu
 	committed := false
 	defer func() {
 		if p := recover(); p != nil {
-			_ = tx.Rollback(ctx)
+			// Roll back, but never let a panicking Rollback mask the original
+			// panic: swallow any rollback panic so panic(p) re-throws the real cause.
+			func() {
+				defer func() { _ = recover() }()
+				_ = tx.Rollback(ctx)
+			}()
 			panic(p)
 		}
 		// Roll back unless the transaction already committed. The rollback error

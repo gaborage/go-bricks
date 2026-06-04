@@ -133,6 +133,12 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 			shouldRecordErr: false,
 		},
 		{
+			name:            "sql_err_tx_done",
+			err:             sql.ErrTxDone,
+			expectedStatus:  codes.Unset, // Benign: deferred rollback after commit
+			shouldRecordErr: false,
+		},
+		{
 			name:            "actual_error",
 			err:             errors.New(testutil.TestConnectionRefused),
 			expectedStatus:  codes.Error,
