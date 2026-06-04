@@ -188,8 +188,8 @@ func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 	require.True(t, ok)
 
 	require.NotNil(t, amqp.LastPublishHdrs)
-	assert.Equal(t, "evt-42", amqp.LastPublishHdrs["x-outbox-event-id"])
-	assert.Equal(t, "order.created", amqp.LastPublishHdrs["x-outbox-event-type"])
+	assert.Equal(t, "evt-42", amqp.LastPublishHdrs[HeaderEventID])
+	assert.Equal(t, "order.created", amqp.LastPublishHdrs[HeaderEventType])
 	assert.Equal(t, "abc", amqp.LastPublishHdrs["x-correlation-id"], "preserves caller-supplied headers")
 }
 
@@ -205,7 +205,7 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	rec := &Record{ID: "evt-7", EventType: "x.y", Exchange: "ex", RoutingKey: "rk"}
 	require.True(t, r.publishRecord(ctx, db, amqp, rec))
 	require.NotNil(t, amqp.LastPublishHdrs)
-	assert.Equal(t, "evt-7", amqp.LastPublishHdrs["x-outbox-event-id"])
+	assert.Equal(t, "evt-7", amqp.LastPublishHdrs[HeaderEventID])
 }
 
 func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {

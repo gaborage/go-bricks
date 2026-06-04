@@ -401,7 +401,7 @@ func TestOutboxTracePropagationContinuityAcrossThreeSites(t *testing.T) {
 	}
 	wire := map[string]any{}
 	maps.Copy(wire, stored)
-	wire["x-outbox-event-id"] = record.ID
+	wire[HeaderEventID] = record.ID
 	gobrickstrace.InjectIntoHeaders(context.Background(), &mapHeaderAccessor{headers: wire})
 
 	// Site 3 — consumer: messaging.Registry.processMessage derives the
