@@ -121,7 +121,7 @@ inbox:
   enabled: false                     # Enable consumer-side idempotency (inbox) ledger
   table_name: gobricks_inbox         # Inbox ledger table name (unqualified)
   auto_create_table: false           # Create table on first use (opt-in; true in dev, false with managed migrations)
-  retention_period: 168h             # How long processed-event records are kept; must exceed broker max redelivery window (0 = keep forever)
+  retention_period: 168h             # How long processed-event records are kept; must exceed broker max redelivery window (0 = use default 168h)
 
 log:
   level: debug

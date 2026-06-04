@@ -529,8 +529,8 @@ type InboxConfig struct {
 
 	// RetentionPeriod is how long processed-event records are kept before cleanup.
 	// It MUST exceed the broker's maximum redelivery window, or a late redelivery
-	// could be reprocessed. Set to 0 to disable automatic cleanup (keep forever).
-	// Default: 168h (7 days).
+	// could be reprocessed. A zero value is treated as unset and replaced by the
+	// default; increase it to retain longer. Default: 168h (7 days).
 	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
 }
 
