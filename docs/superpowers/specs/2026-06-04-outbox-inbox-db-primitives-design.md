@@ -10,7 +10,7 @@ Four GitHub issues form one coherent **transactional-outbox → consumer-idempot
 Three are small, independent primitives; the fourth (#536) composes all three into a new
 durable consumer-side "inbox".
 
-```
+```text
 #533 database.IsUniqueViolation ─┐
 #534 database.WithTx ────────────┼──►  #536 inbox.ProcessOnce  (new package)
 #535 outbox.HeaderEventID ───────┘
@@ -68,6 +68,7 @@ tests, and `llms.txt` examples carry the begin/commit/rollback shape). The prefa
 behavior-preserving (or doc-only) changes that make the four issues mechanical.
 
 ### P0.1 — Extract `internal/sqlid.ValidateTableName` (do-first, behavior-preserving for outbox)
+
 - New package **`internal/sqlid`** at the **repo root** (NOT `database/internal/…` — sibling packages
   `outbox/` and `migration/` cannot import another tree's `internal/`).
 - `func ValidateTableName(name string) error` — replicate outbox's exact current rules: optional
@@ -81,6 +82,7 @@ behavior-preserving (or doc-only) changes that make the four issues mechanical.
   unquoted-DDL bug here (see §9 discovered issues).
 
 ### P0.2 — Downgrade post-commit `sql.ErrTxDone` in the tracking layer (recommended; observability-only)
+
 - `database/internal/tracking/transaction.go` `Rollback` + `database/internal/tracking/utils.go`
   `TrackDBOperation` / `createDBSpan`: add an `errors.Is(err, sql.ErrTxDone)` arm that mirrors the
   existing `sql.ErrNoRows` special-case — log at DEBUG and skip `span.RecordError` instead of ERROR.
@@ -94,6 +96,7 @@ behavior-preserving (or doc-only) changes that make the four issues mechanical.
   rollback error — add a test asserting a genuine rollback error still logs ERROR).
 
 ### P0.3 — Config plumbing (mostly mirror; one doc-only outbox fix)
+
 - Correct outbox's doc/example to state `auto_create_table` default = **false** (matches 4 releases of
   actual shipped behavior; `applyDefaults` never set it). `config/types.go:480-482` doc comment +
   `config.example.yaml:112`. **Behavior-preserving** (code already does false).
@@ -184,6 +187,7 @@ func EventIDFromHeaders(h amqp091.Table) (string, bool)
 ## 8. #536 — new `inbox` package
 
 ### 8.1 Public surface
+
 ```go
 // app package (mirrors the OutboxPublisher/OutboxProvider triad; avoids the app<->inbox cycle)
 type InboxProcessor interface {                       // role-named to avoid an Inbox/Inbox/Inbox() collision
@@ -206,6 +210,7 @@ const DefaultTableName = "gobricks_inbox"
 ```
 
 ### 8.2 `ProcessOnce` flow (D3 — inbox owns the tx)
+
 ```go
 db, err := m.getDB(ctx)                 // tenant-resolved from the handler's tenant-scoped ctx
 if err != nil { return err }
@@ -216,12 +221,14 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
     return fn(ctx, tx)                  // side effects atomic with the marker
 })
 ```
+
 - **Postgres `MarkProcessed`:** `INSERT … (tenant_id,event_id,processed_at) VALUES ($1,$2,$3)
   ON CONFLICT (tenant_id,event_id) DO NOTHING`; `inserted = res.RowsAffected()==1`.
 - **Oracle `MarkProcessed`:** plain `INSERT` (`:1,:2,:3`); on error `if database.IsUniqueViolation(err)
   { return inserted=false }` else return the error. (#533 is the backstop.)
 
 ### 8.3 Storage / scaffolding (MIRROR outbox, do not extract — §4 rule-of-three)
+
 - `inbox/store.go` (`InboxStore`, `Record`, `sqlid.ValidateTableName` guard), `store_postgres.go`,
   `store_oracle.go` with vendor DDL **consts** (exported, so managed-migration shops can run them):
   - PG: `CREATE TABLE IF NOT EXISTS %s (tenant_id VARCHAR(255) NOT NULL DEFAULT '', event_id VARCHAR(255)
@@ -242,6 +249,7 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
   `config/loadDefaults()` and NOT `config/validation.go`.
 
 ### 8.4 App + config wiring (pure mirror — additive, non-breaking)
+
 - `app/module.go`: add `InboxProcessor`, `InboxProvider`, and the `ModuleDeps.Inbox` field
   (`app` already imports `dbtypes` and uses `dbtypes.Tx` → zero new imports). All `ModuleDeps{…}`
   literals in the repo are keyed → the new field is non-breaking.
@@ -254,6 +262,7 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
 - `config.example.yaml`: add an `inbox:` block after the outbox block (`retention_period: 168h`, never `7d`).
 
 ## 9. Discovered issues (out of scope — propose as separate tickets)
+
 - **Outbox schema-qualified table names are mishandled:** a name like `myschema.outbox_events` passes
   validation but yields an invalid index name `idx_myschema.outbox_events_pending` and an unquoted
   `CREATE TABLE`. Fixing needs quoting + last-segment index derivation (with a PG case-folding caveat).
@@ -262,6 +271,7 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
   differ deliberately) — separate, behavior-changing PR.
 
 ## 10. Testing strategy
+
 - Unit: per-vendor mirror-image test files driving the concrete store against
   `dbtesting.NewTestDB(dbtypes.PostgreSQL|Oracle)` fluent expectations; `testify`;
   `var _ InboxStore = (*postgresStore)(nil)` compile-time guards.
@@ -272,6 +282,7 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
   `/code-review` and `/security-review` before pushing.
 
 ## 11. Sequencing (one connected effort)
+
 1. **P0.1** `internal/sqlid` + outbox delegation (behavior-preserving).
 2. **#533** `database.IsUniqueViolation` et al. (+ **P0.2** tracking `ErrTxDone` downgrade).
 3. **#534** `WithTx`/`WithTxOptions` (+ dogfood docs/tests).

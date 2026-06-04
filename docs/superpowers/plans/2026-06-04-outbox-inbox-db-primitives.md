@@ -30,6 +30,7 @@
 ### Task 1.1: sqlid package (replicate outbox's exact rules)
 
 - [ ] **Step 1 — failing test** `internal/sqlid/sqlid_test.go`:
+
 ```go
 package sqlid
 
@@ -66,8 +67,10 @@ func TestValidateTableName(t *testing.T) {
 	}
 }
 ```
+
 - [ ] **Step 2 — run red:** `go test ./internal/sqlid/` → FAIL (package/func undefined).
 - [ ] **Step 3 — implement** `internal/sqlid/sqlid.go`:
+
 ```go
 // Package sqlid validates SQL identifiers (table names) before they are
 // interpolated into DDL/DML, guarding against SQL identifier injection.
@@ -109,12 +112,14 @@ func ValidateTableName(name string) error {
 	return nil
 }
 ```
+
 - [ ] **Step 4 — run green:** `go test ./internal/sqlid/ -v` → PASS.
 - [ ] **Step 5 — commit:** `git add internal/sqlid && git commit -m "refactor(database): add internal/sqlid table-name validator"`
 
 ### Task 1.2: outbox delegates to sqlid (behavior-preserving)
 
 - [ ] **Step 1** — Modify `outbox/store.go`: replace the `validIdentifierPattern` var and `validateTableName` body (lines 13-44) with a thin wrapper that delegates and keeps the `outbox:` prefix; drop now-unused `regexp`/`strings` imports if no longer referenced (verify with the compiler):
+
 ```go
 // validateTableName checks that name is a safe SQL identifier, wrapping the
 // shared sqlid validator with the outbox package error prefix.
@@ -125,12 +130,14 @@ func validateTableName(name string) error {
 	return nil
 }
 ```
+
 Add `"github.com/gaborage/go-bricks/internal/sqlid"` to the import block; remove `"regexp"` and (if unused elsewhere in the file) `"strings"`.
 - [ ] **Step 2 — verify existing outbox tests still pass** (behavior preserved): `go test ./outbox/` → PASS. The existing `outbox/store_test.go` cases (`outbox$events`, `outbox#events` valid; dangerous rejected) must still pass; the error strings now read `outbox: table name …` (was `outbox: table name …` — confirm test assertions match; if a test asserts an exact old substring, update it minimally).
 - [ ] **Step 3 — `make check`** → PASS.
 - [ ] **Step 4 — commit:** `git add outbox/store.go outbox/*_test.go && git commit -m "refactor(outbox): use internal/sqlid for table-name validation"`
 
 ### Task 1.3: open + babysit PR1
+
 - [ ] `/code-review` then `/security-review` on the diff; address findings.
 - [ ] `gh pr create --base main --title "refactor(database): extract shared SQL table-name validator to internal/sqlid" --body <see PR body template>`.
 - [ ] Babysit: CI green, CodeRabbit comments addressed, SonarCloud quality gate pass. Then merge (per merge policy confirmed with user).
@@ -150,6 +157,7 @@ Add `"github.com/gaborage/go-bricks/internal/sqlid"` to the import block; remove
 ### Task 2.1: classifier predicates (unit-tested with fabricated driver errors)
 
 - [ ] **Step 1 — failing test** `database/errors_test.go`:
+
 ```go
 package database
 
@@ -229,8 +237,10 @@ func TestConstraintName(t *testing.T) {
 	}
 }
 ```
+
 - [ ] **Step 2 — run red:** `go test ./database/ -run 'Unique|ForeignKey|NotFound|ConstraintName'` → FAIL.
 - [ ] **Step 3 — implement** `database/errors.go`:
+
 ```go
 package database
 
@@ -304,6 +314,7 @@ func ConstraintName(err error) (string, bool) {
 	return "", false
 }
 ```
+
 - [ ] **Step 4 — run green:** `go test ./database/ -run 'Unique|ForeignKey|NotFound|ConstraintName' -v` → PASS.
 - [ ] **Step 5 — `make check`** → PASS (gofmt may reorder the const block; let it).
 - [ ] **Step 6 — commit:** `git add database/errors.go database/errors_test.go && git commit -m "feat(database): add IsUniqueViolation/IsForeignKeyViolation/IsNotFound/ConstraintName"`
@@ -336,6 +347,7 @@ func ConstraintName(err error) (string, bool) {
 - [ ] **Step 2 — run red.**
 - [ ] **Step 3 — implement** in `database/internal/tracking/utils.go`:
   - TrackDBOperation error block (currently lines 114-122):
+
 ```go
 	if err != nil {
 		// Treat sql.ErrNoRows and post-commit/rollback sql.ErrTxDone specially -
@@ -354,7 +366,9 @@ func ConstraintName(err error) (string, bool) {
 		logEvent.Debug().Msg("Database operation executed")
 	}
 ```
+
   - createDBSpan record-error guard (currently lines 246-251):
+
 ```go
 	if err != nil {
 		// sql.ErrNoRows and sql.ErrTxDone are not real errors.
@@ -364,6 +378,7 @@ func ConstraintName(err error) (string, bool) {
 		}
 	}
 ```
+
   (No new imports — `errors` and `database/sql` already imported.)
 - [ ] **Step 4 — run green** + `make check`.
 - [ ] **Step 5 — commit:** `git commit -am "fix(database): treat post-commit sql.ErrTxDone as benign in tracking (no ERROR log/span)"`
@@ -371,6 +386,7 @@ func ConstraintName(err error) (string, bool) {
 ### Task 3.2: WithTx + WithTxOptions
 
 - [ ] **Step 1 — failing test** `database/transaction_test.go` (use `database/testing` TestDB; assert commit on success, rollback+original-error on fn error, rollback+re-panic on panic, and no ERROR log on happy path):
+
 ```go
 package database_test
 
@@ -416,9 +432,11 @@ func TestWithTxRollsBackAndRepanics(t *testing.T) {
 	})
 }
 ```
+
 (If `dbtesting` cannot satisfy a bare `ExpectTransaction()` with no exec on the rollback path, adjust to the TestDB's documented rollback expectation API — consult `database/testing/fake_tx.go` `IsRolledBack()`.)
 - [ ] **Step 2 — run red.**
 - [ ] **Step 3 — implement** `database/transaction.go`:
+
 ```go
 package database
 
@@ -472,10 +490,12 @@ func WithTxOptions(ctx context.Context, db Interface, opts *sql.TxOptions, fn fu
 	return nil
 }
 ```
+
 - [ ] **Step 4 — run green** + `make check`.
 - [ ] **Step 5 — commit:** `git add database/transaction.go database/transaction_test.go && git commit -m "feat(database): add WithTx and WithTxOptions transaction helpers"`
 
 ### Task 3.3: dogfood docs (update examples to use WithTx)
+
 - [ ] Update the doc-comment examples in `outbox/outbox.go` and `database/types/transactor.go` to show `database.WithTx`; update `llms.txt` and `wiki/outbox.md`. Keep one manual Begin/Commit example for callers needing the tx handle outside a closure. Commit: `docs: show WithTx in transaction examples`.
 
 ### Task 3.4: open + babysit PR3.
@@ -496,6 +516,7 @@ func WithTxOptions(ctx context.Context, db Interface, opts *sql.TxOptions, fn fu
 ### Task 4.1: headers.go
 
 - [ ] **Step 1 — failing test** `outbox/headers_test.go`:
+
 ```go
 package outbox
 
@@ -528,8 +549,10 @@ func TestEventIDFromHeaders(t *testing.T) {
 	assert.False(t, ok)
 }
 ```
+
 - [ ] **Step 2 — run red.**
 - [ ] **Step 3 — implement** `outbox/headers.go`:
+
 ```go
 package outbox
 
@@ -568,10 +591,12 @@ func EventIDFromHeaders(h amqp.Table) (string, bool) {
 	}
 }
 ```
+
 - [ ] **Step 4 — run green** + `make check`.
 - [ ] **Step 5 — commit.**
 
 ### Task 4.2: rewire literals to constants
+
 - [ ] `outbox/relay.go:84-85` → `headers[HeaderEventID] = record.ID` / `headers[HeaderEventType] = record.EventType`.
 - [ ] Update `outbox/relay_test.go:191,192,208`, `outbox/publisher_test.go:404` to reference `HeaderEventID`/`HeaderEventType`. Update `outbox/outbox.go:8` doc to mention `outbox.HeaderEventID` / `outbox.EventIDFromHeaders`.
 - [ ] `go test ./outbox/` → PASS; `make check` → PASS. Commit: `refactor(outbox): reference HeaderEventID/HeaderEventType constants at the relay`.
@@ -599,7 +624,9 @@ func EventIDFromHeaders(h amqp.Table) (string, bool) {
 - Modify: `config/types.go:480-482` + `config.example.yaml:112` (outbox `auto_create_table` doc → default **false**, behavior-preserving) and add an `inbox:` block to `config.example.yaml`.
 
 ### Task 5.1: app wiring (interfaces + deps field + registry branch)
+
 - [ ] In `app/module.go`, after the OutboxProvider block (line 112) add:
+
 ```go
 // InboxProcessor runs a handler exactly once per event id, recording the id in a
 // durable, tenant-aware ledger atomically with the handler's writes. Defined here
@@ -616,13 +643,17 @@ type InboxProvider interface {
 	InboxProcessor() InboxProcessor
 }
 ```
+
 - [ ] Add the `ModuleDeps` field after `Outbox OutboxPublisher` (line 190):
+
 ```go
 	// Inbox provides durable consumer-side idempotency (ProcessOnce).
 	// This field is nil if no inbox module is registered or inbox.enabled is false.
 	Inbox InboxProcessor
 ```
+
 - [ ] In `app/module_registry.go`, after the KeyStoreProvider branch (line 89), before line 91:
+
 ```go
 	// Special case: If this module is an InboxProvider (inbox module),
 	// make it available to other modules via deps.Inbox
@@ -633,10 +664,13 @@ type InboxProvider interface {
 			Msg("Inbox module registered - available to other modules via deps.Inbox")
 	}
 ```
+
 - [ ] `make check` (app compiles with nil Inbox everywhere — keyed ModuleDeps literals unaffected). Commit: `feat(app): add InboxProcessor/InboxProvider wiring and deps.Inbox`.
 
 ### Task 5.2: config (InboxConfig + outbox doc fix + example)
+
 - [ ] Add `InboxConfig` to `config/types.go` after OutboxConfig (mirror tag style; `AutoCreateTable` honest off-by-default; `RetentionPeriod time.Duration`):
+
 ```go
 // InboxConfig holds consumer-side idempotency (inbox) settings.
 // Production-safe defaults are applied when inbox is enabled:
@@ -650,12 +684,15 @@ type InboxConfig struct {
 	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
 }
 ```
+
 - [ ] Add `Inbox InboxConfig` to the `Config` struct after the `Outbox` line (run gofmt to realign).
 - [ ] Fix outbox doc (`config/types.go:480-482`): change `AutoCreateTable` comment to "Default: false. Set true in development; keep false for managed migrations." and `config.example.yaml:112` `auto_create_table: false`. Add an `inbox:` block to `config.example.yaml` after the outbox block (`enabled: false`, `table_name: gobricks_inbox`, `auto_create_table: false`, `retention_period: 168h`).
 - [ ] `make check`. Commit: `feat(config): add InboxConfig; correct outbox auto_create_table default doc to false`.
 
 ### Task 5.3: inbox store (Record, Store iface, PG + Oracle, sqlid guard)
+
 - [ ] **Record + Store + validateTableName** `inbox/store.go` (mirror `outbox/store.go` shape; package `inbox`; reuse `sqlid`):
+
 ```go
 package inbox
 
@@ -693,7 +730,9 @@ func validateTableName(name string) error {
 	return nil
 }
 ```
+
 - [ ] **Postgres** `inbox/store_postgres.go` (`//nolint:dupl` line before `package inbox`; `$N`; **ON CONFLICT DO NOTHING + RowsAffected**):
+
 ```go
 //nolint:dupl // Intentional: PostgreSQL and Oracle stores share structure but differ in SQL dialect
 package inbox
@@ -769,7 +808,9 @@ func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) e
 
 var _ Store = (*postgresStore)(nil)
 ```
+
 - [ ] **Oracle** `inbox/store_oracle.go` (`:N`; **plain INSERT + catch `database.IsUniqueViolation`**; no `IF NOT EXISTS`; function index). NOTE: imports `github.com/gaborage/go-bricks/database` for `IsUniqueViolation`:
+
 ```go
 //nolint:dupl // Intentional: Oracle and PostgreSQL stores share structure but differ in SQL dialect
 package inbox
@@ -844,12 +885,15 @@ func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) err
 
 var _ Store = (*oracleStore)(nil)
 ```
+
 NOTE on Oracle PK name: `pk_%s` consumes tableName once; if the table name is schema-qualified, the constraint name would contain a dot — guard by deriving the constraint suffix from the last segment, or document that schema-qualified inbox names are unsupported in v1 (simplest: require an unqualified `table_name` for inbox; validate in config). Decide during implementation; default to requiring unqualified inbox table names and asserting it in `validateConfig`.
 - [ ] **Tests** `inbox/store_postgres_test.go` / `inbox/store_oracle_test.go` mirror outbox store tests: `MarkProcessed` inserted=true (RowsAffected 1), duplicate inserted=false (PG RowsAffected 0; Oracle `WillReturnError` with a fabricated `*network.OracleError{ErrCode:1}` → inserted=false), `DeleteProcessed`, `CreateTable`. Conformance guards already in the store files.
 - [ ] `make check`. Commit: `feat(inbox): vendor-split ledger store (PG ON CONFLICT / Oracle catch unique violation)`.
 
 ### Task 5.4: config defaults + validation
+
 - [ ] `inbox/config.go` (mirror `outbox/config.go`):
+
 ```go
 package inbox
 
@@ -889,10 +933,13 @@ func validateConfig(c *config.InboxConfig) error {
 	return nil
 }
 ```
+
 - [ ] `inbox/config_test.go`: defaults applied, negative retention rejected, dotted table rejected. `make check`. Commit: `feat(inbox): config defaults and validation`.
 
 ### Task 5.5: Inbox processor (ProcessOnce — composes WithTx + store) + cleanup + module
+
 - [ ] `inbox/inbox.go`:
+
 ```go
 package inbox
 
@@ -935,7 +982,9 @@ func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx con
 	})
 }
 ```
+
 - [ ] `inbox/cleanup.go` (mirror `outbox/cleanup.go`; `DeleteProcessed`):
+
 ```go
 package inbox
 
@@ -968,15 +1017,18 @@ func (c *Cleanup) Execute(ctx scheduler.JobContext) error {
 	return nil
 }
 ```
+
 - [ ] `inbox/module.go` (mirror `outbox/module.go`: Module struct with `logger/config/getDB/store/cfg/initMu/tableCreated/processor`, `NewModule`, `Name`="inbox", `Init` (capture deps.Logger/Config/DB, `m.cfg = m.config.Inbox`, applyDefaults, validateConfig, Enabled short-circuit, fail-fast `getDB==nil`, build `&Inbox{module:m}`), `ensureStoreInitialized` (verbatim shape — switch `db.DatabaseType()` → `NewPostgresStore`/`NewOracleStore`, `tableCreated` guard, CreateTable-as-warning), `InboxProcessor()` provider method returning the `*Inbox`, `RegisterJobs` (only the cleanup `DailyAt("inbox-cleanup", …)` when `RetentionPeriod > 0` — **no relay**, so implement `app.JobProvider` for cleanup only; use a `lazyStore` wrapper for the cleanup job mirroring outbox), `Shutdown`). Inbox has no `getMsg`/`publisher`/messaging fail-fast.
 - [ ] `inbox/inbox_test.go`: `ProcessOnce` runs fn once on first id (TestDB: ExpectTransaction → ExpectExec INSERT RowsAffected 1 → fn side-effect exec → commit), skips fn on duplicate (RowsAffected 0 → fn NOT called → commit), and propagates fn errors (rollback). Use a captured bool to assert fn invocation.
 - [ ] `make check`. Commit: `feat(inbox): ProcessOnce idempotency helper, cleanup job, and module wiring`.
 
 ### Task 5.6: inbox/testing mock + assertions
+
 - [ ] `inbox/testing/mock_inbox.go`: `MockInbox` implementing `app.InboxProcessor` — records each `ProcessOnce(eventID)`, configurable "already processed" set (skip fn) and error; runs `fn(ctx, nil)` when not a duplicate so handler logic is exercised; thread-safe (mutex). `inbox/testing/assertions.go`: `AssertProcessed`, `AssertNotProcessed`, `AssertProcessCount` mirroring outbox/testing.
 - [ ] `make check`. Commit: `feat(inbox): testing mock and assertions`.
 
 ### Task 5.7: integration tests (both vendors)
+
 - [ ] `inbox/*_integration_test.go` (`//go:build integration`): same event id processed twice against PG and Oracle containers → fn runs once, second call is a no-op; verify PG path not poisoned and Oracle path survives. `make test-integration`.
 - [ ] Commit: `test(inbox): integration coverage for exactly-once across both vendors`.
 
@@ -985,6 +1037,7 @@ func (c *Cleanup) Execute(ctx scheduler.JobContext) error {
 ---
 
 ## Self-review notes (run before executing)
+
 - **Spec coverage:** P0.1→PR1; #533→PR2; P0.2+#534→PR3; #535→PR4; #536+InboxConfig+outbox-doc-fix→PR5. All §-items mapped.
 - **Type consistency:** `Store.MarkProcessed(ctx, tx, Record) (bool, error)` used identically in PG/Oracle/Inbox/tests; `app.InboxProcessor.ProcessOnce(ctx, eventID, fn func(ctx, tx dbtypes.Tx) error) error` matches `inbox.Inbox.ProcessOnce`; `database.IsUniqueViolation(error) bool` consumed by `inbox/store_oracle.go`; `sqlid.ValidateTableName` consumed by outbox + inbox.
 - **Decision encodings:** PG ON CONFLICT vs Oracle catch (Task 5.3); auto-create OFF-by-default honest bool (Task 5.2/5.4); error-only WithTx (Task 3.2); retention 168h not 7d (Task 5.4).
