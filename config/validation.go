@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -455,7 +456,42 @@ func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
 func validateScheduler(cfg *SchedulerConfig) error {
 	normalized, err := normalizeIANATimezone("scheduler.timezone", cfg.Timezone)
 	cfg.Timezone = normalized
-	return err
+	if err != nil {
+		return err
+	}
+	if err := validateCIDRList("scheduler.security.cidrallowlist", cfg.Security.CIDRAllowlist); err != nil {
+		return err
+	}
+	return validateCIDRList("scheduler.security.trustedproxies", cfg.Security.TrustedProxies)
+}
+
+// validateCIDRList fails when a non-empty list contains zero parseable CIDRs.
+// Empty lists are valid (localhost-only / no-trusted-proxy defaults). Partial-invalid
+// lists pass here and keep the existing middleware-time WARN so a single typo does not
+// crash startup, while an all-invalid security control fails fast instead of silently
+// degrading to a more restrictive (or, for redaction, weaker) posture.
+func validateCIDRList(field string, list []string) error {
+	if len(list) == 0 {
+		return nil
+	}
+	var invalid []string
+	valid := 0
+	for _, entry := range list {
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(entry)); err != nil {
+			invalid = append(invalid, entry)
+			continue
+		}
+		valid++
+	}
+	if valid == 0 {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field,
+			Message:  fmt.Sprintf("no valid CIDR entries (all %d rejected: %v)", len(list), invalid),
+			Action:   "use CIDR notation, e.g. 10.0.0.0/8; comma-separate multiple values in one env var",
+		}
+	}
+	return nil
 }
 
 // validateNamedDatabases validates the named databases configuration.
