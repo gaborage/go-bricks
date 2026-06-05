@@ -519,7 +519,7 @@ git commit -m "feat(config): support []string fields in InjectInto (#539)"
 
 Change the "Supported Types" line under Configuration Injection to:
 
-```
+```text
 **Supported Types:** string, int, int64, float64, bool, time.Duration, []string (comma-separated via env, native sequence via YAML).
 ```
 
