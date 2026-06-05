@@ -26,6 +26,23 @@ var (
 	errEmptyString = errors.New("empty string")
 )
 
+// splitAndTrimList splits raw on sep, trims each element, and drops empties.
+// Single source of truth for env/default string -> []string semantics, shared by
+// the config Unmarshal decode hook and InjectInto.
+func splitAndTrimList(raw, sep string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // toInt converts various types to int with overflow protection.
 func toInt(value any) (int, error) {
 	n, err := toInt64(value)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -103,10 +104,25 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 func buildDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToTrimmedSliceHookFunc(","),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),
 		),
 		WeaklyTypedInput: true,
+	}
+}
+
+// stringToTrimmedSliceHookFunc splits a scalar string into []string on sep,
+// trimming each element and dropping empties. Scoped to string -> []string only
+// (Type-level), so []byte, other slices, and YAML sequences are untouched. This
+// lets a single env var express a multi-element list, e.g.
+// SCHEDULER_SECURITY_CIDRALLOWLIST=10.0.0.0/8,192.168.0.0/16.
+func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
+	return func(f reflect.Type, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String || t != reflect.TypeOf([]string(nil)) {
+			return data, nil
+		}
+		return splitAndTrimList(data.(string), sep), nil
 	}
 }
 
