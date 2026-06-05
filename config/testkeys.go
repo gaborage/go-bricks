@@ -13,8 +13,8 @@ const (
 	TestKeyCacheRedisHost  = "cache.redis.host"
 	TestKeyCacheRedisPort  = "cache.redis.port"
 	TestKeyCacheRedisDB    = "cache.redis.database"
-	TestKeyCacheManagerMax = "cache.manager.max_size"
-	TestKeyCacheManagerTTL = "cache.manager.idle_ttl"
+	TestKeyCacheManagerMax = "cache.manager.maxsize"
+	TestKeyCacheManagerTTL = "cache.manager.idlettl"
 
 	// Messaging Configuration Keys
 	TestKeyMessagingBrokerURL      = "messaging.broker.url"
