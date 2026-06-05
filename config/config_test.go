@@ -423,6 +423,27 @@ func TestLoadCustomConfiguration(t *testing.T) {
 	})
 }
 
+// TestEnvOverrideReachesRenamedKeys verifies that the flat-smushed config keys
+// are settable from environment variables. Underscored keys (the old snake_case
+// form) were unreachable because the env loader maps "_"->"." (koanf nesting).
+func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("OUTBOX_BATCHSIZE", "250")
+	t.Setenv("OUTBOX_AUTOCREATETABLE", "true")
+	t.Setenv("MESSAGING_RECONNECT_CONNECTIONTIMEOUT", "45s")
+	t.Setenv("KEYSTORE_SECRETMINLENGTH", "64")
+	t.Setenv("LOG_SENSITIVEFIELDS", "pan, cvv2 ,otp")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, 250, cfg.Outbox.BatchSize)
+	assert.True(t, cfg.Outbox.AutoCreateTable)
+	assert.Equal(t, 45*time.Second, cfg.Messaging.Reconnect.ConnectionTimeout)
+	assert.Equal(t, 64, cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)
+}
+
 // Helper function to clear environment variables that might affect tests
 func clearEnvironmentVariables() {
 	envVars := []string{
