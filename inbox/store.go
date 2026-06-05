@@ -33,7 +33,7 @@ type Store interface {
 	DeleteProcessed(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error)
 
 	// CreateTable creates the inbox table and its index if they do not exist.
-	// Used for auto-migration when inbox.auto_create_table is true.
+	// Used for auto-migration when inbox.autocreatetable is true.
 	CreateTable(ctx context.Context, db dbtypes.Interface) error
 }
 

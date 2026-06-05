@@ -35,19 +35,24 @@ func TestConfigKoanfTagsHaveNoUnderscore(t *testing.T) {
 		seen[rt] = true
 		for i := 0; i < rt.NumField(); i++ {
 			f := rt.Field(i)
-			tag := f.Tag.Get("koanf")
-			if tag == "" || tag == "-" {
+			name := strings.Split(f.Tag.Get("koanf"), ",")[0]
+			if name == "-" {
 				continue
 			}
-			name := strings.Split(tag, ",")[0]
-			key := name
-			if prefix != "" {
-				key = prefix + "." + name
+			// An untagged field (incl. anonymous/embedded structs) keeps the
+			// parent prefix so its tagged children are still reached and checked.
+			key := prefix
+			if name != "" {
+				if prefix != "" {
+					key = prefix + "." + name
+				} else {
+					key = name
+				}
+				if strings.Contains(name, "_") {
+					offenders = append(offenders, key)
+				}
 			}
-			if strings.Contains(name, "_") {
-				offenders = append(offenders, key)
-			}
-			// Recurse into nested config types; walk is a no-op for scalar leaf kinds.
+			// Recurse into every field type; walk is a no-op for scalar leaf kinds.
 			walk(f.Type, key)
 		}
 	}

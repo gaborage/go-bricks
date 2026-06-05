@@ -428,6 +428,7 @@ func TestLoadCustomConfiguration(t *testing.T) {
 // form) were unreachable because the env loader maps "_"->"." (koanf nesting).
 func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
 	t.Setenv("OUTBOX_BATCHSIZE", "250")
 	t.Setenv("OUTBOX_AUTOCREATETABLE", "true")
 	t.Setenv("MESSAGING_RECONNECT_CONNECTIONTIMEOUT", "45s")
