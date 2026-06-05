@@ -519,3 +519,11 @@ func TestToStringSlice(t *testing.T) {
 		})
 	}
 }
+
+func TestToStringSliceCopiesInputSlice(t *testing.T) {
+	in := []string{"a", "b"}
+	out, err := toStringSlice(in)
+	require.NoError(t, err)
+	out[0] = "mutated"
+	assert.Equal(t, "a", in[0], "toStringSlice must not alias the input slice")
+}

@@ -470,6 +470,9 @@ func validateScheduler(cfg *SchedulerConfig) error {
 // lists pass here and keep the existing middleware-time WARN so a single typo does not
 // crash startup, while an all-invalid security control fails fast instead of silently
 // degrading to a more restrictive (or, for redaction, weaker) posture.
+//
+// The parse loop intentionally mirrors scheduler/cidr_middleware.go's parser; config
+// cannot import scheduler (import cycle), so the few lines are duplicated rather than shared.
 func validateCIDRList(field string, list []string) error {
 	if len(list) == 0 {
 		return nil

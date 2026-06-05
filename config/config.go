@@ -122,7 +122,8 @@ func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
 		if f.Kind() != reflect.String || t != reflect.TypeOf([]string(nil)) {
 			return data, nil
 		}
-		return splitAndTrimList(data.(string), sep), nil
+		// reflect.Value.String() (not data.(string)) so named string types don't panic.
+		return splitAndTrimList(reflect.ValueOf(data).String(), sep), nil
 	}
 }
 

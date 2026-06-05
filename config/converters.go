@@ -49,7 +49,8 @@ func splitAndTrimList(raw, sep string) []string {
 func toStringSlice(value any) ([]string, error) {
 	switch v := value.(type) {
 	case []string:
-		return v, nil
+		// Defensive copy so the caller's field doesn't alias koanf's stored slice.
+		return append([]string(nil), v...), nil
 	case []any: // YAML sequence
 		out := make([]string, len(v))
 		for i, el := range v {
