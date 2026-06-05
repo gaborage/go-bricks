@@ -9,6 +9,10 @@ import (
 
 const tagValueTrue = "true"
 
+// actionSetEnvOrYAML is the remediation hint for missing/empty injected fields.
+// Format args: env var name, then the config key path.
+const actionSetEnvOrYAML = "set %s env var or add '%s' to config.yaml"
+
 // InjectInto populates a struct with configuration values based on struct tags.
 // It supports the following struct tags:
 //   - `config:"key.path"` - specifies the configuration key to use
@@ -112,7 +116,7 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 			Category: errCategoryMissing,
 			Field:    configKey,
 			Message:  errMessageRequired,
-			Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, configKey),
+			Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, configKey),
 		}
 	}
 
@@ -207,7 +211,7 @@ func (c *Config) assignStringSliceField(field reflect.Value, configKey string, r
 			Category: errCategoryMissing,
 			Field:    configKey,
 			Message:  errMessageRequired,
-			Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, configKey),
+			Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, configKey),
 		}
 	}
 	field.Set(reflect.ValueOf(slice))
@@ -226,7 +230,7 @@ func (c *Config) convertToString(value any, key string, required bool) (string, 
 				Category: errCategoryMissing,
 				Field:    key,
 				Message:  "cannot be empty",
-				Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, key),
+				Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, key),
 			}
 		}
 		return trimmed, nil
