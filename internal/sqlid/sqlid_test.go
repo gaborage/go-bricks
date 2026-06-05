@@ -38,6 +38,8 @@ func TestIndexBaseName(t *testing.T) {
 		{"events", "events"},
 		{"myschema.events", "events"},
 		{"MYSCHEMA.OUTBOX_EVENTS", "OUTBOX_EVENTS"},
+		{"", ""},
+		{"a.b.c", "c"}, // last segment, even for multi-dot input
 	}
 	for _, c := range cases {
 		if got := IndexBaseName(c.in); got != c.want {
