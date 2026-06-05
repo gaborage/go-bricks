@@ -203,7 +203,7 @@ func (m *Module) Init(deps *ModuleDeps) error {
 ```
 
 **Struct Tags:** `config:"key.path"` (required), `required:"true"`, `default:"value"`.
-**Supported Types:** string, int, int64, float64, bool, time.Duration.
+**Supported Types:** string, int, int64, float64, bool, time.Duration, `[]string` (comma-separated via env/`default`, native sequence via YAML).
 **Configuration Priority:** Environment variables > `config.<env>.yaml` > `config.yaml` > defaults.
 
 ### Enhanced Handler Pattern

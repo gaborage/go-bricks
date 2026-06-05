@@ -38,6 +38,17 @@ path affects **every** `[]string` field — all of which are security-relevant:
 | `debug.allowedips` | `DEBUG_ALLOWEDIPS` | debug-endpoint IP gate degraded |
 | `log.sensitive_fields` | `LOG_SENSITIVE_FIELDS` | one bogus field name matches nothing → **redaction silently weakened** (fail-open; PCI/PII leak) |
 
+> **Finding during implementation:** `log.sensitive_fields` has a *second, distinct* bug
+> that the comma-split fix cannot reach. The env `TransformFunc` rewrites every `_` to `.`,
+> so `LOG_SENSITIVE_FIELDS` becomes the koanf key `log.sensitive.fields`, which does **not**
+> match the field's key `log.sensitive_fields` (underscore *inside* a segment). The env var is
+> therefore dropped entirely — the value never reaches the field, split or not. This field is
+> documented as YAML-or-code only (never env), so this is an undocumented-path bug with a
+> separate root cause (env-key segment vs. nesting ambiguity) whose proper fix changes global
+> env-key resolution. **Tracked as a follow-up issue; out of scope here.** The comma-split fix
+> fully fixes the three env-mappable `[]string` fields (`cidrallowlist`, `trustedproxies`,
+> `allowedips`) plus the YAML and `InjectInto` paths for all `[]string` fields.
+
 There is a **second, independent path** with the same gap: `Config.InjectInto()`
 (service-specific config) reads `c.k.Get(key)` directly and **bypasses** koanf's `Unmarshal`,
 so any decode-hook fix does not reach it. It currently rejects `[]string` fields outright
@@ -293,6 +304,9 @@ All tests use camelCase function names; table cases use snake_case descriptions
 
 ## Out of scope
 
+- **`LOG_SENSITIVE_FIELDS` (and any underscore-in-segment key) env override** — the `_`→`.`
+  transform mismaps it to `log.sensitive.fields`. Separate root cause, global blast radius;
+  filed as a follow-up issue.
 - `debug.allowedips` fail-fast (mixed IP-or-CIDR rule; the comma-split fix covers its bug).
 - Deduping `scheduler/cidr_middleware.go` `parseCIDRAllowlist` / `parseTrustedProxies`.
 - Any `[]string` element that must itself contain a comma.
