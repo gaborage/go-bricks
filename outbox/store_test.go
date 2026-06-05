@@ -75,3 +75,14 @@ func TestNewOracleStoreInvalidTableName(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dangerous SQL")
 }
+
+func TestIndexBaseName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"gobricks_outbox", "gobricks_outbox"},
+		{"myschema.outbox_events", "outbox_events"},
+		{"MYSCHEMA.OUTBOX_EVENTS", "OUTBOX_EVENTS"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, indexBaseName(c.in), "indexBaseName(%q)", c.in)
+	}
+}

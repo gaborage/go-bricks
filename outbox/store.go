@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -17,6 +18,18 @@ func validateTableName(name string) error {
 		return fmt.Errorf("outbox: %w", err)
 	}
 	return nil
+}
+
+// indexBaseName returns the unqualified table name (the last dot-separated
+// segment), used to derive index names. An index name cannot itself be
+// schema-qualified, so a schema-qualified table like "myschema.outbox_events"
+// must derive its index names from "outbox_events" while the index still targets
+// the fully-qualified table in its ON clause.
+func indexBaseName(tableName string) string {
+	if i := strings.LastIndex(tableName, "."); i >= 0 {
+		return tableName[i+1:]
+	}
+	return tableName
 }
 
 // Record represents a single row in the outbox table.
