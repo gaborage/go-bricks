@@ -81,8 +81,8 @@ func (r *Relay) publishRecord(ctx scheduler.JobContext, db dbtypes.Interface, ms
 	if headers == nil {
 		headers = make(map[string]any)
 	}
-	headers["x-outbox-event-id"] = record.ID
-	headers["x-outbox-event-type"] = record.EventType
+	headers[HeaderEventID] = record.ID
+	headers[HeaderEventType] = record.EventType
 
 	// Rehydrate the originating trace context (persisted by Publish) into the
 	// publish context. The relay job runs detached with no ambient trace, so
