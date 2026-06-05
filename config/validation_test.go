@@ -3820,3 +3820,62 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	assert.ErrorContains(t, err, "scheduler config:")
 	assert.ErrorContains(t, err, "scheduler.timezone")
 }
+
+func TestValidateSchedulerCIDRListRejectsAllInvalid(t *testing.T) {
+	tests := []struct {
+		name      string
+		security  SchedulerSecurityConfig
+		wantField string
+	}{
+		{
+			name:      "allowlist_all_invalid",
+			security:  SchedulerSecurityConfig{CIDRAllowlist: []string{"not-a-cidr", "also-bad"}},
+			wantField: "scheduler.security.cidrallowlist",
+		},
+		{
+			name:      "trustedproxies_all_invalid",
+			security:  SchedulerSecurityConfig{TrustedProxies: []string{"garbage"}},
+			wantField: "scheduler.security.trustedproxies",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SchedulerConfig{Security: tt.security}
+			err := validateScheduler(cfg)
+			assertValidationError(t, err, tt.wantField)
+		})
+	}
+}
+
+func TestValidateSchedulerCIDRListAcceptsValidCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		security SchedulerSecurityConfig
+	}{
+		{name: "empty_lists", security: SchedulerSecurityConfig{}},
+		{name: "single_valid", security: SchedulerSecurityConfig{CIDRAllowlist: []string{"10.0.0.0/8"}}},
+		{name: "valid_multi", security: SchedulerSecurityConfig{CIDRAllowlist: []string{"10.0.0.0/8", "192.168.0.0/16"}}},
+		{name: "partial_invalid_keeps_valid", security: SchedulerSecurityConfig{CIDRAllowlist: []string{"10.0.0.0/8", "bad"}}},
+		{name: "valid_trustedproxies", security: SchedulerSecurityConfig{TrustedProxies: []string{"172.16.0.0/12"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SchedulerConfig{Security: tt.security}
+			require.NoError(t, validateScheduler(cfg))
+		})
+	}
+}
+
+// TestLoadFailsOnAllInvalidCIDRAllowlistEnv proves the env -> comma-split -> validate
+// chain: a multi-element env list of invalid CIDRs splits into several invalid entries,
+// which then fail startup instead of silently degrading to localhost-only.
+func TestLoadFailsOnAllInvalidCIDRAllowlistEnv(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("SCHEDULER_SECURITY_CIDRALLOWLIST", "bad1,bad2")
+	cfg, err := Load()
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "scheduler.security.cidrallowlist")
+}

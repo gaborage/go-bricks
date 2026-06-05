@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	envprovider "github.com/knadh/koanf/providers/env/v2"
@@ -54,7 +56,9 @@ func Load() (*Config, error) {
 
 	// Unmarshal into config struct
 	var cfg Config
-	if err := k.Unmarshal("", &cfg); err != nil {
+	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+		DecoderConfig: buildDecoderConfig(),
+	}); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
@@ -92,6 +96,35 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 		}
 	}
 	return nil
+}
+
+// buildDecoderConfig replicates koanf's default Unmarshal decoder
+// (knadh/koanf/v2 koanf.go:265-272) so we control the DecodeHook chain.
+// koanf fills in Result and TagName at unmarshal time.
+func buildDecoderConfig() *mapstructure.DecoderConfig {
+	return &mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToTrimmedSliceHookFunc(","),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc(),
+		),
+		WeaklyTypedInput: true,
+	}
+}
+
+// stringToTrimmedSliceHookFunc splits a scalar string into []string on sep,
+// trimming each element and dropping empties. Scoped to string -> []string only
+// (Type-level), so []byte, other slices, and YAML sequences are untouched. This
+// lets a single env var express a multi-element list, e.g.
+// SCHEDULER_SECURITY_CIDRALLOWLIST=10.0.0.0/8,192.168.0.0/16.
+func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
+	return func(f reflect.Type, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String || t != reflect.TypeOf([]string(nil)) {
+			return data, nil
+		}
+		// reflect.Value.String() (not data.(string)) so named string types don't panic.
+		return splitAndTrimList(reflect.ValueOf(data).String(), sep), nil
+	}
 }
 
 func loadDefaults(k *koanf.Koanf) error {

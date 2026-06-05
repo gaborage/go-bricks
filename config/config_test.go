@@ -109,6 +109,30 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, serverHost, cfg.Server.Host)
 }
 
+func TestLoadMultiElementStringSliceEnv(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("SCHEDULER_SECURITY_CIDRALLOWLIST", "10.0.0.0/8,192.168.0.0/16")
+	// Spaces around the delimiter exercise per-element trimming.
+	t.Setenv("SCHEDULER_SECURITY_TRUSTEDPROXIES", "10.0.0.0/8, 172.16.0.0/12 ,, 169.254.0.0/16")
+	t.Setenv("DEBUG_ALLOWEDIPS", "127.0.0.1,::1")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, cfg.Scheduler.Security.CIDRAllowlist)
+	// Trimmed, with the empty element between the doubled commas dropped.
+	assert.Equal(t, []string{"10.0.0.0/8", "172.16.0.0/12", "169.254.0.0/16"}, cfg.Scheduler.Security.TrustedProxies)
+	assert.Equal(t, []string{"127.0.0.1", "::1"}, cfg.Debug.AllowedIPs)
+}
+
+func TestLoadSingleElementStringSliceEnv(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("SCHEDULER_SECURITY_CIDRALLOWLIST", "10.0.0.0/8")
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.Scheduler.Security.CIDRAllowlist)
+}
+
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
 	baseEnv := map[string]string{
 		testDatabaseDatabase: "testdb",

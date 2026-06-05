@@ -410,3 +410,34 @@ func BenchmarkConfigInjectionComplex(b *testing.B) {
 		}
 	}
 }
+
+type sliceInjectConfig struct {
+	Hosts    []string `config:"svc.hosts"`
+	Defaults []string `config:"svc.defaults" default:"a,b,c"`
+	Required []string `config:"svc.required" required:"true"`
+}
+
+func TestConfigInjectionStringSliceFromEnv(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("SVC_HOSTS", "h1, h2 ,h3")
+	t.Setenv("SVC_REQUIRED", "r1")
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	var sc sliceInjectConfig
+	require.NoError(t, cfg.InjectInto(&sc))
+	assert.Equal(t, []string{"h1", "h2", "h3"}, sc.Hosts)
+	assert.Equal(t, []string{"a", "b", "c"}, sc.Defaults)
+	assert.Equal(t, []string{"r1"}, sc.Required)
+}
+
+func TestConfigInjectionStringSliceRequiredMissing(t *testing.T) {
+	clearEnvironmentVariables()
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	var sc sliceInjectConfig
+	err = cfg.InjectInto(&sc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "svc.required")
+}

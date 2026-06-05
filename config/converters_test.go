@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -490,4 +491,39 @@ func TestAdditionalEdgeCases(t *testing.T) {
 		// This tests the error path in toBool when toInt64 fails for uint types
 		assert.False(t, result) // Should return false on conversion error
 	})
+}
+
+func TestToStringSlice(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		want    []string
+		wantErr bool
+	}{
+		{name: "string_split_and_trim", input: "a, b ,c", want: []string{"a", "b", "c"}},
+		{name: "string_drops_empties", input: "a,,b,", want: []string{"a", "b"}},
+		{name: "empty_string", input: "", want: []string{}},
+		{name: "string_slice_passthrough", input: []string{"x", "y"}, want: []string{"x", "y"}},
+		{name: "any_slice_stringified", input: []any{"x", 2}, want: []string{"x", "2"}},
+		{name: "unsupported_type", input: 42, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toStringSlice(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestToStringSliceCopiesInputSlice(t *testing.T) {
+	in := []string{"a", "b"}
+	out, err := toStringSlice(in)
+	require.NoError(t, err)
+	out[0] = "mutated"
+	assert.Equal(t, "a", in[0], "toStringSlice must not alias the input slice")
 }

@@ -9,13 +9,18 @@ import (
 
 const tagValueTrue = "true"
 
+// actionSetEnvOrYAML is the remediation hint for missing/empty injected fields.
+// Format args: env var name, then the config key path.
+const actionSetEnvOrYAML = "set %s env var or add '%s' to config.yaml"
+
 // InjectInto populates a struct with configuration values based on struct tags.
 // It supports the following struct tags:
 //   - `config:"key.path"` - specifies the configuration key to use
 //   - `required:"true"` - marks the field as required (default: false)
 //   - `default:"value"` - provides a default value if the config key is missing
 //
-// Supported field types: string, int, int64, float64, bool, time.Duration
+// Supported field types: string, int, int64, float64, bool, time.Duration, []string
+// ([]string accepts a comma-separated string from env/default tags or a native YAML sequence)
 func (c *Config) InjectInto(target any) error {
 	if c == nil || c.k == nil {
 		return &ConfigError{
@@ -90,6 +95,12 @@ func (c *Config) setFieldValue(field reflect.Value, configKey string, required b
 		return nil
 	}
 
+	// []string is the one supported composite type; handle it before the kind
+	// switch so other slice element types still fall through to "unsupported".
+	if field.Type() == reflect.TypeOf([]string(nil)) {
+		return c.assignStringSliceField(field, configKey, required, value)
+	}
+
 	return c.assignFieldValue(field, configKey, required, value)
 }
 
@@ -105,7 +116,7 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 			Category: errCategoryMissing,
 			Field:    configKey,
 			Message:  errMessageRequired,
-			Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, configKey),
+			Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, configKey),
 		}
 	}
 
@@ -131,7 +142,7 @@ func (c *Config) assignFieldValue(field reflect.Value, configKey string, require
 			Category: errCategoryInvalid,
 			Field:    configKey,
 			Message:  fmt.Sprintf("unsupported type %s", field.Type()),
-			Action:   "use string, int, int64, float64, bool, or time.Duration",
+			Action:   "use string, int, int64, float64, bool, time.Duration, or []string",
 		}
 	}
 }
@@ -184,6 +195,29 @@ func (c *Config) assignBoolField(field reflect.Value, configKey string, value an
 	return nil
 }
 
+func (c *Config) assignStringSliceField(field reflect.Value, configKey string, required bool, value any) error {
+	slice, err := toStringSlice(value)
+	if err != nil {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    configKey,
+			Message:  fmt.Sprintf("'%v' is not a valid string list", value),
+			Action:   "provide a comma-separated string or a YAML sequence",
+		}
+	}
+	if required && len(slice) == 0 {
+		envVar := strings.ToUpper(strings.ReplaceAll(configKey, ".", "_"))
+		return &ConfigError{
+			Category: errCategoryMissing,
+			Field:    configKey,
+			Message:  errMessageRequired,
+			Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, configKey),
+		}
+	}
+	field.Set(reflect.ValueOf(slice))
+	return nil
+}
+
 // Helper conversion methods with better error messages
 
 func (c *Config) convertToString(value any, key string, required bool) (string, error) {
@@ -196,7 +230,7 @@ func (c *Config) convertToString(value any, key string, required bool) (string, 
 				Category: errCategoryMissing,
 				Field:    key,
 				Message:  "cannot be empty",
-				Action:   fmt.Sprintf("set %s env var or add '%s' to config.yaml", envVar, key),
+				Action:   fmt.Sprintf(actionSetEnvOrYAML, envVar, key),
 			}
 		}
 		return trimmed, nil

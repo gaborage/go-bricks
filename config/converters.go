@@ -26,6 +26,44 @@ var (
 	errEmptyString = errors.New("empty string")
 )
 
+// splitAndTrimList splits raw on sep, trims each element, and drops empties.
+// Single source of truth for env/default string -> []string semantics, shared by
+// the config Unmarshal decode hook and InjectInto.
+func splitAndTrimList(raw, sep string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// toStringSlice converts a resolved config value to []string. Reuses
+// splitAndTrimList for the string case so InjectInto matches the Unmarshal
+// decode-hook semantics (comma-separated env/default string, YAML sequence).
+func toStringSlice(value any) ([]string, error) {
+	switch v := value.(type) {
+	case []string:
+		// Defensive copy so the caller's field doesn't alias koanf's stored slice.
+		return append([]string(nil), v...), nil
+	case []any: // YAML sequence
+		out := make([]string, len(v))
+		for i, el := range v {
+			out[i] = fmt.Sprintf("%v", el)
+		}
+		return out, nil
+	case string:
+		return splitAndTrimList(v, ","), nil
+	default:
+		return nil, fmt.Errorf(errMsgUnsupportedType, value)
+	}
+}
+
 // toInt converts various types to int with overflow protection.
 func toInt(value any) (int, error) {
 	n, err := toInt64(value)
