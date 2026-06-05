@@ -328,15 +328,13 @@ Request structs use tags for binding/validation (`path`, `query`, `header`, `val
 ### Routing Configuration
 ```yaml
 server:
-  base:
-    path: "/api/v1"    # All routes prefixed
-  health:
-    route: "/health"   # Liveness endpoint
-  ready:
-    route: "/ready"    # Readiness endpoint
+  path:
+    base: "/api/v1"     # All routes prefixed
+    health: "/health"   # Liveness endpoint
+    ready: "/ready"     # Readiness endpoint
 ```
 
-Override with environment variables: `SERVER_BASE_PATH`, `SERVER_HEALTH_ROUTE`, `SERVER_READY_ROUTE`.
+Override with environment variables: `SERVER_PATH_BASE`, `SERVER_PATH_HEALTH`, `SERVER_PATH_READY`.
 
 ---
 
