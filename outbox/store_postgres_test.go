@@ -243,5 +243,23 @@ func TestPostgresStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
 	assert.Contains(t, err.Error(), "create published index failed")
 }
 
+func TestPostgresStoreCreateTableSchemaQualified(t *testing.T) {
+	store, err := NewPostgresStore("myschema.outbox_events")
+	require.NoError(t, err)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	// Index NAMES derive from the last segment ("outbox_events"); a dotted index
+	// name like "idx_myschema.outbox_events_pending" is invalid SQL.
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS myschema.outbox_events`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_outbox_events_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_outbox_events_published`).WillReturnRowsAffected(0)
+
+	require.NoError(t, store.CreateTable(t.Context(), db))
+	// Both index ON clauses must reference the full schema-qualified name.
+	execs := db.ExecLog()
+	require.Len(t, execs, 3) // table, pending index, published index
+	assert.Contains(t, execs[1].SQL, "ON myschema.outbox_events", "pending index must target the qualified table")
+	assert.Contains(t, execs[2].SQL, "ON myschema.outbox_events", "published index must target the qualified table")
+}
+
 // Compile-time guard: ensure postgresStore satisfies the Store interface.
 var _ Store = (*postgresStore)(nil)

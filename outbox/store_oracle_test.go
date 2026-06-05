@@ -185,6 +185,23 @@ func TestOracleStoreCreateTableSuccess(t *testing.T) {
 	require.NoError(t, store.CreateTable(t.Context(), db))
 }
 
+func TestOracleStoreCreateTableSchemaQualified(t *testing.T) {
+	store, err := NewOracleStore("MYSCHEMA.OUTBOX_EVENTS")
+	require.NoError(t, err)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	// Index NAMES derive from the last segment; a dotted index name is invalid SQL.
+	db.ExpectExec(`CREATE TABLE MYSCHEMA.OUTBOX_EVENTS`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_OUTBOX_EVENTS_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_OUTBOX_EVENTS_published`).WillReturnRowsAffected(0)
+
+	require.NoError(t, store.CreateTable(t.Context(), db))
+	// Both index ON clauses must reference the full schema-qualified name.
+	execs := db.ExecLog()
+	require.Len(t, execs, 3) // table, pending index, published index
+	assert.Contains(t, execs[1].SQL, "ON MYSCHEMA.OUTBOX_EVENTS", "pending index must target the qualified table")
+	assert.Contains(t, execs[2].SQL, "ON MYSCHEMA.OUTBOX_EVENTS", "published index must target the qualified table")
+}
+
 func TestOracleStoreCreateTableErrorOnTable(t *testing.T) {
 	store := newOracleTestStore(t)
 	db := dbtesting.NewTestDB(dbtypes.Oracle)
