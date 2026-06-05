@@ -118,6 +118,7 @@ GoBricks applies production-safe cache manager defaults when cache is configured
 | `manager.cleanupinterval` | 5m | Frequency of idle cache cleanup |
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 cache:
   manager:

@@ -69,6 +69,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retentionperiod`
 
 **Configuration:**
+
 ```yaml
 outbox:
   enabled: true
@@ -130,6 +131,7 @@ GoBricks applies production-safe outbox defaults when outbox is enabled:
 | `outbox.retentionperiod` | `72h` | Published event retention |
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 outbox:
   enabled: true

@@ -189,6 +189,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `publisher.idlettl` | 10m | TTL for idle publisher channels |
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 messaging:
   reconnect:
