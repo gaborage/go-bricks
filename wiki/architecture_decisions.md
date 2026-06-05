@@ -241,6 +241,17 @@ the absence of any timezone knob for scheduled jobs and removes the vestigial
 `ScheduleConfiguration.Timezone` field. Breaking: an unset zone now means UTC
 instead of host-local.
 
+### [ADR-024: Flat-Smushed Config Keys (Underscore-Free for Env Reachability)](adr_024_config_key_flatsmush.md)
+
+Renames 21 snake_case koanf leaf keys (e.g. `log.sensitive_fields`,
+`keystore.secret_min_length`, `outbox.batch_size`) to the framework's
+flat-smushed convention (`log.sensitivefields`, …). The env loader maps `_`→`.`
+(koanf nesting), so underscored leaf keys were silently unreachable from
+environment variables — the value landed at an orphan path and the default won.
+Only struct tags change; Go field names are unchanged. A `Config`-tree reflection
+test enforces underscore-free koanf tags so the bug class cannot recur. Breaking:
+old snake_case YAML/env keys fall back to defaults.
+
 ---
 
 ## ADR Lifecycle
@@ -252,7 +263,7 @@ instead of host-local.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-023) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-024) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
