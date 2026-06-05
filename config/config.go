@@ -195,7 +195,7 @@ func loadDefaults(k *koanf.Koanf) error {
 
 		// KeyStore defaults — symmetric secret floor (32 bytes). Set to 0 to
 		// disable the minimum-length check explicitly.
-		"keystore.secret_min_length": 32,
+		"keystore.secretminlength": 32,
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

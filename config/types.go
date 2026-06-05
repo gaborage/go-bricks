@@ -256,15 +256,15 @@ type CacheManagerConfig struct {
 	// MaxSize is the maximum number of active cache instances.
 	// 0 = use default (100); negative values are invalid.
 	// Set higher for applications with many tenants.
-	MaxSize int `koanf:"max_size" json:"max_size" yaml:"max_size" toml:"max_size" mapstructure:"max_size"`
+	MaxSize int `koanf:"maxsize" json:"maxsize" yaml:"maxsize" toml:"maxsize" mapstructure:"maxsize"`
 
 	// IdleTTL is the idle timeout before cache instances are closed.
 	// Default: 15m. Set lower for memory-constrained environments.
-	IdleTTL time.Duration `koanf:"idle_ttl" json:"idle_ttl" yaml:"idle_ttl" toml:"idle_ttl" mapstructure:"idle_ttl"`
+	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
 
 	// CleanupInterval is how often the cleanup goroutine runs.
 	// Default: 5m. Should be less than IdleTTL for effective cleanup.
-	CleanupInterval time.Duration `koanf:"cleanup_interval" json:"cleanup_interval" yaml:"cleanup_interval" toml:"cleanup_interval" mapstructure:"cleanup_interval"`
+	CleanupInterval time.Duration `koanf:"cleanupinterval" json:"cleanupinterval" yaml:"cleanupinterval" toml:"cleanupinterval" mapstructure:"cleanupinterval"`
 }
 
 // RedisConfig holds Redis-specific cache settings.
@@ -296,7 +296,7 @@ type LogConfig struct {
 	// Go code. For full control over the FilterConfig (e.g., custom MaskValue
 	// or opting out of defaults), set app.Options.LoggerFilterConfig instead;
 	// that field takes precedence over this one.
-	SensitiveFields []string `koanf:"sensitive_fields" json:"sensitive_fields" yaml:"sensitive_fields" toml:"sensitive_fields" mapstructure:"sensitive_fields"`
+	SensitiveFields []string `koanf:"sensitivefields" json:"sensitivefields" yaml:"sensitivefields" toml:"sensitivefields" mapstructure:"sensitivefields"`
 }
 
 // OutputConfig holds log output settings.
@@ -339,19 +339,19 @@ type ReconnectConfig struct {
 
 	// ReinitDelay is the delay before channel reinitialization after failure.
 	// Default: 2s.
-	ReinitDelay time.Duration `koanf:"reinit_delay" json:"reinit_delay" yaml:"reinit_delay" toml:"reinit_delay" mapstructure:"reinit_delay"`
+	ReinitDelay time.Duration `koanf:"reinitdelay" json:"reinitdelay" yaml:"reinitdelay" toml:"reinitdelay" mapstructure:"reinitdelay"`
 
 	// ResendDelay is the delay before retrying a failed publish operation.
 	// Default: 5s.
-	ResendDelay time.Duration `koanf:"resend_delay" json:"resend_delay" yaml:"resend_delay" toml:"resend_delay" mapstructure:"resend_delay"`
+	ResendDelay time.Duration `koanf:"resenddelay" json:"resenddelay" yaml:"resenddelay" toml:"resenddelay" mapstructure:"resenddelay"`
 
 	// ConnectionTimeout is the timeout for connection establishment and publish confirmation.
 	// Default: 30s. Set higher for high-latency networks.
-	ConnectionTimeout time.Duration `koanf:"connection_timeout" json:"connection_timeout" yaml:"connection_timeout" toml:"connection_timeout" mapstructure:"connection_timeout"`
+	ConnectionTimeout time.Duration `koanf:"connectiontimeout" json:"connectiontimeout" yaml:"connectiontimeout" toml:"connectiontimeout" mapstructure:"connectiontimeout"`
 
 	// MaxDelay is the maximum delay for exponential backoff during reconnection.
 	// Default: 60s. Prevents unbounded delays during prolonged outages.
-	MaxDelay time.Duration `koanf:"max_delay" json:"max_delay" yaml:"max_delay" toml:"max_delay" mapstructure:"max_delay"`
+	MaxDelay time.Duration `koanf:"maxdelay" json:"maxdelay" yaml:"maxdelay" toml:"maxdelay" mapstructure:"maxdelay"`
 }
 
 // PublisherPoolConfig holds publisher cache/pool settings.
@@ -361,11 +361,11 @@ type ReconnectConfig struct {
 type PublisherPoolConfig struct {
 	// MaxCached is the maximum number of publisher clients to keep in the cache.
 	// Default: 50. Set higher for applications with many tenants.
-	MaxCached int `koanf:"max_cached" json:"max_cached" yaml:"max_cached" toml:"max_cached" mapstructure:"max_cached"`
+	MaxCached int `koanf:"maxcached" json:"maxcached" yaml:"maxcached" toml:"maxcached" mapstructure:"maxcached"`
 
 	// IdleTTL is the time after which idle publisher clients are evicted.
 	// Default: 10m. Set lower for memory-constrained environments.
-	IdleTTL time.Duration `koanf:"idle_ttl" json:"idle_ttl" yaml:"idle_ttl" toml:"idle_ttl" mapstructure:"idle_ttl"`
+	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
 }
 
 // BrokerConfig holds message broker connection settings.
@@ -477,34 +477,34 @@ type OutboxConfig struct {
 
 	// TableName is the outbox table name in the database.
 	// Default: "gobricks_outbox".
-	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
+	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
 
 	// AutoCreateTable creates the outbox table on first use if it doesn't exist.
 	// Default: false (opt-in). Set true to auto-create (e.g. in development); leave
 	// false in production with managed migrations.
-	AutoCreateTable bool `koanf:"auto_create_table" json:"auto_create_table" yaml:"auto_create_table" toml:"auto_create_table" mapstructure:"auto_create_table"`
+	AutoCreateTable bool `koanf:"autocreatetable" json:"autocreatetable" yaml:"autocreatetable" toml:"autocreatetable" mapstructure:"autocreatetable"`
 
 	// DefaultExchange is the fallback AMQP exchange when Event.Exchange is empty.
 	// Default: "" (empty, which publishes to the default exchange).
-	DefaultExchange string `koanf:"default_exchange" json:"default_exchange" yaml:"default_exchange" toml:"default_exchange" mapstructure:"default_exchange"`
+	DefaultExchange string `koanf:"defaultexchange" json:"defaultexchange" yaml:"defaultexchange" toml:"defaultexchange" mapstructure:"defaultexchange"`
 
 	// PollInterval is how often the relay checks for pending events.
 	// Default: 5s. Lower values reduce latency but increase database load.
-	PollInterval time.Duration `koanf:"poll_interval" json:"poll_interval" yaml:"poll_interval" toml:"poll_interval" mapstructure:"poll_interval"`
+	PollInterval time.Duration `koanf:"pollinterval" json:"pollinterval" yaml:"pollinterval" toml:"pollinterval" mapstructure:"pollinterval"`
 
 	// BatchSize is the maximum number of events processed per relay cycle.
 	// Default: 100. Higher values improve throughput but increase memory usage.
-	BatchSize int `koanf:"batch_size" json:"batch_size" yaml:"batch_size" toml:"batch_size" mapstructure:"batch_size"`
+	BatchSize int `koanf:"batchsize" json:"batchsize" yaml:"batchsize" toml:"batchsize" mapstructure:"batchsize"`
 
 	// MaxRetries is the maximum number of publish attempts before giving up.
 	// Events exceeding this count remain in the table with status "pending" but are skipped by the relay.
 	// Default: 5.
-	MaxRetries int `koanf:"max_retries" json:"max_retries" yaml:"max_retries" toml:"max_retries" mapstructure:"max_retries"`
+	MaxRetries int `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
 
 	// RetentionPeriod is how long published events are kept before cleanup.
 	// Set to 0 to disable automatic cleanup.
 	// Default: 72h.
-	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
+	RetentionPeriod time.Duration `koanf:"retentionperiod" json:"retentionperiod" yaml:"retentionperiod" toml:"retentionperiod" mapstructure:"retentionperiod"`
 }
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.
@@ -523,18 +523,18 @@ type InboxConfig struct {
 	// TableName is the inbox ledger table name in the database.
 	// Default: "gobricks_inbox". Must be unqualified (no schema prefix) because the
 	// Oracle store derives a primary-key constraint name from it.
-	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
+	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
 
 	// AutoCreateTable creates the inbox table on first use if it doesn't exist.
 	// Default: false (opt-in). Set true to auto-create (e.g. in development); leave
 	// false in production with managed migrations.
-	AutoCreateTable bool `koanf:"auto_create_table" json:"auto_create_table" yaml:"auto_create_table" toml:"auto_create_table" mapstructure:"auto_create_table"`
+	AutoCreateTable bool `koanf:"autocreatetable" json:"autocreatetable" yaml:"autocreatetable" toml:"autocreatetable" mapstructure:"autocreatetable"`
 
 	// RetentionPeriod is how long processed-event records are kept before cleanup.
 	// It MUST exceed the broker's maximum redelivery window, or a late redelivery
 	// could be reprocessed. A zero value is treated as unset and replaced by the
 	// default; increase it to retain longer. Default: 168h (7 days).
-	RetentionPeriod time.Duration `koanf:"retention_period" json:"retention_period" yaml:"retention_period" toml:"retention_period" mapstructure:"retention_period"`
+	RetentionPeriod time.Duration `koanf:"retentionperiod" json:"retentionperiod" yaml:"retentionperiod" toml:"retentionperiod" mapstructure:"retentionperiod"`
 }
 
 // SchedulerConfig holds job scheduler settings.
@@ -586,7 +586,7 @@ type KeyStoreConfig struct {
 	// entries at startup. The default (32) is applied via loadDefaults; an
 	// explicit 0 disables the check (opt-out for callers with a deliberate
 	// reason to allow shorter keys). Negative values are rejected at validation.
-	SecretMinLength int `koanf:"secret_min_length" json:"secret_min_length" yaml:"secret_min_length" toml:"secret_min_length" mapstructure:"secret_min_length"`
+	SecretMinLength int `koanf:"secretminlength" json:"secretminlength" yaml:"secretminlength" toml:"secretminlength" mapstructure:"secretminlength"`
 }
 
 // KeyPairConfig holds key material for one logical name. An entry is either an
