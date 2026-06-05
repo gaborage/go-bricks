@@ -1973,6 +1973,46 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 			},
 			errorContains: "messaging.publisher.maxcached",
 		},
+		{
+			name: "negative_reinit_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ReinitDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.reinitdelay",
+		},
+		{
+			name: "negative_resend_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ResendDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.resenddelay",
+		},
+		{
+			name: "negative_connection_timeout_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ConnectionTimeout: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.connectiontimeout",
+		},
+		{
+			name: "negative_max_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{MaxDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.maxdelay",
+		},
+		{
+			name: "negative_publisher_idle_ttl_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Publisher: PublisherPoolConfig{IdleTTL: -1 * time.Second},
+			},
+			errorContains: "messaging.publisher.idlettl",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2070,6 +2110,16 @@ func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
 				Manager: CacheManagerConfig{IdleTTL: -1 * time.Minute},
 			},
 			errorContains: "cache.manager.idlettl",
+		},
+		{
+			name: "negative_cleanup_interval_rejected",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{CleanupInterval: -1 * time.Minute},
+			},
+			errorContains: "cache.manager.cleanupinterval",
 		},
 	}
 
