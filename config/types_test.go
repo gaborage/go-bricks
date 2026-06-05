@@ -47,10 +47,8 @@ func TestConfigKoanfTagsHaveNoUnderscore(t *testing.T) {
 			if strings.Contains(name, "_") {
 				offenders = append(offenders, key)
 			}
-			switch f.Type.Kind() {
-			case reflect.Struct, reflect.Pointer, reflect.Map, reflect.Slice:
-				walk(f.Type, key)
-			}
+			// Recurse into nested config types; walk is a no-op for scalar leaf kinds.
+			walk(f.Type, key)
 		}
 	}
 
