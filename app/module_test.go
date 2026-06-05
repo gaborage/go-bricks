@@ -106,6 +106,18 @@ func TestModuleRegistryWiresInboxProvider(t *testing.T) {
 	assert.NotNil(t, deps.Inbox, "an InboxProvider module should wire deps.Inbox")
 }
 
+func TestModuleRegistryRegisterNonInboxModule(t *testing.T) {
+	deps := &ModuleDeps{Logger: logger.New("info", false)}
+	registry := NewModuleRegistry(deps)
+
+	module := &MockModule{name: testModule}
+	module.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(module))
+
+	assert.Nil(t, deps.Inbox, "a non-InboxProvider module must not wire deps.Inbox")
+	module.AssertExpectations(t)
+}
+
 func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
 	mockDB := &testmocks.MockDatabase{}
