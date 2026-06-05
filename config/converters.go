@@ -43,6 +43,26 @@ func splitAndTrimList(raw, sep string) []string {
 	return out
 }
 
+// toStringSlice converts a resolved config value to []string. Reuses
+// splitAndTrimList for the string case so InjectInto matches the Unmarshal
+// decode-hook semantics (comma-separated env/default string, YAML sequence).
+func toStringSlice(value any) ([]string, error) {
+	switch v := value.(type) {
+	case []string:
+		return v, nil
+	case []any: // YAML sequence
+		out := make([]string, len(v))
+		for i, el := range v {
+			out[i] = fmt.Sprintf("%v", el)
+		}
+		return out, nil
+	case string:
+		return splitAndTrimList(v, ","), nil
+	default:
+		return nil, fmt.Errorf(errMsgUnsupportedType, value)
+	}
+}
+
 // toInt converts various types to int with overflow protection.
 func toInt(value any) (int, error) {
 	n, err := toInt64(value)
