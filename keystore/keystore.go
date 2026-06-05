@@ -13,7 +13,7 @@
 // Keys are configured in YAML under the "keystore" section:
 //
 //	keystore:
-//	  secret_min_length: 32                        # default 32; 0 disables
+//	  secretminlength: 32                        # default 32; 0 disables
 //	  keys:
 //	    signing:
 //	      public:

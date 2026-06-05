@@ -593,42 +593,42 @@ func applyMessagingDefaults(cfg *MessagingConfig) error {
 	if cfg.Reconnect.ReinitDelay == 0 {
 		cfg.Reconnect.ReinitDelay = defaultReinitDelay
 	} else if cfg.Reconnect.ReinitDelay < 0 {
-		return NewValidationError("messaging.reconnect.reinit_delay", errMustBeNonNegative)
+		return NewValidationError("messaging.reconnect.reinitdelay", errMustBeNonNegative)
 	}
 
 	// Reconnect.ResendDelay
 	if cfg.Reconnect.ResendDelay == 0 {
 		cfg.Reconnect.ResendDelay = defaultResendDelay
 	} else if cfg.Reconnect.ResendDelay < 0 {
-		return NewValidationError("messaging.reconnect.resend_delay", errMustBeNonNegative)
+		return NewValidationError("messaging.reconnect.resenddelay", errMustBeNonNegative)
 	}
 
 	// Reconnect.ConnectionTimeout
 	if cfg.Reconnect.ConnectionTimeout == 0 {
 		cfg.Reconnect.ConnectionTimeout = defaultConnectionTimeout
 	} else if cfg.Reconnect.ConnectionTimeout < 0 {
-		return NewValidationError("messaging.reconnect.connection_timeout", errMustBeNonNegative)
+		return NewValidationError("messaging.reconnect.connectiontimeout", errMustBeNonNegative)
 	}
 
 	// Reconnect.MaxDelay
 	if cfg.Reconnect.MaxDelay == 0 {
 		cfg.Reconnect.MaxDelay = defaultMaxReconnectDelay
 	} else if cfg.Reconnect.MaxDelay < 0 {
-		return NewValidationError("messaging.reconnect.max_delay", errMustBeNonNegative)
+		return NewValidationError("messaging.reconnect.maxdelay", errMustBeNonNegative)
 	}
 
 	// Publisher.MaxCached
 	if cfg.Publisher.MaxCached == 0 {
 		cfg.Publisher.MaxCached = defaultMaxPublishers
 	} else if cfg.Publisher.MaxCached < 0 {
-		return NewValidationError("messaging.publisher.max_cached", errMustBeNonNegative)
+		return NewValidationError("messaging.publisher.maxcached", errMustBeNonNegative)
 	}
 
 	// Publisher.IdleTTL
 	if cfg.Publisher.IdleTTL == 0 {
 		cfg.Publisher.IdleTTL = defaultPublisherIdleTTL
 	} else if cfg.Publisher.IdleTTL < 0 {
-		return NewValidationError("messaging.publisher.idle_ttl", errMustBeNonNegative)
+		return NewValidationError("messaging.publisher.idlettl", errMustBeNonNegative)
 	}
 
 	return nil
@@ -647,21 +647,21 @@ func applyCacheManagerDefaults(cfg *CacheConfig) error {
 	if cfg.Manager.MaxSize == 0 {
 		cfg.Manager.MaxSize = defaultCacheMaxSize
 	} else if cfg.Manager.MaxSize < 0 {
-		return NewValidationError("cache.manager.max_size", errMustBeNonNegative)
+		return NewValidationError("cache.manager.maxsize", errMustBeNonNegative)
 	}
 
 	// Manager.IdleTTL
 	if cfg.Manager.IdleTTL == 0 {
 		cfg.Manager.IdleTTL = defaultCacheIdleTTL
 	} else if cfg.Manager.IdleTTL < 0 {
-		return NewValidationError("cache.manager.idle_ttl", errMustBeNonNegative)
+		return NewValidationError("cache.manager.idlettl", errMustBeNonNegative)
 	}
 
 	// Manager.CleanupInterval
 	if cfg.Manager.CleanupInterval == 0 {
 		cfg.Manager.CleanupInterval = defaultCacheCleanupInterval
 	} else if cfg.Manager.CleanupInterval < 0 {
-		return NewValidationError("cache.manager.cleanup_interval", errMustBeNonNegative)
+		return NewValidationError("cache.manager.cleanupinterval", errMustBeNonNegative)
 	}
 
 	return nil
@@ -804,7 +804,7 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 // symmetric secret — a mixed entry is rejected.
 func validateKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength < 0 {
-		return NewValidationError("keystore.secret_min_length", errMustBeNonNegative)
+		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
 	}
 
 	if len(cfg.Keys) == 0 {

@@ -29,7 +29,7 @@ func TestValidateConfig(t *testing.T) {
 
 	err := validateConfig(&config.InboxConfig{TableName: "gobricks_inbox", RetentionPeriod: -time.Hour})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "retention_period must not be negative")
+	assert.Contains(t, err.Error(), "retentionperiod must not be negative")
 
 	err = validateConfig(&config.InboxConfig{TableName: "schema.inbox", RetentionPeriod: time.Hour})
 	require.Error(t, err, "qualified table name rejected")
