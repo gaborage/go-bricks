@@ -62,23 +62,23 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 **How It Works:**
 1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction
-2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `poll_interval`
+2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
 3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
 4. Successfully published events are marked as `published`
-5. Failed events are retried up to `max_retries` times
-6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retention_period`
+5. Failed events are retried up to `maxretries` times
+6. The **cleanup job** (`outbox-cleanup`) removes published events older than `retentionperiod`
 
 **Configuration:**
 ```yaml
 outbox:
   enabled: true
-  table_name: gobricks_outbox       # Default table name
-  auto_create_table: true           # Create table on first use
-  default_exchange: ""              # Fallback if Event.Exchange empty
-  poll_interval: 5s                 # Relay poll frequency
-  batch_size: 100                   # Events per relay cycle
-  max_retries: 5                    # Max attempts before giving up
-  retention_period: 72h             # Keep published events (0=disable cleanup)
+  tablename: gobricks_outbox       # Default table name
+  autocreatetable: true           # Create table on first use
+  defaultexchange: ""              # Fallback if Event.Exchange empty
+  pollinterval: 5s                 # Relay poll frequency
+  batchsize: 100                   # Events per relay cycle
+  maxretries: 5                    # Max attempts before giving up
+  retentionperiod: 72h             # Keep published events (0=disable cleanup)
 ```
 
 **Event Struct:**
@@ -89,7 +89,7 @@ outbox:
 | `AggregateID` | string | Yes | Entity identifier for idempotency (e.g., "order-123") |
 | `Payload` | any | Yes | `[]byte` stored as-is, otherwise JSON-marshaled |
 | `Headers` | map[string]any | No | Custom AMQP headers propagated to published message |
-| `Exchange` | string | No | Target AMQP exchange (falls back to `default_exchange` config) |
+| `Exchange` | string | No | Target AMQP exchange (falls back to `defaultexchange` config) |
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |
 
 ## Trace Propagation
@@ -122,18 +122,18 @@ GoBricks applies production-safe outbox defaults when outbox is enabled:
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| `outbox.table_name` | `gobricks_outbox` | Outbox table name |
-| `outbox.auto_create_table` | `true` | Auto-create table on first use |
-| `outbox.poll_interval` | `5s` | Relay poll frequency |
-| `outbox.batch_size` | `100` | Events per relay cycle |
-| `outbox.max_retries` | `5` | Max publish attempts |
-| `outbox.retention_period` | `72h` | Published event retention |
+| `outbox.tablename` | `gobricks_outbox` | Outbox table name |
+| `outbox.autocreatetable` | `false` | Auto-create table on first use (opt-in) |
+| `outbox.pollinterval` | `5s` | Relay poll frequency |
+| `outbox.batchsize` | `100` | Events per relay cycle |
+| `outbox.maxretries` | `5` | Max publish attempts |
+| `outbox.retentionperiod` | `72h` | Published event retention |
 
 **Override defaults** in `config.yaml`:
 ```yaml
 outbox:
   enabled: true
-  poll_interval: 2s           # Lower latency
-  batch_size: 200             # Higher throughput
-  retention_period: 168h      # 7-day retention
+  pollinterval: 2s           # Lower latency
+  batchsize: 200             # Higher throughput
+  retentionperiod: 168h      # 7-day retention
 ```

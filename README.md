@@ -544,9 +544,9 @@ cache:
   enabled: true
   type: redis
   manager:
-    max_size: 100              # Max tenant cache instances (LRU-evicted)
-    idle_ttl: 15m              # Close caches idle longer than this
-    cleanup_interval: 5m       # How often the cleanup goroutine runs
+    maxsize: 100              # Max tenant cache instances (LRU-evicted)
+    idlettl: 15m              # Close caches idle longer than this
+    cleanupinterval: 5m       # How often the cleanup goroutine runs
   redis:
     host: localhost
     port: 6379
@@ -658,7 +658,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 }
 ```
 
-The relay job polls for pending events every `poll_interval` (default 5s), publishes them to AMQP with an `x-outbox-event-id` header for deduplication, and a cleanup job removes published events after `retention_period` (default 72h). See [CLAUDE.md](CLAUDE.md) for full configuration options.
+The relay job polls for pending events every `pollinterval` (default 5s), publishes them to AMQP with an `x-outbox-event-id` header for deduplication, and a cleanup job removes published events after `retentionperiod` (default 72h). See [CLAUDE.md](CLAUDE.md) for full configuration options.
 
 ---
 

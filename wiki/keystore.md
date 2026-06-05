@@ -23,7 +23,7 @@ once at startup and held read-only in memory.
 
 ```yaml
 keystore:
-  secret_min_length: 32          # default 32; explicit 0 disables the floor
+  secretminlength: 32          # default 32; explicit 0 disables the floor
   keys:
     signing:                     # RSA pair (public required, private optional)
       public:
@@ -52,7 +52,7 @@ a clear `ConfigError`.
 
 ### Minimum-length floor
 
-`keystore.secret_min_length` (default **32**) is the byte floor enforced for
+`keystore.secretminlength` (default **32**) is the byte floor enforced for
 every symmetric secret after decoding. It is a defensive control against
 silently weak HMAC/HKDF keys. Set it to an explicit `0` to opt out (documented,
 deliberate); negative values are rejected at config validation.
@@ -138,7 +138,7 @@ the real store so tests exercise the same ownership contract.
   the logical name, key type, and file path only; the framework logger's
   `SensitiveDataFilter` covers any incidental log lines.
 - The minimum-length floor is on by default — keep it on for HMAC/HKDF keys;
-  only disable it (`secret_min_length: 0`) with a deliberate, documented reason.
+  only disable it (`secretminlength: 0`) with a deliberate, documented reason.
 - Derivation (HKDF expansion, etc.) is left to the consumer — the keystore
   intentionally exposes raw material rather than a built-in derive helper
   (smallest viable surface; can layer on later if demand appears).

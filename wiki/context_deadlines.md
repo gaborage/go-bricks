@@ -15,12 +15,12 @@ Every operation that crosses an external boundary already has a configured timeo
 | HTTP server graceful shutdown | `server.timeout.shutdown` | 10s | Drain inflight requests on SIGTERM |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s | Per-request timeout on the underlying `http.Client` |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s | Per-operation socket timeouts |
-| AMQP connection establishment | `messaging.reconnect.connection_timeout` | 30s | Includes publish confirmation |
+| AMQP connection establishment | `messaging.reconnect.connectiontimeout` | 30s | Includes publish confirmation |
 | Scheduler — slow job warning | `scheduler.timeout.slowjob` | 25s | Logs WARN if a job exceeds this; does not cancel |
 | Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC |
 
-**Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idle_ttl`), [messaging.md](messaging.md) (`reconnect.max_delay`, `publisher.idle_ttl`), [outbox.md](outbox.md), and [startup_defaults.md](startup_defaults.md).
+**Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idlettl`), [messaging.md](messaging.md) (`reconnect.maxdelay`, `publisher.idlettl`), [outbox.md](outbox.md), and [startup_defaults.md](startup_defaults.md).
 
 ## The default pattern: do nothing
 

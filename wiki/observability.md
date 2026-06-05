@@ -70,7 +70,7 @@ For regulated payloads — PCI-DSS (PAN, CVV2), PII (SSN, account numbers), one-
 ```yaml
 log:
   level: info
-  sensitive_fields:                     # NEW: appended to DefaultFilterConfig
+  sensitivefields:                     # NEW: appended to DefaultFilterConfig
     - pan                               # masks "pan", "PAN", "card_pan"
     - primary_account_number            # masks the long-form variant too
     - cvv
@@ -119,7 +119,7 @@ fw, err = app.NewWithOptions(&app.Options{
 })
 ```
 
-**Precedence** when both are set: `Options.LoggerFilterConfig` wins. The YAML `log.sensitive_fields` value is **ignored entirely** in that case (no silent merge — the consumer is in full control). Mention this in your runbook if your deployment pattern mixes both.
+**Precedence** when both are set: `Options.LoggerFilterConfig` wins. The YAML `log.sensitivefields` value is **ignored entirely** in that case (no silent merge — the consumer is in full control). Mention this in your runbook if your deployment pattern mixes both.
 
 ### Matching semantics — what gets masked
 
