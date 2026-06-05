@@ -109,19 +109,19 @@ keystore:
 # Requires: database + messaging + scheduler modules
 outbox:
   enabled: false                     # Enable transactional outbox pattern
-  table_name: gobricks_outbox        # Outbox table name in database
-  auto_create_table: false           # Create table on first use (opt-in; true in dev, false with managed migrations)
-  default_exchange: ""               # Fallback AMQP exchange when Event.Exchange is empty
-  poll_interval: 5s                  # How often the relay checks for pending events
-  batch_size: 100                    # Maximum events processed per relay cycle
-  max_retries: 5                     # Max publish attempts before giving up
-  retention_period: 72h              # How long published events are kept (0 = disable cleanup)
+  tablename: gobricks_outbox        # Outbox table name in database
+  autocreatetable: false           # Create table on first use (opt-in; true in dev, false with managed migrations)
+  defaultexchange: ""               # Fallback AMQP exchange when Event.Exchange is empty
+  pollinterval: 5s                  # How often the relay checks for pending events
+  batchsize: 100                    # Maximum events processed per relay cycle
+  maxretries: 5                     # Max publish attempts before giving up
+  retentionperiod: 72h              # How long published events are kept (0 = disable cleanup)
 
 inbox:
   enabled: false                     # Enable consumer-side idempotency (inbox) ledger
-  table_name: gobricks_inbox         # Inbox ledger table name (unqualified)
-  auto_create_table: false           # Create table on first use (opt-in; true in dev, false with managed migrations)
-  retention_period: 168h             # How long processed-event records are kept; must exceed broker max redelivery window (0 = use default 168h)
+  tablename: gobricks_inbox         # Inbox ledger table name (unqualified)
+  autocreatetable: false           # Create table on first use (opt-in; true in dev, false with managed migrations)
+  retentionperiod: 168h             # How long processed-event records are kept; must exceed broker max redelivery window (0 = use default 168h)
 
 log:
   level: debug
@@ -129,14 +129,14 @@ log:
   output:
     format: json
     file: ""
-  # sensitive_fields extends logger.DefaultFilterConfig (password, api_key,
+  # sensitivefields extends logger.DefaultFilterConfig (password, api_key,
   # token, …) with extra field names whose values must be masked in every
   # log line — including framework middleware. Substring match,
   # case-insensitive. For PCI/PII workloads (PAN, CVV2, OTP). For full
   # control (custom mask value, opt-out, code composition) use
   # app.Options.LoggerFilterConfig instead — see
   # wiki/observability.md#sensitive-data-filtering.
-  sensitive_fields:
+  sensitivefields:
     - pan
     - primary_account_number
     - cvv
