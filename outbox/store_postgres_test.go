@@ -254,10 +254,11 @@ func TestPostgresStoreCreateTableSchemaQualified(t *testing.T) {
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_outbox_events_published`).WillReturnRowsAffected(0)
 
 	require.NoError(t, store.CreateTable(t.Context(), db))
-	// The ON clause must reference the full schema-qualified name.
+	// Both index ON clauses must reference the full schema-qualified name.
 	execs := db.ExecLog()
-	require.GreaterOrEqual(t, len(execs), 2)
-	assert.Contains(t, execs[1].SQL, "ON myschema.outbox_events", "index must target the qualified table")
+	require.Len(t, execs, 3) // table, pending index, published index
+	assert.Contains(t, execs[1].SQL, "ON myschema.outbox_events", "pending index must target the qualified table")
+	assert.Contains(t, execs[2].SQL, "ON myschema.outbox_events", "published index must target the qualified table")
 }
 
 // Compile-time guard: ensure postgresStore satisfies the Store interface.

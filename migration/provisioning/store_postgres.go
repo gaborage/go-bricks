@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
 // DefaultPostgresTable is the table name used when NewPostgresStore is called
@@ -96,7 +98,7 @@ func NewPostgresStore(db *sql.DB, tableName string) (*PostgresStore, error) {
 		db:          db,
 		tableName:   tableName,
 		quotedTable: quoteQualified(tableName),
-		indexBase:   indexBaseName(tableName),
+		indexBase:   sqlid.IndexBaseName(tableName),
 	}, nil
 }
 
@@ -297,14 +299,4 @@ func quoteQualified(name string) string {
 		parts[i] = `"` + p + `"`
 	}
 	return strings.Join(parts, ".")
-}
-
-// indexBaseName returns the identifier-safe last segment of a possibly
-// schema-qualified name; used to construct supporting index names that
-// stay short and identifier-clean.
-func indexBaseName(name string) string {
-	if idx := strings.LastIndex(name, "."); idx >= 0 {
-		return name[idx+1:]
-	}
-	return name
 }

@@ -45,3 +45,14 @@ func ValidateTableName(name string) error {
 
 	return nil
 }
+
+// IndexBaseName returns the unqualified last dot-separated segment of name,
+// used to derive index (and similar) identifier names. An index name cannot be
+// schema-qualified, so a schema-qualified table like "myschema.events" must base
+// its index names on "events" while the index still targets the qualified table.
+func IndexBaseName(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}

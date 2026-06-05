@@ -9,6 +9,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver registration for stubDB
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
 func TestNewPostgresStoreRejectsNilDB(t *testing.T) {
@@ -95,8 +97,8 @@ func TestEncodeMetadata(t *testing.T) {
 func TestQuoteQualifiedAndIndexBase(t *testing.T) {
 	assert.Equal(t, `"foo"`, quoteQualified("foo"))
 	assert.Equal(t, `"a"."b"`, quoteQualified("a.b"))
-	assert.Equal(t, "foo", indexBaseName("foo"))
-	assert.Equal(t, "b", indexBaseName("a.b"))
+	assert.Equal(t, "foo", sqlid.IndexBaseName("foo"))
+	assert.Equal(t, "b", sqlid.IndexBaseName("a.b"))
 }
 
 func TestPostgresStateTableIndexNamesFitNAMEDATALEN(t *testing.T) {

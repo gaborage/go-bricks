@@ -32,3 +32,16 @@ func TestValidateTableName(t *testing.T) {
 		})
 	}
 }
+
+func TestIndexBaseName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"events", "events"},
+		{"myschema.events", "events"},
+		{"MYSCHEMA.OUTBOX_EVENTS", "OUTBOX_EVENTS"},
+	}
+	for _, c := range cases {
+		if got := IndexBaseName(c.in); got != c.want {
+			t.Fatalf("IndexBaseName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

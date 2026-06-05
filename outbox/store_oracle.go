@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
 // Oracle DDL for the outbox table.
@@ -168,7 +169,7 @@ func (s *oracleStore) DeletePublished(ctx context.Context, db dbtypes.Interface,
 // if the table or indexes already exist. The caller (ensureStoreInitialized) treats
 // all CreateTable errors as warnings, so existing objects are handled gracefully.
 func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	idxBase := indexBaseName(s.tableName)
+	idxBase := sqlid.IndexBaseName(s.tableName)
 
 	// Create table (ORA-00955 if already exists — handled by caller as warning)
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreateTableSQL, s.tableName)); err != nil {

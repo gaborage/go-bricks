@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
 // PostgreSQL DDL for the outbox table.
@@ -158,7 +159,7 @@ func (s *postgresStore) DeletePublished(ctx context.Context, db dbtypes.Interfac
 }
 
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	idxBase := indexBaseName(s.tableName)
+	idxBase := sqlid.IndexBaseName(s.tableName)
 
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreateTableSQL, s.tableName)); err != nil {
 		return fmt.Errorf("outbox postgres: create table failed: %w", err)
