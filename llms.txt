@@ -63,10 +63,10 @@ cache:
     port: 6379
 outbox:
   enabled: true
-  poll_interval: 5s
-  batch_size: 100
-  max_retries: 5
-  retention_period: 72h
+  pollinterval: 5s
+  batchsize: 100
+  maxretries: 5
+  retentionperiod: 72h
 observability:
   enabled: true
   service:
@@ -1587,9 +1587,9 @@ GoBricks uses CacheManager to handle per-tenant cache instances with automatic l
 cache:
   enabled: true
   manager:
-    max_size: 100          # Max tenant cache instances
-    idle_ttl: 15m          # Idle timeout per cache
-    cleanup_interval: 5m   # Cleanup goroutine frequency
+    maxsize: 100          # Max tenant cache instances
+    idlettl: 15m          # Idle timeout per cache
+    cleanupinterval: 5m   # Cleanup goroutine frequency
   redis:
     host: localhost
     port: 6379
@@ -2476,11 +2476,11 @@ messaging:
     x-environment: development
   reconnect:
     delay: 5s
-    max_delay: 60s                         # Exponential backoff cap
-    connection_timeout: 30s
+    maxdelay: 60s                         # Exponential backoff cap
+    connectiontimeout: 30s
   publisher:
-    max_cached: 50                         # Cached publisher channels (per tenant)
-    idle_ttl: 10m
+    maxcached: 50                         # Cached publisher channels (per tenant)
+    idlettl: 10m
 ```
 
 Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured (no silent degradation). For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.
@@ -2850,13 +2850,13 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 ```yaml
 outbox:
   enabled: true
-  table_name: gobricks_outbox       # Custom table name
-  auto_create_table: true           # DDL on first use
-  default_exchange: ""              # Fallback exchange
-  poll_interval: 5s                 # Relay frequency
-  batch_size: 100                   # Events per cycle
-  max_retries: 5                    # Before giving up
-  retention_period: 72h             # Cleanup threshold
+  tablename: gobricks_outbox       # Custom table name
+  autocreatetable: true           # DDL on first use
+  defaultexchange: ""              # Fallback exchange
+  pollinterval: 5s                 # Relay frequency
+  batchsize: 100                   # Events per cycle
+  maxretries: 5                    # Before giving up
+  retentionperiod: 72h             # Cleanup threshold
 ```
 
 ### Testing
@@ -2924,7 +2924,7 @@ keystore:
 
 # EKS deployment (base64-encoded DER via env vars)
 keystore:
-  secret_min_length: 32          # default 32; 0 disables the floor
+  secretminlength: 32          # default 32; 0 disables the floor
   keys:
     signing:
       public:
@@ -3021,7 +3021,7 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 - Symmetric `secret` entries are mutually exclusive with `public`/`private` — a
   mixed entry is a startup config error (structural detection, no discriminator)
 - `Secret(name)` returns a **defensive copy**; the caller owns it and may zeroize
-- `keystore.secret_min_length` (default 32) enforces a byte floor at startup; an
+- `keystore.secretminlength` (default 32) enforces a byte floor at startup; an
   explicit `0` disables it
 - Exactly one source per key: `file` (raw/DER path) or `value` (base64 string)
 - Fails fast at startup if any key cannot be loaded, parsed, or is too short
@@ -4263,7 +4263,7 @@ For regulated payloads (PAN, CVV2, OTP, account numbers) you extend the list at 
 ```yaml
 log:
   level: info
-  sensitive_fields:        # NEW: appended to logger.DefaultFilterConfig
+  sensitivefields:        # NEW: appended to logger.DefaultFilterConfig
     - pan
     - primary_account_number
     - cvv

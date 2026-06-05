@@ -111,8 +111,8 @@ database:
 # → Verify pool size adequate: cache.redis.pool_size >= NumCPU * 2
 
 # CacheManager eviction issues
-# → Increase max_size if seeing unexpected evictions: cache.manager.max_size
-# → Increase idle_ttl if caches closing too quickly: cache.manager.idle_ttl
+# → Increase maxsize if seeing unexpected evictions: cache.manager.maxsize
+# → Increase idlettl if caches closing too quickly: cache.manager.idlettl
 # → Monitor stats: cacheManager.Stats() — check Evictions/IdleCleanups counters
 ```
 
@@ -245,7 +245,7 @@ grep "Panic recovered in message handler" logs/app.log
 # → Use x-outbox-event-id header for idempotency in consumer handlers
 
 # Table creation fails
-# → Set outbox.auto_create_table: false and create table manually
+# → Set outbox.autocreatetable: false and create table manually
 # → DDL provided in outbox/store_postgres.go and outbox/store_oracle.go
 ```
 

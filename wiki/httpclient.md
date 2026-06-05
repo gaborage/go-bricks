@@ -260,7 +260,7 @@ func TestModuleEmitsHTTPSpans(t *testing.T) {
 
 > **Warning:** payload logging is a debug aid for development/staging only. Enabling it in production widens the audit-log surface and may expose sensitive data to log pipelines.
 >
-> **PCI/PII workloads must extend the default sensitive-field list.** The framework ships defaults like `password`, `token`, `api_key`, `authorization`, but workload-specific fields (`pan`, `cvv2`, `cvv`, `otp`, `ssn`, …) need to be added via `log.sensitive_fields` in YAML or `app.Options.LoggerFilterConfig` in code before enabling payload logging — see [observability.md](observability.md#sensitive-data-filtering) for the full field list and customization seams.
+> **PCI/PII workloads must extend the default sensitive-field list.** The framework ships defaults like `password`, `token`, `api_key`, `authorization`, but workload-specific fields (`pan`, `cvv2`, `cvv`, `otp`, `ssn`, …) need to be added via `log.sensitivefields` in YAML or `app.Options.LoggerFilterConfig` in code before enabling payload logging — see [observability.md](observability.md#sensitive-data-filtering) for the full field list and customization seams.
 
 By default the client logs only request/response metadata (method, URL, status, elapsed, body size). Debug-level payload logging can be enabled via the builder:
 

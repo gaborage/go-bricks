@@ -41,9 +41,9 @@ cache:
   enabled: true
   type: redis
   manager:
-    max_size: 100          # Max tenant cache instances
-    idle_ttl: 15m          # Idle timeout per cache
-    cleanup_interval: 5m   # Cleanup goroutine frequency
+    maxsize: 100          # Max tenant cache instances
+    idlettl: 15m          # Idle timeout per cache
+    cleanupinterval: 5m   # Cleanup goroutine frequency
   redis:
     host: localhost
     port: 6379
@@ -113,17 +113,18 @@ GoBricks applies production-safe cache manager defaults when cache is configured
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| `manager.max_size` | 100 | Maximum tenant cache instances |
-| `manager.idle_ttl` | 15m | Close idle cache connections |
-| `manager.cleanup_interval` | 5m | Frequency of idle cache cleanup |
+| `manager.maxsize` | 100 | Maximum tenant cache instances |
+| `manager.idlettl` | 15m | Close idle cache connections |
+| `manager.cleanupinterval` | 5m | Frequency of idle cache cleanup |
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 cache:
   manager:
-    max_size: 200         # Support more tenants
-    idle_ttl: 30m         # Keep caches longer
-    cleanup_interval: 10m # Less frequent cleanup
+    maxsize: 200         # Support more tenants
+    idlettl: 30m         # Keep caches longer
+    cleanupinterval: 10m # Less frequent cleanup
 ```
 
 ---

@@ -96,11 +96,11 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 	}
 
 	if cfg.MaxSize < 0 {
-		return nil, fmt.Errorf("max_size cannot be negative")
+		return nil, fmt.Errorf("maxsize cannot be negative")
 	}
 
 	if cfg.IdleTTL < 0 {
-		return nil, fmt.Errorf("idle_ttl cannot be negative")
+		return nil, fmt.Errorf("idlettl cannot be negative")
 	}
 
 	if cfg.CleanupInterval <= 0 {

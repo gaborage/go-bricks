@@ -1971,7 +1971,47 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 				Broker:    BrokerConfig{URL: testAMQPHost},
 				Publisher: PublisherPoolConfig{MaxCached: -1},
 			},
-			errorContains: "messaging.publisher.max_cached",
+			errorContains: "messaging.publisher.maxcached",
+		},
+		{
+			name: "negative_reinit_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ReinitDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.reinitdelay",
+		},
+		{
+			name: "negative_resend_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ResendDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.resenddelay",
+		},
+		{
+			name: "negative_connection_timeout_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ConnectionTimeout: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.connectiontimeout",
+		},
+		{
+			name: "negative_max_delay_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{MaxDelay: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.maxdelay",
+		},
+		{
+			name: "negative_publisher_idle_ttl_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Publisher: PublisherPoolConfig{IdleTTL: -1 * time.Second},
+			},
+			errorContains: "messaging.publisher.idlettl",
 		},
 	}
 
@@ -2025,7 +2065,7 @@ func TestApplyCacheManagerDefaults(t *testing.T) {
 				Type:    "redis",
 				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
 				Manager: CacheManagerConfig{
-					MaxSize: 50, // Only max_size set
+					MaxSize: 50, // Only maxsize set
 				},
 			},
 			expectedMaxSize:         50,                          // Preserved
@@ -2059,7 +2099,7 @@ func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
 				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
 				Manager: CacheManagerConfig{MaxSize: -1},
 			},
-			errorContains: "cache.manager.max_size",
+			errorContains: "cache.manager.maxsize",
 		},
 		{
 			name: "negative_idle_ttl_rejected",
@@ -2069,7 +2109,17 @@ func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
 				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
 				Manager: CacheManagerConfig{IdleTTL: -1 * time.Minute},
 			},
-			errorContains: "cache.manager.idle_ttl",
+			errorContains: "cache.manager.idlettl",
+		},
+		{
+			name: "negative_cleanup_interval_rejected",
+			config: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+				Manager: CacheManagerConfig{CleanupInterval: -1 * time.Minute},
+			},
+			errorContains: "cache.manager.cleanupinterval",
 		},
 	}
 
@@ -3756,7 +3806,7 @@ func TestValidateKeyStoreMixedEntrySecretPlusPrivate(t *testing.T) {
 func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
 	cfg := &KeyStoreConfig{SecretMinLength: -1}
 	err := validateKeyStore(cfg)
-	assert.ErrorContains(t, err, "keystore.secret_min_length")
+	assert.ErrorContains(t, err, "keystore.secretminlength")
 	assert.ErrorContains(t, err, "must be non-negative")
 }
 

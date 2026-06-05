@@ -30,7 +30,7 @@ func applyDefaults(c *config.InboxConfig) {
 // Called after applyDefaults, so zero values have already been replaced.
 func validateConfig(c *config.InboxConfig) error {
 	if c.RetentionPeriod < 0 {
-		return fmt.Errorf("inbox: retention_period must not be negative, got %s", c.RetentionPeriod)
+		return fmt.Errorf("inbox: retentionperiod must not be negative, got %s", c.RetentionPeriod)
 	}
 	if err := validateTableName(c.TableName); err != nil {
 		return err

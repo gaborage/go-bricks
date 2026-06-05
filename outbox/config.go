@@ -14,16 +14,16 @@ const DefaultTableName = "gobricks_outbox"
 // Called after applyDefaults, so zero values have already been replaced.
 func validateConfig(c *config.OutboxConfig) error {
 	if c.PollInterval <= 0 {
-		return fmt.Errorf("outbox: poll_interval must be positive, got %s", c.PollInterval)
+		return fmt.Errorf("outbox: pollinterval must be positive, got %s", c.PollInterval)
 	}
 	if c.BatchSize <= 0 {
-		return fmt.Errorf("outbox: batch_size must be positive, got %d", c.BatchSize)
+		return fmt.Errorf("outbox: batchsize must be positive, got %d", c.BatchSize)
 	}
 	if c.MaxRetries < 0 {
-		return fmt.Errorf("outbox: max_retries must not be negative, got %d", c.MaxRetries)
+		return fmt.Errorf("outbox: maxretries must not be negative, got %d", c.MaxRetries)
 	}
 	if c.RetentionPeriod < 0 {
-		return fmt.Errorf("outbox: retention_period must not be negative, got %s", c.RetentionPeriod)
+		return fmt.Errorf("outbox: retentionperiod must not be negative, got %s", c.RetentionPeriod)
 	}
 	return nil
 }

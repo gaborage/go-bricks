@@ -77,7 +77,7 @@ func TestValidateConfigNegativePollInterval(t *testing.T) {
 	}
 	err := validateConfig(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "poll_interval")
+	assert.Contains(t, err.Error(), "pollinterval")
 }
 
 func TestValidateConfigZeroBatchSize(t *testing.T) {
@@ -87,7 +87,7 @@ func TestValidateConfigZeroBatchSize(t *testing.T) {
 	}
 	err := validateConfig(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "batch_size")
+	assert.Contains(t, err.Error(), "batchsize")
 }
 
 func TestValidateConfigNegativeMaxRetries(t *testing.T) {
@@ -98,7 +98,7 @@ func TestValidateConfigNegativeMaxRetries(t *testing.T) {
 	}
 	err := validateConfig(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "max_retries")
+	assert.Contains(t, err.Error(), "maxretries")
 }
 
 func TestValidateConfigNegativeRetentionPeriod(t *testing.T) {
@@ -109,5 +109,5 @@ func TestValidateConfigNegativeRetentionPeriod(t *testing.T) {
 	}
 	err := validateConfig(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "retention_period")
+	assert.Contains(t, err.Error(), "retentionperiod")
 }

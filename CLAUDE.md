@@ -75,7 +75,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
 - Raw-SQL escape hatches (`f.Raw()` and `jf.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
 - Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
-- No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PCI/PII workloads (PAN, CVV2, OTP) extend the default list via `log.sensitive_fields` in YAML or `app.Options.LoggerFilterConfig` in code — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
+- No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PCI/PII workloads (PAN, CVV2, OTP) extend the default list via `log.sensitivefields` in YAML or `app.Options.LoggerFilterConfig` in code — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
 - Audit logging for sensitive operations (access control, data modifications).
 
 ### Practices & Patterns
@@ -440,7 +440,7 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | HTTP server read / write / idle / shutdown | `server.timeout.{read,write,idle,shutdown}` | 15s / 30s / 60s / 10s |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s |
-| AMQP connection establishment | `messaging.reconnect.connection_timeout` | 30s |
+| AMQP connection establishment | `messaging.reconnect.connectiontimeout` | 30s |
 | Scheduler slow-job WARN / shutdown | `scheduler.timeout.{slowjob,shutdown}` | 25s / 30s |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) |
 

@@ -181,20 +181,21 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | `reconnect.delay` | 5s | Initial delay before reconnect attempts |
-| `reconnect.reinit_delay` | 2s | Delay between channel re-initialization |
-| `reconnect.resend_delay` | 5s | Delay before resending failed messages |
-| `reconnect.connection_timeout` | 30s | Timeout for connection establishment |
-| `reconnect.max_delay` | 60s | Maximum backoff cap for exponential retry |
-| `publisher.max_cached` | 50 | Maximum cached publisher channels |
-| `publisher.idle_ttl` | 10m | TTL for idle publisher channels |
+| `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
+| `reconnect.resenddelay` | 5s | Delay before resending failed messages |
+| `reconnect.connectiontimeout` | 30s | Timeout for connection establishment |
+| `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
+| `publisher.maxcached` | 50 | Maximum cached publisher channels |
+| `publisher.idlettl` | 10m | TTL for idle publisher channels |
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 messaging:
   reconnect:
     delay: 10s            # Slower initial reconnect
-    max_delay: 120s       # Higher backoff cap
+    maxdelay: 120s       # Higher backoff cap
   publisher:
-    max_cached: 100       # More cached publishers for high-throughput
-    idle_ttl: 30m         # Keep publishers longer
+    maxcached: 100       # More cached publishers for high-throughput
+    idlettl: 30m         # Keep publishers longer
 ```

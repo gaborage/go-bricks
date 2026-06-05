@@ -144,7 +144,7 @@ func TestNewCacheManager(t *testing.T) {
 		mgr, err := cache.NewCacheManager(config, connector)
 		assert.Error(t, err)
 		assert.Nil(t, mgr)
-		assert.Contains(t, err.Error(), "max_size cannot be negative")
+		assert.Contains(t, err.Error(), "maxsize cannot be negative")
 	})
 
 	t.Run("NegativeIdleTTL", func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestNewCacheManager(t *testing.T) {
 		mgr, err := cache.NewCacheManager(config, connector)
 		assert.Error(t, err)
 		assert.Nil(t, mgr)
-		assert.Contains(t, err.Error(), "idle_ttl cannot be negative")
+		assert.Contains(t, err.Error(), "idlettl cannot be negative")
 	})
 
 	t.Run("ZeroMaxSize_Unlimited", func(t *testing.T) {
