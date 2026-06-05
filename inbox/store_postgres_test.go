@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,13 @@ func TestNewPostgresStoreRejectsBadTableName(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewPostgresStore("myschema.gobricks_inbox")
 	require.Error(t, err, "qualified names must be rejected")
+
+	_, err = NewPostgresStore(strings.Repeat("a", maxTableNameLen+1))
+	require.Error(t, err, "over-length names must be rejected")
+	assert.Contains(t, err.Error(), "too long")
+
+	_, err = NewPostgresStore(strings.Repeat("a", maxTableNameLen))
+	require.NoError(t, err, "a name at the max length is accepted")
 }
 
 func TestPostgresStoreMarkProcessedInserted(t *testing.T) {

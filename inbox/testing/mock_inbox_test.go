@@ -42,6 +42,18 @@ func TestMockInboxWithError(t *testing.T) {
 	inboxtest.AssertProcessCount(t, m, 0) // errored calls are not recorded as processed
 }
 
+func TestMockInboxPropagatesHandlerError(t *testing.T) {
+	m := inboxtest.NewMockInbox()
+	wantErr := errors.New("handler boom")
+
+	err := m.ProcessOnce(context.Background(), "evt-1", func(context.Context, dbtypes.Tx) error {
+		return wantErr
+	})
+	assert.ErrorIs(t, err, wantErr)
+	inboxtest.AssertProcessed(t, m, "evt-1") // the call is recorded
+	inboxtest.AssertProcessCount(t, m, 1)
+}
+
 func TestMockInboxMarkAlreadyProcessed(t *testing.T) {
 	m := inboxtest.NewMockInbox().MarkAlreadyProcessed("evt-1")
 

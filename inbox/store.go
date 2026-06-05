@@ -37,15 +37,24 @@ type Store interface {
 	CreateTable(ctx context.Context, db dbtypes.Interface) error
 }
 
+// maxTableNameLen bounds the inbox table name so the longest derived Oracle
+// identifier — the index "idx_<name>_processed" (14 extra chars) — stays within
+// Oracle's 128-character identifier limit.
+const maxTableNameLen = 128 - len("idx__processed")
+
 // validateTableName checks that name is a safe, unqualified SQL identifier.
 // The inbox requires an unqualified name (no schema prefix) because the Oracle
-// store derives a primary-key constraint name from it.
+// store derives a primary-key constraint name from it, and bounds its length so
+// the derived constraint/index identifiers fit Oracle's limit.
 func validateTableName(name string) error {
 	if err := sqlid.ValidateTableName(name); err != nil {
 		return fmt.Errorf("inbox: %w", err)
 	}
 	if strings.Contains(name, ".") {
 		return fmt.Errorf("inbox: table name %q must be unqualified (no schema prefix)", name)
+	}
+	if len(name) > maxTableNameLen {
+		return fmt.Errorf("inbox: table name %q is too long (max %d; derived Oracle identifiers must fit 128 chars)", name, maxTableNameLen)
 	}
 	return nil
 }
