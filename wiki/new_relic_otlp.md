@@ -29,7 +29,7 @@ observability:
     protocol: grpc
     compression: gzip
     temporality: delta  # New Relic recommendation (lower memory, better performance)
-    histogram_aggregation: exponential  # Better precision, ~10x lower memory
+    histogramaggregation: exponential  # Better precision, ~10x lower memory
     headers:
       api-key: your-new-relic-license-key-here
 
@@ -39,7 +39,7 @@ observability:
     endpoint: otlp.nr-data.net:4317  # Reuse trace endpoint
     protocol: grpc
     compression: gzip
-    sampling_rate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always exported)
+    samplingrate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always exported)
     headers:
       api-key: your-new-relic-license-key-here
 ```
@@ -67,7 +67,7 @@ observability:
     protocol: http
     compression: gzip
     temporality: delta
-    histogram_aggregation: exponential
+    histogramaggregation: exponential
     headers:
       api-key: your-license-key
 
@@ -102,7 +102,7 @@ trace:
 |--------|--------|---------|--------------------------|
 | `compression` | `gzip`, `none` | `gzip` | **gzip** (~70% bandwidth reduction) |
 | `temporality` | `delta`, `cumulative` | `cumulative` | **delta** (lower memory, better performance) |
-| `histogram_aggregation` | `exponential`, `explicit` | `explicit` | **exponential** (better precision, ~10x lower memory) |
+| `histogramaggregation` | `exponential`, `explicit` | `explicit` | **exponential** (better precision, ~10x lower memory) |
 | `protocol` | `http`, `grpc` | `http` | **grpc** (lower latency, better performance) |
 
 ## Attribute Limits

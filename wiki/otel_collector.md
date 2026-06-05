@@ -162,7 +162,7 @@ observability:
     protocol: grpc
     compression: gzip
     temporality: delta  # Collector can convert if needed
-    histogram_aggregation: exponential
+    histogramaggregation: exponential
 
   logs:
     enabled: true

@@ -174,6 +174,11 @@ func loadTenantStoreFromFile(path string) (*config.TenantStore, error) {
 		return nil, fmt.Errorf("load config %q: %w", path, err)
 	}
 
+	// Plain Unmarshal binds by koanf tag / case-insensitive field name and
+	// ignores mapstructure tags, so it only reaches config.Config keys that are
+	// flat-smushed (underscore-free). That invariant is enforced by
+	// config.TestConfigKoanfTagsHaveNoUnderscore; if it ever regressed, an
+	// underscored key would silently fail to bind here (see issue #554).
 	var cfg config.Config
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config %q: %w", path, err)

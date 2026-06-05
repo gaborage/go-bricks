@@ -481,7 +481,7 @@ type MetricsConfig struct {
 	// Supported values: "exponential", "explicit".
 	// Default: "explicit" (OTEL SDK default).
 	// New Relic recommends "exponential" for better precision and lower memory overhead.
-	HistogramAggregation string `mapstructure:"histogram_aggregation"`
+	HistogramAggregation string `mapstructure:"histogramaggregation"`
 
 	// Interval specifies how often to export metrics.
 	// Shorter intervals provide more real-time data but increase overhead.
@@ -524,7 +524,7 @@ type LogsConfig struct {
 	// DisableStdout controls whether to disable stdout logging when OTLP is enabled.
 	// When false (default), logs go to both stdout and OTLP (useful for development).
 	// When true, logs only go to OTLP (production efficiency).
-	DisableStdout bool `mapstructure:"disable_stdout"`
+	DisableStdout bool `mapstructure:"disablestdout"`
 
 	// Headers allows custom HTTP headers for OTLP exporters.
 	// Useful for authentication tokens or API keys.
@@ -549,14 +549,14 @@ type LogsConfig struct {
 	// Requests exceeding this duration are logged with result_code="WARN" in action logs.
 	// This is a system-wide threshold (no per-route overrides).
 	// Default: 1 second.
-	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"`
+	SlowRequestThreshold time.Duration `mapstructure:"slowrequestthreshold"`
 
 	// SamplingRate controls what fraction of INFO/DEBUG trace logs to export (0.0 to 1.0).
 	// ERROR/WARN logs and action logs are always exported at 100%.
 	// Sampling is deterministic per trace (all logs in a trace are sampled together).
 	// 1.0 means export all INFO/DEBUG logs, 0.0 means export none (default).
 	// nil = apply default (0.0 for backward compatibility).
-	SamplingRate *float64 `mapstructure:"sampling_rate"`
+	SamplingRate *float64 `mapstructure:"samplingrate"`
 }
 
 // Validate checks the configuration for common errors.

@@ -98,7 +98,13 @@ with the pre-existing flat `reconnect.delay` sibling and contradicts the
   not `…_SECRET_MIN_LENGTH`) — an inherent property of underscore-free keys.
 - **Guard against recurrence:** `TestConfigKoanfTagsHaveNoUnderscore`
   (`config/types_test.go`) reflects over the whole `Config` tree and fails if any
-  koanf tag contains an underscore, so the bug class cannot return.
+  tag contains an underscore. As first written it walked only `koanf` tags, which
+  left a blind spot: the `mapstructure`-tagged `observability` tree (loaded via a
+  separate section `Unmarshal`) was never visited, and four underscored keys there
+  stayed broken — see [#554](https://github.com/gaborage/go-bricks/issues/554). The
+  guard now also walks `mapstructure` tags, and a sibling
+  `observability.TestObservabilityConfigTagsHaveNoUnderscore` covers the
+  observability tree, so the bug class cannot return across either decode path.
 - **Out of scope (follow-up):** service configs consumed via `InjectInto` that put
   an underscore inside a `config:"…"` segment have the same env-reachability
   limitation; the convention is to use dotted segments. A separate effort tracks
