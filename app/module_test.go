@@ -75,6 +75,49 @@ func TestModuleRegistryRegisterSuccess(t *testing.T) {
 	module.AssertExpectations(t)
 }
 
+// MockInboxModule implements Module + InboxProvider for testing inbox wiring.
+type MockInboxModule struct {
+	name      string
+	processor InboxProcessor
+}
+
+func (m *MockInboxModule) Name() string                   { return m.name }
+func (m *MockInboxModule) Init(*ModuleDeps) error         { return nil }
+func (m *MockInboxModule) Shutdown() error                { return nil }
+func (m *MockInboxModule) InboxProcessor() InboxProcessor { return m.processor }
+
+var (
+	_ Module        = (*MockInboxModule)(nil)
+	_ InboxProvider = (*MockInboxModule)(nil)
+)
+
+// stubInboxProcessor is a minimal InboxProcessor for wiring tests.
+type stubInboxProcessor struct{}
+
+func (stubInboxProcessor) ProcessOnce(context.Context, string, func(context.Context, database.Tx) error) error {
+	return nil
+}
+
+func TestModuleRegistryWiresInboxProvider(t *testing.T) {
+	deps := &ModuleDeps{Logger: logger.New("info", false)}
+	registry := NewModuleRegistry(deps)
+
+	require.NoError(t, registry.Register(&MockInboxModule{name: "inbox", processor: stubInboxProcessor{}}))
+	assert.NotNil(t, deps.Inbox, "an InboxProvider module should wire deps.Inbox")
+}
+
+func TestModuleRegistryRegisterNonInboxModule(t *testing.T) {
+	deps := &ModuleDeps{Logger: logger.New("info", false)}
+	registry := NewModuleRegistry(deps)
+
+	module := &MockModule{name: testModule}
+	module.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(module))
+
+	assert.Nil(t, deps.Inbox, "a non-InboxProvider module must not wire deps.Inbox")
+	module.AssertExpectations(t)
+}
+
 func TestModuleRegistryRegisterInitError(t *testing.T) {
 	log := logger.New("debug", true)
 	mockDB := &testmocks.MockDatabase{}

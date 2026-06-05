@@ -111,6 +111,25 @@ type OutboxProvider interface {
 	OutboxPublisher() OutboxPublisher
 }
 
+// InboxProcessor runs a handler exactly once per event id, recording the id in a
+// durable, tenant-aware ledger atomically with the handler's writes. It is the
+// consumer-side complement to the transactional outbox. Defined here to avoid an
+// app<->inbox import cycle; the inbox package implements it.
+type InboxProcessor interface {
+	// ProcessOnce runs fn inside a transaction exactly once per eventID. A
+	// redelivery of an already-processed id short-circuits (fn is not run) and
+	// returns nil. The tenant is resolved from ctx.
+	ProcessOnce(ctx context.Context, eventID string, fn func(ctx context.Context, tx dbtypes.Tx) error) error
+}
+
+// InboxProvider is an optional interface that modules can implement to provide an
+// InboxProcessor for dependency injection into other modules.
+// When a module implements this interface, the ModuleRegistry automatically wires
+// its InboxProcessor into ModuleDeps.Inbox.
+type InboxProvider interface {
+	InboxProcessor() InboxProcessor
+}
+
 // KeyStore provides access to named RSA key pairs loaded at startup.
 // Keys are loaded from DER files or base64-encoded values during module initialization.
 // All methods are safe for concurrent use (the store is read-only after init).
@@ -188,6 +207,12 @@ type ModuleDeps struct {
 	// This field is nil if no outbox module is registered or outbox.enabled is false.
 	// Example: deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{EventType: "order.created", ...})
 	Outbox OutboxPublisher
+
+	// Inbox provides durable consumer-side idempotency (exactly-once processing).
+	// ProcessOnce records the event id in a ledger atomically with the handler's writes.
+	// This field is nil if no inbox module is registered or inbox.enabled is false.
+	// Example: deps.Inbox.ProcessOnce(ctx, eventID, func(ctx, tx) error { ... })
+	Inbox InboxProcessor
 
 	// KeyStore provides access to named RSA key pairs for encryption/signing.
 	// Keys are loaded at startup from DER files or base64-encoded values.

@@ -29,6 +29,8 @@ func validateConfig(c *config.OutboxConfig) error {
 }
 
 // applyDefaults fills in zero-value fields with production-safe defaults.
+// AutoCreateTable is intentionally not set here: its default (false, opt-in) is
+// the zero value, so auto-creation must be explicitly enabled.
 func applyDefaults(c *config.OutboxConfig) {
 	if c.TableName == "" {
 		c.TableName = DefaultTableName
