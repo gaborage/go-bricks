@@ -462,7 +462,8 @@ type SourceConfig struct {
 }
 
 // OutboxConfig holds transactional outbox settings.
-// Production-safe defaults are applied automatically when outbox is enabled:
+// Default values when outbox is enabled (AutoCreateTable is opt-in: its default
+// false is the zero value, not actively applied):
 //   - TableName: "gobricks_outbox"
 //   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - PollInterval: 5s (relay poll frequency)
@@ -508,8 +509,9 @@ type OutboxConfig struct {
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.
 // The inbox is the durable complement to the outbox: it records processed event
-// ids in a ledger so redeliveries are skipped. Production-safe defaults are
-// applied automatically when inbox is enabled:
+// ids in a ledger so redeliveries are skipped. Default values when inbox is
+// enabled (AutoCreateTable is opt-in: its default false is the zero value, not
+// actively applied):
 //   - TableName: "gobricks_inbox"
 //   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - RetentionPeriod: 168h / 7d (must exceed the broker's max redelivery window)
@@ -519,7 +521,8 @@ type InboxConfig struct {
 	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 
 	// TableName is the inbox ledger table name in the database.
-	// Default: "gobricks_inbox". Must be unqualified (no schema prefix).
+	// Default: "gobricks_inbox". Must be unqualified (no schema prefix) because the
+	// Oracle store derives a primary-key constraint name from it.
 	TableName string `koanf:"table_name" json:"table_name" yaml:"table_name" toml:"table_name" mapstructure:"table_name"`
 
 	// AutoCreateTable creates the inbox table on first use if it doesn't exist.

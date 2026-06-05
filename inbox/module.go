@@ -142,6 +142,8 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		retentionPeriod: m.cfg.RetentionPeriod,
 	}
 
+	// DailyAt uses only the time-of-day (04:00 local); the date components are
+	// placeholders.
 	cleanupTime := time.Date(0, 1, 1, 4, 0, 0, 0, time.Local)
 	if err := registrar.DailyAt("inbox-cleanup", cleanup, cleanupTime); err != nil {
 		return fmt.Errorf("inbox: failed to register cleanup job: %w", err)
