@@ -1,4 +1,3 @@
-//nolint:dupl // Intentional: Oracle and PostgreSQL stores share structure but differ in SQL dialect
 package inbox
 
 import (
