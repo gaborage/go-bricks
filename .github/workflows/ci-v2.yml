@@ -22,6 +22,15 @@ jobs:
       framework: ${{ steps.filter.outputs.framework }}
       # yamllint: valid GitHub Actions context expression
       migrate_tool: ${{ steps.filter.outputs.migrate_tool }}
+      # `code` = any non-doc change that must run the full coverage + SonarCloud
+      # path. It is its OWN explicit filter (see `code:` under `filters:` below),
+      # NOT inferred from framework/migrate_tool: those two omit non-Go scan
+      # inputs (e.g. sonar-project.properties), so deriving `code` from them
+      # would skip the scan on a Sonar-config-only change. The coverage run
+      # (framework-test, framework-integration-test, migrate-tool-test, merge,
+      # SonarCloud) gates on this; doc-only PRs match nothing and skip it.
+      # yamllint: valid GitHub Actions context expression
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v6
 
@@ -45,6 +54,31 @@ jobs:
           # `**/*.go` pattern below already matches `tools/**/*.go`, so tool
           # Go-file changes correctly re-run the framework matrix without help
           # from a negation.
+          #
+          # COVERAGE COMPLETENESS — these two filters scope the per-module
+          # lint/build/security/vuln jobs, but they must NOT gate the coverage
+          # run independently. SonarCloud analyzes the framework and the migrate
+          # tool as a single project fed by one merged coverage.out, assembled
+          # from the framework-test, framework-integration-test, and
+          # migrate-tool-test jobs. If the coverage run were gated per-module, a
+          # change touching only one module would upload a report missing the
+          # other module's coverage, and SonarCloud would score that module as
+          # 0% covered — e.g. a renovate bump to `tools/migration/go.mod`
+          # (framework filter false) collapsed framework coverage from ~90% to
+          # ~4% and reddened the gate. To prevent that, the coverage run gates on
+          # the explicit `code` filter below — NOT on framework/migrate_tool —
+          # so it always runs all three coverage jobs together and uploads a
+          # complete report; doc-only PRs match nothing and still skip it.
+          #
+          # `code` is defined explicitly (not inferred as framework||migrate_tool)
+          # because that union omits non-Go scan inputs — most importantly
+          # sonar-project.properties (a Sonar-config-only PR would otherwise set
+          # code=false and skip the scan). It is the UNION of every real non-doc
+          # path in framework + migrate_tool — note the tools/migration manifests
+          # must be listed here too, since framework's root-anchored go.mod/go.sum/
+          # Makefile do NOT match the nested tools/migration copies — PLUS
+          # sonar-project.properties and the go.work/go.work.sum workspace files.
+          # Keep it free of `!` negations (see the NOTE above) so docs still skip.
           filters: |
             framework:
               - '**/*.go'
@@ -59,6 +93,19 @@ jobs:
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
+            code:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'go.work'
+              - 'go.work.sum'
+              - 'Makefile'
+              - '.golangci.yml'
+              - 'sonar-project.properties'
+              - '.github/workflows/ci-v2.yml'
+              - 'tools/migration/go.mod'
+              - 'tools/migration/go.sum'
+              - 'tools/migration/Makefile'
 
   # ============================================================================
   # Framework CI Jobs (conditional on framework changes)
@@ -68,7 +115,10 @@ jobs:
     permissions:
       contents: read
     needs: changes
-    if: needs.changes.outputs.framework == 'true'
+    # Gates on `code` (not `framework`) so framework coverage is regenerated on
+    # ANY non-doc change — including tools/migration-only bumps — keeping the
+    # merged SonarCloud report complete. See the `code` filter rationale.
+    if: needs.changes.outputs.code == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -166,7 +216,8 @@ jobs:
     permissions:
       contents: read
     needs: changes
-    if: needs.changes.outputs.framework == 'true'
+    # Gates on `code` so integration coverage is part of every merged report.
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
 
     steps:
@@ -251,7 +302,7 @@ jobs:
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
+      needs.changes.outputs.code == 'true' &&
       (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
       (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
@@ -267,23 +318,22 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      # All three coverage jobs gate on `code`, so on any non-doc change they
+      # all ran and uploaded their artifacts. Download them unconditionally —
+      # a missing artifact is a real failure and the merge guard below catches it.
       - name: Download unit test coverage
-        if: needs.changes.outputs.framework == 'true'
         uses: actions/download-artifact@v8
         with:
           name: coverage-unit
           path: .
 
       - name: Download integration test coverage
-        if: needs.changes.outputs.framework == 'true'
         uses: actions/download-artifact@v8
         with:
           name: coverage-integration
           path: .
 
       - name: Download migrate tool coverage
-        if: needs.changes.outputs.migrate_tool == 'true'
-        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: migrate-tool-coverage-report
@@ -316,9 +366,21 @@ jobs:
             has_migrate_tool=true
           fi
 
-          # Ensure at least one coverage file exists
-          if [ "$has_framework_unit" = false ] && [ "$has_framework_integration" = false ] && [ "$has_migrate_tool" = false ]; then
-            echo "Error: No coverage files found"
+          # Defense-in-depth: the report uploaded to SonarCloud must be COMPLETE.
+          # This job only runs on non-doc (`code`) changes, where framework-test,
+          # framework-integration-test, and migrate-tool-test all run and upload
+          # their coverage. If any part is missing here, a partial report would
+          # mis-score the absent module as 0% covered — the failure mode that
+          # collapsed framework coverage from ~90% to ~4% on tools-only pushes.
+          # Fail loudly rather than upload an incomplete report.
+          missing=""
+          [ "$has_framework_unit" = true ]        || missing="$missing framework-unit(coverage.out)"
+          [ "$has_framework_integration" = true ] || missing="$missing framework-integration(coverage-integration.out)"
+          [ "$has_migrate_tool" = true ]          || missing="$missing migrate-tool(tools/migration/coverage.out)"
+          if [ -n "$missing" ]; then
+            echo "❌ ERROR: coverage report is incomplete — missing:$missing"
+            echo "    Refusing to upload a partial coverage report to SonarCloud."
+            echo "    Each coverage producer must have run and uploaded its artifact."
             exit 1
           fi
 
@@ -474,7 +536,11 @@ jobs:
     permissions:
       contents: read
     needs: changes
-    if: needs.changes.outputs.migrate_tool == 'true'
+    # Gates on `code` (not `migrate_tool`) so the tool's coverage is part of
+    # every merged report — otherwise a framework-only change would omit it and
+    # SonarCloud would score tools/migration as 0% covered. The tool's other
+    # jobs (build/lint/security/vuln) stay scoped to `migrate_tool` below.
+    if: needs.changes.outputs.code == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -758,7 +824,7 @@ jobs:
     if: |
       always() &&
       needs.changes.result == 'success' &&
-      (needs.changes.outputs.framework == 'true' || needs.changes.outputs.migrate_tool == 'true') &&
+      needs.changes.outputs.code == 'true' &&
       needs.framework-merge-coverage.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
