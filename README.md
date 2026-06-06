@@ -793,7 +793,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
        endpoint: otel-collector:4317
        protocol: grpc
        insecure: true
-       slow_request_threshold: 750ms   # requests slower than this become WARN result_code
+       slowrequestthreshold: 750ms   # requests slower than this become WARN result_code
        export:
          timeout: 5s
        batch:

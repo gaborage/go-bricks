@@ -1,6 +1,8 @@
 package observability
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -388,6 +390,77 @@ metrics:
 	assert.Equal(t, "stdout", obsCfg.Metrics.Endpoint, "Metrics endpoint should be 'stdout'")
 	assert.Equal(t, 15*time.Second, obsCfg.Metrics.Interval, "Metrics interval should be 15s")
 	assert.Equal(t, 25*time.Second, obsCfg.Metrics.Export.Timeout, "Metrics export timeout should be 25s")
+}
+
+// TestConfigUnmarshalCompoundKeysBindFromYAML pins the user-facing #554 contract
+// for the four compound-word observability keys, which load via Config.Unmarshal
+// -> plain koanf.Unmarshal. koanf binds by koanf tag or the case-insensitive Go
+// field name and NEVER honors the mapstructure tag, so only the flat-smushed YAML
+// form binds; the pre-#554 underscored form is silently dropped (the bug).
+//
+// Because koanf ignores the mapstructure tag, a binding assertion alone cannot
+// detect the tag rename — reverting the tags to the underscored form leaves the
+// positive case green. The load-bearing rename guard is therefore
+// TestObservabilityConfigTagsHaveNoUnderscore; this test instead documents both
+// halves of the contract: the smushed form binds, the underscored form does not.
+func TestConfigUnmarshalCompoundKeysBindFromYAML(t *testing.T) {
+	t.Run("flat-smushed keys bind", func(t *testing.T) {
+		yamlContent := `
+metrics:
+  histogramaggregation: exponential
+logs:
+  disablestdout: true
+  slowrequestthreshold: 750ms
+  samplingrate: 0.2
+`
+		k := koanf.New(".")
+		require.NoError(t, k.Load(rawbytes.Provider([]byte(yamlContent)), yaml.Parser()))
+
+		var obsCfg Config
+		require.NoError(t, k.Unmarshal("", &obsCfg))
+
+		assert.Equal(t, HistogramAggregationExponential, obsCfg.Metrics.HistogramAggregation,
+			"metrics.histogramaggregation should bind from YAML")
+		assert.True(t, obsCfg.Logs.DisableStdout,
+			"logs.disablestdout should bind from YAML")
+		assert.Equal(t, 750*time.Millisecond, obsCfg.Logs.SlowRequestThreshold,
+			"logs.slowrequestthreshold should bind from YAML")
+		require.NotNil(t, obsCfg.Logs.SamplingRate, "logs.samplingrate should bind from YAML (not stay nil)")
+		assert.InDelta(t, 0.2, *obsCfg.Logs.SamplingRate, 1e-9,
+			"logs.samplingrate should bind from YAML")
+	})
+
+	t.Run("underscored keys are silently dropped", func(t *testing.T) {
+		// The pre-#554 underscored form matches neither a koanf tag nor the
+		// field-name fallback, so every field stays at its zero value and a
+		// service that set these in YAML silently got the framework default. This
+		// negative assertion encodes why the keys must be flat-smushed: it fails if
+		// someone later makes the underscored form bind (e.g. by switching the load
+		// path to honor mapstructure tags), which would reintroduce the env-var
+		// unreachability the smush convention exists to avoid.
+		yamlContent := `
+metrics:
+  histogram_aggregation: exponential
+logs:
+  disable_stdout: true
+  slow_request_threshold: 750ms
+  sampling_rate: 0.2
+`
+		k := koanf.New(".")
+		require.NoError(t, k.Load(rawbytes.Provider([]byte(yamlContent)), yaml.Parser()))
+
+		var obsCfg Config
+		require.NoError(t, k.Unmarshal("", &obsCfg))
+
+		assert.Empty(t, obsCfg.Metrics.HistogramAggregation,
+			"underscored metrics.histogram_aggregation must NOT bind (stays zero value)")
+		assert.False(t, obsCfg.Logs.DisableStdout,
+			"underscored logs.disable_stdout must NOT bind (stays zero value)")
+		assert.Zero(t, obsCfg.Logs.SlowRequestThreshold,
+			"underscored logs.slow_request_threshold must NOT bind (stays zero value)")
+		assert.Nil(t, obsCfg.Logs.SamplingRate,
+			"underscored logs.sampling_rate must NOT bind (stays nil)")
+	})
 }
 
 // TestConfigApplyDefaults validates that default values are correctly applied
@@ -1489,5 +1562,105 @@ func TestConfigTemporalityDefaults(t *testing.T) {
 			assert.Equal(t, tt.expectedTemporality, tt.config.Metrics.Temporality)
 			assert.Equal(t, tt.expectedHistogramAgg, tt.config.Metrics.HistogramAggregation)
 		})
+	}
+}
+
+// TestObservabilityConfigTagsHaveNoUnderscore guards the bug class from #554:
+// the observability tree is loaded via Config.Unmarshal("observability", ...),
+// which runs plain koanf.Unmarshal. koanf binds by koanf tag or, when absent,
+// the case-insensitive Go field name — it never honors the mapstructure tag.
+// An underscored mapstructure tag (e.g. "histogram_aggregation") therefore (a)
+// lies about the YAML key that actually binds (the field-name-smushed form), and
+// (b) is unreachable from env vars, which nest on "_". Every koanf/mapstructure
+// tag in the observability Config tree MUST be underscore-free, matching the
+// flat-smushed convention #549 established for the config tree.
+func TestObservabilityConfigTagsHaveNoUnderscore(t *testing.T) {
+	offenders := collectUnderscoredConfigTags(reflect.TypeOf(Config{}), "", map[reflect.Type]bool{})
+	if len(offenders) > 0 {
+		t.Fatalf("observability config tags must be underscore-free (koanf binds on the\n"+
+			"field-name fallback and env vars nest on '_'); offenders:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// collectUnderscoredConfigTags walks a config struct tree (through pointers, maps,
+// slices, and nested/embedded structs) and returns the dotted key paths whose
+// koanf OR mapstructure tag contains an underscore. seen prevents revisiting
+// shared types. This intentionally mirrors the config package's koanf-only walker
+// but also covers mapstructure, because the observability tree is mapstructure-
+// tagged; the logic is kept local to this package to avoid coupling observability
+// to config (the two packages do not import each other).
+func collectUnderscoredConfigTags(rt reflect.Type, prefix string, seen map[reflect.Type]bool) []string {
+	rt = configTagUnderlyingStruct(rt)
+	if rt == nil || seen[rt] {
+		return nil
+	}
+	seen[rt] = true
+
+	var offenders []string
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		// Unexported fields never receive config values, so their tags are
+		// irrelevant to the binding invariant.
+		if f.PkgPath != "" {
+			continue
+		}
+		koanfName := configTagName(&f, "koanf")
+		mapName := configTagName(&f, "mapstructure")
+		// Untagged fields (incl. anonymous/embedded structs) keep the parent prefix
+		// so their tagged children are still reached and checked. Prefer the koanf
+		// name for the path, falling back to the mapstructure name.
+		pathName := koanfName
+		if pathName == "" {
+			pathName = mapName
+		}
+		key := configTagChildKey(prefix, pathName)
+		if strings.Contains(koanfName, "_") {
+			offenders = append(offenders, key+` (koanf:"`+koanfName+`")`)
+		}
+		if strings.Contains(mapName, "_") {
+			offenders = append(offenders, key+` (mapstructure:"`+mapName+`")`)
+		}
+		offenders = append(offenders, collectUnderscoredConfigTags(f.Type, key, seen)...)
+	}
+	return offenders
+}
+
+// configTagName returns the first segment of the named struct tag, treating the
+// explicit "-" skip marker as empty (no key contributed).
+func configTagName(f *reflect.StructField, tag string) string {
+	name := strings.Split(f.Tag.Get(tag), ",")[0]
+	if name == "-" {
+		return ""
+	}
+	return name
+}
+
+// configTagUnderlyingStruct dereferences pointers and unwraps map/slice element
+// types, returning the underlying struct type, or nil if the type bottoms out at
+// a non-struct (a scalar leaf).
+func configTagUnderlyingStruct(rt reflect.Type) reflect.Type {
+	for {
+		switch rt.Kind() {
+		case reflect.Pointer, reflect.Map, reflect.Slice:
+			rt = rt.Elem()
+		case reflect.Struct:
+			return rt
+		default:
+			return nil
+		}
+	}
+}
+
+// configTagChildKey joins a parent prefix with a leaf name, treating an empty
+// name (untagged/embedded field) as a pass-through of the parent prefix.
+func configTagChildKey(prefix, name string) string {
+	switch {
+	case name == "":
+		return prefix
+	case prefix == "":
+		return name
+	default:
+		return prefix + "." + name
 	}
 }
