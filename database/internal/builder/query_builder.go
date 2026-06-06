@@ -77,21 +77,29 @@ var _ dbtypes.DeleteQueryBuilder = (*DeleteQueryBuilder)(nil)
 
 // ========== QueryBuilder Methods ==========
 
-// NewQueryBuilder creates a new query builder for the specified database vendor.
-// It configures placeholder formats and prepares for vendor-specific SQL generation.
-func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {
-	var sb squirrel.StatementBuilderType
+// Per-vendor statement builders, built once at package load instead of on every
+// NewQueryBuilder call. squirrel's StatementBuilderType wraps a persistent
+// (copy-on-write) map: every fluent call (.Select(), .From(), …) clones the
+// receiver rather than mutating it, and the placeholder formats stored here
+// (Dollar/Colon/Question) are stateless. Sharing one value per vendor across
+// goroutines is therefore safe and avoids a PlaceholderFormat clone + reflect
+// allocation per NewQueryBuilder call. Treat these as immutable: never assign back
+// through a method (e.g. RunWith) and never store a stateful PlaceholderFormat.
+var (
+	pgStatementBuilder    = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)   // PostgreSQL: $1, $2, ...
+	oraStatementBuilder   = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Colon)    // Oracle: :1, :2, ...
+	qmarkStatementBuilder = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question) // Default: ?, ?, ...
+)
 
+// NewQueryBuilder creates a new query builder for the specified database vendor.
+// It selects the vendor's shared, immutable placeholder-format statement builder.
+func NewQueryBuilder(vendor dbtypes.Vendor) *QueryBuilder {
+	sb := qmarkStatementBuilder // default to question mark placeholders
 	switch vendor {
 	case dbtypes.PostgreSQL:
-		// PostgreSQL uses $1, $2, ... placeholders
-		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
+		sb = pgStatementBuilder
 	case dbtypes.Oracle:
-		// Oracle uses :1, :2, ... placeholders
-		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Colon)
-	default:
-		// Default to question mark placeholders
-		sb = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Question)
+		sb = oraStatementBuilder
 	}
 
 	return &QueryBuilder{

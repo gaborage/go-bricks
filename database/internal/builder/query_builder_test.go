@@ -2,6 +2,7 @@ package builder
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Masterminds/squirrel"
@@ -10,6 +11,37 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestNewQueryBuilderConcurrentSharedBuilders exercises the per-vendor package-level
+// statement builders from many goroutines. They are shared values, so this locks in
+// the immutability invariant under -race: concurrent NewQueryBuilder + query
+// construction must neither race nor corrupt the shared builders.
+func TestNewQueryBuilderConcurrentSharedBuilders(t *testing.T) {
+	vendors := []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle, dbtypes.Vendor("sqlite")}
+	var wg sync.WaitGroup
+	for _, vendor := range vendors {
+		for range 30 {
+			wg.Add(1)
+			go func(v dbtypes.Vendor) {
+				defer wg.Done()
+				qb := NewQueryBuilder(v)
+				// Use a bind-producing Where so the rendered placeholder validates the
+				// correct per-vendor builder was selected (not just that SQL is non-empty).
+				sql, _, err := qb.Select("id").From("users").Where(qb.Filter().Eq("id", 1)).ToSQL()
+				assert.NoError(t, err)
+				switch v {
+				case dbtypes.PostgreSQL:
+					assert.Contains(t, sql, "$1")
+				case dbtypes.Oracle:
+					assert.Contains(t, sql, ":1")
+				default:
+					assert.Contains(t, sql, "?")
+				}
+			}(vendor)
+		}
+	}
+	wg.Wait()
+}
 
 const (
 	joinFilterErrorMsg = "mock join filter error"
