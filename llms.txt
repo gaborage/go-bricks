@@ -3992,7 +3992,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Stream | Marker | Sampling | Use case |
 |---|---|---|---|
 | Action logs | `log.type="action"` | Always 100% | One summary line per HTTP request (status, duration, route) |
-| Trace logs | `log.type="trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.sampling_rate` | Application logs from `logger.Info()/Error()/...` |
+| Trace logs | `log.type="trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.samplingrate` | Application logs from `logger.Info()/Error()/...` |
 | Trace correlation | `trace_id` / `span_id` fields | — | Auto-injected via `logger.WithContext(ctx)` |
 
 **Auto-wired health endpoints:**
@@ -4020,7 +4020,7 @@ observability:
     enabled: true               # No endpoint = stdout/disabled by build
   logs:
     enabled: true
-    slow_request_threshold: 750ms
+    slowrequestthreshold: 750ms
 
 logger:
   pretty: false                 # MUST be false when observability.logs.enabled = true
@@ -4046,13 +4046,13 @@ observability:
     protocol: grpc
     compression: gzip
     temporality: delta              # Lower memory; backend-friendly
-    histogram_aggregation: exponential
+    histogramaggregation: exponential
   logs:
     enabled: true
     endpoint: otel-collector:4317
     protocol: grpc
     compression: gzip
-    sampling_rate: 0.2              # 20% of INFO/DEBUG; ERROR/WARN always 100%
+    samplingrate: 0.2              # 20% of INFO/DEBUG; ERROR/WARN always 100%
 
 logger:
   pretty: false
@@ -4335,7 +4335,7 @@ GoBricks separates two log streams to keep volume under control without losing v
 | Stream | Marker (`log.type`) | Sampling | Purpose |
 |---|---|---|---|
 | **Action logs** | `"action"` | Always 100% (never sampled) | One synthesized summary per HTTP request (status code, route, latency, severity) |
-| **Trace logs** | `"trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.sampling_rate` | Application logs from `logger.Info()/Error()/...` calls inside handlers/services |
+| **Trace logs** | `"trace"` | `ERROR`/`WARN` always; `INFO`/`DEBUG` sampled by `observability.logs.samplingrate` | Application logs from `logger.Info()/Error()/...` calls inside handlers/services |
 
 **Why two streams?** A noisy `INFO`-level codebase shouldn't drown out request summaries — and dropping all `INFO` logs would hide context for the 1% you sample. Action logs guarantee you always have one row per request even when trace-log sampling is aggressive.
 
@@ -4345,8 +4345,8 @@ GoBricks separates two log streams to keep volume under control without losing v
 observability:
   logs:
     enabled: true
-    sampling_rate: 0.1            # Export 10% of INFO/DEBUG trace logs (default 0.0 drops them all)
-    slow_request_threshold: 750ms # Auto-escalate action log severity to WARN if request slower
+    samplingrate: 0.1            # Export 10% of INFO/DEBUG trace logs (default 0.0 drops them all)
+    slowrequestthreshold: 750ms # Auto-escalate action log severity to WARN if request slower
 ```
 
 **Sampling determinism:** within a single trace, all logs are sampled together (kept or dropped as a unit), so debugging a sampled trace shows the full picture; debugging a dropped trace shows only `ERROR`/`WARN` lines.
@@ -4357,7 +4357,7 @@ Action logs derive severity automatically:
 - HTTP `2xx`/`3xx` → `INFO`
 - HTTP `4xx` → `WARN`
 - HTTP `5xx` → `ERROR`
-- Slow requests (above `slow_request_threshold`) → `WARN`
+- Slow requests (above `slowrequestthreshold`) → `WARN`
 
 **Escalate explicitly** for cross-cutting concerns that aren't reflected in the status code (rate-limit hits, deprecated endpoint usage, suspicious tenant activity):
 
@@ -4899,8 +4899,8 @@ For application logs, exercise the production logger directly and capture into a
 | gRPC error: `frame too large, note that the frame header looked like an HTTP/1.1 header` | gRPC client connecting to an HTTP endpoint (e.g. port `4318` with `protocol: grpc`, or `https://...` scheme with gRPC) | Use `host:port` (no scheme) on port `4317` for gRPC; use `https://host:port/v1/...` on port `4318` for HTTP |
 | Spans appear in console (`endpoint: stdout`) but not in collector | App can't reach collector / TLS misconfiguration / batch hasn't flushed yet | Check connectivity, set `insecure: true` for in-cluster collectors, wait for batch flush (~5s prod) or trigger graceful shutdown |
 | Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.Echo.Request().Context()` |
-| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slow_request_threshold` or call `server.EscalateSeverity(c, level)` |
-| INFO/DEBUG application logs are dropped | Default `sampling_rate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.sampling_rate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
+| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slowrequestthreshold` or call `server.EscalateSeverity(c, level)` |
+| INFO/DEBUG application logs are dropped | Default `samplingrate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.samplingrate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
 | Custom metric is `nil` when recording | `observability.enabled: false` makes `deps.MeterProvider` a no-op, but the helper-returned instruments may still be `nil` if `Meter()` was never called | Always nil-check before recording: `if m.counter != nil { m.counter.Add(...) }` |
 | Noisy `[OBSERVABILITY]` debug output | `GOBRICKS_DEBUG` env var is set | Unset `GOBRICKS_DEBUG` |
 
