@@ -263,7 +263,7 @@ tracking `database.pool.max.connections` (default 25). A fixed idle of 2 against
 max of 25 made the pool churn physical connections (TCP+TLS+auth) under sustained
 load — profiling showed p95 16.25→1.46 ms and errors 8.15%→0% once idle tracked
 max. `database/sql` caps idle at max, so the change is safe; an explicit idle
-value still wins. Centralized in `applyDatabasePoolDefaults` (covers PostgreSQL,
+value still wins. Centralized in `applyPoolConnectionDefaults` (called from `applyDatabasePoolDefaults`, covers PostgreSQL,
 Oracle, named, and per-tenant DBs); effective pool settings are now logged at
 startup. Behavioral change: idle footprint rises (notably per-tenant) and idle
 metrics report max rather than 2.
