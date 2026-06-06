@@ -24,9 +24,19 @@ func TestNewQueryBuilderConcurrentSharedBuilders(t *testing.T) {
 			wg.Add(1)
 			go func(v dbtypes.Vendor) {
 				defer wg.Done()
-				sql, _, err := NewQueryBuilder(v).Select("id").From("users").ToSQL()
+				qb := NewQueryBuilder(v)
+				// Use a bind-producing Where so the rendered placeholder validates the
+				// correct per-vendor builder was selected (not just that SQL is non-empty).
+				sql, _, err := qb.Select("id").From("users").Where(qb.Filter().Eq("id", 1)).ToSQL()
 				assert.NoError(t, err)
-				assert.NotEmpty(t, sql)
+				switch v {
+				case dbtypes.PostgreSQL:
+					assert.Contains(t, sql, "$1")
+				case dbtypes.Oracle:
+					assert.Contains(t, sql, ":1")
+				default:
+					assert.Contains(t, sql, "?")
+				}
 			}(vendor)
 		}
 	}
