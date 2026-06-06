@@ -2,6 +2,29 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Connection Pool Idle Default — Tracks Max (ADR-025)
+
+Per [ADR-025](adr_025_pool_idle_tracks_max.md), the default for `database.pool.idle.connections` changed from a fixed **2** to **tracking `database.pool.max.connections`** (default 25). The old default kept only 2 idle connections against a max of 25, so under sustained load the pool continuously opened and closed physical connections (TCP+TLS+auth) — measured as a 91% p95 latency reduction (16.25 → 1.46 ms) and connection-establishment errors dropping from 8.15% to 0% once idle tracked max.
+
+**No code or config change is required.** This is a default-only change with `apiImpact: none`. But be aware of three behavioral consequences if you relied on the old default:
+
+| Area | Before | After |
+|---|---|---|
+| Idle connections held (idle unset) | up to 2 | up to `pool.max.connections` (default 25), still reaped after `pool.idle.time` (5m) |
+| Multi-tenant idle ceiling | 2 × tenants | up to ~12.5× higher per tenant — verify your PostgreSQL `max_connections` / Oracle session budget |
+| Pool idle metrics | OTEL idle gauges & `Stats()` `max_idle_connections`/`configured_idle_connections` reported `2` | now report the effective max — update dashboards/alerts keyed to `idle == 2` |
+
+**To keep the old behavior**, set the value explicitly — an explicit `database.pool.idle.connections` always wins over the default:
+
+```yaml
+database:
+  pool:
+    idle:
+      connections: 2   # opt back into the old conservative fixed idle cap of 2
+```
+
+The effective `pool_max_connections` / `pool_idle_connections` / `pool_max_lifetime` / `pool_idle_time` are now logged at `Info` on every successful connection, so you can confirm what the pool actually uses.
+
 ## Config Keys — Flat-Smushed Rename (ADR-024)
 
 Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were renamed to the framework's underscore-free flat-smushed convention so they become settable via environment variables (the env loader maps `_`→`.`, koanf's nesting delimiter, so underscored leaf keys were silently unreachable from env). Update both your YAML and any environment variables. Go field names are unchanged.

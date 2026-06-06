@@ -296,7 +296,7 @@ func logConnectionSuccess(log logger.Logger, cfg *config.DatabaseConfig) {
 		ev = ev.Str("database", cfg.Database)
 	}
 
-	ev.Msg("Connected to Oracle database")
+	wrapper.AppendPoolFields(ev, cfg).Msg("Connected to Oracle database")
 }
 
 // Oracle re-exports the vendor-agnostic wrappers; see database/internal/wrapper.

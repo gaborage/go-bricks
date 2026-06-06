@@ -1607,7 +1607,7 @@ func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 			},
 			expectedIdleTime:        defaultPoolIdleTime,
 			expectedLifetimeMax:     defaultPoolLifetimeMax,
-			expectedIdleConnections: defaultPoolIdleConnections,
+			expectedIdleConnections: defaultPoolMaxConnections,
 		},
 		{
 			name: "explicit_values_preserved",
@@ -1641,8 +1641,8 @@ func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 				},
 			},
 			expectedIdleTime:        3 * time.Minute,
-			expectedLifetimeMax:     defaultPoolLifetimeMax,     // Default applied
-			expectedIdleConnections: defaultPoolIdleConnections, // Default applied
+			expectedLifetimeMax:     defaultPoolLifetimeMax,    // Default applied
+			expectedIdleConnections: defaultPoolMaxConnections, // Default applied
 		},
 		{
 			name: "only_idle_connections_set",
@@ -1672,9 +1672,42 @@ func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 					Lifetime: LifetimeConfig{Max: 15 * time.Minute},
 				},
 			},
-			expectedIdleTime:        defaultPoolIdleTime,        // Default applied
-			expectedLifetimeMax:     15 * time.Minute,           // Explicit value preserved
-			expectedIdleConnections: defaultPoolIdleConnections, // Default applied
+			expectedIdleTime:        defaultPoolIdleTime,       // Default applied
+			expectedLifetimeMax:     15 * time.Minute,          // Explicit value preserved
+			expectedIdleConnections: defaultPoolMaxConnections, // Default applied
+		},
+		{
+			name: "idle_tracks_custom_max",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max: PoolMaxConfig{Connections: 10}, // Custom max, idle left unset
+				},
+			},
+			expectedIdleTime:        defaultPoolIdleTime,
+			expectedLifetimeMax:     defaultPoolLifetimeMax,
+			expectedIdleConnections: 10, // Idle defaults to track the configured max, never the old fixed 2
+		},
+		{
+			name: "explicit_idle_above_max_clamped",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:  PoolMaxConfig{Connections: 10},
+					Idle: PoolIdleConfig{Connections: 50}, // Explicit idle above max
+				},
+			},
+			expectedIdleTime:        defaultPoolIdleTime,
+			expectedLifetimeMax:     defaultPoolLifetimeMax,
+			expectedIdleConnections: 10, // Clamped to max — database/sql caps idle at max-open anyway
 		},
 	}
 
@@ -1727,6 +1760,21 @@ func TestApplyDatabasePoolDefaultsNegativeValues(t *testing.T) {
 				},
 			},
 			errorContains: "database.pool.lifetime.max",
+		},
+		{
+			name: "negative_idle_connections_rejected",
+			config: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "testdb",
+				Username: "testuser",
+				Pool: PoolConfig{
+					Max:  PoolMaxConfig{Connections: 25},
+					Idle: PoolIdleConfig{Connections: -1},
+				},
+			},
+			errorContains: "database.pool.idle.connections",
 		},
 	}
 

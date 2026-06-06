@@ -85,8 +85,8 @@ func (c *Connection) Health(ctx context.Context) error {
 
 // Stats returns database connection statistics in a map suitable for logging
 // or metrics tracking. When Config is non-nil, the configured idle-connection
-// target is included for visibility (Go's sql.DB doesn't enforce a minimum
-// idle count; this is purely a configured target).
+// cap is included for visibility (Go's sql.DB treats the idle setting as a cap,
+// not a floor — it does not pre-warm or maintain a minimum idle count).
 func (c *Connection) Stats() (map[string]any, error) {
 	stats := c.DB.Stats()
 	result := map[string]any{
@@ -102,15 +102,28 @@ func (c *Connection) Stats() (map[string]any, error) {
 	}
 
 	if c.Config != nil {
-		// Go's database/sql exposes a single idle knob (SetMaxIdleConns). The tracking
-		// layer surfaces it under both OTEL semconv gauges -- idle.max (hard cap) and
-		// idle.min (configured warm-pool target) -- so both keys intentionally carry the
-		// same configured value. See database/internal/tracking/metrics.go.
+		// Go's database/sql exposes a single idle knob (SetMaxIdleConns), which is a
+		// cap (not a floor — the driver never pre-warms). The tracking layer surfaces
+		// it under both OTEL semconv gauges -- idle.max and idle.min -- so both keys
+		// intentionally carry the same configured value. See
+		// database/internal/tracking/metrics.go.
 		result["max_idle_connections"] = int(c.Config.Pool.Idle.Connections)
 		result["configured_idle_connections"] = int(c.Config.Pool.Idle.Connections)
 	}
 
 	return result, nil
+}
+
+// AppendPoolFields adds the effective connection-pool settings to a log event so
+// operators can confirm what the pool actually uses after defaulting. Shared by
+// the PostgreSQL and Oracle connection layers so the logged field set cannot
+// drift between vendors.
+func AppendPoolFields(ev logger.LogEvent, cfg *config.DatabaseConfig) logger.LogEvent {
+	return ev.
+		Int("pool_max_connections", int(cfg.Pool.Max.Connections)).
+		Int("pool_idle_connections", int(cfg.Pool.Idle.Connections)).
+		Dur("pool_max_lifetime", cfg.Pool.Lifetime.Max).
+		Dur("pool_idle_time", cfg.Pool.Idle.Time)
 }
 
 // Close closes the underlying *sql.DB, unregisters the metrics callback (if

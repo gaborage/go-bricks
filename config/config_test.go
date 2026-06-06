@@ -523,7 +523,9 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	os.Setenv("DATABASE_PORT", "5432")
 	os.Setenv(testDatabaseDatabase, "testdb")
 	os.Setenv(testDatabaseUsername, "testuser")
-	os.Setenv(testDatabaseMaxConns, "25")
+	// Use a non-default max (40 != defaultPoolMaxConnections) so the idle-tracks-max
+	// assertion below proves idle follows the *configured* max, not a constant.
+	os.Setenv(testDatabaseMaxConns, "40")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -536,10 +538,10 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "testdb", cfg.Database.Database)
 	assert.Equal(t, "testuser", cfg.Database.Username)
-	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections)
+	assert.Equal(t, int32(40), cfg.Database.Pool.Max.Connections)
 
 	// Verify production-safe pool defaults are applied
-	assert.Equal(t, int32(2), cfg.Database.Pool.Idle.Connections)         // Default: warm connections
+	assert.Equal(t, int32(40), cfg.Database.Pool.Idle.Connections)        // Default: idle tracks the configured max (40), not a constant
 	assert.Equal(t, 5*time.Minute, cfg.Database.Pool.Idle.Time)           // Default: idle timeout
 	assert.Equal(t, 30*time.Minute, cfg.Database.Pool.Lifetime.Max)       // Default: max lifetime
 	assert.True(t, cfg.Database.Pool.KeepAlive.Enabled)                   // Default: keep-alive enabled

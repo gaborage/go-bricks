@@ -12,13 +12,13 @@ import (
 
 // Database pool defaults
 const (
-	defaultSlowQueryThreshold  = 200 * time.Millisecond
-	defaultMaxQueryLength      = 1000
-	defaultKeepAliveEnabled    = true
-	defaultKeepAliveInterval   = 60 * time.Second
-	defaultPoolIdleTime        = 5 * time.Minute  // Close idle connections before NAT/firewall timeout
-	defaultPoolLifetimeMax     = 30 * time.Minute // Force periodic connection recycling
-	defaultPoolIdleConnections = int32(2)         // Maintain minimal warm connections
+	defaultSlowQueryThreshold = 200 * time.Millisecond
+	defaultMaxQueryLength     = 1000
+	defaultKeepAliveEnabled   = true
+	defaultKeepAliveInterval  = 60 * time.Second
+	defaultPoolIdleTime       = 5 * time.Minute  // Close idle connections before NAT/firewall timeout
+	defaultPoolLifetimeMax    = 30 * time.Minute // Force periodic connection recycling
+	defaultPoolMaxConnections = int32(25)        // Maximum open connections (tune to workload/server capacity)
 )
 
 // Database session defaults
@@ -346,27 +346,15 @@ func validateRequiredDatabasePort(port int) error {
 	return nil
 }
 
-// applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
-//
-// It modifies cfg in-place:
-// - Timezone: if empty, sets to "UTC"; validates with time.LoadLocation unless set to "-".
-// - Pool.Max.Connections: if 0, sets to 25; if negative, returns an error.
-// - Pool.Idle.Connections: if 0, sets to 2 (minimal warm connections); if negative, returns an error.
-// - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
-// - Pool.Lifetime.Max: if 0, sets to 30m (forces periodic connection recycling); if negative, returns an error.
-// - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
-// - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts).
-// - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
-// - Query.Slow.Threshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
-//
-// Returns an error when any value is invalid; otherwise returns nil.
-func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
-	if err := applyDatabaseTimezoneDefault(cfg); err != nil {
-		return err
-	}
-
+// applyPoolConnectionDefaults defaults and validates the max/idle connection
+// counts. Max is defaulted first; idle then defaults to — and is capped at — max
+// so the pool reuses warm connections instead of churning them (TCP+TLS+auth) on
+// every burst. database/sql caps idle at max-open, so an explicit idle above max
+// is clamped here to keep the reported value (startup log, Stats(), OTEL gauges)
+// truthful. An explicit idle below max is honored. See ADR-025.
+func applyPoolConnectionDefaults(cfg *DatabaseConfig) error {
 	if cfg.Pool.Max.Connections == 0 {
-		cfg.Pool.Max.Connections = 25
+		cfg.Pool.Max.Connections = defaultPoolMaxConnections
 	} else if cfg.Pool.Max.Connections < 0 {
 		return NewValidationError("database.pool.max.connections", errMustBeNonNegative)
 	}
@@ -374,9 +362,33 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg.Pool.Idle.Connections < 0 {
 		return NewValidationError("database.pool.idle.connections", errMustBeNonNegative)
 	}
-	// Apply default idle connections if not configured
-	if cfg.Pool.Idle.Connections == 0 {
-		cfg.Pool.Idle.Connections = defaultPoolIdleConnections
+	if cfg.Pool.Idle.Connections == 0 || cfg.Pool.Idle.Connections > cfg.Pool.Max.Connections {
+		cfg.Pool.Idle.Connections = cfg.Pool.Max.Connections
+	}
+	return nil
+}
+
+// applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
+//
+// It modifies cfg in-place:
+//   - Timezone: if empty, sets to "UTC"; validates with time.LoadLocation unless set to "-".
+//   - Pool.Max.Connections / Pool.Idle.Connections: defaulted and validated by
+//     applyPoolConnectionDefaults (idle defaults to and is capped at max; see ADR-025).
+//   - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
+//   - Pool.Lifetime.Max: if 0, sets to 30m (forces periodic connection recycling); if negative, returns an error.
+//   - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
+//   - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts).
+//   - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
+//   - Query.Slow.Threshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
+//
+// Returns an error when any value is invalid; otherwise returns nil.
+func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	if err := applyDatabaseTimezoneDefault(cfg); err != nil {
+		return err
+	}
+
+	if err := applyPoolConnectionDefaults(cfg); err != nil {
+		return err
 	}
 
 	// Apply default idle time - closes connections before NAT/firewall timeout

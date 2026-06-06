@@ -318,7 +318,7 @@ database:
     max:
       connections: 25                     # Max open connections (default 25)
     idle:
-      connections: 2                      # Min warm connections
+      # connections defaults to max.connections (idle cap, avoids churn); override only to release idle conns
       time: 5m                            # Recycle idle connections (NAT/firewall hygiene)
     lifetime:
       max: 30m                            # Force periodic reconnect (DNS rotation)
