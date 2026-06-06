@@ -42,7 +42,8 @@ database:
     max:
       connections: 25
     idle:
-      connections: 5
+      # connections defaults to max.connections (idle cap; avoids connection churn under load).
+      # Override only to deliberately release idle connections back to the database.
       time: 4m                     # Recycle idle connections before NAT/LB timeout (AWS: 350s)
     lifetime:
       max: 30m

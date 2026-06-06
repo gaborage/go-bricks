@@ -139,7 +139,7 @@ type DatabaseConfig struct {
 // PoolConfig holds connection pool settings.
 // Production-safe defaults are applied automatically when database is configured:
 //   - Max.Connections: 25 (maximum open connections)
-//   - Idle.Connections: 2 (minimum warm connections)
+//   - Idle.Connections: tracks Max.Connections (idle cap, avoids connection churn)
 //   - Idle.Time: 5m (close idle connections before NAT/firewall timeout)
 //   - Lifetime.Max: 30m (periodic connection recycling)
 //   - KeepAlive.Enabled: true (TCP keep-alive probes)
@@ -160,8 +160,12 @@ type PoolMaxConfig struct {
 
 // PoolIdleConfig holds idle connections settings.
 type PoolIdleConfig struct {
-	// Connections is the minimum number of idle connections to maintain in the pool.
-	// Default: 2. Maintains warm connections to reduce cold-start latency.
+	// Connections is the maximum number of idle connections kept open in the pool.
+	// This is a cap (database/sql clamps it to Max.Connections), not a floor — the
+	// pool does not pre-warm connections.
+	// Default: tracks Max.Connections. Keeping idle below max causes the pool to
+	// churn physical connections under sustained load; set a lower value only when
+	// you deliberately want to release idle connections back to the database.
 	Connections int32 `koanf:"connections" json:"connections" yaml:"connections" toml:"connections" mapstructure:"connections"`
 
 	// Time is the maximum duration an idle connection may remain unused before closing.

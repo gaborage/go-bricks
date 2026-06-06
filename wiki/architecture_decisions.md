@@ -254,6 +254,24 @@ old snake_case YAML/env keys fall back to defaults.
 
 ---
 
+### [ADR-025: Connection Pool Idle Connections Default to Track Max](adr_025_pool_idle_tracks_max.md)
+
+**Date:** 2026-06-06 | **Status:** Accepted
+
+Changes the default for `database.pool.idle.connections` from a fixed `2` to
+tracking `database.pool.max.connections` (default 25). A fixed idle of 2 against a
+max of 25 made the pool churn physical connections (TCP+TLS+auth) under sustained
+load — profiling showed p95 16.25→1.46 ms and errors 8.15%→0% once idle tracked
+max. `database/sql` caps idle at max, so the change is safe; an explicit idle
+value still wins. Centralized in `applyConnectionCountDefaults` (called from `applyDatabasePoolDefaults`, covers PostgreSQL,
+Oracle, named, and per-tenant DBs); effective pool settings are now logged at
+startup. Behavioral change: idle footprint rises (notably per-tenant) and idle
+metrics report max rather than 2.
+
+**Key Benefits:** Eliminates connection churn, removes a class of connection-establishment errors, makes effective pool config observable
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -263,7 +281,7 @@ old snake_case YAML/env keys fall back to defaults.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-024) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-025) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

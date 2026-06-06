@@ -174,11 +174,11 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		return nil, fmt.Errorf("failed to ping PostgreSQL database: %w", err)
 	}
 
-	log.Info().
+	ev := log.Info().
 		Str("host", cfg.Host).
 		Int("port", cfg.Port).
-		Str("database", cfg.Database).
-		Msg("Connected to PostgreSQL database")
+		Str("database", cfg.Database)
+	wrapper.AppendPoolFields(ev, cfg).Msg("Connected to PostgreSQL database")
 
 	conn := &Connection{
 		Connection: &wrapper.Connection{

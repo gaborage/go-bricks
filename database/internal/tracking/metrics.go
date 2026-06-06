@@ -31,9 +31,9 @@ const (
 	// metricDBConnectionIdleMin maps to OTEL semconv "db.client.connection.idle.min".
 	// Go's database/sql exposes a single idle knob (SetMaxIdleConns), so this gauge
 	// shares its source value (Pool.Idle.Connections) with idle.max; it is emitted under
-	// the semconv idle.min name because the framework treats Pool.Idle.Connections as the
-	// configured warm-pool target. See config.PoolIdleConfig.
-	metricDBConnectionIdleMin = "db.client.connection.idle.min" // Configured idle-connection target (semconv idle.min)
+	// the semconv idle.min name even though Pool.Idle.Connections is a cap, not a floor
+	// (database/sql does not pre-warm), and now defaults to tracking max. See config.PoolIdleConfig.
+	metricDBConnectionIdleMin = "db.client.connection.idle.min" // Configured idle-connection cap (semconv idle.min)
 	metricDBConnectionMax     = "db.client.connection.max"      // Max configured connections
 
 	// Pool saturation metrics per OTEL semconv
