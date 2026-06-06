@@ -404,6 +404,7 @@ func (e *stubEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 func (e *stubEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *stubEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *stubEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *stubEvent) Enabled() bool                                 { return true }
 
 // testHandler is a MessageHandler that returns a configured error
 type testHandler struct{ retErr error }

@@ -21,6 +21,19 @@ func createTestLogger() (*ZeroLogger, *bytes.Buffer) {
 	return &ZeroLogger{zlog: &zl}, &buf
 }
 
+func TestLogEventAdapterEnabled(t *testing.T) {
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf).Level(zerolog.WarnLevel)
+	log := &ZeroLogger{zlog: &zl}
+
+	// At WARN level, warn/error events emit; info/debug are disabled (zerolog
+	// returns a nil *Event, which Enabled() handles nil-safely).
+	assert.True(t, log.Warn().Enabled(), "warn event should be enabled at warn level")
+	assert.True(t, log.Error().Enabled(), "error event should be enabled at warn level")
+	assert.False(t, log.Info().Enabled(), "info event should be disabled at warn level")
+	assert.False(t, log.Debug().Enabled(), "debug event should be disabled at warn level")
+}
+
 func TestLogEventAdapterMsg(t *testing.T) {
 	logger, buf := createTestLogger()
 

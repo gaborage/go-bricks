@@ -2,6 +2,41 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Request-Path Zero-Overhead Changes (ADR-026)
+
+A set of perf changes that make the default-config request path allocate less. Several carry consumer-visible surface:
+
+### DB span/metric emission gated on `observability.enabled`
+
+Per-operation database OpenTelemetry spans and metrics are now emitted only when observability is enabled (the global `otel.Tracer`/`otel.Meter` return non-nil no-ops, so without an explicit gate the framework built and discarded span/metric attributes on every query with observability off). The app bootstrap sets the gate automatically from `observability.enabled`. **Consumers that use the `database` package directly — without the framework's `app` bootstrap — must call `database.SetObservabilityEnabled(true)` to emit DB spans/metrics**; otherwise DB telemetry is silently suppressed even when a global OTel provider is registered.
+
+### `logger.LogEvent` gained `Enabled() bool`
+
+The interface now has `Enabled() bool` so callers can skip building expensive fields when an event would be dropped (the request action-log short-circuits at disabled levels). The framework's `LogEventAdapter` implements it (delegating to zerolog's nil-safe `Event.Enabled()`). **Any external type implementing `logger.LogEvent`** (custom adapters, test doubles) must add the method:
+
+```go
+func (e *YourEvent) Enabled() bool { return true } // or delegate to the underlying event
+```
+
+This mirrors prior interface-evolution entries (S8179/S8196) — the fix is to add the method, never to abandon the interface.
+
+### `server.SetupMiddlewares` signature
+
+`SetupMiddlewares` now takes an explicit `observabilityEnabled bool` immediately after `cfg`:
+
+```go
+// before
+SetupMiddlewares(e, log, cfg, healthPath, readyPath)
+// after
+SetupMiddlewares(e, log, cfg, cfg.Bool("observability.enabled", false), healthPath, readyPath)
+```
+
+The OTel HTTP middleware is registered only when the flag is true (zero per-request span/metric overhead when observability is off). Apps using the framework's normal `app`/server bootstrap are unaffected; only direct callers of `SetupMiddlewares` need to pass the flag.
+
+### `server.gzip.minlength` default
+
+`server.gzip.minlength` now defaults to **1024** bytes (previously gzip compressed everything). Responses smaller than this are sent uncompressed, avoiding gzip header overhead on tiny JSON. Set `server.gzip.minlength: 0` to restore always-compress behavior.
+
 ## Connection Pool Idle Default — Tracks Max (ADR-025)
 
 Per [ADR-025](adr_025_pool_idle_tracks_max.md), the default for `database.pool.idle.connections` changed from a fixed **2** to **tracking `database.pool.max.connections`** (default 25). The old default kept only 2 idle connections against a max of 25, so under sustained load the pool continuously opened and closed physical connections (TCP+TLS+auth) — measured as a 91% p95 latency reduction (16.25 → 1.46 ms) and connection-establishment errors dropping from 8.15% to 0% once idle tracked max.

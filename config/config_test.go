@@ -47,6 +47,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.Server.Timeout.Idle)
 	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
 	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
+	assert.Equal(t, 1024, cfg.Server.Gzip.MinLength)
 
 	// Database should be disabled by default (no defaults provided)
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))

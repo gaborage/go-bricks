@@ -400,6 +400,10 @@ func setupTestObservabilityProviders(t *testing.T) (
 	dbMeter = nil
 	dbDurationHistogram = nil
 
+	// Enable the DB-tracking gate so TrackDBOperation emits spans/metrics for the
+	// duration of the test (the package default is off — see SetObservabilityEnabled).
+	SetObservabilityEnabled(true)
+
 	// Return cleanup function
 	cleanup = func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
@@ -415,9 +419,31 @@ func setupTestObservabilityProviders(t *testing.T) (
 		meterOnce = sync.Once{}
 		dbMeter = nil
 		dbDurationHistogram = nil
+		SetObservabilityEnabled(false)
 	}
 
 	return traceExporter, meterProvider, cleanup
+}
+
+func TestTrackDBOperationSkipsSpansWhenObsDisabled(t *testing.T) {
+	// Register real in-memory providers (so spans WOULD be captured if emitted),
+	// then force the gate off. This is the latent-bug scenario: otel.Tracer/Meter
+	// return non-nil no-ops, so without the explicit gate the framework would still
+	// build span/metric attributes. The gate must skip the whole dispatch.
+	traceExporter, _, cleanup := setupTestObservabilityProviders(t)
+	defer cleanup()
+	SetObservabilityEnabled(false)
+
+	tc := &Context{
+		Logger:   newDisabledTestLogger(),
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+	TrackDBOperation(context.Background(), tc, TestQuerySelectUsersParams, nil,
+		time.Now().Add(-25*time.Millisecond), 0, nil)
+
+	assert.Empty(t, traceExporter.GetSpans(),
+		"no spans should be created when observability is disabled")
 }
 
 func TestTrackDBOperationCreatesSpanAndMetrics(t *testing.T) {

@@ -19,8 +19,10 @@ import (
 
 // SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
 // It sets up CORS, logging, recovery, security headers, rate limiting, and other essential middleware.
+// observabilityEnabled gates the OTel HTTP instrumentation middleware (passed explicitly,
+// like healthPath/readyPath, so the decision is made by the caller from observability.enabled).
 // healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
-func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
+func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
 	// Request ID — validates the inbound X-Request-ID and sets the response
 	// header to either the validated value or a fresh UUID. Replaces Echo's
 	// stock middleware.RequestID() which echoes the inbound header verbatim
@@ -37,47 +39,54 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// MetricAttributes seeds from the library's default semconv attribute set and
 	// then appends custom attributes (proxy-aware url.scheme, error.type). This
 	// extends — rather than replaces — the standard HTTP server metric attributes.
-	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
-	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
-		ServerName:     cfg.App.Name,
-		TracerProvider: otel.GetTracerProvider(),
-		Skipper: func(c *echo.Context) bool {
-			return probeSkipper(c)
-		},
-		MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
-			// echo-opentelemetry treats a non-empty MetricAttributes return as a
-			// REPLACEMENT for its default attribute set: Metrics.Record falls back to
-			// v.MetricAttributes() only when the returned slice is empty. Seeding from
-			// the defaults preserves the standard semconv metric attributes
-			// (http.request.method, http.response.status_code, http.route,
-			// server.address, server.port, url.scheme, network.protocol.*) that would
-			// otherwise be dropped, while still letting us append custom attributes.
-			attrs := v.MetricAttributes()
+	// Honor "zero overhead when disabled": when observability is off the global
+	// tracer/meter providers are non-nil no-ops, so registering this middleware
+	// would still build and discard span/metric attributes on every request.
+	// Gate it on observabilityEnabled (RequestID/RequestEnrich below stay
+	// unconditional so W3C trace propagation works regardless).
+	if observabilityEnabled {
+		probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
+			ServerName:     cfg.App.Name,
+			TracerProvider: otel.GetTracerProvider(),
+			Skipper: func(c *echo.Context) bool {
+				return probeSkipper(c)
+			},
+			MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
+				// echo-opentelemetry treats a non-empty MetricAttributes return as a
+				// REPLACEMENT for its default attribute set: Metrics.Record falls back to
+				// v.MetricAttributes() only when the returned slice is empty. Seeding from
+				// the defaults preserves the standard semconv metric attributes
+				// (http.request.method, http.response.status_code, http.route,
+				// server.address, server.port, url.scheme, network.protocol.*) that would
+				// otherwise be dropped, while still letting us append custom attributes.
+				attrs := v.MetricAttributes()
 
-			// Override url.scheme with a proxy-aware value. The library derives
-			// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
-			// Appended after the defaults so our value wins attribute.Set's
-			// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
-			scheme := "http"
-			if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
-				scheme = "https"
-			}
-			attrs = append(attrs, attribute.String("url.scheme", scheme))
+				// Override url.scheme with a proxy-aware value. The library derives
+				// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
+				// Appended after the defaults so our value wins attribute.Set's
+				// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
+				scheme := "http"
+				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == "https" {
+					scheme = "https"
+				}
+				attrs = append(attrs, attribute.String("url.scheme", scheme))
 
-			// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
-			if v.HTTPResponseStatusCode >= 400 {
-				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
-			}
+				// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
+				if v.HTTPResponseStatusCode >= 400 {
+					attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
+				}
 
-			return attrs
-		},
-	}))
+				return attrs
+			},
+		}))
+	}
 
-	// Inject trace context into request context for outbound propagation
-	e.Use(TraceContext())
-
-	// Operation Tracker - Initialize AMQP and DB operation tracking for each request
-	e.Use(PerformanceStats())
+	// Enrich the request context in a single Request.WithContext clone: trace ID +
+	// W3C headers for outbound propagation, plus the per-request AMQP/DB operation
+	// counters. Combines the standalone TraceContext + PerformanceStats middlewares
+	// (which remain exported for callers that register them individually).
+	e.Use(RequestEnrich())
 
 	// CORS — pass cfg.App.Env so the policy honors the Koanf default of
 	// EnvDevelopment (instead of falling back to os.Getenv which is empty
@@ -127,9 +136,11 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healt
 	// Body limit
 	e.Use(middleware.BodyLimit(10 * 1024 * 1024)) // 10 MB
 
-	// Gzip
+	// Gzip — skip compressing tiny responses (the gzip header/overhead can exceed
+	// the savings for small JSON); threshold is configurable via server.gzip.minlength.
 	e.Use(middleware.GzipWithConfig(middleware.GzipConfig{
-		Level: 5,
+		Level:     5,
+		MinLength: cfg.Server.Gzip.MinLength,
 	}))
 
 	// Rate limit

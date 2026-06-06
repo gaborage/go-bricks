@@ -52,7 +52,6 @@ type operationalMetrics struct {
 // logEventParams bundles parameters needed to construct a log event.
 // This reduces parameter count and improves code organization.
 type logEventParams struct {
-	logLevel   string
 	metadata   *requestMetadata
 	metrics    operationalMetrics
 	tenantID   string
@@ -177,17 +176,24 @@ func logActionSummary(
 ) {
 	ctx := c.Request().Context()
 
-	// Extract all data using helper functions
+	// Determine severity, then create the event first so we can short-circuit
+	// before the expensive extraction + field building when the action-log level
+	// is disabled (e.g. LOG_LEVEL=warn on a healthy 2xx request). WithContext must
+	// run before the check: a context-bound logger may carry a different level, so
+	// enablement is only accurate after binding.
+	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err)
+	event := createLogEvent(log.WithContext(ctx), logLevel)
+	if !event.Enabled() {
+		return
+	}
+
+	// Extract all data using helper functions (skipped when the event is disabled)
 	metadata := extractRequestMetadata(c)
 	metrics := extractOperationalMetrics(ctx)
 	tenantID := extractTenantID(ctx)
 
-	// Determine log severity and result_code
-	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err)
-
-	// Build and emit log event
-	event := buildLogEvent(log.WithContext(ctx), &logEventParams{
-		logLevel:   logLevel,
+	// Populate and emit the log event
+	event = buildLogEvent(event, &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   tenantID,
@@ -200,12 +206,10 @@ func logActionSummary(
 	event.Msg(createActionMessage(metadata.Method, metadata.URI, latency, status))
 }
 
-// buildLogEvent constructs a log event with all OpenTelemetry fields populated.
-// This function is pure - it takes extracted data and produces a configured log event.
-func buildLogEvent(log logger.Logger, params *logEventParams) logger.LogEvent {
-	// Create log event with appropriate severity
-	event := createLogEvent(log, params.logLevel)
-
+// buildLogEvent populates the given event with all OpenTelemetry action-log fields.
+// The caller creates the event (deciding its level) so enablement can be checked
+// before the expensive extraction; buildLogEvent only adds fields.
+func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEvent {
 	// Add error if present
 	if params.err != nil {
 		event = event.Err(params.err)

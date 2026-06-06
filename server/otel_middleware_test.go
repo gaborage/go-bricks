@@ -33,6 +33,50 @@ const (
 	testAPIEndpoint     = "/api/test"
 )
 
+// TestOTelMiddlewareAbsentWhenObservabilityDisabled verifies the #2 gate: with
+// observabilityEnabled=false, SetupMiddlewares does NOT register the OTel HTTP
+// middleware, so no span is produced even though a real tracer is registered.
+func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
+	originalTP := otel.GetTracerProvider()
+	originalProp := otel.GetTextMapPropagator()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			t.Logf("Failed to shutdown test tracer provider: %v", err)
+		}
+		otel.SetTracerProvider(originalTP)
+		otel.SetTextMapPropagator(originalProp)
+	})
+
+	e := echo.New()
+	log := logger.New("disabled", false)
+	cfg := &config.Config{App: config.AppConfig{Name: testServiceName}}
+	// observabilityEnabled = false → the echootel middleware must not be registered.
+	SetupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath)
+	var captured context.Context
+	e.GET("/test", func(c *echo.Context) error {
+		captured = c.Request().Context()
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, exporter.GetSpans(),
+		"no HTTP span should be created when observability is disabled")
+
+	// RequestEnrich stays unconditional: trace ID must still be seeded with obs off.
+	require.NotNil(t, captured)
+	traceID, ok := gobrickshttp.TraceIDFromContext(captured)
+	assert.True(t, ok, "RequestEnrich must run even when observability is disabled")
+	assert.NotEmpty(t, traceID)
+}
+
 // setupTestServerWithTracing creates a test Echo server with OTel middleware and an in-memory span exporter.
 // It properly saves and restores global OTel state to prevent test pollution.
 func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryExporter) {
@@ -77,7 +121,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 	// Setup middlewares (including OTel)
 	healthPath := testHealthPath
 	readyPath := testReadyPath
-	SetupMiddlewares(e, log, cfg, healthPath, readyPath)
+	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
 
 	return e, exporter
 }
@@ -477,7 +521,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 	// Setup middlewares with custom base path
 	healthPath := "/api/v1/health"
 	readyPath := "/api/v1/ready"
-	SetupMiddlewares(e, log, cfg, healthPath, readyPath)
+	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
 
 	// Register route under base path
 	group := e.Group("/api/v1")
@@ -522,7 +566,7 @@ func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProv
 	}
 	log := logger.New("disabled", false)
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	return e, mp
 }

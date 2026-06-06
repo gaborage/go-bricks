@@ -272,6 +272,27 @@ metrics report max rather than 2.
 
 ---
 
+### [ADR-026: Zero-Overhead Request Path When Observability and Logging Are Disabled](adr_026_zero_overhead_request_path.md)
+
+**Date:** 2026-06-06 | **Status:** Accepted
+
+Makes the default-config request path genuinely allocation-free when features are
+off, by gating on explicit booleans rather than the OTel no-op providers (which
+are non-nil, so the framework was building and discarding span/metric attributes
+on every DB query and HTTP request). Gates DB tracking (process-global flag set at
+bootstrap) and the OTel HTTP middleware (explicit `SetupMiddlewares` param); adds
+`logger.LogEvent.Enabled()` to short-circuit the per-request action log at disabled
+levels; consolidates four counter `WithValue`s into one struct and two request
+clones into one via `RequestEnrich`; adds `server.gzip.minlength` (default 1024).
+
+**Breaking:** `logger.LogEvent` gains `Enabled()`; `server.SetupMiddlewares` gains
+an `observabilityEnabled` param; gzip default 1024; standalone `database`-package
+consumers must call `database.SetObservabilityEnabled(true)`.
+
+**Key Benefits:** True zero overhead when observability/logging disabled, fewer per-request allocations, honest no-op contract
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -281,7 +302,7 @@ metrics report max rather than 2.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-025) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-026) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

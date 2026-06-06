@@ -80,7 +80,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			log := logger.New("disabled", false)
 
 			// Setup middlewares
-			SetupMiddlewares(e, log, tt.config, testHealthPath, testReadyPath)
+			SetupMiddlewares(e, log, tt.config, true, testHealthPath, testReadyPath)
 
 			// Create test handler
 			e.GET("/test", func(c *echo.Context) error {
@@ -195,7 +195,7 @@ func TestMiddlewareOrder(t *testing.T) {
 		}
 	})
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
@@ -253,7 +253,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	e.POST("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -297,7 +297,7 @@ func TestGzipMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	// Create handler that returns large response
 	largeResponse := strings.Repeat("This is a test response that should be compressed. ", 100)
@@ -335,6 +335,46 @@ func TestGzipMiddleware(t *testing.T) {
 	})
 }
 
+// TestGzipMiddlewareMinLength verifies the server.gzip.minlength wiring: responses
+// smaller than the configured threshold are sent uncompressed, larger ones gzipped.
+func TestGzipMiddlewareMinLength(t *testing.T) {
+	e := echo.New()
+	log := logger.New("disabled", false)
+	cfg := &config.Config{
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
+		Server: config.ServerConfig{
+			Timeout: config.TimeoutConfig{Middleware: 30 * time.Second},
+			Gzip:    config.GzipConfig{MinLength: 2048},
+		},
+	}
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+
+	e.GET("/small", func(c *echo.Context) error { return c.String(http.StatusOK, "tiny") })
+	e.GET("/large", func(c *echo.Context) error {
+		return c.String(http.StatusOK, strings.Repeat("compress me please. ", 200)) // ~4000 bytes
+	})
+
+	t.Run("below_minlength_not_compressed", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/small", http.NoBody)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Empty(t, rec.Header().Get("Content-Encoding"),
+			"responses below server.gzip.minlength must not be compressed")
+	})
+
+	t.Run("above_minlength_compressed", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/large", http.NoBody)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "gzip", rec.Header().Get("Content-Encoding"),
+			"responses above server.gzip.minlength must be compressed")
+	})
+}
+
 func TestRecoveryMiddleware(t *testing.T) {
 	e := echo.New()
 	log := logger.New("debug", false) // Enable logging to capture panic logs
@@ -347,7 +387,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	// Handler that panics
 	e.GET("/panic", func(_ *echo.Context) error {
@@ -379,7 +419,7 @@ func TestSecurityHeaders(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, testHealthPath, testReadyPath)
+	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

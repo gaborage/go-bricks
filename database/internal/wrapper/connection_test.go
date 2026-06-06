@@ -31,6 +31,7 @@ func (e *recordingLogEvent) Dur(k string, d time.Duration) logger.LogEvent { e.f
 func (e *recordingLogEvent) Interface(k string, i any) logger.LogEvent     { e.fields[k] = i; return e }
 func (e *recordingLogEvent) Bytes(k string, v []byte) logger.LogEvent      { e.fields[k] = v; return e }
 func (e *recordingLogEvent) Bool(k string, v bool) logger.LogEvent         { e.fields[k] = v; return e }
+func (e *recordingLogEvent) Enabled() bool                                 { return true }
 
 func TestAppendPoolFields(t *testing.T) {
 	cfg := &config.DatabaseConfig{}

@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/observability"
 )
@@ -41,6 +42,11 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 
 	// Resolve resource source
 	resourceSource := resolver.ResourceSource(b.cfg)
+
+	// Gate DB-operation OpenTelemetry spans/metrics on observability.enabled before
+	// any connection is created. Honors the no-op provider's zero-overhead contract:
+	// with observability off the tracking layer builds no span/metric attributes.
+	database.SetObservabilityEnabled(b.cfg.Bool("observability.enabled", false))
 
 	// Create managers using the factory
 	dbManager := factory.CreateDatabaseManager(resourceSource)

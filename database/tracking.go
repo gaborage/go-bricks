@@ -24,6 +24,12 @@ var (
 	NewTrackingSettings           = tracking.NewSettings
 	RegisterConnectionPoolMetrics = tracking.RegisterConnectionPoolMetrics
 
+	// SetObservabilityEnabled gates DB-operation OpenTelemetry span/metric emission.
+	// Called once at app bootstrap from the resolved observability.enabled value so
+	// that, when observability is disabled, the tracking layer builds no span/metric
+	// attributes (honoring the no-op provider's zero-overhead contract).
+	SetObservabilityEnabled = tracking.SetObservabilityEnabled
+
 	// WithRepositoryMethod records the business-operation (repository) method name
 	// on ctx so the tracking layer emits it as the `repository.method` attribute on
 	// the db.client.operation.duration metric. Pass the resulting context to the
