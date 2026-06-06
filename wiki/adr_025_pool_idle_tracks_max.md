@@ -43,7 +43,7 @@ so idle can never exceed max regardless of how it is configured.
 
 ## Decision
 
-In `applyPoolConnectionDefaults` (a helper called from `applyDatabasePoolDefaults`),
+In `applyConnectionCountDefaults` (a helper called from `applyDatabasePoolDefaults`),
 when `database.pool.idle.connections` is unset (zero), default it to the effective
 `database.pool.max.connections` instead of a fixed `2`. Max is defaulted first, so idle always tracks the resolved max. An
 explicit idle *below* max is honored; an explicit idle *above* max is clamped to
@@ -58,7 +58,7 @@ Supporting changes:
   `defaultPoolMaxConnections` const, so both pool defaults are explicit and
   greppable (Explicit > Implicit).
 - Extract the max/idle defaulting and clamp into a focused
-  `applyPoolConnectionDefaults` helper, keeping the `applyDatabasePoolDefaults`
+  `applyConnectionCountDefaults` helper, keeping the `applyDatabasePoolDefaults`
   orchestrator within its cyclomatic-complexity budget.
 - Correct the misleading "minimum warm connections" wording in `config/types.go`
   and `wiki/database.md` to describe idle as a cap that tracks max.

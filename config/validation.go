@@ -346,13 +346,13 @@ func validateRequiredDatabasePort(port int) error {
 	return nil
 }
 
-// applyPoolConnectionDefaults defaults and validates the max/idle connection
+// applyConnectionCountDefaults defaults and validates the max/idle connection
 // counts. Max is defaulted first; idle then defaults to — and is capped at — max
 // so the pool reuses warm connections instead of churning them (TCP+TLS+auth) on
 // every burst. database/sql caps idle at max-open, so an explicit idle above max
 // is clamped here to keep the reported value (startup log, Stats(), OTEL gauges)
 // truthful. An explicit idle below max is honored. See ADR-025.
-func applyPoolConnectionDefaults(cfg *DatabaseConfig) error {
+func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 	if cfg.Pool.Max.Connections == 0 {
 		cfg.Pool.Max.Connections = defaultPoolMaxConnections
 	} else if cfg.Pool.Max.Connections < 0 {
@@ -373,7 +373,7 @@ func applyPoolConnectionDefaults(cfg *DatabaseConfig) error {
 // It modifies cfg in-place:
 //   - Timezone: if empty, sets to "UTC"; validates with time.LoadLocation unless set to "-".
 //   - Pool.Max.Connections / Pool.Idle.Connections: defaulted and validated by
-//     applyPoolConnectionDefaults (idle defaults to and is capped at max; see ADR-025).
+//     applyConnectionCountDefaults (idle defaults to and is capped at max; see ADR-025).
 //   - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
 //   - Pool.Lifetime.Max: if 0, sets to 30m (forces periodic connection recycling); if negative, returns an error.
 //   - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
@@ -387,7 +387,7 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		return err
 	}
 
-	if err := applyPoolConnectionDefaults(cfg); err != nil {
+	if err := applyConnectionCountDefaults(cfg); err != nil {
 		return err
 	}
 
