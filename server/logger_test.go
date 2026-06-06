@@ -90,6 +90,52 @@ func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *recEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *recEvent) Enabled() bool                                 { return true }
+
+// disabledEvent is a LogEvent reporting a disabled level; it records whether Msg ran.
+type disabledEvent struct{ msgCalled bool }
+
+func (e *disabledEvent) Msg(string)                          { e.msgCalled = true }
+func (e *disabledEvent) Msgf(string, ...any)                 { e.msgCalled = true }
+func (e *disabledEvent) Err(error) logger.LogEvent           { return e }
+func (e *disabledEvent) Str(_, _ string) logger.LogEvent     { return e }
+func (e *disabledEvent) Int(_ string, _ int) logger.LogEvent { return e }
+func (e *disabledEvent) Int64(_ string, _ int64) logger.LogEvent {
+	return e
+}
+func (e *disabledEvent) Uint64(_ string, _ uint64) logger.LogEvent { return e }
+func (e *disabledEvent) Dur(_ string, _ time.Duration) logger.LogEvent {
+	return e
+}
+func (e *disabledEvent) Interface(_ string, _ any) logger.LogEvent { return e }
+func (e *disabledEvent) Bytes(_ string, _ []byte) logger.LogEvent  { return e }
+func (e *disabledEvent) Bool(_ string, _ bool) logger.LogEvent     { return e }
+func (e *disabledEvent) Enabled() bool                             { return false }
+
+// disabledLogger returns disabled events for every level.
+type disabledLogger struct{ ev *disabledEvent }
+
+func (l *disabledLogger) Info() logger.LogEvent                     { return l.ev }
+func (l *disabledLogger) Error() logger.LogEvent                    { return l.ev }
+func (l *disabledLogger) Debug() logger.LogEvent                    { return l.ev }
+func (l *disabledLogger) Warn() logger.LogEvent                     { return l.ev }
+func (l *disabledLogger) Fatal() logger.LogEvent                    { return l.ev }
+func (l *disabledLogger) WithContext(_ any) logger.Logger           { return l }
+func (l *disabledLogger) WithFields(_ map[string]any) logger.Logger { return l }
+
+// TestLogActionSummarySkipsWhenLevelDisabled verifies the short-circuit guard: when
+// the action-log level is disabled, logActionSummary returns before emitting.
+func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	dl := &disabledLogger{ev: &disabledEvent{}}
+	logActionSummary(c, dl, LoggerConfig{SlowRequestThreshold: time.Second}, 10*time.Millisecond, 200, nil)
+
+	assert.False(t, dl.ev.msgCalled, "action summary must not emit when the level is disabled")
+}
 
 // Test that the request logger logs the same correlation_id as the response meta.traceId
 func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
@@ -956,8 +1002,7 @@ func TestBuildLogEventInfoLevel(t *testing.T) {
 		DBElapsed:     2000,
 	}
 
-	event := buildLogEvent(recLog, &logEventParams{
-		logLevel:   "info",
+	event := buildLogEvent(createLogEvent(recLog, "info"), &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   "",
@@ -984,8 +1029,7 @@ func TestBuildLogEventWithError(t *testing.T) {
 	metrics := operationalMetrics{}
 	testErr := assert.AnError
 
-	event := buildLogEvent(recLog, &logEventParams{
-		logLevel:   "error",
+	event := buildLogEvent(createLogEvent(recLog, "error"), &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   "",
@@ -1007,8 +1051,7 @@ func TestBuildLogEventWithTenant(t *testing.T) {
 	metadata := requestMetadata{Method: "GET", URI: "/api/data"}
 	metrics := operationalMetrics{}
 
-	event := buildLogEvent(recLog, &logEventParams{
-		logLevel:   "info",
+	event := buildLogEvent(createLogEvent(recLog, "info"), &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   "tenant-xyz",
@@ -1029,8 +1072,7 @@ func TestBuildLogEventWithoutTenant(t *testing.T) {
 	metadata := requestMetadata{Method: "GET", URI: "/public"}
 	metrics := operationalMetrics{}
 
-	event := buildLogEvent(recLog, &logEventParams{
-		logLevel:   "info",
+	event := buildLogEvent(createLogEvent(recLog, "info"), &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   "",
@@ -1066,8 +1108,7 @@ func TestBuildLogEventAllFields(t *testing.T) {
 		DBElapsed:     7500,
 	}
 
-	event := buildLogEvent(recLog, &logEventParams{
-		logLevel:   "warn",
+	event := buildLogEvent(createLogEvent(recLog, "warn"), &logEventParams{
 		metadata:   &metadata,
 		metrics:    metrics,
 		tenantID:   "full-tenant",

@@ -440,6 +440,7 @@ func (e *noopLogEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e
 func (e *noopLogEvent) Float64(_ string, _ float64) logger.LogEvent   { return e }
 func (e *noopLogEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
 func (e *noopLogEvent) Any(_ string, _ any) logger.LogEvent           { return e }
+func (e *noopLogEvent) Enabled() bool                                 { return true }
 func (e *noopLogEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *noopLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
 func (e *noopLogEvent) Interface(_ string, _ any) logger.LogEvent     { return e }

@@ -47,6 +47,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.Server.Timeout.Idle)
 	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
 	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
+	assert.Equal(t, 1024, cfg.Server.Gzip.MinLength)
 
 	// Database should be disabled by default (no defaults provided)
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
@@ -452,7 +453,7 @@ func clearEnvironmentVariables() {
 		"APP_NAME", "APP_VERSION", "APP_ENV", "APP_DEBUG", "APP_RATE_LIMIT", "APP_RATE_BURST", "APP_NAMESPACE",
 		"SERVER_HOST", "SERVER_PORT", "SERVER_TIMEOUT_READ", "SERVER_TIMEOUT_WRITE",
 		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
-		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY",
+		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY", "SERVER_GZIP_MINLENGTH",
 		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
 		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_TLS_MODE",
 		testDatabaseMaxConns, "DATABASE_POOL_IDLE_CONNECTIONS",

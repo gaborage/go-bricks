@@ -422,6 +422,20 @@ func TestValidateServerFailures(t *testing.T) {
 			},
 			expectedError: "server.timeout.middleware must be less than server.timeout.write",
 		},
+		{
+			name: "negative_gzip_minlength",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+				Gzip: GzipConfig{MinLength: -1},
+			},
+			expectedError: "server.gzip.minlength",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1644,6 +1644,7 @@ func (e *levelRecEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return 
 func (e *levelRecEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *levelRecEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *levelRecEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *levelRecEvent) Enabled() bool                                 { return true }
 
 func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 	e := echo.New()

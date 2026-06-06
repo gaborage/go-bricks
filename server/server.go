@@ -121,8 +121,9 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	healthPath := s.buildFullPath(healthRoute)
 	readyPath := s.buildFullPath(readyRoute)
 
-	// Setup middlewares with probe endpoint paths for tenant skipper
-	SetupMiddlewares(e, log, cfg, healthPath, readyPath)
+	// Setup middlewares with probe endpoint paths for tenant skipper. The OTel HTTP
+	// middleware is registered only when observability is enabled (zero overhead when off).
+	SetupMiddlewares(e, log, cfg, cfg.Bool("observability.enabled", false), healthPath, readyPath)
 
 	s.RegisterReadyHandler(s.readyCheck)
 

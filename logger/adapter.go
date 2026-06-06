@@ -116,6 +116,13 @@ func (lea *LogEventAdapter) Bool(key string, value bool) LogEvent {
 	return lea.wrapEvent(lea.event.Bool(key, value))
 }
 
+// Enabled reports whether the underlying zerolog event will be emitted. It is
+// nil-safe: zerolog returns a nil *Event for disabled levels, and *Event.Enabled
+// returns false on a nil receiver.
+func (lea *LogEventAdapter) Enabled() bool {
+	return lea.event.Enabled()
+}
+
 func (lea *LogEventAdapter) trackSeverity() {
 	if lea.hook != nil && lea.level >= zerolog.WarnLevel {
 		lea.hook(lea.level)

@@ -150,6 +150,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"server.path.base":          "",
 		"server.path.health":        "/health",
 		"server.path.ready":         "/ready",
+		"server.gzip.minlength":     1024,
 
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured

@@ -140,6 +140,8 @@ func (e *recordingEvent) Bool(key string, value bool) logger.LogEvent {
 	return e
 }
 
+func (e *recordingEvent) Enabled() bool { return true }
+
 func TestTruncateStringNoTruncation(t *testing.T) {
 	original := "short"
 	if TruncateString(original, len(original)+1) != original {

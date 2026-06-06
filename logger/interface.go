@@ -30,4 +30,8 @@ type LogEvent interface {
 	Interface(key string, i any) LogEvent
 	Bytes(key string, val []byte) LogEvent
 	Bool(key string, value bool) LogEvent
+	// Enabled reports whether the event will actually be emitted at its level
+	// (i.e. not dropped by the logger's level or sampling). Callers can use it to
+	// skip building expensive fields when the event would be discarded.
+	Enabled() bool
 }

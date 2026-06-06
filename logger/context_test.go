@@ -34,11 +34,13 @@ func TestWithAMQPCounter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var ctx context.Context
-			if tt.ctx != nil {
-				ctx = WithAMQPCounter(tt.ctx)
-			} else {
-				ctx = WithAMQPCounter(context.Background())
+			// Nil-safe: WithAMQPCounter(nil) returns nil without panicking, and the
+			// accessors report 0 on a nil context.
+			ctx := WithAMQPCounter(tt.ctx)
+			if tt.ctx == nil {
+				assert.Nil(t, ctx)
+				assert.Equal(t, int64(0), GetAMQPCounter(ctx))
+				return
 			}
 
 			// Verify counter is initialized to 0
@@ -76,11 +78,13 @@ func TestWithDBCounter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var ctx context.Context
-			if tt.ctx != nil {
-				ctx = WithDBCounter(tt.ctx)
-			} else {
-				ctx = WithDBCounter(context.Background())
+			// Nil-safe: WithDBCounter(nil) returns nil without panicking, and the
+			// accessors report 0 on a nil context.
+			ctx := WithDBCounter(tt.ctx)
+			if tt.ctx == nil {
+				assert.Nil(t, ctx)
+				assert.Equal(t, int64(0), GetDBCounter(ctx))
+				return
 			}
 
 			// Verify counter is initialized to 0
@@ -325,29 +329,17 @@ func TestConcurrentMixedOperations(t *testing.T) {
 }
 
 func TestContextKeyUniqueness(t *testing.T) {
-	// Verify that our context keys don't collide with user keys
-	userKey1 := testContextKey("amqp_message_counter")
-	userKey2 := testContextKey("db_operation_counter")
-	userKey3 := testContextKey("amqp_elapsed_nanos")
-	userKey4 := testContextKey("db_elapsed_nanos")
+	// A user key whose STRING matches the framework's internal counters key must not
+	// collide, because the framework stores under a distinct unexported contextKey type.
+	userKey := testContextKey("request_counters")
 
-	ctx := context.Background()
-	ctx = context.WithValue(ctx, userKey1, "user_value")
-	ctx = context.WithValue(ctx, userKey2, "user_value")
-	ctx = context.WithValue(ctx, userKey3, "user_value")
-	ctx = context.WithValue(ctx, userKey4, "user_value")
+	ctx := context.WithValue(context.Background(), userKey, "user_value")
+	ctx = WithRequestCounters(ctx)
 
-	// Add our counters
-	ctx = WithAMQPCounter(ctx)
-	ctx = WithDBCounter(ctx)
+	// User value is preserved alongside the framework counters.
+	assert.Equal(t, "user_value", ctx.Value(userKey))
 
-	// User values should be preserved
-	assert.Equal(t, "user_value", ctx.Value(userKey1))
-	assert.Equal(t, "user_value", ctx.Value(userKey2))
-	assert.Equal(t, "user_value", ctx.Value(userKey3))
-	assert.Equal(t, "user_value", ctx.Value(userKey4))
-
-	// Our counters should work independently
+	// Framework counters work independently.
 	assert.Equal(t, int64(0), GetAMQPCounter(ctx))
 	assert.Equal(t, int64(0), GetDBCounter(ctx))
 	assert.Equal(t, int64(0), GetAMQPElapsed(ctx))

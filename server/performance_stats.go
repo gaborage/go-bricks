@@ -12,9 +12,8 @@ import (
 func PerformanceStats() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			// Add both AMQP counter and DB counter to request context
-			ctx := logger.WithAMQPCounter(c.Request().Context())
-			ctx = logger.WithDBCounter(ctx)
+			// Seed the shared per-request AMQP/DB counters.
+			ctx := logger.WithRequestCounters(c.Request().Context())
 			c.SetRequest(c.Request().WithContext(ctx))
 
 			return next(c)

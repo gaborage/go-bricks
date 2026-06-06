@@ -115,6 +115,7 @@ func (e *testLogEvent) Bool(key string, _ bool) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+func (e *testLogEvent) Enabled() bool { return true }
 
 // Test helpers for common setup patterns
 func newTestConfig(basePath, healthRoute, readyRoute string) *config.Config {

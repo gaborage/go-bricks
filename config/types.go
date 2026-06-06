@@ -91,6 +91,7 @@ type ServerConfig struct {
 	Port    int           `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
 	Timeout TimeoutConfig `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
 	Path    PathConfig    `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`
+	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
 }
 
 // TimeoutConfig holds various timeout durations for the server.
@@ -107,6 +108,14 @@ type PathConfig struct {
 	Base   string `koanf:"base" json:"base" yaml:"base" toml:"base" mapstructure:"base"`
 	Health string `koanf:"health" json:"health" yaml:"health" toml:"health" mapstructure:"health"`
 	Ready  string `koanf:"ready" json:"ready" yaml:"ready" toml:"ready" mapstructure:"ready"`
+}
+
+// GzipConfig holds HTTP response compression settings.
+type GzipConfig struct {
+	// MinLength is the minimum response size in bytes before gzip compression is
+	// applied. Responses smaller than this are sent uncompressed, since the gzip
+	// header/overhead can exceed the savings for small payloads. Default: 1024.
+	MinLength int `koanf:"minlength" json:"minlength" yaml:"minlength" toml:"minlength" mapstructure:"minlength"`
 }
 
 // DatabaseConfig holds database connection settings.

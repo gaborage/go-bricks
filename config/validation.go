@@ -227,6 +227,10 @@ func validateServer(cfg *ServerConfig) error {
 		return NewValidationError("server.timeout.shutdown", errMustBePositive)
 	}
 
+	if cfg.Gzip.MinLength < 0 {
+		return NewValidationError("server.gzip.minlength", errMustBeNonNegative)
+	}
+
 	return nil
 }
 

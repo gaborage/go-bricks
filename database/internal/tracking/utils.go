@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -56,6 +57,21 @@ const (
 	maxDBQueryAttrLen = 2000                 // Maximum length for db.query.text attribute
 )
 
+// observabilityEnabled gates OpenTelemetry span/metric emission for DB operations
+// (process-global; access is atomic since it is read on every DB-op goroutine).
+var observabilityEnabled atomic.Bool
+
+// SetObservabilityEnabled toggles DB-operation OpenTelemetry span/metric emission.
+// The app bootstrap calls it once from the resolved observability.enabled value.
+// It defaults to false to honor the no-op provider's zero-overhead contract: when
+// off, no span/metric attributes are built (otel.Tracer/otel.Meter return non-nil
+// no-ops, so the in-function nil guards alone never fire). Consumers that use the
+// database package WITHOUT the framework's app bootstrap must call this explicitly
+// to enable DB tracing.
+func SetObservabilityEnabled(enabled bool) {
+	observabilityEnabled.Store(enabled)
+}
+
 // TrackDBOperation records metrics and emits a log event for a completed database operation.
 //
 // TrackDBOperation is a no-op if tc or its Logger is nil. It records the operation's duration to
@@ -81,13 +97,13 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
 	}
 
-	// Create OpenTelemetry span for database operation with accurate timing
-	if ctx != nil {
+	// Create the OpenTelemetry span + metrics for the database operation — but only
+	// when observability is enabled. otel.Tracer/otel.Meter return non-nil no-ops
+	// when no provider is registered, so without this explicit gate the framework
+	// would build and discard span/metric attributes on every query with
+	// observability off (the in-function nil guards never fire).
+	if ctx != nil && observabilityEnabled.Load() {
 		createDBSpan(ctx, tc, query, start, err)
-	}
-
-	// Record OpenTelemetry metrics for database operation
-	if ctx != nil {
 		recordDBMetrics(ctx, tc, query, elapsed, rowsAffected, err)
 	}
 

@@ -460,5 +460,6 @@ func (e *testLogEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e
 func (e *testLogEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *testLogEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *testLogEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *testLogEvent) Enabled() bool                                 { return true }
 func (e *testLogEvent) Msg(_ string)                                  {} // No-op for test logger
 func (e *testLogEvent) Msgf(_ string, _ ...any)                       {} // No-op for test logger

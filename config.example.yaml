@@ -27,6 +27,8 @@ server:
     base: ""          # Global prefix for all routes (e.g., "/api/v1")
     health: /health   # Custom health endpoint path
     ready: /ready     # Custom readiness endpoint path
+  gzip:
+    minlength: 1024   # Min response size (bytes) before gzip applies; smaller responses skip compression
 
 database:
   type: postgresql

@@ -87,6 +87,8 @@ func (e *fakeLogEvent) Bool(key string, value bool) logger.LogEvent {
 	return e
 }
 
+func (e *fakeLogEvent) Enabled() bool { return true }
+
 // fakeLogger implements logger.Logger for testing
 type fakeLogger struct {
 	events []loggedEvent
