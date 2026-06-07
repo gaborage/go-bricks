@@ -15,17 +15,15 @@ type LogEventAdapter struct {
 	hook   func(zerolog.Level)
 }
 
-// wrapEvent creates a new LogEventAdapter reusing the current filter/level/hook.
-func (lea *LogEventAdapter) wrapEvent(e *zerolog.Event) *LogEventAdapter {
-	return &LogEventAdapter{event: e, filter: lea.filter, level: lea.level, hook: lea.hook}
-}
-
-// maskIfSensitive returns a masked adapter when the key is sensitive, signalling via ok.
+// maskIfSensitive masks the key in place when it is sensitive, signalling via ok.
 // Centralizes the typed-method mask check so adding a new typed slot (e.g. Float64) cannot
 // silently bypass the privacy boundary by forgetting to wire the same conditional.
+// zerolog's *Event.Interface mutates the event in place and returns the same pointer, so
+// reusing the receiver here avoids allocating a wrapper per masked field.
 func (lea *LogEventAdapter) maskIfSensitive(key string) (LogEvent, bool) {
 	if lea.filter != nil && lea.filter.isSensitiveField(key) {
-		return lea.wrapEvent(lea.event.Interface(key, lea.filter.config.MaskValue)), true
+		lea.event = lea.event.Interface(key, lea.filter.config.MaskValue)
+		return lea, true
 	}
 	return nil, false
 }
@@ -44,7 +42,8 @@ func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 
 // Err adds an error to the log event
 func (lea *LogEventAdapter) Err(err error) LogEvent {
-	return lea.wrapEvent(lea.event.Err(err))
+	lea.event = lea.event.Err(err)
+	return lea
 }
 
 // Str adds a string field to the log event
@@ -52,7 +51,8 @@ func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 	if lea.filter != nil {
 		value = lea.filter.FilterString(key, value)
 	}
-	return lea.wrapEvent(lea.event.Str(key, value))
+	lea.event = lea.event.Str(key, value)
+	return lea
 }
 
 // Int adds an integer field to the log event
@@ -60,7 +60,8 @@ func (lea *LogEventAdapter) Int(key string, value int) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
 	}
-	return lea.wrapEvent(lea.event.Int(key, value))
+	lea.event = lea.event.Int(key, value)
+	return lea
 }
 
 // Int64 adds an int64 field to the log event
@@ -68,7 +69,8 @@ func (lea *LogEventAdapter) Int64(key string, value int64) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
 	}
-	return lea.wrapEvent(lea.event.Int64(key, value))
+	lea.event = lea.event.Int64(key, value)
+	return lea
 }
 
 // Uint64 adds a uint64 field to the log event
@@ -76,7 +78,8 @@ func (lea *LogEventAdapter) Uint64(key string, value uint64) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
 	}
-	return lea.wrapEvent(lea.event.Uint64(key, value))
+	lea.event = lea.event.Uint64(key, value)
+	return lea
 }
 
 // Dur adds a duration field to the log event
@@ -84,7 +87,8 @@ func (lea *LogEventAdapter) Dur(key string, d time.Duration) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
 	}
-	return lea.wrapEvent(lea.event.Dur(key, d))
+	lea.event = lea.event.Dur(key, d)
+	return lea
 }
 
 // Interface adds an any field to the log event
@@ -92,7 +96,8 @@ func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 	if lea.filter != nil {
 		i = lea.filter.FilterValue(key, i)
 	}
-	return lea.wrapEvent(lea.event.Interface(key, i))
+	lea.event = lea.event.Interface(key, i)
+	return lea
 }
 
 // Bytes adds a byte slice field to the log event
@@ -100,7 +105,8 @@ func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
 	}
-	return lea.wrapEvent(lea.event.Bytes(key, val))
+	lea.event = lea.event.Bytes(key, val)
+	return lea
 }
 
 // Bool adds a boolean field to the log event
@@ -108,12 +114,15 @@ func (lea *LogEventAdapter) Bool(key string, value bool) LogEvent {
 	if lea.filter != nil {
 		filtered := lea.filter.FilterValue(key, value)
 		if b, ok := filtered.(bool); ok {
-			return lea.wrapEvent(lea.event.Bool(key, b))
+			lea.event = lea.event.Bool(key, b)
+			return lea
 		}
 		// Sensitive field was masked to a string — fall back to Interface to preserve the mask
-		return lea.wrapEvent(lea.event.Interface(key, filtered))
+		lea.event = lea.event.Interface(key, filtered)
+		return lea
 	}
-	return lea.wrapEvent(lea.event.Bool(key, value))
+	lea.event = lea.event.Bool(key, value)
+	return lea
 }
 
 // Enabled reports whether the underlying zerolog event will be emitted. It is
