@@ -40,6 +40,30 @@ type APIResponse struct {
 	Meta  map[string]any    `json:"meta"`
 }
 
+// frameworkMeta is the typed form of the default envelope meta. Field order
+// (Timestamp, TraceID) reproduces encoding/json's sorted map-key order
+// ("timestamp" < "traceId") so output is byte-identical to the map form.
+//
+// The json tags MUST stay equal to the fieldTimestamp/fieldTraceID constants
+// (server/constants.go); tags must be string literals, so they are duplicated
+// here rather than referenced.
+type frameworkMeta struct {
+	Timestamp string `json:"timestamp"`
+	TraceID   string `json:"traceId"`
+}
+
+// frameworkEnvelope is the internal, unexported wire DTO for the default
+// success/error encode paths. It mirrors APIResponse's field ORDER but carries
+// the typed frameworkMeta (zero map allocation, zero per-key any-boxing). The
+// JSON shape is byte-identical to APIResponse with a map[string]any meta: the
+// omitempty Data/Error are dropped when zero, field order is data,error,meta,
+// and meta key order is timestamp,traceId.
+type frameworkEnvelope struct {
+	Data  any               `json:"data,omitempty"`
+	Error *APIErrorResponse `json:"error,omitempty"`
+	Meta  frameworkMeta     `json:"meta"`
+}
+
 // APIErrorResponse represents the error portion of an API response.
 type APIErrorResponse struct {
 	Code    string         `json:"code"`
@@ -708,14 +732,16 @@ func parseTime(s string) (time.Time, error) {
 }
 
 // formatSuccessResponse formats a successful response with standardized structure.
+//
+// The default (non-merge) success path encodes via frameworkEnvelope so it avoids the
+// map allocation and per-key any-boxing of APIResponse.Meta; the wire shape is identical
+// ({"data":...,"meta":{"timestamp":...,"traceId":...}}).
 func formatSuccessResponse(c *echo.Context, data any) error {
 	ensureTraceParentHeader(c)
-	response := APIResponse{
+	return c.JSON(http.StatusOK, frameworkEnvelope{
 		Data: data,
-		Meta: buildFrameworkMeta(c),
-	}
-
-	return c.JSON(http.StatusOK, response)
+		Meta: newFrameworkMeta(c),
+	})
 }
 
 // formatSuccessResponseWithStatus formats a successful response with a custom status and headers.
@@ -769,6 +795,17 @@ func buildFrameworkMeta(c *echo.Context) map[string]any {
 	}
 }
 
+// newFrameworkMeta builds the typed form of the default envelope meta. It computes
+// the same values as buildFrameworkMeta (RFC3339 UTC timestamp + traceId) so the wire
+// output is identical, but as a struct it avoids the map allocation and per-key
+// any-boxing on the default success/error encode paths.
+func newFrameworkMeta(c *echo.Context) frameworkMeta {
+	return frameworkMeta{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		TraceID:   getTraceID(c),
+	}
+}
+
 // mergeEnvelopeMeta returns the union of handler-supplied meta and framework-managed meta.
 // Framework keys (reservedMetaKeys) are authoritative: any handler value for those keys is
 // dropped, and a structured WARN is emitted via log identifying the offending key and the
@@ -819,13 +856,14 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 		errorResp.Details = devDetails(apiErr)
 	}
 
-	response := APIResponse{
-		Error: errorResp,
-		Meta:  buildFrameworkMeta(c),
-	}
-
+	// Default (non-merge) error path: encode via the typed frameworkEnvelope to skip the
+	// meta map allocation. Wire shape is identical to APIResponse{Error, Meta:map} —
+	// {"error":{...},"meta":{"timestamp":...,"traceId":...}}.
 	ensureTraceParentHeader(c)
-	return c.JSON(apiErr.HTTPStatus(), response)
+	return c.JSON(apiErr.HTTPStatus(), frameworkEnvelope{
+		Error: errorResp,
+		Meta:  newFrameworkMeta(c),
+	})
 }
 
 // devDetails returns the dev-only details payload: caller-supplied details merged
