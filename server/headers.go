@@ -13,7 +13,8 @@ package server
 
 const (
 	// HeaderXResponseTime is used to report request processing duration.
-	// Set by the timing middleware on all responses.
+	// Set by the optional timing middleware only when server.responsetime.enabled
+	// is true (off by default); see ADR-026.
 	HeaderXResponseTime = "X-Response-Time"
 
 	// HeaderXRealIP contains the client's real IP address when behind a proxy.

@@ -28,7 +28,17 @@ import (
 // Koanf default of EnvDevelopment when APP_ENV is unset). When omitted,
 // CORS falls back to os.Getenv("APP_ENV") — preserving call sites that
 // existed before the parameter was added.
-func CORS(envOverride ...string) echo.MiddlewareFunc {
+//
+// exposeResponseTime advertises X-Response-Time in Access-Control-Expose-Headers
+// only when the Timing middleware actually emits the header (server.responsetime.
+// enabled). Advertising an expose-header the server never sends is harmless but
+// misleading, so this keeps the CORS contract aligned with what is on the wire.
+func CORS(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFunc {
+	exposeHeaders := []string{echo.HeaderXRequestID}
+	if exposeResponseTime {
+		exposeHeaders = append(exposeHeaders, HeaderXResponseTime)
+	}
+
 	cfg := middleware.CORSConfig{
 		AllowMethods: []string{
 			http.MethodGet,
@@ -45,10 +55,7 @@ func CORS(envOverride ...string) echo.MiddlewareFunc {
 			echo.HeaderAuthorization,
 			echo.HeaderXRequestID,
 		},
-		ExposeHeaders: []string{
-			echo.HeaderXRequestID,
-			HeaderXResponseTime,
-		},
+		ExposeHeaders:    exposeHeaders,
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}

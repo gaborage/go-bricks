@@ -91,7 +91,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// CORS — pass cfg.App.Env so the policy honors the Koanf default of
 	// EnvDevelopment (instead of falling back to os.Getenv which is empty
 	// when the operator relies on config.yaml / framework defaults).
-	e.Use(CORS(cfg.App.Env))
+	e.Use(CORS(cfg.Server.ResponseTime.Enabled, cfg.App.Env))
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {
@@ -146,8 +146,13 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// Rate limit
 	e.Use(RateLimit(cfg.App.Rate.Limit))
 
-	// Timing
-	e.Use(Timing())
+	// Timing — opt-in. The X-Response-Time header costs a per-response header
+	// allocation (net/textproto.MIMEHeader.Set allocates a []string per Set) and
+	// OTel provides richer latency telemetry, so it defaults off. Enable via
+	// server.responsetime.enabled for local debugging or consumer compatibility.
+	if cfg.Server.ResponseTime.Enabled {
+		e.Use(Timing())
+	}
 }
 
 var defaultTenantIDRegex = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)

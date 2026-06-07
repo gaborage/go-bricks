@@ -27,7 +27,7 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	// Create a simple handler
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -76,7 +76,7 @@ func TestCORSProductionEnvironmentWithCustomOrigins(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	// Create a simple handler
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -153,7 +153,7 @@ func TestCORSProductionEnvironmentWithoutCustomOrigins(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	// Create a simple handler
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -197,7 +197,7 @@ func TestCORSNeutralEnvWithoutCustomOriginsFailsClosed(t *testing.T) {
 			os.Unsetenv("CORS_ORIGINS")
 
 			e := echo.New()
-			handler := CORS()(func(c *echo.Context) error {
+			handler := CORS(false)(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "test")
 			})
 
@@ -225,7 +225,7 @@ func TestCORSAllowedHeaders(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	// Create a simple handler
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -262,9 +262,9 @@ func TestCORSExposedHeaders(t *testing.T) {
 
 	os.Setenv("APP_ENV", "development")
 
-	// Setup Echo
+	// Setup Echo — exposeResponseTime=true mirrors server.responsetime.enabled.
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(true)
 
 	// Create a simple handler that sets response headers
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -289,6 +289,40 @@ func TestCORSExposedHeaders(t *testing.T) {
 	assert.Contains(t, exposedHeaders, HeaderXResponseTime)
 }
 
+// TestCORSExposedHeadersResponseTimeDisabled verifies that when the Timing
+// middleware is opt-out (exposeResponseTime=false, the default), CORS does not
+// advertise X-Response-Time in Access-Control-Expose-Headers — keeping the CORS
+// contract aligned with what the server actually emits. X-Request-ID stays.
+func TestCORSExposedHeadersResponseTimeDisabled(t *testing.T) {
+	originalAppEnv := os.Getenv("APP_ENV")
+	defer func() {
+		os.Setenv("APP_ENV", originalAppEnv)
+	}()
+
+	os.Setenv("APP_ENV", "development")
+
+	e := echo.New()
+	corsMiddleware := CORS(false)
+
+	handler := corsMiddleware(func(c *echo.Context) error {
+		c.Response().Header().Set("X-Request-ID", "test-123")
+		return c.String(http.StatusOK, "test")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	req.Header.Set("Origin", "http://localhost:3000")
+
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, handler(c))
+
+	exposedHeaders := rec.Header().Get(HeaderAccessControlExposeHeaders)
+	assert.Contains(t, exposedHeaders, echo.HeaderXRequestID)
+	assert.NotContains(t, exposedHeaders, HeaderXResponseTime,
+		"X-Response-Time must not be advertised when the Timing middleware is disabled")
+}
+
 func TestCORSActualRequestHandling(t *testing.T) {
 	// Save original env vars
 	originalAppEnv := os.Getenv("APP_ENV")
@@ -300,7 +334,7 @@ func TestCORSActualRequestHandling(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	// Create a handler that returns JSON
 	handler := corsMiddleware(func(c *echo.Context) error {
@@ -349,7 +383,7 @@ func TestCORSMaxAge(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
@@ -381,7 +415,7 @@ func TestCORSCredentialsEnabled(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
@@ -420,7 +454,7 @@ func TestCORSEmptyOriginsList(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
@@ -455,7 +489,7 @@ func TestCORSSingleOrigin(t *testing.T) {
 
 	// Setup Echo
 	e := echo.New()
-	corsMiddleware := CORS()
+	corsMiddleware := CORS(false)
 
 	handler := corsMiddleware(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
@@ -510,7 +544,7 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 
 	// Setup Echo with CORS middleware
 	e := echo.New()
-	e.Use(CORS())
+	e.Use(CORS(false))
 
 	// Add a route
 	e.GET("/api/test", func(c *echo.Context) error {
@@ -569,7 +603,7 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 			}
 
 			e := echo.New()
-			corsMiddleware := CORS()
+			corsMiddleware := CORS(false)
 			handler := corsMiddleware(func(c *echo.Context) error {
 				return c.String(http.StatusOK, "test")
 			})
@@ -616,7 +650,7 @@ func TestCORSEnvOverrideHonorsConfigValue(t *testing.T) {
 	os.Unsetenv("CORS_ORIGINS")
 
 	e := echo.New()
-	handler := CORS("development")(func(c *echo.Context) error {
+	handler := CORS(false, "development")(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -647,7 +681,7 @@ func TestCORSStrictBranchRejectsWildcardEntry(t *testing.T) {
 
 	// Must not panic at construction time.
 	e := echo.New()
-	handler := CORS()(func(c *echo.Context) error {
+	handler := CORS(false)(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -679,7 +713,7 @@ func TestCORSStrictBranchTolerantOfTrailingComma(t *testing.T) {
 
 	// Must not panic at construction time.
 	e := echo.New()
-	handler := CORS()(func(c *echo.Context) error {
+	handler := CORS(false)(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
@@ -709,7 +743,7 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 
 	// Must not panic.
 	e := echo.New()
-	handler := CORS()(func(c *echo.Context) error {
+	handler := CORS(false)(func(c *echo.Context) error {
 		return c.String(http.StatusOK, "test")
 	})
 
