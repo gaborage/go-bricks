@@ -92,6 +92,8 @@ type ServerConfig struct {
 	Timeout TimeoutConfig `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
 	Path    PathConfig    `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`
 	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
+
+	ResponseTime ResponseTimeConfig `koanf:"responsetime" json:"responsetime" yaml:"responsetime" toml:"responsetime" mapstructure:"responsetime"`
 }
 
 // TimeoutConfig holds various timeout durations for the server.
@@ -116,6 +118,15 @@ type GzipConfig struct {
 	// applied. Responses smaller than this are sent uncompressed, since the gzip
 	// header/overhead can exceed the savings for small payloads. Default: 1024.
 	MinLength int `koanf:"minlength" json:"minlength" yaml:"minlength" toml:"minlength" mapstructure:"minlength"`
+}
+
+// ResponseTimeConfig controls the optional X-Response-Time diagnostic header.
+type ResponseTimeConfig struct {
+	// Enabled adds an X-Response-Time response header (per-request processing
+	// time) when true. Default false: the header costs a per-response header
+	// allocation and OTel provides richer latency telemetry. Opt in for local
+	// debugging or when a consumer depends on the header.
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 }
 
 // DatabaseConfig holds database connection settings.

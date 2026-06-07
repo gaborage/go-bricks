@@ -48,6 +48,13 @@ enrichment:
   combining trace enrichment and counter seeding. `TraceContext`/`PerformanceStats`
   remain exported and share the trace-enrichment helper.
 - **Add `server.gzip.minlength`** (default 1024) so tiny responses skip compression.
+- **Make the `X-Response-Time` header opt-in** via `server.responsetime.enabled`
+  (default false). The always-on `Timing` middleware set the header on every
+  response, and each `Header().Set` allocates a `[]string` in
+  `net/textproto.MIMEHeader.Set` — ~2.4% of total allocations on the default read
+  workload (perf iteration-2). The middleware is registered only when enabled, and
+  `server.CORS` advertises the header in `Access-Control-Expose-Headers` only when
+  it is actually emitted. `X-Request-ID` and `traceparent` stay unconditional.
 
 ### Breaking changes
 
@@ -55,6 +62,9 @@ enrichment:
   (Interface evolution, same class as the S8179/S8196 changes in ADR-013.)
 - `server.SetupMiddlewares` gains an `observabilityEnabled bool` parameter.
 - `server.gzip.minlength` defaults to 1024 (was effectively 0 = compress all).
+- `X-Response-Time` is no longer emitted by default — opt in with
+  `server.responsetime.enabled: true`. Direct callers of `server.CORS(...)` gain a
+  leading `exposeResponseTime bool` parameter.
 - Consumers using the `database` package **without** the app bootstrap must call
   `database.SetObservabilityEnabled(true)` to emit DB spans/metrics.
 

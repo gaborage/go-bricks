@@ -48,6 +48,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
 	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
 	assert.Equal(t, 1024, cfg.Server.Gzip.MinLength)
+	assert.False(t, cfg.Server.ResponseTime.Enabled, "X-Response-Time header must default to opt-out")
 
 	// Database should be disabled by default (no defaults provided)
 	assert.False(t, IsDatabaseConfigured(&cfg.Database))
@@ -132,6 +133,25 @@ func TestLoadSingleElementStringSliceEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.Scheduler.Security.CIDRAllowlist)
+}
+
+// TestLoadResponseTimeEnabledEnv verifies the opt-in X-Response-Time header flag
+// is off by default and flips to true when SERVER_RESPONSETIME_ENABLED is set.
+func TestLoadResponseTimeEnabledEnv(t *testing.T) {
+	t.Run("default_disabled", func(t *testing.T) {
+		clearEnvironmentVariables()
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.False(t, cfg.Server.ResponseTime.Enabled)
+	})
+
+	t.Run("env_enables", func(t *testing.T) {
+		clearEnvironmentVariables()
+		t.Setenv("SERVER_RESPONSETIME_ENABLED", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.True(t, cfg.Server.ResponseTime.Enabled)
+	})
 }
 
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
@@ -454,6 +474,7 @@ func clearEnvironmentVariables() {
 		"SERVER_HOST", "SERVER_PORT", "SERVER_TIMEOUT_READ", "SERVER_TIMEOUT_WRITE",
 		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
 		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY", "SERVER_GZIP_MINLENGTH",
+		"SERVER_RESPONSETIME_ENABLED",
 		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
 		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_TLS_MODE",
 		testDatabaseMaxConns, "DATABASE_POOL_IDLE_CONNECTIONS",

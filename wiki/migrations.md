@@ -37,6 +37,18 @@ The OTel HTTP middleware is registered only when the flag is true (zero per-requ
 
 `server.gzip.minlength` now defaults to **1024** bytes (previously gzip compressed everything). Responses smaller than this are sent uncompressed, avoiding gzip header overhead on tiny JSON. Set `server.gzip.minlength: 0` to restore always-compress behavior.
 
+### `X-Response-Time` header is now opt-in (`server.responsetime.enabled`)
+
+The diagnostic `X-Response-Time` response header (per-request processing time) is **no longer emitted by default**. The `Timing` middleware that set it on every response is now gated behind `server.responsetime.enabled` (default **false**). Each per-response `Header().Set` allocates a `[]string` in `net/textproto.MIMEHeader.Set` — measured at ~2.4% of total allocations on the default read workload — and OTel provides richer latency telemetry. `X-Request-ID` and `traceparent` are unaffected. To restore the header, set:
+
+```yaml
+server:
+  responsetime:
+    enabled: true   # or SERVER_RESPONSETIME_ENABLED=true
+```
+
+When disabled, CORS also stops advertising `X-Response-Time` in `Access-Control-Expose-Headers`, keeping the CORS contract aligned with what is on the wire. Direct callers of `server.CORS(...)` get a new leading `exposeResponseTime bool` parameter (`CORS(cfg.Server.ResponseTime.Enabled, cfg.App.Env)`); apps using the normal server bootstrap are unaffected.
+
 ## Connection Pool Idle Default — Tracks Max (ADR-025)
 
 Per [ADR-025](adr_025_pool_idle_tracks_max.md), the default for `database.pool.idle.connections` changed from a fixed **2** to **tracking `database.pool.max.connections`** (default 25). The old default kept only 2 idle connections against a max of 25, so under sustained load the pool continuously opened and closed physical connections (TCP+TLS+auth) — measured as a 91% p95 latency reduction (16.25 → 1.46 ms) and connection-establishment errors dropping from 8.15% to 0% once idle tracked max.

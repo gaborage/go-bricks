@@ -108,13 +108,64 @@ func TestSetupMiddlewares(t *testing.T) {
 			// Verify request ID is set
 			assert.NotEmpty(t, rec.Header().Get(echo.HeaderXRequestID))
 
-			// Verify timing header is set
-			assert.NotEmpty(t, rec.Header().Get(HeaderXResponseTime))
+			// Timing header is opt-in (server.responsetime.enabled); the test
+			// configs leave it at the zero-value default (disabled), so the
+			// X-Response-Time header must be absent.
+			assert.Empty(t, rec.Header().Get(HeaderXResponseTime))
 
 			// Response should be successful
 			assert.Equal(t, http.StatusOK, rec.Code)
 		})
 	}
+}
+
+// TestSetupMiddlewaresResponseTimeHeader verifies the X-Response-Time header is
+// opt-in: absent under the default (disabled) config and present once
+// server.responsetime.enabled is true.
+func TestSetupMiddlewaresResponseTimeHeader(t *testing.T) {
+	newCfg := func(enabled bool) *config.Config {
+		return &config.Config{
+			App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
+			Server: config.ServerConfig{
+				Timeout:      config.TimeoutConfig{Middleware: 30 * time.Second},
+				ResponseTime: config.ResponseTimeConfig{Enabled: enabled},
+			},
+		}
+	}
+
+	t.Run("disabled_by_default_omits_header", func(t *testing.T) {
+		e := echo.New()
+		log := logger.New("disabled", false)
+		SetupMiddlewares(e, log, newCfg(false), true, testHealthPath, testReadyPath)
+		e.GET("/test", func(c *echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		})
+
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Empty(t, rec.Header().Get(HeaderXResponseTime),
+			"X-Response-Time must be absent when server.responsetime.enabled is false")
+	})
+
+	t.Run("enabled_sets_header", func(t *testing.T) {
+		e := echo.New()
+		log := logger.New("disabled", false)
+		SetupMiddlewares(e, log, newCfg(true), true, testHealthPath, testReadyPath)
+		e.GET("/test", func(c *echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		})
+
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.NotEmpty(t, rec.Header().Get(HeaderXResponseTime),
+			"X-Response-Time must be present when server.responsetime.enabled is true")
+	})
 }
 
 func TestBuildTenantResolver(t *testing.T) {

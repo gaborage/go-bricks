@@ -29,6 +29,8 @@ server:
     ready: /ready     # Custom readiness endpoint path
   gzip:
     minlength: 1024   # Min response size (bytes) before gzip applies; smaller responses skip compression
+  responsetime:
+    enabled: false    # Opt-in X-Response-Time header (per-request processing time); off by default — OTel provides richer latency telemetry. SERVER_RESPONSETIME_ENABLED=true to restore.
 
 database:
   type: postgresql
