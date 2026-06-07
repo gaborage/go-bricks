@@ -25,6 +25,16 @@ const (
 	// Log field key for the SQL query string.
 	logFieldQuery = "query"
 
+	// Log message emitted for a successful (non-slow, error-free) DB operation.
+	// Extracted as a constant because it is also asserted in tests (goconst).
+	msgDBOperationExecuted = "Database operation executed"
+
+	// Log messages for the special-cased and error branches. Extracted as constants
+	// because they are also asserted in tests (goconst).
+	msgDBOperationNoRows = "Database operation returned no rows"
+	msgDBTxFinalized     = "Database transaction already finalized"
+	msgDBOperationError  = "Database operation error"
+
 	// Database vendor normalization constants matching OTel semantic conventions
 	dbVendorPostgreSQL = "postgresql"
 	dbVendorOracle     = "oracle.db" // OTel spec requires "oracle.db" not "oracle"
@@ -97,6 +107,9 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
 	}
 
+	// Counter/metric/span emission is intentionally ABOVE (and NOT gated by) the log-level
+	// short-circuit below, so DB counters, tracing and metrics are never affected by LOG_LEVEL.
+	//
 	// Create the OpenTelemetry span + metrics for the database operation — but only
 	// when observability is enabled. otel.Tracer/otel.Meter return non-nil no-ops
 	// when no provider is registered, so without this explicit gate the framework
@@ -107,43 +120,82 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 		recordDBMetrics(ctx, tc, query, elapsed, rowsAffected, err)
 	}
 
+	// Select the log event (level + message) up front so field construction can be
+	// short-circuited when the level is disabled. WithContext binds first: a context-bound
+	// logger may carry a different level, so enablement is only accurate after binding.
+	//
+	// Treat sql.ErrNoRows and sql.ErrTxDone specially - not actual errors, log as debug.
+	// ErrTxDone is returned by the deferred Rollback of an already-committed transaction
+	// (e.g. the WithTx helper), which is benign. errors.Is(nil, target) is false, so a nil
+	// err correctly falls through to the slow/default branches.
+	//
+	// Request-severity note: the WARN (slow-query) and ERROR branches escalate request
+	// severity via the adapter's Msg/Msgf -> trackSeverity -> escalateSeverity hook (see
+	// logger/adapter.go and server/logger.go), which suppresses the per-request action
+	// summary. trackSeverity fires whenever the event level >= WarnLevel, independent of
+	// Enabled(), so a WARN/ERROR that is DISABLED at the active LOG_LEVEL must still reach
+	// Msg to escalate. The Enabled() short-circuit below preserves this exactly: it still
+	// calls event.Msg before returning, so severity escalation is unchanged; only the field
+	// construction is skipped (the allocation win).
+	log := tc.Logger.WithContext(ctx)
+	var event logger.LogEvent
+	var message string
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		event, message = log.Debug(), msgDBOperationNoRows
+	case errors.Is(err, sql.ErrTxDone):
+		event, message = log.Debug(), msgDBTxFinalized
+	case err != nil:
+		event, message = log.Error().Err(err), msgDBOperationError
+	case elapsed > tc.Settings.SlowQueryThreshold():
+		event, message = log.Warn(), fmt.Sprintf("Slow database operation detected (%s)", elapsed)
+	default:
+		event, message = log.Debug(), msgDBOperationExecuted
+	}
+
+	// Short-circuit before building any fields when the chosen level is disabled. This
+	// is below the metric/span/counter block so observability is never gated by LOG_LEVEL.
+	if !event.Enabled() {
+		// Preserve exact parity with the prior WithFields path: emitting a (dropped)
+		// WARN/ERROR still escalated request severity via the adapter's
+		// Msg -> trackSeverity hook, which suppresses the per-request action summary.
+		// Call Msg on the disabled event so that hook still fires; zerolog drops the
+		// line and no fields are built (the allocation win). For DEBUG (level < Warn)
+		// trackSeverity is a no-op, so the common success path stays free.
+		event.Msg(message)
+		return
+	}
+
 	// Truncate query string to safe max length to avoid unbounded payloads
 	truncatedQuery := query
 	if tc.Settings.MaxQueryLength() > 0 && len(query) > tc.Settings.MaxQueryLength() {
 		truncatedQuery = TruncateString(query, tc.Settings.MaxQueryLength())
 	}
 
-	// Log query execution details
-	logEvent := tc.Logger.WithContext(ctx).WithFields(map[string]any{
-		"vendor":      tc.Vendor,
-		"duration_ms": elapsed.Milliseconds(),
-		"duration_ns": elapsed.Nanoseconds(),
-		logFieldQuery: truncatedQuery,
-	})
+	// Typed setters avoid the map alloc; Str routes through SensitiveDataFilter.FilterString and
+	// Interface through FilterValue, preserving the same privacy boundary as the old WithFields(map)
+	// for the framework-default config (none of vendor/duration_ms/duration_ns/query/args are
+	// sensitive by default, so both paths emit the raw value).
+	//
+	// Privacy note for vendor/query: these are framework-controlled, non-secret fields (vendor is
+	// "postgresql"/"oracle.db"; query is already-truncated SQL) and are intentionally kept OFF the
+	// sensitive surface. If an operator marks them sensitive via log.sensitivefields, the typed Str
+	// path masks via FilterString -> maskString, which is URL-aware and reveals strictly more for a
+	// URL-shaped value (scheme/user/host/path, password masked) than the old WithFields -> FilterValue
+	// path did (full "***"). That divergence is by design for the typed-setter path and unreachable
+	// for these two keys under the default config; do not add vendor/query to the sensitive list to
+	// avoid relying on full masking here.
+	event = event.
+		Str("vendor", tc.Vendor).
+		Int64("duration_ms", elapsed.Milliseconds()).
+		Int64("duration_ns", elapsed.Nanoseconds()).
+		Str(logFieldQuery, truncatedQuery)
 
 	if tc.Settings.LogQueryParameters() && len(args) > 0 {
-		logEvent = logEvent.WithFields(map[string]any{
-			"args": SanitizeArgs(args, tc.Settings.MaxQueryLength()),
-		})
+		event = event.Interface("args", SanitizeArgs(args, tc.Settings.MaxQueryLength()))
 	}
 
-	if err != nil {
-		// Treat sql.ErrNoRows and sql.ErrTxDone specially - not actual errors,
-		// log as debug. ErrTxDone is returned by the deferred Rollback of an
-		// already-committed transaction (e.g. the WithTx helper), which is benign.
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			logEvent.Debug().Msg("Database operation returned no rows")
-		case errors.Is(err, sql.ErrTxDone):
-			logEvent.Debug().Msg("Database transaction already finalized")
-		default:
-			logEvent.Error().Err(err).Msg("Database operation error")
-		}
-	} else if elapsed > tc.Settings.SlowQueryThreshold() {
-		logEvent.Warn().Msgf("Slow database operation detected (%s)", elapsed)
-	} else {
-		logEvent.Debug().Msg("Database operation executed")
-	}
+	event.Msg(message)
 }
 
 // extractRowsAffected safely extracts the number of rows affected from a sql.Result.
