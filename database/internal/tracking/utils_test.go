@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,9 +24,20 @@ type eventRecord struct {
 	Fields map[string]any
 }
 
+// recordingLogger is a recording SPY: it records every adapter method call —
+// including calls made on disabled events (e.g. Msg on a dropped WARN) — so tests
+// can assert exactly what production invoked. Enabled() faithfully reports the
+// per-level state (via disabledLevels), but the spy intentionally does NOT emulate
+// zerolog's drop-the-line behavior: a disabled event still records its Msg and any
+// fields set on it, letting tests verify the severity-escalation path (Msg is called
+// on a disabled WARN/ERROR) while also asserting the field-build short-circuit.
 type recordingLogger struct {
 	sink   *recordingSink
 	fields map[string]any
+	// disabledLevels holds level names for which the produced event reports
+	// Enabled() == false and records no fields — emulating zerolog dropping
+	// events below the configured threshold (e.g. debug at LOG_LEVEL=info).
+	disabledLevels map[string]bool
 }
 
 type recordingSink struct {
@@ -33,23 +45,41 @@ type recordingSink struct {
 }
 
 type recordingEvent struct {
-	record *eventRecord
+	record  *eventRecord
+	enabled bool
 }
 
 func newRecordingLogger() *recordingLogger {
 	return &recordingLogger{
-		sink:   &recordingSink{},
-		fields: map[string]any{},
+		sink:           &recordingSink{},
+		fields:         map[string]any{},
+		disabledLevels: map[string]bool{},
 	}
+}
+
+// newRecordingLoggerWithDisabled returns a recordingLogger whose events at the given
+// levels report Enabled() == false (and therefore must not have fields built on them).
+func newRecordingLoggerWithDisabled(levels ...string) *recordingLogger {
+	l := newRecordingLogger()
+	for _, lvl := range levels {
+		l.disabledLevels[lvl] = true
+	}
+	return l
 }
 
 func (l *recordingLogger) clone() *recordingLogger {
 	cloned := &recordingLogger{
-		sink:   l.sink,
-		fields: make(map[string]any, len(l.fields)),
+		sink:           l.sink,
+		fields:         make(map[string]any, len(l.fields)),
+		disabledLevels: make(map[string]bool, len(l.disabledLevels)),
 	}
 	for k, v := range l.fields {
 		cloned.fields[k] = v
+	}
+	// Deep-copy disabledLevels too (symmetry with fields); avoids a clone sharing
+	// the parent's level map and decoupling the spy's enablement state.
+	for k, v := range l.disabledLevels {
+		cloned.disabledLevels[k] = v
 	}
 	return cloned
 }
@@ -63,7 +93,7 @@ func (l *recordingLogger) newEvent(level string) logger.LogEvent {
 		record.Fields[k] = v
 	}
 	l.sink.events = append(l.sink.events, record)
-	return &recordingEvent{record: record}
+	return &recordingEvent{record: record, enabled: !l.disabledLevels[level]}
 }
 
 func (l *recordingLogger) Info() logger.LogEvent  { return l.newEvent(levelInfo) }
@@ -140,7 +170,7 @@ func (e *recordingEvent) Bool(key string, value bool) logger.LogEvent {
 	return e
 }
 
-func (e *recordingEvent) Enabled() bool { return true }
+func (e *recordingEvent) Enabled() bool { return e.enabled }
 
 func TestTruncateStringNoTruncation(t *testing.T) {
 	original := "short"
@@ -217,7 +247,7 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	if event.Level != levelDebug {
 		t.Fatalf("expected debug level, got %s", event.Level)
 	}
-	if event.Msg != "Database operation executed" {
+	if event.Msg != msgDBOperationExecuted {
 		t.Fatalf("unexpected log message: %q", event.Msg)
 	}
 	if event.Fields["query"] != selectOne {
@@ -225,6 +255,193 @@ func TestTrackDBOperationRecordsSuccess(t *testing.T) {
 	}
 	if _, exists := event.Fields["args"]; exists {
 		t.Fatalf("did not expect args when LogQueryParameters is false")
+	}
+}
+
+// TestTrackDBOperationSkipsFieldBuildWhenDebugDisabled verifies the success fast path:
+// when the debug level is disabled (e.g. LOG_LEVEL=info on a healthy query), no log
+// fields are built, yet the DB counter/elapsed metrics still fire — proving the level
+// short-circuit never gates observability. Msg is still called on the disabled event so
+// the severity-parity path runs (a no-op at debug level, but exercised identically to
+// the WARN/ERROR branches, where escalation must be preserved).
+func TestTrackDBOperationSkipsFieldBuildWhenDebugDisabled(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLoggerWithDisabled(levelDebug)
+	settings := Settings{
+		slowQueryThreshold: time.Second,
+		maxQueryLength:     50,
+		logQueryParameters: true,
+	}
+
+	start := time.Now().Add(-25 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, 0, nil)
+
+	// Metrics/counters must still fire even though the debug log is disabled.
+	if logger.GetDBCounter(ctx) != 1 {
+		t.Fatalf("expected db counter to increment even when debug log is disabled")
+	}
+	if logger.GetDBElapsed(ctx) <= 0 {
+		t.Fatalf("expected elapsed time to be recorded even when debug log is disabled")
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelDebug {
+		t.Fatalf("expected debug level event, got %s", event.Level)
+	}
+	// Short-circuit must prevent any field construction.
+	if len(event.Fields) != 0 {
+		t.Fatalf("expected no fields built when level disabled, got %v", event.Fields)
+	}
+	// Msg must still be called on the disabled event so the severity-parity path runs.
+	if event.Msg != msgDBOperationExecuted {
+		t.Fatalf("expected success message even when level disabled (Msg still called), got %q", event.Msg)
+	}
+}
+
+// TestTrackDBOperationDisabledWarnStillEscalates verifies the disabled-WARN slow-query
+// path: when the warn level is disabled, no log fields are built (the allocation win),
+// but event.Msg is still called with the slow-query message — proving severity escalation
+// is preserved (the adapter's Msg -> trackSeverity hook fires regardless of Enabled()).
+func TestTrackDBOperationDisabledWarnStillEscalates(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLoggerWithDisabled(levelWarn)
+	settings := Settings{
+		slowQueryThreshold: 5 * time.Millisecond,
+		maxQueryLength:     100,
+		logQueryParameters: true,
+	}
+
+	start := time.Now().Add(-20 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, []any{"param"}, start, 0, nil)
+
+	if logger.GetDBCounter(ctx) != 1 {
+		t.Fatalf("expected db counter to increment even when warn log is disabled")
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelWarn {
+		t.Fatalf("expected warn level event, got %s", event.Level)
+	}
+	// Field construction must be short-circuited.
+	if len(event.Fields) != 0 {
+		t.Fatalf("expected no fields built when warn level disabled, got %v", event.Fields)
+	}
+	// Msg must still be called so the WARN escalates request severity.
+	elapsed := logger.GetDBElapsed(ctx)
+	if elapsed <= 0 {
+		t.Fatalf("expected elapsed time to be recorded")
+	}
+	expectedMsg := fmt.Sprintf("Slow database operation detected (%s)", time.Duration(elapsed))
+	if event.Msg != expectedMsg {
+		t.Fatalf("expected slow-query message on disabled WARN, got %q", event.Msg)
+	}
+}
+
+// TestTrackDBOperationDisabledErrorStillEscalates verifies the disabled-ERROR path:
+// when the error level is disabled, no fields are built but event.Msg is still called
+// with the error message and the error is attached — proving severity escalation is
+// preserved on a dropped ERROR line.
+func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLoggerWithDisabled(levelError)
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	failure := errors.New("boom")
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, failure)
+
+	if logger.GetDBCounter(ctx) != 1 {
+		t.Fatalf("expected db counter to increment even when error log is disabled")
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelError {
+		t.Fatalf("expected error level event, got %s", event.Level)
+	}
+	// The error is attached via .Err(err) before the Enabled() short-circuit; the
+	// fields map itself must remain empty (no vendor/duration/query built).
+	if len(event.Fields) != 0 {
+		t.Fatalf("expected no fields built when error level disabled, got %v", event.Fields)
+	}
+	if event.Err != failure {
+		t.Fatalf("expected error to be attached on disabled ERROR, got %v", event.Err)
+	}
+	if event.Msg != msgDBOperationError {
+		t.Fatalf("expected error message on disabled ERROR, got %q", event.Msg)
+	}
+}
+
+// TestTrackDBOperationDisabledDebugErrNoRows verifies the disabled-DEBUG sql.ErrNoRows
+// path short-circuits field construction yet still records its benign message and
+// increments the counter (trackSeverity is a no-op below WarnLevel).
+func TestTrackDBOperationDisabledDebugErrNoRows(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLoggerWithDisabled(levelDebug)
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, sql.ErrNoRows)
+
+	if logger.GetDBCounter(ctx) != 1 {
+		t.Fatalf("expected db counter to increment even when debug log is disabled")
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelDebug {
+		t.Fatalf("expected debug level for sql.ErrNoRows, got %s", event.Level)
+	}
+	if len(event.Fields) != 0 {
+		t.Fatalf("expected no fields built when debug level disabled, got %v", event.Fields)
+	}
+	if event.Msg != msgDBOperationNoRows {
+		t.Fatalf("unexpected message on disabled ErrNoRows: %q", event.Msg)
+	}
+}
+
+// TestTrackDBOperationDisabledDebugErrTxDone verifies the disabled-DEBUG sql.ErrTxDone
+// path short-circuits field construction yet still records its benign message and
+// increments the counter.
+func TestTrackDBOperationDisabledDebugErrTxDone(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLoggerWithDisabled(levelDebug)
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, "ROLLBACK", nil, start, 0, sql.ErrTxDone)
+
+	if logger.GetDBCounter(ctx) != 1 {
+		t.Fatalf("expected db counter to increment even when debug log is disabled")
+	}
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelDebug {
+		t.Fatalf("expected debug level for sql.ErrTxDone, got %s", event.Level)
+	}
+	if len(event.Fields) != 0 {
+		t.Fatalf("expected no fields built when debug level disabled, got %v", event.Fields)
+	}
+	if event.Msg != msgDBTxFinalized {
+		t.Fatalf("unexpected message on disabled ErrTxDone: %q", event.Msg)
 	}
 }
 
@@ -279,7 +496,7 @@ func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
 	if event.Level != levelWarn {
 		t.Fatalf("expected warn level for slow query, got %s", event.Level)
 	}
-	if event.Msg == "" || event.Msg == "Database operation executed" {
+	if !strings.HasPrefix(event.Msg, "Slow database operation detected (") {
 		t.Fatalf("expected slow query warning message, got %q", event.Msg)
 	}
 }
@@ -300,7 +517,7 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 	if event.Level != levelDebug {
 		t.Fatalf("expected debug level for sql.ErrNoRows, got %s", event.Level)
 	}
-	if event.Msg != "Database operation returned no rows" {
+	if event.Msg != msgDBOperationNoRows {
 		t.Fatalf("unexpected message: %q", event.Msg)
 	}
 }
@@ -323,7 +540,7 @@ func TestTrackDBOperationHandlesSqlErrTxDone(t *testing.T) {
 	if event.Level != levelDebug {
 		t.Fatalf("expected debug level for sql.ErrTxDone, got %s", event.Level)
 	}
-	if event.Msg != "Database transaction already finalized" {
+	if event.Msg != msgDBTxFinalized {
 		t.Fatalf("unexpected message: %q", event.Msg)
 	}
 }
@@ -348,7 +565,7 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 	if event.Err != failure {
 		t.Fatalf("expected error to be recorded")
 	}
-	if event.Msg != "Database operation error" {
+	if event.Msg != msgDBOperationError {
 		t.Fatalf("unexpected message: %q", event.Msg)
 	}
 }
