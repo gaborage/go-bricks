@@ -1849,3 +1849,106 @@ func TestGetTraceIDRejectsInvalidInboundHeader(t *testing.T) {
 		})
 	}
 }
+
+// TestFrameworkEnvelopeWireParity proves the internal typed frameworkEnvelope used on the
+// default success/error encode paths serializes byte-for-byte identically to the public
+// APIResponse with a map[string]any meta. It also drives the real production writers
+// (formatSuccessResponse / formatErrorResponse) and asserts the emitted meta sub-object is
+// {"timestamp":...,"traceId":...} with timestamp ordered before traceId.
+func TestFrameworkEnvelopeWireParity(t *testing.T) {
+	const (
+		fixedTimestamp = "2026-06-07T12:34:56Z"
+		fixedTraceID   = "trace-parity-123"
+	)
+
+	typedMeta := frameworkMeta{Timestamp: fixedTimestamp, TraceID: fixedTraceID}
+	mapMeta := map[string]any{fieldTimestamp: fixedTimestamp, fieldTraceID: fixedTraceID}
+
+	t.Run("success_data_and_meta", func(t *testing.T) {
+		data := helloResp{Message: "ok"}
+
+		typedBytes, err := json.Marshal(frameworkEnvelope{Data: data, Meta: typedMeta})
+		require.NoError(t, err)
+		mapBytes, err := json.Marshal(APIResponse{Data: data, Meta: mapMeta})
+		require.NoError(t, err)
+		typedStr := string(typedBytes)
+
+		// Byte-for-byte identical: data,meta field order; meta key order timestamp,traceId.
+		assert.Equal(t, string(mapBytes), typedStr)
+		assert.JSONEq(t, `{"data":{"message":"ok"},"meta":{"timestamp":"2026-06-07T12:34:56Z","traceId":"trace-parity-123"}}`, typedStr)
+		// timestamp must appear before traceId in the raw bytes.
+		assert.Less(t, strings.Index(typedStr, `"timestamp"`), strings.Index(typedStr, `"traceId"`))
+	})
+
+	t.Run("error_error_and_meta", func(t *testing.T) {
+		errResp := &APIErrorResponse{Code: "BAD_REQUEST", Message: "boom"}
+
+		typedBytes, err := json.Marshal(frameworkEnvelope{Error: errResp, Meta: typedMeta})
+		require.NoError(t, err)
+		mapBytes, err := json.Marshal(APIResponse{Error: errResp, Meta: mapMeta})
+		require.NoError(t, err)
+		typedStr := string(typedBytes)
+
+		// Byte-for-byte identical: data omitted (zero), then error,meta.
+		assert.Equal(t, string(mapBytes), typedStr)
+		assert.JSONEq(t, `{"error":{"code":"BAD_REQUEST","message":"boom"},"meta":{"timestamp":"2026-06-07T12:34:56Z","traceId":"trace-parity-123"}}`, typedStr)
+		assert.Less(t, strings.Index(typedStr, `"timestamp"`), strings.Index(typedStr, `"traceId"`))
+	})
+
+	// metaOrderRe captures the literal meta sub-object so we can assert exact key order
+	// in the bytes the production writers emit.
+	metaOrderRe := `"meta":{"timestamp":`
+
+	t.Run("formatSuccessResponse_emits_typed_envelope", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.Response().Header().Set(echo.HeaderXRequestID, fixedTraceID)
+
+		require.NoError(t, formatSuccessResponse(c, helloResp{Message: "ok"}))
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		body := rec.Body.String()
+		// meta sub-object must be exactly {"timestamp":...,"traceId":...} (key order).
+		assert.Contains(t, body, metaOrderRe)
+		assert.Contains(t, body, `"traceId":"`+fixedTraceID+`"`)
+		assert.Less(t, strings.Index(body, `"timestamp"`), strings.Index(body, `"traceId"`))
+
+		// Body still unmarshals into the public APIResponse with a map meta (wire shape unchanged).
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		assert.Equal(t, fixedTraceID, resp.Meta[fieldTraceID])
+		ts, ok := resp.Meta[fieldTimestamp].(string)
+		require.True(t, ok)
+		_, err := time.Parse(time.RFC3339, ts)
+		require.NoError(t, err)
+	})
+
+	t.Run("formatErrorResponse_emits_typed_envelope", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.Response().Header().Set(echo.HeaderXRequestID, fixedTraceID)
+
+		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		apiErr := NewBadRequestError("boom")
+		require.NoError(t, formatErrorResponse(c, apiErr, cfg))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		body := rec.Body.String()
+		assert.Contains(t, body, metaOrderRe)
+		assert.Contains(t, body, `"traceId":"`+fixedTraceID+`"`)
+		assert.Less(t, strings.Index(body, `"timestamp"`), strings.Index(body, `"traceId"`))
+
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Error)
+		assert.Equal(t, fixedTraceID, resp.Meta[fieldTraceID])
+		ts, ok := resp.Meta[fieldTimestamp].(string)
+		require.True(t, ok)
+		_, err := time.Parse(time.RFC3339, ts)
+		require.NoError(t, err)
+	})
+}
