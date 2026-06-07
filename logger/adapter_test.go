@@ -258,6 +258,105 @@ func TestLogEventAdapterChainedFields(t *testing.T) {
 	assert.Equal(t, "error", logEntry["level"])
 }
 
+// TestLogEventAdapterMutateInPlaceDisabledChainIsNilSafe exercises the surface the
+// mutate-and-return-receiver change newly stresses: chaining typed setters (incl. a
+// sensitive masked key) on a level-DISABLED event whose underlying *zerolog.Event is
+// nil. Every setter (and maskIfSensitive) must be a nil-safe no-op, the adapter must
+// stay disabled, and nothing may be emitted.
+func TestLogEventAdapterMutateInPlaceDisabledChainIsNilSafe(t *testing.T) {
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf).Level(zerolog.WarnLevel)
+	filterConfig := &FilterConfig{
+		SensitiveFields: []string{"password"},
+		MaskValue:       "[MASKED]",
+	}
+	logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+
+	// Debug is disabled at WarnLevel -> zerolog returns a nil *Event.
+	start := logger.Debug()
+	assert.False(t, start.Enabled())
+
+	// A long chain (incl. the sensitive mask path) must not panic and must stay disabled.
+	event := start.
+		Err(errors.New("boom")).
+		Str("user", "alice").
+		Int("attempt", 3).
+		Int64("timestamp", 1640995200).
+		Uint64("size", 1024).
+		Dur("duration", 250*time.Millisecond).
+		Interface("data", map[string]string{"k": "v"}).
+		Bytes("payload", []byte("hello")).
+		Bool("active", true).
+		Int("password", 9999) // sensitive key on a disabled event
+
+	assert.False(t, event.Enabled(), "chaining must not re-enable a disabled event")
+	event.Msg("dropped")
+
+	assert.Empty(t, buf.String(), "a disabled event must emit nothing even after a full setter chain")
+}
+
+// TestLogEventAdapterMutateInPlaceAccumulatesAllFields proves that reusing the receiver
+// across chained typed setters (instead of allocating a fresh wrapper per field) preserves
+// full field accumulation AND the privacy boundary. It chains many typed setters — including
+// a sensitive key that must be masked — and asserts every field lands in the emitted JSON
+// with the correct value while the sensitive one is masked. It also locks in the no-alloc
+// intent by asserting the chain returns the same underlying adapter (pointer identity).
+func TestLogEventAdapterMutateInPlaceAccumulatesAllFields(t *testing.T) {
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf)
+	filterConfig := &FilterConfig{
+		SensitiveFields: []string{"password"},
+		MaskValue:       "[MASKED]",
+	}
+	logger := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(filterConfig)}
+
+	testErr := errors.New(testutil.TestError)
+	start := logger.Info()
+
+	// Chain every typed setter, including a sensitive key (password) that must be masked.
+	event := start.
+		Err(testErr).
+		Str("user", "alice").
+		Int("attempt", 3).
+		Int64("timestamp", 1640995200).
+		Uint64("size", 1024).
+		Dur("duration", 250*time.Millisecond).
+		Interface("data", map[string]string{"k": "v"}).
+		Bytes("payload", []byte("hello")).
+		Bool("active", true).
+		Int("password", 9999) // sensitive — Int routes through maskIfSensitive, emitted as the mask value
+
+	// Identity: every setter returns the same underlying receiver (no per-field wrapper).
+	startAdapter, ok := start.(*LogEventAdapter)
+	require.True(t, ok)
+	eventAdapter, ok := event.(*LogEventAdapter)
+	require.True(t, ok)
+	assert.Same(t, startAdapter, eventAdapter, "chained setters must reuse the same adapter (no per-field alloc)")
+
+	event.Msg("mutate in place")
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+
+	// All fields accumulated with correct values despite mutate-and-return.
+	assert.Equal(t, testutil.TestError, entry["error"])
+	assert.Equal(t, "alice", entry["user"])
+	assert.Equal(t, float64(3), entry["attempt"])
+	assert.Equal(t, float64(1640995200), entry["timestamp"])
+	assert.Equal(t, float64(1024), entry["size"])
+	assert.Equal(t, float64(250), entry["duration"])
+	data, ok := entry["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "v", data["k"])
+	assert.NotEmpty(t, entry["payload"])
+	assert.Equal(t, true, entry["active"])
+	assert.Equal(t, "mutate in place", entry["message"])
+
+	// Privacy boundary preserved: sensitive key masked, raw value absent.
+	assert.Equal(t, "[MASKED]", entry["password"], "sensitive key must be masked, not the raw int")
+	assert.NotContains(t, buf.String(), "9999")
+}
+
 func TestZeroLoggerInfo(t *testing.T) {
 	logger, buf := createTestLogger()
 
