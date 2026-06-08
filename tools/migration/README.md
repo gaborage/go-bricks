@@ -152,7 +152,7 @@ object. Both are newline-delimited; pipe through `jq -c .` to consume.
   "applied_versions": ["1", "2"],
   "ending_version": "2",
   "duration_millis": 142,
-  "flyway_version": "10.22.0"
+  "flyway_version": "12.8.1"
 }
 ```
 

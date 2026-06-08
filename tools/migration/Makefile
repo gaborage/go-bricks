@@ -3,9 +3,11 @@
 BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s|^tools/migration/||" | grep . || echo "dev")
 # Keep in sync with the other module's Makefile.
-GOVULNCHECK_VERSION := v1.1.4
+# renovate: datasource=go depName=golang.org/x/vuln
+GOVULNCHECK_VERSION := v1.3.0
 # Keep in sync with the other module's Makefile.
-GOSEC_VERSION := v2.26.1
+# renovate: datasource=go depName=github.com/securego/gosec/v2
+GOSEC_VERSION := v2.27.1
 
 help: ## Show this help message
 	@echo "go-bricks-migrate tool commands:"
@@ -43,7 +45,7 @@ validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) --help
 	@echo "✓ CLI validation passed"
 
-check: fmt lint test validate-cli ## Run fmt, lint, test, and CLI validation (pre-commit checks)
+check: fmt lint test validate-cli vuln ## Run fmt, lint, test, CLI validation, and vuln scan (pre-commit checks)
 
 dev-deps: ## Install development dependencies
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
