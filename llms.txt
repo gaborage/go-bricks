@@ -2074,7 +2074,7 @@ No code changes required - observability hooks activate automatically when confi
 ```yaml
 cache:
   redis:
-    pool_size: 10  # Default: 10
+    poolsize: 10  # Default: 10
 ```
 
 **Rule:** `PoolSize >= (NumCPU * 2 * ConcurrentRequests) / 100`

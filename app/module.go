@@ -166,9 +166,9 @@ type KeyStoreProvider interface {
 //
 //	type JobsModule struct{}
 //
-//	func (m *JobsModule) RegisterJobs(scheduler JobRegistrar) error {
-//	    scheduler.FixedRate("cleanup", &CleanupJob{}, 30*time.Minute)
-//	    scheduler.DailyAt("report", &ReportJob{}, time.Date(0, 0, 0, 3, 0, 0, 0, time.UTC))
+//	func (m *JobsModule) RegisterJobs(reg JobRegistrar) error {
+//	    reg.FixedRate("cleanup", &CleanupJob{}, 30*time.Minute)
+//	    reg.DailyAt("report", &ReportJob{}, scheduler.ParseTime("03:00"))
 //	    return nil
 //	}
 //
