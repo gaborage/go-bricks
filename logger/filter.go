@@ -162,7 +162,8 @@ func (f *SensitiveDataFilter) filterStringMapWithProtection(m map[string]any, vi
 func (f *SensitiveDataFilter) filterSliceOrArrayWithProtection(key string, rv reflect.Value, visited map[uintptr]struct{}, maxDepth int) any {
 	// Check if we can get a pointer to track this slice/array for cycles
 	if rv.CanAddr() {
-		ptr := uintptr(unsafe.Pointer(rv.UnsafeAddr())) //#nosec G103 -- pointer identity for cycle detection; uintptr used only as a map key, never dereferenced
+		// #nosec G103 -- pointer identity for cycle detection; uintptr used only as a map key, never dereferenced
+		ptr := uintptr(unsafe.Pointer(rv.UnsafeAddr()))
 		if _, exists := visited[ptr]; exists {
 			return rv.Interface() // Return original if cycle detected
 		}
@@ -353,7 +354,8 @@ func (f *SensitiveDataFilter) extractStructValueWithPointer(value any) (reflect.
 
 	// If we have a struct value that can be addressed and we haven't captured a pointer yet
 	if trackingPtr == 0 && val.CanAddr() {
-		trackingPtr = uintptr(unsafe.Pointer(val.UnsafeAddr())) //#nosec G103 -- pointer identity for cycle detection; uintptr used only as a map key, never dereferenced
+		// #nosec G103 -- pointer identity for cycle detection; uintptr used only as a map key, never dereferenced
+		trackingPtr = uintptr(unsafe.Pointer(val.UnsafeAddr()))
 	}
 
 	// Validate it's a struct
