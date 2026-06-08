@@ -229,11 +229,17 @@ jobs:
 
       - name: Install Flyway
         run: |
+          set -euo pipefail
           # Flyway 12.x is distributed from Redgate's server — Maven Central
           # stopped publishing the self-contained -linux-x64.tar.gz mid-11.x.
+          # Pin the SHA256 and verify before extracting (fail-closed) so a
+          # tampered or swapped tarball aborts the job — never pipe curl|tar.
           FLYWAY_VERSION=12.8.1
-          curl -L "https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz" \
-            | tar xz
+          FLYWAY_SHA256=706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
+          url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
+          curl -fsSL "$url" -o flyway.tar.gz
+          echo "${FLYWAY_SHA256}  flyway.tar.gz" | sha256sum -c -
+          tar xzf flyway.tar.gz
           echo "$PWD/flyway-${FLYWAY_VERSION}" >> "$GITHUB_PATH"
 
       - name: Build go-bricks-migrate
