@@ -207,7 +207,7 @@ func TestMakeHookJSONIncludesStructuredResultFields(t *testing.T) {
 			StartingVersion: "",
 			EndingVersion:   "2",
 			DurationMillis:  42,
-			FlywayVersion:   "10.22.0",
+			FlywayVersion:   "12.8.1",
 		},
 	})
 	out := buf.String()
@@ -215,7 +215,7 @@ func TestMakeHookJSONIncludesStructuredResultFields(t *testing.T) {
 	assert.Contains(t, out, `"ending_version":"2"`)
 	assert.NotContains(t, out, `"starting_version"`, "empty StartingVersion should be omitted, not emitted as \"\"")
 	assert.Contains(t, out, `"duration_millis":42`)
-	assert.Contains(t, out, `"flyway_version":"10.22.0"`)
+	assert.Contains(t, out, `"flyway_version":"12.8.1"`)
 }
 
 func TestMakeHookPlainTextRendersSchemaSummary(t *testing.T) {

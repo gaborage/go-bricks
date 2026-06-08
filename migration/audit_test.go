@@ -501,7 +501,7 @@ func TestMigrationAppliedCarriesParsedVersionAndAttributes(t *testing.T) {
 	ev := events[0]
 	assert.Equal(t, AuditOutcomeSuccess, ev.Outcome)
 	assert.Equal(t, "2", ev.Version, "AuditEvent.Version mirrors Result.EndingVersion")
-	assert.Equal(t, "10.22.0", ev.Attributes["migration.flyway_version"])
+	assert.Equal(t, "12.8.1", ev.Attributes["migration.flyway_version"])
 	assert.Equal(t, "1,2", ev.Attributes["migration.applied_versions"])
 }
 

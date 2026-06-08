@@ -3,5 +3,17 @@
   "extends": [
     "config:recommended"
   ],
-  "postUpdateOptions": ["gomodTidy"]
+  "postUpdateOptions": ["gomodTidy"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump the go-run-pinned security scanners (GOVULNCHECK_VERSION / GOSEC_VERSION) in both Makefiles. These are 'go run <module>@<version>' literals that Renovate's gomod manager cannot see, so they drift silently (govulncheck rotted from v1.1.4 well behind latest before this manager existed). The inline '# renovate:' annotation above each pin supplies the datasource + depName.",
+      "managerFilePatterns": [
+        "/(^|/)Makefile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\s+\\w+_VERSION := (?<currentValue>\\S+)"
+      ]
+    }
+  ]
 }

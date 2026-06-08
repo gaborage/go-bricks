@@ -621,7 +621,7 @@ func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	// Full jitter is a load-distribution mechanism, not a security primitive —
 	// math/rand/v2 is the right tool here. crypto/rand would add system-call
 	// overhead per reconnect attempt without changing the herd-spreading behavior.
-	return time.Duration(rand.Int64N(int64(backoff))) //nolint:gosec // G404: jitter randomness, not cryptographic
+	return time.Duration(rand.Int64N(int64(backoff))) //#nosec G404 -- jitter randomness, not cryptographic
 }
 
 // connect creates a new AMQP connection.

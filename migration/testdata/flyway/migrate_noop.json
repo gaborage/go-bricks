@@ -9,7 +9,7 @@
   "migrations" : [ ],
   "migrationsExecuted" : 0,
   "success" : true,
-  "flywayVersion" : "10.22.0",
+  "flywayVersion" : "12.8.1",
   "database" : "testdb",
   "warnings" : [ ],
   "databaseType" : "PostgreSQL",

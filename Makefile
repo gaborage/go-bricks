@@ -4,9 +4,11 @@
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS :=
 # Keep in sync with the other module's Makefile.
-GOVULNCHECK_VERSION := v1.1.4
+# renovate: datasource=go depName=golang.org/x/vuln
+GOVULNCHECK_VERSION := v1.3.0
 # Keep in sync with the other module's Makefile.
-GOSEC_VERSION := v2.26.1
+# renovate: datasource=go depName=github.com/securego/gosec/v2
+GOSEC_VERSION := v2.27.1
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -71,13 +73,20 @@ clean: ## Clean build cache and test artifacts
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
 
-check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
+check: fmt lint test vuln ## Run fmt, lint, test, and vuln scan (pre-commit checks)
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) $(PKGS)
+	# gosec only accepts relative patterns — the previous $(PKGS) import paths
+	# silently scanned 0 files (a no-op gate). This now scans ./... as a backstop to
+	# golangci-lint's gosec (make lint), which is the fine-grained gate that honors the
+	# codebase's //#nosec annotations. G103 (unsafe audit) and G104 (unchecked cleanup
+	# Close errors) are excluded to match make lint's stance: the .golangci.yml
+	# common-false-positives + std-error-handling presets already treat both classes as
+	# non-issues, so gating them only here would diverge from the repo's gosec policy.
+	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }
