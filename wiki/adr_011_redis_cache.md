@@ -251,23 +251,23 @@ See main implementation plan for details (CBOR serialization, Redis client, conf
 ### Adoption Path
 ```go
 // Phase 1: Basic caching
-cache, _ := deps.Cache(ctx)
+c, _ := deps.Cache(ctx)
 data, _ := cache.Marshal(&user)
-cache.Set(ctx, "user:123", data, 5*time.Minute)
+c.Set(ctx, "user:123", data, 5*time.Minute)
 
 // Phase 2: Query result caching
-cached, err := cache.Get(ctx, cacheKey)
+cached, err := c.Get(ctx, cacheKey)
 if err == nil {
     return cache.Unmarshal[User](cached)
 }
 // Fall back to database
 
 // Phase 3: Distributed locking
-acquired, _ := cache.CompareAndSet(ctx, lockKey, nil, []byte("worker-1"), 30*time.Second)
+acquired, _ := c.CompareAndSet(ctx, lockKey, nil, []byte("worker-1"), 30*time.Second)
 if !acquired {
     return ErrLockHeld
 }
-defer cache.Delete(ctx, lockKey)
+defer c.Delete(ctx, lockKey)
 ```
 
 ## Security Considerations

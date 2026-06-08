@@ -58,7 +58,7 @@ Two-part design:
 2. **Behavior switches go through predicates** with documented alias sets:
    - `func config.IsDevelopment(env string) bool` + `(*AppConfig).IsDevelopment()` — accepts `{development, dev, local}`.
    - `func config.IsProduction(env string) bool` + `(*AppConfig).IsProduction()` — accepts `{production, prod, prd}`.
-   - Any value not in either alias set is **neutral**: treated as non-dev (no dev conveniences like stack-trace capture or error-detail leakage) and non-prod (no CORS lockdown). Examples: `staging`, `stg`, `tst`, `qa`, `uat`, `production-eu`.
+   - Any value not in either alias set is **neutral**: treated as non-dev (no dev conveniences like stack-trace capture or error-detail leakage) and non-prod (fail-closed CORS — no `Access-Control-Allow-Origin` is emitted unless `CORS_ORIGINS` is set explicitly). Examples: `staging`, `stg`, `tst`, `qa`, `uat`, `production-eu` — all receive fail-closed CORS behavior, identical to production aliases.
 
 **Chosen because:**
 
@@ -122,7 +122,7 @@ Rejects: empty, `Production` (uppercase), `prd eu` (space), `1prod` (leading dig
 - `config/validation.go` — `validateApp` switches from `slices.Contains(validEnvs, cfg.Env)` to `envFormat.MatchString(cfg.Env)`.
 - `config/validation_test.go` — replace the `Env: "invalid"` failure case (which now passes the format check) with cases that genuinely fail it: empty, uppercase, embedded space, leading digit, too-long. Adds positive cases for `local`, `tst`, `prd`, `production-eu`.
 - `server/server.go`, `server/handler.go` — four call sites switched from `isDevelopmentEnv(cfg.App.Env)` to `cfg.App.IsDevelopment()`.
-- `server/cors.go` — `os.Getenv("APP_ENV") == config.EnvProduction` → `config.IsProduction(os.Getenv("APP_ENV"))`. **Behavior change:** `APP_ENV=prd` or `APP_ENV=prod` now triggers strict CORS, matching the alias map.
+- `server/cors.go` — `os.Getenv("APP_ENV") == config.EnvProduction` replaced by a three-branch switch: (1) `CORS_ORIGINS` set → strict allowlist; (2) `config.IsDevelopment(appEnv)` → permissive wildcard; (3) default → fail-closed (no `Access-Control-Allow-Origin` emitted). This is broader than an `IsProduction` check: every non-dev alias — including `staging`, `stg`, `qa`, `uat`, `production-eu` — falls through to the fail-closed branch.
 - `server/cors_test.go` — adds `TestCORSProductionAliasesTriggerStrictMode` covering `prd`, `prod`, `production`, plus `local` and `tst` as negative cases.
 - `migration/flyway.go` — `fm.config.App.Env == config.EnvDevelopment` → `fm.config.App.IsDevelopment()`. Auto-migrate now also fires for `APP_ENV=dev` or `APP_ENV=local`.
 - `app/app.go` — bootstrap logger replaces inline `strings.EqualFold` calls with `config.IsDevelopment(env)`. Preserves the legacy "empty/whitespace `APP_ENV` → dev defaults" behaviour.

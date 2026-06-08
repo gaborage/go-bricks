@@ -74,7 +74,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 outbox:
   enabled: true
   tablename: gobricks_outbox       # Default table name
-  autocreatetable: true           # Create table on first use
+  autocreatetable: false          # Auto-create table on first use (default: false; enable for development only)
   defaultexchange: ""              # Fallback if Event.Exchange empty
   pollinterval: 5s                 # Relay poll frequency
   batchsize: 100                   # Events per relay cycle
@@ -88,7 +88,7 @@ outbox:
 |-------|------|----------|-------------|
 | `EventType` | string | Yes | Event routing key (e.g., "order.created") |
 | `AggregateID` | string | Yes | Entity identifier for idempotency (e.g., "order-123") |
-| `Payload` | any | Yes | `[]byte` stored as-is, otherwise JSON-marshaled |
+| `Payload` | any | No | Event data. `[]byte` stored as-is, otherwise JSON-marshaled. Nil is accepted and stored as JSON `null`. |
 | `Headers` | map[string]any | No | Custom AMQP headers propagated to published message |
 | `Exchange` | string | No | Target AMQP exchange (falls back to `defaultexchange` config) |
 | `RoutingKey` | string | No | AMQP routing key (falls back to `EventType`) |

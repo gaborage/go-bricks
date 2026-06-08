@@ -51,7 +51,7 @@ func main() {
         log.Fatalf("Failed to load config: %v", err)
     }
     var obsCfg observability.Config
-    if err := cfg.InjectInto(&obsCfg); err != nil {
+    if err := cfg.Unmarshal("observability", &obsCfg); err != nil {
         panic(err)
     }
 
@@ -60,7 +60,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer observability.Shutdown(provider, 5*time.Second)
+    defer observability.MustShutdown(provider, 5*time.Second)
 
     // Create tracer
     tracer := provider.TracerProvider().Tracer("my-service")
@@ -206,11 +206,11 @@ observability:
 | `trace.enabled` | bool | `true` | Enable/disable tracing |
 | `trace.endpoint` | string | `"stdout"` | Endpoint for trace export (stdout, http, grpc) |
 | `trace.protocol` | string | `"http"` | OTLP protocol: "http" or "grpc" |
-| `trace.insecure` | bool | `true` | Use insecure connection (no TLS) |
+| `trace.insecure` | bool | `false` | Use insecure connection (no TLS) |
 | `trace.headers` | map[string]string | - | Custom headers for authentication |
 | `trace.sample.rate` | float64 | `1.0` | Sampling rate (0.0 = none, 1.0 = all) |
-| `trace.batch.timeout` | duration | `5s` | Time to wait before sending batch |
-| `trace.export.timeout` | duration | `30s` | Maximum time for export operation |
+| `trace.batch.timeout` | duration | `500ms (development/stdout) / 5s (production)` | Time to wait before sending batch |
+| `trace.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for export operation |
 | `trace.max.queue.size` | int | `2048` | Maximum buffered spans |
 | `trace.max.batch.size` | int | `512` | Maximum spans per batch |
 
@@ -224,7 +224,7 @@ observability:
 | `metrics.insecure` | bool | Fallback to `trace.insecure` | Use insecure connection (no TLS) |
 | `metrics.headers` | map[string]string | Fallback to `trace.headers` | Custom headers for metrics authentication |
 | `metrics.interval` | duration | `10s` | Metric export interval |
-| `metrics.export.timeout` | duration | `30s` | Maximum time for metric export operation |
+| `metrics.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for metric export operation |
 
 ## Advanced Usage
 
@@ -407,6 +407,6 @@ The observability package integrates seamlessly with other GoBricks components:
 - **HTTP Server**: Automatic trace propagation via W3C traceparent headers
 - **Database**: Database query spans (when using instrumented drivers)
 - **Messaging**: AMQP message tracing (when configured)
-- **Configuration**: Full support for config injection via `InjectInto()`
+- **Configuration**: Full support for config loading via `cfg.Unmarshal("observability", &obsCfg)` (koanf mapstructure-based unmarshaling)
 
 See the [go-bricks-demo-project](https://github.com/gaborage/go-bricks-demo-project) for complete examples.

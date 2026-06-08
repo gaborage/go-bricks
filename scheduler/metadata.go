@@ -22,7 +22,7 @@ type JobMetadata struct {
 	ScheduleType string `json:"scheduleType"`
 
 	// CronExpression is a cron-style representation of the schedule (e.g., "0 3 * * *" for daily at 3 AM)
-	// Generated from ScheduleConfiguration per data-model.md
+	// Generated from ScheduleConfiguration by ToCronExpression()
 	CronExpression string `json:"cronExpression"`
 
 	// HumanReadable is a user-friendly description (e.g., "Every Monday at 2:00 AM", "Every 30 minutes")

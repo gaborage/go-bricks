@@ -9,7 +9,8 @@ import (
 // ColumnRegistry maintains a cache of struct column metadata per database vendor.
 // It uses lazy initialization: struct types are parsed on first use and cached forever.
 //
-// Thread-safety: Uses sync.Map for lock-free reads after first write.
+// Thread-safety: Uses a sync.RWMutex (double-checked locking) for vendor-cache map access
+// and sync.Map for per-type column-metadata lookups within each vendor cache.
 // Memory overhead: ~1-2KB per registered struct type.
 // Performance: ~2µs first-use parsing, ~50ns cached access.
 type ColumnRegistry struct {
@@ -53,8 +54,8 @@ var globalColumnRegistry = &ColumnRegistry{
 //	}
 //
 //	cols := RegisterColumns(dbtypes.Oracle, &User{})
-//	cols.Col("ID")    // Returns: `"ID"` (Oracle, quoted)
-//	cols.Col("Level") // Returns: `"LEVEL"` (Oracle reserved word, quoted)
+//	cols.Col("ID")    // Returns: "id" (Oracle, not a reserved word — returned as-is)
+//	cols.Col("Level") // Returns: "\"level\"" (Oracle reserved word — double-quoted lowercase)
 func RegisterColumns(vendor string, structPtr any) *ColumnMetadata {
 	return globalColumnRegistry.Get(vendor, structPtr)
 }

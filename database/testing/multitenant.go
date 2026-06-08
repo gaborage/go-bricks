@@ -93,7 +93,7 @@ func (m *TenantDBMap) ForTenantWithVendor(tenantID, vendor string) *TestDB {
 	defer m.mu.Unlock()
 
 	if db, exists := m.databases[tenantID]; exists {
-		// Tenant already has a DB - warn if vendor mismatch
+		// Tenant already has a DB — panic if vendor mismatch to prevent silent misconfiguration
 		if db.DatabaseType() != vendor {
 			panic(fmt.Sprintf("tenant %q already has DB with vendor %q, cannot change to %q",
 				tenantID, db.DatabaseType(), vendor))
@@ -319,7 +319,7 @@ func (m *NamedDBMap) ForNameWithVendor(name, vendor string) *TestDB {
 	defer m.mu.Unlock()
 
 	if db, exists := m.databases[name]; exists {
-		// Name already has a DB - warn if vendor mismatch
+		// Name already has a DB — panic if vendor mismatch to prevent silent misconfiguration
 		if db.DatabaseType() != vendor {
 			panic(fmt.Sprintf("named database %q already has DB with vendor %q, cannot change to %q",
 				name, db.DatabaseType(), vendor))

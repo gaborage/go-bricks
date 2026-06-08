@@ -101,6 +101,9 @@ if err := exec.Run(ctx, job.ID); err != nil {
 | `provisioning.NewMemoryStore` | In-memory reference implementation (unit tests, alt-vendor template) |
 | `provisioning.PostgresStateTableDDL` | Exported DDL constant for external migration tooling |
 | `provisioning.ErrJobNotFound` / `ErrIllegalTransition` / `ErrStaleRead` | Sentinel errors |
+| `provisioning.ErrQuiesced` | Returned by `Run` when the deployment quiesce flag is set; callers should treat it as "retry later" |
+| `Executor.WithQuiesce(g migration.QuiesceGate)` | Enables the deployment quiesce gate; `Run` returns `ErrQuiesced` instead of advancing while the flag is set |
+| `Executor.WithAudit(emitter migration.Emitter, cfg AuditContext)` | Opt-in `state.transitioned` audit-event emission via the shared OTel seam (ADR-019) |
 
 ## Crash-recovery contract
 
@@ -191,11 +194,6 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 - **The dispatcher** that polls for `StatePending` jobs and calls `Run`
   on them: deferred to a follow-up after the state machine itself is
   solid (issue body, "Out of scope").
-- **Quiesce-flag interaction** that pauses the dispatcher during
-  deployments: tracked under #380.
-- **State-transition audit events** (`state.transitioned`,
-  `cleanup.completed`): tracked under #382. The existing ADR-019
-  audit-emitter seam is the integration point.
 
 ## Related
 
@@ -203,8 +201,8 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
   the `CreateSchema` / `CreateRole` steps invoke.
 - [multi_tenant_migration.md](multi_tenant_migration.md) — the `MigrateAll`
   orchestrator the `Migrate` step typically calls.
-- [migration_audit.md](migration_audit.md) — the audit-event seam future
-  state-transition events will use.
+- [migration_audit.md](migration_audit.md) — the audit-event seam that
+  `state.transitioned` events are emitted through (ADR-019).
 - [ADR-021](adr_021_provisioning_state_machine.md) — the reuse-vs-divergence
   decision that put this package in `migration/provisioning/` rather than
   inside `outbox/`.

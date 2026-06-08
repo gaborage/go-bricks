@@ -1,8 +1,10 @@
 # ADR-004: Lazy Messaging Registry Creation in ModuleRegistry
 
 **Date:** 2025-09-24
-**Status:** Accepted
+**Status:** Superseded
 **Context:** Multi-tenant messaging architecture and improved dependency resolution
+
+> **Superseded (2026-03-16):** The `initializeMessagingRegistry` / `RegisterMessaging` approach described below was replaced by the `MessagingDeclarer` duck-typing pattern (ADR-014). The singleflight protection moved to `messaging.Manager.EnsureConsumers()`. The `GetMessaging` field on `ModuleDeps` was renamed to `Messaging` per the S8179 breaking change. This ADR remains as a historical record of the original lazy-init design intent.
 
 ## Problem Statement
 
@@ -52,7 +54,7 @@ func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*mess
             return r.messagingRegistry, nil
         }
 
-        client, err := r.deps.GetMessaging(ctx)
+        client, err := r.deps.Messaging(ctx)
         if err != nil {
             return nil, err
         }

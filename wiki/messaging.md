@@ -52,14 +52,14 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
         Queue:     "events.queue",
         Consumer:  "discover-pending",
         EventType: "discover-pending-events",
-        Handler:   m.discoverHandler.Handle,
+        Handler:   m.discoverHandler,
     }, nil)
 
     decls.DeclareConsumer(&messaging.ConsumerOptions{
         Queue:     "events.queue",
         Consumer:  "process-batch",  // Different consumer tag - OK
         EventType: "process-batch-events",
-        Handler:   m.processHandler.Handle,
+        Handler:   m.processHandler,
     }, nil)
 }
 ```

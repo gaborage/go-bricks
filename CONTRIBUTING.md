@@ -28,7 +28,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
    ```bash
    make check
    ```
-   This runs formatting, linting, and tests.
+   This runs formatting, linting, tests, and a vulnerability scan.
 
 ### Code Quality Standards
 
@@ -128,9 +128,9 @@ make test          # Run all tests
 make test-coverage # Run tests with coverage
 make lint          # Run golangci-lint
 make fmt           # Format Go code
-make tidy          # Tidy Go modules
+make update        # Update deps and tidy modules
 make clean         # Clean build cache
-make check         # Run fmt, lint, and test
+make check         # Run fmt, lint, test, and vuln scan
 ```
 
 ## Module Development

@@ -83,7 +83,7 @@ Both implementations apply the timezone *per physical connection*, not once afte
 
 ### Code structure
 
-- **PostgreSQL**: a five-line `RuntimeParams` injection in `database/postgresql/connection.go` after `pgx.ParseConfig`. No new files.
+- **PostgreSQL**: a small `RuntimeParams` injection block in `database/postgresql/connection.go` after `pgx.ParseConfig`. No new files.
 - **Oracle**: a new `database/oracle/tz_connector.go` containing the wrapper, plus a small refactor in `connection.go` that branches by `cfg.Timezone`. The legacy `openOracleDB` / `openOracleDBWithDialer` paths are preserved for backward compatibility (used when `Timezone == "-"` or in tests that don't go through validation), so existing test infrastructure is undisturbed.
 
 ### Rejected alternatives

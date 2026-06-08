@@ -67,7 +67,7 @@ var (
 	dbDurationHistogram metric.Float64Histogram // Duration in seconds
 
 	// Connection pool metrics are registered per-connection via callbacks
-	// They use ObservableGauges which are registered externally
+	// using ObservableUpDownCounters and ObservableCounters per OTel semconv.
 )
 
 // logMetricError logs a metric initialization or registration error to stderr.

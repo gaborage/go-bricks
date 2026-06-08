@@ -180,7 +180,14 @@ go-bricks-migrate migrate \
   --source-url https://control-plane.example.com/api \
   --aws-region us-east-1 \
   --json
+
+# Manage the deployment quiesce flag (pauses worker pickup and tenant fan-out)
+go-bricks-migrate quiesce set    --source-url https://control-plane.example.com/api
+go-bricks-migrate quiesce status --source-url https://control-plane.example.com/api
+go-bricks-migrate quiesce clear  --source-url https://control-plane.example.com/api
 ```
+
+> See [wiki/migration_quiesce.md](migration_quiesce.md) for the full `quiesce set|clear|status` subcommand reference, TTL auto-release, and fail-open behaviour.
 
 ### Flag reference
 
@@ -201,6 +208,11 @@ go-bricks-migrate migrate \
 | `--parallel <N>`         | `1`                    | Concurrent tenants (1 = sequential, max 32)         |
 | `--tenant <id>`          |                        | Run for a single tenant; bypasses listing           |
 | `--json`                 | `false`                | NDJSON progress + summary records                   |
+| `--applied-by`           | `$GOBRICKS_MIGRATE_APPLIED_BY`      | Principal recorded in `migration.applied` audit events   |
+| `--git-sha`              | `$GOBRICKS_MIGRATE_GIT_SHA`         | Source commit SHA recorded in the audit event            |
+| `--pipeline-run-id`      | `$GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | CI/CD run ID recorded in the audit event                 |
+| `--allow-insecure-scheme` | `false`               | Allow `http://` base URLs for `--source-url` (dev/LocalStack only; bearer token would be cleartext) |
+| `--verbose` / `-v`       | `false`                | Enable debug-level logging                          |
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 
@@ -220,7 +232,7 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:

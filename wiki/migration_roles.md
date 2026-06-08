@@ -54,7 +54,7 @@ DML-accessible to the runtime role.
 ```go
 import "github.com/gaborage/go-bricks/migration"
 
-spec := migration.PGRoleSpec{
+spec := &migration.PGRoleSpec{
     Schema:           "tenant_a",
     MigratorRole:     "migrator",
     MigratorPassword: os.Getenv("MIGRATOR_PASSWORD"), // optional, omit if managed externally
@@ -180,7 +180,8 @@ role helpers directly against PostgreSQL.
 - **Oracle.** Tracked under #385. Oracle's user-as-schema model and
   privilege grants are fundamentally different — likely a separate
   `OracleRoleSpec` and `ProvisionOracleRoles` rather than an extension here.
-- **Provisioning state machine.** #379 will add a durable, crash-recoverable
-  state machine that orchestrates the full per-tenant provisioning flow
-  (schema_created → role_created → migrated → seeded → ready). Today the
-  helper is a single idempotent call; the state machine will wrap it.
+- **Provisioning state machine.** Shipped in PR #429. A durable,
+  crash-recoverable state machine (`migration/provisioning/`) orchestrates the
+  full per-tenant provisioning flow (`pending → schema_created → role_created →
+  migrated → seeded → ready`, with `cleanup → failed` branches) and wraps the
+  role-provisioning helper. See [migration_provisioning.md](migration_provisioning.md).

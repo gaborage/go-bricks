@@ -43,7 +43,7 @@ const (
 // Example usage:
 //
 //	func (m *MyModule) Init(deps *app.ModuleDeps) error {
-//	    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+//	    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 //	}
 type Module struct {
 	// GoBricks dependencies

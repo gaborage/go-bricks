@@ -1156,4 +1156,4 @@ func (c *client) logResponse(resp *Response, traceID string) {
 	}
 }
 
-// generator moved to http/interface.go for reuse by server
+// generator functions (GenerateTraceParent, EnsureTraceID, TraceIDFromContext) live in httpclient/interface.go and are also used by the server package

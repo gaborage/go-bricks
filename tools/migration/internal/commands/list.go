@@ -72,9 +72,9 @@ func requireExactlyOneSource(flags *CommonFlags) error {
 	return nil
 }
 
-// writeTenantIDs emits ids as NDJSON when asJSON is set or one-per-line text
-// otherwise, propagating writer errors so a broken pipe surfaces as a non-zero
-// exit instead of being silently dropped.
+// writeTenantIDs emits ids as a JSON object ({"tenants":[...]}) when asJSON is
+// set or one-per-line text otherwise, propagating writer errors so a broken
+// pipe surfaces as a non-zero exit instead of being silently dropped.
 func writeTenantIDs(out io.Writer, ids []string, asJSON bool) error {
 	if asJSON {
 		if err := json.NewEncoder(out).Encode(map[string]any{jsonKeyTenants: ids}); err != nil {

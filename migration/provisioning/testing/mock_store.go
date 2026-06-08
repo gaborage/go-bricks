@@ -25,8 +25,8 @@ import (
 )
 
 // MockStateStore is a thread-safe StateStore implementation for unit tests.
-// It mirrors the semantics of provisioning.MemoryStore (which is the
-// production-side reference implementation) but adds configurable failure
+// It mirrors the semantics of provisioning.MemoryStore (the in-memory reference
+// implementation for tests and vendor authors) but adds configurable failure
 // injection for testing error paths.
 type MockStateStore struct {
 	mu       sync.Mutex

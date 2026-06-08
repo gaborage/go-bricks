@@ -34,8 +34,8 @@ func (r *Relay) Execute(ctx scheduler.JobContext) error {
 	}
 
 	// Check broker readiness before fetching records.
-	// PublishToExchange returns nil (not error) when the client is not ready,
-	// which would cause events to be incorrectly marked as published.
+	// Avoids pulling a full batch only to have every publish fail with errNotConnected
+	// on the first not-ready cycle, which wastes a DB round-trip and retry increments.
 	if !msgClient.IsReady() {
 		return fmt.Errorf("outbox relay: messaging client not ready")
 	}

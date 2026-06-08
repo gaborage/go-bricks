@@ -179,7 +179,7 @@ type InsertQueryBuilder interface {
 	Prefix(sql string, args ...any) InsertQueryBuilder
 	Suffix(sql string, args ...any) InsertQueryBuilder
 
-	// Select panics if sb is not the concrete *SelectQueryBuilder from this package.
+	// Select returns an error (deferred to ToSQL()) if sb is not the concrete *SelectQueryBuilder from this package.
 	Select(sb SelectQueryBuilder) InsertQueryBuilder
 
 	ToSQL() (sql string, args []any, err error)

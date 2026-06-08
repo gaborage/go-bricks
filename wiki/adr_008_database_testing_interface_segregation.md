@@ -105,7 +105,7 @@ AssertTransactionCommitted(t, db)
 
 ### Negative
 - **One more abstraction**: Developers must learn TestDB API (mitigated by clear examples in llms.txt)
-- **RowSet.toSQLRows() incomplete**: QueryRow works, Query needs enhancement for multi-row results
+- **RowSet.toSQLRows() complexity**: Full multi-row support requires a `sql.DB`-backed connector (`newRowSetConnector`), adding internal complexity (resolved in final implementation)
 - **Intentional code duplication**: TestDB.Query and TestTx.Query share implementation (~65 lines each, marked with `//nolint:dupl`)
 
 ### Trade-offs Accepted
@@ -140,7 +140,7 @@ AssertTransactionCommitted(t, db)
 - `database/testing/fake_db_test.go` - Comprehensive tests
 
 ### Files Modified
-- `database/types/interfaces.go:270` - Interface now embeds Querier + Transactor
+- `database/types/interfaces.go:304` - Interface now embeds Querier + Transactor
 
 ### Quality Metrics
 - **Linter**: 0 issues (golangci-lint passes)

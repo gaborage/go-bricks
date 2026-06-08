@@ -114,7 +114,7 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 	}, nil
 }
 
-// BrokerURL returns the AMQP connection URL (amqp://guest:guest@localhost:port/)
+// BrokerURL returns the AMQP connection URL for the running container.
 func (r *RabbitMQContainer) BrokerURL() string {
 	return r.brokerURL
 }
@@ -124,7 +124,7 @@ func (r *RabbitMQContainer) Host() string {
 	return r.host
 }
 
-// Port returns the mapped AMQP port (5672)
+// Port returns the host-side port Docker mapped to the container's 5672.
 func (r *RabbitMQContainer) Port() int {
 	return r.port
 }
