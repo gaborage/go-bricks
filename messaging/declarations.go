@@ -497,7 +497,7 @@ func writeMapArgs(h hash.Hash, args map[string]any) {
 // writeInt64 writes an int64 to the hash
 func writeInt64(h hash.Hash, value int64) {
 	buf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(buf, uint64(value)) //nolint:gosec // G115 - intentional bit reinterpretation for hash
+	binary.LittleEndian.PutUint64(buf, uint64(value)) //#nosec G115 -- intentional bit reinterpretation for hash
 	_, _ = h.Write(buf)
 }
 

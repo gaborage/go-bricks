@@ -4,9 +4,11 @@
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS :=
 # Keep in sync with the other module's Makefile.
-GOVULNCHECK_VERSION := v1.1.4
+# renovate: datasource=go depName=golang.org/x/vuln
+GOVULNCHECK_VERSION := v1.3.0
 # Keep in sync with the other module's Makefile.
-GOSEC_VERSION := v2.26.1
+# renovate: datasource=go depName=github.com/securego/gosec/v2
+GOSEC_VERSION := v2.27.1
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -71,13 +73,21 @@ clean: ## Clean build cache and test artifacts
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
 
-check: fmt lint test ## Run fmt, lint, and test (pre-commit checks)
+check: fmt lint test vuln ## Run fmt, lint, test, and vuln scan (pre-commit checks)
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
-	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) $(PKGS)
+	# gosec only accepts relative patterns — the previous $(PKGS) import paths
+	# silently scanned 0 files (a no-op gate). golangci-lint's gosec (make lint) is
+	# the fine-grained gate that honors per-line //#nosec annotations; this standalone
+	# pass is a backstop. Only G104 (unchecked cleanup Close errors) is excluded here —
+	# errcheck + the std-error-handling preset already enforce that class in make lint.
+	# Every other rule stays active, including G103 (unsafe): golangci-lint suppresses
+	# G103 via common-false-positives, so this standalone pass is the ONLY gate for new
+	# unaudited unsafe use. Intentional uses carry //#nosec annotations.
+	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G104 ./...
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }

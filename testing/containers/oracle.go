@@ -20,7 +20,7 @@ import (
 
 // OracleContainerConfig holds configuration for Oracle test container
 type OracleContainerConfig struct {
-	// ImageTag specifies the Oracle version (default: "23-slim")
+	// ImageTag specifies the Oracle version (default: "23.26.2-slim")
 	ImageTag string
 	// Password for SYSTEM, SYS, and APP users (default: "testpass")
 	Password string
@@ -34,11 +34,11 @@ type OracleContainerConfig struct {
 
 // DefaultOracleConfig returns an OracleContainerConfig populated with sensible defaults.
 //
-// The returned configuration sets ImageTag to "23-slim", Password to "testpass",
+// The returned configuration sets ImageTag to "23.26.2-slim", Password to "testpass",
 // Database to "FREEPDB1" (Oracle Free default PDB), AppUser to "testuser", and StartupTimeout to 120 seconds.
 func DefaultOracleConfig() *OracleContainerConfig {
 	return &OracleContainerConfig{
-		ImageTag:       "23-slim",
+		ImageTag:       "23.26.2-slim",
 		Password:       "testpass",
 		Database:       "FREEPDB1", // Oracle Free default PDB name
 		AppUser:        "testuser",

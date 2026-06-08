@@ -236,31 +236,37 @@ jobs:
       - name: Pre-pull container images
         run: |
           echo "Warming Docker cache with container images..."
-          docker pull postgres:17-alpine &
-          docker pull gvenzl/oracle-free:23-slim &
-          docker pull rabbitmq:3.13-management-alpine &
-          docker pull redis:7-alpine &
+          docker pull postgres:17.10-alpine &
+          docker pull gvenzl/oracle-free:23.26.2-slim &
+          docker pull rabbitmq:3.13.7-management-alpine &
+          docker pull redis:7.4.9-alpine &
           wait
           echo "All container images cached"
 
       - name: Cache Flyway CLI
         id: cache-flyway
-        # Pinned to 10.22.0 to match the JSON-output fixture captures in
+        # Pinned to 12.8.1 to match the JSON-output fixture captures in
         # migration/testdata/flyway. The SHA256 is part of the cache key so
         # a version/digest bump invalidates the cached tarball automatically.
+        # NOTE: Flyway stopped publishing the self-contained platform CLI tarballs
+        # to Maven Central mid-11.x; 12.x ships only from Redgate's own distribution
+        # server (see the Install step). The SHA256 pin keeps the new host integrity-checked.
         uses: actions/cache@v5
         with:
-          path: /tmp/flyway-10.22.0
-          key: flyway-10.22.0-638df407be107e6b89318ec1b020f60e96290db64981e7308a0d9b674c7f2918
+          path: /tmp/flyway-12.8.1
+          key: flyway-12.8.1-706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
 
       - name: Install Flyway CLI
         if: steps.cache-flyway.outputs.cache-hit != 'true'
         env:
-          FLYWAY_VERSION: 10.22.0
-          FLYWAY_SHA256: 638df407be107e6b89318ec1b020f60e96290db64981e7308a0d9b674c7f2918
+          FLYWAY_VERSION: 12.8.1
+          FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
         run: |
           set -euo pipefail
-          url="https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
+          # Flyway 12.x is distributed only from Redgate's server — Maven Central
+          # stopped publishing the self-contained -linux-x64.tar.gz mid-11.x (last
+          # one is 11.8.2). The SHA256 check below keeps this host integrity-pinned.
+          url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
           curl -fsSL "$url" -o /tmp/flyway.tar.gz
           actual="$(sha256sum /tmp/flyway.tar.gz | awk '{print $1}')"
           if [ "$actual" != "$FLYWAY_SHA256" ]; then
@@ -274,7 +280,7 @@ jobs:
 
       - name: Wire Flyway onto PATH
         run: |
-          sudo ln -sf /tmp/flyway-10.22.0/flyway /usr/local/bin/flyway
+          sudo ln -sf /tmp/flyway-12.8.1/flyway /usr/local/bin/flyway
           flyway --version | head -3
 
       - name: Run integration tests
@@ -668,7 +674,7 @@ jobs:
           cache-dependency-path: tools/migration/go.sum
 
       - name: golangci-lint (migrate tool)
-        uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee  # v9.2.1
         with:
           version: v2.12.2
           working-directory: tools/migration
@@ -719,7 +725,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: golangci-lint (framework)
-        uses: golangci/golangci-lint-action@36fe29c8f9dc696b104db0f7d49d1a87d2bbcd5b
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee  # v9.2.1
         with:
           version: v2.12.2
           args: --timeout=5m --skip-dirs=tools
@@ -843,6 +849,6 @@ jobs:
           path: .
 
       - name: Scan
-        uses: SonarSource/sonarqube-scan-action@f099b441665cb71b0414100cfaf6d835492cee5f
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995  # v8.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

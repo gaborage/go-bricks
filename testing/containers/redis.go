@@ -15,7 +15,7 @@ import (
 
 // RedisContainerConfig holds configuration for Redis test container
 type RedisContainerConfig struct {
-	// ImageTag specifies the Redis version (default: "7-alpine")
+	// ImageTag specifies the Redis version (default: "7.4.9-alpine")
 	ImageTag string
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
@@ -23,10 +23,10 @@ type RedisContainerConfig struct {
 
 // DefaultRedisConfig returns a RedisContainerConfig populated with sensible defaults.
 //
-// The returned configuration sets ImageTag to "7-alpine" and StartupTimeout to 60 seconds.
+// The returned configuration sets ImageTag to "7.4.9-alpine" and StartupTimeout to 60 seconds.
 func DefaultRedisConfig() *RedisContainerConfig {
 	return &RedisContainerConfig{
-		ImageTag:       "7-alpine",
+		ImageTag:       "7.4.9-alpine",
 		StartupTimeout: 60 * time.Second,
 	}
 }

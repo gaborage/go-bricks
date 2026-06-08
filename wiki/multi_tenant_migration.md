@@ -229,9 +229,12 @@ jobs:
 
       - name: Install Flyway
         run: |
-          curl -L https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/10.x/flyway-commandline-10.x-linux-x64.tar.gz \
+          # Flyway 12.x is distributed from Redgate's server — Maven Central
+          # stopped publishing the self-contained -linux-x64.tar.gz mid-11.x.
+          FLYWAY_VERSION=12.8.1
+          curl -L "https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz" \
             | tar xz
-          echo "$PWD/flyway-10.x" >> "$GITHUB_PATH"
+          echo "$PWD/flyway-${FLYWAY_VERSION}" >> "$GITHUB_PATH"
 
       - name: Build go-bricks-migrate
         run: |

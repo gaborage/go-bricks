@@ -30,7 +30,7 @@ func TestParseFlywayJSONMigrateSuccess(t *testing.T) {
 	assert.Equal(t, "", got.StartingVersion, "fresh schema starts at null/empty")
 	assert.Equal(t, "2", got.EndingVersion)
 	assert.Equal(t, int64(8), got.DurationMillis)
-	assert.Equal(t, "10.22.0", got.FlywayVersion)
+	assert.Equal(t, "12.8.1", got.FlywayVersion)
 	assert.Equal(t, "PostgreSQL", got.DatabaseType)
 	assert.Empty(t, got.ErrorCode)
 	assert.Empty(t, got.ErrorMessage)

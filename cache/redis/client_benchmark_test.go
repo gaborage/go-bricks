@@ -13,7 +13,7 @@ import (
 )
 
 // Note: These benchmarks require a running Redis instance on localhost:6379
-// To run benchmarks: docker run -d -p 6379:6379 redis:7-alpine
+// To run benchmarks: docker run -d -p 6379:6379 redis:7.4.9-alpine
 // Or use: make test-integration (which starts containers automatically for tests)
 
 // Benchmark constants
