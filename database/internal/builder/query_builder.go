@@ -188,8 +188,8 @@ func (qb *QueryBuilder) MustExpr(sql string, alias ...string) dbtypes.RawExpress
 //	}
 //
 //	cols := qb.Columns(&User{})
-//	query := qb.Select(cols.Cols("ID", "Name")...).From("users")
-//	// Oracle: SELECT "ID", "NAME" FROM users
+//	query := qb.Select(cols.Cols("ID", "Name")).From("users") // []string flattened by Select
+//	// Oracle: SELECT id, name FROM users
 //	// PostgreSQL: SELECT id, name FROM users
 func (qb *QueryBuilder) Columns(structPtr any) dbtypes.Columns {
 	return colreg.RegisterColumns(qb.vendor, structPtr)
