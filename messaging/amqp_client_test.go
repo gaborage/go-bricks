@@ -709,6 +709,33 @@ func TestNewAMQPClientConstructsAndStarts(t *testing.T) {
 	t.Cleanup(func() { closeAndWaitForReconnect(c) })
 }
 
+func TestNewAMQPClientWithConnectionTimeout(t *testing.T) {
+	// Stub the dialer so the reconnect goroutine never touches the network.
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	defer func() { setAmqpDialFunc(oldDial) }()
+
+	tests := []struct {
+		name string
+		opts []ClientOption
+		want time.Duration
+	}{
+		{name: "default_when_no_option", opts: nil, want: defaultConnectionTimeout},
+		{name: "override_applied", opts: []ClientOption{WithConnectionTimeout(7 * time.Second)}, want: 7 * time.Second},
+		{name: "non_positive_ignored", opts: []ClientOption{WithConnectionTimeout(0)}, want: defaultConnectionTimeout},
+		{name: "negative_ignored", opts: []ClientOption{WithConnectionTimeout(-1 * time.Second)}, want: defaultConnectionTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewAMQPClient("amqp://example", &stubLogger{}, tc.opts...)
+			t.Cleanup(func() { closeAndWaitForReconnect(c) })
+			if c.connectionTimeout != tc.want {
+				t.Errorf("connectionTimeout = %v, want %v", c.connectionTimeout, tc.want)
+			}
+		})
+	}
+}
+
 // ===== Enhanced Connection Management Tests =====
 
 // mockChannelConnection implements amqpConnection for testing

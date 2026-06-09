@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/cache/redis"
@@ -35,8 +36,10 @@ func (f *FactoryResolver) DatabaseConnector() database.Connector {
 }
 
 // MessagingClientFactory returns the appropriate messaging client factory function.
-// If no custom factory is provided in options, returns a factory that creates AMQPClient instances.
-func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
+// The default factory creates AMQPClient instances configured with the supplied per-publish
+// connection timeout. If a custom Options.MessagingClientFactory is set it owns construction
+// and receives only (url, log) — the connectionTimeout does not apply to it.
+func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {
 			return f.opts.MessagingClientFactory(url, log)
@@ -44,7 +47,7 @@ func (f *FactoryResolver) MessagingClientFactory() messaging.ClientFactory {
 	}
 
 	return func(url string, log logger.Logger) messaging.AMQPClient {
-		return messaging.NewAMQPClient(url, log)
+		return messaging.NewAMQPClient(url, log, messaging.WithConnectionTimeout(connectionTimeout))
 	}
 }
 

@@ -35,6 +35,7 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 	// Create factory resolver and configuration builder
 	resolver := NewFactoryResolver(b.opts)
 	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
+	configBuilder.connectionTimeout = b.cfg.Messaging.Reconnect.ConnectionTimeout
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	// Log factory configuration for debugging
