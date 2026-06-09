@@ -8,9 +8,11 @@ import (
 // private key, then encrypt that JWS as a compact JWE to the peer's public key. Returns
 // the compact JWE string.
 //
-// On any failure, returns an *Error with Code/Status mapped to JOSE_OUTBOUND_FAILED (500)
-// — outbound failures are framework/operator errors (missing keys, bad config), never
-// peer-induced. The Cause field carries the underlying detail for logging.
+// On failure, returns an *Error. Pre-flight guard failures (Status 500) use Code
+// JOSE_POLICY_DIRECTION_MISMATCH (nil or wrong-direction policy) or JOSE_KEYSTORE_UNAVAILABLE
+// (nil resolver); sign/encrypt failures (Status 500) use JOSE_OUTBOUND_FAILED. Key-resolution
+// failures propagate the resolver's *Error verbatim (e.g. JOSE_KID_UNKNOWN), whose Status is
+// resolver-defined. The Cause field carries the underlying detail for logging.
 func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	if p == nil || p.Direction != DirectionOutbound {
 		return "", &Error{

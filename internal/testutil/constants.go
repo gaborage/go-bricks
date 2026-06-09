@@ -52,6 +52,6 @@ const (
 	// TestConfigKey is a generic configuration key for testing.
 	TestConfigKey = "test.key"
 
-	// TestConfigPort is a common port configuration key.
+	// TestConfigPort is a common port number used in test configurations.
 	TestConfigPort = "8080"
 )

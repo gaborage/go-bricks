@@ -128,7 +128,6 @@ Per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/), gette
 | `app.Builder` | `GetError()` | `Error()` |
 | `messaging.Manager` | `GetPublisher()` | `Publisher()` |
 | `server.Validator` | `GetValidator()` | `Validator()` |
-| `validation.TagInfo` | `GetMin()`, `GetMax()`, `GetMinLength()`, `GetMaxLength()`, `GetPattern()`, `GetEnum()`, `GetConstraints()` | `Min()`, `Max()`, `MinLength()`, `MaxLength()`, `Pattern()`, `Enum()`, `AllConstraints()` |
 | `migration.FlywayMigrator` | `GetDefaultMigrationConfig()` | `DefaultMigrationConfig()` |
 | `config.TenantStore` | `GetTenants()` | `Tenants()` |
 | `app.MetadataRegistry` | `GetModules()`, `GetModule()` | `Modules()`, `Module()` |
@@ -136,7 +135,6 @@ Per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/), gette
 | `database.Interface` | `GetMigrationTable()` | `MigrationTable()` |
 | `database/testing.TestDB` | `GetQueryLog()`, `GetExecLog()` | `QueryLog()`, `ExecLog()` |
 | `database/testing.TenantDBMap` | `GetTenantDB()` | `TenantDB()` |
-| `messaging.Registry` | `GetDeclarations()` | `Declarations()` |
 | `server.RouteRegistry` | `GetRoutes()` | `Routes()` |
 
 **Example:**

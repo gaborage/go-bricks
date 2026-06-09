@@ -116,9 +116,24 @@ var (
 	errShutdown      = errors.New("AMQP client is shutting down")
 )
 
+// ClientOption configures an AMQPClientImpl at construction time.
+type ClientOption func(*AMQPClientImpl)
+
+// WithConnectionTimeout overrides the per-publish broker confirmation timeout —
+// the wait for an ACK/NACK after a confirmed publish (see PublishToExchange).
+// Non-positive values are ignored, leaving the 30s default in place.
+func WithConnectionTimeout(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.connectionTimeout = d
+		}
+	}
+}
+
 // NewAMQPClient creates a new AMQP client instance.
 // It automatically attempts to connect to the broker and handles reconnections.
-func NewAMQPClient(brokerURL string, log logger.Logger) *AMQPClientImpl {
+// Optional Option values (e.g. WithConnectionTimeout) override the defaults.
+func NewAMQPClient(brokerURL string, log logger.Logger, opts ...ClientOption) *AMQPClientImpl {
 	client := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		brokerURL:         brokerURL,
@@ -130,6 +145,13 @@ func NewAMQPClient(brokerURL string, log logger.Logger) *AMQPClientImpl {
 		reInitDelay:       defaultReInitDelay,
 		resendDelay:       defaultResendDelay,
 		connectionTimeout: defaultConnectionTimeout,
+	}
+
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(client)
 	}
 
 	// Start connection management in background

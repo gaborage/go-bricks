@@ -146,6 +146,7 @@ make lint                       # Run golangci-lint
 - **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md).
 - **observability/** — OpenTelemetry tracing and metrics
 - **outbox/** — Transactional outbox for reliable event publishing (at-least-once delivery)
+- **inbox/** — Exactly-once consumer-side processing (`InboxProcessor`); consumer-side complement to the transactional outbox
 - **keystore/** — Named key-material management: RSA key pairs and raw symmetric secrets (HMAC/HKDF) from files or base64 env vars; per-entry RSA-or-secret with a startup mutual-exclusivity check. See [keystore.md](wiki/keystore.md)
 - **jose/** — Nested JWE-of-JWS protection on HTTP request and response bodies
 
@@ -174,9 +175,9 @@ type MessagingDeclarer interface {
 // Simplified — see app/module.go for the full struct (~12 fields including
 // Scheduler, Outbox, Tracer, MeterProvider, DBByName, etc.)
 type ModuleDeps struct {
-    DB        database.Interface
+    DB        func(context.Context) (database.Interface, error)
     Logger    logger.Logger
-    Messaging messaging.Client
+    Messaging func(context.Context) (messaging.AMQPClient, error)
     Config    *config.Config
 }
 ```
@@ -251,10 +252,10 @@ type User struct {
 cols := qb.Columns(&User{})  // Cached per vendor
 f := qb.Filter()
 
-query := qb.Select(cols.Fields("ID", "Name")...).
+query := qb.Select(cols.Cols("ID", "Name")).
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// Oracle: SELECT id, name FROM users WHERE "level" = :1
 ```
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex*`, `f.JSONContains` (PG only), `f.Null/NotNull`, `f.Between`, `f.Exists`, `f.NotExists`, `f.InSubquery`. Use `qb.Expr()` for complex SQL inside type-safe methods (no placeholders).
@@ -320,8 +321,8 @@ type Executor interface {
     Execute(ctx JobContext) error  // JobContext gives JobID, TriggerType, Logger, DB, Messaging, Config
 }
 
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+func (m *Module) RegisterJobs(s app.JobRegistrar) error {
+    return s.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 }
 ```
 
@@ -440,7 +441,7 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | HTTP server read / write / idle / shutdown | `server.timeout.{read,write,idle,shutdown}` | 15s / 30s / 60s / 10s |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s |
-| AMQP connection establishment | `messaging.reconnect.connectiontimeout` | 30s |
+| AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s |
 | Scheduler slow-job WARN / shutdown | `scheduler.timeout.{slowjob,shutdown}` | 25s / 30s |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) |
 
@@ -537,6 +538,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **observability/testing/** — Test utilities for spans and metrics.
 - **outbox/** — Transactional outbox pattern (Publisher, Relay, Store, multi-vendor).
 - **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
+- **inbox/** — Exactly-once consumer-side processing (InboxProcessor, DB-vendor store, cleanup).
 - **keystore/** — Named RSA key pairs + symmetric secrets (DER/raw files + base64 env vars).
 - **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
 - **tools/** — Development tooling (`migration` CLI / `go-bricks-migrate`).
@@ -561,16 +563,18 @@ type Interface interface {
 type Client interface {
     Publish(ctx context.Context, destination string, data []byte) error
     Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error)
+    Close() error
     IsReady() bool
 }
 
 // Observability
 type Provider interface {
-    TracerProvider() *sdktrace.TracerProvider
-    MeterProvider() *sdkmetric.MeterProvider
+    TracerProvider() trace.TracerProvider
+    MeterProvider() metric.MeterProvider
     LoggerProvider() *sdklog.LoggerProvider
     ShouldDisableStdout() bool
     Shutdown(ctx context.Context) error
+    ForceFlush(ctx context.Context) error
 }
 
 // Outbox

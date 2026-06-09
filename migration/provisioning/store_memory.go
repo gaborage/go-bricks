@@ -94,7 +94,7 @@ func (m *MemoryStore) Transition(
 	j.State = to
 	j.UpdatedAt = m.timestamp()
 	j.LastError = lastError
-	// Attempts increments on every forward transition (cleanup excluded)
+	// Attempts increments on every forward transition (cleanup and failed excluded)
 	// so consumers can correlate retries with audit events.
 	if to != StateCleanup && to != StateFailed {
 		j.Attempts++

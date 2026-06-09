@@ -89,10 +89,11 @@ var allowedNext = map[State][]State{
 	StateFailed:        nil, // terminal
 }
 
-// nextForward maps each state to the single forward-progress state that the
+// nextForward maps each non-terminal, non-cleanup state to the single forward-progress state that the
 // Executor advances to when the corresponding step succeeds. Cleanup is the
 // fallback when the forward step errors and is therefore not represented
-// here. Terminal states map to themselves (the Executor never advances).
+// here. Terminal states (StateReady, StateFailed) are absent — the outer
+// Run loop's IsTerminal() gate ensures they never reach runForwardStep.
 var nextForward = map[State]State{
 	StatePending:       StateSchemaCreated,
 	StateSchemaCreated: StateRoleCreated,

@@ -89,7 +89,7 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Details:**
   - `BaseAPIError` implements `error` for seamless integration with logging/middleware.
   - A unified Echo `HTTPErrorHandler` maps untyped errors and `echo.HTTPError` values into the standard `{ error, meta }` envelope and status.
-  - Error `details` are included only in development (`app.env=dev|development`).
+  - Error `details` are included only in development (`app.env=development|dev|local` — matched via `config.IsDevelopment()`; see ADR-022).
 
 ### 6. **Validation Integration Strategy**
 - **Decision:** Integrate `validator/v10` with automatic validation

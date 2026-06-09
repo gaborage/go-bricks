@@ -46,7 +46,7 @@ func Test_Filter_Eq(t *testing.T) { }
 **Exception:** Test case descriptions in table-driven tests use snake_case for readability (e.g., `name: "with_invalid_credentials"`)
 
 ## Testing Strategy
-- **Unit tests:** testify, database/testing (database), httptest (server), fake adapters (messaging)
+- **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging)
 - **Integration tests:** testcontainers, `-tags=integration` flag
 - **Race detection:** All tests run with `-race` in CI
 - **Coverage target:** 80% (SonarCloud)
@@ -59,7 +59,7 @@ GoBricks provides `database/testing` package for easy database mocking without s
 ```go
 import dbtest "github.com/gaborage/go-bricks/database/testing"
 
-func TestProductService_FindActive(t *testing.T) {
+func TestProductServiceFindActive(t *testing.T) {
     // Setup (8 lines vs 30+ with sqlmock)
     db := dbtest.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
@@ -118,7 +118,7 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 - Vendor-agnostic RowSet builder
 - Partial SQL matching by default (or strict with StrictSQLMatching())
 
-See [database/testing](../database/testing/) package and [llms.txt:294](../llms.txt) for full examples.
+See [database/testing](../database/testing/) package and [llms.txt:1393](../llms.txt) for full examples.
 
 ## Cache Testing
 
@@ -179,7 +179,7 @@ result, err := svc.Process(acmeCtx)  // Uses acme's MockCache
 **Key Features:**
 - Fluent configuration API (`WithGetFailure`, `WithDelay`, `WithCloseCallback`)
 - Operation tracking (Get/Set/Delete/GetOrSet/CompareAndSet counts)
-- 20+ assertion helpers (`AssertCacheHit`, `AssertOperationCount`, `AssertValue`)
+- 17 assertion helpers (`AssertCacheHit`, `AssertOperationCount`, `AssertValue`)
 - TTL expiration testing (real time-based expiration)
 - Multi-tenant isolation support
 
@@ -262,7 +262,7 @@ The `database/oracle` integration suite provisions exactly one Oracle container 
 - **MUST** acquire its schema via `setupTestSchema(t)` (which delegates to `(*containers.OracleContainer).NewSchema(t)`).
 - **MUST NOT** create globally-named objects. No `CREATE PUBLIC SYNONYM`, no `CREATE TYPE` outside the test's own schema — fully qualify with the per-test schema name (`CREATE TYPE <schema>.PRODUCT_TYPE`) so `DROP USER ... CASCADE` reclaims them on cleanup.
 - **MUST NOT** rely on dropping its own tables/sequences/UDTs by name. `DROP USER ... CASCADE` is the cleanup primitive; tests that try to `DROP TABLE` explicitly will see no-op or already-dropped errors.
-- **MAY** opt into `t.Parallel()` once the refactor is stable (separate follow-up after ADR-020 lands).
+- **MAY** opt into `t.Parallel()` as a separate follow-up (not yet done).
 
 Tests that need a *different* `DatabaseConfig` (pool sizing, keep-alive, timezone, connection-string format variants) call `packageOracleContainer().NewSchema(t)` directly and build their own `cfg` from the returned `*containers.OracleSchema` credentials — still on the shared container, just with custom wiring.
 

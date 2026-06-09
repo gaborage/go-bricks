@@ -35,7 +35,7 @@ _, _ = ctrl.Set(ctx, migration.QuiesceSetOptions{
     Reason: "deploy-2026.06", // operator-supplied "why" (safe to audit)
     TTL:    time.Hour,
 })
-st, _ := ctrl.Query(ctx)     // QuiesceStatus{Active, SetBy, Reason, ExpiresAt, ClearedAt, Expired}
+st, _ := ctrl.Query(ctx)     // QuiesceStatus{Active, SetAt, SetBy, Reason, ExpiresAt, ClearedAt, Expired}
 _, _ = ctrl.Clear(ctx, "ops-oncall")
 
 // Worker (per-tenant provisioning):
@@ -54,13 +54,13 @@ migration.MigrateAll(ctx, fm, lister, configs, migration.ActionMigrate,
 A single control-plane table (zero new dependencies), one row per scope (v1 uses the single `"global"` scope):
 
 ```sql
-CREATE TABLE quiesce_flags (
+CREATE TABLE IF NOT EXISTS quiesce_flags (
     id          VARCHAR(64)  PRIMARY KEY,
     set_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     set_by      VARCHAR(255) NOT NULL DEFAULT '',
     reason      TEXT NOT NULL DEFAULT '',
     expires_at  TIMESTAMP WITH TIME ZONE NOT NULL,
-    cleared_at  TIMESTAMP WITH TIME ZONE  -- NULL = uncleared
+    cleared_at  TIMESTAMP WITH TIME ZONE
 )
 ```
 

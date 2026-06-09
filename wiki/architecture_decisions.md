@@ -56,7 +56,7 @@ Lazy initialization of messaging registry to support context-aware dependency re
 
 **Date:** 2025-09-27 | **Status:** Accepted
 
-Compile-time safe WHERE clause construction replacing string-based API. Introduces type-safe methods (`WhereEq`, `WhereLt`, etc.) with automatic Oracle identifier quoting.
+Compile-time safe WHERE clause construction replacing string-based API. Introduces type-safe filter methods (`f.Eq`, `f.Lt`, etc. on `FilterFactory`) with automatic Oracle identifier quoting.
 
 **Key Benefits:** Eliminates Oracle quoting bugs, compile-time safety, clear responsibility boundaries
 
@@ -112,7 +112,7 @@ Converts panic-based fail-fast validation to idiomatic error returns for SonarCl
 
 ---
 
-### [ADR-011: Redis Cache Backend with CBOR Serialization (ModuleDeps Extension)](adr_011_redis_cache.md)
+### [ADR-011: Redis Cache Backend with CBOR Serialization](adr_011_redis_cache.md)
 
 **Date:** 2025-11-09 | **Status:** Accepted
 
@@ -234,6 +234,8 @@ Resolves issue #435. Replaces the strict `{development, staging, production}` al
 
 ### [ADR-023: Scheduler Timezone Configuration](adr_023_scheduler_timezone.md)
 
+**Date:** 2026-06-02 | **Status:** Accepted
+
 Adds `scheduler.timezone`, a single config field applied scheduler-wide via
 gocron's `WithLocation`, mirroring the `database.timezone` contract from ADR-016
 (default UTC, `"-"` opt-out for host-local, IANA-validated, fail-fast). Resolves
@@ -241,7 +243,11 @@ the absence of any timezone knob for scheduled jobs and removes the vestigial
 `ScheduleConfiguration.Timezone` field. Breaking: an unset zone now means UTC
 instead of host-local.
 
+---
+
 ### [ADR-024: Flat-Smushed Config Keys (Underscore-Free for Env Reachability)](adr_024_config_key_flatsmush.md)
+
+**Date:** 2026-06-05 | **Status:** Accepted
 
 Renames 21 snake_case koanf leaf keys (e.g. `log.sensitive_fields`,
 `keystore.secret_min_length`, `outbox.batch_size`) to the framework's

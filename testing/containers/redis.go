@@ -100,7 +100,7 @@ func (r *RedisContainer) Host() string {
 	return r.host
 }
 
-// Port returns the mapped Redis port (6379)
+// Port returns the host-side port Docker mapped to the container's 6379.
 func (r *RedisContainer) Port() int {
 	return r.port
 }

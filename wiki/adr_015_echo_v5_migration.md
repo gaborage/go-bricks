@@ -61,8 +61,8 @@ Use `echo.UnwrapResponse(c.Response())` to access `.Committed` and `.Status` fie
 ### Server Lifecycle: `StartServer()`/`Shutdown()` Removed
 Replaced by `echo.StartConfig` with context-based graceful shutdown.
 
-### `NewContext`: Standalone Function
-Changed from `e.NewContext(req, rec)` method to `echo.NewContext(req, rec, e)` standalone function.
+### `NewContext`: Both Forms Available
+Echo v5 adds a standalone `echo.NewContext(req, rec, opts ...any)` package-level function (in `context.go`), where the `*Echo` instance can be passed as an optional variadic argument. The `e.NewContext(req, rec)` method on `*Echo` is retained unchanged. Either form works; the method form is used throughout this codebase.
 
 ### OpenTelemetry: `otelecho` to `echo-opentelemetry`
 The community `otelecho` package does not support Echo v5. The first-party `echo-opentelemetry` package provides equivalent functionality.

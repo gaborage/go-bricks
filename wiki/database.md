@@ -54,8 +54,9 @@ func (h *Handler) MigrateLegacyData(ctx context.Context) error {
     mainDB, err := h.getDB(ctx)
     if err != nil { return err }
 
-    oracleQB := builder.NewQueryBuilder(dbtypes.Oracle)
-    rows, _ := legacyDB.Query(ctx, oracleQB.Select("*").From("OLD_USERS").Build())
+    oracleQB := database.NewQueryBuilder(database.Oracle)
+    query, args, _ := oracleQB.Select("*").From("OLD_USERS").ToSQL()
+    rows, _ := legacyDB.Query(ctx, query, args...)
     // ... process and write to mainDB ...
     return nil
 }
@@ -75,7 +76,7 @@ GoBricks eliminates column repetition through struct-based column management usi
 - **DRY:** Define columns once in struct tags, reference by field name
 - **Type Safety:** Compile-time field name validation (panics on typos)
 - **Vendor-Aware:** Automatic Oracle reserved word quoting
-- **Zero Overhead:** One-time reflection (~0.6µs), cached forever (~26ns access)
+- **Zero Overhead:** One-time reflection (~2µs), cached forever (~50ns access)
 - **Refactor-Friendly:** Rename struct fields → compiler catches all query references
 
 **Quick Example:**
@@ -88,14 +89,14 @@ type User struct {
 
 cols := qb.Columns(&User{})  // Cached per vendor
 
-query := qb.Select(cols.All()...).From("users")
+query := qb.Select(cols.All()).From("users")
 // or select specific fields:
-query = qb.Select(cols.Cols("ID", "Name")...).From("users")
+query = qb.Select(cols.Cols("ID", "Name")).From("users")
 
-query := qb.Select(cols.All()...).
+query := qb.Select(cols.All()).
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME", "LEVEL" FROM users WHERE "LEVEL" = :1
+// Oracle: SELECT id, name, "level" FROM users WHERE "level" = :1
 
 qb.Update("users").
     Set(cols.Col("Name"), "Jane").
@@ -105,12 +106,12 @@ qb.Update("users").
 **Service-Level Caching Pattern:**
 ```go
 type ProductService struct {
-    qb   *builder.QueryBuilder
+    qb   *database.QueryBuilder
     cols dbtypes.Columns
 }
 
 func NewProductService(db database.Interface) *ProductService {
-    qb := builder.NewQueryBuilder(db.DatabaseType())
+    qb := database.NewQueryBuilder(db.DatabaseType())
     return &ProductService{
         qb:   qb,
         cols: qb.Columns(&Product{}),
@@ -118,7 +119,7 @@ func NewProductService(db database.Interface) *ProductService {
 }
 ```
 
-**Performance:** First use ~0.6µs (reflection), cached access ~26ns, thread-safe via `sync.Map`.
+**Performance:** First use ~2µs (reflection), cached access ~50ns, thread-safe via `sync.Map`.
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`.
 
@@ -138,7 +139,7 @@ type Profile struct {
     Bio    string `db:"bio"`
 }
 
-qb := builder.NewQueryBuilder(dbtypes.Oracle)
+qb := database.NewQueryBuilder(database.Oracle)
 jf := qb.JoinFilter()
 f := qb.Filter()
 
@@ -196,8 +197,8 @@ productCols := qb.Columns(&Product{})
 p := productCols.As("p")
 
 subquery := qb.Select("1").From("reviews").
-    Where(jf.And(
-        jf.EqColumn("reviews."+reviewCols.Col("ProductID"), p.Col("ID")),
+    Where(f.And(
+        f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
 

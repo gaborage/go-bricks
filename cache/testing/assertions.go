@@ -335,8 +335,7 @@ func AssertNoError(t *testing.T, operation func() error) {
 	}
 }
 
-// AssertStats asserts that cache stats contain expected key-value pairs.
-// Only works with MockCache instances.
+// AssertStatsContains asserts that cache stats contain expected key-value pairs.
 //
 // Example:
 //

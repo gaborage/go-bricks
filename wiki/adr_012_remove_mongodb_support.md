@@ -70,4 +70,4 @@ Applications using MongoDB with GoBricks must:
 
 - [ADR-003: Database by Intent Configuration](adr_003_database_by_intent.md) — database-only-when-configured principle
 - [ADR-007: Struct-Based Column Extraction](adr_007_struct_based_columns.md) — column system now only handles PostgreSQL and Oracle
-- [ADR-010: Panic-to-Error Conversion](adr_010_panic_to_error_conversion.md) — previously referenced MongoDB transactions
+- [ADR-010: Panic-to-Error Conversion](adr_010_panic_to_error_conversion.md) — converts panic-based validation in database/types to error returns

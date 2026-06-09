@@ -349,14 +349,14 @@ observability:
 
 ### Testing Strategy
 
-1. **Unit Tests** (Phase 8 - Planned):
+1. **Unit Tests** (Implemented):
    - Config defaults and validation
    - Exporter selection (stdout/HTTP/gRPC)
    - Severity filter and sampling distribution
    - JSON→OTel conversion edge cases
    - Logger enhancement and context injection
 
-2. **Integration Tests** (Phase 8 - Planned):
+2. **Integration Tests** (Implemented):
    - End-to-end OTLP export with in-memory exporter
    - Trace correlation via WithContext()
    - Batching behavior under load

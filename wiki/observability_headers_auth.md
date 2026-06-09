@@ -56,16 +56,16 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
    - `config.production.yaml` — Production overrides (committed; references `${VAR}`)
    - `config.development.yaml` — Dev settings (committed; references `${VAR}` or default literals for local-only test keys)
 
-3. **Programmatic override from a secret manager** (when env-var injection isn't enough — e.g., rotating tokens):
+3. **Programmatic secret injection** (when a sidecar or secret manager provides the value at process start — e.g., rotating tokens): set the environment variable before `app.Run()` so Koanf's env-var layer resolves the `${VAR}` placeholder declared in YAML.
    ```go
-   // In main.go before app.Run()
+   // In main.go, before app.Run()
    apiKey, err := vault.GetSecret(ctx, "otel/api-key")
    if err != nil { return err }
-
-   cfg.Observability.Trace.Headers = map[string]string{
-       "api-key": apiKey,
-   }
+   os.Setenv("NEW_RELIC_API_KEY", apiKey)
+   // config.production.yaml already declares: api-key: ${NEW_RELIC_API_KEY}
+   // Koanf resolves the placeholder at startup — no config struct mutation needed.
    ```
+   Note: `config.Config` has no `Observability` struct field; the header keys must be declared in YAML — only the secret *value* can come from the environment.
 
 ## Vendor-Specific Header Examples
 

@@ -38,9 +38,6 @@ const (
 	TestConsumerTag = "test-consumer"
 )
 
-// MessagingFixtures provides helper functions for creating pre-configured messaging mocks
-// and message builders for consistent testing.
-
 // NewWorkingMessagingClient creates a mock messaging client that operates successfully.
 // This is useful for testing happy path scenarios.
 func NewWorkingMessagingClient() *mocks.MockMessagingClient {
