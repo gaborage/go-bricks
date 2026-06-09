@@ -433,10 +433,10 @@ type User struct {
 cols := qb.Columns(&User{})
 f := qb.Filter()
 
-query := qb.Select(cols.Fields("ID", "Name")...).
+query := qb.Select(cols.Cols("ID", "Name")). // []string flattened by Select
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// Oracle: SELECT id, name FROM users WHERE "level" = :1
 // PostgreSQL: SELECT id, name FROM users WHERE level = $1
 ```
 
