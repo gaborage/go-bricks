@@ -148,6 +148,9 @@ func NewAMQPClient(brokerURL string, log logger.Logger, opts ...ClientOption) *A
 	}
 
 	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
 		opt(client)
 	}
 
