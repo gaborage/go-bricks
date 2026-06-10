@@ -83,6 +83,40 @@ func TestModuleInitRejectsBadTableName(t *testing.T) {
 	assert.Contains(t, err.Error(), "unqualified")
 }
 
+func TestRegisterJobsFailsFastForDynamicMultitenant(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox:       config.InboxConfig{Enabled: true, RetentionPeriod: time.Hour},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	}
+	require.NoError(t, m.Init(deps), "Init succeeds — ProcessOnce works in multi-tenant mode")
+
+	reg := &fakeRegistrar{}
+	err := m.RegisterJobs(reg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dynamic multi-tenant",
+		"the cleanup job cannot enumerate dynamic tenants, so RegisterJobs must fail fast")
+	assert.Empty(t, reg.dailyJobs, "no cleanup job is registered for dynamic multi-tenant")
+}
+
+func TestInitSucceedsForDynamicMultitenantProcessOnceOnly(t *testing.T) {
+	// ProcessOnce resolves the tenant from the request context, so it works in dynamic
+	// multi-tenant mode. Init must succeed; the dynamic-MT guard lives in RegisterJobs,
+	// which only runs when the scheduler is present and the cleanup job would register.
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox:       config.InboxConfig{Enabled: true, RetentionPeriod: time.Hour},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	}
+
+	require.NoError(t, m.Init(deps))
+	require.NotNil(t, m.InboxProcessor())
+}
+
 func TestRegisterJobsRegistersCleanup(t *testing.T) {
 	m := NewModule()
 	deps := testDeps()

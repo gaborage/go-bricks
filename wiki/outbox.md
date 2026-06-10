@@ -139,3 +139,9 @@ outbox:
   batchsize: 200             # Higher throughput
   retentionperiod: 168h      # 7-day retention
 ```
+
+## Multi-Tenant
+
+In multi-tenant mode the relay and cleanup jobs **fan out across the configured static tenants** (`multitenant.tenants`): each poll cycle resolves every tenant's database independently (via `multitenant.SetTenant` + `deps.DB`), relays that tenant's pending events, and prunes its published rows. A failure for one tenant is logged and does not block the others.
+
+**Dynamic tenant sources are not supported** for the relay/cleanup: because the tenant set is not enumerable at job-registration time, the framework fails fast rather than silently never relaying. With `multitenant.enabled` and `source.type: dynamic`, enabling the outbox is rejected at module `Init` (and the inbox cleanup job at `RegisterJobs`). Use static `multitenant.tenants` config for outbox/inbox relay and cleanup.

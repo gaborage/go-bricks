@@ -137,9 +137,29 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		return nil
 	}
 
+	// Fail fast on multi-tenant configurations the cleanup job cannot fan out across, so
+	// it does not silently never prune any tenant's ledger. ProcessOnce itself is
+	// unaffected (it resolves the tenant from the request context), which is why this
+	// guard lives here — failing only when the cleanup job would actually be registered —
+	// rather than in Init, so ProcessOnce-only deployments (no scheduler) still work:
+	//   - dynamic sources: the tenant set is not enumerable at registration time;
+	//   - static sources with no tenants: there is nothing to fan out to.
+	if m.config != nil && m.config.Multitenant.Enabled {
+		switch {
+		case m.config.Source.Type == config.SourceTypeDynamic:
+			return fmt.Errorf("inbox: retention cleanup is not supported with dynamic multi-tenant sources " +
+				"(source.type=dynamic); use static multitenant.tenants config, or run without the scheduler to use ProcessOnce only")
+		case len(m.config.Multitenant.Tenants) == 0:
+			return fmt.Errorf("inbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
+				"the cleanup job would prune nothing. Configure multitenant.tenants, or run without the scheduler to use ProcessOnce only")
+		}
+	}
+
 	cleanup := &Cleanup{
 		store:           &lazyStore{module: m},
 		retentionPeriod: m.cfg.RetentionPeriod,
+		getDB:           m.getDB,
+		tenants:         m.config.PerTenantJobKeys(),
 	}
 
 	// DailyAt uses only the time-of-day (04:00) and applies the scheduler's

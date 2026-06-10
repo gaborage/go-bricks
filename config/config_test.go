@@ -157,6 +157,31 @@ func TestLoadAppEnvRejectsMalformedOverlaySuffix(t *testing.T) {
 	assert.ErrorContains(t, err, fieldAppEnv, "malformed APP_ENV must be rejected by validation, not silently used as a file path")
 }
 
+func TestConfigPerTenantJobKeys(t *testing.T) {
+	t.Run("single_tenant_yields_one_empty_key", func(t *testing.T) {
+		cfg := &Config{}
+		assert.Equal(t, []string{""}, cfg.PerTenantJobKeys())
+	})
+
+	t.Run("nil_config_yields_one_empty_key", func(t *testing.T) {
+		var cfg *Config
+		assert.Equal(t, []string{""}, cfg.PerTenantJobKeys())
+	})
+
+	t.Run("static_multitenant_yields_sorted_keys", func(t *testing.T) {
+		cfg := &Config{Multitenant: MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]TenantEntry{"zeta": {}, "alpha": {}},
+		}}
+		assert.Equal(t, []string{"alpha", "zeta"}, cfg.PerTenantJobKeys())
+	})
+
+	t.Run("multitenant_enabled_without_tenants_yields_empty", func(t *testing.T) {
+		cfg := &Config{Multitenant: MultitenantConfig{Enabled: true}}
+		assert.Empty(t, cfg.PerTenantJobKeys(), "callers must reject this degenerate config")
+	})
+}
+
 func TestLoadMultiElementStringSliceEnv(t *testing.T) {
 	clearEnvironmentVariables()
 	t.Setenv("SCHEDULER_SECURITY_CIDRALLOWLIST", "10.0.0.0/8,192.168.0.0/16")

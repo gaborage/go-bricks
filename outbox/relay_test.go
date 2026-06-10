@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,7 +10,9 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -36,9 +39,10 @@ func TestDecodeHeadersInvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid headers JSON")
 }
 
-// newRelayWithFakes wires a Relay with the supplied fake store and AMQP
-// client. The getMessaging closure always returns the fake AMQP regardless
-// of JobContext content.
+// newRelayWithFakes wires a single-tenant Relay with the supplied fake store and AMQP
+// client. tenants is [""], so multitenant.SetTenant is a no-op and the per-tenant context
+// the relay resolves with is the fake JobContext itself — getDB type-asserts it back to
+// read the db supplied via newFakeJobCtx, preserving the existing test ergonomics.
 func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 	return &Relay{
 		store: store,
@@ -46,7 +50,14 @@ func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 			BatchSize:  10,
 			MaxRetries: 3,
 		},
-		getMessaging: func(_ scheduler.JobContext) messaging.AMQPClient { return amqp },
+		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
+			if jc, ok := ctx.(scheduler.JobContext); ok {
+				return jc.DB(), nil
+			}
+			return nil, nil
+		},
+		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return amqp, nil },
+		tenants:      []string{""},
 	}
 }
 
@@ -60,13 +71,15 @@ func TestRelayExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {
 }
 
 func TestRelayExecuteReturnsErrorWhenMessagingUnavailable(t *testing.T) {
+	db := dbtesting.NewTestDB("postgresql")
 	r := &Relay{
 		store:  &fakeStore{},
 		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
+		getDB:  func(context.Context) (dbtypes.Interface, error) { return db, nil },
 		// getMessaging deliberately returns nil to simulate misconfigured tenant.
-		getMessaging: func(_ scheduler.JobContext) messaging.AMQPClient { return nil },
+		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
+		tenants:      []string{""},
 	}
-	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, nil)
 
 	err := r.Execute(ctx)
@@ -161,7 +174,7 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-bad-hdr", Headers: []byte(`{not valid json}`)}
-	ok := r.publishRecord(ctx, db, amqp, rec)
+	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
 	assert.False(t, ok, "publishRecord returns false when headers can't be decoded")
 	assert.Equal(t, 0, amqp.PublishCalls, "publish never attempted with bad headers")
@@ -184,7 +197,7 @@ func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"x-correlation-id":"abc"}`),
 	}
-	ok := r.publishRecord(ctx, db, amqp, rec)
+	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 	require.True(t, ok)
 
 	require.NotNil(t, amqp.LastPublishHdrs)
@@ -203,7 +216,7 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-7", EventType: "x.y", Exchange: "ex", RoutingKey: "rk"}
-	require.True(t, r.publishRecord(ctx, db, amqp, rec))
+	require.True(t, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
 	require.NotNil(t, amqp.LastPublishHdrs)
 	assert.Equal(t, "evt-7", amqp.LastPublishHdrs[HeaderEventID])
 }
@@ -216,7 +229,7 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-mp-fail", Exchange: "ex", RoutingKey: "rk"}
-	ok := r.publishRecord(ctx, db, amqp, rec)
+	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
 	assert.False(t, ok, "MarkPublished failure makes the cycle treat the record as failed")
 	assert.Equal(t, 1, amqp.PublishCalls)
@@ -245,7 +258,7 @@ func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"traceparent":"` + inboundTraceparent + `","X-Request-ID":"` + inboundTraceID + `"}`),
 	}
-	require.True(t, r.publishRecord(ctx, db, amqp, rec))
+	require.True(t, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
 
 	require.NotNil(t, amqp.LastPublishCtx, "publish context must be captured")
 	tp, ok := gobrickstrace.ParentFromContext(amqp.LastPublishCtx)
@@ -264,7 +277,60 @@ func TestMarkRecordFailedLogsButDoesNotPanicOnStoreError(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	require.NotPanics(t, func() {
-		r.markRecordFailed(ctx, db, "evt-id", "publish err")
+		r.markRecordFailed(ctx, ctx.Logger(), db, "evt-id", "publish err")
 	})
 	assert.Equal(t, 1, store.MarkFailedCalls)
+}
+
+// TestRelayExecuteFansOutAcrossStaticTenants verifies the multi-tenant fix: the relay
+// resolves the database once per configured tenant (with that tenant injected into the
+// context) and relays each tenant's pending events — rather than the prior tenant-less
+// resolution that returned ErrNoTenantInContext and relayed nothing.
+func TestRelayExecuteFansOutAcrossStaticTenants(t *testing.T) {
+	var resolved []string
+	store := &fakeStore{FetchPendingResult: []Record{{ID: "e1", Exchange: "ex", RoutingKey: "rk"}}}
+	amqp := newFakeAMQP()
+	r := &Relay{
+		store:  store,
+		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
+		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
+			tid, _ := multitenant.GetTenant(ctx)
+			resolved = append(resolved, tid)
+			return dbtesting.NewTestDB("postgresql"), nil
+		},
+		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return amqp, nil },
+		tenants:      []string{"tenant-a", "tenant-b"},
+	}
+	ctx := newFakeJobCtx(nil, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, []string{"tenant-a", "tenant-b"}, resolved, "relay must resolve the DB once per configured tenant, in order")
+	assert.Equal(t, 2, store.FetchPendingCalls, "FetchPending runs once per tenant")
+	assert.Equal(t, 2, amqp.PublishCalls, "each tenant's pending record is published")
+}
+
+// TestRelayExecuteIsolatesPerTenantFailures verifies one unhealthy tenant does not block
+// the others: its error is collected (naming the tenant) while healthy tenants still run.
+func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	r := &Relay{
+		store:  store,
+		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
+		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
+			if tid, _ := multitenant.GetTenant(ctx); tid == "bad" {
+				return nil, errors.New("tenant db down")
+			}
+			return dbtesting.NewTestDB("postgresql"), nil
+		},
+		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return amqp, nil },
+		tenants:      []string{"good", "bad"},
+	}
+	ctx := newFakeJobCtx(nil, amqp)
+
+	err := r.Execute(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `tenant "bad"`)
+	assert.Contains(t, err.Error(), "tenant db down")
+	assert.Equal(t, 1, store.FetchPendingCalls, "the healthy tenant is still relayed despite the other failing")
 }
