@@ -336,6 +336,23 @@ insert) — those now apply the caller's intended value.
 
 ---
 
+### [ADR-029: Graceful Shutdown Phase Ordering (Stop Inbound Work Before Teardown)](adr_029_graceful_shutdown_order.md)
+
+**Date:** 2026-06-10 | **Status:** Accepted
+
+`App.Shutdown` tore down modules **first**, while the HTTP server was still serving and AMQP
+consumers were still delivering — so in-flight handlers ran against already-shut-down modules
+(shutdown-window panics). Reordered to stop inbound work first: **server → consumers →
+modules → observability → closers**, with a new additive `Manager.StopConsumers()` that
+quiesces consumers (idempotent) without closing connections.
+
+**Behavioral change (not an API break):** in-flight HTTP/AMQP handlers now complete against
+live modules; no application code must change. `messaging.Manager.StopConsumers()` is additive.
+
+**Key Benefits:** No shutdown-window panics, in-flight work drains against live modules, consumer-quiesce hook
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -345,7 +362,7 @@ insert) — those now apply the caller's intended value.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-028) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-029) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -2,6 +2,15 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Graceful Shutdown Now Stops Inbound Work First (ADR-029)
+
+Per [ADR-029](adr_029_graceful_shutdown_order.md), `App.Shutdown` reordered its phases. **Before:** modules were torn down first, while the HTTP server was still serving and AMQP consumers were still delivering — so in-flight handlers could run against already-shut-down modules (panics/errors during the shutdown window). **After:** `server → consumers → modules → observability → closers`.
+
+**No code or config change is required** — this is an internal behavioral correction. Two things to be aware of:
+
+- If a module's `Shutdown()` implicitly relied on the HTTP server still serving or on consumers still delivering, it will now see the corrected order (server drained and consumers stopped before module teardown). This was the buggy case the reorder fixes.
+- `messaging.Manager` gains an additive `StopConsumers()` method (quiesce consumers without closing connections); existing code is unaffected.
+
 ## PostgreSQL `BuildUpsert` Now Binds Update Values (ADR-028)
 
 Per [ADR-028](adr_028_pg_upsert_binds_update_values.md), `QueryBuilder.BuildUpsert` on PostgreSQL now binds the `updateColumns` values as parameters instead of emitting `col = EXCLUDED.col`.

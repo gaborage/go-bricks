@@ -439,6 +439,23 @@ func (m *Manager) cleanupIdlePublishers() {
 }
 
 // Close closes all clients and stops cleanup
+// StopConsumers stops every consumer registry from accepting new messages (cancelling their
+// consume contexts) WITHOUT closing the underlying AMQP connections — Close does that. The
+// framework calls this during shutdown before tearing down modules so it stops delivering
+// fresh messages to modules that are about to shut down. Cancellation propagates to in-flight
+// handlers via their context, but they are not synchronously joined here. Idempotent:
+// Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
+// consumers) is safe.
+func (m *Manager) StopConsumers() {
+	m.consMu.Lock()
+	defer m.consMu.Unlock()
+	for _, entry := range m.consumers {
+		if entry.registry != nil {
+			entry.registry.StopConsumers()
+		}
+	}
+}
+
 func (m *Manager) Close() error {
 	m.StopCleanup()
 
