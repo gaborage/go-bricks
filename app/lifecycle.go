@@ -416,7 +416,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 	//    delivering fresh messages to modules that are about to be torn down.
 	a.shutdownConsumers()
 
-	// 3. Shut down modules — now that no HTTP or AMQP handler is running.
+	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
+	//    point. AMQP handlers already in flight may still be unwinding after cancellation.
 	a.shutdownPhase("modules", func() error {
 		return a.registry.Shutdown()
 	}, &errs)
