@@ -453,11 +453,16 @@ type LimitsConfig struct {
 
 // DebugConfig holds debug endpoint settings.
 type DebugConfig struct {
-	Enabled     bool                 `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`                // Enable debug endpoints
-	PathPrefix  string               `koanf:"pathprefix" json:"pathprefix" yaml:"pathprefix" toml:"pathprefix" mapstructure:"pathprefix"` // URL path prefix for debug endpoints
-	AllowedIPs  []string             `koanf:"allowedips" json:"allowedips" yaml:"allowedips" toml:"allowedips" mapstructure:"allowedips"` // List of allowed IP addresses/CIDRs
-	BearerToken string               `koanf:"bearertoken" json:"bearertoken" yaml:"bearertoken" toml:"bearertoken" mapstructure:"bearertoken"`
-	Endpoints   DebugEndpointsConfig `koanf:"endpoints" json:"endpoints" yaml:"endpoints" toml:"endpoints" mapstructure:"endpoints"` // Individual endpoint settings
+	Enabled    bool     `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`                // Enable debug endpoints
+	PathPrefix string   `koanf:"pathprefix" json:"pathprefix" yaml:"pathprefix" toml:"pathprefix" mapstructure:"pathprefix"` // URL path prefix for debug endpoints
+	AllowedIPs []string `koanf:"allowedips" json:"allowedips" yaml:"allowedips" toml:"allowedips" mapstructure:"allowedips"` // List of allowed IP addresses/CIDRs
+	// TrustedProxies holds CIDR ranges of reverse proxies trusted to set X-Forwarded-For /
+	// X-Real-IP. When empty (the default), proxy headers are IGNORED and the immediate peer
+	// IP is used for the AllowedIPs check — so the allowlist cannot be bypassed by spoofing
+	// X-Forwarded-For. Only set this to the CIDRs of proxies actually in front of the service.
+	TrustedProxies []string             `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
+	BearerToken    string               `koanf:"bearertoken" json:"bearertoken" yaml:"bearertoken" toml:"bearertoken" mapstructure:"bearertoken"`
+	Endpoints      DebugEndpointsConfig `koanf:"endpoints" json:"endpoints" yaml:"endpoints" toml:"endpoints" mapstructure:"endpoints"` // Individual endpoint settings
 }
 
 // DebugEndpointsConfig holds settings for individual debug endpoints.

@@ -3933,6 +3933,27 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	assert.ErrorContains(t, err, "scheduler.timezone")
 }
 
+func TestValidateDebugTrustedProxiesRejectsAllInvalid(t *testing.T) {
+	cfg := &DebugConfig{TrustedProxies: []string{"garbage", "also-bad"}}
+	assertValidationError(t, validateDebug(cfg), "debug.trustedproxies")
+}
+
+func TestValidateDebugTrustedProxiesAcceptsValidCases(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *DebugConfig
+	}{
+		{name: "empty_is_valid", cfg: &DebugConfig{}},
+		{name: "single_valid", cfg: &DebugConfig{TrustedProxies: []string{"10.0.0.0/8"}}},
+		{name: "partial_invalid_keeps_valid", cfg: &DebugConfig{TrustedProxies: []string{"10.0.0.0/8", "bad"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, validateDebug(tt.cfg))
+		})
+	}
+}
+
 func TestValidateSchedulerCIDRListRejectsAllInvalid(t *testing.T) {
 	tests := []struct {
 		name      string
