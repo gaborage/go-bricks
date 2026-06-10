@@ -769,18 +769,45 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	case Oracle:
 		return validateOracleFields(cfg)
 	case PostgreSQL:
-		// No vendor-specific validation needed for PostgreSQL currently
-		return nil
+		return validatePostgreSQLFields(cfg)
 	default:
 		// Unknown database type should have been caught by validateDatabaseType
 		return nil
 	}
 }
 
+// validatePostgreSQLFields validates PostgreSQL-specific configuration fields.
+func validatePostgreSQLFields(cfg *DatabaseConfig) error {
+	// Client-certificate (mTLS) auth requires BOTH sslcert and sslkey. pgx rejects a lone
+	// one at connect time, but under sslmode=disable it silently drops them — so validate
+	// the pairing up front rather than letting a half-configured cert be silently ignored.
+	if (cfg.TLS.CertFile != "") != (cfg.TLS.KeyFile != "") {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    "database.tls",
+			Message:  "sslcert and sslkey must be configured together for client-certificate (mTLS) auth",
+			Action:   "set both database.tls.cert and database.tls.key, or neither",
+		}
+	}
+	return nil
+}
+
 // validateOracleFields validates Oracle-specific configuration fields.
 // It ensures that exactly one of Service.Name, SID, or Database is configured,
 // mirroring the DSN selection logic in database/oracle/connection.go.
 func validateOracleFields(cfg *DatabaseConfig) error {
+	// Oracle TLS (tcps/wallet) is not implemented, so reject TLS material rather than
+	// silently ignoring it — otherwise an operator who configures database.tls.cert/key/ca
+	// for Oracle would believe the connection is authenticated/encrypted when it is not.
+	if cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    "database.tls",
+			Message:  "TLS cert/key/ca are not supported for Oracle (tcps/wallet is not implemented)",
+			Action:   "remove database.tls.cert, database.tls.key, and database.tls.ca for Oracle connections",
+		}
+	}
+
 	serviceSet := cfg.Oracle.Service.Name != ""
 	sidSet := cfg.Oracle.Service.SID != ""
 	databaseSet := cfg.Database != ""

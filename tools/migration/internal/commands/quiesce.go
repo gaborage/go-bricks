@@ -291,8 +291,10 @@ func openControlPlaneDB(ctx context.Context, flags *CommonFlags) (db *sql.DB, cl
 // connector: an explicit ConnectionString wins verbatim; otherwise the URL is
 // assembled from the discrete fields with credentials URL-encoded (so special
 // characters in the password can't corrupt the URL, and the password is never
-// logged). sslmode is set only when the operator configured TLS.Mode — never a
-// forced plaintext downgrade.
+// logged). TLS material (sslmode plus sslrootcert/sslcert/sslkey) is set only when
+// the operator configured it — never a forced plaintext downgrade. Wiring the CA
+// and client cert/key (not just sslmode) is required so the control-plane connection
+// is actually authenticated/mTLS, matching the framework connector (ADR-027).
 func controlPlaneDSN(c *config.DatabaseConfig) string {
 	if c.ConnectionString != "" {
 		return c.ConnectionString
@@ -303,8 +305,21 @@ func controlPlaneDSN(c *config.DatabaseConfig) string {
 		Host:   fmt.Sprintf("%s:%d", c.Host, c.Port),
 		Path:   c.Database,
 	}
+	q := url.Values{}
 	if c.TLS.Mode != "" {
-		u.RawQuery = url.Values{"sslmode": {c.TLS.Mode}}.Encode()
+		q.Set("sslmode", c.TLS.Mode)
+	}
+	if c.TLS.CAFile != "" {
+		q.Set("sslrootcert", c.TLS.CAFile)
+	}
+	if c.TLS.CertFile != "" {
+		q.Set("sslcert", c.TLS.CertFile)
+	}
+	if c.TLS.KeyFile != "" {
+		q.Set("sslkey", c.TLS.KeyFile)
+	}
+	if len(q) > 0 {
+		u.RawQuery = q.Encode()
 	}
 	return u.String()
 }

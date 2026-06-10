@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,6 +113,22 @@ func TestControlPlaneDSN(t *testing.T) {
 	withTLS := *base
 	withTLS.TLS.Mode = "require"
 	assert.Contains(t, controlPlaneDSN(&withTLS), "sslmode=require")
+
+	// Full TLS material (CA + client cert/key) must be wired so the control-plane
+	// connection is authenticated/mTLS — not just sslmode (ADR-027). url.Values encodes
+	// the paths, so parse and assert decoded values.
+	fullTLS := *base
+	fullTLS.TLS.Mode = "verify-full"
+	fullTLS.TLS.CAFile = "/etc/ssl/ca.pem"
+	fullTLS.TLS.CertFile = "/etc/ssl/client.crt"
+	fullTLS.TLS.KeyFile = "/etc/ssl/client.key"
+	u, err := url.Parse(controlPlaneDSN(&fullTLS))
+	require.NoError(t, err)
+	q := u.Query()
+	assert.Equal(t, "verify-full", q.Get("sslmode"))
+	assert.Equal(t, "/etc/ssl/ca.pem", q.Get("sslrootcert"))
+	assert.Equal(t, "/etc/ssl/client.crt", q.Get("sslcert"))
+	assert.Equal(t, "/etc/ssl/client.key", q.Get("sslkey"))
 
 	// An explicit ConnectionString wins verbatim.
 	assert.Equal(t, "postgres://verbatim/x",

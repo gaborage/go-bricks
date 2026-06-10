@@ -2,6 +2,18 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## `database.tls.cert/key/ca` Now Wired Into the Drivers (ADR-027)
+
+Per [ADR-027](adr_027_database_tls_material.md), the `database.tls.cert`, `database.tls.key`, and `database.tls.ca` fields — previously advertised but never consumed — are now honored.
+
+**PostgreSQL:** the DSN now includes `sslrootcert` (ca), `sslcert` (cert), and `sslkey` (key) when set, so pgx authenticates the server and presents a client certificate for mTLS. A config that set `mode: require` + `ca:` was previously **encrypted but unauthenticated** (MITM-able); it now performs CA verification.
+
+**Action (PostgreSQL):** if you set `database.tls.ca` (or `cert`/`key`), the connection now verifies the server certificate against that CA. **A wrong, missing, or mismatched CA — or a server cert that doesn't match — will now make the connection fail** where it previously succeeded unauthenticated. Confirm the CA path and server certificate before upgrading. Configs without `cert/key/ca` are unaffected.
+
+**Oracle:** TLS via tcps/wallet is not implemented, so `database.tls.cert/key/ca` are now **rejected at startup validation** (rather than silently ignored). `database.tls.mode` alone still passes (no-op).
+
+**Action (Oracle):** remove `database.tls.cert`, `database.tls.key`, and `database.tls.ca` from Oracle configs — they never did anything and now fail validation.
+
 ## Migration `Config.DryRun` Is Now Honored
 
 `Config.DryRun` ("Only validate, do not execute") was documented and stamped into the `migration.applied` audit event, but **never consumed** — a `DryRun=true` `Migrate`/`MigrateAll` ran a real migration (mutating the schema across the whole tenant fleet) while the audit falsely recorded `dry_run=true`.

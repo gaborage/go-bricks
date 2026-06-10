@@ -299,6 +299,25 @@ consumers must call `database.SetObservabilityEnabled(true)`.
 
 ---
 
+### [ADR-027: Wire `database.tls.cert/key/ca` Into the Drivers (Fail Closed on Oracle)](adr_027_database_tls_material.md)
+
+**Date:** 2026-06-10 | **Status:** Accepted
+
+`TLSConfig.cert/key/ca` were advertised but never consumed: the PostgreSQL DSN emitted
+only `sslmode`, so `mode: require` + `ca:` was encrypted-but-unauthenticated (MITM-able)
+and mTLS was impossible; Oracle ignored TLS entirely. PostgreSQL now wires
+`sslrootcert`/`sslcert`/`sslkey` (all values `quoteDSN`-quoted, which also closes an
+unquoted-`sslmode` DSN-injection vector); Oracle rejects `database.tls.cert/key/ca` at
+config validation (tcps/wallet not implemented) rather than silently dropping it.
+
+**Breaking:** a PostgreSQL deployment relying on the silent unauthenticated downgrade now
+upgrades to CA verification (a wrong/missing CA now fails the connection); an Oracle
+config that set `database.tls.cert/key/ca` now fails validation at startup.
+
+**Key Benefits:** TLS material is actually honored (server auth + mTLS), no silent security degradation, fail-closed on the unsupported vendor
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -308,7 +327,7 @@ consumers must call `database.SetObservabilityEnabled(true)`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-026) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-027) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

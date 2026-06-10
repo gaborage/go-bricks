@@ -99,6 +99,38 @@ func quoteDSN(value string) string {
 	return "'" + escaped + "'"
 }
 
+// buildPostgresDSN assembles a libpq-style keyword/value DSN from cfg, quoting every value.
+// TLS material is wired so pgx actually honors it: sslmode plus sslrootcert (CAFile),
+// sslcert (CertFile), and sslkey (KeyFile) when configured — previously only sslmode was
+// emitted, so a `mode: require` + `ca:` config was encrypted but UNAUTHENTICATED (MITM-able)
+// and client certs (mTLS) were silently impossible. Every value (including sslmode) is run
+// through quoteDSN so a path or mode containing spaces/quotes cannot corrupt the DSN or
+// inject extra connection parameters.
+func buildPostgresDSN(cfg *config.DatabaseConfig) string {
+	parts := []string{
+		fmt.Sprintf("host=%s", quoteDSN(cfg.Host)),
+		fmt.Sprintf("port=%d", cfg.Port),
+		fmt.Sprintf("user=%s", quoteDSN(cfg.Username)),
+		fmt.Sprintf("password=%s", quoteDSN(cfg.Password)),
+		fmt.Sprintf("dbname=%s", quoteDSN(cfg.Database)),
+	}
+
+	if cfg.TLS.Mode != "" {
+		parts = append(parts, fmt.Sprintf("sslmode=%s", quoteDSN(cfg.TLS.Mode)))
+	}
+	if cfg.TLS.CAFile != "" {
+		parts = append(parts, fmt.Sprintf("sslrootcert=%s", quoteDSN(cfg.TLS.CAFile)))
+	}
+	if cfg.TLS.CertFile != "" {
+		parts = append(parts, fmt.Sprintf("sslcert=%s", quoteDSN(cfg.TLS.CertFile)))
+	}
+	if cfg.TLS.KeyFile != "" {
+		parts = append(parts, fmt.Sprintf("sslkey=%s", quoteDSN(cfg.TLS.KeyFile)))
+	}
+
+	return strings.Join(parts, " ")
+}
+
 // NewConnection creates and configures a PostgreSQL Connection using cfg and log.
 // It validates cfg, builds or uses the provided DSN, sets pool options, ensures connectivity with a ping, logs success, and returns the wrapped Connection or an error.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
@@ -109,19 +141,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	if cfg.ConnectionString != "" {
 		dsn = cfg.ConnectionString
 	} else {
-		parts := []string{
-			fmt.Sprintf("host=%s", quoteDSN(cfg.Host)),
-			fmt.Sprintf("port=%d", cfg.Port),
-			fmt.Sprintf("user=%s", quoteDSN(cfg.Username)),
-			fmt.Sprintf("password=%s", quoteDSN(cfg.Password)),
-			fmt.Sprintf("dbname=%s", quoteDSN(cfg.Database)),
-		}
-
-		if cfg.TLS.Mode != "" {
-			parts = append(parts, fmt.Sprintf("sslmode=%s", cfg.TLS.Mode))
-		}
-
-		dsn = strings.Join(parts, " ")
+		dsn = buildPostgresDSN(cfg)
 	}
 
 	// Parse config for pgx
