@@ -403,6 +403,66 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 	}
 }
 
+// TestFlywayMigratorDryRunRunsValidate verifies that Config.DryRun is honored: a dry-run
+// Migrate must invoke the Flyway `validate` verb (no schema mutation), not `migrate`.
+// Regression test for the High audit finding — DryRun was documented ("Only validate, do
+// not execute") and stamped into the audit event but never consumed, so DryRun=true ran a
+// real migration while the audit recorded dry_run=true.
+func TestFlywayMigratorDryRunRunsValidate(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	cases := []struct {
+		name         string
+		dryRun       bool
+		expectedCmd  string
+		forbiddenCmd string
+	}{
+		{name: "dry_run_substitutes_validate", dryRun: true, expectedCmd: "validate", forbiddenCmd: "migrate"},
+		{name: "non_dry_run_runs_migrate", dryRun: false, expectedCmd: "migrate"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Database: config.DatabaseConfig{
+					Type: "postgresql", Host: "h", Port: 5432,
+					Username: "u", Password: "p", Database: "d",
+				},
+				App: config.AppConfig{Env: "test"},
+			}
+			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
+
+			stub, capturePath := createCommandCapturingStub(t, "")
+			tempDir := t.TempDir()
+			configPath := filepath.Join(tempDir, "flyway.conf")
+			migrationPath := filepath.Join(tempDir, "migrations")
+			require.NoError(t, os.WriteFile(configPath, []byte(""), 0o644))
+			require.NoError(t, os.MkdirAll(migrationPath, 0o755))
+
+			mcfg := &Config{
+				FlywayPath:    stub,
+				ConfigPath:    configPath,
+				MigrationPath: migrationPath,
+				Timeout:       10 * time.Second,
+				DryRun:        tc.dryRun,
+			}
+
+			_, err := fm.MigrateFor(context.Background(), &cfg.Database, mcfg)
+			require.NoError(t, err)
+
+			captured, readErr := os.ReadFile(capturePath)
+			require.NoError(t, readErr)
+			assert.Contains(t, string(captured), tc.expectedCmd)
+			if tc.forbiddenCmd != "" {
+				assert.NotContains(t, string(captured), tc.forbiddenCmd,
+					"DryRun must not invoke the migrate verb (it would mutate the schema)")
+			}
+		})
+	}
+}
+
 // createCommandCapturingStub builds a flyway-stub that writes the verbatim
 // arg list to capturePath, then optionally emits stdoutPayload on stdout
 // before exiting 0. Pass an empty stdoutPayload for the args-only variant.
