@@ -144,7 +144,20 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("keystore config: %w", err)
 	}
 
+	if err := validateDebug(&cfg.Debug); err != nil {
+		return fmt.Errorf("debug config: %w", err)
+	}
+
 	return nil
+}
+
+// validateDebug validates the debug-endpoint configuration. The trusted-proxy list uses
+// the same semantics as scheduler.security.trustedproxies: empty is valid (proxy headers
+// ignored), an all-invalid list fails fast, and a partial-invalid list passes with a
+// middleware-time WARN so a single typo cannot silently weaken the allowlist's spoofing
+// protection.
+func validateDebug(cfg *DebugConfig) error {
+	return validateCIDRList("debug.trustedproxies", cfg.TrustedProxies)
 }
 
 // validateMessaging validates messaging configuration and applies defaults.

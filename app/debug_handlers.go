@@ -14,6 +14,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // DebugResponse represents a standard debug endpoint response
@@ -181,7 +182,6 @@ func (w *IPWhitelist) normalizeToCIDR(ipStr string) string {
 
 // ipWhitelistMiddleware restricts access to allowed IPs
 func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
-	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
 	if len(d.config.AllowedIPs) == 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c *echo.Context) error {
@@ -189,14 +189,27 @@ func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 			}
 		}
 	}
-	return d.createIPCheckHandler(whitelist)
+
+	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
+	trustedNets, invalid := server.ParseCIDRs(d.config.TrustedProxies)
+	if len(invalid) > 0 {
+		d.logger.Warn().
+			Int("count", len(invalid)).
+			Interface("entries", invalid).
+			Msg("Debug endpoint trustedproxies list contains invalid CIDR entries; proxy headers from those ranges will not be trusted")
+	}
+	return d.createIPCheckHandler(whitelist, trustedNets)
 }
 
-// createIPCheckHandler creates the middleware handler with IP validation
-func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist) echo.MiddlewareFunc {
+// createIPCheckHandler creates the middleware handler with IP validation.
+// The client IP is derived with trusted-proxy verification (server.ClientIP) rather than
+// echo's spoofable c.RealIP(): X-Forwarded-For / X-Real-IP are honored only when the
+// immediate peer is a configured trusted proxy, so the allowlist cannot be bypassed by an
+// unauthenticated client sending a forged X-Forwarded-For header.
+func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist, trustedNets []*net.IPNet) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
-			clientIP := c.RealIP()
+			clientIP := server.ClientIP(c.Request(), trustedNets)
 			if allowed, err := d.isIPAllowed(clientIP, whitelist); err != nil {
 				return d.handleAccessDenied(clientIP, "invalid IP")
 			} else if !allowed {
