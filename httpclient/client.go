@@ -1064,13 +1064,32 @@ func logBodyPreview(dbg logger.LogEvent, preview []byte, ct string) logger.LogEv
 	return dbg.Interface("body_preview", m)
 }
 
+// redactURLForLog returns a log-safe string form of u with credentials, the query
+// string, and the fragment removed. Go's (*url.URL).String() emits the userinfo
+// password, the full raw query, and the fragment verbatim — all three routinely carry
+// secrets (API keys, OAuth tokens including implicit-flow tokens returned in the
+// fragment, presigned-URL signatures) — and the "url" log field is not matched by the
+// SensitiveDataFilter, so the redaction must happen here, at the boundary. Only scheme,
+// host, port, and path survive.
+func redactURLForLog(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	redacted := *u            // shallow copy — never mutate the caller's request URL
+	redacted.User = nil       // strip user:pass@ (String() otherwise leaks the password)
+	redacted.RawQuery = ""    // strip ?api_key=...&token=...
+	redacted.Fragment = ""    // strip #access_token=... (OAuth 2.0 implicit grant)
+	redacted.RawFragment = "" // clear the encoded form so String() cannot re-emit it
+	return redacted.String()
+}
+
 // logRequest logs the outgoing request
 func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID string) {
 	// Info-level: only metadata to avoid leaking PII/secrets
 	infoEvent := c.logger.Info().
 		Str("direction", "outbound").
 		Str("method", httpReq.Method).
-		Str("url", httpReq.URL.String()).
+		Str("url", redactURLForLog(httpReq.URL)).
 		Str("request_id", traceID)
 	if headerCount := len(httpReq.Header); headerCount > 0 {
 		infoEvent.Int("header_count", headerCount)
@@ -1085,7 +1104,7 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 		dbg := c.logger.Debug().
 			Str("direction", "outbound").
 			Str("method", httpReq.Method).
-			Str("url", httpReq.URL.String()).
+			Str("url", redactURLForLog(httpReq.URL)).
 			Str("request_id", traceID)
 		if len(httpReq.Header) > 0 {
 			// Headers go through logger filter to mask sensitive keys/values
