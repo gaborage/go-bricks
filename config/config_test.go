@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,51 @@ func TestLoadWithEnvironmentVariables(t *testing.T) {
 	// Verify defaults still work for non-overridden values
 	assert.Equal(t, appVersion, cfg.App.Version)
 	assert.Equal(t, serverHost, cfg.Server.Host)
+}
+
+// TestLoadAppEnvSelectsEnvironmentOverlay verifies that the APP_ENV environment variable
+// selects the config.<env>.yaml overlay, honoring the documented precedence
+// (env vars > config.<env>.yaml > config.yaml > defaults). Regression test for the High
+// audit finding: the overlay suffix was read from koanf (k.String(app.env)) BEFORE the env
+// provider loaded, so APP_ENV=production silently loaded config.development.yaml (or none)
+// while cfg.App.Env still ended up "production" — production pods could run the dev overlay.
+func TestLoadAppEnvSelectsEnvironmentOverlay(t *testing.T) {
+	clearEnvironmentVariables()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML),
+		[]byte("app:\n  name: base-app\n  env: development\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.production.yaml"),
+		[]byte("app:\n  name: prod-overlay-app\n"), 0o600))
+	t.Chdir(dir)
+
+	// APP_ENV reaches koanf only via the env provider, which loads AFTER overlay selection,
+	// so the suffix must be resolved from the environment variable directly.
+	t.Setenv("APP_ENV", EnvProduction)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, EnvProduction, cfg.App.Env)
+	assert.Equal(t, "prod-overlay-app", cfg.App.Name,
+		"config.production.yaml overlay must be selected by APP_ENV (got the base config — overlay was not loaded)")
+}
+
+// TestLoadAppEnvRejectsMalformedOverlaySuffix verifies a malformed APP_ENV is not
+// interpolated into the overlay filename (no config.<traversal>.yaml read attempt);
+// the value is left for validateApp to reject with a clear app.env error.
+func TestLoadAppEnvRejectsMalformedOverlaySuffix(t *testing.T) {
+	clearEnvironmentVariables()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML),
+		[]byte("app:\n  name: base-app\n  env: development\n"), 0o600))
+	t.Chdir(dir)
+
+	t.Setenv("APP_ENV", "../../etc/passwd")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, fieldAppEnv, "malformed APP_ENV must be rejected by validation, not silently used as a file path")
 }
 
 func TestLoadMultiElementStringSliceEnv(t *testing.T) {

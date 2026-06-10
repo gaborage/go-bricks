@@ -111,7 +111,7 @@ func (c *Config) resolveFieldValue(configKey string, required bool, defaultValue
 
 	if required {
 		// Convert config key to env var format (e.g., "custom.api.key" -> "CUSTOM_API_KEY")
-		envVar := strings.ToUpper(strings.ReplaceAll(configKey, ".", "_"))
+		envVar := keyToEnvVar(configKey)
 		return nil, false, &ConfigError{
 			Category: errCategoryMissing,
 			Field:    configKey,
@@ -206,7 +206,7 @@ func (c *Config) assignStringSliceField(field reflect.Value, configKey string, r
 		}
 	}
 	if required && len(slice) == 0 {
-		envVar := strings.ToUpper(strings.ReplaceAll(configKey, ".", "_"))
+		envVar := keyToEnvVar(configKey)
 		return &ConfigError{
 			Category: errCategoryMissing,
 			Field:    configKey,
@@ -225,7 +225,7 @@ func (c *Config) convertToString(value any, key string, required bool) (string, 
 	case string:
 		trimmed := strings.TrimSpace(v)
 		if required && trimmed == "" {
-			envVar := strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+			envVar := keyToEnvVar(key)
 			return "", &ConfigError{
 				Category: errCategoryMissing,
 				Field:    key,

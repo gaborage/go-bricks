@@ -34,8 +34,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Load environment-specific YAML (if exists)
-	env := k.String(fieldAppEnv)
+	// Load environment-specific YAML (if exists). The suffix must honor APP_ENV from the
+	// environment so a 12-factor deployment (APP_ENV=production + config.production.yaml)
+	// selects the right overlay — the env provider is loaded only below (after this
+	// selection), so reading koanf alone would always see the default/config.yaml value.
+	env := resolveEnvOverlaySuffix(k)
 	if env != "" {
 		envFile := fmt.Sprintf("config.%s", env)
 		if err := tryLoadYAMLFile(k, envFile); err != nil {
@@ -71,6 +74,33 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// resolveEnvOverlaySuffix determines the config.<env>.yaml overlay suffix. The APP_ENV
+// environment variable takes precedence, because the env provider is loaded only after
+// overlay selection — so without this a deployment that sets APP_ENV but ships only
+// config.<env>.yaml would silently load the default/config.yaml suffix instead. Falls back
+// to the koanf value (defaults / config.yaml) when APP_ENV is unset.
+//
+// The resolved suffix is interpolated into a filename, so it is validated against the same
+// envFormat as cfg.App.Env: a malformed value (path separators, etc.) returns "" so no
+// config.<garbage>.yaml read is attempted, leaving validateApp to reject it with a clear
+// error rather than an opaque YAML-parse failure.
+func resolveEnvOverlaySuffix(k *koanf.Koanf) string {
+	env := strings.TrimSpace(os.Getenv(keyToEnvVar(fieldAppEnv)))
+	if env == "" {
+		env = k.String(fieldAppEnv)
+	}
+	if !envFormat.MatchString(env) {
+		return ""
+	}
+	return env
+}
+
+// keyToEnvVar converts a koanf key (lower.dotted) to its environment-variable name
+// (UPPER_SNAKE), the inverse of the env provider's TransformFunc in Load.
+func keyToEnvVar(key string) string {
+	return strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
 }
 
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
