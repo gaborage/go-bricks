@@ -171,9 +171,15 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return fmt.Errorf("failed to declare messaging infrastructure: %w", err)
 	}
 
-	// Start consumers with tenant-aware context
-	tenantCtx := multitenant.SetTenant(ctx, key)
-	if err := registry.StartConsumers(tenantCtx); err != nil {
+	// Start consumers with a tenant-aware context whose lifetime is detached from the
+	// caller. In multi-tenant mode consumers start lazily from the HTTP request context
+	// (a ~5s-deadline, cancel-on-finish context); threading that into the long-lived
+	// supervisor goroutines would stop every consumer when the first request ends, and
+	// they would never restart. context.WithoutCancel severs the request's cancellation
+	// and deadline while preserving values (trace/tenant), so consumer lifetime is
+	// governed solely by StopConsumers/Close. (Setup calls above keep the caller deadline.)
+	consumerCtx := multitenant.SetTenant(context.WithoutCancel(ctx), key)
+	if err := registry.StartConsumers(consumerCtx); err != nil {
 		m.closeClientOnRollback(client, key, "start_consumers")
 		return fmt.Errorf("failed to start messaging consumers: %w", err)
 	}
