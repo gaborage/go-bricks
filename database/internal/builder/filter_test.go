@@ -800,11 +800,15 @@ func TestFilterInSubquery(t *testing.T) {
 
 		sql, args, err := query.ToSQL()
 		require.NoError(t, err)
+		// Placeholders must be contiguous across the subquery AND the outer filters:
+		// region=$1 (subquery), quantity=$2, status=$3. A duplicate-numbering bug
+		// (subquery $1 colliding with the outer filters' $1/$2) makes pgx Bind fail with
+		// "bind message supplies 3 parameters, but prepared statement requires 2".
 		assert.Contains(t, sql, "supplier_id IN (SELECT supplier_id FROM verified_suppliers WHERE region = $1)")
-		assert.Contains(t, sql, "quantity >")
-		assert.Contains(t, sql, "status =")
-		// Squirrel may optimize placeholders, so just verify args content
-		assert.ElementsMatch(t, []any{"EU", 0, "available"}, args)
+		assert.Contains(t, sql, "quantity > $2")
+		assert.Contains(t, sql, "status = $3")
+		assert.NotContains(t, sql, "quantity > $1", "outer filter must not reuse the subquery's $1")
+		assert.Equal(t, []any{"EU", 0, "available"}, args)
 	})
 
 	t.Run("PostgreSQL vs Oracle placeholder handling", func(t *testing.T) {
@@ -828,6 +832,34 @@ func TestFilterInSubquery(t *testing.T) {
 
 		// Both should have same args
 		assert.Equal(t, argsPG, argsOracle)
+	})
+
+	t.Run("Oracle subquery with additional filters uses contiguous placeholders", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		f := qb.Filter()
+
+		subquery := qb.Select("supplier_id").
+			From("verified_suppliers").
+			Where(f.Eq("region", "EU"))
+
+		query := qb.Select("*").
+			From("inventory").
+			Where(f.And(
+				f.InSubquery("supplier_id", subquery),
+				f.Gt("quantity", 0),
+				f.Eq("status", "available"),
+			))
+
+		sql, args, err := query.ToSQL()
+		require.NoError(t, err)
+		// Oracle :N binds must be contiguous 1..3 with no duplicate :1 — go-ora treats :1
+		// as a named parameter, so a duplicate either errors or silently binds one value to
+		// two positions (filter corruption).
+		assert.Contains(t, sql, "region = :1")
+		assert.Contains(t, sql, "quantity > :2")
+		assert.Contains(t, sql, "status = :3")
+		assert.NotContains(t, sql, "quantity > :1", "outer filter must not reuse the subquery's :1")
+		assert.Equal(t, []any{"EU", 0, "available"}, args)
 	})
 }
 

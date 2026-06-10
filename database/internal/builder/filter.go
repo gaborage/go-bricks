@@ -435,11 +435,18 @@ func (ff *FilterFactory) buildExistsFilter(subquery dbtypes.SelectQueryBuilder, 
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 
-	// Extract the underlying squirrel.SelectBuilder using type assertion
-	// This avoids calling ToSQL() prematurely, allowing proper placeholder numbering
+	// Render the subquery with question-mark placeholders and embed the raw SQL, so the
+	// OUTER query's single final placeholder pass numbers the subquery's and the outer
+	// query's parameters consistently. Passing the SelectBuilder directly would let
+	// squirrel apply the vendor format ($1/:1) to the subquery early, colliding with the
+	// outer query's renumbering (duplicate $1 on PostgreSQL; duplicate :1 on Oracle).
 	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
+		subSQL, subArgs, err := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+		if err != nil {
+			return Filter{sqlizer: errorSqlizer{err: err}}
+		}
 		return Filter{sqlizer: &existsFilter{
-			sqlizer: squirrel.Expr(keyword+" (?)", sqb.buildSelectBuilder()),
+			sqlizer: squirrel.Expr(keyword+" ("+subSQL+")", subArgs...),
 		}}
 	}
 
@@ -478,10 +485,17 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 	// Quote column name for vendor-specific rules (e.g., Oracle reserved words)
 	quotedColumn := ff.qb.quoteColumnForQuery(column)
 
-	// Extract the underlying squirrel.SelectBuilder using type assertion
+	// Render the subquery with question-mark placeholders and embed the raw SQL so the
+	// outer query's single final placeholder pass numbers everything consistently (see
+	// buildExistsFilter for the rationale — passing the SelectBuilder directly causes
+	// duplicate placeholder numbers when combined with other parameterized filters).
 	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
+		subSQL, subArgs, err := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+		if err != nil {
+			return Filter{sqlizer: errorSqlizer{err: err}}
+		}
 		return Filter{sqlizer: &inSubqueryFilter{
-			sqlizer: squirrel.Expr(quotedColumn+" IN (?)", sqb.buildSelectBuilder()),
+			sqlizer: squirrel.Expr(quotedColumn+" IN ("+subSQL+")", subArgs...),
 		}}
 	}
 
