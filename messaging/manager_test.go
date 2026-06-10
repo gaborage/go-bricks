@@ -30,6 +30,7 @@ type stubAMQPClient struct {
 	closedMu      sync.Mutex
 	lastPublish   PublishOptions
 	consumers     int
+	consumeCtx    context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
 	closeCallback func()
 	closeErr      error
 }
@@ -49,9 +50,10 @@ func (s *stubAMQPClient) Consume(_ context.Context, _ string) (<-chan amqp.Deliv
 	return ch, nil
 }
 
-func (s *stubAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
+func (s *stubAMQPClient) ConsumeFromQueue(ctx context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
 	s.closedMu.Lock()
 	s.consumers++
+	s.consumeCtx = ctx
 	s.closedMu.Unlock()
 	// Return an open delivery channel (never closed) so the consumer supervisor
 	// parks waiting for deliveries instead of treating an immediately-closed
@@ -68,6 +70,14 @@ func (s *stubAMQPClient) consumerCount() int {
 	s.closedMu.Lock()
 	defer s.closedMu.Unlock()
 	return s.consumers
+}
+
+// lastConsumeCtx returns the context the supervisor most recently subscribed
+// with (read under the same lock), so tests can assert its cancellation lifecycle.
+func (s *stubAMQPClient) lastConsumeCtx() context.Context {
+	s.closedMu.Lock()
+	defer s.closedMu.Unlock()
+	return s.consumeCtx
 }
 
 func (s *stubAMQPClient) DeclareQueue(string, bool, bool, bool, bool) error            { return nil }
@@ -281,6 +291,42 @@ func TestMessagingManagerInjectsTenantIntoConsumerContext(t *testing.T) {
 	// importing multitenant package and checking the context in the handler
 	// For this test, we verify that EnsureConsumers completed successfully
 	// which means it called StartConsumers with the tenant-injected context
+}
+
+// TestMessagingManagerConsumersSurviveCallerContextCancellation guards the High audit
+// finding: in multi-tenant mode consumers start lazily from the HTTP request context
+// (a 5s-deadline, cancel-on-finish context). If that context is threaded into the
+// long-lived consumer supervisor, the consumers die when the first request ends and
+// never restart. EnsureConsumers must detach request cancellation so consumer lifetime
+// is governed only by StopConsumers/Close.
+func TestMessagingManagerConsumersSurviveCallerContextCancellation(t *testing.T) {
+	log := logger.New("error", false)
+	client := &stubAMQPClient{}
+	factory := func(string, logger.Logger) AMQPClient { return client }
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	defer func() { _ = manager.Close() }()
+
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+
+	// Lazy startup driven by a request-scoped context that is cancelled when the request ends.
+	callerCtx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, manager.EnsureConsumers(callerCtx, testTenantID, decls))
+
+	// Wait until the supervisor goroutine has subscribed (and captured its context).
+	require.Eventually(t, func() bool { return client.consumerCount() >= 1 }, time.Second, 5*time.Millisecond)
+	consumerCtx := client.lastConsumeCtx()
+	require.NotNil(t, consumerCtx)
+
+	// Request ends: cancelling the caller context must NOT cancel the consumer.
+	cancel()
+	select {
+	case <-consumerCtx.Done():
+		t.Fatal("consumer context was cancelled when the caller/request context ended — consumers stop after one request and never restart")
+	case <-time.After(100 * time.Millisecond):
+		// Consumer context is detached from the request lifecycle, as required.
+	}
 }
 
 func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
