@@ -2,6 +2,14 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Migration `Config.DryRun` Is Now Honored
+
+`Config.DryRun` ("Only validate, do not execute") was documented and stamped into the `migration.applied` audit event, but **never consumed** — a `DryRun=true` `Migrate`/`MigrateAll` ran a real migration (mutating the schema across the whole tenant fleet) while the audit falsely recorded `dry_run=true`.
+
+`DryRun=true` now downgrades a `migrate` to the Flyway `validate` verb, so no schema is mutated. Because `validate` is not an application, it emits no `migration.applied` audit event (per ADR-019) — so the `migration.dry_run` attribute is now always `false` on emitted events, accurately asserting "this was a real application."
+
+**Action:** if any pipeline set `DryRun=true` and relied on it actually applying migrations (contrary to the field's documentation), it now only validates. Remove `DryRun` (or set it `false`) for runs that must apply schema changes.
+
 ## `APP_ENV` Now Selects the `config.<env>.yaml` Overlay
 
 Previously the environment-specific YAML overlay suffix was read from koanf **before** the environment provider loaded, so the `APP_ENV` environment variable could not select it — the suffix always came from `config.yaml`/defaults (typically `development`). A 12-factor deployment that set `APP_ENV=production` and shipped `config.production.yaml` silently ran the development overlay (or none), even though `cfg.App.Env` still ended up `production`.

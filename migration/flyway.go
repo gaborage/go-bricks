@@ -240,12 +240,27 @@ func (fm *FlywayMigrator) ValidateFor(ctx context.Context, db *config.DatabaseCo
 	return err
 }
 
+// effectiveVerb downgrades a dry-run migrate to the validate verb so Config.DryRun
+// mutates nothing. Non-migrate verbs and non-dry-run migrates are returned unchanged.
+func effectiveVerb(cfg *Config, verb string) string {
+	if cfg.DryRun && verb == flywayCmdMigrate {
+		return flywayCmdValidate
+	}
+	return verb
+}
+
 func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) (Result, error) {
 	startedAt := time.Now()
 
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
 	}
+
+	// Honor DryRun: downgrade a dry-run migrate to validate so no schema is mutated.
+	// validate takes the non-migrate path below, which emits no migration.applied audit
+	// (ADR-019 fires that only for actual applications) — so a dry run is never recorded
+	// as an application, and migration.dry_run stays accurate on real applications.
+	verb = effectiveVerb(cfg, verb)
 
 	vendor := dbVendor(db, fm.config.Database.Type)
 	fm.logger.Info().
@@ -356,7 +371,11 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 	}
 
 	attrs := map[string]string{
-		"migration.vendor":  run.Vendor,
+		"migration.vendor": run.Vendor,
+		// Always "false" in practice: a dry-run migrate is downgraded to validate (see
+		// effectiveVerb), which never reaches this emit path (ADR-019 — migration.applied
+		// fires only for actual applications). The attribute is retained so every emitted
+		// event positively asserts "this was a real application, not a rehearsal".
 		"migration.dry_run": strconv.FormatBool(cfg.DryRun),
 	}
 	if run.Result.FlywayVersion != "" {
