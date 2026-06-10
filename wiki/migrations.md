@@ -2,6 +2,14 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## `APP_ENV` Now Selects the `config.<env>.yaml` Overlay
+
+Previously the environment-specific YAML overlay suffix was read from koanf **before** the environment provider loaded, so the `APP_ENV` environment variable could not select it — the suffix always came from `config.yaml`/defaults (typically `development`). A 12-factor deployment that set `APP_ENV=production` and shipped `config.production.yaml` silently ran the development overlay (or none), even though `cfg.App.Env` still ended up `production`.
+
+`APP_ENV` now drives overlay selection, matching the documented precedence (env vars > `config.<env>.yaml` > `config.yaml` > defaults).
+
+**Action:** if you set `APP_ENV` and ship a `config.<env>.yaml` that was previously being ignored, that overlay is now loaded — review those files to confirm their values are correct for the environment. A malformed `APP_ENV` (not matching `^[a-z][a-z0-9-]{0,31}$`) is now rejected at startup with a clear `app.env` error instead of being interpolated into a config filename.
+
 ## Request-Path Zero-Overhead Changes (ADR-026)
 
 A set of perf changes that make the default-config request path allocate less. Several carry consumer-visible surface:
