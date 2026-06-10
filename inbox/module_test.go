@@ -101,6 +101,23 @@ func TestRegisterJobsFailsFastForDynamicMultitenant(t *testing.T) {
 	assert.Empty(t, reg.dailyJobs, "no cleanup job is registered for dynamic multi-tenant")
 }
 
+func TestRegisterJobsFailsFastForEmptyStaticMultitenant(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox:       config.InboxConfig{Enabled: true, RetentionPeriod: time.Hour},
+		Multitenant: config.MultitenantConfig{Enabled: true}, // static (default) but no tenants configured
+	}
+	require.NoError(t, m.Init(deps), "Init succeeds; the guard is in RegisterJobs")
+
+	reg := &fakeRegistrar{}
+	err := m.RegisterJobs(reg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no static multitenant.tenants",
+		"the cleanup job would fan out across zero tenants and prune nothing, so RegisterJobs must fail fast")
+	assert.Empty(t, reg.dailyJobs, "no cleanup job is registered when static multi-tenant has no tenants")
+}
+
 func TestInitSucceedsForDynamicMultitenantProcessOnceOnly(t *testing.T) {
 	// ProcessOnce resolves the tenant from the request context, so it works in dynamic
 	// multi-tenant mode. Init must succeed; the dynamic-MT guard lives in RegisterJobs,

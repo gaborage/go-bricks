@@ -49,6 +49,26 @@ func TestFanOutRetentionCleanupSingleTenantRunsOnce(t *testing.T) {
 	assert.Equal(t, 1, calls, "single-tenant runs the delete exactly once")
 }
 
+func TestFanOutRetentionCleanupRecoversPerTenantPanic(t *testing.T) {
+	log := logger.New("disabled", true)
+	getDB := func(context.Context) (dbtypes.Interface, error) { return stubDB{}, nil }
+
+	var seen []string
+	del := func(ctx context.Context, _ dbtypes.Interface, _ time.Time) (int64, error) {
+		tid, _ := GetTenant(ctx)
+		seen = append(seen, tid)
+		if tid == "boom" {
+			panic("kaboom")
+		}
+		return 0, nil
+	}
+
+	err := FanOutRetentionCleanup(context.Background(), log, []string{"boom", "ok"}, getDB, time.Hour, "outbox", del)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `outbox cleanup: tenant "boom": panic: kaboom`)
+	assert.Equal(t, []string{"boom", "ok"}, seen, "a panicking tenant must not abort the remaining tenants")
+}
+
 func TestFanOutRetentionCleanupReportsDBUnavailable(t *testing.T) {
 	log := logger.New("disabled", true)
 
