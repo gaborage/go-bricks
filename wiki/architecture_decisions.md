@@ -318,6 +318,24 @@ config that set `database.tls.cert/key/ca` now fails validation at startup.
 
 ---
 
+### [ADR-028: PostgreSQL `BuildUpsert` Binds Update Values (Parity With Oracle MERGE)](adr_028_pg_upsert_binds_update_values.md)
+
+**Date:** 2026-06-10 | **Status:** Accepted
+
+`BuildUpsert` takes separate insert/update value maps; Oracle's MERGE bound both, but the
+PostgreSQL path emitted `DO UPDATE SET col = EXCLUDED.col`, silently ignoring the caller's
+update values (updated to the *insert* value) and breaking update columns absent from the
+insert set (`EXCLUDED.<not-inserted>`). PostgreSQL now binds the update values as
+parameters (`col = $N`, numbered after the insert placeholders), matching Oracle.
+
+**Breaking:** the generated SQL changes (`EXCLUDED.col` → `$N`); runtime behavior changes
+only when update values differ from insert values (or an update column is absent from the
+insert) — those now apply the caller's intended value.
+
+**Key Benefits:** PostgreSQL/Oracle upsert parity, no silent data divergence, update-only columns work
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -327,7 +345,7 @@ config that set `database.tls.cert/key/ca` now fails validation at startup.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-027) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-028) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
