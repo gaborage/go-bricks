@@ -3933,6 +3933,66 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	assert.ErrorContains(t, err, "scheduler.timezone")
 }
 
+func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*DatabaseConfig)
+	}{
+		{"cert_without_key", func(c *DatabaseConfig) { c.TLS.CertFile = "/etc/ssl/client.crt" }},
+		{"key_without_cert", func(c *DatabaseConfig) { c.TLS.KeyFile = "/etc/ssl/client.key" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{Type: "postgresql", Host: "h", Database: "d"}
+			tc.mutate(cfg)
+			err := validatePostgreSQLFields(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "sslcert and sslkey",
+				"a lone client cert/key is silently dropped under sslmode=disable, so reject the unpaired config up front")
+		})
+	}
+}
+
+func TestValidatePostgreSQLFieldsAllowsPairedOrCAOnly(t *testing.T) {
+	both := &DatabaseConfig{Type: "postgresql"}
+	both.TLS.CertFile = "/etc/ssl/client.crt"
+	both.TLS.KeyFile = "/etc/ssl/client.key"
+	require.NoError(t, validatePostgreSQLFields(both))
+
+	caOnly := &DatabaseConfig{Type: "postgresql"}
+	caOnly.TLS.CAFile = "/etc/ssl/ca.pem" // CA alone is valid (server auth, no client cert)
+	require.NoError(t, validatePostgreSQLFields(caOnly))
+}
+
+func TestValidateOracleFieldsRejectsTLSMaterial(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*DatabaseConfig)
+	}{
+		{"ca", func(c *DatabaseConfig) { c.TLS.CAFile = "/etc/ssl/ca.pem" }},
+		{"cert", func(c *DatabaseConfig) { c.TLS.CertFile = "/etc/ssl/client.crt" }},
+		{"key", func(c *DatabaseConfig) { c.TLS.KeyFile = "/etc/ssl/client.key" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{Type: "oracle", Database: "PDB1"}
+			tc.mutate(cfg)
+			err := validateOracleFields(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not supported for Oracle",
+				"Oracle TLS material must be rejected, not silently dropped (which leaves the connection unauthenticated)")
+		})
+	}
+}
+
+func TestValidateOracleFieldsAllowsModeWithoutMaterial(t *testing.T) {
+	// sslmode alone is a no-op for Oracle today, so it passes; only cert/key/ca (which
+	// would falsely imply authenticated TLS) are rejected.
+	cfg := &DatabaseConfig{Type: "oracle", Database: "PDB1"}
+	cfg.TLS.Mode = "require"
+	require.NoError(t, validateOracleFields(cfg))
+}
+
 func TestValidateDebugTrustedProxiesRejectsAllInvalid(t *testing.T) {
 	cfg := &DebugConfig{TrustedProxies: []string{"garbage", "also-bad"}}
 	assertValidationError(t, validateDebug(cfg), "debug.trustedproxies")

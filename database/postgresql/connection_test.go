@@ -221,6 +221,33 @@ func TestConnectionNewConnectionWithHostConfigNoSSLMode(t *testing.T) {
 	testConnectionExpectedError(t, cfg)
 }
 
+func TestBuildPostgresDSNWiresTLSMaterial(t *testing.T) {
+	cfg := &config.DatabaseConfig{Host: "db.example.com", Port: 5432, Username: "u", Password: "p", Database: "app"}
+	cfg.TLS.Mode = "verify-full"
+	cfg.TLS.CAFile = "/etc/ssl/ca.pem"
+	cfg.TLS.CertFile = "/etc/ssl/client.crt"
+	cfg.TLS.KeyFile = "/etc/ssl/client.key"
+
+	dsn := buildPostgresDSN(cfg)
+	// CA/cert/key must be wired so pgx authenticates the server (and presents a client
+	// cert for mTLS) — not just sslmode. Paths contain '/', so quoteDSN wraps them.
+	assert.Contains(t, dsn, "sslmode=verify-full")
+	assert.Contains(t, dsn, "sslrootcert='/etc/ssl/ca.pem'")
+	assert.Contains(t, dsn, "sslcert='/etc/ssl/client.crt'")
+	assert.Contains(t, dsn, "sslkey='/etc/ssl/client.key'")
+}
+
+func TestBuildPostgresDSNOmitsUnsetTLSMaterialAndQuotesMode(t *testing.T) {
+	cfg := &config.DatabaseConfig{Host: "h", Port: 5432, Username: "u", Password: "p", Database: "app"}
+	cfg.TLS.Mode = "require"
+
+	dsn := buildPostgresDSN(cfg)
+	assert.Contains(t, dsn, "sslmode=require")
+	assert.NotContains(t, dsn, "sslrootcert")
+	assert.NotContains(t, dsn, "sslcert")
+	assert.NotContains(t, dsn, "sslkey")
+}
+
 func TestConnectionNewConnectionSuccess(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
