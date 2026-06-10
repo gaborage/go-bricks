@@ -462,7 +462,7 @@ func TestParseTrustedProxiesReturnsInvalidEntries(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			nets, invalid := parseTrustedProxies(tc.proxies)
+			nets, invalid := server.ParseCIDRs(tc.proxies)
 			assert.Equal(t, tc.wantInvalid, invalid, "invalid entries")
 			assert.Len(t, nets, tc.wantNetCount, "valid nets count")
 		})

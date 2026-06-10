@@ -13,6 +13,103 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+// TestIPWhitelistMiddlewareTrustedProxy verifies that the debug-endpoint IP allowlist
+// cannot be bypassed by spoofing X-Forwarded-For. The allowlist must be evaluated against
+// the immediate peer IP unless the peer is a configured trusted proxy — mirroring the
+// scheduler's CIDR middleware. Regression test for the High audit finding: the handler
+// previously used echo's spoofable c.RealIP(), so an attacker connecting directly could
+// send "X-Forwarded-For: 127.0.0.1" to satisfy a localhost-only allowlist.
+func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
+	app := &App{logger: logger.New("info", false)}
+
+	cases := []struct {
+		name           string
+		allowedIPs     []string
+		trustedProxies []string
+		remoteAddr     string
+		xff            string
+		wantStatus     int
+	}{
+		{
+			// THE finding: direct attacker spoofs XFF to impersonate localhost.
+			name:       "xff_spoof_from_untrusted_peer_is_denied",
+			allowedIPs: []string{"127.0.0.1", "::1"},
+			remoteAddr: "203.0.113.9:54321",
+			xff:        "127.0.0.1",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "direct_localhost_peer_is_allowed",
+			allowedIPs: []string{"127.0.0.1", "::1"},
+			remoteAddr: "127.0.0.1:12345",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "untrusted_public_peer_no_headers_is_denied",
+			allowedIPs: []string{"127.0.0.1"},
+			remoteAddr: "203.0.113.9:54321",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			// Behind a configured trusted proxy, the forwarded real client IS evaluated.
+			name:           "trusted_proxy_forwards_allowlisted_client_is_allowed",
+			allowedIPs:     []string{"203.0.113.7"},
+			trustedProxies: []string{"10.0.0.0/8"},
+			remoteAddr:     "10.0.0.5:443",
+			xff:            "203.0.113.7",
+			wantStatus:     http.StatusOK,
+		},
+		{
+			name:           "trusted_proxy_forwards_disallowed_client_is_denied",
+			allowedIPs:     []string{"127.0.0.1"},
+			trustedProxies: []string{"10.0.0.0/8"},
+			remoteAddr:     "10.0.0.5:443",
+			xff:            "203.0.113.7",
+			wantStatus:     http.StatusForbidden,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			debugConfig := &config.DebugConfig{
+				Enabled:        true,
+				PathPrefix:     "/_debug",
+				AllowedIPs:     tc.allowedIPs,
+				TrustedProxies: tc.trustedProxies,
+			}
+			debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
+			wrapped := debugHandlers.ipWhitelistMiddleware()(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "success")
+			})
+
+			e := echo.New()
+			// Replicate the production server config (server/server.go), where
+			// LegacyIPExtractor makes c.RealIP() trust X-Forwarded-For unconditionally —
+			// the exact setting that makes the allowlist spoofable before the fix.
+			e.IPExtractor = echo.LegacyIPExtractor()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/_debug/info", http.NoBody)
+			req.RemoteAddr = tc.remoteAddr
+			if tc.xff != "" {
+				req.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := wrapped(c)
+
+			if tc.wantStatus == http.StatusOK {
+				assert.NoError(t, err)
+				assert.Equal(t, http.StatusOK, rec.Code)
+			} else {
+				assert.Error(t, err)
+				if httpErr, ok := err.(*echo.HTTPError); ok {
+					assert.Equal(t, tc.wantStatus, httpErr.Code)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthMiddleware(t *testing.T) {
 	// Create test app and handlers with bearer token
 	app := &App{

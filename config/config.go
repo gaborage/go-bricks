@@ -179,6 +179,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"debug.enabled":              false,
 		"debug.pathprefix":           "/_sys",
 		"debug.allowedips":           []string{"127.0.0.1", "::1"},
+		"debug.trustedproxies":       []string{},
 		"debug.bearertoken":          "",
 		"debug.endpoints.goroutines": true,
 		"debug.endpoints.gc":         true,
