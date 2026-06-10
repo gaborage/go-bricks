@@ -652,6 +652,86 @@ func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
 	assert.Contains(t, preview, "password", "parsed map must contain all JSON keys")
 }
 
+// TestClientLogRequestRedactsURL verifies that the outbound request URL is redacted
+// before logging in BOTH the INFO and Debug branches: the userinfo (user:pass@), the
+// raw query string, and the fragment are stripped, so credentials and secrets carried
+// in any of those positions (API keys, OAuth tokens — including implicit-flow tokens
+// returned in the fragment — presigned-URL signatures) never reach application logs.
+//
+// Regression test for the High audit finding: Go's (*url.URL).String() emits the full
+// URL including the userinfo password, the entire query string, and the fragment, and
+// the "url" log field is not matched by the SensitiveDataFilter, so it was written
+// verbatim. Each case isolates one secret-bearing position so a future conditional
+// redaction (e.g. "only strip query when userinfo present") cannot silently reintroduce
+// a leak.
+func TestClientLogRequestRedactsURL(t *testing.T) {
+	cases := []struct {
+		name           string
+		rawURL         string
+		wantURL        string
+		mustNotContain []string
+	}{
+		{
+			name:           "userinfo_and_query",
+			rawURL:         "https://alice:s3cr3t@api.example.com/users?api_key=ABC123&access_token=xyz789",
+			wantURL:        "https://api.example.com/users",
+			mustNotContain: []string{"s3cr3t", "api_key", "ABC123", "access_token", "xyz789"},
+		},
+		{
+			name:           "userinfo_only",
+			rawURL:         "https://bob:hunter2@api.example.com/v1/accounts",
+			wantURL:        "https://api.example.com/v1/accounts",
+			mustNotContain: []string{"bob", "hunter2"},
+		},
+		{
+			name:           "query_only",
+			rawURL:         "https://api.example.com/search?token=SECRET&q=hi",
+			wantURL:        "https://api.example.com/search",
+			mustNotContain: []string{"token", "SECRET"},
+		},
+		{
+			// OAuth 2.0 implicit grant returns the access token in the URL fragment.
+			name:           "fragment_token",
+			rawURL:         "https://api.example.com/callback#access_token=FRAGTOKEN&state=foo",
+			wantURL:        "https://api.example.com/callback",
+			mustNotContain: []string{"access_token", "FRAGTOKEN"},
+		},
+		{
+			name:    "clean_url_unchanged",
+			rawURL:  "https://api.example.com/users",
+			wantURL: "https://api.example.com/users",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeLog := &fakeLogger{}
+			c := &client{
+				logger: fakeLog,
+				config: &Config{
+					LogPayloads:        true, // exercise both the INFO and the Debug branch
+					MaxPayloadLogBytes: 1024,
+				},
+			}
+
+			req, err := http.NewRequestWithContext(context.Background(), "GET", tc.rawURL, http.NoBody)
+			assert.NoError(t, err)
+
+			c.logRequest(req, nil, "trace-redact")
+
+			for _, level := range []string{"info", "debug"} {
+				events := fakeLog.eventsByLevel(level)
+				assert.Len(t, events, 1, "expected exactly one %s event", level)
+				loggedURL, _ := events[0].fields["url"].(string)
+				assert.Equal(t, tc.wantURL, loggedURL, "%s url must be redacted", level)
+				for _, secret := range tc.mustNotContain {
+					assert.NotContains(t, loggedURL, secret, "%s url must not leak %q", level, secret)
+				}
+			}
+		})
+	}
+}
+
 // TestLogBodyPreviewPrimitiveRootDropped verifies that JSON bodies whose root is a
 // primitive or array are never emitted as body_preview. SensitiveDataFilter can only
 // walk map[string]any keys, so logging a raw string/number/bool/array would bypass
