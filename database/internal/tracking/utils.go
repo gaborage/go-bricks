@@ -228,7 +228,7 @@ func TruncateString(value string, maxLen int) string {
 	if len(r) <= maxLen {
 		return value
 	}
-	// Handle multi-byte characters correctly
+	// Not enough room to append "..." without exceeding maxLen.
 	if maxLen <= 3 {
 		return string(r[:maxLen])
 	}

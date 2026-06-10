@@ -21,7 +21,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Latency**: <1ms for Get/Set (localhost), ~2ms for atomic operations (Lua scripts)
 - **Throughput**: 100k reads/sec, 80k writes/sec (single Redis instance)
 - **CBOR Serialization**: ~83ns/op marshal, ~167ns/op unmarshal (simple structs)
-- **Connection Pool**: Default 10, configurable via `cache.redis.pool_size`
+- **Connection Pool**: Default 10, configurable via `cache.redis.poolsize`
 - **Network Impact**: +0.5-1ms (same datacenter), +50-200ms (cross-region, not recommended)
 
 **Benchmark Results** (Apple M4 Pro, localhost Redis):
@@ -49,7 +49,7 @@ cache:
     port: 6379
     password: ${CACHE_REDIS_PASSWORD}  # From environment
     database: 0
-    pool_size: 10
+    poolsize: 10
 ```
 
 **Module Setup Pattern:**
@@ -72,7 +72,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
     // Try cache first
     data, err := c.Get(ctx, fmt.Sprintf("user:%d", id))
     if err == nil {
-        return cache.Unmarshal[User](data)
+        return cache.Unmarshal[*User](data)
     }
 
     // Cache miss - query database

@@ -415,12 +415,18 @@ func (m *UserModule) FindActiveUsersBuilder(ctx context.Context) ([]User, error)
 	cols := qb.Columns(&User{})
 	f := qb.Filter()
 
-	sql, args := qb.Select(cols.All()...).
+	all := cols.All()
+	allAny := make([]any, len(all))
+	for i, c := range all { allAny[i] = c }
+	sql, args, err := qb.Select(allAny...).
 		From("users").
 		Where(f.Eq(cols.Col("Status"), "active")).
 		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("build query: %w", err)
+	}
 	// PostgreSQL: SELECT id, name, email, status FROM users WHERE status = $1
-	// Oracle:     SELECT "ID", "NAME", "EMAIL", "STATUS" FROM users WHERE "STATUS" = :1
+	// Oracle:     SELECT id, name, email, status FROM users WHERE status = :1
 
 	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
@@ -445,7 +451,7 @@ func (m *UserModule) FindActiveUsersBuilder(ctx context.Context) ([]User, error)
 | Method | Returns | Purpose |
 |---|---|---|
 | `Query(ctx, sql, args...)` | `(*sql.Rows, error)` | Multi-row query — caller MUST `defer rows.Close()` |
-| `QueryRow(ctx, sql, args...)` | `*sql.Row` | Single-row query — call `.Scan(&dst...)` on the result |
+| `QueryRow(ctx, sql, args...)` | `types.Row` | Single-row query — call `.Scan(&dst...)` on the result |
 | `Exec(ctx, sql, args...)` | `(sql.Result, error)` | INSERT / UPDATE / DELETE / DDL |
 | `Begin(ctx)` | `(types.Tx, error)` | Start a transaction — `defer tx.Rollback(ctx)`, then `tx.Commit(ctx)` |
 | `Health(ctx)` | `error` | Liveness check — auto-wired into `/health` endpoint |
@@ -524,8 +530,10 @@ func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.R
 // === Simple HTTP GET Endpoints ===
 
 // Static message endpoint (simplest possible handler)
-func (h *Handler) Health(_ server.NoBody, ctx server.HandlerContext) (server.Result[string], server.IAPIError) {
-	return server.OK("Service is healthy"), nil
+type NoBodyReq struct{}
+
+func (h *Handler) Health(_ NoBodyReq, ctx server.HandlerContext) (server.Result[string], server.IAPIError) {
+	return server.NewResult(http.StatusOK, "Service is healthy"), nil
 }
 
 // Register: server.GET(hr, e, "/health", h.Health)
@@ -540,7 +548,7 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 	if err != nil {
 		return server.Result[User]{}, server.NewNotFoundError("user")
 	}
-	return server.OK(user), nil
+	return server.NewResult(http.StatusOK, user), nil
 }
 
 // Register: server.GET(hr, e, "/users/:id", h.GetUser)
@@ -561,7 +569,7 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 	if err != nil {
 		return server.Result[[]User]{}, server.NewInternalServerError(err.Error())
 	}
-	return server.OK(users), nil
+	return server.NewResult(http.StatusOK, users), nil
 }
 
 // Register: server.GET(hr, e, "/users", h.ListUsers)
@@ -571,9 +579,9 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 | Pattern          | Request binding              | Success helper          | Notes                          |
 |------------------|------------------------------|-------------------------|--------------------------------|
 | POST create      | JSON struct w/ validators    | `server.Created(data)`  | 422 auto-emitted on validation |
-| GET lookup       | `server.NoBody` + `ctx.Param`| `server.OK(data)`       | Return domain errors as API    |
-| LIST with query  | `query:"..."` struct tags    | `server.OK(list)`       | Query params auto-bound        |
-| DELETE           | `server.NoBody`              | `server.NoContent()`    | Return typed API errors        |
+| GET lookup       | `struct{}` + `ctx.Param`     | `server.NewResult(http.StatusOK, data)` | Return domain errors as API |
+| LIST with query  | `query:"..."` struct tags    | `server.NewResult(http.StatusOK, list)` | Query params auto-bound     |
+| DELETE           | `struct{}`                   | `server.NoContent()`    | Return typed API errors        |
 | ASYNC acceptance | Request struct               | `server.Accepted(meta)` | For enqueue-style workflows    |
 | PAGINATED list   | `query:"..."` struct tags    | `server.ResultWithMeta` | Adds pagination keys to `meta` |
 
@@ -1001,13 +1009,19 @@ qb := database.NewQueryBuilder(db.DatabaseType())
 f := qb.Filter()
 cols := qb.Columns(&User{})
 
-sql, args := qb.Select(cols.Fields("ID", "Email")...).
+selected := cols.Cols("ID", "Email")
+selectedAny := make([]any, len(selected))
+for i, c := range selected { selectedAny[i] = c }
+sql, args, err := qb.Select(selectedAny...).
 	From("users").
 	Where(f.And(
 		f.Eq(cols.Col("Status"), "active"),
 		f.Like(cols.Col("Email"), "%@example.com"),
 	)).
 	ToSQL()
+if err != nil {
+	return nil, fmt.Errorf("build query: %w", err)
+}
 
 rows, err := db.Query(ctx, sql, args...)
 ```
@@ -1017,7 +1031,7 @@ rows, err := db.Query(ctx, sql, args...)
 | Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`                           |
 | Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
 | JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
-| Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.Expr("created_at DESC")).GroupBy("tenant_id")` |
+| Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.MustExpr("created_at DESC")).GroupBy("tenant_id")` |
 | Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
@@ -1028,25 +1042,28 @@ rows, err := db.Query(ctx, sql, args...)
 
 ```go
 // INSERT
-sql, args := qb.Insert("users").
+sql, args, err := qb.Insert("users").
     Columns(cols.Col("Name"), cols.Col("Email")).
     Values("Alice", "alice@example.com").
     ToSQL()
+if err != nil { return err }
 result, err := db.Exec(ctx, sql, args...)
 
 // UPDATE
-sql, args := qb.Update("users").
+sql, args, err = qb.Update("users").
     Set(cols.Col("Name"), "Bob").
     Set(cols.Col("Email"), "bob@example.com").
     Where(f.Eq(cols.Col("ID"), 123)).
     ToSQL()
-result, err := db.Exec(ctx, sql, args...)
+if err != nil { return err }
+result, err = db.Exec(ctx, sql, args...)
 
 // DELETE
-sql, args := qb.Delete("users").
+sql, args, err = qb.Delete("users").
     Where(f.Eq(cols.Col("ID"), 123)).
     ToSQL()
-result, err := db.Exec(ctx, sql, args...)
+if err != nil { return err }
+result, err = db.Exec(ctx, sql, args...)
 ```
 
 Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.
@@ -1063,11 +1080,15 @@ cols := qb.Columns(&User{})
 f := qb.Filter()
 
 // Case-sensitive: PG "email ~ ?", Oracle "REGEXP_LIKE(email, ?)"
-sql, args := qb.Select(cols.All()...).From("users").
+all := cols.All()
+allAny := make([]any, len(all))
+for i, c := range all { allAny[i] = c }
+sql, args, err := qb.Select(allAny...).From("users").
     Where(f.Regex(cols.Col("Email"), `^admin@`)).ToSQL()
+if err != nil { return nil, err }
 
 // Case-insensitive: PG "email ~* ?", Oracle "REGEXP_LIKE(email, ?, 'i')"
-qb.Select(cols.All()...).From("users").
+qb.Select(allAny...).From("users").
     Where(f.RegexI(cols.Col("Email"), `@example\.com$`))
 
 // Negation: f.NotRegex / f.NotRegexI
@@ -1089,9 +1110,10 @@ cols := qb.Columns(&User{})
 f := qb.Filter()
 
 // Pass any JSON-marshallable value; structs/maps/slices auto-encode.
-sql, args := qb.Select(cols.Col("ID")).From("users").
+sql, args, err := qb.Select(cols.Col("ID")).From("users").
     Where(f.JSONContains(cols.Col("Metadata"), map[string]any{"role": "admin"})).
     ToSQL()
+if err != nil { return nil, err }
 // SQL: SELECT id FROM users WHERE metadata @> $1::jsonb
 // args: [`{"role":"admin"}`]
 
@@ -1118,15 +1140,18 @@ type User struct {
 cols := qb.Columns(&User{})
 
 // SELECT with type-safe field references
-query := qb.Select(cols.Fields("ID", "Name")...).
+selected := cols.Cols("ID", "Name")
+selectedAny := make([]any, len(selected))
+for i, c := range selected { selectedAny[i] = c }
+query := qb.Select(selectedAny...).
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// Oracle: SELECT id, name FROM users WHERE "level" = :1
 // PostgreSQL: SELECT id, name FROM users WHERE level = $1
 
 // All columns: cols.All()
 // Single column: cols.Col("FieldName")
-// Multiple columns: cols.Fields("ID", "Name", "Email")
+// Multiple columns: cols.Cols("ID", "Name", "Email")
 // Performance: ~0.6µs first parse, ~26ns cached access
 ```
 
@@ -1159,11 +1184,11 @@ query := qb.Select(
     u.Col("Name"),    // "u.name" or "u.\"NAME\"" for Oracle
     a.Col("Number"),  // "a.\"NUMBER\"" for Oracle (reserved word)
 ).
-    From(dbtypes.Table("users").As("u")).
-    JoinOn(dbtypes.Table("accounts").As("a"),
+    From(dbtypes.MustTable("users").MustAs("u")).
+    JoinOn(dbtypes.MustTable("accounts").MustAs("a"),
         jf.EqColumn(u.Col("ID"), a.Col("ID"))).
     Where(f.Eq(u.Col("Status"), "active"))
-// Oracle: SELECT u."ID", u."NAME", a."NUMBER" FROM users u JOIN accounts a ON u."ID" = a."ID" WHERE u."STATUS" = :1
+// Oracle: SELECT u.id, u.name, a."number" FROM users u JOIN accounts a ON u.id = a.id WHERE u.status = :1
 ```
 
 **Advanced JOIN Patterns:**
@@ -1174,15 +1199,15 @@ jf := qb.JoinFilter()
 f := qb.Filter()
 
 query := qb.Select("*").
-    From(dbtypes.Table("orders").As("o")).
-    JoinOn(dbtypes.Table("customers").As("c"), jf.And(
+    From(dbtypes.MustTable("orders").MustAs("o")).
+    JoinOn(dbtypes.MustTable("customers").MustAs("c"), jf.And(
         jf.EqColumn("c.id", "o.customer_id"),       // Column-to-column
         jf.Eq("c.status", "active"),                 // Column-to-value
         jf.In("c.tier", []string{"gold", "platinum"}),
     )).
-    JoinOn(dbtypes.Table("products").As("p"), jf.And(
+    JoinOn(dbtypes.MustTable("products").MustAs("p"), jf.And(
         jf.EqColumn("p.id", "o.product_id"),
-        jf.Eq("p.price", qb.Expr("TO_NUMBER(o.max_price)")), // Expression support
+        jf.Eq("p.price", qb.MustExpr("TO_NUMBER(o.max_price)")), // Expression support
     )).
     Where(f.Eq("o.status", "pending"))
 ```
@@ -1201,14 +1226,14 @@ cols := qb.Columns(&Product{})
 query := qb.Select(
     cols.Col("ProductID"),
     cols.Col("Price"),
-    qb.Expr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
+    qb.MustExpr("ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC)", "rank"),
 ).From("products")
 
 // Aggregations with GROUP BY
 query := qb.Select(
     cols.Col("Category"),
-    qb.Expr("COUNT(*)", "product_count"),
-    qb.Expr("AVG(price)", "avg_price"),
+    qb.MustExpr("COUNT(*)", "product_count"),
+    qb.MustExpr("AVG(price)", "avg_price"),
 ).From("products").GroupBy(cols.Col("Category"))
 ```
 
@@ -1377,7 +1402,7 @@ _, err = conn.Exec(ctx, "BEGIN update_customer(:1); END;", customer)
 ```go
 import dbtest "github.com/gaborage/go-bricks/database/testing"
 
-func TestProductService_FindActive(t *testing.T) {
+func TestProductServiceFindActive(t *testing.T) {
     // Setup (8 lines vs 30+ with sqlmock)
     db := dbtest.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
@@ -1405,7 +1430,7 @@ dbtest.AssertQueryExecuted(t, db, "SELECT")
 **Iterating Rows with `Query`:**
 
 ```go
-func TestProductRepository_List(t *testing.T) {
+func TestProductRepositoryList(t *testing.T) {
     db := dbtest.NewTestDB(dbtypes.PostgreSQL)
     db.ExpectQuery("SELECT").
         WillReturnRows(
@@ -1433,7 +1458,7 @@ func TestProductRepository_List(t *testing.T) {
 **Transaction Test:**
 
 ```go
-func TestOrderService_CreateWithItems(t *testing.T) {
+func TestOrderServiceCreateWithItems(t *testing.T) {
     db := dbtest.NewTestDB(dbtypes.PostgreSQL)
     tx := db.ExpectTransaction().
         ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
@@ -1485,7 +1510,7 @@ func TestMultiTenantService(t *testing.T) {
 **Named Databases Test (Single-Tenant Multi-Database):**
 
 ```go
-func TestCrossDatabase_LegacyMigration(t *testing.T) {
+func TestCrossDatabaseLegacyMigration(t *testing.T) {
     namedDBs := dbtest.NewNamedDBMap()
 
     // Setup default PostgreSQL database
@@ -1643,7 +1668,7 @@ type UserService struct {
 
 func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     // Cache resolves tenant from context automatically
-    cache, err := s.getCache(ctx)
+    c, err := s.getCache(ctx)
     if err != nil {
         return nil, fmt.Errorf("cache not available: %w", err)
     }
@@ -1651,9 +1676,9 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     cacheKey := fmt.Sprintf("user:%d", id)
 
     // Try cache first
-    data, err := cache.Get(ctx, cacheKey)
+    data, err := c.Get(ctx, cacheKey)
     if err == nil {
-        return cache.Unmarshal[User](data)
+        return cache.Unmarshal[*User](data)
     }
 
     // Cache miss - query database
@@ -1664,7 +1689,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 
     // Store in cache
     serialized, _ := cache.Marshal(user)
-    cache.Set(ctx, cacheKey, serialized, 5*time.Minute)
+    c.Set(ctx, cacheKey, serialized, 5*time.Minute)
 
     return user, nil
 }
@@ -1715,21 +1740,19 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
     m.defaultTTL = cacheCfg.DefaultTTL
     m.keyPrefix = cacheCfg.KeyPrefix
 
-    deps.Logger.Info("Cache configured",
-        "default_ttl", m.defaultTTL,
-        "key_prefix", m.keyPrefix)
+    deps.Logger.Info().Dur("default_ttl", m.defaultTTL).Str("key_prefix", m.keyPrefix).Msg("Cache configured")
 
     return nil
 }
 
 // Use injected config in service methods
 func (m *Module) CacheUser(ctx context.Context, user *User) error {
-    cache, _ := m.getCache(ctx)
+    c, _ := m.getCache(ctx)
 
     key := fmt.Sprintf("%s:user:%d", m.keyPrefix, user.ID)  // Uses prefix
     data, _ := cache.Marshal(user)
 
-    return cache.Set(ctx, key, data, m.defaultTTL)  // Uses default TTL
+    return c.Set(ctx, key, data, m.defaultTTL)  // Uses default TTL
 }
 ```
 
@@ -1778,7 +1801,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     // Try cache first
     data, err := s.cache.Get(ctx, cacheKey)
     if err == nil {
-        return cache.Unmarshal[User](data)
+        return cache.Unmarshal[*User](data)
     }
 
     // Cache miss - query database
@@ -1909,10 +1932,10 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     cacheCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
     defer cancel()
 
-    if cache, err := s.getCache(cacheCtx); err == nil {
-        data, err := cache.Get(cacheCtx, cacheKey)
+    if c, err := s.getCache(cacheCtx); err == nil {
+        data, err := c.Get(cacheCtx, cacheKey)
         if err == nil {
-            user, err := cache.Unmarshal[User](data)
+            user, err := cache.Unmarshal[*User](data)
             if err == nil {
                 return user, nil  // Cache hit - return immediately
             }
@@ -1920,8 +1943,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 
         // Log cache errors but don't fail the request
         if !errors.Is(err, cache.ErrNotFound) {
-            s.logger.Warn("Cache operation failed, falling back to database",
-                "error", err, "key", cacheKey)
+            s.logger.Warn().Err(err).Str("key", cacheKey).Msg("Cache operation failed, falling back to database")
         }
     }
 
@@ -1936,7 +1958,7 @@ defer cancel()
 data, err := cache.Get(ctx, key)
 if errors.Is(err, context.DeadlineExceeded) {
     // Cache too slow - fallback to database
-    s.logger.Warn("Cache timeout exceeded", "key", key)
+    s.logger.Warn().Str("key", key).Msg("Cache timeout exceeded")
 }
 
 // Error type checking
@@ -1948,10 +1970,7 @@ if errors.Is(err, cache.ErrNotFound) {
     // Developer error - negative or zero TTL provided
 } else if opErr, ok := err.(*cache.OperationError); ok {
     // Network/Redis error - includes operation, key, underlying error
-    s.logger.Error("Cache operation failed",
-        "operation", opErr.Op,
-        "key", opErr.Key,
-        "error", opErr.Err)
+    s.logger.Error().Str("operation", opErr.Op).Str("key", opErr.Key).Err(opErr.Err).Msg("Cache operation failed")
 }
 ```
 
@@ -2055,7 +2074,7 @@ No code changes required - observability hooks activate automatically when confi
 ```yaml
 cache:
   redis:
-    pool_size: 10  # Default: NumCPU * 2
+    poolsize: 10  # Default: 10
 ```
 
 **Rule:** `PoolSize >= (NumCPU * 2 * ConcurrentRequests) / 100`
@@ -2174,7 +2193,7 @@ func (m *MockCache) Close() error {
 }
 
 // Test example with MockCache
-func TestUserService_CacheHit(t *testing.T) {
+func TestUserServiceCacheHit(t *testing.T) {
     mockCache := NewMockCache()
 
     deps := &app.ModuleDeps{
@@ -2347,14 +2366,14 @@ mock := cachetest.NewMockCache().WithCloseCallback(func(id string) {
 cachetest.ResetMock(mockCache)  // Clears data + counters
 
 // Debugging
-counts := cachetest.GetOperationCounts(mockCache)
+counts := cachetest.OperationCounts(mockCache)
 fmt.Printf("Operations: %+v\n", counts)  // {Get:5, Set:3, Delete:1, ...}
 
 dump := cachetest.DumpCache(mockCache)
 t.Log(dump)  // Prints cache contents with expiration info
 
 // Check all stored keys
-keys := mockCache.GetAllKeys()
+keys := mockCache.AllKeys()
 assert.Contains(t, keys, "user:123")
 
 // Stats assertion
@@ -2395,8 +2414,10 @@ func TestCacheAsidePattern(t *testing.T) {
     cachetest.AssertOperationCount(t, mockCache, "Set", 1)
     dbtest.AssertQueryExecuted(t, mockDB, "SELECT")
 
-    // Second call - cache hit, no DB query
-    mockDB.ResetQueryLog()
+    // Second call - cache hit, no DB query.
+    // Record the query count first; the deps.DB closure captured mockDB, so
+    // don't reassign it — assert the cache hit adds no new query instead.
+    queriesBefore := len(mockDB.QueryLog())
     user2, err := svc.GetUser(ctx, 123)
     assert.NoError(t, err)
     assert.Equal(t, "Alice", user2.Name)
@@ -2404,7 +2425,7 @@ func TestCacheAsidePattern(t *testing.T) {
     // Verify cache hit
     cachetest.AssertOperationCount(t, mockCache, "Get", 2)
     cachetest.AssertOperationCount(t, mockCache, "Set", 1)  // Still 1
-    assert.Empty(t, mockDB.QueryLog(), "Should not query DB on cache hit")
+    assert.Len(t, mockDB.QueryLog(), queriesBefore, "Should not query DB on cache hit")
 }
 ```
 
@@ -2871,7 +2892,8 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 
     mockOutbox := outboxtest.NewMockOutbox()
 
-    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    dbFunc := func(_ context.Context) (database.Interface, error) { return db, nil }
+    svc := NewOrderService(dbFunc, mockOutbox)
     err := svc.CreateOrder(ctx, order)
 
     assert.NoError(t, err)
@@ -2883,8 +2905,10 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 
 // Test outbox failure (transaction should roll back)
 func TestOrderServiceOutboxFailure(t *testing.T) {
+    db := dbtest.NewTestDB(dbtypes.PostgreSQL)
     mockOutbox := outboxtest.NewMockOutbox().WithError(fmt.Errorf("outbox down"))
-    svc := NewOrderService(db.AsDBFunc(), mockOutbox)
+    dbFunc := func(_ context.Context) (database.Interface, error) { return db, nil }
+    svc := NewOrderService(dbFunc, mockOutbox)
     err := svc.CreateOrder(ctx, order)
     assert.Error(t, err)
 }
@@ -3462,7 +3486,7 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
         return server.Result[User]{}, server.NewInternalServerError(err.Error())
     }
 
-    return server.OK(user), nil
+    return server.NewResult(http.StatusOK, user), nil
 }
 
 type GetUserReq struct {
@@ -3486,7 +3510,6 @@ type GetUserReq struct {
 | Error | HTTP Status | User Message |
 |-------|-------------|--------------|
 | `app.ErrNoTenantInContext` | 400 | "X-Tenant-ID header required" |
-| `app.ErrTenantNotFound` | 404 | "Tenant not configured" |
 | Database connection error | 503 | "Service temporarily unavailable" |
 | Query error | 500 | "Internal server error" |
 
@@ -3553,13 +3576,16 @@ func (s *UserService) FindByEmail(ctx context.Context, email string) (*User, err
     f := qb.Filter()
 
     // Always filter by tenant_id for data isolation
-    sql, args := qb.Select(cols.All()...).
+    sql, args, err := qb.Select(cols.All()).
         From("users").
         Where(f.And(
             f.Eq(cols.Col("TenantID"), tenantID),  // Tenant isolation
             f.Eq(cols.Col("Email"), email),
         )).
         ToSQL()
+    if err != nil {
+        return nil, err
+    }
 
     var user User
     err = db.QueryRow(ctx, sql, args...).Scan(&user.ID, &user.TenantID, &user.Email, &user.Name)
@@ -3580,14 +3606,17 @@ func (s *UserService) Create(ctx context.Context, email, name string) (*User, er
     cols := qb.Columns(&User{})
 
     // Always include tenant_id in INSERT
-    sql, args := qb.Insert("users").
+    sql, args, err := qb.Insert("users").
         Columns(cols.Col("TenantID"), cols.Col("Email"), cols.Col("Name")).
         Values(tenantID, email, name).
         Suffix("RETURNING id").
         ToSQL()
+    if err != nil {
+        return nil, err
+    }
 
     var id int64
-    err := db.QueryRow(ctx, sql, args...).Scan(&id)
+    err = db.QueryRow(ctx, sql, args...).Scan(&id)
     return &User{ID: id, TenantID: tenantID, Email: email, Name: name}, err
 }
 
@@ -3609,13 +3638,16 @@ func (s *UserService) List(ctx context.Context, status string) ([]User, error) {
     f := qb.Filter()
 
     // Tenant isolation + business filter
-    sql, args := qb.Select(cols.All()...).
+    sql, args, err := qb.Select(cols.All()).
         From("users").
         Where(f.And(
             f.Eq(cols.Col("TenantID"), tenantID),  // Always filter by tenant
             f.Eq(cols.Col("Status"), status),       // Business filter
         )).
         ToSQL()
+    if err != nil {
+        return nil, err
+    }
 
     rows, err := db.Query(ctx, sql, args...)
     if err != nil {
@@ -3677,13 +3709,16 @@ if !ok {
     return nil, errors.New("tenant context required")
 }
 
-sql, args := qb.Select(cols.All()...).
+sql, args, err := qb.Select(cols.All()).
     From("orders").
     Where(f.And(
         WithTenantFilter(ctx, f, cols),  // Tenant isolation
         f.Eq(cols.Col("Status"), "pending"),
     )).
     ToSQL()
+if err != nil {
+    return nil, err
+}
 ```
 
 **Strategy Comparison:**
@@ -3960,7 +3995,6 @@ When `observability.enabled: true`, the framework auto-emits:
 | Database | `db.query` / `db.exec` | `db.system`, `db.statement`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
 | AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.routing_key` | Every `Publish`/`PublishToExchange` |
 | AMQP consume | `{destination} consume` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.queue` | Every message received |
-| Cache | `cache.{operation}` | `cache.operation`, `cache.key`, `cache.hit` | Every `Get`/`Set`/`Delete` |
 | Outbound HTTP | propagates `traceparent` | `http.url`, `http.method` | Via `httpclient` package |
 | JOSE | `jose.decode_request` / `jose.encode_response` | `jose.kid`, `jose.alg` | Every JOSE-tagged route |
 
@@ -3970,7 +4004,7 @@ When `observability.enabled: true`, the framework auto-emits:
 |---|---|---|---|
 | HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
 | Database | `db.client.operation.duration` | Histogram (s) | `db.system.name`, `db.operation.name`, `db.collection.name`, `db.namespace`, `repository.method` (opt-in via `database.WithRepositoryMethod`) |
-| Database pool | `db.client.connection.count` | UpDownCounter | `state` (`open`/`idle`) |
+| Database pool | `db.client.connection.count` | UpDownCounter | `state` (`used`/`idle`) |
 | Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | UpDownCounter | — |
 | Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
 | Database pool | `db.client.connection.pending_requests` | UpDownCounter | — |
@@ -4139,7 +4173,9 @@ import (
 
 // === Basic Informational Log with Custom Fields ===
 
-logger.Info().
+log := logger.New("info", false)
+
+log.Info().
 	Str("user_id", "alice@example.com").
 	Str("action", "login").
 	Msg("User logged in successfully")
@@ -4147,7 +4183,7 @@ logger.Info().
 
 // === Multiple Field Types in Single Log ===
 
-logger.Info().
+log.Info().
 	Str("order_id", "ord_12345").
 	Int("item_count", 3).
 	Int64("total_cents", 4999).
@@ -4157,7 +4193,7 @@ logger.Info().
 
 // === Error Logging with Context ===
 
-logger.Error().
+log.Error().
 	Err(err).
 	Str("operation", "payment_process").
 	Str("payment_id", "pay_789").
@@ -4276,7 +4312,7 @@ log:
 // cfg.Log.SensitiveFields at startup and threads a SensitiveDataFilter
 // through the logger before any module or middleware captures a
 // reference to it.
-fw, err := app.New()
+fw, _, err := app.New()
 if err != nil { log.Fatal(err) }
 fw.RegisterModules(myModule)
 log.Fatal(fw.Run())
@@ -4306,7 +4342,7 @@ base.SensitiveFields = append(base.SensitiveFields,
 )
 base.MaskValue = "[REDACTED]"
 
-fw, err := app.NewWithOptions(&app.Options{
+fw, _, err := app.NewWithOptions(&app.Options{
     LoggerFilterConfig: base,
 })
 if err != nil { log.Fatal(err) }
@@ -4314,7 +4350,7 @@ fw.RegisterModules(myModule)
 log.Fatal(fw.Run())
 
 // Opt out entirely (e.g., test fixtures emitting deterministic payloads):
-fw, err = app.NewWithOptions(&app.Options{
+fw, _, err = app.NewWithOptions(&app.Options{
     LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
 })
 ```
@@ -4372,9 +4408,9 @@ import (
 // Inside any middleware or handler — escalates the request's action-log severity.
 // Once escalated to WARN+, the action log is emitted at that level even on a 2xx response.
 func RateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-    return func(c echo.Context) error {
+    return func(c *echo.Context) error {
         if exceededRateLimit(c) {
-            server.EscalateSeverity(&c, zerolog.WarnLevel) // request summary now logs at WARN
+            server.EscalateSeverity(c, zerolog.WarnLevel) // request summary now logs at WARN
             return c.JSON(429, map[string]string{"error": "rate limited"})
         }
         return next(c)

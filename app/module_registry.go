@@ -32,8 +32,9 @@ func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 // Register adds a module to the registry and initializes it.
 // It calls the module's Init method with the injected dependencies.
 // Returns an error if a module with the same name is already registered.
-// Special handling: If the module implements app.JobRegistrar, it is automatically
-// wired into ModuleDeps.Scheduler for other modules to use.
+// Special handling: modules implementing JobRegistrar, OutboxProvider, InboxProvider,
+// or KeyStoreProvider are automatically wired into the corresponding ModuleDeps fields
+// (Scheduler, Outbox, Inbox, KeyStore) so subsequent modules can use them.
 //
 // IMPORTANT: Duplicate module errors are unrecoverable and must be handled with log.Fatal().
 func (r *ModuleRegistry) Register(module Module) error {

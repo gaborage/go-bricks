@@ -228,7 +228,7 @@ go-bricks-migrate migrate \
 ## Development
 
 ```bash
-make check               # fmt + lint + test + CLI smoke
+make check               # fmt + lint + test + CLI smoke + vuln scan
 make test                # unit tests only
 make test-coverage       # writes coverage.html
 ```

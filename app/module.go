@@ -166,9 +166,9 @@ type KeyStoreProvider interface {
 //
 //	type JobsModule struct{}
 //
-//	func (m *JobsModule) RegisterJobs(scheduler JobRegistrar) error {
-//	    scheduler.FixedRate("cleanup", &CleanupJob{}, 30*time.Minute)
-//	    scheduler.DailyAt("report", &ReportJob{}, scheduler.ParseTime("03:00"))
+//	func (m *JobsModule) RegisterJobs(reg JobRegistrar) error {
+//	    reg.FixedRate("cleanup", &CleanupJob{}, 30*time.Minute)
+//	    reg.DailyAt("report", &ReportJob{}, scheduler.ParseTime("03:00"))
 //	    return nil
 //	}
 //
@@ -179,8 +179,7 @@ type JobProvider interface {
 }
 
 // ModuleDeps contains the dependencies that are injected into each module.
-// It provides access to core services like database, logging, messaging, observability, and job scheduling.
-// All modules must use DB() and Messaging() functions for resource access.
+// It provides access to core services like database, logging, messaging, caching, observability, and job scheduling.
 type ModuleDeps struct {
 	Logger logger.Logger
 	Config *config.Config

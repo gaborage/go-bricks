@@ -191,15 +191,16 @@ var (
 
 ## Additional Files Affected
 
-Beyond `database/types/`, these files also have panic-to-error conversions:
+Beyond `database/types/`, `database/internal/builder/query_builder.go` also had panic-to-error conversions applied.
 
-| File | Functions |
-|------|-----------|
-| `observability/dual_processor.go` | `NewDualModeLogProcessor()` constructor |
-| `database/testing/rowset.go` | `Scan()` methods on RowScanner |
-| `scheduler/helpers.go` | Job helper validation |
-| `testing/fixtures/database.go` | Test fixture setup |
-| `database/internal/builder/query_builder.go` | Query builder validation |
+The following files **intentionally retain panics** (suppressed with `//nolint:S8148 // NOSONAR`) because the panics represent startup-time configuration failures or test-helper programmer-error conditions that should crash immediately rather than return errors:
+
+| File | Reason panics are retained |
+|------|---------------------------|
+| `scheduler/helpers.go` | `ParseTime()` — invalid time format is a configuration error at startup (fail-fast) |
+| `observability/dual_processor.go` | `NewDualModeLogProcessor()` — nil processor arguments are a wiring bug, not a runtime condition |
+| `database/testing/rowset.go` | `AddRow` — test-helper misuse; panicking gives a clear programmer-error signal |
+| `testing/fixtures/database.go` | Test fixture setup — panic on fixture setup failure is intentional for test clarity |
 
 ## Testing Impact
 

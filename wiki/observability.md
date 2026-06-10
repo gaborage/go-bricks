@@ -15,7 +15,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 **Export Timeout Configuration:** GoBricks uses environment-aware export timeouts to balance fail-fast feedback (development) with network resilience (production):
 - **Development/stdout:** 10s (quick failure detection for debugging)
 - **Production:** 60s (accommodates network latency, TLS handshake, batch transmission)
-- **Override via YAML:** `observability.trace.export.timeout: "90s"` (applies to traces/metrics/logs)
+- **Override via YAML:** `observability.trace.export.timeout: "90s"` (trace only); use `observability.metrics.export.timeout` and `observability.logs.export.timeout` for the other subsystems
 - **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
 
 **Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type`:
@@ -105,16 +105,16 @@ base.SensitiveFields = append(base.SensitiveFields,
 )
 base.MaskValue = "[REDACTED]"
 
-fw, err := app.NewWithOptions(&app.Options{
+fw, _, err := app.NewWithOptions(&app.Options{
     LoggerFilterConfig: base,
 })
 if err != nil { log.Fatal(err) }
-fw.RegisterModules(myModule)
+fw.RegisterModule(myModule)
 log.Fatal(fw.Run())
 
 // Opt-out variant (no masking at all — use only for test fixtures or
 // environments where structured logs are sandboxed):
-fw, err = app.NewWithOptions(&app.Options{
+fw, _, err = app.NewWithOptions(&app.Options{
     LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
 })
 ```

@@ -28,7 +28,7 @@ type LoginRequest struct {
     Password string `json:"password" validate:"required"`
 }
 
-func (h *Handler) login(req LoginRequest, ctx server.HandlerContext) (Result[Token], server.IAPIError) {
+func (h *Handler) login(req LoginRequest, ctx server.HandlerContext) (server.Result[Token], server.IAPIError) {
     token := h.authService.Authenticate(req)
     return server.NewResult(http.StatusOK, token), nil
 }
@@ -40,7 +40,7 @@ type FileUploadRequest struct {
     MimeType string `json:"mime_type"`
 }
 
-func (h *Handler) uploadFile(req *FileUploadRequest, ctx server.HandlerContext) (Result[UploadResponse], server.IAPIError) {
+func (h *Handler) uploadFile(req *FileUploadRequest, ctx server.HandlerContext) (server.Result[UploadResponse], server.IAPIError) {
     // Pointer avoids copying large byte slice
     fileID := h.storageService.Store(req.Data, req.Filename)
     return server.Created(UploadResponse{FileID: fileID}), nil
@@ -75,12 +75,13 @@ func (h *Handler) processBulk(req *BulkRequest, ctx server.HandlerContext) (Summ
 **Linter Configuration**:
 Configure `govet` to warn on large value copies:
 ```yaml
-# .golangci.yml
-linters-settings:
-  govet:
-    enable:
-      - copylocks
-      - composites
+# .golangci.yml  (add under the existing linters: block)
+linters:
+  settings:
+    govet:
+      enable:
+        - copylocks
+        - composites
 ```
 
 ## Raw Response Mode (Strangler Fig Migration)

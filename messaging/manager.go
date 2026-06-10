@@ -73,6 +73,9 @@ type consumerEntry struct {
 type ManagerOptions struct {
 	MaxPublishers int           // Maximum number of publisher clients to keep cached
 	IdleTTL       time.Duration // Time after which idle publishers are evicted
+	// ConnectionTimeout is the per-publish broker confirmation timeout applied to
+	// clients created by the default factory. Zero leaves the client default (30s).
+	ConnectionTimeout time.Duration
 }
 
 // NewMessagingManager creates a new messaging manager
@@ -87,7 +90,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 	// Default to real client factory if none provided
 	if clientFactory == nil {
 		clientFactory = func(url string, log logger.Logger) AMQPClient {
-			return NewAMQPClient(url, log)
+			return NewAMQPClient(url, log, WithConnectionTimeout(opts.ConnectionTimeout))
 		}
 	}
 

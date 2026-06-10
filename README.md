@@ -78,7 +78,7 @@ go test -run TestName   # Run specific test
 - **Redis cache integration** with type-safe serialization, multi-tenant isolation, and automatic lifecycle management
 - **Transactional outbox** for reliable at-least-once event publishing (dual-write problem solved)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
-- **Named RSA key pair management** from DER files or base64 environment variables
+- **Named RSA key pair and symmetric secret management** from DER/raw files or base64 environment variables
 - **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies (Visa-style integrations)
 - **Multi-tenant architecture** with complete resource isolation and context propagation
 - **Flyway migration integration** for schema evolution
@@ -161,7 +161,7 @@ cache:
     host: localhost
     port: 6379
     database: 0
-    pool_size: 10
+    poolsize: 10
 
 log:
   level: info
@@ -220,7 +220,7 @@ func (m *Module) Init(deps *ModuleDeps) error {
 ```
 
 **Supported tags:** `config:"key.path"` (required), `required:"true"` (fail if missing), `default:"value"` (fallback).
-**Supported types:** string, int, int64, float64, bool, time.Duration.
+**Supported types:** string, int, int64, float64, bool, time.Duration, []string (comma-separated via env/`default`, native sequence via YAML).
 
 ### Environment Variables
 Environment variables use uppercase with underscores and automatically map to dot notation:
@@ -292,6 +292,7 @@ type ModuleDeps struct {
     MeterProvider metric.MeterProvider                                   // Custom metrics (no-op if disabled)
     Scheduler     JobRegistrar                                           // Job scheduling (nil if no scheduler module)
     Outbox        OutboxPublisher                                        // Transactional event publishing (nil if disabled)
+    Inbox         InboxProcessor                                         // Durable consumer-side idempotency (nil if inbox module not registered)
     KeyStore      KeyStore                                               // Named RSA key pairs (nil if not configured)
     DB            func(ctx context.Context) (database.Interface, error)  // Tenant-aware database
     DBByName      func(ctx context.Context, name string) (database.Interface, error) // Named databases
@@ -432,10 +433,10 @@ type User struct {
 cols := qb.Columns(&User{})
 f := qb.Filter()
 
-query := qb.Select(cols.Fields("ID", "Name")...).
+query := qb.Select(cols.Cols("ID", "Name")). // []string flattened by Select
     From("users").
     Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT "ID", "NAME" FROM users WHERE "LEVEL" = :1
+// Oracle: SELECT id, name FROM users WHERE "level" = :1
 // PostgreSQL: SELECT id, name FROM users WHERE level = $1
 ```
 
@@ -458,7 +459,8 @@ The `migration` package wraps the Flyway CLI for repeatable schema versioning. I
 
 ```go
 m := migration.NewFlywayMigrator(cfg, logger)
-if err := m.Migrate(ctx, nil); err != nil {     // nil → use vendor-aware defaults
+_, err := m.Migrate(ctx, nil)     // nil → use vendor-aware defaults
+if err != nil {
     log.Fatal(err)
 }
 ```
@@ -500,7 +502,7 @@ type UserService struct {
 
 func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     // Cache(ctx) resolves the tenant from context automatically
-    cache, err := s.getCache(ctx)
+    c, err := s.getCache(ctx)
     if err != nil {
         return nil, err
     }
@@ -508,9 +510,9 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     cacheKey := fmt.Sprintf("user:%d", id)
 
     // Try cache first
-    data, err := cache.Get(ctx, cacheKey)
+    data, err := c.Get(ctx, cacheKey)
     if err == nil {
-        return cache.Unmarshal[User](data)
+        return cache.Unmarshal[*User](data)
     }
 
     // Cache miss - query database
@@ -521,7 +523,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 
     // Store in cache with TTL
     data, _ = cache.Marshal(user)
-    cache.Set(ctx, cacheKey, data, 5*time.Minute)
+    c.Set(ctx, cacheKey, data, 5*time.Minute)
 
     return user, nil
 }
@@ -550,7 +552,7 @@ cache:
     port: 6379
     password: ${CACHE_REDIS_PASSWORD}   # From environment
     database: 0
-    pool_size: 10              # Defaults to NumCPU * 2 if unset
+    poolsize: 10               # Default: 10
 ```
 
 The `manager.*` keys tune the per-tenant lifecycle; tune them up if you serve many tenants or want connections to live longer between bursts.
@@ -607,11 +609,11 @@ func TestMyService(t *testing.T) {
 
 ### Job Scheduler
 
-gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention (mutex per job), automatic panic recovery with stack trace logging, and system APIs (`GET /_sys/jobs`, `POST /_sys/job/:jobId`).
+gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention (mutex per job), automatic panic recovery with stack trace logging, and system APIs (`GET /_sys/job`, `POST /_sys/job/:jobId`).
 
 ```go
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, mustParseTime("03:00"))
+    return deps.Scheduler.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 }
 
 // Implement the Executor interface
@@ -818,7 +820,11 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
    )
 
    func wireLogging(cfg *config.Config, e *echo.Echo) (observability.Provider, logger.Logger, error) {
-       obsProvider, err := observability.NewProvider(&cfg.Observability)
+       var obsCfg observability.Config
+       if err := cfg.Unmarshal("observability", &obsCfg); err != nil {
+           return nil, nil, err
+       }
+       obsProvider, err := observability.NewProvider(&obsCfg)
        if err != nil {
            return nil, nil, err
        }
@@ -829,7 +835,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
        e.Use(server.LoggerWithConfig(appLogger, server.LoggerConfig{
            HealthPath:           "/health",
            ReadyPath:            "/ready",
-           SlowRequestThreshold: cfg.Observability.Logs.SlowRequestThreshold,
+           SlowRequestThreshold: obsCfg.Logs.SlowRequestThreshold,
        }))
 
        return obsProvider, appLogger, nil

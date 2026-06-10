@@ -82,7 +82,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 // ensureStoreInitialized creates the vendor-specific store on first use.
 // Lazy because the database vendor type is only known once a connection exists.
-// Uses double-check locking (mutex, not sync.Once) so a failed init can retry.
+// Uses mutex-guarded lazy initialization (not sync.Once) so a failed init can retry.
 func (m *Module) ensureStoreInitialized(ctx context.Context) error {
 	m.initMu.Lock()
 	defer m.initMu.Unlock()

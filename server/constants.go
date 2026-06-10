@@ -44,8 +44,8 @@ var reservedMetaKeys = map[string]struct{}{
 
 // HTTP Server Default Timeouts
 //
-// These constants define default timeout values for the Echo HTTP server.
-// They are used in server configuration and tests to ensure consistent behavior.
+// The following constants are exported as a reference for the framework's default values
+// and for use by callers that configure the server programmatically.
 
 const (
 	// DefaultReadTimeout is the maximum duration for reading the entire request.
@@ -54,7 +54,7 @@ const (
 
 	// DefaultWriteTimeout is the maximum duration before timing out writes of the response.
 	// This is set from the start of the request handler to the end of the response write.
-	DefaultWriteTimeout = 15 * time.Second
+	DefaultWriteTimeout = 30 * time.Second
 
 	// DefaultIdleTimeout is the maximum amount of time to wait for the next request
 	// when keep-alives are enabled.
@@ -62,10 +62,9 @@ const (
 
 	// DefaultShutdownTimeout is the maximum time to wait for graceful shutdown.
 	// This allows in-flight requests to complete before forceful termination.
-	DefaultShutdownTimeout = 30 * time.Second
+	DefaultShutdownTimeout = 10 * time.Second
 
 	// DefaultAPITimeout is the maximum duration for external API calls.
-	// Used in HTTP client configurations for backend service communication.
 	DefaultAPITimeout = 30 * time.Second
 )
 

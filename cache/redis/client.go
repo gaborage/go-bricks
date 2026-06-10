@@ -310,7 +310,7 @@ func (c *Client) Stats() (map[string]any, error) {
 
 // Close closes the Redis client and releases resources.
 // After calling Close, the client should not be used.
-// Close is idempotent - calling it multiple times is safe.
+// Subsequent calls to Close return cache.ErrClosed.
 func (c *Client) Close() error {
 	// Use CompareAndSwap for idempotent close (only close once)
 	if !c.closed.CompareAndSwap(false, true) {

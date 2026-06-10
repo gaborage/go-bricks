@@ -121,7 +121,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 
 // Shutdown shuts down both processors.
 func (p *DualModeLogProcessor) Shutdown(ctx context.Context) error {
-	// Shutdown both processors, return first error encountered
+	// Shutdown both processors, collecting all errors
 	errAction := p.actionProcessor.Shutdown(ctx)
 	errTrace := p.traceProcessor.Shutdown(ctx)
 
@@ -130,7 +130,7 @@ func (p *DualModeLogProcessor) Shutdown(ctx context.Context) error {
 
 // ForceFlush flushes both processors.
 func (p *DualModeLogProcessor) ForceFlush(ctx context.Context) error {
-	// Flush both processors, return first error encountered
+	// Flush both processors, collecting all errors
 	errAction := p.actionProcessor.ForceFlush(ctx)
 	errTrace := p.traceProcessor.ForceFlush(ctx)
 

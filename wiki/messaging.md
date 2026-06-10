@@ -52,14 +52,14 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
         Queue:     "events.queue",
         Consumer:  "discover-pending",
         EventType: "discover-pending-events",
-        Handler:   m.discoverHandler.Handle,
+        Handler:   m.discoverHandler,
     }, nil)
 
     decls.DeclareConsumer(&messaging.ConsumerOptions{
         Queue:     "events.queue",
         Consumer:  "process-batch",  // Different consumer tag - OK
         EventType: "process-batch-events",
-        Handler:   m.processHandler.Handle,
+        Handler:   m.processHandler,
     }, nil)
 }
 ```
@@ -183,7 +183,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.delay` | 5s | Initial delay before reconnect attempts |
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
-| `reconnect.connectiontimeout` | 30s | Timeout for connection establishment |
+| `reconnect.connectiontimeout` | 30s | Per-publish broker confirmation (ACK/NACK) timeout |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
 | `publisher.idlettl` | 10m | TTL for idle publisher channels |

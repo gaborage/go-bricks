@@ -31,7 +31,7 @@ docker run -d --name gobricks-oracle-dev \
     -e ORACLE_PASSWORD=testpass \
     -e APP_USER=testuser \
     -e APP_USER_PASSWORD=testpass \
-    gvenzl/oracle-free:23-slim
+    gvenzl/oracle-free:23.26.2-slim
 docker logs -f gobricks-oracle-dev | grep -m1 "DATABASE IS READY TO USE!"
 
 # 2) Wrap go test in a script that exports the existing endpoint
@@ -51,7 +51,7 @@ Currently this is a documented developer convenience: TestMain always spins up a
 # → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
 
 # "database not configured" errors
-# → Set database.type, database.host OR database.connection_string (see ADR-003)
+# → Set database.type, database.host OR database.connectionstring (see ADR-003)
 ```
 
 ## Connection Pool Issues (ORA-01013, connection reset)
@@ -108,7 +108,7 @@ database:
 # Cache timeout errors
 # → Increase operation timeout: ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 # → Check network latency if Redis on different host
-# → Verify pool size adequate: cache.redis.pool_size >= NumCPU * 2
+# → Verify pool size adequate: cache.redis.poolsize >= NumCPU * 2
 
 # CacheManager eviction issues
 # → Increase maxsize if seeing unexpected evictions: cache.manager.maxsize

@@ -15,7 +15,7 @@ Every operation that crosses an external boundary already has a configured timeo
 | HTTP server graceful shutdown | `server.timeout.shutdown` | 10s | Drain inflight requests on SIGTERM |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s | Per-request timeout on the underlying `http.Client` |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s | Per-operation socket timeouts |
-| AMQP connection establishment | `messaging.reconnect.connectiontimeout` | 30s | Includes publish confirmation |
+| AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s | Per-publish wait for broker ACK/NACK. Connection dial uses `amqp091-go`'s `amqp.Dial` (its own ~30s TCP+handshake timeout), not this key |
 | Scheduler — slow job warning | `scheduler.timeout.slowjob` | 25s | Logs WARN if a job exceeds this; does not cancel |
 | Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC |

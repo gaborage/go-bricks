@@ -184,7 +184,7 @@ func (o *OracleContainer) Host() string {
 	return o.host
 }
 
-// Port returns the mapped Oracle port (1521)
+// Port returns the host-side port Docker mapped to the container's 1521.
 func (o *OracleContainer) Port() int {
 	return o.port
 }

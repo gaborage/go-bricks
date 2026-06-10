@@ -151,9 +151,11 @@ this ADR achieves the informational goal at zero cost.
 **Negative:**
 
 - Two DDL constants, two tables, two `CreateTable` flows. Operators
-  managing schema externally must apply both. Mitigated by exporting both
-  as `[]string` (outbox) / `string` constant (provisioning) so external
-  migration tooling can consume them.
+  managing schema externally must apply both. The provisioning package
+  exports its DDL as `PostgresStateTableDDL` (a `string` constant) so
+  external migration tooling can consume it. The outbox DDL constants are
+  unexported; operators must apply the outbox schema via the
+  `Store.CreateTable` method or by copying the DDL from source.
 - Two retry-counter bookkeeping surfaces. Outbox's `MaxRetries` skip-and-
   retry pattern is orthogonal to the state machine's "errors are
   terminal, retry via new jobID" pattern. Documented in each package
@@ -167,8 +169,9 @@ that lands, it may reuse parts of outbox's relay-scheduling pattern
 (scheduler integration, slow-job warning thresholds). The dispatcher's
 package home is an open question at the time of writing.
 
-The **state transition audit events** (`state.transitioned`,
-`cleanup.completed`) referenced in #382 will hook into the existing
-ADR-019 audit-emitter seam once the state machine has a stable consumer.
-They are out of scope for #379 to keep this PR focused on the
-state-machine + storage contract.
+The **state transition audit events** (`state.transitioned`) referenced
+in #382 are now emitted by `provisioning.Executor.WithAudit` via the
+ADR-019 `Emitter` seam (shipped in PR #523). A separate
+`cleanup.completed` event type was considered but not implemented;
+cleanup-to-failed transitions emit a `state.transitioned` event with
+`Outcome: failed` and `ErrorClass: internal_error`.

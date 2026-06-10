@@ -99,14 +99,14 @@ func (cm *ColumnMetadata) Alias() string {
 //	}
 //
 //	cols := qb.Columns(&User{})
-//	cols.Col("ID")    // Returns: "id" (PostgreSQL) or "ID" (Oracle)
-//	cols.Col("Level") // Returns: "level" (PostgreSQL) or "LEVEL" (Oracle, quoted)
+//	cols.Col("ID")    // Returns: "id" (PostgreSQL) or "id" (Oracle, not a reserved word)
+//	cols.Col("Level") // Returns: "level" (PostgreSQL) or "\"level\"" (Oracle, reserved word — double-quoted lowercase)
 //
 // Example (aliased):
 //
 //	u := cols.As("u")
-//	u.Col("ID")       // Returns: "u.id" (PostgreSQL) or "u.\"ID\"" (Oracle)
-//	u.Col("Level")    // Returns: "u.\"LEVEL\"" (Oracle reserved word with table qualification)
+//	u.Col("ID")    // Returns: "u.id" (PostgreSQL) or "u.id" (Oracle, not a reserved word)
+//	u.Col("Level") // Returns: "u.\"level\"" (Oracle reserved word, double-quoted lowercase, with table qualification)
 //
 // Panics if the field name is not found (fail-fast for development-time typos).
 func (cm *ColumnMetadata) Col(fieldName string) string {

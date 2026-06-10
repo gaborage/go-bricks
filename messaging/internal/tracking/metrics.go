@@ -75,8 +75,8 @@ func logMetricError(metricName string, err error) {
 }
 
 // initAMQPMeter initializes the OpenTelemetry meter and metric instruments.
-// This function is called lazily and only once using sync.Once to ensure
-// thread-safe initialization.
+// It is invoked via sync.Once in getAMQPMeter; the internal mutex guards
+// against any future direct calls that bypass that guarantee.
 func initAMQPMeter() {
 	meterInitMu.Lock()
 	defer meterInitMu.Unlock()

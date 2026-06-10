@@ -40,7 +40,7 @@ const (
 // Registry readiness polling. Previously inline literals in registry.go's
 // "wait for AMQP client ready" loop.
 const (
-	// readyTimeoutDuration is how long DeclareConsumers waits for the
+	// readyTimeoutDuration is how long DeclareInfrastructure waits for the
 	// AMQP client to enter the isReady state before failing startup.
 	// Long enough to cover broker handshake + channel init; short enough
 	// that misconfigurations surface during deploy rather than hanging.

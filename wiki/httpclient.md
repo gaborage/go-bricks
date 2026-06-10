@@ -95,6 +95,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 | `"tls_error"` | `*tls.RecordHeaderError` or `*tls.CertificateVerificationError` |
 | `"connection_error"` | `*net.OpError` with `Op == "dial"` (TCP connection refused / unreachable) |
 | `"interceptor_failed"` | `InterceptorError` from a request or response interceptor |
+| `"panic"` | Panic recovered in user-supplied code (interceptor or custom `RoundTripper`). Emitted on both the attempt span and the parent Do span. |
 | `"_OTHER"` | Any other `NetworkError` or unclassified error |
 
 ### `WithPeerName` Example
@@ -204,7 +205,7 @@ OTel HTTP **client** span status convention (different from server spans):
 | 4xx response (no err) | `codes.Unset` | no |
 | 5xx response (no err) | `codes.Error`, description `"HTTP {code}"` | no |
 | Transport error (no response) | `codes.Error`, description = error.type | yes — sanitized event |
-| Any response + non-nil err (interceptor/build failure on a 2xx, terminal HTTPError on a 5xx, …) | `codes.Error`, description = error.type or err message | yes — sanitized event |
+| Non-5xx response + non-nil err (interceptor/build failure on a 2xx/3xx/4xx) | `codes.Error`, description = error.type (or err.Error() when error.type is empty). Note: 5xx responses always take the row-3 path regardless of whether err is non-nil — `codes.Error`, description `"HTTP {code}"`. | yes — sanitized event |
 
 Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-control signal (the server told you something legitimate about the request). 5xx signals a server-side failure; transport errors signal a network-side failure on the path between us and the server. Any err alongside a response (e.g. a response interceptor failing on a 200) takes the error path so the span doesn't silently look like a success.
 
@@ -267,7 +268,7 @@ By default the client logs only request/response metadata (method, URL, status, 
 ```go
 client := httpclient.NewBuilder(logger).
     WithLogPayloads(true).
-    WithMaxPayloadLogBytes(2048). // default 1024; must be > 0
+    WithMaxPayloadLogBytes(2048). // default 1024; values ≤ 0 are ignored and the default applies
     Build()
 ```
 

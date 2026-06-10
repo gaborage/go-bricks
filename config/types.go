@@ -354,7 +354,7 @@ type MessagingConfig struct {
 //   - Delay: 5s (initial delay between reconnection attempts)
 //   - ReinitDelay: 2s (delay before channel reinitialization)
 //   - ResendDelay: 5s (delay before retrying failed publishes)
-//   - ConnectionTimeout: 30s (timeout for connection/confirmation)
+//   - ConnectionTimeout: 30s (per-publish broker ACK/NACK confirmation wait)
 //   - MaxDelay: 60s (maximum delay for exponential backoff cap)
 type ReconnectConfig struct {
 	// Delay is the initial delay between reconnection attempts.
@@ -369,8 +369,10 @@ type ReconnectConfig struct {
 	// Default: 5s.
 	ResendDelay time.Duration `koanf:"resenddelay" json:"resenddelay" yaml:"resenddelay" toml:"resenddelay" mapstructure:"resenddelay"`
 
-	// ConnectionTimeout is the timeout for connection establishment and publish confirmation.
-	// Default: 30s. Set higher for high-latency networks.
+	// ConnectionTimeout is the per-publish broker confirmation timeout — how long a
+	// confirmed publish waits for the broker's ACK/NACK before the attempt is retried.
+	// The TCP/AMQP connection dial itself is bounded by amqp091-go's amqp.Dial default,
+	// not by this value. Default: 30s. Set higher for high-latency networks.
 	ConnectionTimeout time.Duration `koanf:"connectiontimeout" json:"connectiontimeout" yaml:"connectiontimeout" toml:"connectiontimeout" mapstructure:"connectiontimeout"`
 
 	// MaxDelay is the maximum delay for exponential backoff during reconnection.

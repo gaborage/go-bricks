@@ -14,6 +14,9 @@ import (
 type ManagerConfigBuilder struct {
 	multiTenantEnabled bool
 	tenantLimit        int
+	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
+	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
+	connectionTimeout time.Duration
 }
 
 // NewManagerConfigBuilder creates a new manager configuration builder.
@@ -47,14 +50,16 @@ func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions 
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
 	if b.multiTenantEnabled {
 		return messaging.ManagerOptions{
-			MaxPublishers: b.tenantLimit,   // Use configured tenant limit
-			IdleTTL:       5 * time.Minute, // Shorter TTL for multi-tenant
+			MaxPublishers:     b.tenantLimit,   // Use configured tenant limit
+			IdleTTL:           5 * time.Minute, // Shorter TTL for multi-tenant
+			ConnectionTimeout: b.connectionTimeout,
 		}
 	}
 
 	return messaging.ManagerOptions{
-		MaxPublishers: 10,               // Small fixed size for single-tenant
-		IdleTTL:       30 * time.Minute, // Moderate TTL for single-tenant
+		MaxPublishers:     10,               // Small fixed size for single-tenant
+		IdleTTL:           30 * time.Minute, // Moderate TTL for single-tenant
+		ConnectionTimeout: b.connectionTimeout,
 	}
 }
 
@@ -140,8 +145,8 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 		f.logger.Info().Msg("Creating messaging manager for single-tenant mode")
 	}
 
-	clientFactory := f.factoryResolver.MessagingClientFactory()
 	msgOptions := f.configBuilder.BuildMessagingOptions()
+	clientFactory := f.factoryResolver.MessagingClientFactory(msgOptions.ConnectionTimeout)
 
 	return messaging.NewMessagingManager(resourceSource, f.logger, msgOptions, clientFactory)
 }

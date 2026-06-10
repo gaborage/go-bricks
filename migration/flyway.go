@@ -57,7 +57,7 @@ type Config struct {
 	ConfigPath    string        // Path to the configuration file
 	MigrationPath string        // Path to migration scripts
 	Timeout       time.Duration // Timeout for migration operations
-	Environment   string        // Environment (development, testing, production)
+	Environment   string        // Environment (development, staging, production)
 	DryRun        bool          // Only validate, do not execute
 
 	// Audit carries the per-call audit-event context required by ADR-019.

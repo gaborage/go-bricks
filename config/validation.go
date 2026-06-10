@@ -43,7 +43,7 @@ const (
 	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
 	defaultReinitDelay       = 2 * time.Second  // Delay before channel reinitialization
 	defaultResendDelay       = 5 * time.Second  // Delay before retrying failed publishes
-	defaultConnectionTimeout = 30 * time.Second // Timeout for connection/confirmation
+	defaultConnectionTimeout = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
 	defaultMaxReconnectDelay = 60 * time.Second // Maximum delay for exponential backoff cap
 	defaultMaxPublishers     = 50               // Maximum publisher clients in cache
 	defaultPublisherIdleTTL  = 10 * time.Minute // Time before idle publishers are evicted

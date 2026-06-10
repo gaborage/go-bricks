@@ -151,6 +151,22 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		assert.Equal(t, largeLimit, options.MaxPublishers)
 		assert.Equal(t, 5*time.Minute, options.IdleTTL)
 	})
+
+	t.Run("connection_timeout_propagated_to_options", func(t *testing.T) {
+		// Single-tenant branch carries the configured per-publish timeout.
+		st := NewManagerConfigBuilder(false, 100)
+		st.connectionTimeout = 12 * time.Second
+		assert.Equal(t, 12*time.Second, st.BuildMessagingOptions().ConnectionTimeout)
+
+		// Multi-tenant branch carries it too.
+		mt := NewManagerConfigBuilder(true, 100)
+		mt.connectionTimeout = 8 * time.Second
+		assert.Equal(t, 8*time.Second, mt.BuildMessagingOptions().ConnectionTimeout)
+
+		// Unset leaves zero, so the client falls back to its 30s default.
+		zero := NewManagerConfigBuilder(false, 100)
+		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().ConnectionTimeout)
+	})
 }
 
 func TestManagerConfigBuilderIsMultiTenant(t *testing.T) {

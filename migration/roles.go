@@ -27,7 +27,7 @@ var pgPasswordLiteralPattern = regexp.MustCompile(`(?i)(PASSWORD\s+)'(?:[^']|'')
 //
 // Migrator role: owns the per-tenant schema, holds DDL privileges, used
 // exclusively by the migration runner. Created with NOSUPERUSER NOCREATEDB
-// NOCREATEROLE NOBYPASSRLS NOREPLICATION so even a compromised migrator
+// NOCREATEROLE NOREPLICATION NOBYPASSRLS so even a compromised migrator
 // credential cannot escalate itself.
 //
 // Runtime role: per-tenant LOGIN role granted only DML on the tenant schema.
