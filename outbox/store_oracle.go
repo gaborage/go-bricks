@@ -85,6 +85,9 @@ func (s *oracleStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record)
 	return nil
 }
 
+// FetchPending returns up to batchSize pending events (retry_count below maxRetries),
+// oldest first. An empty exchange or routing_key is stored as NULL on Oracle (an empty
+// string is NULL there) and mapped back to an empty string on scan; see issue #586.
 func (s *oracleStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error) {
 	// Oracle uses FETCH FIRST N ROWS ONLY (12c+) instead of LIMIT
 	query := fmt.Sprintf(
