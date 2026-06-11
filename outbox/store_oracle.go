@@ -3,6 +3,7 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -21,8 +22,11 @@ CREATE TABLE %s (
     aggregate_id  VARCHAR2(255) NOT NULL,
     payload       BLOB NOT NULL,
     headers       BLOB,
-    exchange      VARCHAR2(255) DEFAULT '' NOT NULL,
-    routing_key   VARCHAR2(255) DEFAULT '' NOT NULL,
+    -- Nullable: Oracle treats '' as NULL, so a DEFAULT '' NOT NULL is self-contradictory and
+    -- rejects events targeting the AMQP default (empty) exchange with ORA-01400. FetchPending
+    -- maps the resulting NULL back to "" on scan. See issue #586.
+    exchange      VARCHAR2(255),
+    routing_key   VARCHAR2(255),
     status        VARCHAR2(20) DEFAULT 'pending' NOT NULL,
     retry_count   NUMBER(10) DEFAULT 0 NOT NULL,
     error_msg     CLOB,
@@ -81,6 +85,9 @@ func (s *oracleStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record)
 	return nil
 }
 
+// FetchPending returns up to batchSize pending events (retry_count below maxRetries),
+// oldest first. An empty exchange or routing_key is stored as NULL on Oracle (an empty
+// string is NULL there) and mapped back to an empty string on scan; see issue #586.
 func (s *oracleStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error) {
 	// Oracle uses FETCH FIRST N ROWS ONLY (12c+) instead of LIMIT
 	query := fmt.Sprintf(
@@ -101,12 +108,18 @@ func (s *oracleStore) FetchPending(ctx context.Context, db dbtypes.Interface, ba
 	var records []Record
 	for rows.Next() {
 		var r Record
+		// Oracle stores an empty exchange/routing_key (the AMQP default exchange) as NULL,
+		// because '' IS NULL in Oracle — so scan them NULL-tolerantly and map NULL -> "".
+		// See issue #586.
+		var exchange, routingKey sql.NullString
 		if err := rows.Scan(
 			&r.ID, &r.EventType, &r.AggregateID, &r.Payload, &r.Headers,
-			&r.Exchange, &r.RoutingKey, &r.Status, &r.RetryCount, &r.CreatedAt,
+			&exchange, &routingKey, &r.Status, &r.RetryCount, &r.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("outbox oracle: scan failed: %w", err)
 		}
+		r.Exchange = exchange.String
+		r.RoutingKey = routingKey.String
 		records = append(records, r)
 	}
 

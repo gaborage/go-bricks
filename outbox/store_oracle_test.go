@@ -53,6 +53,18 @@ func TestOracleStoreInsertExecError(t *testing.T) {
 	assert.Contains(t, err.Error(), "insert failed")
 }
 
+// TestOracleCreateTableDDLAllowsEmptyExchange guards issue #586: the exchange/routing_key
+// columns must be nullable. In Oracle ” IS NULL, so a DEFAULT ” NOT NULL constraint is
+// self-contradictory and rejects default-exchange events with ORA-01400.
+func TestOracleCreateTableDDLAllowsEmptyExchange(t *testing.T) {
+	assert.NotContains(t, oracleCreateTableSQL, "exchange      VARCHAR2(255) DEFAULT '' NOT NULL",
+		"exchange must be nullable on Oracle ('' is NULL)")
+	assert.NotContains(t, oracleCreateTableSQL, "routing_key   VARCHAR2(255) DEFAULT '' NOT NULL",
+		"routing_key must be nullable on Oracle ('' is NULL)")
+	assert.Contains(t, oracleCreateTableSQL, "exchange      VARCHAR2(255),")
+	assert.Contains(t, oracleCreateTableSQL, "routing_key   VARCHAR2(255),")
+}
+
 // --- FetchPending -----------------------------------------------------------
 
 func TestOracleStoreFetchPendingSuccess(t *testing.T) {
@@ -73,6 +85,31 @@ func TestOracleStoreFetchPendingSuccess(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, "evt-1", out[0].ID)
+}
+
+// TestOracleStoreFetchPendingHandlesNullExchangeAndRoutingKey guards issue #586: on Oracle
+// an empty exchange/routing_key (the AMQP default exchange) is stored as NULL (” IS NULL in
+// Oracle), so FetchPending must scan those columns NULL-tolerantly and map NULL -> "" rather
+// than failing with "converting NULL to string is unsupported".
+func TestOracleStoreFetchPendingHandlesNullExchangeAndRoutingKey(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+
+	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "status", "retry_count", "created_at",
+	).
+		AddRow("evt-default-ex", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+			nil, nil, StatusPending, int64(0), createdAt) // NULL exchange + routing_key
+
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, "", out[0].Exchange, "NULL exchange must map to the empty (default) exchange")
+	assert.Equal(t, "", out[0].RoutingKey, "NULL routing_key must map to empty")
 }
 
 func TestOracleStoreFetchPendingEmpty(t *testing.T) {
