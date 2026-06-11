@@ -343,8 +343,8 @@ insert) — those now apply the caller's intended value.
 `App.Shutdown` tore down modules **first**, while the HTTP server was still serving and AMQP
 consumers were still delivering — so in-flight handlers ran against already-shut-down modules
 (shutdown-window panics). Reordered to stop inbound work first: **server → consumers →
-modules → observability → closers**, with a new additive `Manager.StopConsumers()` that
-quiesces consumers (idempotent) without closing connections.
+modules → observability → manager cleanup loops → closers**, with a new additive
+`Manager.StopConsumers()` that quiesces consumers (idempotent) without closing connections.
 
 **Behavioral change (not an API break):** the framework stops admitting new HTTP requests and
 AMQP deliveries before modules are torn down (consumers are cancelled, not synchronously
