@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -9,10 +10,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
+// newCleanupWithFakes wires a single-tenant Cleanup. tenants is [""], so SetTenant is a
+// no-op and getDB type-asserts the context back to the fake JobContext to read the db
+// supplied via newFakeJobCtx (preserving the existing per-test ergonomics).
 func newCleanupWithFakes(store *fakeStore, retention time.Duration) *Cleanup {
-	return &Cleanup{store: store, retentionPeriod: retention}
+	return &Cleanup{
+		store:           store,
+		retentionPeriod: retention,
+		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
+			if jc, ok := ctx.(scheduler.JobContext); ok {
+				return jc.DB(), nil
+			}
+			return nil, nil
+		},
+		tenants: []string{""},
+	}
 }
 
 func TestCleanupExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {

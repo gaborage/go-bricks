@@ -11,7 +11,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // Module implements the GoBricks Module interface for transactional outbox.
@@ -89,6 +88,22 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if m.config != nil && !m.config.Multitenant.Enabled && !config.IsMessagingConfigured(&m.config.Messaging) {
 		return fmt.Errorf("outbox: messaging is not configured but outbox.enabled=true; " +
 			"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
+	}
+
+	// Fail fast on multi-tenant configurations the relay cannot fan out across, rather
+	// than silently never relaying events (the prior behavior: the relay's tenant-less
+	// context could not resolve any tenant's database):
+	//   - dynamic sources: the tenant set is not enumerable at job-registration time;
+	//   - static sources with no tenants: there is nothing to fan out to.
+	if m.config != nil && m.config.Multitenant.Enabled {
+		switch {
+		case m.config.Source.Type == config.SourceTypeDynamic:
+			return fmt.Errorf("outbox: relay is not supported with dynamic multi-tenant sources " +
+				"(source.type=dynamic); use static multitenant.tenants config, or set outbox.enabled=false")
+		case len(m.config.Multitenant.Tenants) == 0:
+			return fmt.Errorf("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
+				"the relay would never deliver any events. Configure multitenant.tenants, or set outbox.enabled=false")
+		}
 	}
 
 	// Store creation is deferred until first use (lazy init like scheduler)
@@ -170,20 +185,15 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		return nil
 	}
 
+	tenants := m.config.PerTenantJobKeys()
+
 	// Register relay job
 	relay := &Relay{
-		store:  &lazyStore{module: m},
-		config: m.cfg,
-		getMessaging: func(ctx scheduler.JobContext) messaging.AMQPClient {
-			client := ctx.Messaging()
-			if client == nil {
-				return nil
-			}
-			if amqpClient, ok := client.(messaging.AMQPClient); ok {
-				return amqpClient
-			}
-			return nil
-		},
+		store:        &lazyStore{module: m},
+		config:       m.cfg,
+		getDB:        m.getDB,
+		getMessaging: m.getMsg,
+		tenants:      tenants,
 	}
 
 	if err := registrar.FixedRate("outbox-relay", relay, m.cfg.PollInterval); err != nil {
@@ -195,6 +205,8 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		cleanup := &Cleanup{
 			store:           &lazyStore{module: m},
 			retentionPeriod: m.cfg.RetentionPeriod,
+			getDB:           m.getDB,
+			tenants:         tenants,
 		}
 
 		cleanupTime := time.Date(0, 1, 1, 4, 0, 0, 0, time.Local)

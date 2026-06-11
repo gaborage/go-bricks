@@ -1,9 +1,11 @@
 package outbox
 
 import (
-	"fmt"
+	"context"
 	"time"
 
+	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 )
 
@@ -11,30 +13,18 @@ import (
 // older than the configured retention period.
 //
 // Runs daily at 04:00 by default (registered via scheduler.DailyAt).
+// Like the relay, it resolves the database through the tenant-aware getDB
+// resolver and fans out across the configured tenants in multi-tenant mode
+// (shared with the inbox cleanup via multitenant.FanOutRetentionCleanup).
 type Cleanup struct {
 	store           Store
 	retentionPeriod time.Duration
+	getDB           func(context.Context) (dbtypes.Interface, error)
+	tenants         []string
 }
 
-func (c *Cleanup) Execute(ctx scheduler.JobContext) error {
-	db := ctx.DB()
-	if db == nil {
-		return fmt.Errorf("outbox cleanup: database not available")
-	}
-
-	cutoff := time.Now().Add(-c.retentionPeriod)
-
-	deleted, err := c.store.DeletePublished(ctx, db, cutoff)
-	if err != nil {
-		return fmt.Errorf("outbox cleanup: delete failed: %w", err)
-	}
-
-	if deleted > 0 {
-		ctx.Logger().Info().
-			Int64("deleted", deleted).
-			Str("cutoff", cutoff.Format(time.RFC3339)).
-			Msg("Outbox cleanup completed")
-	}
-
-	return nil
+func (c *Cleanup) Execute(jobCtx scheduler.JobContext) error {
+	return multitenant.FanOutRetentionCleanup(
+		jobCtx, jobCtx.Logger(), c.tenants, c.getDB, c.retentionPeriod, "outbox", c.store.DeletePublished,
+	)
 }

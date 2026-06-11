@@ -2,6 +2,17 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Outbox/Inbox Multi-Tenant Relay & Cleanup
+
+The outbox relay, outbox-cleanup, and inbox-cleanup jobs run from the scheduler's tenant-less context, so in multi-tenant mode they could not resolve any tenant's database — outbox events accumulated per tenant and were **never delivered**, and inbox ledgers were never pruned. These jobs now **fan out across the configured static tenants** (`multitenant.tenants`), resolving each tenant's database independently, so multi-tenant outbox delivery and cleanup now work.
+
+For **dynamic** tenant sources (`source.type: dynamic`), the tenant set is not enumerable at job-registration time, so the framework now **fails fast** rather than silently never relaying:
+
+- **Outbox** + `multitenant.enabled` + `source.type: dynamic` → module **Init fails** (the relay is the whole point of the outbox).
+- **Inbox** + `multitenant.enabled` + `source.type: dynamic` → **`RegisterJobs` fails** when the cleanup job would register (i.e. when the scheduler is present). `ProcessOnce` is unaffected and still works — run without the scheduler to use the inbox without retention cleanup.
+
+**Action:** a dynamic-multi-tenant deployment with outbox/inbox cleanup enabled now fails at startup instead of silently losing events. Use static `multitenant.tenants` config, or (for inbox) drop the scheduler to keep `ProcessOnce` without cleanup.
+
 ## `database.tls.cert/key/ca` Now Wired Into the Drivers (ADR-027)
 
 Per [ADR-027](adr_027_database_tls_material.md), the `database.tls.cert`, `database.tls.key`, and `database.tls.ca` fields — previously advertised but never consumed — are now honored.

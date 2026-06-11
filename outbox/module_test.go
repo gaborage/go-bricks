@@ -181,8 +181,13 @@ func TestModuleInitEnabledMessagingUnconfiguredMultiTenant(t *testing.T) {
 	deps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
-			Outbox:      config.OutboxConfig{Enabled: true},
-			Multitenant: config.MultitenantConfig{Enabled: true},
+			Outbox: config.OutboxConfig{Enabled: true},
+			Multitenant: config.MultitenantConfig{
+				Enabled: true,
+				// Static tenants are required for the relay to fan out; messaging is
+				// resolved per-tenant, so the global broker URL stays intentionally empty.
+				Tenants: map[string]config.TenantEntry{"tenant-a": {}},
+			},
 			// Messaging.Broker.URL intentionally empty.
 		},
 		DB: func(_ context.Context) (dbtypes.Interface, error) {
@@ -195,7 +200,46 @@ func TestModuleInitEnabledMessagingUnconfiguredMultiTenant(t *testing.T) {
 
 	err := m.Init(deps)
 	require.NoError(t, err)
-	assert.NotNil(t, m.publisher, "Publisher should be initialized in multi-tenant mode even with empty global broker URL")
+	assert.NotNil(t, m.publisher, "Publisher should be initialized in static multi-tenant mode even with empty global broker URL")
+}
+
+func TestModuleInitFailsFastForDynamicMultitenant(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{
+			Outbox:      config.OutboxConfig{Enabled: true},
+			Multitenant: config.MultitenantConfig{Enabled: true},
+			Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dynamic multi-tenant",
+		"the relay cannot enumerate dynamic tenants, so Init must fail fast rather than silently never relaying")
+}
+
+func TestModuleInitFailsFastForEmptyStaticMultitenant(t *testing.T) {
+	// multitenant enabled + static source (the default) but no tenants configured: the
+	// relay would fan out across zero tenants and silently deliver nothing, so Init must
+	// fail fast rather than register a no-op relay.
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{
+			Outbox:      config.OutboxConfig{Enabled: true},
+			Multitenant: config.MultitenantConfig{Enabled: true}, // Tenants intentionally omitted
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no static multitenant.tenants")
 }
 
 // initEnabledModule returns an outbox Module that has gone through Init

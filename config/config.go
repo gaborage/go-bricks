@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -101,6 +102,30 @@ func resolveEnvOverlaySuffix(k *koanf.Koanf) string {
 // (UPPER_SNAKE), the inverse of the env provider's TransformFunc in Load.
 func keyToEnvVar(key string) string {
 	return strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+}
+
+// PerTenantJobKeys returns the tenant keys a per-tenant background job (e.g. the outbox
+// relay or the outbox/inbox cleanup jobs) should iterate each cycle:
+//
+//   - single-tenant mode → a single "" key (one pass with no tenant in context;
+//     multitenant.SetTenant with "" is a no-op);
+//   - static multi-tenant mode → the configured tenant IDs, sorted for deterministic
+//     iteration.
+//
+// The result is empty ONLY for a degenerate static multi-tenant config with no tenants
+// (multitenant.enabled=true but multitenant.tenants omitted) — callers must reject that,
+// because a per-tenant job would otherwise silently iterate nothing. Dynamic multi-tenant
+// sources are not enumerable here; callers reject them before relying on this.
+func (c *Config) PerTenantJobKeys() []string {
+	if c == nil || !c.Multitenant.Enabled {
+		return []string{""}
+	}
+	ids := make([]string, 0, len(c.Multitenant.Tenants))
+	for id := range c.Multitenant.Tenants {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
