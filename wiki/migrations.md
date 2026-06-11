@@ -2,6 +2,19 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## PostgreSQL `BuildUpsert` Now Binds Update Values (ADR-028)
+
+Per [ADR-028](adr_028_pg_upsert_binds_update_values.md), `QueryBuilder.BuildUpsert` on PostgreSQL now binds the `updateColumns` values as parameters instead of emitting `col = EXCLUDED.col`.
+
+**Before:** `ON CONFLICT (...) DO UPDATE SET "col" = EXCLUDED."col"` — the on-conflict update silently reused the *insert* value and ignored the `updateColumns` values entirely (diverging from Oracle's MERGE).
+
+**After:** `ON CONFLICT (...) DO UPDATE SET "col" = $N` — the caller's update value is bound (Oracle parity).
+
+**Action:**
+- If you assert on the exact generated SQL, update expectations (`EXCLUDED.col` → `$N`).
+- If you relied on the old behavior of updating to the *inserted* value, pass the same value in both `insertColumns` and `updateColumns` (the result is then identical).
+- Calls that passed differing update values (or update columns absent from the insert set) were silently wrong before and now apply the intended value — no action needed beyond verifying the corrected behavior is what you want.
+
 ## Outbox/Inbox Multi-Tenant Relay & Cleanup
 
 The outbox relay, outbox-cleanup, and inbox-cleanup jobs run from the scheduler's tenant-less context, so in multi-tenant mode they could not resolve any tenant's database — outbox events accumulated per tenant and were **never delivered**, and inbox ledgers were never pruned. These jobs now **fan out across the configured static tenants** (`multitenant.tenants`), resolving each tenant's database independently, so multi-tenant outbox delivery and cleanup now work.
