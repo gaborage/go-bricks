@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.42.0](https://github.com/gaborage/go-bricks/compare/v0.41.0...v0.42.0) (2026-06-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **database:** bind PostgreSQL upsert update values (Oracle MERGE parity) ([#583](https://github.com/gaborage/go-bricks/issues/583))
+* **database:** honor database.tls.cert/key/ca (fail closed on Oracle) ([#582](https://github.com/gaborage/go-bricks/issues/582))
+
+### Fixed
+
+* **app:** require trusted proxy for debug-endpoint IP allowlist (block XFF spoofing) ([#576](https://github.com/gaborage/go-bricks/issues/576)) ([43b7230](https://github.com/gaborage/go-bricks/commit/43b723090292c98580b37c0f919b67ab9ba522ab))
+* **app:** stop inbound work before module teardown on shutdown ([#585](https://github.com/gaborage/go-bricks/issues/585)) ([1d94162](https://github.com/gaborage/go-bricks/commit/1d94162f8db34f778c780c17a909f76c14c627ed))
+* **config:** select config.&lt;env&gt;.yaml overlay from APP_ENV ([#578](https://github.com/gaborage/go-bricks/issues/578)) ([35c7291](https://github.com/gaborage/go-bricks/commit/35c72915af04de484e0bb33b9c298ed26ad69525))
+* **database:** bind PostgreSQL upsert update values (Oracle MERGE parity) ([#583](https://github.com/gaborage/go-bricks/issues/583)) ([88ecabb](https://github.com/gaborage/go-bricks/commit/88ecabb7a2ca8f21a3e337df4c8e0a61f02aca6c))
+* **database:** honor database.tls.cert/key/ca (fail closed on Oracle) ([#582](https://github.com/gaborage/go-bricks/issues/582)) ([37da1eb](https://github.com/gaborage/go-bricks/commit/37da1eb4e305a6289c81a25d26e6f60379ce6d92))
+* **database:** number subquery filter placeholders contiguously ([#579](https://github.com/gaborage/go-bricks/issues/579)) ([691dfcd](https://github.com/gaborage/go-bricks/commit/691dfcd63a8649c94270c70335ca820a58251a10))
+* **deps:** update aws-sdk-go-v2 monorepo ([#572](https://github.com/gaborage/go-bricks/issues/572)) ([2077d55](https://github.com/gaborage/go-bricks/commit/2077d55f9ca617cdc96b1db09c6c0f6dfdc735ae))
+* **deps:** update module github.com/gaborage/go-bricks to v0.41.0 ([#567](https://github.com/gaborage/go-bricks/issues/567)) ([984580f](https://github.com/gaborage/go-bricks/commit/984580f96a1e89b5d9759024f65153dee97549a9))
+* **deps:** update module golang.org/x/sync to v0.21.0 ([#568](https://github.com/gaborage/go-bricks/issues/568)) ([9add39a](https://github.com/gaborage/go-bricks/commit/9add39ab742dda3a77d34e9ee02cb1cddbd7444d))
+* **deps:** update module golang.org/x/term to v0.44.0 ([#570](https://github.com/gaborage/go-bricks/issues/570)) ([332cf9e](https://github.com/gaborage/go-bricks/commit/332cf9eb94a1fb66aebcc10944d9afc1be817d1d))
+* **httpclient:** redact credentials and secrets from logged request URLs ([#575](https://github.com/gaborage/go-bricks/issues/575)) ([c7fed56](https://github.com/gaborage/go-bricks/commit/c7fed56f715ff007f24d143083ca3776c8a58b8c))
+* **messaging:** apply reconnect.connectiontimeout to the AMQP client (+ repo-wide doc-drift cleanup) ([#571](https://github.com/gaborage/go-bricks/issues/571)) ([9e0c6c4](https://github.com/gaborage/go-bricks/commit/9e0c6c4a7c0eae69851f0b16c58a39d1a3307772))
+* **messaging:** detach lazily-started consumers from the caller/request context ([#577](https://github.com/gaborage/go-bricks/issues/577)) ([8a4197f](https://github.com/gaborage/go-bricks/commit/8a4197fbaea160cb63c6ed3d3af71399f03bf720))
+* **migration:** honor Config.DryRun by running validate instead of migrate ([#580](https://github.com/gaborage/go-bricks/issues/580)) ([a4ca6cb](https://github.com/gaborage/go-bricks/commit/a4ca6cb3394671d7c1665725be1274a8e9f158f5))
+* **outbox:** resolve tenants in the relay & cleanup jobs (multi-tenant delivery) ([#581](https://github.com/gaborage/go-bricks/issues/581)) ([6ce8bfe](https://github.com/gaborage/go-bricks/commit/6ce8bfe9eda0b395b09da49f27586a65793544f0))
+* **outbox:** support the default (empty) exchange on Oracle ([#589](https://github.com/gaborage/go-bricks/issues/589)) ([642c40a](https://github.com/gaborage/go-bricks/commit/642c40ab8b19e1b50999f47ab248adc673b2c441))
+
 ## [0.41.0](https://github.com/gaborage/go-bricks/compare/v0.40.1...v0.41.0) (2026-06-07)
 
 
