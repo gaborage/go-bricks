@@ -94,8 +94,9 @@ func TestShutdownStopsServerBeforeModules(t *testing.T) {
 
 	require.NoError(t, fixture.app.Shutdown(context.Background()))
 
-	// The HTTP server must be drained before modules are torn down, so in-flight request
-	// handlers complete against live modules rather than half-shut-down ones.
+	// The HTTP server must be shut down before modules are torn down: http.Server.Shutdown
+	// synchronously drains in-flight HTTP handlers, so they finish against live modules
+	// rather than racing module teardown.
 	assert.Equal(t, 1, serverShutdownsAtModuleTeardown,
 		"server must shut down before modules")
 }
