@@ -145,3 +145,15 @@ outbox:
 In multi-tenant mode the relay and cleanup jobs **fan out across the configured static tenants** (`multitenant.tenants`): each poll cycle resolves every tenant's database independently (via `multitenant.SetTenant` + `deps.DB`), relays that tenant's pending events, and prunes its published rows. A failure for one tenant is logged and does not block the others.
 
 **Dynamic tenant sources are not supported** for the relay/cleanup: because the tenant set is not enumerable at job-registration time, the framework fails fast rather than silently never relaying. With `multitenant.enabled` and `source.type: dynamic`, enabling the outbox is rejected at module `Init` (and the inbox cleanup job at `RegisterJobs`). Use static `multitenant.tenants` config for outbox/inbox relay and cleanup.
+
+## Oracle: Default (Empty) Exchange
+
+The AMQP **default exchange** is the empty string, and a common pattern is "publish straight to a pre-declared queue" with `Exchange: ""` and `RoutingKey: "<queue-name>"`. Because Oracle treats `''` as `NULL`, the `gobricks_outbox.exchange`/`routing_key` columns are **nullable** on Oracle (PostgreSQL stores `''` as a real value). The relay's `FetchPending` maps the stored `NULL` back to `""`, so the default exchange works transparently on both vendors.
+
+**Upgrading an existing Oracle deployment:** older framework versions created the table with `exchange ... DEFAULT '' NOT NULL` (a self-contradictory constraint that rejected default-exchange events with `ORA-01400`). The framework only auto-creates *fresh* tables, so a table created by an older version must be migrated once:
+
+```sql
+ALTER TABLE gobricks_outbox MODIFY (exchange DEFAULT NULL NULL, routing_key DEFAULT NULL NULL);
+```
+
+(Substitute your configured `outbox.tablename`.) Dropping `NOT NULL` is the part that matters; `DEFAULT NULL` also clears the now-meaningless `DEFAULT ''` so an auditor doesn't see a lingering empty-string default. Fresh deployments need no action.
