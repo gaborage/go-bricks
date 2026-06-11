@@ -21,7 +21,7 @@ Reorder `App.Shutdown` to stop **inbound work first**, then tear down what it de
 
 1. **HTTP server** — stop accepting new requests; drain in-flight handlers.
 2. **AMQP consumers** — stop delivering new messages (new `App.shutdownConsumers()` → `Manager.StopConsumers()`), *without* closing connections.
-3. **modules** — now safe; no HTTP or AMQP handler is running.
+3. **modules** — no new HTTP requests or AMQP deliveries are admitted; in-flight handlers may still be unwinding after cancellation, but no fresh work is handed to modules being torn down.
 4. **observability** — flush and shut down.
 5. **manager cleanup loops**, then **closers** (DB pools, messaging connections).
 

@@ -4,7 +4,7 @@ Historical migration tables for upgrading existing GoBricks-based applications. 
 
 ## Graceful Shutdown Now Stops Inbound Work First (ADR-029)
 
-Per [ADR-029](adr_029_graceful_shutdown_order.md), `App.Shutdown` reordered its phases. **Before:** modules were torn down first, while the HTTP server was still serving and AMQP consumers were still delivering — so in-flight handlers could run against already-shut-down modules (panics/errors during the shutdown window). **After:** `server → consumers → modules → observability → closers`.
+Per [ADR-029](adr_029_graceful_shutdown_order.md), `App.Shutdown` reordered its phases. **Before:** modules were torn down first, while the HTTP server was still serving and AMQP consumers were still delivering — so in-flight handlers could run against already-shut-down modules (panics/errors during the shutdown window). **After:** `server → consumers → modules → observability → manager cleanup loops → closers`.
 
 **No code or config change is required** — this is an internal behavioral correction. Two things to be aware of:
 

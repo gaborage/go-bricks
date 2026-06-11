@@ -346,8 +346,10 @@ consumers were still delivering — so in-flight handlers ran against already-sh
 modules → observability → closers**, with a new additive `Manager.StopConsumers()` that
 quiesces consumers (idempotent) without closing connections.
 
-**Behavioral change (not an API break):** in-flight HTTP/AMQP handlers now complete against
-live modules; no application code must change. `messaging.Manager.StopConsumers()` is additive.
+**Behavioral change (not an API break):** the framework stops admitting new HTTP requests and
+AMQP deliveries before modules are torn down (consumers are cancelled, not synchronously
+joined, so in-flight handlers may briefly overlap teardown); no application code must change.
+`messaging.Manager.StopConsumers()` is additive.
 
 **Key Benefits:** No shutdown-window panics, in-flight work drains against live modules, consumer-quiesce hook
 

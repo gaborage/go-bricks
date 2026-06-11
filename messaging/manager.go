@@ -438,7 +438,6 @@ func (m *Manager) cleanupIdlePublishers() {
 	}
 }
 
-// Close closes all clients and stops cleanup
 // StopConsumers stops every consumer registry from accepting new messages (cancelling their
 // consume contexts) WITHOUT closing the underlying AMQP connections — Close does that. The
 // framework calls this during shutdown before tearing down modules so it stops delivering
@@ -456,6 +455,7 @@ func (m *Manager) StopConsumers() {
 	}
 }
 
+// Close closes all clients and stops cleanup.
 func (m *Manager) Close() error {
 	m.StopCleanup()
 
