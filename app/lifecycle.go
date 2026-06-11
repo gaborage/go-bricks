@@ -323,6 +323,19 @@ func capitalizeFirst(s string) string {
 	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
+// shutdownConsumers stops AMQP consumers from accepting NEW messages before modules are
+// torn down, so the framework stops handing fresh work to modules that are shutting down.
+// It cancels each consumer's context (which propagates to in-flight handlers) but does not
+// synchronously join them, and does NOT close the underlying connections — the
+// messaging-manager closer does that later. No-op when messaging is not configured.
+func (a *App) shutdownConsumers() {
+	if a.messagingManager == nil {
+		return
+	}
+	a.logger.Info().Msg("Stopping messaging consumers")
+	a.messagingManager.StopConsumers()
+}
+
 // shutdownManagers stops cleanup loops for database and messaging managers
 func (a *App) shutdownManagers() {
 	managerStart := time.Now()
@@ -383,12 +396,12 @@ func (a *App) Shutdown(ctx context.Context) error {
 	var errs []error
 	shutdownStart := time.Now()
 
-	// Shutdown modules first
-	a.shutdownPhase("modules", func() error {
-		return a.registry.Shutdown()
-	}, &errs)
+	// Order matters. Stop inbound work BEFORE tearing down what it depends on, so the
+	// framework stops handing new HTTP requests and AMQP messages to modules/resources that
+	// are shutting down (the previous order shut modules down first, while the server was
+	// still serving and consumers still delivering — so handlers ran against dead modules).
 
-	// Shutdown server
+	// 1. Stop accepting new HTTP requests; the server drains its in-flight handlers within ctx.
 	if a.server != nil {
 		a.shutdownPhase("HTTP server", func() error {
 			if err := a.server.Shutdown(ctx); err != nil {
@@ -398,13 +411,24 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}, &errs)
 	}
 
-	// Flush and shutdown observability (export pending telemetry)
+	// 2. Stop AMQP consumers from accepting new messages (connections are closed later via
+	//    the messaging-manager closer). Done before module shutdown so the framework stops
+	//    delivering fresh messages to modules that are about to be torn down.
+	a.shutdownConsumers()
+
+	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
+	//    point. AMQP handlers already in flight may still be unwinding after cancellation.
+	a.shutdownPhase("modules", func() error {
+		return a.registry.Shutdown()
+	}, &errs)
+
+	// 4. Flush and shutdown observability (export pending telemetry).
 	a.shutdownObservability(ctx, &errs)
 
-	// Stop cleanup loops for managers
+	// 5. Stop cleanup loops for managers.
 	a.shutdownManagers()
 
-	// Close remaining resources
+	// 6. Close remaining resources (DB pools, messaging connections, etc.).
 	a.shutdownClosers(&errs)
 
 	a.logger.Info().Dur("total_duration", time.Since(shutdownStart)).Msg("Application shutdown complete")

@@ -67,6 +67,40 @@ func TestShutdownTimeouts(t *testing.T) {
 	}
 }
 
+// recordingModule runs a hook when its Shutdown is invoked, letting tests observe what
+// other shutdown phases have already run at module-teardown time.
+type recordingModule struct {
+	onShutdown func()
+}
+
+func (recordingModule) Name() string           { return "recording" }
+func (recordingModule) Init(*ModuleDeps) error { return nil }
+func (m recordingModule) Shutdown() error {
+	if m.onShutdown != nil {
+		m.onShutdown()
+	}
+	return nil
+}
+
+func TestShutdownStopsServerBeforeModules(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	fixture.messaging.ExpectClose(nil)
+	fixture.db.On(methodClose).Return(nil)
+
+	serverShutdownsAtModuleTeardown := -1
+	require.NoError(t, fixture.app.registry.Register(&recordingModule{onShutdown: func() {
+		serverShutdownsAtModuleTeardown = fixture.server.shutdownCount()
+	}}))
+
+	require.NoError(t, fixture.app.Shutdown(context.Background()))
+
+	// The HTTP server must be shut down before modules are torn down: http.Server.Shutdown
+	// synchronously drains in-flight HTTP handlers, so they finish against live modules
+	// rather than racing module teardown.
+	assert.Equal(t, 1, serverShutdownsAtModuleTeardown,
+		"server must shut down before modules")
+}
+
 func TestShutdownTiming(t *testing.T) {
 	// Test that the shutdown process completes within reasonable time
 	cfg := &config.Config{

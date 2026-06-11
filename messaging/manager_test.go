@@ -103,6 +103,26 @@ func (s *stubAMQPClient) IsReady() bool {
 	return !s.closed
 }
 
+func TestManagerStopConsumersStopsRegistriesWithoutClosing(t *testing.T) {
+	log := logger.New("error", false)
+	cancelled := false
+	reg := &Registry{logger: log, consumersActive: true, cancelConsumers: func() { cancelled = true }}
+	client := &stubAMQPClient{}
+	m := &Manager{
+		logger:    log,
+		consumers: map[string]*consumerEntry{"": {client: client, registry: reg}},
+	}
+
+	m.StopConsumers()
+
+	assert.True(t, cancelled, "consume context must be cancelled so no new messages are delivered")
+	assert.False(t, reg.consumersActive, "registry must mark consumers stopped")
+	assert.False(t, client.closed, "StopConsumers must NOT close the AMQP connection — Close does that later")
+
+	// Idempotent: a second call must be a safe no-op (Close also stops consumers).
+	require.NotPanics(t, m.StopConsumers)
+}
+
 func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
