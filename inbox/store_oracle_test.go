@@ -71,6 +71,8 @@ func TestOracleStoreMarkProcessedDefaultTenant(t *testing.T) {
 	assert.True(t, inserted)
 }
 
+// TestOracleStoreMarkProcessedRejectsReservedTenant asserts a real tenant id equal to the
+// reserved sentinel is rejected rather than colliding with the default tenant in the ledger.
 func TestOracleStoreMarkProcessedRejectsReservedTenant(t *testing.T) {
 	store := newOracleTestStore(t)
 	db := dbtesting.NewTestDB(dbtypes.Oracle)
@@ -85,6 +87,8 @@ func TestOracleStoreMarkProcessedRejectsReservedTenant(t *testing.T) {
 	assert.Contains(t, err.Error(), "reserved")
 }
 
+// TestOracleCreateTableTenantNotNullNoEmptyDefault guards the fresh-table DDL: tenant_id stays
+// NOT NULL but no longer carries the contradictory DEFAULT empty-string (which is NULL on Oracle).
 func TestOracleCreateTableTenantNotNullNoEmptyDefault(t *testing.T) {
 	assert.NotContains(t, oracleCreateTableSQL, "tenant_id     VARCHAR2(255) DEFAULT '' NOT NULL",
 		"the contradictory DEFAULT '' (which is NULL on Oracle) must be gone")
