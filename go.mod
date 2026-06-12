@@ -24,7 +24,7 @@ require (
 	github.com/labstack/echo-opentelemetry v0.0.2
 	github.com/labstack/echo/v5 v5.1.1
 	github.com/rabbitmq/amqp091-go v1.11.0
-	github.com/redis/go-redis/v9 v9.20.0
+	github.com/redis/go-redis/v9 v9.20.1
 	github.com/rs/zerolog v1.35.1
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/stretchr/testify v1.11.1
