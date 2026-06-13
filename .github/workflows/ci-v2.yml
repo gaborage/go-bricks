@@ -726,9 +726,19 @@ jobs:
 
       - name: golangci-lint (framework)
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee  # v9.2.1
+        env:
+          # Scope the run to the root (framework) module. `--skip-dirs=tools` was
+          # a golangci-lint v1 flag (deprecated in v2). `./...` already stops at
+          # the tools/migration module boundary, but golangci-lint's v2 workspace
+          # mode would otherwise pull that unioned module in; GOWORK=off disables
+          # the workspace so the separately-versioned submodule (covered by
+          # lint-migrate-tool) can't leak into framework findings, and lint
+          # resolves against the framework's own go.mod — the dependency view its
+          # consumers actually see.
+          GOWORK: "off"
         with:
           version: v2.12.2
-          args: --timeout=5m --skip-dirs=tools
+          args: --timeout=5m
 
   security-framework:
     permissions:
@@ -852,3 +862,200 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e  # v8.2.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ============================================================================
+  # Exported-API compatibility gate (apidiff vs latest release tag)
+  # ----------------------------------------------------------------------------
+  # Diffs the PR head's exported API surface (root module only — internal/ is
+  # auto-ignored by apidiff and GOWORK=off excludes the separately-versioned
+  # tools/migration submodule) against the latest release tag. FAILS on an
+  # INCOMPATIBLE change UNLESS the squash PR title carries a conventional-commit
+  # '!' marker (feat!:/fix(scope)!: …) or the PR has the 'breaking-approved'
+  # label. This catches ACCIDENTAL breaks that would otherwise ship as a
+  # patch/minor — release-please derives the bump from the squash PR title, so
+  # the same '!' that bypasses the gate also drives the version bump (no drift).
+  #
+  # Runs on pull_request ONLY: the escape hatch reads the PR title, which exists
+  # only in PR context. On push to main (post-merge) the break is already
+  # accepted, so the job skips there and ci-ok tolerates the skip.
+  apidiff:
+    permissions:
+      contents: read
+    name: API compatibility
+    needs: changes
+    if: needs.changes.outputs.framework == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need full history + tags to build the baseline snapshot
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Install apidiff
+        # Pinned for reproducibility (x/exp ships only pseudo-versions). The
+        # annotation lets Renovate bump this 'go install …@version' literal,
+        # which its gomod manager cannot see (see renovate.json customManagers).
+        # renovate: datasource=go depName=golang.org/x/exp
+        run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260611194520-c48552f49976
+
+      - name: Resolve latest release tag (baseline)
+        id: baseline
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          # GA tags only (vX.Y.Z) — exclude pre-releases (vX.Y.Z-rc1) so the
+          # baseline is always the latest stable release. `|| true` keeps the
+          # no-tag case on the skip path below rather than aborting on pipefail.
+          base_tag="$(git tag --list 'v*' --sort=-v:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+          if [ -z "$base_tag" ]; then
+            echo "::warning::No GA release tag found; skipping API-compatibility check (no baseline to diff against)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Baseline release tag: $base_tag"
+          echo "base_tag=$base_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build baseline API snapshot (at latest tag)
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          BASE_TAG: ${{ steps.baseline.outputs.base_tag }}
+          # GOWORK=off restricts the diff to the ROOT module's packages and
+          # excludes the separately-versioned tools/migration submodule (only
+          # unioned in via go.work). internal/ is auto-ignored by apidiff.
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          # Defensive pre-clean: a prior cancelled run on a reused (self-hosted)
+          # runner could leave the path behind, which would fail `worktree add`.
+          git worktree remove --force /tmp/apidiff-base 2>/dev/null || true
+          rm -rf /tmp/apidiff-base
+          git worktree add --detach /tmp/apidiff-base "$BASE_TAG"
+          ( cd /tmp/apidiff-base \
+            && GOWORK=off apidiff -m -w /tmp/apidiff-base.snapshot github.com/gaborage/go-bricks )
+
+      - name: Build PR-head API snapshot
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          GOWORK: "off"
+        run: GOWORK=off apidiff -m -w /tmp/apidiff-head.snapshot github.com/gaborage/go-bricks
+
+      - name: Diff exported API and enforce escape hatch
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          GOWORK: "off"
+          BASE_TAG: ${{ steps.baseline.outputs.base_tag }}
+          # Pass PR title/labels via env (NOT inline ${{ }} in the script body) so
+          # a crafted PR title cannot inject shell — the values are read as data.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          # apidiff writes the change list to STDOUT and "Ignoring internal
+          # package …" notices to STDERR, so stdout alone is the signal. It
+          # exits 0 whether or not changes exist, and non-zero ONLY on a real
+          # tool/build error. NO `|| true` on the load-bearing capture below:
+          # under `set -e` a tool failure aborts the step, so the gate fails
+          # CLOSED instead of silently reporting "no breaks".
+          echo "::group::Full apidiff report (base=$BASE_TAG vs PR head)"
+          GOWORK=off apidiff -m /tmp/apidiff-base.snapshot /tmp/apidiff-head.snapshot || true
+          echo "::endgroup::"
+
+          # The gate keys ONLY on incompatible changes. Compatible/additive
+          # changes (new funcs, new packages, added struct fields) never fail.
+          incompat="$(GOWORK=off apidiff -incompatible -m \
+            /tmp/apidiff-base.snapshot /tmp/apidiff-head.snapshot)"
+
+          if [ -z "$incompat" ]; then
+            echo "✅ No incompatible exported-API changes vs $BASE_TAG."
+            exit 0
+          fi
+
+          echo "::warning::Incompatible exported-API changes detected vs $BASE_TAG:"
+          printf '%s\n' "$incompat"
+
+          # ---- Escape hatch (only evaluated when a break exists) ----
+          # 1) Conventional-commit '!' marker anchored at the ':' position.
+          if printf '%s' "$PR_TITLE" | grep -Eq '^[a-zA-Z]+(\([^)]*\))?!:'; then
+            echo "✅ Breaking change ACKNOWLEDGED via '!' in PR title: $PR_TITLE"
+            exit 0
+          fi
+
+          # 2) 'breaking-approved' label — exact array-element match (not a
+          # substring grep, which could match e.g. a 'pre-breaking-approved' label).
+          if printf '%s' "$PR_LABELS" | jq -e 'any(.[]?; . == "breaking-approved")' >/dev/null 2>&1; then
+            echo "✅ Breaking change ACKNOWLEDGED via 'breaking-approved' label."
+            exit 0
+          fi
+
+          echo "::error::Incompatible exported-API change shipped without acknowledgement."
+          echo "Retitle the squash PR with a '!' breaking marker (e.g. 'feat!: …' /"
+          echo "'fix(scope)!: …') so release-please bumps correctly, or add the"
+          echo "'breaking-approved' label if the break is intentional and reviewed."
+          exit 1
+
+      - name: Clean up baseline worktree
+        if: always() && steps.baseline.outputs.skip != 'true'
+        run: git worktree remove --force /tmp/apidiff-base || true
+
+  # ============================================================================
+  # CI gate (fan-in aggregator — the single required status check on main)
+  # ----------------------------------------------------------------------------
+  # Branch protection requires only THIS check. It depends on every PR-relevant
+  # leaf job and fails if any of them failed or was cancelled. 'skipped' counts
+  # as success so doc-only PRs (where the path-filtered jobs skip) still pass —
+  # the same always()+skipped-tolerant idiom used by framework-merge-coverage
+  # and sonarcloud above. vuln-weekly is schedule-only and intentionally absent.
+  # When you add a new PR job, add it to `needs:` here or it stays unenforced.
+  # ============================================================================
+  ci-ok:
+    permissions:
+      contents: read
+    name: ci-ok
+    if: always() && github.event_name != 'schedule'
+    needs:
+      - changes
+      - framework-test
+      - framework-integration-test
+      - framework-merge-coverage
+      - framework-build
+      - migrate-tool-test
+      - migrate-tool-build
+      - lint-migrate-tool
+      - security-migrate-tool
+      - lint-framework
+      - security-framework
+      - vuln-framework
+      - vuln-migrate-tool
+      - apidiff
+      - sonarcloud
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "Aggregated job results:"
+          printf '%s\n' "$NEEDS_JSON"
+          # Fail only on 'failure'/'cancelled'. 'success' and 'skipped' pass —
+          # path-filtered jobs legitimately skip on doc-only PRs.
+          failed="$(printf '%s' "$NEEDS_JSON" \
+            | jq -r 'to_entries[]
+                     | select(.value.result == "failure" or .value.result == "cancelled")
+                     | .key')"
+          if [ -n "$failed" ]; then
+            echo "::error::Required job(s) did not pass:"
+            printf '  - %s\n' $failed
+            exit 1
+          fi
+          echo "✅ All required jobs passed (or were skipped on a doc-only PR)."

@@ -14,6 +14,16 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\s+\\w+_VERSION := (?<currentValue>\\S+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Bump the go-run-pinned apidiff tool in the API-compatibility CI gate (.github/workflows). The 'go install <module>@<version>' literal in a workflow run: string is invisible to Renovate's gomod manager, so it drifts silently. The inline '# renovate:' annotation above the pin supplies the datasource + depName.",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\s+run: go install \\S+@(?<currentValue>\\S+)"
+      ]
     }
   ]
 }
