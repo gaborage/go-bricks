@@ -9,6 +9,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -104,9 +105,8 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 			} else {
 				assert.Error(t, err)
 				var httpErr *echo.HTTPError
-				if errors.As(err, &httpErr) {
-					assert.Equal(t, tc.wantStatus, httpErr.Code)
-				}
+				require.True(t, errors.As(err, &httpErr))
+				assert.Equal(t, tc.wantStatus, httpErr.Code)
 			}
 		})
 	}
@@ -206,9 +206,8 @@ func TestAuthMiddleware(t *testing.T) {
 
 				// Check if it's an echo.HTTPError
 				var httpErr *echo.HTTPError
-				if errors.As(err, &httpErr) {
-					assert.Equal(t, tt.expectedStatusCode, httpErr.Code)
-				}
+				require.True(t, errors.As(err, &httpErr))
+				assert.Equal(t, tt.expectedStatusCode, httpErr.Code)
 			}
 		})
 	}
@@ -265,9 +264,8 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 			} else {
 				assert.Error(t, err)
 				var httpErr *echo.HTTPError
-				if errors.As(err, &httpErr) {
-					assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
-				}
+				require.True(t, errors.As(err, &httpErr))
+				assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
 			}
 		})
 	}

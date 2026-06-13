@@ -11,6 +11,7 @@ import (
 	"github.com/gaborage/go-bricks/server"
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -73,7 +74,7 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 				assert.Error(t, err)
 				var httpErr *echo.HTTPError
 				ok := errors.As(err, &httpErr)
-				assert.True(t, ok)
+				require.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
 		})
@@ -143,7 +144,7 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 				assert.Error(t, err)
 				var httpErr *echo.HTTPError
 				ok := errors.As(err, &httpErr)
-				assert.True(t, ok)
+				require.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
 		})
@@ -226,7 +227,7 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 				assert.Error(t, err, tt.description)
 				var httpErr *echo.HTTPError
 				ok := errors.As(err, &httpErr)
-				assert.True(t, ok)
+				require.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
 		})
@@ -330,7 +331,7 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 				assert.Error(t, err, tt.description)
 				var httpErr *echo.HTTPError
 				ok := errors.As(err, &httpErr)
-				assert.True(t, ok)
+				require.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
 		})
@@ -367,7 +368,7 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 	assert.Error(t, err2)
 	var httpErr *echo.HTTPError
 	ok := errors.As(err2, &httpErr)
-	assert.True(t, ok)
+	require.True(t, ok)
 	assert.Equal(t, http.StatusForbidden, httpErr.Code)
 }
 
