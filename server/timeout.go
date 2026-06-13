@@ -29,7 +29,7 @@ func Timeout(duration time.Duration) echo.MiddlewareFunc {
 		return func(c *echo.Context) error {
 			parent := c.Request().Context()
 
-			// Short-circuit if the upstream context is already cancelled.
+			// Short-circuit if the upstream context is already canceled.
 			select {
 			case <-parent.Done():
 				return parent.Err()

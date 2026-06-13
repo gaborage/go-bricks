@@ -74,8 +74,8 @@ func TestMockOutboxEventsByType(t *testing.T) {
 	created := mock.EventsByType("order.created")
 	assert.Len(t, created, 2)
 
-	cancelled := mock.EventsByType("order.cancelled")
-	assert.Len(t, cancelled, 1)
+	canceled := mock.EventsByType("order.cancelled")
+	assert.Len(t, canceled, 1)
 
 	unknown := mock.EventsByType("unknown")
 	assert.Empty(t, unknown)

@@ -21,7 +21,7 @@ func ResetMeterForTesting() {
 
 // ResetTracerForTesting resets the package-level tracer state so each test
 // starts with a fresh tracer. Mirrors ResetMeterForTesting. Safe to call
-// concurrently with InitHTTPTracer — the mutex serialises both paths.
+// concurrently with InitHTTPTracer — the mutex serializes both paths.
 func ResetTracerForTesting() {
 	tracerInitMu.Lock()
 	defer tracerInitMu.Unlock()

@@ -22,7 +22,6 @@ func TestPGRoleSpecValidateAccepts(t *testing.T) {
 		},
 	}
 	for _, s := range specs {
-		s := s
 		t.Run(s.Schema, func(t *testing.T) {
 			assert.NoError(t, s.Validate())
 		})

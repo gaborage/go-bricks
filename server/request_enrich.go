@@ -14,14 +14,14 @@ import (
 //
 // Behavior is the union of both originals: the resolved trace ID and any inbound
 // W3C trace headers are attached for outbound propagation, and the shared AMQP/DB
-// counters are seeded. TraceContext's cancelled-context early-return is adopted so
-// an already-cancelled inbound request short-circuits before any enrichment.
+// counters are seeded. TraceContext's canceled-context early-return is adopted so
+// an already-canceled inbound request short-circuits before any enrichment.
 func RequestEnrich() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			req := c.Request()
 
-			// SAFETY: if the request context is already cancelled (e.g. by timeout),
+			// SAFETY: if the request context is already canceled (e.g. by timeout),
 			// return early to avoid touching potentially invalidated Echo state.
 			select {
 			case <-req.Context().Done():

@@ -81,6 +81,10 @@ func TestTransactionQueryLogs(t *testing.T) {
 	settings := Settings{slowQueryThreshold: time.Second}
 	tx := NewTransaction(underlying, recLogger, "postgresql", settings)
 
+	// stubTx returns a bare new(sql.Rows) with a nil driver connection; calling
+	// Close() on it panics. These are not real DB rows, so there is nothing to
+	// release here.
+	//nolint:sqlclosecheck // stub-returned *sql.Rows is not closeable (nil driverConn)
 	rows, err := tx.Query(ctx, "SELECT", 1)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)

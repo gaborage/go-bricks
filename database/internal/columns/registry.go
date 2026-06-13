@@ -114,8 +114,8 @@ func (cr *ColumnRegistry) getOrCreateVendorCache(vendor string) *vendorCache {
 	defer cr.mu.Unlock()
 
 	// Double-check: another goroutine might have created it
-	if cache, ok := cr.vendorCaches[vendor]; ok {
-		return cache
+	if existing, ok := cr.vendorCaches[vendor]; ok {
+		return existing
 	}
 
 	// Create new vendor cache

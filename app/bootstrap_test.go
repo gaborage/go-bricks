@@ -283,8 +283,8 @@ observability:
 	originalDir, err := os.Getwd()
 	require.NoError(t, err)
 	defer func() {
-		err := os.Chdir(originalDir)
-		require.NoError(t, err)
+		cerr := os.Chdir(originalDir)
+		require.NoError(t, cerr)
 	}()
 
 	err = os.Chdir(tmpDir)
@@ -388,8 +388,8 @@ observability:
 	originalDir, err := os.Getwd()
 	require.NoError(t, err)
 	defer func() {
-		err := os.Chdir(originalDir)
-		require.NoError(t, err)
+		cerr := os.Chdir(originalDir)
+		require.NoError(t, cerr)
 	}()
 
 	err = os.Chdir(tmpDir)
@@ -470,8 +470,8 @@ observability:
 	originalDir, err := os.Getwd()
 	require.NoError(t, err)
 	defer func() {
-		err := os.Chdir(originalDir)
-		require.NoError(t, err)
+		cerr := os.Chdir(originalDir)
+		require.NoError(t, cerr)
 	}()
 
 	err = os.Chdir(tmpDir)
@@ -529,8 +529,8 @@ debug:
 	originalDir, err := os.Getwd()
 	require.NoError(t, err)
 	defer func() {
-		err := os.Chdir(originalDir)
-		require.NoError(t, err)
+		cerr := os.Chdir(originalDir)
+		require.NoError(t, cerr)
 	}()
 
 	err = os.Chdir(tmpDir)

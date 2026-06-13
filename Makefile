@@ -9,6 +9,9 @@ GOVULNCHECK_VERSION := v1.3.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.27.1
+# Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
+# renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
+GOLANGCI_LINT_VERSION := v2.12.2
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -57,9 +60,9 @@ coverage-report: ## Generate HTML coverage report from coverage.out
 docker-check: ## Check if Docker is available
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker is not running. Integration tests require Docker Desktop or Docker daemon." && echo "Install Docker: https://www.docker.com/products/docker-desktop" && exit 1)
 
-lint: ## Run golangci-lint
-	golangci-lint cache clean
-	golangci-lint run
+lint: ## Run golangci-lint (pinned + GOWORK=off; identical to CI lint-framework)
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean
+	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
 fmt: ## Format Go code
 	go fmt ./...

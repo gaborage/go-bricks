@@ -480,9 +480,9 @@ func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, nega
 
 // BuildJSONContains creates a JSON containment expression.
 //
-// PostgreSQL emits "column @> ?::jsonb" with the value marshalled to JSON.
+// PostgreSQL emits "column @> ?::jsonb" with the value marshaled to JSON.
 // Strings, []byte, and json.RawMessage values are passed through as-is
-// (caller-provided JSON); other values are marshalled via encoding/json so
+// (caller-provided JSON); other values are marshaled via encoding/json so
 // that callers can pass structs, maps, or slices directly.
 //
 // Oracle has no clean equivalent (JSON_EQUAL is exact-equality, JSON_EXISTS

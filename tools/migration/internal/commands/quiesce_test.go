@@ -234,7 +234,7 @@ func TestRunQuiesceStatusReportsClearedState(t *testing.T) {
 }
 
 func TestRunQuiesceWrapsControllerErrors(t *testing.T) {
-	boom := erroringController{err: assertErr}
+	boom := erroringController{err: errAssert}
 	var out bytes.Buffer
 
 	require.Error(t, runQuiesceStatus(context.Background(), &out, boom, false))
@@ -243,11 +243,11 @@ func TestRunQuiesceWrapsControllerErrors(t *testing.T) {
 	require.Error(t, runQuiesceSet(context.Background(), &out, boom, flags))
 }
 
-var assertErr = errorString("control-plane unavailable")
+var errAssert = stringError("control-plane unavailable")
 
-type errorString string
+type stringError string
 
-func (e errorString) Error() string { return string(e) }
+func (e stringError) Error() string { return string(e) }
 
 func TestRunQuiesceStatusReportsExpiredState(t *testing.T) {
 	now := time.Now().UTC()
@@ -280,7 +280,7 @@ type createTableErrController struct {
 	*migration.MemoryQuiesceController
 }
 
-func (createTableErrController) CreateTable(context.Context) error { return errorString("ddl failed") }
+func (createTableErrController) CreateTable(context.Context) error { return stringError("ddl failed") }
 
 func TestWithControlPlaneControllerCreateTableError(t *testing.T) {
 	orig := controllerOpener

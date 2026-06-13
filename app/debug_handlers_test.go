@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -102,7 +103,8 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err)
-				if httpErr, ok := err.(*echo.HTTPError); ok {
+				var httpErr *echo.HTTPError
+				if errors.As(err, &httpErr) {
 					assert.Equal(t, tc.wantStatus, httpErr.Code)
 				}
 			}
@@ -203,7 +205,8 @@ func TestAuthMiddleware(t *testing.T) {
 				assert.Error(t, err)
 
 				// Check if it's an echo.HTTPError
-				if httpErr, ok := err.(*echo.HTTPError); ok {
+				var httpErr *echo.HTTPError
+				if errors.As(err, &httpErr) {
 					assert.Equal(t, tt.expectedStatusCode, httpErr.Code)
 				}
 			}
@@ -261,7 +264,8 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err)
-				if httpErr, ok := err.(*echo.HTTPError); ok {
+				var httpErr *echo.HTTPError
+				if errors.As(err, &httpErr) {
 					assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
 				}
 			}

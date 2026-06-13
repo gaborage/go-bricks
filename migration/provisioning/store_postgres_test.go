@@ -44,7 +44,6 @@ func TestNewPostgresStoreAcceptsValidNames(t *testing.T) {
 		{strings.Repeat("a", maxPGTableSegment), `"` + strings.Repeat("a", maxPGTableSegment) + `"`, strings.Repeat("a", maxPGTableSegment)},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.in, func(t *testing.T) {
 			s, err := NewPostgresStore(db, c.in)
 			require.NoError(t, err)
@@ -70,7 +69,6 @@ func TestNewPostgresStoreRejectsInvalidNames(t *testing.T) {
 		strings.Repeat("a", 64),
 	}
 	for _, name := range invalid {
-		name := name
 		t.Run(name, func(t *testing.T) {
 			_, err := NewPostgresStore(db, name)
 			require.Error(t, err)

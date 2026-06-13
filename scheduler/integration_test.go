@@ -83,7 +83,7 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 
 	assert.NoError(t, err, "Shutdown should succeed")
 
-	// Verify job completed (not cancelled mid-execution)
+	// Verify job completed (not canceled mid-execution)
 	assert.True(t, job.Completed(), "Job should have completed")
 
 	// Verify shutdown waited for job

@@ -204,7 +204,7 @@ func TestJobContextContextBehavior(t *testing.T) {
 		// Wait for timeout
 		time.Sleep(20 * time.Millisecond)
 
-		// Should be cancelled
+		// Should be canceled
 		assert.Error(t, ctx.Err())
 		assert.Equal(t, context.DeadlineExceeded, ctx.Err())
 	})

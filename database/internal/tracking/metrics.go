@@ -440,7 +440,12 @@ type poolMetricsRegistration struct {
 func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer metric.Observer) error {
 	stats, err := r.conn.Stats()
 	if err != nil {
-		return nil // Best-effort - don't fail metrics collection
+		// Best-effort: log the failure but return nil so a transient Stats() error
+		// (e.g. a closed pool) does not poison the whole metrics-collection batch.
+		// Returning the error here would propagate through Reader.Collect and abort
+		// every other observable in the same callback cycle.
+		logMetricError("pool_metrics_stats", err)
+		return nil
 	}
 
 	ps := extractPoolStats(stats)

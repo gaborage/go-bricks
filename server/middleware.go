@@ -130,7 +130,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	}))
 
 	// Timeout - add a request-scoped deadline without swapping the response writer.
-	// This prevents goroutine panics when the context is cancelled mid-flight.
+	// This prevents goroutine panics when the context is canceled mid-flight.
 	e.Use(Timeout(cfg.Server.Timeout.Middleware))
 
 	// Body limit

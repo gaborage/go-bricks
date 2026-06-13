@@ -395,7 +395,7 @@ func TestStartHTTPClientSpanNilInfoIsSafe(t *testing.T) {
 	})
 
 	got := obtest.NewSpanCollector(t, tp.Exporter).First()
-	// Empty method canonicalises to _OTHER per the package's existing behaviour;
+	// Empty method canonicalises to _OTHER per the package's existing behavior;
 	// the span name therefore uses the HTTP-METHOD template since PeerName is
 	// also empty.
 	assert.Equal(t, "HTTP _OTHER", got.Name)

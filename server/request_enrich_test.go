@@ -72,8 +72,8 @@ func TestRequestEnrichPropagatesW3CHeaders(t *testing.T) {
 	assert.Equal(t, tracestate, gotTS)
 }
 
-// TestRequestEnrichShortCircuitsOnCancelledContext verifies the cancelled-context
-// guard: an already-cancelled inbound request returns the context error without
+// TestRequestEnrichShortCircuitsOnCancelledContext verifies the canceled-context
+// guard: an already-canceled inbound request returns the context error without
 // invoking the next handler. (This guard path was previously untested.)
 func TestRequestEnrichShortCircuitsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -93,5 +93,5 @@ func TestRequestEnrichShortCircuitsOnCancelledContext(t *testing.T) {
 	err := handler(c)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
-	assert.False(t, nextCalled, "next handler must not run for an already-cancelled context")
+	assert.False(t, nextCalled, "next handler must not run for an already-canceled context")
 }

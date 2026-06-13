@@ -73,7 +73,7 @@ func TestCleanupExecuteUsesRetentionCutoff(t *testing.T) {
 
 func TestCleanupExecuteSucceedsWhenNothingDeleted(t *testing.T) {
 	// deleted == 0 must not log an Info line (only logs when > 0) but the
-	// Execute function still returns nil. We assert behaviour via the
+	// Execute function still returns nil. We assert behavior via the
 	// store's call count + error.
 	store := &fakeStore{DeletePublishedN: 0}
 	c := newCleanupWithFakes(store, 24*time.Hour)

@@ -389,7 +389,7 @@ func TestColumnMetadataMultipleAliasesPanic(t *testing.T) {
 	})
 }
 
-// TestAsPanicsOnEmptyAlias pins the documented fail-fast behaviour: the
+// TestAsPanicsOnEmptyAlias pins the documented fail-fast behavior: the
 // As() helper panics rather than returning an unaliased clone, so a
 // caller passing an empty string sees the bug at development time.
 func TestAsPanicsOnEmptyAlias(t *testing.T) {

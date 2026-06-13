@@ -17,7 +17,7 @@ import (
 )
 
 // setupTestMeterProvider creates a test meter provider, sets it as the global provider,
-// resets meter state, and initialises the instruments. Returns the provider for metric
+// resets meter state, and initializes the instruments. Returns the provider for metric
 // collection and a cleanup function.
 func setupTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
 	t.Helper()
@@ -427,7 +427,7 @@ func TestEmptyPeerNameOmitsPeerServiceAttribute(t *testing.T) {
 	assertNoAttribute(t, retrySumData.DataPoints[0].Attributes.ToSlice(), attrPeerService)
 }
 
-// TestUnknownMethodNormalizedToOther verifies that an unrecognised HTTP method is
+// TestUnknownMethodNormalizedToOther verifies that an unrecognized HTTP method is
 // normalised to "_OTHER" in the http.request.method attribute.
 func TestUnknownMethodNormalizedToOther(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)

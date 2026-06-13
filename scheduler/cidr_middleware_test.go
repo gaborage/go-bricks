@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -70,7 +71,8 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err)
-				httpErr, ok := err.(*echo.HTTPError)
+				var httpErr *echo.HTTPError
+				ok := errors.As(err, &httpErr)
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
@@ -139,7 +141,8 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err)
-				httpErr, ok := err.(*echo.HTTPError)
+				var httpErr *echo.HTTPError
+				ok := errors.As(err, &httpErr)
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
@@ -221,7 +224,8 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err, tt.description)
-				httpErr, ok := err.(*echo.HTTPError)
+				var httpErr *echo.HTTPError
+				ok := errors.As(err, &httpErr)
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
@@ -324,7 +328,8 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
 				assert.Error(t, err, tt.description)
-				httpErr, ok := err.(*echo.HTTPError)
+				var httpErr *echo.HTTPError
+				ok := errors.As(err, &httpErr)
 				assert.True(t, ok)
 				assert.Equal(t, tt.expectCode, httpErr.Code)
 			}
@@ -360,7 +365,8 @@ func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
 
 	err2 := handler(c2)
 	assert.Error(t, err2)
-	httpErr, ok := err2.(*echo.HTTPError)
+	var httpErr *echo.HTTPError
+	ok := errors.As(err2, &httpErr)
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusForbidden, httpErr.Code)
 }

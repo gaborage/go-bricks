@@ -202,7 +202,7 @@ func (ff *FilterFactory) NotRegexI(column, pattern string) dbtypes.Filter {
 //
 // On PostgreSQL emits "column @> ?::jsonb" with the value JSON-encoded.
 // Strings, []byte, and json.RawMessage are passed through as-is (assumed
-// already-valid JSON); everything else is marshalled via encoding/json so
+// already-valid JSON); everything else is marshaled via encoding/json so
 // callers can pass structs, maps, or slices directly.
 //
 // Oracle is not yet supported and returns a filter that surfaces an error

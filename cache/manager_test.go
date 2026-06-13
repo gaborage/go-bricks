@@ -425,8 +425,8 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				_, err := mgr.Get(ctx, tenantOne)
-				if err != nil {
+				_, gerr := mgr.Get(ctx, tenantOne)
+				if gerr != nil {
 					return // Manager may be closed during test cleanup
 				}
 			case <-done:
@@ -882,9 +882,9 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 	// Start a goroutine that will trigger eviction (slow close)
 	go func() {
 		// Triggers eviction of tenant-1 (200ms close) - error intentionally ignored in background goroutine
-		if _, err := mgr.Get(ctx, tenantThree); err != nil {
+		if _, gerr := mgr.Get(ctx, tenantThree); gerr != nil {
 			// Log but don't fail - background operation
-			t.Logf("background Get error (may be expected during cleanup): %v", err)
+			t.Logf("background Get error (may be expected during cleanup): %v", gerr)
 		}
 	}()
 
@@ -961,14 +961,14 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 			// These should all complete quickly - errors ignored as concurrent operations may race
 			stats := mgr.Stats()
 			_ = stats // intentionally unused - just checking non-blocking behavior
-			c2, err := mgr.Get(ctx, tenantTwo)
-			if err != nil {
+			c2, gerr := mgr.Get(ctx, tenantTwo)
+			if gerr != nil {
 				t.Fail()
 			}
 			_ = c2 // intentionally unused
 
-			c3, err := mgr.Get(ctx, tenantThree)
-			if err != nil {
+			c3, gerr := mgr.Get(ctx, tenantThree)
+			if gerr != nil {
 				t.Fail()
 			}
 

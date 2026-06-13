@@ -96,8 +96,8 @@ func newContextChecker(cfg *config.Config) *contextChecker {
 	return &contextChecker{cfg: cfg}
 }
 
-// checkCancellation checks if the request context has been cancelled or timed out.
-// Returns an API error if cancelled, nil otherwise.
+// checkCancellation checks if the request context has been canceled or timed out.
+// Returns an API error if canceled, nil otherwise.
 func (cc *contextChecker) checkCancellation(c *echo.Context, stage string) IAPIError {
 	if c.Request().Context().Err() != nil {
 		msg := fmt.Sprintf("Request timeout %s", stage)
@@ -310,7 +310,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		}
 		formatErr := hw.selectErrorFormatter()
 
-		if apiErr := hw.checker.checkCancellation(c, "or cancelled"); apiErr != nil {
+		if apiErr := hw.checker.checkCancellation(c, "or canceled"); apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
 		}
 		if apiErr := hw.runJOSEInbound(c); apiErr != nil {
@@ -321,13 +321,13 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		if apiErr != nil {
 			return formatErr(c, apiErr, hw.responder.cfg)
 		}
-		if apiErr := hw.checker.checkCancellation(c, "during validation"); apiErr != nil {
-			return formatErr(c, apiErr, hw.responder.cfg)
+		if cancelErr := hw.checker.checkCancellation(c, "during validation"); cancelErr != nil {
+			return formatErr(c, cancelErr, hw.responder.cfg)
 		}
 
 		response, apiErr := handlerFunc(request, HandlerContext{Echo: c, Config: hw.responder.cfg})
 		if c.Request().Context().Err() != nil {
-			return formatErr(c, NewServiceUnavailableError("Request timeout or cancelled during handler execution"), hw.responder.cfg)
+			return formatErr(c, NewServiceUnavailableError("Request timeout or canceled during handler execution"), hw.responder.cfg)
 		}
 		return hw.dispatchResponse(c, response, apiErr)
 	}

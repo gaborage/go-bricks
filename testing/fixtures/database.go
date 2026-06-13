@@ -221,7 +221,12 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	// Setup the expectation
 	sqlMock.ExpectQuery(".*").WillReturnRows(sqlRows)
 
-	// Execute the query to get the actual rows
+	// Execute the query to get the actual rows. The *sql.Rows is intentionally
+	// returned (not closed here) so the caller/mock can consume it as a fixture;
+	// closing it in this factory would yield an unusable, drained result set. The
+	// sqlmock-backed connection is released when the returned rows are eventually
+	// drained or the mock is torn down — sqlclosecheck cannot model this transfer.
+	//nolint:sqlclosecheck // fixture rows are returned for the caller to own; see comment above
 	result, err := db.QueryContext(context.Background(), "SELECT")
 	if err != nil {
 		panic(err) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional

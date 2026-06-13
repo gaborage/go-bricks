@@ -986,7 +986,7 @@ func TestConnectDialFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected connection error")
 	}
-	if err != expectedErr {
+	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected dial error, got: %v", err)
 	}
 	if conn != nil {
@@ -1007,7 +1007,7 @@ func TestPublishToExchangeShutdownDuringPublish(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected shutdown error")
 	}
-	if err != errShutdown {
+	if !errors.Is(err, errShutdown) {
 		t.Fatalf("expected errShutdown, got: %v", err)
 	}
 }
@@ -1026,7 +1026,7 @@ func TestPublishToExchangeShutdownDuringConfirmation(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected shutdown error")
 	}
-	if err != errShutdown {
+	if !errors.Is(err, errShutdown) {
 		t.Fatalf("expected errShutdown, got: %v", err)
 	}
 }
@@ -1043,7 +1043,7 @@ func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected context timeout error")
 	}
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context deadline exceeded, got: %v", err)
 	}
 }
@@ -1207,7 +1207,7 @@ func TestUnsafePublishNotReady(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected errNotConnected when not ready")
 	}
-	if err != errNotConnected {
+	if !errors.Is(err, errNotConnected) {
 		t.Fatalf("expected errNotConnected, got: %v", err)
 	}
 }

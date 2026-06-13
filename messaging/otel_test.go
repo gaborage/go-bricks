@@ -360,6 +360,26 @@ func TestConsumeSpanWithMinimalDelivery(t *testing.T) {
 	assertAttribute(t, attrs, string(semconv.MessagingDestinationNameKey), "minimal-queue")
 }
 
+func TestStartConsumeSpanNilDelivery(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// A nil delivery (e.g. a drained/closed consume channel) must still yield a
+	// usable consumer span whose ownership transfers to the caller to end —
+	// the span-factory no-op branch.
+	spanCtx, span := StartConsumeSpan(ctx, nil, "nil-delivery-queue")
+	require.NotNil(t, spanCtx)
+	require.NotNil(t, span)
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "nil-delivery-queue receive", spans[0].Name)
+	assert.Equal(t, trace.SpanKindConsumer, spans[0].SpanKind)
+}
+
 // Helper functions
 
 func setupReadyClient(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeChannel) {

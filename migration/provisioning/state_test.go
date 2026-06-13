@@ -41,7 +41,6 @@ func TestValidateTransitionForwardGraph(t *testing.T) {
 func TestValidateTransitionCleanupBranches(t *testing.T) {
 	cases := []State{StatePending, StateSchemaCreated, StateRoleCreated, StateMigrated, StateSeeded}
 	for _, from := range cases {
-		from := from
 		t.Run(string(from), func(t *testing.T) {
 			assert.NoError(t, ValidateTransition(from, StateCleanup))
 		})
@@ -68,7 +67,6 @@ func TestValidateTransitionRejectsIllegalEdges(t *testing.T) {
 		{State("bogus"), StatePending},
 	}
 	for _, c := range illegal {
-		c := c
 		t.Run(fmt.Sprintf("%s->%s", c.from, c.to), func(t *testing.T) {
 			err := ValidateTransition(c.from, c.to)
 			require.Error(t, err)
@@ -93,7 +91,6 @@ func TestStepsValidate(t *testing.T) {
 		{"missing_cleanup", func(s *Steps) { s.Cleanup = nil }, "Cleanup"},
 	}
 	for _, m := range mutators {
-		m := m
 		t.Run(m.name, func(t *testing.T) {
 			s := okSteps(t)
 			m.mutate(&s)

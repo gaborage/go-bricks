@@ -329,7 +329,7 @@ func TestNewProviderTracingSampleRate(t *testing.T) {
 
 func TestProviderShutdownTimeout(t *testing.T) {
 	// This test verifies that Shutdown respects context timeout.
-	// We use a blocking exporter that only unblocks when context is cancelled,
+	// We use a blocking exporter that only unblocks when context is canceled,
 	// ensuring deterministic timeout behavior.
 
 	// Create a custom blocking exporter
@@ -365,7 +365,7 @@ func TestProviderShutdownTimeout(t *testing.T) {
 	close(blockingExporter.blockUntilCancel)
 }
 
-// blockingSpanExporter is a test exporter that blocks in Shutdown until context is cancelled
+// blockingSpanExporter is a test exporter that blocks in Shutdown until context is canceled
 type blockingSpanExporter struct {
 	blockUntilCancel chan struct{}
 }

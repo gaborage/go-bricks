@@ -375,7 +375,7 @@ func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
 	if len(event.Fields) != 0 {
 		t.Fatalf("expected no fields built when error level disabled, got %v", event.Fields)
 	}
-	if event.Err != failure {
+	if !errors.Is(event.Err, failure) {
 		t.Fatalf("expected error to be attached on disabled ERROR, got %v", event.Err)
 	}
 	if event.Msg != msgDBOperationError {
@@ -562,7 +562,7 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 	if event.Level != levelError {
 		t.Fatalf("expected error level, got %s", event.Level)
 	}
-	if event.Err != failure {
+	if !errors.Is(event.Err, failure) {
 		t.Fatalf("expected error to be recorded")
 	}
 	if event.Msg != msgDBOperationError {
