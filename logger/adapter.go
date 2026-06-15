@@ -15,7 +15,7 @@ type LogEventAdapter struct {
 	hook   func(zerolog.Level)
 }
 
-// maskIfSensitive masks the key in place when it is sensitive, signalling via ok.
+// maskIfSensitive masks the key in place when it is sensitive, signaling via ok.
 // Centralizes the typed-method mask check so adding a new typed slot (e.g. Float64) cannot
 // silently bypass the privacy boundary by forgetting to wire the same conditional.
 // zerolog's *Event.Interface mutates the event in place and returns the same pointer, so

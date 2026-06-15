@@ -227,7 +227,7 @@ const (
 	Oracle     Vendor = "oracle"
 )
 
-// Row represents a single result set row with basic scanning behaviour.
+// Row represents a single result set row with basic scanning behavior.
 type Row interface {
 	Scan(dest ...any) error
 	Err() error

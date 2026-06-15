@@ -138,12 +138,12 @@ func parseSecretPayload(raw []byte) (*config.DatabaseConfig, error) {
 
 	var cfg config.DatabaseConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSecretMalformed, err)
+		return nil, fmt.Errorf("%w: %w", ErrSecretMalformed, err)
 	}
 
 	var aliases rdsRotationAliases
 	if err := json.Unmarshal(raw, &aliases); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSecretMalformed, err)
+		return nil, fmt.Errorf("%w: %w", ErrSecretMalformed, err)
 	}
 
 	if cfg.Type == "" {

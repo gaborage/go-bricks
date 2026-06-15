@@ -44,7 +44,7 @@ func ValidateSubquery(subquery SelectQueryBuilder) error {
 
 	if validator, ok := subquery.(subqueryValidator); ok {
 		if err := validator.ValidateForSubquery(); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidSubquery, err)
+			return fmt.Errorf("%w: %w", ErrInvalidSubquery, err)
 		}
 		return nil
 	}
@@ -52,7 +52,7 @@ func ValidateSubquery(subquery SelectQueryBuilder) error {
 	// Test ToSQL() to catch construction errors early
 	sql, _, err := subquery.ToSQL()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidSubquery, err)
+		return fmt.Errorf("%w: %w", ErrInvalidSubquery, err)
 	}
 	if sql == "" {
 		return ErrEmptySubquerySQL

@@ -51,7 +51,7 @@ const (
 	retryReason5xx           = "5xx"
 )
 
-// netOpDial is the net.OpError.Op value for TCP dial operations. Centralised
+// netOpDial is the net.OpError.Op value for TCP dial operations. Centralized
 // as a constant because classifyError and its tests reference it in four places.
 const netOpDial = "dial"
 
@@ -60,7 +60,7 @@ const netOpDial = "dial"
 // and http.client.request.failed counter — kept as named constants so that
 // both classifyError and its tests can reference them without duplication.
 const (
-	// errorTypeContextCanceled indicates the request was cancelled by the caller.
+	// errorTypeContextCanceled indicates the request was canceled by the caller.
 	errorTypeContextCanceled = "context_canceled"
 
 	// errorTypeTimeout covers framework TimeoutError, context.DeadlineExceeded,

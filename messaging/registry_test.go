@@ -224,10 +224,10 @@ func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) 
 	err := registry.DeclareInfrastructure(ctx)
 
 	assert.Error(t, err)
-	// Could be either timeout or context cancelled depending on timing
+	// Could be either timeout or context canceled depending on timing
 	assert.True(t,
 		strings.Contains(err.Error(), "timeout waiting for AMQP client") ||
-			strings.Contains(err.Error(), "context cancelled while waiting for AMQP client"),
+			strings.Contains(err.Error(), "context canceled while waiting for AMQP client"),
 		"Expected timeout or context cancellation error, got: %s", err.Error())
 }
 
@@ -299,12 +299,12 @@ func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
 	assert.False(t, registry.consumersActive)
 	assert.Nil(t, registry.cancelConsumers)
 
-	// Verify context was cancelled
+	// Verify context was canceled
 	select {
 	case <-ctx.Done():
-		// Expected - context should be cancelled
+		// Expected - context should be canceled
 	default:
-		t.Fatal("Expected context to be cancelled")
+		t.Fatal("Expected context to be canceled")
 	}
 }
 
@@ -738,7 +738,7 @@ func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
 	err := registry.DeclareInfrastructure(ctx)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "context cancelled while waiting for AMQP client")
+	assert.Contains(t, err.Error(), "context canceled while waiting for AMQP client")
 }
 
 func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
@@ -2167,7 +2167,7 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 	require.NoError(t, registry.StartConsumers(ctx))
 
 	// Flap, then wait until the supervisor is actively retrying (it has called
-	// ConsumeFromQueue again and is failing into backoff) before cancelling, so
+	// ConsumeFromQueue again and is failing into backoff) before canceling, so
 	// this exercises cancellation from inside the retry/backoff path.
 	close(ch1)
 	require.Eventually(t, func() bool {

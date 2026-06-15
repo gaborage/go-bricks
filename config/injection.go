@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -65,7 +66,8 @@ func (c *Config) InjectInto(target any) error {
 		// Set field value based on config
 		if err := c.setFieldValue(field, configKey, required, defaultValue, hasDefault); err != nil {
 			// Enhance error with field name if not already present
-			if cerr, ok := err.(*ConfigError); ok && cerr.Field == configKey {
+			var cerr *ConfigError
+			if errors.As(err, &cerr) && cerr.Field == configKey {
 				return err
 			}
 			return fmt.Errorf("field %s: %w", fieldType.Name, err)

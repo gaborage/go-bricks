@@ -181,6 +181,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 	if rows == nil {
 		t.Fatalf("expected rows result")
 	}
+	defer rows.Close()
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf(unmetExpectationsErrMsg, err)

@@ -105,8 +105,8 @@ func (s *stubAMQPClient) IsReady() bool {
 
 func TestManagerStopConsumersStopsRegistriesWithoutClosing(t *testing.T) {
 	log := logger.New("error", false)
-	cancelled := false
-	reg := &Registry{logger: log, consumersActive: true, cancelConsumers: func() { cancelled = true }}
+	canceled := false
+	reg := &Registry{logger: log, consumersActive: true, cancelConsumers: func() { canceled = true }}
 	client := &stubAMQPClient{}
 	m := &Manager{
 		logger:    log,
@@ -115,7 +115,7 @@ func TestManagerStopConsumersStopsRegistriesWithoutClosing(t *testing.T) {
 
 	m.StopConsumers()
 
-	assert.True(t, cancelled, "consume context must be cancelled so no new messages are delivered")
+	assert.True(t, canceled, "consume context must be canceled so no new messages are delivered")
 	assert.False(t, reg.consumersActive, "registry must mark consumers stopped")
 	assert.False(t, client.closed, "StopConsumers must NOT close the AMQP connection — Close does that later")
 
@@ -330,7 +330,7 @@ func TestMessagingManagerConsumersSurviveCallerContextCancellation(t *testing.T)
 	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
 
-	// Lazy startup driven by a request-scoped context that is cancelled when the request ends.
+	// Lazy startup driven by a request-scoped context that is canceled when the request ends.
 	callerCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, manager.EnsureConsumers(callerCtx, testTenantID, decls))
 
@@ -339,11 +339,11 @@ func TestMessagingManagerConsumersSurviveCallerContextCancellation(t *testing.T)
 	consumerCtx := client.lastConsumeCtx()
 	require.NotNil(t, consumerCtx)
 
-	// Request ends: cancelling the caller context must NOT cancel the consumer.
+	// Request ends: canceling the caller context must NOT cancel the consumer.
 	cancel()
 	select {
 	case <-consumerCtx.Done():
-		t.Fatal("consumer context was cancelled when the caller/request context ended — consumers stop after one request and never restart")
+		t.Fatal("consumer context was canceled when the caller/request context ended — consumers stop after one request and never restart")
 	case <-time.After(100 * time.Millisecond):
 		// Consumer context is detached from the request lifecycle, as required.
 	}

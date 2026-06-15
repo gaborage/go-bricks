@@ -245,7 +245,7 @@ func parsePrivateKey(der []byte, keyName string) (*rsa.PrivateKey, error) {
 	// Fallback to PKCS1 (legacy format)
 	rsaKey, err2 := x509.ParsePKCS1PrivateKey(der)
 	if err2 != nil {
-		return nil, fmt.Errorf("keystore: key %q private: PKCS8 failed (%v), PKCS1 fallback also failed: %w", keyName, err, err2)
+		return nil, fmt.Errorf("keystore: key %q private: PKCS8 failed (%w), PKCS1 fallback also failed: %w", keyName, err, err2)
 	}
 	return rsaKey, nil
 }

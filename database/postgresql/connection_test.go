@@ -146,10 +146,12 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Execute Query operation
-	rs, err := c.Query(ctx, "SELECT id, name FROM items")
-	require.NoError(t, err)
-	assert.True(t, rs.Next())
-	_ = rs.Close()
+	func() {
+		rs, qerr := c.Query(ctx, "SELECT id, name FROM items")
+		require.NoError(t, qerr)
+		defer rs.Close()
+		assert.True(t, rs.Next())
+	}()
 
 	// Execute QueryRow operation
 	row := c.QueryRow(ctx, "SELECT NOW()")
@@ -453,10 +455,12 @@ func TestStatementQueryAndQueryRow(t *testing.T) {
 	require.NoError(t, err)
 	ps := wrapper.NewStatement(stmt)
 
-	rows, err := ps.Query(ctx, true)
-	require.NoError(t, err)
-	require.True(t, rows.Next())
-	rows.Close()
+	func() {
+		rows, qerr := ps.Query(ctx, true)
+		require.NoError(t, qerr)
+		defer rows.Close()
+		require.True(t, rows.Next())
+	}()
 	require.NoError(t, ps.Close())
 
 	mock.ExpectPrepare(regexp.QuoteMeta("SELECT name FROM widgets WHERE id = $1")).
@@ -492,9 +496,11 @@ func TestTransactionQueryPrepareAndExec(t *testing.T) {
 		WithArgs("A-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(9))
 
-	resultRows, err := trx.Query(ctx, "SELECT id FROM parts WHERE sku = $1", "A-1")
-	require.NoError(t, err)
-	resultRows.Close()
+	func() {
+		resultRows, qerr := trx.Query(ctx, "SELECT id FROM parts WHERE sku = $1", "A-1")
+		require.NoError(t, qerr)
+		defer resultRows.Close()
+	}()
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM parts WHERE id = $1")).
 		WithArgs(9).

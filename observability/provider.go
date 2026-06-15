@@ -561,11 +561,11 @@ func (p *provider) ForceFlush(ctx context.Context) error {
 // cleanupPartialInit safely shuts down any partially initialized providers.
 // Called when provider initialization fails mid-way to prevent resource leaks.
 // Uses a background context with timeout to ensure cleanup completes even if the
-// initialization context was cancelled.
+// initialization context was canceled.
 func (p *provider) cleanupPartialInit() {
 	debugLogger.Println("Cleaning up partially initialized providers due to init error")
 
-	// Use background context with timeout for cleanup (don't inherit cancelled context)
+	// Use background context with timeout for cleanup (don't inherit canceled context)
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 

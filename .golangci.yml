@@ -3,30 +3,44 @@ run:
   tests: true
 linters:
   enable:
-    - bodyclose          # checks whether HTTP response body is closed successfully
-    - dogsled            # checks assignments with too many blank identifiers
-    - dupl               # code clone detection  
-    - errcheck           # checks for unchecked errors
-    - exhaustive         # checks exhaustiveness of enum switch statements
-    - gochecknoinits     # checks that no init functions are present
-    - goconst            # finds repeated strings that could be replaced by a constant
-    - gocritic           # provides diagnostics that check for bugs, performance and style issues
-    - gocyclo            # computes and checks the cyclomatic complexity of functions
-    - goprintffuncname   # checks that printf-like functions are named with f at the end
-    - gosec              # inspects source code for security problems
-    - govet              # reports suspicious constructs (go vet)
-    - ineffassign        # detects when assignments to existing variables are not used
-    - lll                # reports long lines
-    - nakedret           # finds naked returns in functions greater than a specified function length
-    - noctx              # finds sending HTTP request without context.Context
-    - nolintlint         # reports ill-formed or insufficient nolint directives
-    - prealloc           # finds slice declarations that could potentially be preallocated
-    - revive             # fast, configurable, extensible, flexible, and beautiful linter for Go
-    - rowserrcheck       # checks whether Err of rows is checked successfully
-    - staticcheck        # staticcheck is a go vet on steroids, applying a ton of static analysis checks
-    - unconvert          # removes unnecessary type conversions
-    - unparam            # reports unused function parameters
-    - whitespace         # detection of leading and trailing whitespace
+    - bodyclose                 # checks whether HTTP response body is closed successfully
+    - copyloopvar               # checks for unnecessary loop-variable copies (Go 1.22+ per-iteration vars)
+    - dogsled                   # checks assignments with too many blank identifiers
+    - dupl                      # code clone detection
+    - durationcheck             # checks for two durations multiplied together
+    - errcheck                  # checks for unchecked errors
+    - errname                   # checks that error variables/types follow the errFoo/FooError convention
+    - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
+    - exhaustive                # checks exhaustiveness of enum switch statements
+    - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
+    - gochecknoinits            # checks that no init functions are present
+    - goconst                   # finds repeated strings that could be replaced by a constant
+    - gocritic                  # provides diagnostics that check for bugs, performance and style issues
+    - gocyclo                   # computes and checks the cyclomatic complexity of functions
+    - goprintffuncname          # checks that printf-like functions are named with f at the end
+    - gosec                     # inspects source code for security problems
+    - govet                     # reports suspicious constructs (go vet)
+    - ineffassign               # detects when assignments to existing variables are not used
+    - lll                       # reports long lines
+    - loggercheck               # checks key-value pairs for common logger libraries (zap, zerolog, ...)
+    - makezero                  # finds slice declarations with non-zero initial length used with append
+    - misspell                  # finds commonly misspelled English words in comments
+    - musttag                   # enforces field tags in (un)marshaled structs
+    - nakedret                  # finds naked returns in functions greater than a specified function length
+    - nilerr                    # finds code that returns nil even if it checks that the error is not nil
+    - noctx                     # finds sending HTTP request without context.Context
+    - nolintlint                # reports ill-formed or insufficient nolint directives
+    - prealloc                  # finds slice declarations that could potentially be preallocated
+    - revive                    # fast, configurable, extensible, flexible, and beautiful linter for Go
+    - rowserrcheck              # checks whether Err of rows is checked successfully
+    - spancheck                 # checks for mistakes with OpenTelemetry/Census spans
+    - sqlclosecheck             # checks that sql.Rows and sql.Stmt are closed
+    - staticcheck               # staticcheck is a go vet on steroids, applying a ton of static analysis checks
+    - unconvert                 # removes unnecessary type conversions
+    - unparam                   # reports unused function parameters
+    - wastedassign              # finds wasted assignment statements
+    - whitespace                # detection of leading and trailing whitespace
+    - zerologlint               # detects the wrong usage of zerolog that a user forgets to dispatch with Send or Msg
   settings:
     dupl:
       threshold: 100
@@ -50,13 +64,8 @@ linters:
     gocyclo:
       min-complexity: 15
     govet:
-      settings:
-        printf:
-          funcs:
-            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+      enable:
+        - shadow  # reports shadowed variables (disabled by default)
     lll:
       line-length: 215
     misspell:
@@ -92,25 +101,17 @@ linters:
           - gosec
           - ineffassign
           - rowserrcheck
-          - govet  # Allow unkeyed bson.D fields in tests
         path: _test\.go
-      - linters:
-          - gocyclo
-          - ineffassign
-        path: pkg/mock/
       - linters:
           - lll
         source: '^//go:generate '
       - linters:
           - staticcheck
         text: 'SA9003:'
+      # zerologlint cannot follow the LogEventAdapter wrapper which dispatches via its own Send/Msg
       - linters:
-          - ineffassign
-        path: cmd/.*/main\.go
-      - linters:
-          - gocyclo
-        path: pkg/parser/
-        text: cyclomatic complexity
+          - zerologlint
+        path: logger/adapter\.go
       # Intentional "testing" subpackages for test utilities (imported with aliases)
       - linters:
           - revive

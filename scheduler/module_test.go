@@ -133,8 +133,8 @@ func TestJobSkippedDuringShutdown(t *testing.T) {
 
 // TestCreateJobWrapperBalancesAddDoneOnShutdownPath asserts that the wrapper's
 // wg.Add(1)/wg.Done() pair stays balanced when the closure bails because the
-// shutdown context is already cancelled. The pre-fix code did Add AFTER the
-// shutdown check, so a shutdown-cancelled invocation never incremented wg —
+// shutdown context is already canceled. The pre-fix code did Add AFTER the
+// shutdown check, so a shutdown-canceled invocation never incremented wg —
 // allowing wg.Wait() in Shutdown() to return before the closure had even
 // observed the cancellation. The fix moves Add to the first statement; this
 // test locks in the invariant that every bail path balances Add and Done.

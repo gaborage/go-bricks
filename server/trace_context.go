@@ -31,11 +31,11 @@ func TraceContext() echo.MiddlewareFunc {
 		return func(c *echo.Context) error {
 			req := c.Request()
 
-			// SAFETY: Check if the request context has already been cancelled (e.g., by timeout).
+			// SAFETY: Check if the request context has already been canceled (e.g., by timeout).
 			// If so, we should return early to avoid accessing potentially invalidated Echo state.
 			select {
 			case <-req.Context().Done():
-				// Context already cancelled, return the error without processing
+				// Context already canceled, return the error without processing
 				return req.Context().Err()
 			default:
 				// Context still active, proceed normally

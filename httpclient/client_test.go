@@ -976,7 +976,7 @@ func TestTraceIDUtilities(t *testing.T) {
 }
 
 // setupClientTestMeterProvider creates a TestMeterProvider, sets it as the global OTel
-// provider, resets tracking meter state, and initialises the instruments. Returns the
+// provider, resets tracking meter state, and initializes the instruments. Returns the
 // provider for metric collection and a cleanup function that must be deferred.
 func setupClientTestMeterProvider(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
 	t.Helper()
@@ -1282,14 +1282,14 @@ func TestBackoffDelayFallbacks(t *testing.T) {
 	})
 }
 
-// netTimeoutErr is a minimal net.Error implementation used to exercise the
+// netTimeoutError is a minimal net.Error implementation used to exercise the
 // generic net.Error.Timeout() branch in classifyError without matching any of
 // the more specific error types (DNSError, OpError, etc.).
-type netTimeoutErr struct{}
+type netTimeoutError struct{}
 
-func (netTimeoutErr) Error() string   { return "simulated net timeout" }
-func (netTimeoutErr) Timeout() bool   { return true }
-func (netTimeoutErr) Temporary() bool { return true }
+func (netTimeoutError) Error() string   { return "simulated net timeout" }
+func (netTimeoutError) Timeout() bool   { return true }
+func (netTimeoutError) Temporary() bool { return true }
 
 // TestClassifyError is a white-box table-driven test that verifies every branch
 // of classifyError, including the DNS-timeout regression (a timed-out
@@ -1352,7 +1352,7 @@ func TestClassifyError(t *testing.T) {
 			// A read-deadline net.Error (not a DNSError or dial OpError) must fall
 			// through to the generic net.Error.Timeout() branch → errorTypeTimeout.
 			name:     "generic_net_timeout",
-			err:      netTimeoutErr{},
+			err:      netTimeoutError{},
 			expected: errorTypeTimeout,
 		},
 		{
@@ -1688,7 +1688,7 @@ func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing
 
 	// First two attempts (503) → Error status, last (200) → Unset.
 	// codes.Ok is unused for client spans per OTel HTTP semconv (4xx-as-OK
-	// is signalled by Unset, not Ok).
+	// is signaled by Unset, not Ok).
 	errorCount, unsetCount := 0, 0
 	for i := range children {
 		switch children[i].Status.Code {

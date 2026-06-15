@@ -275,7 +275,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for AMQP client: %w", ctx.Err())
+			return fmt.Errorf("context canceled while waiting for AMQP client: %w", ctx.Err())
 		case <-timeout.C:
 			return fmt.Errorf("timeout waiting for AMQP client to be ready")
 		case <-ticker.C:
@@ -483,17 +483,17 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 
 // superviseConsumer runs consumer sessions back-to-back, re-subscribing after
 // the broker drops the delivery channel, until the consumer context is
-// cancelled (StopConsumers / shutdown). This is the consumer-side counterpart
+// canceled (StopConsumers / shutdown). This is the consumer-side counterpart
 // to the client's reconnection supervisor: the publisher path recovers because
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
 func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
 	for {
 		// Run one subscription session until the delivery channel closes
-		// (reconnect needed) or the context is cancelled (stop for good).
+		// (reconnect needed) or the context is canceled (stop for good).
 		sessionStart := time.Now()
 		if !r.handleMessages(ctx, consumer, deliveries) {
-			return // context cancelled → stop for good
+			return // context canceled → stop for good
 		}
 
 		// Rapid-flap guard: if the session barely lasted, the broker is handing
@@ -508,14 +508,14 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 
 		next, ok := r.resubscribe(ctx, consumer)
 		if !ok {
-			return // context cancelled while waiting to re-subscribe
+			return // context canceled while waiting to re-subscribe
 		}
 		deliveries = next
 	}
 }
 
-// sleepCtx waits for d, or until ctx is cancelled, whichever comes first. It
-// returns true if the full duration elapsed and false if ctx was cancelled.
+// sleepCtx waits for d, or until ctx is canceled, whichever comes first. It
+// returns true if the full duration elapsed and false if ctx was canceled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil
@@ -545,7 +545,7 @@ func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
 // closed. It attempts immediately so a routine channel-only flap (the client's
 // connection is still up) recovers without added downtime, then on failure
 // backs off with full jitter before retrying, until ConsumeFromQueue succeeds
-// or the context is cancelled. Returns (channel, true) on success and
+// or the context is canceled. Returns (channel, true) on success and
 // (nil, false) on cancellation.
 //
 // A success-then-immediately-closing channel cannot become a tight spin: the
@@ -587,7 +587,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 // handleMessages runs a single consumer session: it spawns a worker pool
 // (v0.17+) and feeds deliveries to it until the session ends. It returns true
 // when the broker closed the delivery channel (the caller should re-subscribe)
-// and false when the context was cancelled (shut down for good).
+// and false when the context was canceled (shut down for good).
 func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) bool {
 	workers := consumer.Workers
 	if workers <= 0 {
@@ -617,12 +617,12 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 
 	// Main loop: feed jobs to worker pool. reconnect=true means the broker
 	// closed the delivery channel (the caller should re-subscribe); false means
-	// the context was cancelled (shut down for good).
+	// the context was canceled (shut down for good).
 	reconnect := func() bool {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info().Msg("Consumer context cancelled, stopping message handler")
+				log.Info().Msg("Consumer context canceled, stopping message handler")
 				return false
 
 			case delivery, ok := <-deliveries:
@@ -640,7 +640,7 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 				select {
 				case jobs <- &d:
 				case <-ctx.Done():
-					log.Info().Msg("Consumer context cancelled, stopping message handler")
+					log.Info().Msg("Consumer context canceled, stopping message handler")
 					return false
 				}
 			}
@@ -672,7 +672,7 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debug().Msg("Worker context cancelled")
+			log.Debug().Msg("Worker context canceled")
 			return
 
 		case delivery, ok := <-jobs:

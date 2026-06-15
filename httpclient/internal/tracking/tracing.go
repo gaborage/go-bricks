@@ -102,8 +102,14 @@ func StartHTTPClientSpan(ctx context.Context, info *HTTPSpanInfo) (context.Conte
 		info = &HTTPSpanInfo{}
 	}
 	method := canonicalMethod(info.Method)
+	// Span-factory pattern: the started span is returned to the caller, which is
+	// responsible for ending it via EndHTTPClientSpan (see client.go). Ending it
+	// here would terminate the span at ~0 duration and break HTTP-client tracing.
+	// spancheck cannot model this cross-function ownership transfer.
+	//nolint:spancheck // span ownership intentionally transferred to caller (EndHTTPClientSpan)
 	ctx, span := httpTracer.Start(ctx, spanName(info, method), trace.WithSpanKind(trace.SpanKindClient))
 	span.SetAttributes(spanStartAttributes(info, method)...)
+	//nolint:spancheck // span ownership intentionally transferred to caller (EndHTTPClientSpan)
 	return ctx, span
 }
 

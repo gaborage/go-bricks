@@ -124,7 +124,7 @@ func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
 
 	GET(hr, registrar, "/test", handler)
 
-	// Create request with already-cancelled context
+	// Create request with already-canceled context
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -136,7 +136,7 @@ func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.False(t, handlerCalled, "Handler should not be called when context is already cancelled")
+	assert.False(t, handlerCalled, "Handler should not be called when context is already canceled")
 	assert.Contains(t, rec.Body.String(), "timeout")
 }
 
@@ -207,8 +207,8 @@ func TestTimeoutDuringValidation(t *testing.T) {
 	// Wait for context to expire
 	time.Sleep(5 * time.Millisecond)
 
-	// Explicitly verify context is cancelled (defensive test assertion)
-	require.Error(t, ctx.Err(), "Context should be cancelled after timeout")
+	// Explicitly verify context is canceled (defensive test assertion)
+	require.Error(t, ctx.Err(), "Context should be canceled after timeout")
 
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -311,7 +311,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 		case <-time.After(100 * time.Millisecond): // Exceeds 50ms timeout
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		case <-c.Request().Context().Done():
-			// Context cancelled - return the error to trigger timeout handling
+			// Context canceled - return the error to trigger timeout handling
 			return c.Request().Context().Err()
 		}
 	})
@@ -363,7 +363,7 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 	e.GET("/endpoint", func(c *echo.Context) error {
 		// Simulate slow operation that checks context.
 		// Handler delay (200ms) is 10x the timeout (20ms) to ensure
-		// the context is always cancelled first, even under CI load.
+		// the context is always canceled first, even under CI load.
 		select {
 		case <-time.After(200 * time.Millisecond):
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

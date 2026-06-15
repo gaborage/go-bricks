@@ -120,7 +120,7 @@ type AuditEvent struct {
 // not synchronize concurrent reads if a sink decides to mutate.
 //
 // The framework calls Record with a fresh background context that may be
-// cancelled by FlywayMigrator.Close. Implementations SHOULD respect
+// canceled by FlywayMigrator.Close. Implementations SHOULD respect
 // ctx.Done() for prompt cancellation, but the framework does not retry on
 // the sink's behalf — sink owners requiring zero-loss audit must back their
 // implementation with a durable buffer (Kafka commit-log, S3 staging, etc.).

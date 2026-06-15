@@ -25,7 +25,7 @@ const (
 	auditSinkQueueCap = 256
 )
 
-// Audit attribute keys are centralised here so the span path and the
+// Audit attribute keys are centralized here so the span path and the
 // structured-log path emit identical names — schema drift between the two
 // paths would silently break downstream alerting that pivots across them.
 const (
@@ -292,7 +292,7 @@ func (e *auditEmitter) consumeSink(ctx context.Context) {
 // no-op. Honors ctx for shutdown deadline; events still in the queue when
 // ctx expires are silently dropped (their OTel emission already succeeded).
 //
-// The defer here matters: on the timeout branch, cancelling the consumer
+// The defer here matters: on the timeout branch, canceling the consumer
 // context propagates a Done() signal into any in-flight sink.Record call so
 // a well-behaved sink bails immediately instead of running past Close's
 // deadline. On the drain-completed branch the cancel is a cleanup no-op.

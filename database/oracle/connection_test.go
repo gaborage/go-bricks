@@ -163,10 +163,12 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Execute Query operation
-	rs, err := c.Query(ctx, "SELECT id FROM t")
-	require.NoError(t, err)
-	assert.True(t, rs.Next())
-	_ = rs.Close()
+	func() {
+		rs, qerr := c.Query(ctx, "SELECT id FROM t")
+		require.NoError(t, qerr)
+		defer rs.Close()
+		assert.True(t, rs.Next())
+	}()
 
 	// Execute QueryRow operation
 	row := c.QueryRow(ctx, "SELECT CURRENT_TIMESTAMP")
@@ -185,9 +187,11 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 	tx, err := c.Begin(ctx)
 	require.NoError(t, err)
 	defer tx.Rollback(ctx) // No-op if committed
-	rs2, err := tx.Query(ctx, "SELECT 1 FROM dual")
-	require.NoError(t, err)
-	_ = rs2.Close()
+	func() {
+		rs2, qerr := tx.Query(ctx, "SELECT 1 FROM dual")
+		require.NoError(t, qerr)
+		defer rs2.Close()
+	}()
 	require.NoError(t, tx.Commit(ctx))
 
 	// Execute BeginTx + rollback
@@ -337,10 +341,12 @@ func TestOracleStatementQueryAndQueryRow(t *testing.T) {
 	require.NoError(t, err)
 	ps := wrapper.NewStatement(stmt)
 
-	rows, err := ps.Query(context.Background(), true)
-	require.NoError(t, err)
-	require.True(t, rows.Next())
-	rows.Close()
+	func() {
+		rows, qerr := ps.Query(context.Background(), true)
+		require.NoError(t, qerr)
+		defer rows.Close()
+		require.True(t, rows.Next())
+	}()
 	require.NoError(t, ps.Close())
 
 	mock.ExpectPrepare(regexp.QuoteMeta(selectQuery)).
@@ -375,9 +381,11 @@ func TestOracleTransactionQueryPrepareExec(t *testing.T) {
 		WithArgs("X").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(11))
 
-	rows, err := trx.Query(context.Background(), "SELECT id FROM dual WHERE code = :1", "X")
-	require.NoError(t, err)
-	rows.Close()
+	func() {
+		rows, qerr := trx.Query(context.Background(), "SELECT id FROM dual WHERE code = :1", "X")
+		require.NoError(t, qerr)
+		defer rows.Close()
+	}()
 
 	mock.ExpectQuery(regexp.QuoteMeta(selectQuery)).
 		WithArgs(11).

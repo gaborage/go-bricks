@@ -892,7 +892,10 @@ func (a *amqpHeaderAccessor) Set(key string, value any) {
 func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName string) (context.Context, trace.Span) {
 	tracer := otel.Tracer(messagingTracerName)
 	if delivery == nil {
-		// No delivery, return a no-op span
+		// No delivery, return a no-op span. Span-factory pattern: ownership of the
+		// span is transferred to the caller, which must end it (see doc comment).
+		// spancheck cannot model this cross-function transfer.
+		//nolint:spancheck // span ownership intentionally transferred to caller
 		return tracer.Start(ctx, queueName+" "+operationReceive, trace.WithSpanKind(trace.SpanKindConsumer))
 	}
 	// Extract trace context from message headers

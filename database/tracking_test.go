@@ -291,9 +291,11 @@ func TestTrackedConnectionContextWithoutCounter(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(selectOne)).WillReturnRows(rows)
 
 	// This should not panic even without DB counter in context
-	resultRows, err := tracked.Query(context.Background(), selectOne)
-	require.NoError(t, err)
-	resultRows.Close()
+	func() {
+		resultRows, err := tracked.Query(context.Background(), selectOne)
+		require.NoError(t, err)
+		defer resultRows.Close()
+	}()
 }
 
 func TestTrackDBOperation(t *testing.T) {
@@ -536,7 +538,7 @@ func TestTrackedDBQueryContext(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, resultRows)
-	resultRows.Close()
+	defer resultRows.Close()
 
 	assertDBCounter(ctx, t, 1)
 	assertDBElapsedPositive(ctx, t)
@@ -736,7 +738,7 @@ func TestTrackedStmtQuery(t *testing.T) {
 	resultRows, err := stmt.Query(ctx, 1)
 	require.NoError(t, err)
 	assert.NotNil(t, resultRows)
-	resultRows.Close()
+	defer resultRows.Close()
 	assertDBCounter(ctx, t, 2)
 }
 

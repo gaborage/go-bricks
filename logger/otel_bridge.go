@@ -40,7 +40,11 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 
 	var entry map[string]interface{}
 	if json.Unmarshal(p, &entry) != nil {
-		// Ignore malformed or non-JSON entries (e.g., pretty logs)
+		// Ignore malformed or non-JSON entries (e.g., pretty/console logs). As an
+		// io.Writer we MUST report the bytes as consumed (len(p), nil); surfacing the
+		// parse error would break zerolog's writer chain and could drop or duplicate
+		// log lines. The swallow is intentional, hence the nilerr suppression.
+		//nolint:nilerr // deliberate pass-through of non-JSON writes; see comment above
 		return len(p), nil
 	}
 

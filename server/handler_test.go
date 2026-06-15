@@ -138,17 +138,17 @@ func TestWrapHandlerValidationError(t *testing.T) {
 }
 
 type advancedBindReq struct {
-	ID         int       `param:"id" validate:"min=1"`
-	Names      []string  `query:"names"`
-	Active     *bool     `query:"active"`
-	When       time.Time `query:"when"`
-	HeaderVals []string  `header:"X-Items"`
+	ID         int       `param:"id" json:"id" validate:"min=1"`
+	Names      []string  `query:"names" json:"names"`
+	Active     *bool     `query:"active" json:"active"`
+	When       time.Time `query:"when" json:"when"`
+	HeaderVals []string  `header:"X-Items" json:"headerVals"`
 }
 
 type numericRequest struct {
-	AccountID uint    `param:"accountID"`
-	Limit     uint16  `query:"limit"`
-	Ratio     float32 `query:"ratio"`
+	AccountID uint    `param:"accountID" json:"accountID"`
+	Limit     uint16  `query:"limit" json:"limit"`
+	Ratio     float32 `query:"ratio" json:"ratio"`
 }
 
 func TestRequestBinderAdvancedBinding(t *testing.T) {
