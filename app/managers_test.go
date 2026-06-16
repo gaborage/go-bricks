@@ -110,8 +110,10 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 
 		options := builder.BuildMessagingOptions()
 
-		assert.Equal(t, 10, options.MaxPublishers)
-		assert.Equal(t, 30*time.Minute, options.IdleTTL)
+		// With no operator override, single-tenant falls back to the documented
+		// messaging.publisher defaults (maxcached=50, idlettl=10m).
+		assert.Equal(t, 50, options.MaxPublishers)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run("multi-tenant messaging options", func(t *testing.T) {
@@ -169,6 +171,73 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 	})
 }
 
+func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
+	// Config validation applies defaults: messaging.publisher.maxcached=50, messaging.publisher.idlettl=10m
+	// cache.manager.maxsize=100, cache.manager.idlettl=15m, cache.manager.cleanupinterval=5m
+
+	t.Run("single-tenant BuildMessagingOptions should honor config defaults not hardcoded 10", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		// Currently hardcodes MaxPublishers=10, should instead read from cfg.Messaging.Publisher.MaxCached
+		opts := builder.BuildMessagingOptions()
+		assert.Equal(t, 50, opts.MaxPublishers, "should honor messaging.publisher.maxcached config default of 50, not hardcode 10")
+	})
+
+	t.Run("single-tenant BuildMessagingOptions IdleTTL should honor config default 10m not hardcoded 30m", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildMessagingOptions()
+		assert.Equal(t, 10*time.Minute, opts.IdleTTL, "should honor messaging.publisher.idlettl config default of 10m, not hardcode 30m")
+	})
+
+	t.Run("single-tenant BuildCacheOptions should honor config defaults not hardcoded 10", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 100, opts.MaxSize, "should honor cache.manager.maxsize config default of 100, not hardcode 10")
+	})
+
+	t.Run("single-tenant BuildCacheOptions IdleTTL should honor config default 15m not hardcoded 1h", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 15*time.Minute, opts.IdleTTL, "should honor cache.manager.idlettl config default of 15m, not hardcode 1h")
+	})
+
+	t.Run("single-tenant BuildCacheOptions CleanupInterval should honor config default 5m not hardcoded 15m", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 5*time.Minute, opts.CleanupInterval, "should honor cache.manager.cleanupinterval config default of 5m, not hardcode 15m")
+	})
+
+	t.Run("operator override reaches messaging options", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 77, IdleTTL: 3 * time.Minute}
+		opts := builder.BuildMessagingOptions()
+		assert.Equal(t, 77, opts.MaxPublishers, "operator messaging.publisher.maxcached override must reach ManagerOptions")
+		assert.Equal(t, 3*time.Minute, opts.IdleTTL, "operator messaging.publisher.idlettl override must reach ManagerOptions")
+	})
+
+	t.Run("operator override reaches cache options", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		builder.cacheConfig = config.CacheManagerConfig{MaxSize: 42, IdleTTL: 2 * time.Minute, CleanupInterval: 90 * time.Second}
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 42, opts.MaxSize, "operator cache.manager.maxsize override must reach ManagerConfig")
+		assert.Equal(t, 2*time.Minute, opts.IdleTTL, "operator cache.manager.idlettl override must reach ManagerConfig")
+		assert.Equal(t, 90*time.Second, opts.CleanupInterval, "operator cache.manager.cleanupinterval override must reach ManagerConfig")
+	})
+
+	t.Run("multi-tenant cache MaxSize honors operator override over tenant limit", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 250)
+		builder.cacheConfig = config.CacheManagerConfig{MaxSize: 999}
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 999, opts.MaxSize, "operator cache.manager.maxsize override must win over tenant limit")
+	})
+
+	t.Run("multi-tenant messaging MaxPublishers honors operator override over tenant limit", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 250)
+		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 888}
+		opts := builder.BuildMessagingOptions()
+		assert.Equal(t, 888, opts.MaxPublishers, "operator messaging.publisher.maxcached override must win over tenant limit")
+	})
+}
+
 func TestManagerConfigBuilderIsMultiTenant(t *testing.T) {
 	t.Run("single-tenant returns false", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 50)
@@ -210,9 +279,11 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 
 		options := builder.BuildCacheOptions()
 
-		assert.Equal(t, 10, options.MaxSize)
-		assert.Equal(t, 1*time.Hour, options.IdleTTL)
-		assert.Equal(t, 15*time.Minute, options.CleanupInterval)
+		// With no operator override, single-tenant falls back to the documented
+		// cache.manager defaults (maxsize=100, idlettl=15m, cleanupinterval=5m).
+		assert.Equal(t, 100, options.MaxSize)
+		assert.Equal(t, 15*time.Minute, options.IdleTTL)
+		assert.Equal(t, 5*time.Minute, options.CleanupInterval)
 	})
 
 	t.Run("multi-tenant cache options", func(t *testing.T) {
@@ -265,11 +336,12 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
 
-		// Single-tenant always uses fixed values, regardless of tenantLimit
+		// Single-tenant ignores tenantLimit: DB keeps its fixed size, messaging
+		// falls back to the documented messaging.publisher.maxcached default (50).
 		assert.Equal(t, 10, dbOptions.MaxSize)
-		assert.Equal(t, 10, msgOptions.MaxPublishers)
+		assert.Equal(t, 50, msgOptions.MaxPublishers)
 
-		// Database has longer TTL than messaging in single-tenant mode
+		// Database has longer TTL (1h) than messaging (10m) in single-tenant mode
 		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
 	})
 

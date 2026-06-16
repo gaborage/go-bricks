@@ -18,15 +18,15 @@ import (
 var metricInitHook func() error
 
 // initMeterProvider initializes the OpenTelemetry meter provider.
-func (p *provider) initMeterProvider() error {
+func (p *provider) initMeterProvider(ctx context.Context) error {
 	// Create resource with service information (reuse from trace provider)
-	res, err := p.createResource()
+	res, err := p.createResource(ctx)
 	if err != nil {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
 	// Create metric exporter
-	exporter, err := p.createMetricExporter()
+	exporter, err := p.createMetricExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create metric exporter: %w", err)
 	}
@@ -86,7 +86,7 @@ func (p *provider) initMeterProvider() error {
 }
 
 // createMetricExporter creates a metric exporter based on the configured endpoint.
-func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
+func (p *provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter, error) {
 	endpoint := p.config.Metrics.Endpoint
 	debugLogger.Printf("Creating metric exporter for endpoint: %s", endpoint)
 
@@ -110,13 +110,13 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		exporter, err := p.createOTLPHTTPMetricExporter(useInsecure, headers)
+		exporter, err := p.createOTLPHTTPMetricExporter(ctx, useInsecure, headers)
 		if err != nil {
 			return nil, err
 		}
 		return getMetricExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
-		exporter, err := p.createOTLPGRPCMetricExporter(useInsecure, headers)
+		exporter, err := p.createOTLPGRPCMetricExporter(ctx, useInsecure, headers)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +128,7 @@ func (p *provider) createMetricExporter() (sdkmetric.Exporter, error) {
 }
 
 // createOTLPHTTPMetricExporter creates an OTLP HTTP metric exporter.
-func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
+func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
 		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
@@ -165,7 +165,7 @@ func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[st
 		opts = append(opts, otlpmetrichttp.WithHeaders(headers))
 	}
 
-	exporter, err := otlpmetrichttp.New(context.Background(), opts...)
+	exporter, err := otlpmetrichttp.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP HTTP metric exporter: %v", err)
 		return nil, err
@@ -176,7 +176,7 @@ func (p *provider) createOTLPHTTPMetricExporter(useInsecure bool, headers map[st
 }
 
 // createOTLPGRPCMetricExporter creates an OTLP gRPC metric exporter.
-func (p *provider) createOTLPGRPCMetricExporter(useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
+func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	debugLogger.Printf("Creating OTLP gRPC metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
 		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
@@ -210,7 +210,7 @@ func (p *provider) createOTLPGRPCMetricExporter(useInsecure bool, headers map[st
 		debugLogger.Printf("Added %d custom headers to metrics gRPC exporter", len(headers))
 	}
 
-	exporter, err := otlpmetricgrpc.New(context.Background(), opts...)
+	exporter, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP gRPC metric exporter: %v", err)
 		return nil, err

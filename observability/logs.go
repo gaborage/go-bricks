@@ -20,21 +20,23 @@ var grpcInsecureCredentials = insecure.NewCredentials
 var logInitHook func() error
 
 // initLogProvider initializes the OpenTelemetry logger provider with dual-mode logging.
-func (p *provider) initLogProvider() error {
+func (p *provider) initLogProvider(ctx context.Context) error {
 	// Create resource with service information (reuse from trace provider)
-	res, err := p.createResource()
+	res, err := p.createResource(ctx)
 	if err != nil {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
 	// Create log exporter
-	exporter, err := p.createLogExporter()
+	exporter, err := p.createLogExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create log exporter: %w", err)
 	}
 
-	// Create dual-mode processor (action logs + trace logs)
-	processor, err := p.createDualModeProcessor(exporter)
+	// Create dual-mode processor (action logs + trace logs), reusing the base
+	// resource built above so resource detection runs once under the startup
+	// budget rather than three times.
+	processor, err := p.createDualModeProcessor(res, exporter)
 	if err != nil {
 		return fmt.Errorf("failed to create dual-mode processor: %w", err)
 	}
@@ -55,7 +57,7 @@ func (p *provider) initLogProvider() error {
 }
 
 // createLogExporter creates a log exporter based on the configured endpoint.
-func (p *provider) createLogExporter() (sdklog.Exporter, error) {
+func (p *provider) createLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 	endpoint := p.config.Logs.Endpoint
 	debugLogger.Printf("Creating log exporter for endpoint: %s", endpoint)
 
@@ -79,13 +81,13 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		exporter, err := p.createOTLPHTTPLogExporter()
+		exporter, err := p.createOTLPHTTPLogExporter(ctx)
 		if err != nil {
 			return nil, err
 		}
 		return getLogExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
-		exporter, err := p.createOTLPGRPCLogExporter()
+		exporter, err := p.createOTLPGRPCLogExporter(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +99,7 @@ func (p *provider) createLogExporter() (sdklog.Exporter, error) {
 }
 
 // createOTLPHTTPLogExporter creates an OTLP HTTP log exporter.
-func (p *provider) createOTLPHTTPLogExporter() (sdklog.Exporter, error) {
+func (p *provider) createOTLPHTTPLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 	useInsecure := false
 	if p.config.Logs.Insecure != nil {
 		useInsecure = *p.config.Logs.Insecure
@@ -131,7 +133,7 @@ func (p *provider) createOTLPHTTPLogExporter() (sdklog.Exporter, error) {
 		opts = append(opts, otlploghttp.WithHeaders(p.config.Logs.Headers))
 	}
 
-	exporter, err := otlploghttp.New(context.Background(), opts...)
+	exporter, err := otlploghttp.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP HTTP log exporter: %v", err)
 		return nil, err
@@ -142,7 +144,7 @@ func (p *provider) createOTLPHTTPLogExporter() (sdklog.Exporter, error) {
 }
 
 // createOTLPGRPCLogExporter creates an OTLP gRPC log exporter.
-func (p *provider) createOTLPGRPCLogExporter() (sdklog.Exporter, error) {
+func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Exporter, error) {
 	useInsecure := false
 	if p.config.Logs.Insecure != nil {
 		useInsecure = *p.config.Logs.Insecure
@@ -173,7 +175,7 @@ func (p *provider) createOTLPGRPCLogExporter() (sdklog.Exporter, error) {
 		debugLogger.Printf("Added %d custom headers to logs gRPC exporter", len(p.config.Logs.Headers))
 	}
 
-	exporter, err := otlploggrpc.New(context.Background(), opts...)
+	exporter, err := otlploggrpc.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP gRPC log exporter: %v", err)
 		return nil, err
@@ -184,17 +186,17 @@ func (p *provider) createOTLPGRPCLogExporter() (sdklog.Exporter, error) {
 }
 
 // createDualModeProcessor creates a dual-mode log processor with separate processors for action and trace logs.
-func (p *provider) createDualModeProcessor(baseExporter sdklog.Exporter) (sdklog.Processor, error) {
+func (p *provider) createDualModeProcessor(baseRes *resource.Resource, baseExporter sdklog.Exporter) (sdklog.Processor, error) {
 	debugLogger.Println("Creating dual-mode log processor (action logs + trace logs)")
 
 	// Create resource for action logs (log.type="action")
-	actionResource, err := p.createLogResource("action")
+	actionResource, err := p.createLogResource(baseRes, "action")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create action log resource: %w", err)
 	}
 
 	// Create resource for trace logs (log.type="trace")
-	traceResource, err := p.createLogResource("trace")
+	traceResource, err := p.createLogResource(baseRes, "trace")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace log resource: %w", err)
 	}
@@ -216,13 +218,10 @@ func (p *provider) createDualModeProcessor(baseExporter sdklog.Exporter) (sdklog
 }
 
 // createLogResource creates a resource with the specified log.type attribute.
-// This merges the base service resource with log-type-specific attributes.
-func (p *provider) createLogResource(logType string) (*resource.Resource, error) {
-	baseRes, err := p.createResource()
-	if err != nil {
-		return nil, err
-	}
-
+// This merges the supplied base service resource with log-type-specific
+// attributes. The base resource is built once by the caller so resource
+// detection is not repeated per log type under the startup budget.
+func (p *provider) createLogResource(baseRes *resource.Resource, logType string) (*resource.Resource, error) {
 	// Create log-type-specific resource
 	typeRes, err := resource.Merge(
 		baseRes,

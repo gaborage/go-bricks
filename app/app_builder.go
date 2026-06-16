@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -146,7 +147,7 @@ func (b *Builder) ResolveDependencies() *Builder {
 		return b
 	}
 
-	b.bundle = b.bootstrap.dependencies()
+	b.bundle = b.bootstrap.dependencies(context.Background())
 	if b.bundle != nil && b.bundle.deps != nil && b.bundle.deps.Logger != nil {
 		// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
 		b.logger = b.bundle.deps.Logger
@@ -240,36 +241,120 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 
 // performPreInitialization attempts to establish connections during app startup.
 // This reduces cold-start latency for single-tenant applications.
+//
+// Each component is pre-initialized under its OWN context budget sourced from
+// app.startup.{database,messaging,cache}, honoring the documented three-level
+// fallback hierarchy (component value > app.startup.timeout > built-in default,
+// resolved earlier in config.applyStartupDefaults). Database and messaging
+// failures are fatal (a misconfigured backing store should fail fast at startup);
+// cache pre-init is best-effort, matching the manager-creation contract where a
+// failing cache is disabled rather than crashing the app.
 func (b *Builder) performPreInitialization() {
 	if b.err != nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), b.cfg.App.Startup.Timeout)
-	defer cancel()
+	// Single parent context for the whole pre-init phase; each component derives
+	// its own budget from it via context.WithTimeout so the three share one
+	// cancellation lineage. The context is threaded as a parameter (never stored
+	// on the builder), matching the framework's startup-at-Background precedent.
+	parent := context.Background()
+	startup := b.cfg.App.Startup
 	b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
 
-	// Pre-initialize database if configured
-	if b.bundle.dbManager != nil && config.IsDatabaseConfigured(&b.cfg.Database) {
-		if _, err := b.bundle.dbManager.Get(ctx, ""); err != nil {
-			b.err = fmt.Errorf("database connection failed during startup: %w", err)
-			return
-		}
-		b.logger.Debug().Msg("Pre-initialized database connection")
-	} else if b.bundle.dbManager != nil {
-		b.logger.Debug().Msg("Skipping database pre-initialization: not configured")
+	if !b.preInitDatabase(parent, startup.Database) {
+		return
+	}
+	if !b.preInitMessaging(parent, startup.Messaging) {
+		return
+	}
+	b.preInitCache(parent, startup.Cache)
+}
+
+// preInitDatabase pre-initializes the database connection under its own startup
+// budget. Returns false (and sets b.err) on a fatal failure so the caller stops.
+func (b *Builder) preInitDatabase(parent context.Context, timeout time.Duration) bool {
+	if b.bundle.dbManager == nil {
+		return true
+	}
+	return b.preInitFatalComponent(
+		parent,
+		"database",
+		timeout,
+		config.IsDatabaseConfigured(&b.cfg.Database),
+		func(ctx context.Context) error {
+			_, err := b.bundle.dbManager.Get(ctx, "")
+			return err
+		},
+	)
+}
+
+// preInitMessaging pre-initializes the messaging publisher under its own startup
+// budget. Returns false (and sets b.err) on a fatal failure so the caller stops.
+func (b *Builder) preInitMessaging(parent context.Context, timeout time.Duration) bool {
+	if b.bundle.messagingManager == nil {
+		return true
+	}
+	return b.preInitFatalComponent(
+		parent,
+		"messaging",
+		timeout,
+		config.IsMessagingConfigured(&b.cfg.Messaging),
+		func(ctx context.Context) error {
+			_, err := b.bundle.messagingManager.Publisher(ctx, "")
+			return err
+		},
+	)
+}
+
+// preInitFatalComponent pre-initializes a startup-fatal component (database or
+// messaging) under its own per-component budget derived from the supplied parent.
+// The component is skipped when not configured; a connection failure is fatal
+// (sets b.err) and stops the remaining pre-init steps by returning false.
+func (b *Builder) preInitFatalComponent(
+	parent context.Context,
+	name string,
+	timeout time.Duration,
+	configured bool,
+	connect func(ctx context.Context) error,
+) bool {
+	if !configured {
+		b.logger.Debug().Msgf("Skipping %s pre-initialization: not configured", name)
+		return true
 	}
 
-	// Pre-initialize messaging if configured
-	if b.bundle.messagingManager != nil && config.IsMessagingConfigured(&b.cfg.Messaging) {
-		if _, err := b.bundle.messagingManager.Publisher(ctx, ""); err != nil {
-			b.err = fmt.Errorf("messaging connection failed during startup: %w", err)
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	if err := connect(ctx); err != nil {
+		b.err = fmt.Errorf("%s connection failed during startup: %w", name, err)
+		return false
+	}
+	b.logger.Debug().Msgf("Pre-initialized %s connection", name)
+	return true
+}
+
+// preInitCache pre-initializes the cache connection under its own startup budget.
+// Cache is optional: a not-configured cache is skipped silently and any other
+// failure is logged as a warning without aborting startup, mirroring the
+// manager-creation contract (a failing cache is disabled, not fatal).
+func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
+	if b.bundle.cacheManager == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	if _, err := b.bundle.cacheManager.Get(ctx, ""); err != nil {
+		if config.IsNotConfigured(err) {
+			b.logger.Debug().Msg("Skipping cache pre-initialization: not configured")
 			return
 		}
-		b.logger.Debug().Msg("Pre-initialized messaging publisher")
-	} else if b.bundle.messagingManager != nil {
-		b.logger.Debug().Msg("Skipping messaging pre-initialization: not configured")
+		b.logger.Warn().Err(err).Msg("Failed to pre-initialize cache connection (non-fatal)")
+		return
 	}
+	b.logger.Debug().Msg("Pre-initialized cache connection")
 }
 
 // CreateHealthProbes creates health check probes for all managers.

@@ -109,7 +109,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 				},
 			}
 
-			exporter, err := p.createOTLPHTTPLogExporter()
+			exporter, err := p.createOTLPHTTPLogExporter(context.Background())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -224,7 +224,7 @@ func TestCreateOTLPGRPCLogExporter(t *testing.T) {
 				},
 			}
 
-			exporter, err := p.createOTLPGRPCLogExporter()
+			exporter, err := p.createOTLPGRPCLogExporter(context.Background())
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -255,7 +255,7 @@ func TestCreateLogExporterInvalidProtocol(t *testing.T) {
 		},
 	}
 
-	exporter, err := p.createLogExporter()
+	exporter, err := p.createLogExporter(context.Background())
 	assert.Error(t, err)
 	assert.Nil(t, exporter)
 	assert.ErrorIs(t, err, ErrInvalidProtocol)
@@ -271,7 +271,7 @@ func TestCreateLogExporterStdout(t *testing.T) {
 		},
 	}
 
-	exporter, err := p.createLogExporter()
+	exporter, err := p.createLogExporter(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, exporter)
 
@@ -343,11 +343,14 @@ func TestCreateDualModeProcessor(t *testing.T) {
 			}
 
 			// Create a mock exporter (stdout for simplicity)
-			baseExporter, err := p.createLogExporter()
+			baseExporter, err := p.createLogExporter(context.Background())
 			require.NoError(t, err)
 			require.NotNil(t, baseExporter)
 
-			processor, err := p.createDualModeProcessor(baseExporter)
+			baseRes, err := p.createResource(context.Background())
+			require.NoError(t, err)
+
+			processor, err := p.createDualModeProcessor(baseRes, baseExporter)
 			assert.NoError(t, err)
 
 			if tt.expectedNotNil {
@@ -410,7 +413,9 @@ func TestCreateLogResource(t *testing.T) {
 // attribute matching expectedType.
 func checkLogResourceHasType(expectedType string) func(*testing.T, *provider) {
 	return func(t *testing.T, p *provider) {
-		res, err := p.createLogResource(expectedType)
+		baseRes, err := p.createResource(context.Background())
+		require.NoError(t, err)
+		res, err := p.createLogResource(baseRes, expectedType)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -451,13 +456,15 @@ func TestCreateBatchProcessorWithResource(t *testing.T) {
 		},
 	}
 
-	baseExporter, err := p.createLogExporter()
+	baseExporter, err := p.createLogExporter(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, baseExporter)
 	defer baseExporter.Shutdown(context.Background())
 
 	// Create resource
-	res, err := p.createLogResource("action")
+	baseRes, err := p.createResource(context.Background())
+	require.NoError(t, err)
+	res, err := p.createLogResource(baseRes, "action")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
@@ -503,7 +510,7 @@ func TestInitLogProviderSuccess(t *testing.T) {
 		},
 	}
 
-	err := p.initLogProvider()
+	err := p.initLogProvider(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, p.loggerProvider)
 
@@ -543,7 +550,7 @@ func TestInitLogProviderWithHookFailure(t *testing.T) {
 		},
 	}
 
-	err := p.initLogProvider()
+	err := p.initLogProvider(context.Background())
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, expectedErr)
 	assert.Nil(t, p.loggerProvider)
