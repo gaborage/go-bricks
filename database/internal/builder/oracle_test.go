@@ -64,13 +64,15 @@ func TestBuildUpsertOracleGeneratesMergeStatement(t *testing.T) {
 	if !strings.HasPrefix(sql, "MERGE INTO users") {
 		t.Fatalf("expected MERGE statement, got %s", sql)
 	}
-	if !strings.Contains(sql, "SELECT :1 AS \"id\", :2 AS \"name\" FROM dual") {
+	// Non-reserved identifiers stay unquoted so Oracle folds them to the uppercase
+	// form created by standard DDL (reserved-word-only quoting).
+	if !strings.Contains(sql, "SELECT :1 AS id, :2 AS name FROM dual") {
 		t.Fatalf("expected using clause with positional binds, got %s", sql)
 	}
-	if !strings.Contains(sql, "WHEN MATCHED THEN UPDATE SET \"name\" = :3") {
+	if !strings.Contains(sql, "WHEN MATCHED THEN UPDATE SET name = :3") {
 		t.Fatalf("expected update clause, got %s", sql)
 	}
-	if !strings.Contains(sql, "WHEN NOT MATCHED THEN INSERT (\"id\", \"name\") VALUES (source.\"id\", source.\"name\")") {
+	if !strings.Contains(sql, "WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name)") {
 		t.Fatalf("expected insert clause, got %s", sql)
 	}
 
@@ -1195,4 +1197,80 @@ func TestOracleDeleteWithoutWhereQuoting(t *testing.T) {
 			assert.Equal(t, tt.expectedSQL, sql, "SQL should match expected DELETE FROM clause")
 		})
 	}
+}
+
+// TestBuildUpsertOracleUsesReservedWordOnlyQuoting verifies the Oracle MERGE
+// statement applies reserved-word-only quoting (preserving Oracle's case-folding
+// semantics) rather than unconditionally double-quoting lowercase identifiers.
+// Standard DDL creates uppercase ID/NAME columns, so emitting quoted lowercase
+// "id"/"name" would fail at runtime with ORA-00904 (M7 bug #1).
+func TestBuildUpsertOracleUsesReservedWordOnlyQuoting(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	insertColumns := map[string]any{
+		"id":   1,
+		"name": "alice",
+	}
+	updateColumns := map[string]any{
+		"name": "bob",
+	}
+	conflictColumns := []string{"id"}
+
+	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
+	require.NoError(t, err)
+
+	// Non-reserved identifiers must stay unquoted so Oracle folds them to the
+	// uppercase form created by standard DDL.
+	assert.Equal(t,
+		"MERGE INTO users target USING (SELECT :1 AS id, :2 AS name FROM dual) source "+
+			"ON (target.id = source.id) "+
+			"WHEN MATCHED THEN UPDATE SET name = :3 "+
+			"WHEN NOT MATCHED THEN INSERT (id, name) VALUES (source.id, source.name)",
+		sql,
+		"Oracle MERGE must use reserved-word-only quoting for non-reserved identifiers")
+
+	require.Len(t, args, 3)
+	assert.Equal(t, 1, args[0])
+	assert.Equal(t, "alice", args[1])
+	assert.Equal(t, "bob", args[2])
+}
+
+// TestBuildUpsertOracleQuotesReservedWordColumnsAndTable verifies reserved words
+// used as column or table names ARE quoted (preserving case) while the table name
+// is routed through the same quoting the DML paths use. The "level" table is a
+// reserved word and must become "level"; an unquoted MERGE INTO level fails with
+// ORA-00905 (M7 bug #2). Reserved-word columns ("number") must be quoted too.
+func TestBuildUpsertOracleQuotesReservedWordColumnsAndTable(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	insertColumns := map[string]any{
+		"id":     1,
+		"number": 7,
+	}
+	conflictColumns := []string{"id"}
+
+	sql, args, err := qb.BuildUpsert("level", conflictColumns, insertColumns, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t,
+		`MERGE INTO "level" target USING (SELECT :1 AS id, :2 AS "number" FROM dual) source `+
+			`ON (target.id = source.id) `+
+			`WHEN NOT MATCHED THEN INSERT (id, "number") VALUES (source.id, source."number")`,
+		sql,
+		"reserved-word table and column names must be quoted while preserving case")
+
+	require.Len(t, args, 2)
+}
+
+// TestBuildUpsertOracleRejectsUnknownConflictColumns verifies the MERGE builder
+// fails fast when a conflict column is absent from the insert columns. Otherwise
+// the generated ON clause references source.<missing> which does not exist in the
+// USING SELECT, producing invalid SQL with no error (M7 bug #3).
+func TestBuildUpsertOracleRejectsUnknownConflictColumns(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	_, _, err := qb.BuildUpsert("users", []string{"id", "tenant_id"}, map[string]any{"id": 1}, nil)
+	require.Error(t, err, "conflict column missing from insert columns must be rejected")
+	assert.Contains(t, err.Error(), "tenant_id",
+		"error should name the offending conflict column")
 }

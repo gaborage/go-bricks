@@ -372,11 +372,22 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 		return "", nil, fmt.Errorf("conflict columns required for Oracle MERGE")
 	}
 
-	// Build the USING clause with values
+	// Every conflict column must be present in the insert columns. Otherwise the
+	// generated ON clause references source.<column> which does not exist in the
+	// USING SELECT, producing invalid SQL that would only fail at runtime.
+	for _, col := range conflictColumns {
+		if _, ok := insertColumns[col]; !ok {
+			return "", nil, fmt.Errorf("conflict column %q must be present in insert columns for Oracle MERGE", col)
+		}
+	}
+
+	// Build the USING clause with values. Use reserved-word-only quoting (the same
+	// quoting the DML paths use) so non-reserved identifiers stay unquoted and Oracle
+	// folds them to the uppercase form created by standard DDL.
 	insertKeys := sortedKeys(insertColumns)
-	escapedInsertCols := qb.escapeIdentifiers(insertKeys)
+	quotedInsertCols := qb.quoteOracleColumnsForDML(insertKeys...)
 	usingValues := make([]string, len(insertKeys))
-	for i, col := range escapedInsertCols {
+	for i, col := range quotedInsertCols {
 		usingValues[i] = fmt.Sprintf(":%d AS %s", i+1, col)
 	}
 	usingArgs := valuesByKeyOrder(insertColumns, insertKeys)
@@ -384,32 +395,32 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// Build ON clause for conflict detection
 	orderedConflicts := append([]string(nil), conflictColumns...)
 	sort.Strings(orderedConflicts)
-	escapedConflicts := qb.escapeIdentifiers(orderedConflicts)
-	onConditions := make([]string, len(escapedConflicts))
-	for i, col := range escapedConflicts {
+	quotedConflicts := qb.quoteOracleColumnsForDML(orderedConflicts...)
+	onConditions := make([]string, len(quotedConflicts))
+	for i, col := range quotedConflicts {
 		onConditions[i] = fmt.Sprintf("target.%s = source.%s", col, col)
 	}
 
 	// Build UPDATE SET clause
 	updateKeys := sortedKeys(updateColumns)
-	escapedUpdateCols := qb.escapeIdentifiers(updateKeys)
+	quotedUpdateCols := qb.quoteOracleColumnsForDML(updateKeys...)
 	updateSets := make([]string, len(updateKeys))
 	baseIndex := len(insertKeys) + 1
-	for i, col := range escapedUpdateCols {
+	for i, col := range quotedUpdateCols {
 		updateSets[i] = fmt.Sprintf("%s = :%d", col, baseIndex+i)
 	}
 	updateArgs := valuesByKeyOrder(updateColumns, updateKeys)
 
 	// Build INSERT clause
-	insertCols := make([]string, len(escapedInsertCols))
-	insertVals := make([]string, len(escapedInsertCols))
-	for i, col := range escapedInsertCols {
+	insertCols := make([]string, len(quotedInsertCols))
+	insertVals := make([]string, len(quotedInsertCols))
+	for i, col := range quotedInsertCols {
 		insertCols[i] = col
 		insertVals[i] = "source." + col
 	}
 
 	query = fmt.Sprintf(`MERGE INTO %s target USING (SELECT %s FROM dual) source ON (%s)`,
-		table,
+		qb.quoteTableForQuery(table),
 		strings.Join(usingValues, ", "),
 		strings.Join(onConditions, " AND "))
 
