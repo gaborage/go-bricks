@@ -1,8 +1,6 @@
 package app
 
 import (
-	"context"
-
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -36,13 +34,4 @@ type Options struct {
 	// To extend the defaults from code, call logger.DefaultFilterConfig()
 	// and append your custom names to SensitiveFields.
 	LoggerFilterConfig *logger.FilterConfig
-
-	// StartupContext is the parent context for startup/pre-initialization work:
-	// the per-component startup budgets (app.startup.{database,messaging,cache,
-	// observability}) are derived from it via context.WithTimeout, so canceling
-	// it (e.g. on SIGTERM during a slow boot) aborts in-flight pre-init. When nil,
-	// the framework roots startup at context.Background(). Threading a single
-	// parent here keeps every component budget on one cancellation/trace lineage
-	// instead of independent roots.
-	StartupContext context.Context
 }

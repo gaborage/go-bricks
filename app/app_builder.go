@@ -18,13 +18,6 @@ type Builder struct {
 	cfg  *config.Config
 	opts *Options
 
-	// startupCtx is the single parent context for all startup/pre-initialization
-	// work (observability provider construction and database/messaging/cache
-	// pre-init). Per-component budgets are derived from it via context.WithTimeout
-	// so they share one cancellation/trace lineage instead of independent roots.
-	// Sourced from Options.StartupContext, defaulting to context.Background().
-	startupCtx context.Context
-
 	// Core components
 	logger    logger.Logger
 	bootstrap *appBootstrap
@@ -48,10 +41,6 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 
 	b.cfg = cfg
 	b.opts = opts
-	b.startupCtx = context.Background()
-	if opts != nil && opts.StartupContext != nil {
-		b.startupCtx = opts.StartupContext
-	}
 	return b
 }
 
@@ -158,7 +147,7 @@ func (b *Builder) ResolveDependencies() *Builder {
 		return b
 	}
 
-	b.bundle = b.bootstrap.dependencies(b.startupCtx)
+	b.bundle = b.bootstrap.dependencies(context.Background())
 	if b.bundle != nil && b.bundle.deps != nil && b.bundle.deps.Logger != nil {
 		// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
 		b.logger = b.bundle.deps.Logger
@@ -265,25 +254,31 @@ func (b *Builder) performPreInitialization() {
 		return
 	}
 
+	// Single parent context for the whole pre-init phase; each component derives
+	// its own budget from it via context.WithTimeout so the three share one
+	// cancellation lineage. The context is threaded as a parameter (never stored
+	// on the builder), matching the framework's startup-at-Background precedent.
+	parent := context.Background()
 	startup := b.cfg.App.Startup
 	b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
 
-	if !b.preInitDatabase(startup.Database) {
+	if !b.preInitDatabase(parent, startup.Database) {
 		return
 	}
-	if !b.preInitMessaging(startup.Messaging) {
+	if !b.preInitMessaging(parent, startup.Messaging) {
 		return
 	}
-	b.preInitCache(startup.Cache)
+	b.preInitCache(parent, startup.Cache)
 }
 
 // preInitDatabase pre-initializes the database connection under its own startup
 // budget. Returns false (and sets b.err) on a fatal failure so the caller stops.
-func (b *Builder) preInitDatabase(timeout time.Duration) bool {
+func (b *Builder) preInitDatabase(parent context.Context, timeout time.Duration) bool {
 	if b.bundle.dbManager == nil {
 		return true
 	}
 	return b.preInitFatalComponent(
+		parent,
 		"database",
 		timeout,
 		config.IsDatabaseConfigured(&b.cfg.Database),
@@ -296,11 +291,12 @@ func (b *Builder) preInitDatabase(timeout time.Duration) bool {
 
 // preInitMessaging pre-initializes the messaging publisher under its own startup
 // budget. Returns false (and sets b.err) on a fatal failure so the caller stops.
-func (b *Builder) preInitMessaging(timeout time.Duration) bool {
+func (b *Builder) preInitMessaging(parent context.Context, timeout time.Duration) bool {
 	if b.bundle.messagingManager == nil {
 		return true
 	}
 	return b.preInitFatalComponent(
+		parent,
 		"messaging",
 		timeout,
 		config.IsMessagingConfigured(&b.cfg.Messaging),
@@ -311,21 +307,12 @@ func (b *Builder) preInitMessaging(timeout time.Duration) bool {
 	)
 }
 
-// startupParent returns the parent startup context, falling back to
-// context.Background() when the builder was constructed without WithConfig
-// (e.g. in focused unit tests). WithConfig sets startupCtx on the normal path.
-func (b *Builder) startupParent() context.Context {
-	if b.startupCtx != nil {
-		return b.startupCtx
-	}
-	return context.Background()
-}
-
 // preInitFatalComponent pre-initializes a startup-fatal component (database or
-// messaging) under its own per-component budget. The component is skipped when
-// not configured; a connection failure is fatal (sets b.err) and stops the
-// remaining pre-init steps by returning false.
+// messaging) under its own per-component budget derived from the supplied parent.
+// The component is skipped when not configured; a connection failure is fatal
+// (sets b.err) and stops the remaining pre-init steps by returning false.
 func (b *Builder) preInitFatalComponent(
+	parent context.Context,
 	name string,
 	timeout time.Duration,
 	configured bool,
@@ -336,7 +323,7 @@ func (b *Builder) preInitFatalComponent(
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(b.startupParent(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	if err := connect(ctx); err != nil {
@@ -351,12 +338,12 @@ func (b *Builder) preInitFatalComponent(
 // Cache is optional: a not-configured cache is skipped silently and any other
 // failure is logged as a warning without aborting startup, mirroring the
 // manager-creation contract (a failing cache is disabled, not fatal).
-func (b *Builder) preInitCache(timeout time.Duration) {
+func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
 	if b.bundle.cacheManager == nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(b.startupParent(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	if _, err := b.bundle.cacheManager.Get(ctx, ""); err != nil {
