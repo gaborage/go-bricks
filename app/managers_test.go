@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -271,6 +272,68 @@ func TestManagerConfigBuilderTenantLimit(t *testing.T) {
 
 		assert.Equal(t, -20, builder.TenantLimit())
 	})
+}
+
+func TestManagerConfigBuilderStaticTenantCount(t *testing.T) {
+	t.Run("defaults to zero", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 100)
+		assert.Equal(t, 0, builder.StaticTenantCount())
+	})
+
+	t.Run("reflects assigned value", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 100)
+		builder.staticTenantCount = 3
+		assert.Equal(t, 3, builder.StaticTenantCount())
+	})
+}
+
+// TestPoolBelowTenantCount guards the M3 non-breaking startup mitigation: an
+// advisory WARN fires only when a per-tenant pool's MaxSize is genuinely below the
+// number of statically-configured tenants. Dynamic sources (tenantCount == 0) and
+// unbounded pools (maxSize <= 0) must never trip the warning.
+func TestPoolBelowTenantCount(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxSize     int
+		tenantCount int
+		want        bool
+	}{
+		{name: "pool_below_tenants_warns", maxSize: 2, tenantCount: 5, want: true},
+		{name: "pool_equals_tenants_ok", maxSize: 5, tenantCount: 5, want: false},
+		{name: "pool_above_tenants_ok", maxSize: 10, tenantCount: 5, want: false},
+		{name: "no_static_tenants_skipped", maxSize: 1, tenantCount: 0, want: false},
+		{name: "negative_static_tenants_skipped", maxSize: 1, tenantCount: -3, want: false},
+		{name: "unbounded_pool_skipped", maxSize: 0, tenantCount: 5, want: false},
+		{name: "negative_pool_skipped", maxSize: -1, tenantCount: 5, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, poolBelowTenantCount(tc.maxSize, tc.tenantCount))
+		})
+	}
+}
+
+// TestResourceManagerFactoryWarnsOnUnderProvisionedPool exercises the WARN path
+// end-to-end through the factory: an under-provisioned static-tenant deployment must
+// still create a working manager (advisory, non-fatal) without panicking.
+func TestResourceManagerFactoryWarnsOnUnderProvisionedPool(t *testing.T) {
+	configBuilder := NewManagerConfigBuilder(true, 2) // tenant limit (pool MaxSize) = 2
+	configBuilder.staticTenantCount = 5               // but 5 tenants statically configured
+	factoryResolver := createTestFactoryResolver(t)
+	log := logger.New("error", false)
+	factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Type: "postgresql", Host: "localhost", Port: 5432},
+	}
+	resourceSource := config.NewTenantStore(cfg)
+
+	var manager *database.DbManager
+	require.NotPanics(t, func() {
+		manager = factory.CreateDatabaseManager(resourceSource)
+	})
+	assert.NotNil(t, manager, "under-provisioned pool must still yield a working manager (WARN is advisory)")
 }
 
 func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {

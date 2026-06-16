@@ -147,19 +147,21 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 
 	// Store in cache with LRU tracking
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Check if connection was created by another goroutine while we were waiting
 	if existing, exists := m.conns[key]; exists {
-		// Close our new connection and return the existing one
-		conn.Close()
 		existing.lastUsed = time.Now()
 		m.lru.MoveToFront(existing.element)
-		return existing.conn, nil
+		existingConn := existing.conn
+		m.mu.Unlock()
+
+		// Close our new connection outside the lock and return the existing one.
+		conn.Close()
+		return existingConn, nil
 	}
 
-	// Ensure we don't exceed max size
-	m.evictIfNeeded()
+	// Ensure we don't exceed max size (returns the evicted entry to close outside the lock)
+	evicted := m.evictIfNeeded()
 
 	// Add to cache
 	element := m.lru.PushFront(key)
@@ -170,6 +172,13 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 		key:      key,
 	}
 	m.conns[key] = entry
+	m.mu.Unlock()
+
+	// Close the evicted connection outside the lock so a slow Close() on the LRU
+	// victim does not block concurrent Get() calls for other keys.
+	if evicted != nil {
+		m.closeEvicted(evicted, "Error closing evicted database connection")
+	}
 
 	m.logger.Info().
 		Str("key", key).
@@ -179,36 +188,43 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 	return conn, nil
 }
 
-// evictIfNeeded removes the least recently used connection if at capacity
-func (m *DbManager) evictIfNeeded() {
+// evictIfNeeded removes the least recently used connection from the manager's
+// bookkeeping if at capacity. Must be called with m.mu held. It returns the
+// evicted entry (or nil) so the caller can close it OUTSIDE the lock.
+func (m *DbManager) evictIfNeeded() *dbEntry {
 	if len(m.conns) < m.maxSize {
-		return
+		return nil
 	}
 
 	// Remove the least recently used connection
 	oldest := m.lru.Back()
 	if oldest == nil {
-		return
+		return nil
 	}
 
 	key := oldest.Value.(string)
 	entry := m.conns[key]
 
-	// Close the connection
-	if err := entry.conn.Close(); err != nil {
-		m.logger.Error().
-			Err(err).
-			Str("key", key).
-			Msg("Error closing evicted database connection")
-	}
-
-	// Remove from cache
+	// Remove from cache (close happens outside the lock)
 	delete(m.conns, key)
 	m.lru.Remove(oldest)
 
 	m.logger.Debug().
 		Str("key", key).
 		Msg("Evicted database connection due to LRU limit")
+
+	return entry
+}
+
+// closeEvicted closes an evicted/idle connection and logs any close error.
+// It is always called WITHOUT m.mu held so a slow Close() cannot block other callers.
+func (m *DbManager) closeEvicted(entry *dbEntry, logMsg string) {
+	if err := entry.conn.Close(); err != nil {
+		m.logger.Error().
+			Err(err).
+			Str("key", entry.key).
+			Msg(logMsg)
+	}
 }
 
 // StartCleanup starts the background cleanup routine for idle connections
@@ -256,41 +272,33 @@ func (m *DbManager) cleanupLoop(interval time.Duration, done <-chan struct{}) {
 	}
 }
 
-// cleanupIdleConnections removes connections that have been idle longer than idleTTL
+// cleanupIdleConnections removes connections that have been idle longer than idleTTL.
+// Idle entries are detached from the manager's bookkeeping under the lock, then their
+// Close() calls run outside the lock so a slow teardown cannot block concurrent Get()s.
 func (m *DbManager) cleanupIdleConnections() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	now := time.Now()
-	var toRemove []string
+	var toClose []*dbEntry
 
-	// Find connections to remove
+	// Detach idle connections from bookkeeping under the lock.
 	for key, entry := range m.conns {
 		if now.Sub(entry.lastUsed) > m.idleTTL {
-			toRemove = append(toRemove, key)
+			delete(m.conns, key)
+			m.lru.Remove(entry.element)
+			toClose = append(toClose, entry)
+
+			m.logger.Debug().
+				Str("key", key).
+				Dur("idle_time", now.Sub(entry.lastUsed)).
+				Msg("Cleaned up idle database connection")
 		}
 	}
+	m.mu.Unlock()
 
-	// Remove idle connections
-	for _, key := range toRemove {
-		entry := m.conns[key]
-
-		// Close the connection
-		if err := entry.conn.Close(); err != nil {
-			m.logger.Error().
-				Err(err).
-				Str("key", key).
-				Msg("Error closing idle database connection")
-		}
-
-		// Remove from cache
-		delete(m.conns, key)
-		m.lru.Remove(entry.element)
-
-		m.logger.Debug().
-			Str("key", key).
-			Dur("idle_time", now.Sub(entry.lastUsed)).
-			Msg("Cleaned up idle database connection")
+	// Close detached connections outside the lock.
+	for _, entry := range toClose {
+		m.closeEvicted(entry, "Error closing idle database connection")
 	}
 }
 

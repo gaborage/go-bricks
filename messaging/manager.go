@@ -258,19 +258,21 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 
 	// Store in cache with LRU tracking
 	m.pubMu.Lock()
-	defer m.pubMu.Unlock()
 
 	// Check if publisher was created by another goroutine while we were waiting
 	if existing, exists := m.publishers[key]; exists {
-		// Close our new client and return the existing one
-		m.closeClientOnRollback(client, key, "publisher_double_create_race")
 		existing.lastUsed = time.Now()
 		m.pubLru.MoveToFront(existing.element)
-		return existing.client, nil
+		existingClient := existing.client
+		m.pubMu.Unlock()
+
+		// Close our new client outside the lock and return the existing one.
+		m.closeClientOnRollback(client, key, "publisher_double_create_race")
+		return existingClient, nil
 	}
 
-	// Ensure we don't exceed max size
-	m.evictPublisherIfNeeded()
+	// Ensure we don't exceed max size (returns the evicted entry to close outside the lock)
+	evicted := m.evictPublisherIfNeeded()
 
 	// Add to cache
 	element := m.pubLru.PushFront(key)
@@ -281,6 +283,13 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 		key:      key,
 	}
 	m.publishers[key] = entry
+	m.pubMu.Unlock()
+
+	// Close the evicted client outside the lock so a slow Close() on the LRU victim
+	// does not block concurrent Publisher() calls for other keys.
+	if evicted != nil {
+		m.closeEvictedPublisher(evicted, "Error closing evicted publisher client")
+	}
 
 	m.logger.Info().
 		Str("key", key).
@@ -323,36 +332,44 @@ func (m *Manager) closeClientOnRollback(client AMQPClient, key, phase string) {
 	}
 }
 
-// evictPublisherIfNeeded removes the least recently used publisher if at capacity
-func (m *Manager) evictPublisherIfNeeded() {
+// evictPublisherIfNeeded removes the least recently used publisher from the
+// manager's bookkeeping if at capacity. Must be called with m.pubMu held. It
+// returns the evicted entry (or nil) so the caller can close it OUTSIDE the lock.
+func (m *Manager) evictPublisherIfNeeded() *publisherEntry {
 	if len(m.publishers) < m.maxPubs {
-		return
+		return nil
 	}
 
 	// Remove the least recently used publisher
 	oldest := m.pubLru.Back()
 	if oldest == nil {
-		return
+		return nil
 	}
 
 	key := oldest.Value.(string)
 	entry := m.publishers[key]
 
-	// Close the client
-	if err := entry.client.Close(); err != nil {
-		m.logger.Error().
-			Err(err).
-			Str("key", key).
-			Msg("Error closing evicted publisher client")
-	}
-
-	// Remove from cache
+	// Remove from cache (close happens outside the lock)
 	delete(m.publishers, key)
 	m.pubLru.Remove(oldest)
 
 	m.logger.Debug().
 		Str("key", key).
 		Msg("Evicted publisher client due to LRU limit")
+
+	return entry
+}
+
+// closeEvictedPublisher closes an evicted/idle publisher client and logs any close
+// error. It is always called WITHOUT m.pubMu held so a slow Close() cannot block
+// other callers.
+func (m *Manager) closeEvictedPublisher(entry *publisherEntry, logMsg string) {
+	if err := entry.client.Close(); err != nil {
+		m.logger.Error().
+			Err(err).
+			Str("key", entry.key).
+			Msg(logMsg)
+	}
 }
 
 // StartCleanup starts the background cleanup routine for idle publishers
@@ -400,41 +417,34 @@ func (m *Manager) cleanupLoop(interval time.Duration, done <-chan struct{}) {
 	}
 }
 
-// cleanupIdlePublishers removes publishers that have been idle longer than idleTTL
+// cleanupIdlePublishers removes publishers that have been idle longer than idleTTL.
+// Idle entries are detached from the manager's bookkeeping under the lock, then their
+// Close() calls run outside the lock so a slow teardown cannot block concurrent
+// Publisher() calls.
 func (m *Manager) cleanupIdlePublishers() {
 	m.pubMu.Lock()
-	defer m.pubMu.Unlock()
 
 	now := time.Now()
-	var toRemove []string
+	var toClose []*publisherEntry
 
-	// Find publishers to remove
+	// Detach idle publishers from bookkeeping under the lock.
 	for key, entry := range m.publishers {
 		if now.Sub(entry.lastUsed) > m.idleTTL {
-			toRemove = append(toRemove, key)
+			delete(m.publishers, key)
+			m.pubLru.Remove(entry.element)
+			toClose = append(toClose, entry)
+
+			m.logger.Debug().
+				Str("key", key).
+				Dur("idle_time", now.Sub(entry.lastUsed)).
+				Msg("Cleaned up idle publisher client")
 		}
 	}
+	m.pubMu.Unlock()
 
-	// Remove idle publishers
-	for _, key := range toRemove {
-		entry := m.publishers[key]
-
-		// Close the client
-		if err := entry.client.Close(); err != nil {
-			m.logger.Error().
-				Err(err).
-				Str("key", key).
-				Msg("Error closing idle publisher client")
-		}
-
-		// Remove from cache
-		delete(m.publishers, key)
-		m.pubLru.Remove(entry.element)
-
-		m.logger.Debug().
-			Str("key", key).
-			Dur("idle_time", now.Sub(entry.lastUsed)).
-			Msg("Cleaned up idle publisher client")
+	// Close detached publishers outside the lock.
+	for _, entry := range toClose {
+		m.closeEvictedPublisher(entry, "Error closing idle publisher client")
 	}
 }
 

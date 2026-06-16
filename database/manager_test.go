@@ -59,11 +59,12 @@ func (s *stubTx) Commit(_ context.Context) error   { return nil }
 func (s *stubTx) Rollback(_ context.Context) error { return nil }
 
 type stubDB struct {
-	key      string
-	closedMu sync.Mutex
-	closed   bool
-	closeErr error
-	onClosed func(string)
+	key       string
+	closedMu  sync.Mutex
+	closed    bool
+	closeErr  error
+	onClosed  func(string)
+	closeHook func() // optional: invoked at the start of Close (e.g. to simulate a slow close)
 }
 
 func (s *stubDB) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) { return nil, nil }
@@ -77,6 +78,12 @@ func (s *stubDB) BeginTx(_ context.Context, _ *sql.TxOptions) (Tx, error) { retu
 func (s *stubDB) Health(_ context.Context) error                          { return nil }
 func (s *stubDB) Stats() (map[string]any, error)                          { return map[string]any{"key": s.key}, nil }
 func (s *stubDB) Close() error {
+	s.closedMu.Lock()
+	hook := s.closeHook
+	s.closedMu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	s.closedMu.Lock()
 	s.closed = true
 	callback := s.onClosed
@@ -146,12 +153,19 @@ func TestDbManagerEvictsLRU(t *testing.T) {
 
 	var mu sync.Mutex
 	evicted := []string{}
+	// The LRU victim "a" uses a slow Close to assert eviction detaches bookkeeping
+	// under the lock and closes OUTSIDE it: a concurrent Get must not block on it.
+	releaseClose := make(chan struct{})
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		return &stubDB{key: cfg.Database, onClosed: func(key string) {
+		db := &stubDB{key: cfg.Database, onClosed: func(key string) {
 			mu.Lock()
 			defer mu.Unlock()
 			evicted = append(evicted, key)
-		}}, nil
+		}}
+		if cfg.Database == "a" {
+			db.closeHook = func() { <-releaseClose }
+		}
+		return db, nil
 	}
 
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
@@ -166,10 +180,24 @@ func TestDbManagerEvictsLRU(t *testing.T) {
 	require.NoError(t, err)
 	_, err = manager.Get(ctx, "b")
 	require.NoError(t, err)
-	_, err = manager.Get(ctx, "c")
-	require.NoError(t, err)
 
-	assert.Equal(t, 2, manager.Size())
+	// Get("c") evicts "a"; its Close blocks until releaseClose, so run it in the
+	// background. With close-under-lock this would hold m.mu and stall every Get.
+	done := make(chan struct{})
+	go func() {
+		_, gErr := manager.Get(ctx, "c")
+		assert.NoError(t, gErr)
+		close(done)
+	}()
+
+	// Bookkeeping is detached under the lock, so Size drops to 2 even though the
+	// victim's Close is still blocked. This would deadlock under close-under-lock.
+	assert.Eventually(t, func() bool { return manager.Size() == 2 }, time.Second, 5*time.Millisecond)
+
+	// Release the slow Close and let the eviction finish.
+	close(releaseClose)
+	<-done
+
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Contains(t, evicted, "a")
@@ -181,8 +209,11 @@ func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
 
 	var mu sync.Mutex
 	evicted := []string{}
+	// Slow Close on the idle connection proves idle cleanup detaches bookkeeping
+	// under the lock and closes OUTSIDE it.
+	releaseClose := make(chan struct{})
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		return &stubDB{key: cfg.Database, onClosed: func(key string) {
+		return &stubDB{key: cfg.Database, closeHook: func() { <-releaseClose }, onClosed: func(key string) {
 			mu.Lock()
 			defer mu.Unlock()
 			evicted = append(evicted, key)
@@ -198,7 +229,22 @@ func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
 	require.NoError(t, err)
 
 	time.Sleep(20 * time.Millisecond)
-	manager.cleanupIdleConnections()
+
+	// Run cleanup in the background: the idle connection's Close blocks until
+	// releaseClose. With close-under-lock this would stall every Size()/Get().
+	done := make(chan struct{})
+	go func() {
+		manager.cleanupIdleConnections()
+		close(done)
+	}()
+
+	// Bookkeeping is detached under the lock, so Size drops to 0 even while the
+	// idle connection's Close is still blocked.
+	assert.Eventually(t, func() bool { return manager.Size() == 0 }, time.Second, 5*time.Millisecond)
+
+	// Release the slow Close and let cleanup finish.
+	close(releaseClose)
+	<-done
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -410,6 +456,68 @@ func TestStartCleanupAppliesDefaultIntervalForNonPositive(t *testing.T) {
 
 	require.NotPanics(t, func() { m.StartCleanup(-5 * time.Second) })
 	m.StopCleanup()
+}
+
+// TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet guards the M3 audit
+// finding: evictIfNeeded must NOT hold the manager mutex while closing the evicted
+// connection. A slow Close() on an evicted tenant's connection must not block a
+// concurrent Get() that targets a different, still-cached tenant (head-of-line
+// blocking). Mirrors the safe collect-then-close pattern in cache/manager.go.
+func TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
+	ctx := context.Background()
+	log := newErrorTestLogger()
+
+	const slowClose = 200 * time.Millisecond
+	closeStarted := make(chan struct{})
+
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		db := &stubDB{key: cfg.Database}
+		if cfg.Database == "a" {
+			// Tenant "a" is the LRU victim. Its Close blocks for slowClose to simulate
+			// a stuck connection teardown. Signal once so the test can race a Get.
+			var once sync.Once
+			db.closeHook = func() {
+				once.Do(func() { close(closeStarted) })
+				time.Sleep(slowClose)
+			}
+		}
+		return db, nil
+	}
+
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"a": {Type: "postgresql", Database: "a"},
+		"b": {Type: "postgresql", Database: "b"},
+		"c": {Type: "postgresql", Database: "c"},
+	}}
+
+	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: time.Minute}, connector)
+
+	_, err := manager.Get(ctx, "a")
+	require.NoError(t, err)
+	_, err = manager.Get(ctx, "b")
+	require.NoError(t, err)
+
+	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
+	go func() {
+		_, _ = manager.Get(ctx, "c")
+	}()
+
+	// Wait until the slow Close has actually begun before measuring.
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("eviction Close never started")
+	}
+
+	// "b" is still cached: this Get only needs getExisting's lock. If eviction holds
+	// the manager mutex across Close (the M3 bug), this blocks for ~slowClose.
+	start := time.Now()
+	_, err = manager.Get(ctx, "b")
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, slowClose/2,
+		"Get on a cached tenant must not block on another tenant's slow eviction Close (close-under-lock)")
 }
 
 func TestCleanupIdleConnectionsLogsCloseError(t *testing.T) {

@@ -279,6 +279,14 @@ database:
       interval: 30s
 ```
 
+### Per-tenant connection manager sizing (multi-tenant)
+
+The `pool.*` settings above govern the connection pool **within a single database**. In multi-tenant mode there is a second, outer cap: the `DbManager` keeps at most one connection per tenant key in an LRU cache whose size is `multitenant.limits.tenants`. This is an LRU cap, not a per-tenant guarantee — when more tenants are active than the limit, every request for a not-currently-cached tenant evicts the least-recently-used connection and opens a fresh one. That **eviction thrash** silently degrades latency (each miss pays the full connect cost) without surfacing an error.
+
+Size `multitenant.limits.tenants` to at least the number of tenants you expect to serve concurrently. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the manager's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the limit against your expected fleet manually.
+
+> Eviction (and idle cleanup) closes the evicted connection **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Get()` calls for other tenants.
+
 ## Repository Method Attribution
 
 The `db.client.operation.duration` metric carries `db.operation.name` (the SQL verb:

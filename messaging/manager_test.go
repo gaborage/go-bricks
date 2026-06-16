@@ -32,6 +32,7 @@ type stubAMQPClient struct {
 	consumers     int
 	consumeCtx    context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
 	closeCallback func()
+	closeHook     func() // optional: invoked at the start of Close (e.g. to simulate a slow close)
 	closeErr      error
 }
 
@@ -85,6 +86,13 @@ func (s *stubAMQPClient) DeclareExchange(string, string, bool, bool, bool, bool)
 func (s *stubAMQPClient) BindQueue(string, string, string, bool) error                 { return nil }
 
 func (s *stubAMQPClient) Close() error {
+	s.closedMu.Lock()
+	hook := s.closeHook
+	s.closedMu.Unlock()
+	if hook != nil {
+		hook()
+	}
+
 	s.closedMu.Lock()
 	defer s.closedMu.Unlock()
 	if s.closed {
@@ -201,9 +209,20 @@ func TestMessagingManagerCleanupEvictsIdlePublishers(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
 
-	var closed int
+	var mu sync.Mutex
+	closed := 0
+	// Slow Close on the idle publisher proves idle cleanup detaches bookkeeping
+	// under the lock and closes OUTSIDE it.
+	releaseClose := make(chan struct{})
 	factory := func(string, logger.Logger) AMQPClient {
-		return &stubAMQPClient{closeCallback: func() { closed++ }}
+		return &stubAMQPClient{
+			closeHook: func() { <-releaseClose },
+			closeCallback: func() {
+				mu.Lock()
+				defer mu.Unlock()
+				closed++
+			},
+		}
 	}
 
 	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
@@ -211,7 +230,29 @@ func TestMessagingManagerCleanupEvictsIdlePublishers(t *testing.T) {
 	require.NoError(t, err)
 
 	time.Sleep(20 * time.Millisecond)
-	manager.cleanupIdlePublishers()
+
+	// Run cleanup in the background: the idle publisher's Close blocks until
+	// releaseClose. With close-under-lock this would stall every Publisher()/Stats().
+	done := make(chan struct{})
+	go func() {
+		manager.cleanupIdlePublishers()
+		close(done)
+	}()
+
+	// Bookkeeping is detached under the lock, so the publisher count drops to 0 even
+	// while its Close is still blocked.
+	assert.Eventually(t, func() bool {
+		manager.pubMu.RLock()
+		defer manager.pubMu.RUnlock()
+		return len(manager.publishers) == 0
+	}, time.Second, 5*time.Millisecond)
+
+	// Release the slow Close and let cleanup finish.
+	close(releaseClose)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
 	assert.Equal(t, 1, closed)
 }
 
@@ -221,12 +262,19 @@ func TestMessagingManagerEvictsLRU(t *testing.T) {
 
 	var mu sync.Mutex
 	evicted := []string{}
+	// The LRU victim "a" (amqpURLA) uses a slow Close to assert eviction detaches
+	// bookkeeping under the lock and closes OUTSIDE it.
+	releaseClose := make(chan struct{})
 	factory := func(url string, _ logger.Logger) AMQPClient {
-		return &stubAMQPClient{closeCallback: func() {
+		client := &stubAMQPClient{closeCallback: func() {
 			mu.Lock()
 			defer mu.Unlock()
 			evicted = append(evicted, url)
 		}}
+		if url == amqpURLA {
+			client.closeHook = func() { <-releaseClose }
+		}
+		return client
 	}
 
 	source := &stubMessagingSource{urls: map[string]string{
@@ -240,12 +288,161 @@ func TestMessagingManagerEvictsLRU(t *testing.T) {
 	require.NoError(t, err)
 	_, err = manager.Publisher(ctx, "b")
 	require.NoError(t, err)
-	_, err = manager.Publisher(ctx, "c")
-	require.NoError(t, err)
+
+	// Publisher("c") evicts "a"; its Close blocks until releaseClose, so run it in the
+	// background. With close-under-lock this would hold m.pubMu and stall every Publisher.
+	done := make(chan struct{})
+	go func() {
+		_, gErr := manager.Publisher(ctx, "c")
+		assert.NoError(t, gErr)
+		close(done)
+	}()
+
+	// Bookkeeping is detached under the lock, so the publisher count stays at 2 even
+	// though the victim's Close is still blocked.
+	assert.Eventually(t, func() bool {
+		manager.pubMu.RLock()
+		defer manager.pubMu.RUnlock()
+		_, aStillCached := manager.publishers["a"]
+		return len(manager.publishers) == 2 && !aStillCached
+	}, time.Second, 5*time.Millisecond)
+
+	// Release the slow Close and let the eviction finish.
+	close(releaseClose)
+	<-done
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Contains(t, evicted, amqpURLA)
+}
+
+// TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher guards the
+// M3 audit finding: evictPublisherIfNeeded must NOT hold the publisher mutex while
+// closing the evicted client. A slow Close() on an evicted tenant's publisher must not
+// block a concurrent Publisher() that targets a different, still-cached tenant
+// (head-of-line blocking). Mirrors the collect-then-close pattern in cache/manager.go.
+func TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	const slowClose = 200 * time.Millisecond
+	closeStarted := make(chan struct{})
+
+	factory := func(url string, _ logger.Logger) AMQPClient {
+		client := &stubAMQPClient{}
+		if url == amqpURLA {
+			// Tenant "a" is the LRU victim. Its Close blocks for slowClose to simulate
+			// a stuck connection teardown. Signal once so the test can race a Publisher.
+			var once sync.Once
+			client.closeHook = func() {
+				once.Do(func() { close(closeStarted) })
+				time.Sleep(slowClose)
+			}
+		}
+		return client
+	}
+
+	source := &stubMessagingSource{urls: map[string]string{
+		"a": amqpURLA,
+		"b": amqpURLB,
+		"c": amqpURLC,
+	}}
+
+	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
+
+	_, err := manager.Publisher(ctx, "a")
+	require.NoError(t, err)
+	_, err = manager.Publisher(ctx, "b")
+	require.NoError(t, err)
+
+	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
+	go func() {
+		_, _ = manager.Publisher(ctx, "c")
+	}()
+
+	// Wait until the slow Close has actually begun before measuring.
+	select {
+	case <-closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("eviction Close never started")
+	}
+
+	// "b" is still cached: this Publisher only needs getExistingPublisher's lock. If
+	// eviction holds the publisher mutex across Close (the M3 bug), this blocks ~slowClose.
+	start := time.Now()
+	_, err = manager.Publisher(ctx, "b")
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, slowClose/2,
+		"Publisher on a cached tenant must not block on another tenant's slow eviction Close (close-under-lock)")
+}
+
+// TestMessagingManagerCreatePublisherReturnsExistingOnDoubleCreate guards the
+// concurrent double-create branch in createPublisher: when another goroutine
+// populated the cache while this caller was building its client, createPublisher
+// must return the already-cached publisher and close the freshly-created client
+// outside the lock. Mirrors database's
+// TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached.
+func TestMessagingManagerCreatePublisherReturnsExistingOnDoubleCreate(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	// The freshly-created client that createPublisher builds; it must be closed
+	// once the cache is found already populated.
+	fresh := &stubAMQPClient{}
+	factory := func(string, logger.Logger) AMQPClient { return fresh }
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+	// Pre-seed the cache to simulate another goroutine winning the race.
+	existing := newTenantAwarePublisher(&stubAMQPClient{}, tenantID)
+	manager.pubMu.Lock()
+	element := manager.pubLru.PushFront(tenantID)
+	manager.publishers[tenantID] = &publisherEntry{client: existing, element: element, lastUsed: time.Now(), key: tenantID}
+	manager.pubMu.Unlock()
+
+	got, err := manager.createPublisher(ctx, tenantID)
+	require.NoError(t, err)
+	assert.Same(t, existing, got, "createPublisher must return the already-cached publisher")
+
+	fresh.closedMu.Lock()
+	closed := fresh.closed
+	fresh.closedMu.Unlock()
+	assert.True(t, closed, "the redundant freshly-created client must be closed on the double-create branch")
+}
+
+// TestMessagingManagerCleanupIdlePublishersLogsCloseError drives the close-error
+// branch of closeEvictedPublisher through the idle-cleanup path: the idle entry
+// is detached from bookkeeping and Close() is still attempted even when it returns
+// an error. Mirrors database's TestCleanupIdleConnectionsLogsCloseError.
+func TestMessagingManagerCleanupIdlePublishersLogsCloseError(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	failing := &stubAMQPClient{closeErr: errors.New("broker fault on close")}
+	factory := func(string, logger.Logger) AMQPClient { return failing }
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
+	defer func() { _ = manager.Close() }()
+
+	_, err := manager.Publisher(ctx, "idle")
+	require.NoError(t, err)
+
+	// Backdate lastUsed so the cleanup pass sees the entry as idle.
+	manager.pubMu.Lock()
+	manager.publishers["idle"].lastUsed = time.Now().Add(-2 * time.Hour)
+	manager.pubMu.Unlock()
+
+	manager.cleanupIdlePublishers()
+
+	manager.pubMu.RLock()
+	n := len(manager.publishers)
+	manager.pubMu.RUnlock()
+	assert.Equal(t, 0, n, "idle publisher removed from cache despite Close() error")
+
+	failing.closedMu.Lock()
+	closed := failing.closed
+	failing.closedMu.Unlock()
+	assert.True(t, closed, "Close was attempted even though it returned an error")
 }
 
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
