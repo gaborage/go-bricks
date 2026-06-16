@@ -347,7 +347,10 @@ func TestCreateDualModeProcessor(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, baseExporter)
 
-			processor, err := p.createDualModeProcessor(context.Background(), baseExporter)
+			baseRes, err := p.createResource(context.Background())
+			require.NoError(t, err)
+
+			processor, err := p.createDualModeProcessor(baseRes, baseExporter)
 			assert.NoError(t, err)
 
 			if tt.expectedNotNil {
@@ -410,7 +413,9 @@ func TestCreateLogResource(t *testing.T) {
 // attribute matching expectedType.
 func checkLogResourceHasType(expectedType string) func(*testing.T, *provider) {
 	return func(t *testing.T, p *provider) {
-		res, err := p.createLogResource(context.Background(), expectedType)
+		baseRes, err := p.createResource(context.Background())
+		require.NoError(t, err)
+		res, err := p.createLogResource(baseRes, expectedType)
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -457,7 +462,9 @@ func TestCreateBatchProcessorWithResource(t *testing.T) {
 	defer baseExporter.Shutdown(context.Background())
 
 	// Create resource
-	res, err := p.createLogResource(context.Background(), "action")
+	baseRes, err := p.createResource(context.Background())
+	require.NoError(t, err)
+	res, err := p.createLogResource(baseRes, "action")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 

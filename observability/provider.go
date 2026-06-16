@@ -160,6 +160,9 @@ func NewProvider(cfg *Config) (Provider, error) {
 // need to call ApplyDefaults() first. If observability is disabled, a no-op
 // provider is returned regardless of ctx.
 func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("observability config is nil")
+	}
 	debugLogger.Printf("NewProviderWithContext called - enabled=%v, service=%s", cfg.Enabled, cfg.Service.Name)
 
 	// Create a defensive copy and apply defaults BEFORE validation

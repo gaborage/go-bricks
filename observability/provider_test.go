@@ -77,6 +77,14 @@ func TestNewProviderWithContextDisabledIgnoresContext(t *testing.T) {
 	assert.NoError(t, provider.Shutdown(context.Background()))
 }
 
+func TestNewProviderWithContextNilConfigReturnsError(t *testing.T) {
+	provider, err := NewProviderWithContext(context.Background(), nil)
+
+	require.Error(t, err, "nil config must return a typed error, not panic")
+	assert.Nil(t, provider)
+	assert.Contains(t, err.Error(), "nil", "error should explain the nil config")
+}
+
 func TestNewProviderInvalidConfig(t *testing.T) {
 	cfg := &Config{
 		Enabled: true,

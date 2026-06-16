@@ -33,8 +33,10 @@ func (p *provider) initLogProvider(ctx context.Context) error {
 		return fmt.Errorf("failed to create log exporter: %w", err)
 	}
 
-	// Create dual-mode processor (action logs + trace logs)
-	processor, err := p.createDualModeProcessor(ctx, exporter)
+	// Create dual-mode processor (action logs + trace logs), reusing the base
+	// resource built above so resource detection runs once under the startup
+	// budget rather than three times.
+	processor, err := p.createDualModeProcessor(res, exporter)
 	if err != nil {
 		return fmt.Errorf("failed to create dual-mode processor: %w", err)
 	}
@@ -184,17 +186,17 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 }
 
 // createDualModeProcessor creates a dual-mode log processor with separate processors for action and trace logs.
-func (p *provider) createDualModeProcessor(ctx context.Context, baseExporter sdklog.Exporter) (sdklog.Processor, error) {
+func (p *provider) createDualModeProcessor(baseRes *resource.Resource, baseExporter sdklog.Exporter) (sdklog.Processor, error) {
 	debugLogger.Println("Creating dual-mode log processor (action logs + trace logs)")
 
 	// Create resource for action logs (log.type="action")
-	actionResource, err := p.createLogResource(ctx, "action")
+	actionResource, err := p.createLogResource(baseRes, "action")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create action log resource: %w", err)
 	}
 
 	// Create resource for trace logs (log.type="trace")
-	traceResource, err := p.createLogResource(ctx, "trace")
+	traceResource, err := p.createLogResource(baseRes, "trace")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace log resource: %w", err)
 	}
@@ -216,13 +218,10 @@ func (p *provider) createDualModeProcessor(ctx context.Context, baseExporter sdk
 }
 
 // createLogResource creates a resource with the specified log.type attribute.
-// This merges the base service resource with log-type-specific attributes.
-func (p *provider) createLogResource(ctx context.Context, logType string) (*resource.Resource, error) {
-	baseRes, err := p.createResource(ctx)
-	if err != nil {
-		return nil, err
-	}
-
+// This merges the supplied base service resource with log-type-specific
+// attributes. The base resource is built once by the caller so resource
+// detection is not repeated per log type under the startup budget.
+func (p *provider) createLogResource(baseRes *resource.Resource, logType string) (*resource.Resource, error) {
 	// Create log-type-specific resource
 	typeRes, err := resource.Merge(
 		baseRes,
