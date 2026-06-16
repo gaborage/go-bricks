@@ -60,6 +60,7 @@ var _ dbtypes.InsertQueryBuilder = (*InsertQueryBuilder)(nil)
 type UpdateQueryBuilder struct {
 	qb            *QueryBuilder
 	updateBuilder squirrel.UpdateBuilder
+	err           error // deferred error surfaced by ToSQL()
 }
 
 // check if UpdateQueryBuilder implements dbtypes.UpdateQueryBuilder
@@ -70,6 +71,7 @@ var _ dbtypes.UpdateQueryBuilder = (*UpdateQueryBuilder)(nil)
 type DeleteQueryBuilder struct {
 	qb            *QueryBuilder
 	deleteBuilder squirrel.DeleteBuilder
+	err           error // deferred error surfaced by ToSQL()
 }
 
 // check if DeleteQueryBuilder implements dbtypes.DeleteQueryBuilder
@@ -647,6 +649,32 @@ func (qb *QueryBuilder) quoteTableForQuery(table string) string {
 	}
 }
 
+// validateTableReference validates the identifier(s) carried by a FROM/JOIN
+// table argument BEFORE interpolation. The plain table name (and the alias, when
+// a *TableRef carries one) are interpolated verbatim into the SQL string, so both
+// must satisfy the safe identifier grammar on ALL vendors (M9). Unsupported types
+// fail fast — mirroring quoteTableReference's panic — via the returned error.
+func (qb *QueryBuilder) validateTableReference(table any) error {
+	switch t := table.(type) {
+	case string:
+		// Plain string table names may carry an inline alias ("users u").
+		return validateTableName(t)
+	case *dbtypes.TableRef:
+		// TableRef carries name and alias separately; each is a bare identifier.
+		if err := validateIdentifier("table", t.Name()); err != nil {
+			return err
+		}
+		if t.HasAlias() {
+			return validateIdentifier("table alias", t.Alias())
+		}
+		return nil
+	default:
+		// Unsupported type is a programming error, not attacker input — defer to
+		// quoteTableReference's fail-fast panic rather than masking it as an error.
+		return nil
+	}
+}
+
 // quoteTableReference handles vendor-specific table quoting for both string names and TableRef instances.
 // Returns quoted table name with optional alias (e.g., "customers" c for PostgreSQL, "LEVEL" lvl for Oracle).
 // Accepts either string or *TableRef. Panics for invalid types (fail-fast validation).
@@ -720,6 +748,12 @@ func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
 // Accepts either string table names or *TableRef instances with optional aliases.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
+// SECURITY: Table identifiers must be developer-controlled, not user input. They
+// are validated against a safe identifier grammar (simple/qualified name with an
+// optional alias) on ALL vendors BEFORE interpolation; anything else surfaces as a
+// ToSQL() error. For dynamic table expressions use qb.Expr()/Raw() (which require
+// an explicit security annotation). See ADR-031.
+//
 // Examples:
 //
 //	From("users")                                // Simple table
@@ -734,6 +768,12 @@ func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
 	// Quote all tables and join with commas for multi-table FROM clause
 	quotedTables := make([]string, len(from))
 	for i, table := range from {
+		// Validate table-name identifiers BEFORE interpolation (all vendors) so
+		// the FROM clause cannot be used as a SQL injection vector (M9).
+		if err := sqb.qb.validateTableReference(table); err != nil {
+			sqb.err = fmt.Errorf("From: %w", err)
+			return sqb
+		}
 		quotedTables[i] = sqb.qb.quoteTableReference(table)
 	}
 
@@ -798,16 +838,41 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 	return sqb
 }
 
+// validateJoinTable validates a JOIN table argument BEFORE interpolation (all
+// vendors) and quotes it. The table name/alias are interpolated verbatim into the
+// JOIN clause, so they must satisfy the safe identifier grammar to close the M9
+// injection vector. On failure the first error is captured (deferred to ToSQL,
+// mirroring From) and ok is false so the caller short-circuits.
+//
+// SECURITY: JOIN table identifiers must be developer-controlled, not user input.
+// They are validated against the same safe grammar as From() on ALL vendors before
+// interpolation. For dynamic table expressions use qb.Expr()/Raw(). See ADR-031.
+func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quoted string, ok bool) {
+	if err := sqb.qb.validateTableReference(table); err != nil {
+		if sqb.err == nil {
+			sqb.err = fmt.Errorf("%s: %w", method, err)
+		}
+		return "", false
+	}
+	return sqb.qb.quoteTableReference(table), true
+}
+
 // JoinOn adds a type-safe JOIN clause to the query using JoinFilter for column comparisons.
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
+//
+// SECURITY: see validateJoinTable — JOIN table identifiers are validated on ALL
+// vendors before interpolation (M9 / ADR-031).
 //
 // Example:
 //
 //	jf := qb.JoinFilter()
 //	query.JoinOn(Table("profiles").As("p"), jf.EqColumn("users.id", "p.user_id"))
 func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableReference(table)
+	quotedTable, ok := sqb.validateJoinTable("JoinOn", table)
+	if !ok {
+		return sqb
+	}
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -824,7 +889,10 @@ func (sqb *SelectQueryBuilder) JoinOn(table any, filter dbtypes.JoinFilter) dbty
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableReference(table)
+	quotedTable, ok := sqb.validateJoinTable("LeftJoinOn", table)
+	if !ok {
+		return sqb
+	}
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -841,7 +909,10 @@ func (sqb *SelectQueryBuilder) LeftJoinOn(table any, filter dbtypes.JoinFilter) 
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableReference(table)
+	quotedTable, ok := sqb.validateJoinTable("RightJoinOn", table)
+	if !ok {
+		return sqb
+	}
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -858,7 +929,10 @@ func (sqb *SelectQueryBuilder) RightJoinOn(table any, filter dbtypes.JoinFilter)
 // Accepts either a string table name or *TableRef instance with optional alias.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableReference(table)
+	quotedTable, ok := sqb.validateJoinTable("InnerJoinOn", table)
+	if !ok {
+		return sqb
+	}
 	condition, args, err := filter.ToSQL()
 	if err != nil {
 		// Capture error to be returned from ToSQL()
@@ -876,7 +950,10 @@ func (sqb *SelectQueryBuilder) InnerJoinOn(table any, filter dbtypes.JoinFilter)
 // Cross joins do not have ON conditions, so no JoinFilter is needed.
 // The table name is automatically quoted according to vendor rules.
 func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder {
-	quotedTable := sqb.qb.quoteTableReference(table)
+	quotedTable, ok := sqb.validateJoinTable("CrossJoinOn", table)
+	if !ok {
+		return sqb
+	}
 	sqb.selectBuilder = sqb.selectBuilder.CrossJoin(quotedTable)
 	return sqb
 }
@@ -884,6 +961,13 @@ func (sqb *SelectQueryBuilder) CrossJoinOn(table any) dbtypes.SelectQueryBuilder
 // OrderBy adds an ORDER BY clause to the query.
 // Column names are automatically quoted according to database vendor rules.
 // Accepts both string column names (with optional ASC/DESC) and RawExpression instances (v2.1+).
+//
+// SECURITY: String ORDER BY arguments must be developer-controlled, not user
+// input. They are validated on ALL vendors against a safe grammar — a
+// simple/qualified identifier with an optional ASC/DESC [NULLS FIRST|LAST]
+// direction — BEFORE interpolation; anything else (functions, multiple tokens,
+// comments, semicolons) surfaces as a ToSQL() error. Use qb.Expr() for function
+// or computed orderings (e.g. COUNT(*) DESC). See ADR-031.
 //
 // Examples:
 //
@@ -898,6 +982,10 @@ func (sqb *SelectQueryBuilder) OrderBy(orderBys ...any) dbtypes.SelectQueryBuild
 		sqb.appendClauseValue(&processedOrderBys, orderBy, "orderBy", sqb.qb.quoteIdentifierForClause)
 	}
 
+	if sqb.err != nil {
+		return sqb
+	}
+
 	sqb.selectBuilder = sqb.selectBuilder.OrderBy(processedOrderBys...)
 	return sqb
 }
@@ -905,6 +993,12 @@ func (sqb *SelectQueryBuilder) OrderBy(orderBys ...any) dbtypes.SelectQueryBuild
 // GroupBy adds a GROUP BY clause to the query.
 // Column names are automatically quoted according to database vendor rules.
 // Accepts both string column names and RawExpression instances (v2.1+).
+//
+// SECURITY: String GROUP BY arguments must be developer-controlled, not user
+// input. They are validated on ALL vendors against a safe identifier grammar
+// BEFORE interpolation; anything else (functions, comments, semicolons) surfaces
+// as a ToSQL() error. Use qb.Expr() for computed groupings (e.g.
+// DATE(created_at)). See ADR-031.
 //
 // Examples:
 //
@@ -918,6 +1012,10 @@ func (sqb *SelectQueryBuilder) GroupBy(groupBys ...any) dbtypes.SelectQueryBuild
 		sqb.appendClauseValue(&processedGroupBys, groupBy, "groupBy", sqb.qb.quoteIdentifierForClause)
 	}
 
+	if sqb.err != nil {
+		return sqb
+	}
+
 	sqb.selectBuilder = sqb.selectBuilder.GroupBy(processedGroupBys...)
 	return sqb
 }
@@ -927,6 +1025,16 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 	case nil:
 		panic(fmt.Sprintf("nil %s in %s", clauseName, clauseName))
 	case string:
+		// Validate the identifier (with its optional ASC/DESC [NULLS …] direction)
+		// BEFORE quoting/interpolation on ALL vendors so a crafted clause argument
+		// cannot inject a second statement or comment (M9). Use qb.Expr() for
+		// complex expressions that legitimately need raw SQL.
+		if err := validateClauseIdentifier(clauseName, v); err != nil {
+			if sqb.err == nil {
+				sqb.err = err
+			}
+			return
+		}
 		*processed = append(*processed, stringFormatter(v))
 	case dbtypes.RawExpression:
 		*processed = append(*processed, v.SQL)
@@ -1012,7 +1120,21 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 
 // Set sets a column to a value in the UPDATE statement.
 // Column names are automatically quoted according to database vendor rules.
+//
+// SECURITY: The column identifier must be developer-controlled, not user input.
+// It is validated against a safe identifier grammar on ALL vendors BEFORE
+// interpolation; anything else surfaces as a ToSQL() error. The value side is
+// parameterized. See ADR-031.
 func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQueryBuilder {
+	// Validate the SET target identifier BEFORE interpolation (all vendors) so the
+	// column name cannot be used as a SQL injection vector (M9). The value side is
+	// already parameterized by squirrel.
+	if err := validateIdentifier("Set column", column); err != nil {
+		if uqb.err == nil {
+			uqb.err = err
+		}
+		return uqb
+	}
 	quotedColumn := uqb.qb.quoteColumnForQuery(column)
 	uqb.updateBuilder = uqb.updateBuilder.Set(quotedColumn, value)
 	return uqb
@@ -1020,9 +1142,20 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 
 // SetMap sets multiple columns to values in the UPDATE statement.
 // Column names are automatically quoted according to database vendor rules.
+//
+// SECURITY: Column identifiers (the map keys) must be developer-controlled, not
+// user input. Each is validated against a safe identifier grammar on ALL vendors
+// BEFORE interpolation; anything else surfaces as a ToSQL() error. See ADR-031.
 func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
 	quotedClauses := make(map[string]any, len(clauses))
 	for k, v := range clauses {
+		// Validate each SET target identifier BEFORE interpolation (all vendors, M9).
+		if err := validateIdentifier("SetMap column", k); err != nil {
+			if uqb.err == nil {
+				uqb.err = err
+			}
+			return uqb
+		}
 		quotedClauses[uqb.qb.quoteColumnForQuery(k)] = v
 	}
 	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
@@ -1082,6 +1215,9 @@ func (uqb *UpdateQueryBuilder) Where(filter dbtypes.Filter) dbtypes.UpdateQueryB
 
 // ToSQL generates the final SQL query and arguments.
 func (uqb *UpdateQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	if uqb.err != nil {
+		return "", nil, uqb.err
+	}
 	return uqb.updateBuilder.ToSql()
 }
 
@@ -1104,9 +1240,17 @@ func (dqb *DeleteQueryBuilder) Limit(limit uint64) dbtypes.DeleteQueryBuilder {
 // OrderBy adds ORDER BY clauses to the DELETE statement.
 // Note: ORDER BY in DELETE is not standard SQL and may not be supported by all databases.
 func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBuilder {
-	quotedOrderBys := make([]string, len(orderBys))
-	for i, orderBy := range orderBys {
-		quotedOrderBys[i] = dqb.qb.quoteIdentifierForClause(orderBy)
+	quotedOrderBys := make([]string, 0, len(orderBys))
+	for _, orderBy := range orderBys {
+		// Validate the ORDER BY identifier (with optional ASC/DESC [NULLS …])
+		// BEFORE interpolation on ALL vendors so it cannot inject SQL (M9).
+		if err := validateClauseIdentifier("orderBy", orderBy); err != nil {
+			if dqb.err == nil {
+				dqb.err = err
+			}
+			return dqb
+		}
+		quotedOrderBys = append(quotedOrderBys, dqb.qb.quoteIdentifierForClause(orderBy))
 	}
 	dqb.deleteBuilder = dqb.deleteBuilder.OrderBy(quotedOrderBys...)
 	return dqb
@@ -1114,6 +1258,9 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 
 // ToSQL generates the final SQL query and arguments.
 func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
+	if dqb.err != nil {
+		return "", nil, dqb.err
+	}
 	return dqb.deleteBuilder.ToSql()
 }
 

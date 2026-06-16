@@ -930,32 +930,36 @@ func TestOracleOrderByGroupByQuoting(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		orderBy     []string
-		groupBy     []string
+		orderBy     []any
+		groupBy     []any
 		expectedSQL []string
 	}{
 		{
 			name:        "reserved_word_column",
-			orderBy:     []string{"number"},
-			groupBy:     []string{"level"},
+			orderBy:     []any{"number"},
+			groupBy:     []any{"level"},
 			expectedSQL: []string{`ORDER BY "number"`, `GROUP BY "level"`},
 		},
 		{
 			name:        "column_with_direction",
-			orderBy:     []string{"number ASC", "size DESC"},
-			groupBy:     []string{"access"},
+			orderBy:     []any{"number ASC", "size DESC"},
+			groupBy:     []any{"access"},
 			expectedSQL: []string{`ORDER BY "number" ASC, "size" DESC`, `GROUP BY "access"`},
 		},
 		{
 			name:        "mixed_reserved_and_normal",
-			orderBy:     []string{"name", "number DESC"},
-			groupBy:     []string{"category", "level"},
+			orderBy:     []any{"name", "number DESC"},
+			groupBy:     []any{"category", "level"},
 			expectedSQL: []string{`ORDER BY name, "number" DESC`, `GROUP BY category, "level"`},
 		},
 		{
-			name:        "sql_functions_preserved",
-			orderBy:     []string{countClause, sumClause},
-			groupBy:     []string{"COUNT(items)", "user_id"},
+			// HARDEN (ADR-031): SQL function expressions are no longer accepted as
+			// plain strings through OrderBy/GroupBy — they must go through qb.Expr()
+			// (the developer-controlled raw-SQL escape hatch). Plain strings are
+			// validated as bare identifiers to close the M9 injection vector.
+			name:        "sql_functions_via_expr_preserved",
+			orderBy:     []any{qb.MustExpr(countClause), qb.MustExpr(sumClause)},
+			groupBy:     []any{qb.MustExpr("COUNT(items)"), "user_id"},
 			expectedSQL: []string{`ORDER BY COUNT(*), SUM(amount)`, `GROUP BY COUNT(items), user_id`},
 		},
 	}
@@ -964,10 +968,10 @@ func TestOracleOrderByGroupByQuoting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			query := qb.Select("*").From("users")
 			if len(tt.groupBy) > 0 {
-				query = query.GroupBy(toAny(tt.groupBy)...)
+				query = query.GroupBy(tt.groupBy...)
 			}
 			if len(tt.orderBy) > 0 {
-				query = query.OrderBy(toAny(tt.orderBy)...)
+				query = query.OrderBy(tt.orderBy...)
 			}
 
 			sql, _, err := query.ToSQL()

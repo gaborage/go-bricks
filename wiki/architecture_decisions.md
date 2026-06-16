@@ -373,6 +373,27 @@ use a `*bool` and reads must go through `IsEnabled()`. YAML/env config is unchan
 
 ---
 
+### [ADR-031: Validate Direct-String Identifier Arguments in the Query Builder (Close M9 SQL Injection)](adr_031_query_builder_identifier_validation.md)
+
+**Date:** 2026-06-16 | **Status:** Accepted
+
+The query builder's direct-string APIs (`From`, the JOIN family, `OrderBy`, `GroupBy`, `Set`, `SetMap`,
+`DeleteQueryBuilder.OrderBy`) interpolated their string identifier arguments directly into the SQL, with
+quoting applied **only for Oracle** — the PostgreSQL/default branch returned the argument verbatim. A
+user-controlled identifier passed to one of
+these APIs on PostgreSQL was therefore a SQL-injection vector (M9): `.OrderBy("name; DROP TABLE users--")`
+was interpolated as an executable second statement. These identifier args are now validated against a safe
+grammar (simple/qualified identifier, optional inline alias for `From`, optional `ASC/DESC [NULLS FIRST|LAST]`
+for clauses) on **all vendors** before interpolation; violations surface as a `ToSQL()` error (never a panic).
+Valid identifiers on PostgreSQL stay **unquoted** to avoid a case-folding regression.
+
+**Breaking:** Identifiers outside the grammar — notably SQL **function expressions** passed as plain strings to
+`OrderBy`/`GroupBy` — now error from `ToSQL()` and must move to `qb.Expr()`/`Raw()`.
+
+**Key Benefits:** Closes the M9 injection vector on both vendors, no PostgreSQL case-folding regression, forces computed expressions through the annotated `Expr()`/`Raw()` escape hatch
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -382,7 +403,7 @@ use a `*bool` and reads must go through `IsEnabled()`. YAML/env config is unchan
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-030) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-031) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

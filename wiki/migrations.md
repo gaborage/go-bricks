@@ -2,6 +2,34 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Query Builder Validates Direct-String Identifiers (ADR-031)
+
+Per [ADR-031](adr_031_query_builder_identifier_validation.md), the string identifier arguments of `SelectQueryBuilder.From`, the JOIN family (`JoinOn`/`LeftJoinOn`/`RightJoinOn`/`InnerJoinOn`/`CrossJoinOn`), `OrderBy`, `GroupBy`, `UpdateQueryBuilder.Set`/`SetMap`, and `DeleteQueryBuilder.OrderBy` are now validated against a safe identifier grammar on **all vendors** before interpolation (previously only Oracle quoted them; PostgreSQL interpolated verbatim — the M9 SQL-injection vector). Values outside the grammar are surfaced as a `ToSQL()` error (the methods never panic on bad identifier content).
+
+**Before:**
+
+```go
+// Silently interpolated on PostgreSQL — executable injection:
+qb.Select("*").From("users").OrderBy("name; DROP TABLE users--")
+// → SELECT * FROM users ORDER BY name; DROP TABLE users--
+
+// SQL functions accepted as plain strings:
+qb.Select("*").From("orders").OrderBy("COUNT(*) DESC")
+```
+
+**After:**
+
+```go
+// Injection rejected — ToSQL() returns an error, no SQL emitted:
+_, _, err := qb.Select("*").From("users").OrderBy("name; DROP TABLE users--").ToSQL()
+// err != nil
+
+// Function expressions must go through the Expr() escape hatch:
+qb.Select("*").From("orders").OrderBy(qb.MustExpr("COUNT(*) DESC"))
+```
+
+**What still works unchanged:** bare/qualified column and table names, inline table aliases (`"users u"`), the `Table().As()` helper (in `From` and every JOIN), framework-quoted Oracle reserved words (`cols.Col("Level")`), and `ORDER BY`/`GROUP BY` with a trailing `ASC`/`DESC` (and optional `NULLS FIRST`/`LAST`) direction. Pass user **values** through the parameterized Filter API (`f.Eq`, …) — those were never affected.
+
 ## `PoolKeepAliveConfig.Enabled` Is Now `*bool` (ADR-030)
 
 Per [ADR-030](adr_030_keepalive_enabled_optional.md), `config.PoolKeepAliveConfig.Enabled` changed from `bool` to `*bool` so that an explicit `database.pool.keepalive.enabled: false` is honored even when `interval` is left at its zero default. Previously a zero `interval` flipped `Enabled` back to `true`, silently overriding the opt-out (M5).

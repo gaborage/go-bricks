@@ -137,9 +137,17 @@ type JoinFilterFactory interface {
 // SelectQueryBuilder defines the interface for enhanced SELECT query building with type safety.
 // This interface extends basic squirrel.SelectBuilder functionality with additional methods
 // for composable filters, JOIN operations, and vendor-specific query features.
+// SECURITY: The string-identifier arguments of From, the JOIN table methods
+// (JoinOn/LeftJoinOn/RightJoinOn/InnerJoinOn/CrossJoinOn), OrderBy, and GroupBy
+// must be developer-controlled, not user input. They are validated against a safe
+// identifier grammar on ALL vendors BEFORE interpolation; values outside that
+// grammar surface as a ToSQL() error. Route dynamic/computed expressions through
+// qb.Expr()/Raw() (which require an explicit security annotation) and pass user
+// values through the parameterized Filter API. See ADR-031.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
-	// From accepts either string table names or *TableRef instances with optional aliases
+	// From accepts either string table names or *TableRef instances with optional aliases.
+	// String table identifiers are validated before interpolation (see ADR-031).
 	From(from ...any) SelectQueryBuilder
 
 	// Type-safe JOIN methods with JoinFilter (v2.0+)
@@ -187,6 +195,12 @@ type InsertQueryBuilder interface {
 
 // UpdateQueryBuilder defines the interface for UPDATE query building with type-safe filtering.
 // This interface wraps squirrel.UpdateBuilder with Filter API support and vendor-specific quoting.
+// SECURITY: The string-identifier arguments of Set and SetMap (the SET targets)
+// must be developer-controlled, not user input. They are validated against a safe
+// identifier grammar on ALL vendors BEFORE interpolation; values outside that
+// grammar surface as a ToSQL() error. Route dynamic/computed expressions through
+// qb.Expr()/Raw() (which require an explicit security annotation) and pass user
+// values through the value side of Set/SetMap. See ADR-031.
 type UpdateQueryBuilder interface {
 	// Data modification
 	Set(column string, value any) UpdateQueryBuilder
@@ -207,6 +221,11 @@ type UpdateQueryBuilder interface {
 
 // DeleteQueryBuilder defines the interface for DELETE query building with type-safe filtering.
 // This interface wraps squirrel.DeleteBuilder with Filter API support.
+// SECURITY: The string-identifier arguments of OrderBy must be developer-controlled,
+// not user input. They are validated against a safe identifier grammar on ALL
+// vendors BEFORE interpolation; values outside that grammar surface as a ToSQL()
+// error. Route dynamic/computed orderings through qb.Expr()/Raw() (which require an
+// explicit security annotation) and pass user values through the Filter API. See ADR-031.
 type DeleteQueryBuilder interface {
 	// Filtering
 	Where(filter Filter) DeleteQueryBuilder
