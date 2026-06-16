@@ -2,6 +2,7 @@ package builder
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -79,6 +80,7 @@ const (
 	tableProducts = "products"
 	tableOrders   = "orders"
 	tableAccounts = "accounts"
+	tableLevel    = "level" // Oracle reserved word, used as a table name
 
 	// Column names (commonly used)
 	colID       = "id"
@@ -2017,17 +2019,78 @@ func TestInsertStructOracleReservedWords(t *testing.T) {
 		Size:   "large",
 	}
 
-	query := qb.InsertStruct(tableAccounts, &account)
+	// Use a reserved-word table name to verify both table and column quoting.
+	query := qb.InsertStruct(tableLevel, &account)
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
-	// Oracle should quote reserved words
-	assert.Contains(t, sql, `"number"`)
-	assert.Contains(t, sql, `"level"`)
-	assert.Contains(t, sql, `"size"`)
+	// Oracle should quote the reserved-word table name (finding M8) and reserved-word columns.
+	assert.Contains(t, sql, `INSERT INTO "level"`)
+	// Assert the column-list portion specifically so the reserved-word column quoting is
+	// genuinely exercised — checking the whole SQL for `"level"` alone would be trivially
+	// satisfied by the quoted table name above. The column order is reflection-driven and
+	// not deterministic, so assert each column within the list rather than a fixed string.
+	openParen := strings.Index(sql, "(")
+	valuesIdx := strings.Index(sql, "VALUES")
+	require.GreaterOrEqual(t, openParen, 0, "expected a column list in %q", sql)
+	require.Greater(t, valuesIdx, openParen, "expected VALUES after the column list in %q", sql)
+	columnList := sql[openParen:valuesIdx]
+	assert.Contains(t, columnList, `"number"`)
+	assert.Contains(t, columnList, `"level"`)
+	assert.Contains(t, columnList, `"size"`)
 	assert.Contains(t, args, testAccountID)
 	assert.Contains(t, args, 5)
 	assert.Contains(t, args, "large")
+}
+
+// TestInsertOracleReservedWordTableName verifies that all four INSERT entry points
+// quote a reserved-word table name on Oracle (matching Update/Delete/From), and that
+// PostgreSQL leaves the table name unquoted. Regression guard for finding M8.
+func TestInsertOracleReservedWordTableName(t *testing.T) {
+	const quotedLevel = `INSERT INTO "level"`
+
+	t.Run("oracle_insert", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		query := qb.Insert(tableLevel).Columns(colName).Values("test")
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, quotedLevel)
+	})
+
+	t.Run("oracle_insert_with_columns", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		query := qb.InsertWithColumns(tableLevel, colName).Values("test")
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, quotedLevel)
+	})
+
+	t.Run("oracle_insert_struct", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		account := IntegrationAccount{ID: 0, Number: testAccountID, Level: 5, Size: "large"}
+		query := qb.InsertStruct(tableLevel, &account)
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, quotedLevel)
+	})
+
+	t.Run("oracle_insert_fields", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+		account := IntegrationAccount{ID: 0, Number: testAccountID, Level: 5, Size: "large"}
+		query := qb.InsertFields(tableLevel, &account, fieldNumber)
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, quotedLevel)
+	})
+
+	t.Run("postgresql_insert_unquoted", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		query := qb.Insert(tableLevel).Columns(colName).Values("test")
+		sql, _, err := query.ToSQL()
+		require.NoError(t, err)
+		assert.Contains(t, sql, "INSERT INTO level")
+		assert.NotContains(t, sql, quotedLevel)
+	})
 }
 
 func TestSetStructAllFields(t *testing.T) {

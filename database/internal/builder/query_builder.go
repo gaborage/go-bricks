@@ -250,21 +250,24 @@ func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 // Insert creates an INSERT query builder for the specified table.
 // The returned InsertQueryBuilder exposes ToSQL() (idiomatic Go, per S8179)
 // consistent with Select/Update/Delete builders.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
-	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(table)}
+	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table))}
 }
 
 // InsertWithColumns creates an INSERT query builder with pre-specified columns.
 // It applies vendor-specific column quoting to the provided column list.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtypes.InsertQueryBuilder {
 	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(table).Columns(qb.quoteColumnsForDML(columns...)...),
+		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).Columns(qb.quoteColumnsForDML(columns...)...),
 	}
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
 // Zero-value ID fields (int64 or string type with field name "ID") are automatically excluded
 // to support auto-increment primary keys.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
 // Example:
 //
@@ -297,7 +300,7 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 	}
 
 	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(table).
+		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
 			Columns(qb.quoteColumnsForDML(columns...)...).
 			Values(values...),
 	}
@@ -305,6 +308,7 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 
 // InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
 // This is useful for partial inserts or when you need explicit control over which fields to include.
+// Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
 // Example:
 //
@@ -332,7 +336,7 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 	}
 
 	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(table).
+		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
 			Columns(qb.quoteColumnsForDML(columns...)...).
 			Values(values...),
 	}

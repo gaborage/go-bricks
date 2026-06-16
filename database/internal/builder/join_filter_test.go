@@ -422,7 +422,7 @@ func TestJoinFilterComparisonWithExpressions(t *testing.T) {
 		{
 			name:        "Gte_expression",
 			filter:      jf.Gte("date", qb.MustExpr("SYSDATE")),
-			expectedSQL: "date >= SYSDATE",
+			expectedSQL: `"date" >= SYSDATE`, // DATE is an Oracle reserved word (M10) — auto-quoted
 		},
 	}
 
@@ -614,8 +614,9 @@ func TestJoinFilterBetween(t *testing.T) {
 		sql, args, err := filter.ToSQL()
 
 		require.NoError(t, err)
-		assert.Contains(t, sql, "date >= ?")
-		assert.Contains(t, sql, "date <= SYSDATE")
+		// DATE is an Oracle reserved word (M10) — auto-quoted on the Oracle vendor.
+		assert.Contains(t, sql, `"date" >= ?`)
+		assert.Contains(t, sql, `"date" <= SYSDATE`)
 		assert.Equal(t, []any{"2024-01-01"}, args)
 	})
 }
