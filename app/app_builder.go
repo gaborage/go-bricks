@@ -18,6 +18,13 @@ type Builder struct {
 	cfg  *config.Config
 	opts *Options
 
+	// startupCtx is the single parent context for all startup/pre-initialization
+	// work (observability provider construction and database/messaging/cache
+	// pre-init). Per-component budgets are derived from it via context.WithTimeout
+	// so they share one cancellation/trace lineage instead of independent roots.
+	// Sourced from Options.StartupContext, defaulting to context.Background().
+	startupCtx context.Context
+
 	// Core components
 	logger    logger.Logger
 	bootstrap *appBootstrap
@@ -41,6 +48,10 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 
 	b.cfg = cfg
 	b.opts = opts
+	b.startupCtx = context.Background()
+	if opts != nil && opts.StartupContext != nil {
+		b.startupCtx = opts.StartupContext
+	}
 	return b
 }
 
@@ -147,7 +158,7 @@ func (b *Builder) ResolveDependencies() *Builder {
 		return b
 	}
 
-	b.bundle = b.bootstrap.dependencies()
+	b.bundle = b.bootstrap.dependencies(b.startupCtx)
 	if b.bundle != nil && b.bundle.deps != nil && b.bundle.deps.Logger != nil {
 		// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
 		b.logger = b.bundle.deps.Logger
@@ -300,6 +311,16 @@ func (b *Builder) preInitMessaging(timeout time.Duration) bool {
 	)
 }
 
+// startupParent returns the parent startup context, falling back to
+// context.Background() when the builder was constructed without WithConfig
+// (e.g. in focused unit tests). WithConfig sets startupCtx on the normal path.
+func (b *Builder) startupParent() context.Context {
+	if b.startupCtx != nil {
+		return b.startupCtx
+	}
+	return context.Background()
+}
+
 // preInitFatalComponent pre-initializes a startup-fatal component (database or
 // messaging) under its own per-component budget. The component is skipped when
 // not configured; a connection failure is fatal (sets b.err) and stops the
@@ -315,7 +336,7 @@ func (b *Builder) preInitFatalComponent(
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(b.startupParent(), timeout)
 	defer cancel()
 
 	if err := connect(ctx); err != nil {
@@ -335,7 +356,7 @@ func (b *Builder) preInitCache(timeout time.Duration) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(b.startupParent(), timeout)
 	defer cancel()
 
 	if _, err := b.bundle.cacheManager.Get(ctx, ""); err != nil {

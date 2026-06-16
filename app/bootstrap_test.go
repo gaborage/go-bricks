@@ -303,7 +303,7 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability()
+	obsProvider := bootstrap.initializeObservability(context.Background())
 	require.NotNil(t, obsProvider)
 
 	// Verify tracer provider is initialized
@@ -408,7 +408,7 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability()
+	obsProvider := bootstrap.initializeObservability(context.Background())
 	require.NotNil(t, obsProvider)
 
 	// Verify provider is functional (indicates config was loaded successfully)
@@ -490,7 +490,7 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability()
+	obsProvider := bootstrap.initializeObservability(context.Background())
 	require.NotNil(t, obsProvider)
 
 	// Should return noop providers
@@ -549,7 +549,7 @@ debug:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability (should fallback to noop provider)
-	obsProvider := bootstrap.initializeObservability()
+	obsProvider := bootstrap.initializeObservability(context.Background())
 	require.NotNil(t, obsProvider, "Should return noop provider when config is missing")
 
 	// Should return noop providers
@@ -612,7 +612,7 @@ observability:
 	}
 
 	start := time.Now()
-	got := bootstrap.initializeObservability()
+	got := bootstrap.initializeObservability(context.Background())
 
 	assert.Same(t, want, got, "the provider returned by the seam should be installed verbatim")
 	require.NotNil(t, gotCtx, "seam must receive a non-nil context")
@@ -624,6 +624,52 @@ observability:
 	const tolerance = 2 * time.Second
 	assert.InDelta(t, budget.Seconds(), deadline.Sub(start).Seconds(), tolerance.Seconds(),
 		"seam context deadline must be ~app.startup.observability from now")
+}
+
+// TestInitializeObservabilityPropagatesParentContext verifies the budget context
+// is derived from the supplied startup parent (not a fresh context.Background()):
+// canceling the parent must cancel the context the construction seam receives.
+func TestInitializeObservabilityPropagatesParentContext(t *testing.T) {
+	cfg := loadConfigFromYAML(t, `
+app:
+  name: test-app
+  version: 1.0.0
+  env: development
+  startup:
+    observability: 7s
+server:
+  host: localhost
+  port: 8080
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: testdb
+  username: testuser
+  password: testpass
+log:
+  level: info
+observability:
+  enabled: true
+  service:
+    name: parent-ctx-test
+`)
+
+	var gotCtx context.Context
+	bootstrap := newAppBootstrap(cfg, logger.New("info", false), &Options{})
+	bootstrap.newProvider = func(ctx context.Context, _ *observability.Config) (observability.Provider, error) {
+		gotCtx = ctx
+		return &testObservabilityProvider{}, nil
+	}
+
+	parent, cancel := context.WithCancel(context.Background())
+	cancel() // cancel the parent BEFORE construction
+
+	bootstrap.initializeObservability(parent)
+
+	require.NotNil(t, gotCtx, "seam must receive a non-nil context")
+	require.ErrorIs(t, gotCtx.Err(), context.Canceled,
+		"budget context must inherit cancellation from the startup parent, proving it is not a fresh context.Background()")
 }
 
 // TestInitializeObservabilityConstructorErrorFallsBackToNoop verifies that when
@@ -662,7 +708,7 @@ observability:
 		return nil, errors.New("exporter dial failed")
 	}
 
-	got := bootstrap.initializeObservability()
+	got := bootstrap.initializeObservability(context.Background())
 
 	require.NotNil(t, got, "a no-op provider must be installed on constructor error")
 	assert.NotNil(t, got.TracerProvider(), "no-op provider must expose a tracer provider")
