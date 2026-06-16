@@ -228,6 +228,24 @@ qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
 
 Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`.
 
+## Identifier Validation (ADR-031)
+
+The string-identifier arguments of `From`, the JOIN family (`JoinOn`/`LeftJoinOn`/`RightJoinOn`/`InnerJoinOn`/`CrossJoinOn`), `OrderBy`, `GroupBy`, `Set`, `SetMap`, and `DeleteQueryBuilder.OrderBy` must be **developer-controlled, not user input**. As of ADR-031 these arguments are validated against a safe identifier grammar on **all vendors** (PostgreSQL and Oracle) *before* interpolation:
+
+- **Table args** (`From`, JOIN tables): a simple or qualified identifier — `col`, `table.col`, `schema.table.col` — plus an optional inline alias (`"users u"`). A `*TableRef` from `Table("users").As("u")` validates its name and alias separately.
+- **Identifier args** (`Set`, `SetMap` columns): a simple or qualified identifier plus the framework's own quoted reserved-word output (`"level"`).
+- **Clause args** (`OrderBy`, `GroupBy`, `DeleteQueryBuilder.OrderBy`): the above plus an optional bounded direction — `col ASC|DESC [NULLS FIRST|LAST]`.
+
+Anything outside the grammar — quotes used for injection, embedded whitespace, semicolons, `--` / `/* */` comment sequences, function calls, or extra tokens — is **rejected as a `ToSQL()` error** (the fluent methods cannot return errors, so the violation is deferred to `ToSQL()`; they never panic on bad identifier content). This closes the injection vector where `.OrderBy(userInput)` with a value like `"name; DROP TABLE users--"` was previously interpolated verbatim on PostgreSQL.
+
+```go
+qb.Select("*").From("users").OrderBy("name ASC")                 // SAFE
+qb.Select("*").From("users").OrderBy("COUNT(*) DESC")            // REJECTED → use qb.MustExpr("COUNT(*) DESC")
+qb.Select("*").From("users").OrderBy(req.Query("sort"))          // REJECTED if the value isn't a bare column+direction
+```
+
+Valid identifiers on PostgreSQL are left **unquoted** (PG folds unquoted identifiers to lowercase; quoting would change which physical column is referenced). Complex or computed expressions must go through `qb.Expr()`/`Raw()`, which carry an explicit `// SECURITY:` annotation. Pass user **values** through the parameterized Filter API (`f.Eq`, etc.).
+
 ## Connection Pool Defaults
 
 | Setting | Default | Purpose |

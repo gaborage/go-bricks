@@ -881,3 +881,29 @@ func TestQueryBuilderComplexQueryWithSqlmock(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestPostgreSQLOrderBySQLInjection reproduces M9: the direct-string identifier
+// APIs (OrderBy, GroupBy, From, Set, ...) passed user-controlled identifiers
+// verbatim to squirrel on PostgreSQL (the default, non-Oracle branch), so a
+// crafted ORDER BY argument is interpolated directly into the SQL string.
+//
+// Concrete exploit: .OrderBy(req.Query("sort")) with a value of
+// "name; DROP TABLE users--" injects a second statement plus a line comment.
+//
+// HARDEN posture (ADR-031): identifier arguments are validated against a safe
+// pattern on ALL vendors BEFORE interpolation. The injection vector must be
+// rejected as a ToSQL() error and must NEVER appear in the generated SQL.
+func TestPostgreSQLOrderBySQLInjection(t *testing.T) {
+	qb := NewQueryBuilder(PostgreSQL)
+
+	query := qb.Select("*").From("users").OrderBy("name; DROP TABLE users--")
+
+	sql, _, err := query.ToSQL()
+
+	// The injection must be rejected at build time, not interpolated.
+	require.Error(t, err, "ORDER BY injection must be rejected as a ToSQL() error")
+	assert.NotContains(t, sql, "DROP TABLE",
+		"generated SQL must not contain the injected statement")
+	assert.NotContains(t, sql, "--",
+		"generated SQL must not contain the injected comment sequence")
+}
