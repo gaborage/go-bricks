@@ -133,8 +133,34 @@ type provider struct {
 // IMPORTANT: This function applies default values before validation to ensure
 // safe configuration (e.g., sample rate defaults to 1.0). Callers do NOT need
 // to call ApplyDefaults() first - it's handled internally.
+//
+// NewProvider uses a context.Background() for construction. Use
+// NewProviderWithContext to bound resource detection and exporter setup by a
+// deadline (e.g. an app.startup.observability budget).
 func NewProvider(cfg *Config) (Provider, error) {
-	debugLogger.Printf("NewProvider called - enabled=%v, service=%s", cfg.Enabled, cfg.Service.Name)
+	return NewProviderWithContext(context.Background(), cfg)
+}
+
+// NewProviderWithContext creates a new observability provider, threading ctx
+// through resource detection (resource.New) and OTLP exporter construction so
+// the caller can bound those steps with a deadline.
+//
+// What the context bounds: the synchronous setup work performed here —
+// resource attribute detection and the OTLP exporter constructors
+// (otlptracehttp/grpc, otlpmetrichttp/grpc, otlploghttp/grpc). It does NOT
+// bound steady-state telemetry export, which the SDK governs via its own
+// per-export timeouts.
+//
+// Note: OTLP gRPC dialing is lazy (the connection is established on first
+// export, not at construction), so for the gRPC transports the deadline
+// mainly bounds resource detection and exporter object setup rather than any
+// network round-trip. The HTTP transports likewise connect lazily.
+//
+// Like NewProvider, this applies defaults before validation; callers do NOT
+// need to call ApplyDefaults() first. If observability is disabled, a no-op
+// provider is returned regardless of ctx.
+func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) {
+	debugLogger.Printf("NewProviderWithContext called - enabled=%v, service=%s", cfg.Enabled, cfg.Service.Name)
 
 	// Create a defensive copy and apply defaults BEFORE validation
 	// This ensures zero sample rates or missing timeouts get safe defaults
@@ -175,7 +201,9 @@ func NewProvider(cfg *Config) (Provider, error) {
 	traceEnabled := isProviderEnabled(safeCfg.Trace.Enabled)
 	traceConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s, insecure=%v",
 		traceEnabled, safeCfg.Trace.Endpoint, safeCfg.Trace.Protocol, safeCfg.Trace.Insecure)
-	if err := initializeProvider("Trace", traceEnabled, traceConfig, p.initTraceProvider); err != nil {
+	if err := initializeProvider("Trace", traceEnabled, traceConfig, func() error {
+		return p.initTraceProvider(ctx)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -183,7 +211,9 @@ func NewProvider(cfg *Config) (Provider, error) {
 	metricsEnabled := isProviderEnabled(safeCfg.Metrics.Enabled)
 	metricsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
 		metricsEnabled, safeCfg.Metrics.Endpoint, safeCfg.Metrics.Protocol)
-	if err := initializeProvider("Metrics", metricsEnabled, metricsConfig, p.initMeterProvider); err != nil {
+	if err := initializeProvider("Metrics", metricsEnabled, metricsConfig, func() error {
+		return p.initMeterProvider(ctx)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -191,7 +221,9 @@ func NewProvider(cfg *Config) (Provider, error) {
 	logsEnabled := isProviderEnabled(safeCfg.Logs.Enabled)
 	logsConfig := fmt.Sprintf("enabled=%v, endpoint=%s, protocol=%s",
 		logsEnabled, safeCfg.Logs.Endpoint, safeCfg.Logs.Protocol)
-	if err := initializeProvider("Logs", logsEnabled, logsConfig, p.initLogProvider); err != nil {
+	if err := initializeProvider("Logs", logsEnabled, logsConfig, func() error {
+		return p.initLogProvider(ctx)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -266,15 +298,15 @@ func (p *provider) registerGlobalProviders() {
 }
 
 // initTraceProvider initializes the OpenTelemetry trace provider.
-func (p *provider) initTraceProvider() error {
+func (p *provider) initTraceProvider(ctx context.Context) error {
 	// Create resource with service information
-	res, err := p.createResource()
+	res, err := p.createResource(ctx)
 	if err != nil {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
 	// Create trace exporter
-	exporter, err := p.createTraceExporter()
+	exporter, err := p.createTraceExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create trace exporter: %w", err)
 	}
@@ -313,13 +345,14 @@ func (p *provider) initTraceProvider() error {
 }
 
 // createResource creates an OpenTelemetry resource with service information.
-func (p *provider) createResource() (*resource.Resource, error) {
+// The provided ctx bounds resource detection (resource.New).
+func (p *provider) createResource(ctx context.Context) (*resource.Resource, error) {
 	// Use default resource and add our attributes without schema URL to avoid conflicts
 	defaultRes := resource.Default()
 
 	// Create our custom attributes
 	customRes, err := resource.New(
-		context.Background(),
+		ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(p.config.Service.Name),
 			semconv.ServiceVersion(p.config.Service.Version),
@@ -335,7 +368,7 @@ func (p *provider) createResource() (*resource.Resource, error) {
 }
 
 // createTraceExporter creates a trace exporter based on the configured endpoint.
-func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
+func (p *provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	endpoint := p.config.Trace.Endpoint
 	debugLogger.Printf("Creating trace exporter for endpoint: %s", endpoint)
 
@@ -359,13 +392,13 @@ func (p *provider) createTraceExporter() (sdktrace.SpanExporter, error) {
 
 	switch protocol {
 	case ProtocolHTTP:
-		exporter, err := p.createOTLPHTTPExporter()
+		exporter, err := p.createOTLPHTTPExporter(ctx)
 		if err != nil {
 			return nil, err
 		}
 		return getTraceExporterWrapper()(exporter), nil
 	case ProtocolGRPC:
-		exporter, err := p.createOTLPGRPCExporter()
+		exporter, err := p.createOTLPGRPCExporter(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +418,7 @@ func stripScheme(endpoint string) string {
 }
 
 // createOTLPHTTPExporter creates an OTLP HTTP trace exporter.
-func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
+func (p *provider) createOTLPHTTPExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	debugLogger.Printf("Creating OTLP HTTP trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
@@ -414,7 +447,7 @@ func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
 		opts = append(opts, otlptracehttp.WithHeaders(p.config.Trace.Headers))
 	}
 
-	exporter, err := otlptracehttp.New(context.Background(), opts...)
+	exporter, err := otlptracehttp.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP HTTP trace exporter: %v", err)
 		return nil, err
@@ -425,7 +458,7 @@ func (p *provider) createOTLPHTTPExporter() (sdktrace.SpanExporter, error) {
 }
 
 // createOTLPGRPCExporter creates an OTLP gRPC trace exporter.
-func (p *provider) createOTLPGRPCExporter() (sdktrace.SpanExporter, error) {
+func (p *provider) createOTLPGRPCExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	debugLogger.Printf("Creating OTLP gRPC trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
@@ -451,7 +484,7 @@ func (p *provider) createOTLPGRPCExporter() (sdktrace.SpanExporter, error) {
 		debugLogger.Printf("Added %d custom headers to gRPC exporter", len(p.config.Trace.Headers))
 	}
 
-	exporter, err := otlptracegrpc.New(context.Background(), opts...)
+	exporter, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {
 		debugLogger.Printf("Failed to create OTLP gRPC trace exporter: %v", err)
 		return nil, err

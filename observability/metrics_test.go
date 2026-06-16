@@ -571,7 +571,7 @@ func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
 		},
 	}
 
-	err := p.initMeterProvider()
+	err := p.initMeterProvider(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, p.meterProvider)
 
@@ -611,7 +611,7 @@ func TestInitMeterProviderWithExponentialHistogram(t *testing.T) {
 		},
 	}
 
-	err := p.initMeterProvider()
+	err := p.initMeterProvider(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, p.meterProvider)
 
@@ -705,7 +705,7 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 				useInsecure = *tt.config.Insecure
 			}
 
-			exporter, err := p.createOTLPHTTPMetricExporter(useInsecure, tt.config.Headers)
+			exporter, err := p.createOTLPHTTPMetricExporter(context.Background(), useInsecure, tt.config.Headers)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -799,7 +799,7 @@ func TestCreateOTLPGRPCMetricExporterWithCompression(t *testing.T) {
 				useInsecure = *tt.config.Insecure
 			}
 
-			exporter, err := p.createOTLPGRPCMetricExporter(useInsecure, tt.config.Headers)
+			exporter, err := p.createOTLPGRPCMetricExporter(context.Background(), useInsecure, tt.config.Headers)
 
 			if tt.wantErr {
 				assert.Error(t, err)

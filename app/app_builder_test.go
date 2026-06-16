@@ -1,10 +1,19 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/gaborage/go-bricks/cache"
+	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -513,6 +522,163 @@ func TestAppBuilderChainValidation(t *testing.T) {
 		assert.Nil(t, result.bundle)
 		assert.Nil(t, result.app)
 	})
+}
+
+// deadlineCapturingResource is a static TenantStore that records the context
+// deadline observed during single-tenant pre-initialization for each component.
+// It lets tests assert that DB, messaging, and cache pre-init each receive their
+// own per-component startup budget rather than a single shared global timeout.
+type deadlineCapturingResource struct {
+	mu            sync.Mutex
+	dbDeadline    time.Time
+	dbHadDL       bool
+	msgDeadline   time.Time
+	msgHadDL      bool
+	cacheDeadline time.Time
+	cacheHadDL    bool
+}
+
+func (r *deadlineCapturingResource) DBConfig(ctx context.Context, _ string) (*config.DatabaseConfig, error) {
+	r.mu.Lock()
+	r.dbDeadline, r.dbHadDL = ctx.Deadline()
+	r.mu.Unlock()
+	return &config.DatabaseConfig{Type: dbTypePostgres, Host: localHost, Port: 5432}, nil
+}
+
+func (r *deadlineCapturingResource) BrokerURL(ctx context.Context, _ string) (string, error) {
+	r.mu.Lock()
+	r.msgDeadline, r.msgHadDL = ctx.Deadline()
+	r.mu.Unlock()
+	return "amqp://guest:guest@localhost:5672/", nil
+}
+
+func (r *deadlineCapturingResource) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
+	return &config.CacheConfig{Enabled: true, Redis: config.RedisConfig{Host: localHost, Port: 6379}}, nil
+}
+
+func (r *deadlineCapturingResource) IsDynamic() bool { return false }
+
+func (r *deadlineCapturingResource) captureCacheDeadline(ctx context.Context) {
+	r.mu.Lock()
+	r.cacheDeadline, r.cacheHadDL = ctx.Deadline()
+	r.mu.Unlock()
+}
+
+// TestPerformPreInitializationUsesPerComponentTimeouts verifies that single-tenant
+// pre-initialization derives each component's context deadline from its own
+// app.startup.{database,messaging,cache} budget, not from the shared
+// app.startup.timeout fallback. The global Timeout is set small and the
+// per-component budgets large and distinct so a regression to the shared timeout
+// is unambiguous.
+func TestPerformPreInitializationUsesPerComponentTimeouts(t *testing.T) {
+	const (
+		globalBudget = 2 * time.Second
+		dbBudget     = 30 * time.Second
+		msgBudget    = 45 * time.Second
+		cacheBudget  = 8 * time.Second
+	)
+
+	cfg := defaultTestConfig()
+	cfg.App.Startup = config.StartupConfig{
+		Timeout:       globalBudget,
+		Database:      dbBudget,
+		Messaging:     msgBudget,
+		Cache:         cacheBudget,
+		Observability: 15 * time.Second,
+	}
+
+	resource := &deadlineCapturingResource{}
+	opts := &Options{
+		ResourceSource: resource,
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+		CacheConnector: func(ctx context.Context, _ string) (cache.Cache, error) {
+			resource.captureCacheDeadline(ctx)
+			return cachetesting.NewMockCache(), nil
+		},
+	}
+
+	start := time.Now()
+	_, _, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err)
+
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+
+	require.True(t, resource.dbHadDL, "database pre-init context must carry a deadline")
+	require.True(t, resource.msgHadDL, "messaging pre-init context must carry a deadline")
+	require.True(t, resource.cacheHadDL, "cache pre-init context must carry a deadline")
+
+	const tolerance = 3 * time.Second
+	assert.InDelta(t, dbBudget.Seconds(), resource.dbDeadline.Sub(start).Seconds(), tolerance.Seconds(),
+		"database pre-init must use app.startup.database, not the global timeout")
+	assert.InDelta(t, msgBudget.Seconds(), resource.msgDeadline.Sub(start).Seconds(), tolerance.Seconds(),
+		"messaging pre-init must use app.startup.messaging, not the global timeout")
+	assert.InDelta(t, cacheBudget.Seconds(), resource.cacheDeadline.Sub(start).Seconds(), tolerance.Seconds(),
+		"cache pre-init must use app.startup.cache, not the global timeout")
+}
+
+// TestPreInitCacheFailureIsNonFatal verifies that a cache pre-initialization
+// failure does not abort startup. Both error shapes are exercised:
+//   - a non-NotConfigured error hits the WARN ("non-fatal") branch
+//   - a NotConfigured error hits the silent skip (Debug) branch
+//
+// In both cases NewWithConfig must still succeed, proving cache pre-init is
+// best-effort while database/messaging remain startup-fatal.
+func TestPreInitCacheFailureIsNonFatal(t *testing.T) {
+	cases := []struct {
+		name      string
+		cacheErr  error
+		wantCalls bool
+	}{
+		{
+			name:      "non_configured_error_is_skipped_silently",
+			cacheErr:  config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"),
+			wantCalls: true,
+		},
+		{
+			name:      "other_error_is_logged_and_continues",
+			cacheErr:  errors.New("dial timeout"),
+			wantCalls: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			cfg.App.Startup = config.StartupConfig{
+				Timeout:       2 * time.Second,
+				Database:      2 * time.Second,
+				Messaging:     2 * time.Second,
+				Cache:         2 * time.Second,
+				Observability: 2 * time.Second,
+			}
+
+			var cacheCalled bool
+			opts := &Options{
+				ResourceSource: &deadlineCapturingResource{},
+				DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+					return &testmocks.MockDatabase{}, nil
+				},
+				MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+					return testmocks.NewMockAMQPClient()
+				},
+				CacheConnector: func(context.Context, string) (cache.Cache, error) {
+					cacheCalled = true
+					return nil, tc.cacheErr
+				},
+			}
+
+			app, _, err := NewWithConfig(cfg, opts)
+			require.NoError(t, err, "cache pre-init failure must not abort startup")
+			require.NotNil(t, app)
+			assert.Equal(t, tc.wantCalls, cacheCalled, "cache connector should be invoked during pre-init")
+		})
+	}
 }
 
 func TestAppBuilderErrorRecovery(t *testing.T) {

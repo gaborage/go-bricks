@@ -4,9 +4,22 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+)
+
+// Documented operator-configurable defaults. These mirror the values applied by
+// config validation (see config/validation.go: applyMessagingDefaults and
+// applyCacheManagerDefaults) so the builder honors the same documented behavior
+// even when invoked without a fully-validated config (e.g. in unit tests).
+const (
+	defaultPublisherMaxCached   = 50
+	defaultPublisherIdleTTL     = 10 * time.Minute
+	defaultCacheMaxSize         = 100
+	defaultCacheIdleTTL         = 15 * time.Minute
+	defaultCacheCleanupInterval = 5 * time.Minute
 )
 
 // ManagerConfigBuilder creates configuration options for database and messaging managers
@@ -17,6 +30,14 @@ type ManagerConfigBuilder struct {
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
+	// publisherConfig carries operator-configurable messaging publisher pool
+	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
+	// When unset, documented defaults are applied as fallbacks.
+	publisherConfig config.PublisherPoolConfig
+	// cacheConfig carries operator-configurable cache manager settings
+	// (cache.manager.*), sourced from validated config by bootstrap.
+	// When unset, documented defaults are applied as fallbacks.
+	cacheConfig config.CacheManagerConfig
 }
 
 // NewManagerConfigBuilder creates a new manager configuration builder.
@@ -48,17 +69,29 @@ func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions 
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and moderate TTL.
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
-	if b.multiTenantEnabled {
-		return messaging.ManagerOptions{
-			MaxPublishers:     b.tenantLimit,   // Use configured tenant limit
-			IdleTTL:           5 * time.Minute, // Shorter TTL for multi-tenant
-			ConnectionTimeout: b.connectionTimeout,
+	// Operator config (messaging.publisher.*) is the source of truth. Mode-specific
+	// values are only fallbacks when the operator left the key unset (zero).
+	maxPublishers := b.publisherConfig.MaxCached
+	if maxPublishers == 0 {
+		if b.multiTenantEnabled {
+			maxPublishers = b.tenantLimit // Scale publisher pool with tenant limit
+		} else {
+			maxPublishers = defaultPublisherMaxCached // Documented single-tenant default
+		}
+	}
+
+	idleTTL := b.publisherConfig.IdleTTL
+	if idleTTL == 0 {
+		if b.multiTenantEnabled {
+			idleTTL = 5 * time.Minute // Shorter TTL for multi-tenant churn
+		} else {
+			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default
 		}
 	}
 
 	return messaging.ManagerOptions{
-		MaxPublishers:     10,               // Small fixed size for single-tenant
-		IdleTTL:           30 * time.Minute, // Moderate TTL for single-tenant
+		MaxPublishers:     maxPublishers,
+		IdleTTL:           idleTTL,
 		ConnectionTimeout: b.connectionTimeout,
 	}
 }
@@ -67,18 +100,31 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and longer TTL.
 func (b *ManagerConfigBuilder) BuildCacheOptions() cache.ManagerConfig {
-	if b.multiTenantEnabled {
-		return cache.ManagerConfig{
-			MaxSize:         b.tenantLimit,    // Use configured tenant limit
-			IdleTTL:         15 * time.Minute, // Moderate TTL for multi-tenant
-			CleanupInterval: 5 * time.Minute,  // Cleanup interval
+	// Operator config (cache.manager.*) is the source of truth. Mode-specific
+	// values are only fallbacks when the operator left the key unset (zero).
+	maxSize := b.cacheConfig.MaxSize
+	if maxSize == 0 {
+		if b.multiTenantEnabled {
+			maxSize = b.tenantLimit // Scale cache instances with tenant limit
+		} else {
+			maxSize = defaultCacheMaxSize // Documented single-tenant default
 		}
 	}
 
+	idleTTL := b.cacheConfig.IdleTTL
+	if idleTTL == 0 {
+		idleTTL = defaultCacheIdleTTL // Documented default (same for both modes)
+	}
+
+	cleanupInterval := b.cacheConfig.CleanupInterval
+	if cleanupInterval == 0 {
+		cleanupInterval = defaultCacheCleanupInterval // Documented default (same for both modes)
+	}
+
 	return cache.ManagerConfig{
-		MaxSize:         10,               // Small fixed size for single-tenant
-		IdleTTL:         1 * time.Hour,    // Longer TTL for single-tenant
-		CleanupInterval: 15 * time.Minute, // Less frequent cleanup
+		MaxSize:         maxSize,
+		IdleTTL:         idleTTL,
+		CleanupInterval: cleanupInterval,
 	}
 }
 

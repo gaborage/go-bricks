@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
@@ -560,4 +562,114 @@ debug:
 	// Cleanup (should not error)
 	err = obsProvider.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+// TestInitializeObservabilityThreadsBudgetContext verifies that when
+// app.startup.observability is positive, the construction seam receives a
+// non-nil context whose deadline is set roughly the budget into the future.
+// This is the context-threading replacement for the old goroutine-race budget
+// enforcement: the deadline is what bounds resource detection and exporter
+// setup inside NewProviderWithContext.
+func TestInitializeObservabilityThreadsBudgetContext(t *testing.T) {
+	const budget = 7 * time.Second
+
+	want := &testObservabilityProvider{}
+	var (
+		gotCtx context.Context
+		gotCfg *observability.Config
+	)
+
+	cfg := loadConfigFromYAML(t, `
+app:
+  name: test-app
+  version: 1.0.0
+  env: development
+  startup:
+    observability: 7s
+server:
+  host: localhost
+  port: 8080
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: testdb
+  username: testuser
+  password: testpass
+log:
+  level: info
+observability:
+  enabled: true
+  service:
+    name: budget-test
+`)
+
+	bootstrap := newAppBootstrap(cfg, logger.New("info", false), &Options{})
+	bootstrap.newProvider = func(ctx context.Context, c *observability.Config) (observability.Provider, error) {
+		gotCtx = ctx
+		gotCfg = c
+		return want, nil
+	}
+
+	start := time.Now()
+	got := bootstrap.initializeObservability()
+
+	assert.Same(t, want, got, "the provider returned by the seam should be installed verbatim")
+	require.NotNil(t, gotCtx, "seam must receive a non-nil context")
+	require.NotNil(t, gotCfg, "seam must receive the observability config")
+
+	deadline, ok := gotCtx.Deadline()
+	require.True(t, ok, "seam context must carry a deadline derived from the startup budget")
+
+	const tolerance = 2 * time.Second
+	assert.InDelta(t, budget.Seconds(), deadline.Sub(start).Seconds(), tolerance.Seconds(),
+		"seam context deadline must be ~app.startup.observability from now")
+}
+
+// TestInitializeObservabilityConstructorErrorFallsBackToNoop verifies that when
+// the construction seam returns an error, initializeObservability installs the
+// no-op fallback provider (functional tracer/meter providers, nil logger
+// provider) and logs a WARN rather than crashing.
+func TestInitializeObservabilityConstructorErrorFallsBackToNoop(t *testing.T) {
+	cfg := loadConfigFromYAML(t, `
+app:
+  name: test-app
+  version: 1.0.0
+  env: development
+  startup:
+    observability: 5s
+server:
+  host: localhost
+  port: 8080
+database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: testdb
+  username: testuser
+  password: testpass
+log:
+  level: info
+observability:
+  enabled: true
+  service:
+    name: error-fallback-test
+`)
+
+	mockLog := &mockLogger{}
+	bootstrap := newAppBootstrap(cfg, mockLog, &Options{})
+	bootstrap.newProvider = func(context.Context, *observability.Config) (observability.Provider, error) {
+		return nil, errors.New("exporter dial failed")
+	}
+
+	got := bootstrap.initializeObservability()
+
+	require.NotNil(t, got, "a no-op provider must be installed on constructor error")
+	assert.NotNil(t, got.TracerProvider(), "no-op provider must expose a tracer provider")
+	assert.NotNil(t, got.MeterProvider(), "no-op provider must expose a meter provider")
+	assert.Nil(t, got.LoggerProvider(), "no-op provider has no OTLP logger provider")
+	assert.True(t, mockLog.warnCalled, "constructor failure must be logged as a WARN")
+
+	// The fallback provider must shut down cleanly (no-op).
+	assert.NoError(t, got.Shutdown(context.Background()))
 }

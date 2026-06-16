@@ -39,6 +39,44 @@ func TestNewProviderDisabled(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestNewProviderDelegatesToWithContext verifies that NewProvider still works
+// end-to-end after being reduced to a NewProviderWithContext(background, cfg)
+// delegation: a disabled config yields the no-op provider.
+func TestNewProviderDelegatesToWithContext(t *testing.T) {
+	cfg := &Config{Enabled: false}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+
+	_, ok := provider.(*noopProvider)
+	assert.True(t, ok, "NewProvider must still return the no-op provider when disabled")
+
+	assert.NoError(t, provider.Shutdown(context.Background()))
+}
+
+// TestNewProviderWithContextDisabledIgnoresContext verifies that when
+// observability is disabled, NewProviderWithContext returns the no-op provider
+// regardless of the supplied context — even an already-canceled one. Disabled
+// short-circuits before any resource detection or exporter setup, so the
+// deadline is never consulted.
+func TestNewProviderWithContextDisabledIgnoresContext(t *testing.T) {
+	cfg := &Config{Enabled: false}
+
+	// An already-canceled context must NOT cause an error on the disabled path.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	provider, err := NewProviderWithContext(ctx, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+
+	_, ok := provider.(*noopProvider)
+	assert.True(t, ok, "disabled config must yield the no-op provider regardless of ctx")
+
+	assert.NoError(t, provider.Shutdown(context.Background()))
+}
+
 func TestNewProviderInvalidConfig(t *testing.T) {
 	cfg := &Config{
 		Enabled: true,

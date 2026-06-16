@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/gaborage/go-bricks/config"
@@ -15,6 +16,11 @@ type appBootstrap struct {
 	cfg  *config.Config
 	log  logger.Logger
 	opts *Options
+
+	// newProvider constructs the observability provider under the supplied
+	// context. Defaults to observability.NewProviderWithContext; overridable
+	// in tests to drive the startup-budget timeout path deterministically.
+	newProvider func(context.Context, *observability.Config) (observability.Provider, error)
 }
 
 // newAppBootstrap creates a new bootstrap helper with the provided configuration.
@@ -36,6 +42,8 @@ func (b *appBootstrap) dependencies() *dependencyBundle {
 	resolver := NewFactoryResolver(b.opts)
 	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
 	configBuilder.connectionTimeout = b.cfg.Messaging.Reconnect.ConnectionTimeout
+	configBuilder.publisherConfig = b.cfg.Messaging.Publisher
+	configBuilder.cacheConfig = b.cfg.Cache.Manager
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	// Log factory configuration for debugging
@@ -142,8 +150,24 @@ func (b *appBootstrap) initializeObservability() observability.Provider {
 		Str("logs_disable_stdout", strconv.FormatBool(obsCfg.Logs.DisableStdout)).
 		Msg("Observability config after applying defaults")
 
-	// Create provider (will be no-op if Enabled is false)
-	provider, err := observability.NewProvider(&obsCfg)
+	// Create provider (will be no-op if Enabled is false) under the
+	// app.startup.observability budget. The budget is enforced by threading a
+	// deadline-bound context through provider construction (resource detection
+	// and OTLP exporter setup), so a slow resource probe or exporter setup fails
+	// fast instead of blocking the whole startup on the shared global timeout.
+	budget := b.cfg.App.Startup.Observability
+	construct := b.newProvider
+	if construct == nil {
+		construct = observability.NewProviderWithContext
+	}
+	ctx := context.Background()
+	if budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
+
+	provider, err := construct(ctx, &obsCfg)
 	if err != nil {
 		b.log.Warn().Err(err).Msg("Failed to initialize observability, using no-op provider")
 		return observability.MustNewProvider(&observability.Config{Enabled: false})
