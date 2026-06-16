@@ -452,6 +452,8 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	}
 	if cfg.Pool.KeepAlive.Interval == 0 {
 		cfg.Pool.KeepAlive.Interval = defaultKeepAliveInterval
+	} else if cfg.Pool.KeepAlive.Interval < 0 {
+		return NewValidationError("database.pool.keepalive.interval", errMustBeNonNegative)
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {

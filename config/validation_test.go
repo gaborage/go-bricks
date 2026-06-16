@@ -1645,6 +1645,28 @@ func TestApplyDatabasePoolDefaultsKeepAliveExplicitDisableHonored(t *testing.T) 
 		"zero interval should be defaulted independently of enabled")
 }
 
+func TestApplyDatabasePoolDefaultsKeepAliveNegativeIntervalRejected(t *testing.T) {
+	cfg := DatabaseConfig{
+		Type:     PostgreSQL,
+		Host:     "localhost",
+		Port:     5432,
+		Database: "testdb",
+		Username: "testuser",
+		Pool: PoolConfig{
+			Max: PoolMaxConfig{Connections: 25},
+			KeepAlive: PoolKeepAliveConfig{
+				Enabled:  observability.BoolPtr(true),
+				Interval: -5 * time.Second, // invalid: cannot be negative
+			},
+		},
+	}
+
+	err := validateDatabase(&cfg)
+	require.Error(t, err, "a negative keep-alive interval must be rejected, matching the other pool duration fields")
+	assert.Contains(t, err.Error(), "database.pool.keepalive.interval",
+		"error should identify the offending key")
+}
+
 func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 	tests := []struct {
 		name                    string
