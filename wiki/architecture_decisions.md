@@ -355,6 +355,24 @@ joined, so in-flight handlers may briefly overlap teardown); no application code
 
 ---
 
+### [ADR-030: `PoolKeepAliveConfig.Enabled` Is Optional (`*bool`) So an Explicit `false` Is Honored](adr_030_keepalive_enabled_optional.md)
+
+**Date:** 2026-06-16 | **Status:** Accepted
+
+`PoolKeepAliveConfig.Enabled` was a plain `bool`, and `applyDatabasePoolDefaults` flipped it
+back to `true` whenever `Interval` was zero — so the natural opt-out (`enabled: false` with
+`interval` unset) was silently overridden and keep-alive ran anyway (M5). A `bool` can't tell
+"absent" from "explicit false." Changed to `*bool` (nil → default true; `&true`/`&false` →
+honored, independent of `Interval`), with a nil-safe `IsEnabled()` reader consumed by both
+vendor connection layers.
+
+**Breaking:** `PoolKeepAliveConfig.Enabled` is now `*bool` — direct struct construction must
+use a `*bool` and reads must go through `IsEnabled()`. YAML/env config is unchanged.
+
+**Key Benefits:** Explicit `enabled: false` is honored regardless of interval, nil/true/false are distinguishable, no silent re-enable
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -364,7 +382,7 @@ joined, so in-flight handlers may briefly overlap teardown); no application code
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-029) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-030) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

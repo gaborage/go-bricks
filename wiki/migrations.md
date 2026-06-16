@@ -2,6 +2,41 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## `PoolKeepAliveConfig.Enabled` Is Now `*bool` (ADR-030)
+
+Per [ADR-030](adr_030_keepalive_enabled_optional.md), `config.PoolKeepAliveConfig.Enabled` changed from `bool` to `*bool` so that an explicit `database.pool.keepalive.enabled: false` is honored even when `interval` is left at its zero default. Previously a zero `interval` flipped `Enabled` back to `true`, silently overriding the opt-out (M5).
+
+**Before:**
+
+```go
+PoolKeepAliveConfig{Enabled: true}
+PoolKeepAliveConfig{Enabled: false}
+if cfg.Pool.KeepAlive.Enabled { ... }
+```
+
+**After:**
+
+```go
+PoolKeepAliveConfig{Enabled: boolPtr(true)}   // or observability.BoolPtr(true)
+PoolKeepAliveConfig{Enabled: boolPtr(false)}
+PoolKeepAliveConfig{}                          // nil → defaults to enabled at validation
+if cfg.Pool.KeepAlive.IsEnabled() { ... }      // nil-safe; nil is treated as disabled
+```
+
+**Action:**
+- Code that constructs `PoolKeepAliveConfig` directly must pass a `*bool` for `Enabled` (a `nil` is treated as "unset" and defaulted to `true` during config validation).
+- Code that reads `Enabled` as a `bool` must switch to the nil-safe `IsEnabled()` accessor. After validation `Enabled` is always non-nil, but `IsEnabled()` is the safe reader for structs built without validation (e.g. tests).
+- **YAML/env config is unchanged:** `database.pool.keepalive.enabled: true|false` still binds. The behavioral fix is that `enabled: false` with `interval` unset now actually disables keep-alive (previously it was re-enabled). Configs that omit `enabled` still default to `true`.
+
+## Environment Variables Are Now Ingested Only Under Known Config Prefixes (M4)
+
+Environment-variable config loading now ignores any variable whose first dotted segment is not a recognized top-level config section (`app`, `server`, `database`, `databases`, `cache`, `log`, `messaging`, `multitenant`, `debug`, `source`, `scheduler`, `outbox`, `inbox`, `keystore`, `observability`, `custom`). Previously **every** process environment variable was merged, so a bare variable matching a section name (`DEBUG=1`, `CACHE=…`, `DATABASE=…`) — or a Kubernetes Docker-link variable like `SERVER_PORT=tcp://10.96.0.1:80` — replaced that section's map with a scalar and crashed startup with `expected a map, got string`. A defensive merge guard also drops any remaining scalar that would overwrite an existing config map.
+
+**Action:**
+- Configure the framework only through fully-qualified, sub-keyed variables (e.g. `CACHE_ENABLED=true`, `CACHE_REDIS_HOST=…`, `DATABASE_HOST=…`) — these are unaffected.
+- Application-specific settings must live under the `CUSTOM_` prefix (`custom.*`); other unprefixed variables are no longer read into config (and no longer crash startup).
+- No action is needed for deployments that already use sub-keyed variables or YAML; this change only removes the ability of unrelated/bare env vars to clobber a config section.
+
 ## Graceful Shutdown Now Stops Inbound Work First (ADR-029)
 
 Per [ADR-029](adr_029_graceful_shutdown_order.md), `App.Shutdown` reordered its phases. **Before:** modules were torn down first, while the HTTP server was still serving and AMQP consumers were still delivering — so in-flight handlers could run against already-shut-down modules (panics/errors during the shutdown window). **After:** `server → consumers → modules → observability → manager cleanup loops → closers`.

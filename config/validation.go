@@ -56,6 +56,20 @@ const (
 	defaultCacheCleanupInterval = 5 * time.Minute  // Cleanup goroutine frequency
 )
 
+// Redis cache defaults. The top-level cache.* keys receive these via koanf
+// (see config.go), but per-tenant multitenant.tenants.<id>.cache.* keys have no
+// koanf defaults, so validation must apply them itself (see applyRedisDefaults).
+const (
+	defaultRedisPort            = 6379
+	defaultRedisPoolSize        = 10
+	defaultRedisDialTimeout     = 5 * time.Second
+	defaultRedisReadTimeout     = 3 * time.Second
+	defaultRedisWriteTimeout    = 3 * time.Second
+	defaultRedisMaxRetries      = 3
+	defaultRedisMinRetryBackoff = 8 * time.Millisecond
+	defaultRedisMaxRetryBackoff = 512 * time.Millisecond
+)
+
 // Startup timeout defaults
 const (
 	defaultStartupTimeout              = 10 * time.Second // Overall startup timeout
@@ -92,6 +106,8 @@ const (
 	fieldDatabase        = "database"
 	fieldDatabasePort    = "database.port"
 	fieldMessaging       = "messaging"
+	fieldCache           = "cache"
+	fieldDebug           = "debug"
 	fieldServerPort      = "server.port"
 	fieldLogLevel        = "log.level"
 	fieldAppEnv          = "app.env"
@@ -393,8 +409,10 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 //     applyConnectionCountDefaults (idle defaults to and is capped at max; see ADR-025).
 //   - Pool.Idle.Time: if 0, sets to 5m (closes idle connections before NAT/firewall timeout); if negative, returns an error.
 //   - Pool.Lifetime.Max: if 0, sets to 30m (forces periodic connection recycling); if negative, returns an error.
-//   - Pool.KeepAlive.Enabled: if Interval is 0, sets to true (recommended for cloud).
-//   - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts).
+//   - Pool.KeepAlive.Enabled: if absent (nil), sets to true (recommended for cloud); an
+//     explicit true or false is honored regardless of Interval.
+//   - Pool.KeepAlive.Interval: if 0, sets to 60s (below typical NAT timeouts); this never
+//     flips Enabled.
 //   - Query.Log.MaxLength: if negative, returns an error; if 0, sets to defaultMaxQueryLength.
 //   - Query.Slow.Threshold: if negative, returns an error; if 0, sets to defaultSlowQueryThreshold.
 //
@@ -422,12 +440,20 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		return NewValidationError("database.pool.lifetime.max", errMustBeNonNegative)
 	}
 
-	// Apply keep-alive defaults for cloud deployments.
-	// When Interval is zero (not configured), apply defaults for both Enabled and Interval.
-	// This ensures omitted configs get production-safe settings.
+	// Apply keep-alive defaults for cloud deployments. Enabled and Interval are
+	// defaulted independently so an explicit enabled=false is always honored,
+	// even when Interval is left at its zero default (the natural opt-out).
+	//   - Enabled: default to true only when the key is absent (nil). An explicit
+	//     true or false survives untouched.
+	//   - Interval: default to 60s when zero; this never flips Enabled.
+	if cfg.Pool.KeepAlive.Enabled == nil {
+		enabled := defaultKeepAliveEnabled
+		cfg.Pool.KeepAlive.Enabled = &enabled
+	}
 	if cfg.Pool.KeepAlive.Interval == 0 {
-		cfg.Pool.KeepAlive.Enabled = defaultKeepAliveEnabled
 		cfg.Pool.KeepAlive.Interval = defaultKeepAliveInterval
+	} else if cfg.Pool.KeepAlive.Interval < 0 {
+		return NewValidationError("database.pool.keepalive.interval", errMustBeNonNegative)
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {
@@ -971,6 +997,38 @@ func validateCache(cfg *CacheConfig) error {
 	return nil
 }
 
+// applyRedisDefaults fills in production-safe Redis defaults for any unset
+// fields. The top-level cache.* config receives these via koanf, but per-tenant
+// cache config (multitenant.tenants.<id>.cache.*) has no koanf defaults, so this
+// is the only place those values are populated for tenant caches. Host is left
+// untouched: a missing host is a real misconfiguration that must fail fast.
+func applyRedisDefaults(cfg *RedisConfig) {
+	if cfg.Port == 0 {
+		cfg.Port = defaultRedisPort
+	}
+	if cfg.PoolSize == 0 {
+		cfg.PoolSize = defaultRedisPoolSize
+	}
+	if cfg.DialTimeout == 0 {
+		cfg.DialTimeout = defaultRedisDialTimeout
+	}
+	if cfg.ReadTimeout == 0 {
+		cfg.ReadTimeout = defaultRedisReadTimeout
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = defaultRedisWriteTimeout
+	}
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = defaultRedisMaxRetries
+	}
+	if cfg.MinRetryBackoff == 0 {
+		cfg.MinRetryBackoff = defaultRedisMinRetryBackoff
+	}
+	if cfg.MaxRetryBackoff == 0 {
+		cfg.MaxRetryBackoff = defaultRedisMaxRetryBackoff
+	}
+}
+
 // validateRedisCache validates Redis-specific cache configuration.
 func validateRedisCache(cfg *RedisConfig) error {
 	if cfg.Host == "" {
@@ -1142,28 +1200,8 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		return NewValidationError("multitenant.tenants", "at least one tenant must be configured")
 	}
 
-	// Check consistency: if any tenant has messaging configured, all must have it configured
-	// This prevents confusing scenarios where some tenants can use messaging and others cannot
-	hasAnyMessaging := false
-	hasNoMessaging := false
-
-	for tenantID := range tenants {
-		tenant := tenants[tenantID]
-		if isTenantMessagingConfigured(&tenant.Messaging) {
-			hasAnyMessaging = true
-		} else {
-			hasNoMessaging = true
-		}
-	}
-
-	// Enforce all-or-nothing messaging configuration for consistency
-	if hasAnyMessaging && hasNoMessaging {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    "multitenant.tenants messaging",
-			Message:  "inconsistent configuration",
-			Action:   "either all tenants must have messaging configured or none should",
-		}
+	if err := checkTenantMessagingConsistency(tenants); err != nil {
+		return err
 	}
 
 	for tenantID := range tenants {
@@ -1179,10 +1217,64 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		if err := validateDatabase(&tenant.Database); err != nil {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
+
+		if err := validateTenantCache(tenantID, &tenant.Cache); err != nil {
+			return err
+		}
+
 		// Persist defaults back to the map (see validateNamedDatabases for rationale).
 		tenants[tenantID] = tenant
 	}
 
+	return nil
+}
+
+// checkTenantMessagingConsistency enforces all-or-nothing messaging configuration
+// across tenants: if any tenant has messaging configured, all must have it
+// configured. This prevents confusing scenarios where some tenants can use
+// messaging and others cannot.
+func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
+	hasAnyMessaging := false
+	hasNoMessaging := false
+
+	for tenantID := range tenants {
+		tenant := tenants[tenantID]
+		if isTenantMessagingConfigured(&tenant.Messaging) {
+			hasAnyMessaging = true
+		} else {
+			hasNoMessaging = true
+		}
+	}
+
+	if hasAnyMessaging && hasNoMessaging {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    "multitenant.tenants messaging",
+			Message:  "inconsistent configuration",
+			Action:   "either all tenants must have messaging configured or none should",
+		}
+	}
+	return nil
+}
+
+// validateTenantCache validates a tenant's cache configuration with the same
+// fail-fast posture as the tenant database: an enabled-but-misconfigured cache
+// must crash at startup, not at the first per-request cache access (see
+// tenant_store.go CacheConfig). Per-tenant cache keys have no koanf defaults, so
+// this mirrors the top-level cache.type and cache.redis.* defaults before
+// validating: it defaults the type to redis and fills in the Redis defaults
+// (port 6379, poolsize 10, timeouts). A missing host still fails fast inside
+// validateCache. The CacheConfig is mutated in place via the pointer.
+func validateTenantCache(tenantID string, cache *CacheConfig) error {
+	if cache.Enabled {
+		if cache.Type == "" {
+			cache.Type = CacheTypeRedis
+		}
+		applyRedisDefaults(&cache.Redis)
+	}
+	if err := validateCache(cache); err != nil {
+		return fmt.Errorf("tenant %s cache: %w", tenantID, err)
+	}
 	return nil
 }
 

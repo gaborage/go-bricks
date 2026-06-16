@@ -745,7 +745,7 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 60 * time.Second,
 			},
 		},
@@ -813,7 +813,7 @@ func TestNewConnectionWithKeepAliveFallback(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true, // Keep-alive enabled but dialer fails
+				Enabled:  boolPtr(true), // Keep-alive enabled but dialer fails
 				Interval: 60 * time.Second,
 			},
 		},
@@ -877,7 +877,7 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  false, // Explicitly disabled
+				Enabled:  boolPtr(false), // Explicitly disabled
 				Interval: 60 * time.Second,
 			},
 		},
@@ -945,7 +945,7 @@ func TestNewConnectionWithKeepAliveAndSID(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 30 * time.Second, // Different interval to verify
 			},
 		},
@@ -1119,7 +1119,7 @@ func TestNewConnectionPingFailure(t *testing.T) {
 		Password: "testpass",
 		Oracle:   config.OracleConfig{Service: config.ServiceConfig{Name: "XEPDB1"}},
 		Pool: config.PoolConfig{
-			KeepAlive: config.PoolKeepAliveConfig{Enabled: false},
+			KeepAlive: config.PoolKeepAliveConfig{Enabled: boolPtr(false)},
 		},
 	}
 
