@@ -976,7 +976,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 				Max: time.Hour,
 			},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 15 * time.Second,
 			},
 		},
@@ -1026,7 +1026,7 @@ func TestConnectionWithKeepAliveZeroInterval(t *testing.T) {
 				Max: time.Hour,
 			},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 0, // Zero interval - should still work
 			},
 		},

@@ -137,7 +137,7 @@ func (s *TenantStore) CacheConfig(_ context.Context, key string) (*CacheConfig, 
 	// Single-tenant case
 	if key == "" {
 		if s.defaultCache == nil || !s.defaultCache.Enabled {
-			return nil, NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+			return nil, NewNotConfiguredError(fieldCache, "CACHE_REDIS_HOST", "cache.redis.host")
 		}
 		return s.defaultCache, nil
 	}
@@ -151,7 +151,7 @@ func (s *TenantStore) CacheConfig(_ context.Context, key string) (*CacheConfig, 
 	}
 
 	if !tenant.Cache.Enabled {
-		return nil, NewMultiTenantError(key, "cache", notEnabledErrMsg, fmt.Sprintf("set multitenant.tenants.%s.cache.enabled: true", key))
+		return nil, NewMultiTenantError(key, fieldCache, notEnabledErrMsg, fmt.Sprintf("set multitenant.tenants.%s.cache.enabled: true", key))
 	}
 
 	return &tenant.Cache, nil

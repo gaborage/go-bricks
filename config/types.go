@@ -212,12 +212,25 @@ type LifetimeConfig struct {
 type PoolKeepAliveConfig struct {
 	// Enabled enables TCP keep-alive probes on database connections.
 	// Default: true. Recommended for all cloud deployments.
-	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+	//
+	// A pointer is used so an absent key (nil) is distinguishable from an
+	// explicit false: validation defaults nil to true, but an explicit
+	// enabled=false is always honored — even when Interval is left at its
+	// zero default. Use IsEnabled for nil-safe reads.
+	Enabled *bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 
 	// Interval is the time between keep-alive probes (TCP_KEEPINTVL).
 	// The kernel sends a probe every Interval to keep the connection alive.
 	// Default: 60s. Should be less than NAT/LB idle timeout (AWS: 350s, GCP: 600s).
 	Interval time.Duration `koanf:"interval" json:"interval" yaml:"interval" toml:"interval" mapstructure:"interval"`
+}
+
+// IsEnabled reports whether TCP keep-alive is enabled, treating an absent
+// (nil) Enabled as disabled. After config validation Enabled is always
+// non-nil; the nil guard protects direct struct construction (e.g. tests)
+// that bypasses validation.
+func (c PoolKeepAliveConfig) IsEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
 }
 
 // QueryConfig holds settings related to query logging and slow query detection.

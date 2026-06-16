@@ -537,6 +537,176 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)
 }
 
+// TestEnvVarCollidesWithConfigMap is the M4 regression test. The env provider has no Prefix
+// filter, so it ingests EVERY process environment variable. A bare env var whose name maps
+// onto a top-level config section (CACHE, DEBUG, DATABASE, …) — common in Kubernetes, which
+// auto-injects Docker-link vars like SERVER_PORT=tcp://IP:PORT — unflattens to a scalar at
+// that key. The default koanf merge then replaced the section's nested map (from defaults or
+// YAML) with the scalar string, so UnmarshalWithConf failed with
+// "'cache' expected a map or struct, got \"string\"". The skip-scalar-over-map merge guard
+// keeps the structured config and drops the colliding scalar, so Load no longer aborts.
+func TestEnvVarCollidesWithConfigMap(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	os.Setenv("CACHE", "redis://localhost:6379")
+	defer os.Unsetenv("CACHE")
+	os.Setenv("DATABASE_TYPE", "postgresql")
+	os.Setenv("DATABASE_HOST", "localhost")
+	os.Setenv("DATABASE_PORT", "5432")
+	os.Setenv(testDatabaseDatabase, "testdb")
+	os.Setenv(testDatabaseUsername, "testuser")
+
+	cfg, err := Load()
+	require.NoError(t, err, "env var CACHE should not collide with cache config section")
+	require.NotNil(t, cfg)
+
+	// The colliding CACHE scalar is dropped; the cache section keeps its structured defaults.
+	assert.False(t, cfg.Cache.Enabled, "bare CACHE env var must not clobber the cache config map")
+	// Properly-pathed vars still reach their config keys.
+	assert.Equal(t, "postgresql", cfg.Database.Type)
+}
+
+// TestEnvVarBareSectionNamesDropped covers the other top-level section names that collide
+// with single-word env vars common in container runtimes (DEBUG, SOURCE, SERVER, …). Each
+// scalar must be dropped by the merge guard rather than overwrite the section's nested map.
+func TestEnvVarBareSectionNamesDropped(t *testing.T) {
+	tests := []struct {
+		name   string
+		envKey string
+		value  string
+	}{
+		{name: "debug_scalar", envKey: "DEBUG", value: "1"},
+		{name: "cache_url", envKey: "CACHE", value: "redis://localhost:6379"},
+		{name: "source_scalar", envKey: "SOURCE", value: "static"},
+		{name: "server_link", envKey: "SERVER", value: "tcp://10.0.0.1:8080"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvironmentVariables()
+			defer clearEnvironmentVariables()
+			os.Setenv(tt.envKey, tt.value)
+			defer os.Unsetenv(tt.envKey)
+
+			cfg, err := Load()
+			require.NoError(t, err, "bare env var %s must be dropped, not collide with its config section", tt.envKey)
+			require.NotNil(t, cfg)
+		})
+	}
+}
+
+// TestEnvInjectIntoArbitraryPrefixStillReachable guards the InjectInto escape hatch: the
+// M4 merge guard must NOT break service-specific config:"..." keys delivered via env vars at
+// fresh (non-section) leaves. AUTH_SECRET -> auth.secret lands at a brand-new key, so the
+// scalar merges normally and InjectInto resolves it.
+func TestEnvInjectIntoArbitraryPrefixStillReachable(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	t.Setenv("AUTH_SECRET", "s3cr3t")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	var svc struct {
+		Secret string `config:"auth.secret" required:"true"`
+	}
+	require.NoError(t, cfg.InjectInto(&svc))
+	assert.Equal(t, "s3cr3t", svc.Secret)
+}
+
+// TestEnvBareSectionDoesNotShadowLegitSubKey guards against a fail-open regression: a bare
+// section-name var (DEBUG=1) and a legitimate sub-key var (DEBUG_ENABLED=true) set together.
+// The env provider unflattens its own source map BEFORE the merge guard runs, so a surviving
+// bare "debug" scalar would win the intra-source unflatten race and silently discard the real
+// "debug.enabled" — leaving a security gate at its (safe) default but ignoring operator intent.
+// Dropping the bare section name in the TransformFunc, pre-unflatten, keeps the real sub-key.
+func TestEnvBareSectionDoesNotShadowLegitSubKey(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	os.Setenv("DEBUG", "1")             // bare collision — must be dropped pre-unflatten
+	os.Setenv("DEBUG_ENABLED", "true")  // legitimate sub-key — must survive
+	os.Setenv("DEBUG_BEARERTOKEN", "t") // legitimate sub-key — must survive
+	defer os.Unsetenv("DEBUG")
+	defer os.Unsetenv("DEBUG_ENABLED")
+	defer os.Unsetenv("DEBUG_BEARERTOKEN")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.True(t, cfg.Debug.Enabled,
+		"DEBUG_ENABLED must not be shadowed by a bare DEBUG collision")
+	assert.Equal(t, "t", cfg.Debug.BearerToken)
+}
+
+// TestMergeSkippingScalarOverMapDropsScalarOverMap directly exercises guard 2 of the
+// M4 defense (config.go: the `if destIsMap { continue }` branch). The Load-level tests
+// all collide on bare top-level section names (CACHE, DEBUG, …), which guard 1 (the
+// configSections TransformFunc) drops BEFORE the merge runs, so guard 2's scalar-over-map
+// drop never executes through them. A nested collision (a scalar arriving at cache.redis,
+// which the defaults seed as a map and which is NOT a configSections entry) is the only
+// way to reach this branch — so test it directly.
+func TestMergeSkippingScalarOverMapDropsScalarOverMap(t *testing.T) {
+	dest := map[string]any{
+		"cache": map[string]any{
+			"redis": map[string]any{"host": "localhost"},
+		},
+	}
+	src := map[string]any{
+		"cache": map[string]any{
+			"redis": "redis://stray", // scalar that would clobber the redis map node
+		},
+	}
+
+	mergeSkippingScalarOverMap(src, dest)
+
+	cacheMap, ok := dest["cache"].(map[string]any)
+	require.True(t, ok, "cache node must remain a map")
+	redisMap, stillMap := cacheMap["redis"].(map[string]any)
+	require.True(t, stillMap, "scalar must not clobber the existing redis map node")
+	assert.Equal(t, "localhost", redisMap["host"], "structured redis config must survive")
+}
+
+// TestMergeSkippingScalarOverMapMergesScalarAtFreshLeaf confirms the guard only drops a
+// scalar when it would clobber an existing map: a scalar landing at a brand-new leaf (or
+// over an existing scalar) merges normally, preserving the InjectInto escape hatch.
+func TestMergeSkippingScalarOverMapMergesScalarAtFreshLeaf(t *testing.T) {
+	dest := map[string]any{
+		"auth": map[string]any{"secret": "old"},
+	}
+	src := map[string]any{
+		"auth": map[string]any{
+			"secret": "new",   // scalar over scalar: replaces
+			"token":  "fresh", // scalar at a fresh leaf: added
+		},
+		"feature": "on", // top-level scalar at a fresh key: added
+	}
+
+	mergeSkippingScalarOverMap(src, dest)
+
+	authMap := dest["auth"].(map[string]any)
+	assert.Equal(t, "new", authMap["secret"], "scalar-over-scalar must replace")
+	assert.Equal(t, "fresh", authMap["token"], "scalar at a fresh leaf must be added")
+	assert.Equal(t, "on", dest["feature"], "top-level scalar at a fresh key must be added")
+}
+
+// TestEnvNestedScalarCollisionDroppedThroughLoad exercises guard 2 end-to-end through Load:
+// a nested env scalar at cache.redis (CACHE_REDIS=...) passes guard 1 — `cache.redis` is not
+// a configSections entry — but must be dropped by the merge guard rather than clobber the
+// cache.redis defaults map and abort UnmarshalWithConf.
+func TestEnvNestedScalarCollisionDroppedThroughLoad(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	os.Setenv("CACHE_REDIS", "redis://stray:6379")
+	defer os.Unsetenv("CACHE_REDIS")
+
+	cfg, err := Load()
+	require.NoError(t, err, "nested CACHE_REDIS scalar must be dropped, not clobber the redis map")
+	require.NotNil(t, cfg)
+	// The structured redis defaults survive the dropped scalar.
+	assert.Equal(t, defaultHost, cfg.Cache.Redis.Host)
+}
+
 // Helper function to clear environment variables that might affect tests
 func clearEnvironmentVariables() {
 	envVars := []string{
@@ -637,7 +807,7 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 	assert.Equal(t, int32(40), cfg.Database.Pool.Idle.Connections)        // Default: idle tracks the configured max (40), not a constant
 	assert.Equal(t, 5*time.Minute, cfg.Database.Pool.Idle.Time)           // Default: idle timeout
 	assert.Equal(t, 30*time.Minute, cfg.Database.Pool.Lifetime.Max)       // Default: max lifetime
-	assert.True(t, cfg.Database.Pool.KeepAlive.Enabled)                   // Default: keep-alive enabled
+	assert.True(t, cfg.Database.Pool.KeepAlive.IsEnabled())               // Default: keep-alive enabled
 	assert.Equal(t, 60*time.Second, cfg.Database.Pool.KeepAlive.Interval) // Default: probe interval
 
 	// Verify database fields that should be zero/empty since no defaults

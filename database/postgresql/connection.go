@@ -167,7 +167,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 	}
 
 	// Configure TCP keep-alive if enabled (prevents NAT/LB idle connection drops)
-	if cfg.Pool.KeepAlive.Enabled {
+	if cfg.Pool.KeepAlive.IsEnabled() {
 		pgxConfig.DialFunc = makeKeepAliveDialer(cfg.Pool.KeepAlive, log)
 		log.Debug().
 			Dur("keepalive_interval", cfg.Pool.KeepAlive.Interval).

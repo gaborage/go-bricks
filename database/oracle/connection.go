@@ -99,7 +99,7 @@ func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDia
 // It returns an error if cfg is nil, if the connection cannot be opened, or if an initial ping to the database fails.
 // The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
 // configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
-// When cfg.Pool.KeepAlive.Enabled is true, a custom TCP dialer is used to enable keep-alive probes.
+// When cfg.Pool.KeepAlive.IsEnabled() is true, a custom TCP dialer is used to enable keep-alive probes.
 // When cfg.Timezone is set (non-empty and not "-"), every new physical connection runs
 // ALTER SESSION SET TIME_ZONE before being handed to the pool, guaranteeing pool-wide consistency.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
@@ -172,7 +172,7 @@ func openTimezoneAwareOracleDB(dsn string, cfg *config.DatabaseConfig, log logge
 // fails and we log a warning rather than abort — the connector is still usable
 // without keep-alive.
 func applyOracleKeepAlive(connector driver.Connector, cfg *config.DatabaseConfig, log logger.Logger) {
-	if !cfg.Pool.KeepAlive.Enabled {
+	if !cfg.Pool.KeepAlive.IsEnabled() {
 		return
 	}
 	oc, ok := connector.(*go_ora.OracleConnector)
@@ -191,7 +191,7 @@ func applyOracleKeepAlive(connector driver.Connector, cfg *config.DatabaseConfig
 // when keep-alive is enabled (with graceful fallback to openOracleDB on go-ora
 // API changes), or through openOracleDB directly when keep-alive is disabled.
 func openLegacyOracleDB(dsn string, cfg *config.DatabaseConfig, log logger.Logger) (*sql.DB, error) {
-	if cfg.Pool.KeepAlive.Enabled {
+	if cfg.Pool.KeepAlive.IsEnabled() {
 		dialer := newKeepAliveDialer(cfg.Pool.KeepAlive.Interval, log)
 		db := openOracleDBWithDialer(dsn, dialer)
 		if db == nil {

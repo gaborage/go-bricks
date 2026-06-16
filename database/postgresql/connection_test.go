@@ -648,7 +648,7 @@ func TestMakeKeepAliveDialer(t *testing.T) {
 
 	t.Run("createDialerWithValidConfig", func(t *testing.T) {
 		cfg := config.PoolKeepAliveConfig{
-			Enabled:  true,
+			Enabled:  boolPtr(true),
 			Interval: 60 * time.Second,
 		}
 
@@ -658,7 +658,7 @@ func TestMakeKeepAliveDialer(t *testing.T) {
 
 	t.Run("createDialerWithZeroInterval", func(t *testing.T) {
 		cfg := config.PoolKeepAliveConfig{
-			Enabled:  true,
+			Enabled:  boolPtr(true),
 			Interval: 0,
 		}
 
@@ -701,7 +701,7 @@ func TestNewConnectionWithKeepAliveEnabled(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 60 * time.Second,
 			},
 		},
@@ -759,7 +759,7 @@ func TestNewConnectionWithKeepAliveDisabled(t *testing.T) {
 			},
 			Lifetime: config.LifetimeConfig{Max: 30 * time.Minute},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  false, // Explicitly disabled
+				Enabled:  boolPtr(false), // Explicitly disabled
 				Interval: 60 * time.Second,
 			},
 		},

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 const (
@@ -41,6 +43,15 @@ func makeSampleTenants() map[string]TenantEntry {
 				Username: "tenant_user",
 			},
 			Messaging: TenantMessagingConfig{URL: testAMQPHost},
+			// Cache enabled with only a host: port/poolsize/timeouts are left
+			// at zero values so the shared sample exercises validateMultitenant's
+			// per-tenant cache validation and default-application path. Without
+			// it, every multitenant test would silently skip tenant.Cache and
+			// mask the M6 fast-fail/defaulting behavior.
+			Cache: CacheConfig{
+				Enabled: true,
+				Redis:   RedisConfig{Host: "tenant-a.redis.local"},
+			},
 		},
 	}
 }
@@ -1513,7 +1524,7 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 		expectedInterval time.Duration
 	}{
 		{
-			name: "zero_values_apply_defaults",
+			name: "absent_key_applies_defaults",
 			config: DatabaseConfig{
 				Type:     PostgreSQL,
 				Host:     "localhost",
@@ -1522,14 +1533,14 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 				Username: "testuser",
 				Pool: PoolConfig{
 					Max:       PoolMaxConfig{Connections: 25},
-					KeepAlive: PoolKeepAliveConfig{}, // Zero values
+					KeepAlive: PoolKeepAliveConfig{}, // Enabled nil (absent), Interval 0
 				},
 			},
 			expectedEnabled:  defaultKeepAliveEnabled,
 			expectedInterval: defaultKeepAliveInterval,
 		},
 		{
-			name: "explicit_disabled_with_zero_interval_applies_defaults",
+			name: "explicit_disabled_with_zero_interval_honors_disable",
 			config: DatabaseConfig{
 				Type:     PostgreSQL,
 				Host:     "localhost",
@@ -1539,14 +1550,14 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 				Pool: PoolConfig{
 					Max: PoolMaxConfig{Connections: 25},
 					KeepAlive: PoolKeepAliveConfig{
-						Enabled:  false, // Explicitly disabled
-						Interval: 0,     // But zero interval triggers defaults
+						Enabled:  observability.BoolPtr(false), // Explicitly disabled
+						Interval: 0,                            // Left at default (unset in YAML)
 					},
 				},
 			},
-			// When Interval=0, defaults are applied for BOTH fields
-			// This is intentional: Interval=0 means "not configured"
-			expectedEnabled:  defaultKeepAliveEnabled,
+			// M5 fix: an explicit enabled=false is honored regardless of Interval.
+			// Interval is defaulted independently and never flips Enabled.
+			expectedEnabled:  false,
 			expectedInterval: defaultKeepAliveInterval,
 		},
 		{
@@ -1560,7 +1571,7 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 				Pool: PoolConfig{
 					Max: PoolMaxConfig{Connections: 25},
 					KeepAlive: PoolKeepAliveConfig{
-						Enabled:  true,
+						Enabled:  observability.BoolPtr(true),
 						Interval: 30 * time.Second,
 					},
 				},
@@ -1579,7 +1590,7 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 				Pool: PoolConfig{
 					Max: PoolMaxConfig{Connections: 25},
 					KeepAlive: PoolKeepAliveConfig{
-						Enabled:  false,
+						Enabled:  observability.BoolPtr(false),
 						Interval: 120 * time.Second,
 					},
 				},
@@ -1593,12 +1604,45 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := validateDatabase(&tt.config)
 			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedEnabled, tt.config.Pool.KeepAlive.Enabled,
+			require.NotNil(t, tt.config.Pool.KeepAlive.Enabled,
+				"KeepAlive.Enabled must be non-nil after defaulting")
+			assert.Equal(t, tt.expectedEnabled, *tt.config.Pool.KeepAlive.Enabled,
 				"KeepAlive.Enabled mismatch")
 			assert.Equal(t, tt.expectedInterval, tt.config.Pool.KeepAlive.Interval,
 				"KeepAlive.Interval mismatch")
 		})
 	}
+}
+
+// TestApplyDatabasePoolDefaultsKeepAliveExplicitDisableHonored reproduces M5:
+// an operator who explicitly sets database.pool.keepalive.enabled=false while
+// leaving interval at its zero default must have that opt-out honored. Interval
+// is still defaulted to 60s (independently), but the zero interval must not flip
+// Enabled back to true.
+func TestApplyDatabasePoolDefaultsKeepAliveExplicitDisableHonored(t *testing.T) {
+	cfg := DatabaseConfig{
+		Type:     PostgreSQL,
+		Host:     "localhost",
+		Port:     5432,
+		Database: "testdb",
+		Username: "testuser",
+		Pool: PoolConfig{
+			Max: PoolMaxConfig{Connections: 25},
+			KeepAlive: PoolKeepAliveConfig{
+				Enabled:  observability.BoolPtr(false), // Operator explicitly disables keep-alive.
+				Interval: 0,                            // Left at default (unset in YAML).
+			},
+		},
+	}
+
+	err := validateDatabase(&cfg)
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.Pool.KeepAlive.Enabled, "explicit enabled should remain set")
+	assert.False(t, *cfg.Pool.KeepAlive.Enabled,
+		"explicit enabled=false must survive defaulting regardless of interval")
+	assert.Equal(t, defaultKeepAliveInterval, cfg.Pool.KeepAlive.Interval,
+		"zero interval should be defaulted independently of enabled")
 }
 
 func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
@@ -1929,6 +1973,95 @@ func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
 		assert.Equal(t, "UTC", cfg.Multitenant.Tenants["acme"].Database.Timezone,
 			"tenant DB without explicit timezone must default to UTC via Validate wiring")
 	})
+}
+
+// TestValidateMultitenantTenantsCacheDefaults proves that an enabled tenant
+// cache with a host but no port/poolsize is hardened at startup: Redis
+// defaults (port 6379, poolsize 10, timeouts) are applied and persisted back
+// to the tenants map, exactly as already done for tenant.Database. Without the
+// fix, validateMultitenantTenants never touches tenant.Cache, so the raw
+// zero-value Redis config reaches the cache client and fails at first request
+// instead of at startup.
+func TestValidateMultitenantTenantsCacheDefaults(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: CacheConfig{
+						Enabled: true,
+						// Type, Port and PoolSize intentionally left at zero
+						// values: there are no koanf defaults for per-tenant
+						// cache keys, so validation must apply them itself.
+						Redis: RedisConfig{Host: "acme.redis"},
+					},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	require.NoError(t, Validate(cfg))
+
+	tenant := cfg.Multitenant.Tenants["acme"]
+	assert.Equal(t, CacheTypeRedis, tenant.Cache.Type,
+		"tenant cache type must default to redis via Validate wiring")
+	assert.Equal(t, 6379, tenant.Cache.Redis.Port,
+		"tenant cache without explicit port must default to 6379 and persist to the tenants map")
+	assert.Equal(t, 10, tenant.Cache.Redis.PoolSize,
+		"tenant cache without explicit poolsize must default to 10 and persist to the tenants map")
+}
+
+// TestValidateMultitenantTenantsCacheMisconfigFailsFast proves the HARDEN
+// posture: a genuinely misconfigured tenant cache (enabled but no host) is
+// rejected at startup, not deferred to the first per-request cache access.
+func TestValidateMultitenantTenantsCacheMisconfigFailsFast(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   "header",
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Cache: CacheConfig{
+						Enabled: true,
+						// Host omitted: must fail fast at startup.
+					},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	err := Validate(cfg)
+	require.Error(t, err, "enabled tenant cache without a host must fail at startup")
+	assert.Contains(t, err.Error(), "cache.redis.host")
 }
 
 func TestApplyMessagingDefaults(t *testing.T) {

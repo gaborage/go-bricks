@@ -439,7 +439,7 @@ func TestConnectionWithTCPKeepAlive(t *testing.T) {
 				Max: time.Hour,
 			},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 15 * time.Second,
 			},
 		},
@@ -560,7 +560,7 @@ func TestConnectionWithKeepAliveDefaultInterval(t *testing.T) {
 				Max: time.Hour,
 			},
 			KeepAlive: config.PoolKeepAliveConfig{
-				Enabled:  true,
+				Enabled:  boolPtr(true),
 				Interval: 0, // Zero interval - dialer should still work
 			},
 		},

@@ -4,6 +4,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 // TestConfigKoanfTagsHaveNoUnderscore guards the whole "config key cannot be
@@ -105,5 +109,26 @@ func koanfChildKey(prefix, name string) string {
 		return name
 	default:
 		return prefix + "." + name
+	}
+}
+
+// TestPoolKeepAliveConfigIsEnabled verifies the nil-safe reader treats an absent
+// (nil) Enabled as disabled and reflects the explicit value otherwise.
+func TestPoolKeepAliveConfigIsEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled *bool
+		want    bool
+	}{
+		{name: "nil_is_disabled", enabled: nil, want: false},
+		{name: "explicit_true", enabled: observability.BoolPtr(true), want: true},
+		{name: "explicit_false", enabled: observability.BoolPtr(false), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := PoolKeepAliveConfig{Enabled: tt.enabled}
+			assert.Equal(t, tt.want, c.IsEnabled())
+		})
 	}
 }
