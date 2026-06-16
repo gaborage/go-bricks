@@ -255,6 +255,25 @@ func TestBuilderRejectsIdentifierInjectionBothVendors(t *testing.T) {
 				assert.NotContains(t, sql, "DROP TABLE")
 			})
 
+			t.Run("update_table_injection_rejected", func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+				f := qb.Filter()
+				sql, _, err := qb.Update("users; DROP TABLE users--").
+					Set(colID, 1).
+					Where(f.Eq(colID, 1)).ToSQL()
+				require.Error(t, err)
+				assert.NotContains(t, sql, "DROP TABLE")
+			})
+
+			t.Run("delete_table_injection_rejected", func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+				f := qb.Filter()
+				sql, _, err := qb.Delete("users; DROP TABLE users--").
+					Where(f.Eq(colID, 1)).ToSQL()
+				require.Error(t, err)
+				assert.NotContains(t, sql, "DROP TABLE")
+			})
+
 			t.Run("delete_order_by_injection_rejected", func(t *testing.T) {
 				qb := NewQueryBuilder(vendor)
 				f := qb.Filter()

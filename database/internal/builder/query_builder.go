@@ -400,11 +400,16 @@ func (qb *QueryBuilder) isZeroValueIDField(column string, value any) bool {
 //	    Set("updated_at", time.Now()).
 //	    Where(f.Eq("id", 123))
 func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
-	quotedTable := qb.quoteTableForQuery(table)
-	return &UpdateQueryBuilder{
-		qb:            qb,
-		updateBuilder: qb.statementBuilder.Update(quotedTable),
+	uqb := &UpdateQueryBuilder{qb: qb}
+	// Validate the table identifier before interpolation (all vendors): on
+	// PostgreSQL quoteTableForQuery returns the name verbatim, so an unvalidated
+	// table is a raw-interpolation (M9) vector. Surface a violation from ToSQL().
+	if err := validateTableName(table); err != nil {
+		uqb.err = fmt.Errorf("Update: %w", err)
+		return uqb
 	}
+	uqb.updateBuilder = qb.statementBuilder.Update(qb.quoteTableForQuery(table))
+	return uqb
 }
 
 // Delete creates a DELETE query builder for the specified table with Filter API support.
@@ -419,11 +424,15 @@ func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
 //	    f.Lt("deleted_at", threshold),
 //	))
 func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
-	quotedTable := qb.quoteTableForQuery(table)
-	return &DeleteQueryBuilder{
-		qb:            qb,
-		deleteBuilder: qb.statementBuilder.Delete(quotedTable),
+	dqb := &DeleteQueryBuilder{qb: qb}
+	// Validate the table identifier before interpolation (all vendors) — same M9
+	// raw-interpolation guard as Update/From. Surface a violation from ToSQL().
+	if err := validateTableName(table); err != nil {
+		dqb.err = fmt.Errorf("Delete: %w", err)
+		return dqb
 	}
+	dqb.deleteBuilder = qb.statementBuilder.Delete(qb.quoteTableForQuery(table))
+	return dqb
 }
 
 // BuildCaseInsensitiveLike creates a case-insensitive LIKE expression.
@@ -751,8 +760,9 @@ func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
 // SECURITY: Table identifiers must be developer-controlled, not user input. They
 // are validated against a safe identifier grammar (simple/qualified name with an
 // optional alias) on ALL vendors BEFORE interpolation; anything else surfaces as a
-// ToSQL() error. For dynamic table expressions use qb.Expr()/Raw() (which require
-// an explicit security annotation). See ADR-031.
+// ToSQL() error. The table argument accepts only a string name or *TableRef — it
+// is not an expression slot, so there is no Expr()/Raw() escape hatch for tables.
+// See ADR-031.
 //
 // Examples:
 //
@@ -846,7 +856,8 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 //
 // SECURITY: JOIN table identifiers must be developer-controlled, not user input.
 // They are validated against the same safe grammar as From() on ALL vendors before
-// interpolation. For dynamic table expressions use qb.Expr()/Raw(). See ADR-031.
+// interpolation. The table argument accepts only a string name or *TableRef (no
+// Expr()/Raw() expression slot for tables). See ADR-031.
 func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quoted string, ok bool) {
 	if err := sqb.qb.validateTableReference(table); err != nil {
 		if sqb.err == nil {
