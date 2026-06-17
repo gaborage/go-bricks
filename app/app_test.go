@@ -671,10 +671,12 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	app, _, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
 
-	_, _, err = app.dbManager.Get(context.Background(), "")
+	_, dbRelease, err := app.dbManager.Get(context.Background(), "")
 	require.NoError(t, err)
-	_, _, err = app.messagingManager.Publisher(context.Background(), "")
+	dbRelease()
+	_, msgRelease, err := app.messagingManager.Publisher(context.Background(), "")
 	require.NoError(t, err)
+	msgRelease()
 
 	assert.Greater(t, resource.dbCalls, 0)
 	assert.Greater(t, resource.msgCalls, 0)
@@ -879,13 +881,15 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	assert.True(t, messagingCalled)
 	// Verify the injected factories are used by testing manager behavior
 	ctx := context.Background()
-	dbConn, _, err := app.dbManager.Get(ctx, "")
+	dbConn, dbRelease, err := app.dbManager.Get(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, dbMock, dbConn)
+	dbRelease()
 
-	msgClient, _, err := app.messagingManager.Publisher(ctx, "")
+	msgClient, msgRelease, err := app.messagingManager.Publisher(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, msgMock, msgClient)
+	msgRelease()
 }
 
 func TestNewWithOptionsLoadError(t *testing.T) {

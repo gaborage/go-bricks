@@ -421,11 +421,21 @@ func createTestMessagingManagerWithStats(t *testing.T, stats map[string]any) *me
 		},
 	)
 
-	// If we need active publishers, create them
+	// If we need active publishers, create them. Hold the leases until the test ends (via
+	// t.Cleanup) so the publishers stay active for assertions, then release them — discarding
+	// the ReleaseFunc would pin refs and could mask the lease lifecycle this PR validates.
 	if activePublishers, ok := stats["active_publishers"].(int); ok && activePublishers > 0 {
+		releases := make([]func(), 0, activePublishers)
 		for i := 0; i < activePublishers; i++ {
-			_, _, _ = manager.Publisher(context.Background(), "")
+			_, release, err := manager.Publisher(context.Background(), "")
+			require.NoError(t, err)
+			releases = append(releases, release)
 		}
+		t.Cleanup(func() {
+			for _, release := range releases {
+				release()
+			}
+		})
 	}
 
 	return manager
