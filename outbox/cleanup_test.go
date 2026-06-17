@@ -11,21 +11,17 @@ import (
 
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // newCleanupWithFakes wires a single-tenant Cleanup. tenants is [""], so SetTenant is a
-// no-op and getDB type-asserts the context back to the fake JobContext to read the db
-// supplied via newFakeJobCtx (preserving the existing per-test ergonomics).
+// no-op; getDB reads the db from a context value (dbFromCtx) stashed by newFakeJobCtx, which
+// survives the per-tenant lease scope's context wrapping (ADR-032).
 func newCleanupWithFakes(store *fakeStore, retention time.Duration) *Cleanup {
 	return &Cleanup{
 		store:           store,
 		retentionPeriod: retention,
 		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
-			if jc, ok := ctx.(scheduler.JobContext); ok {
-				return jc.DB(), nil
-			}
-			return nil, nil
+			return dbFromCtx(ctx), nil
 		},
 		tenants: []string{""},
 	}

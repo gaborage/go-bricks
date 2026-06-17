@@ -24,6 +24,17 @@ type BrokerURLProvider interface {
 // ClientFactory creates AMQP clients from URLs
 type ClientFactory func(string, logger.Logger) AMQPClient
 
+// ReleaseFunc releases a lease obtained from Publisher. Callers must invoke it (typically
+// deferred) when finished with the publisher for the current unit of work. It is idempotent.
+// Release does NOT close the shared publisher; it signals this borrower is done, so a
+// publisher evicted while leased is closed only once its last lease is released. See ADR-032.
+type ReleaseFunc func()
+
+// maxPublisherAttempts bounds the rare retry where a reused publisher entry is closed before
+// the caller can take a lease (only under extreme pool churn). A new entry carries a seed
+// lease, so the create path always succeeds and the loop converges.
+const maxPublisherAttempts = 4
+
 // Manager manages AMQP clients by string keys with different lifecycle strategies.
 // Publishers are cached with idle eviction (can be recreated easily).
 // Consumers are long-lived (must stay alive to receive messages).
@@ -53,12 +64,25 @@ type Manager struct {
 	sfg singleflight.Group
 }
 
-// publisherEntry represents a cached publisher with LRU metadata
+// publisherEntry represents a cached publisher with LRU metadata.
+// refs, seedHeld, detached, and closed are guarded by Manager.pubMu.
 type publisherEntry struct {
 	client   AMQPClient
 	element  *list.Element // for LRU
 	lastUsed time.Time
 	key      string
+
+	// refs counts outstanding leases (current borrowers); a publisher with refs > 0 is in use.
+	refs int
+	// seedHeld is true when one of refs is an unclaimed "seed" lease taken at creation. It
+	// keeps a brand-new entry alive through the window before its first Publisher caller claims
+	// it, so a concurrent evict/idle-cleanup can only detach (never close) it.
+	seedHeld bool
+	// detached marks an entry removed from the map+LRU whose Close() was deferred because a
+	// lease was still outstanding.
+	detached bool
+	// closed guards against a double Close() once the deferred close has run.
+	closed bool
 }
 
 // consumerEntry represents a long-lived consumer
@@ -204,33 +228,47 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	return nil
 }
 
-// Publisher returns a publisher client for the given key.
-// Publishers are cached with LRU eviction and lazy initialization.
-func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, error) {
-	// Try to get existing publisher first (fast path)
-	if client := m.getExistingPublisher(key); client != nil {
-		return client, nil
-	}
-
-	// Use singleflight to prevent thundering herd on client creation
-	result, err, _ := m.sfg.Do("publisher:"+key, func() (any, error) {
-		// Double-check after acquiring singleflight lock
-		if client := m.getExistingPublisher(key); client != nil {
-			return client, nil
+// Publisher returns a publisher client for the given key plus a ReleaseFunc the caller must
+// invoke when finished with it for the current unit of work (typically deferred). Publishers
+// are cached with LRU eviction and lazy initialization; the lease prevents a publisher that
+// is evicted while in use from being closed under an active caller (the #606 race). On error
+// the returned ReleaseFunc is nil — check err first.
+func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, ReleaseFunc, error) {
+	for attempt := 0; attempt < maxPublisherAttempts; attempt++ {
+		// Fast path: getExistingPublisher increments the refcount atomically with the lookup.
+		if entry := m.getExistingPublisher(key); entry != nil {
+			return entry.client, m.makeRelease(entry), nil
 		}
 
-		return m.createPublisher(ctx, key)
-	})
+		// Slow path: singleflight collapses concurrent creates for the same key into one. It
+		// returns the shared entry (freshly created with a seed lease, or an existing one);
+		// every caller then takes its own lease on that pointer via claimOrAcquire — the first
+		// claims the seed, the rest increment — so each concurrent borrower is counted.
+		v, err, _ := m.sfg.Do("publisher:"+key, func() (any, error) {
+			if e := m.peekPublisher(key); e != nil {
+				return e, nil
+			}
+			return m.createPublisher(ctx, key)
+		})
+		if err != nil {
+			return nil, nil, err
+		}
 
-	if err != nil {
-		return nil, err
+		entry := v.(*publisherEntry)
+		if m.claimOrAcquire(entry) {
+			return entry.client, m.makeRelease(entry), nil
+		}
+		// The reused entry was closed in the window between lookup and claim; loop to create
+		// a fresh one. The create path always succeeds (seed lease), so this converges.
 	}
 
-	return result.(AMQPClient), nil
+	return nil, nil, fmt.Errorf("failed to acquire publisher for key %s after %d attempts (pool churn)", key, maxPublisherAttempts)
 }
 
-// getExistingPublisher returns an existing publisher and updates LRU, or nil if not found
-func (m *Manager) getExistingPublisher(key string) AMQPClient {
+// getExistingPublisher returns an existing entry with a lease acquired (refcount incremented)
+// and updates LRU, or nil if not found. The increment happens under the same lock as the
+// lookup so the entry cannot be evicted-and-closed before the lease is taken.
+func (m *Manager) getExistingPublisher(key string) *publisherEntry {
 	m.pubMu.Lock()
 	defer m.pubMu.Unlock()
 
@@ -242,12 +280,64 @@ func (m *Manager) getExistingPublisher(key string) AMQPClient {
 	// Update LRU and last used time
 	entry.lastUsed = time.Now()
 	m.pubLru.MoveToFront(entry.element)
+	entry.refs++
 
-	return entry.client
+	return entry
 }
 
-// createPublisher creates a new publisher client for the given key
-func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, error) {
+// peekPublisher reports whether an entry exists without taking a lease or touching LRU.
+func (m *Manager) peekPublisher(key string) *publisherEntry {
+	m.pubMu.RLock()
+	defer m.pubMu.RUnlock()
+	return m.publishers[key]
+}
+
+// claimOrAcquire takes one lease on entry, operating on the shared pointer so it can never
+// "miss" via a map lookup. Returns false only when the entry has already been fully closed
+// (a reused entry that lost a race), signaling the caller to retry with a fresh entry.
+func (m *Manager) claimOrAcquire(entry *publisherEntry) bool {
+	m.pubMu.Lock()
+	defer m.pubMu.Unlock()
+	if entry.closed {
+		return false
+	}
+	if entry.seedHeld {
+		entry.seedHeld = false // claim the seed: that ref becomes this caller's lease
+	} else {
+		entry.refs++
+	}
+	return true
+}
+
+// makeRelease returns an idempotent ReleaseFunc bound to a single lease on entry.
+func (m *Manager) makeRelease(entry *publisherEntry) ReleaseFunc {
+	var once sync.Once
+	return func() {
+		once.Do(func() { m.releasePublisher(entry) })
+	}
+}
+
+// releasePublisher drops one lease. If the entry was detached (evicted/idle-cleaned) while
+// leased and this was the final lease, it closes the publisher now — outside the lock.
+func (m *Manager) releasePublisher(entry *publisherEntry) {
+	m.pubMu.Lock()
+	entry.refs--
+	shouldClose := entry.detached && entry.refs <= 0 && !entry.closed
+	if shouldClose {
+		entry.closed = true
+	}
+	m.pubMu.Unlock()
+
+	if shouldClose {
+		m.closeEvictedPublisher(entry, "Error closing evicted publisher client (deferred until lease release)")
+	}
+}
+
+// createPublisher creates a new publisher client for the given key and registers it with a
+// single seed lease (refs == 1, seedHeld). The seed keeps the entry alive through the window
+// before the caller claims it via claimOrAcquire. Returns an existing entry unchanged on a
+// double-create race.
+func (m *Manager) createPublisher(ctx context.Context, key string) (*publisherEntry, error) {
 	// Create the AMQP client (error is already well-formatted from createAMQPClient)
 	client, err := m.createAMQPClient(ctx, key)
 	if err != nil {
@@ -263,24 +353,25 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 	if existing, exists := m.publishers[key]; exists {
 		existing.lastUsed = time.Now()
 		m.pubLru.MoveToFront(existing.element)
-		existingClient := existing.client
 		m.pubMu.Unlock()
 
 		// Close our new client outside the lock and return the existing one.
 		m.closeClientOnRollback(client, key, "publisher_double_create_race")
-		return existingClient, nil
+		return existing, nil
 	}
 
 	// Ensure we don't exceed max size (returns the evicted entry to close outside the lock)
 	evicted := m.evictPublisherIfNeeded()
 
-	// Add to cache
+	// Add to cache with a seed lease.
 	element := m.pubLru.PushFront(key)
 	entry := &publisherEntry{
 		client:   wrapped,
 		element:  element,
 		lastUsed: time.Now(),
 		key:      key,
+		refs:     1,
+		seedHeld: true,
 	}
 	m.publishers[key] = entry
 	m.pubMu.Unlock()
@@ -295,7 +386,7 @@ func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, 
 		Str("key", key).
 		Msg("Created new publisher client")
 
-	return wrapped, nil
+	return entry, nil
 }
 
 // createAMQPClient creates a new AMQP client for the given key
@@ -349,14 +440,19 @@ func (m *Manager) evictPublisherIfNeeded() *publisherEntry {
 	key := oldest.Value.(string)
 	entry := m.publishers[key]
 
-	// Remove from cache (close happens outside the lock)
+	// Detach from cache (close happens outside the lock, and only when unleased)
 	delete(m.publishers, key)
 	m.pubLru.Remove(oldest)
+	entry.detached = true
 
 	m.logger.Debug().
 		Str("key", key).
 		Msg("Evicted publisher client due to LRU limit")
 
+	if entry.refs > 0 {
+		return nil // still leased — defer the close to the final lease release
+	}
+	entry.closed = true
 	return entry
 }
 
@@ -427,18 +523,26 @@ func (m *Manager) cleanupIdlePublishers() {
 	now := time.Now()
 	var toClose []*publisherEntry
 
-	// Detach idle publishers from bookkeeping under the lock.
+	// Detach idle publishers from bookkeeping under the lock. A still-leased idle publisher
+	// is detached but its Close() is deferred to the final lease release (the #606 race).
 	for key, entry := range m.publishers {
-		if now.Sub(entry.lastUsed) > m.idleTTL {
-			delete(m.publishers, key)
-			m.pubLru.Remove(entry.element)
-			toClose = append(toClose, entry)
-
-			m.logger.Debug().
-				Str("key", key).
-				Dur("idle_time", now.Sub(entry.lastUsed)).
-				Msg("Cleaned up idle publisher client")
+		if now.Sub(entry.lastUsed) <= m.idleTTL {
+			continue
 		}
+		delete(m.publishers, key)
+		m.pubLru.Remove(entry.element)
+		entry.detached = true
+
+		m.logger.Debug().
+			Str("key", key).
+			Dur("idle_time", now.Sub(entry.lastUsed)).
+			Msg("Cleaned up idle publisher client")
+
+		if entry.refs > 0 {
+			continue // still leased — defer close to release
+		}
+		entry.closed = true
+		toClose = append(toClose, entry)
 	}
 	m.pubMu.Unlock()
 

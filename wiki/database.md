@@ -286,6 +286,8 @@ The `pool.*` settings above govern the connection pool **within a single databas
 Size `multitenant.limits.tenants` to at least the number of tenants you expect to serve concurrently. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the manager's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the limit against your expected fleet manually.
 
 > Eviction (and idle cleanup) closes the evicted connection **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Get()` calls for other tenants.
+>
+> A connection that is **still in use** when evicted (held by an in-flight request, message, or job) is detached from the cache immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use connection is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by `DbManager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.DB(ctx)` keeps its `(Interface, error)` signature). Direct callers of `DbManager.Get` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md).
 
 ## Repository Method Attribution
 

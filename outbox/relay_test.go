@@ -13,7 +13,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
-	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -40,9 +39,9 @@ func TestDecodeHeadersInvalidJSON(t *testing.T) {
 }
 
 // newRelayWithFakes wires a single-tenant Relay with the supplied fake store and AMQP
-// client. tenants is [""], so multitenant.SetTenant is a no-op and the per-tenant context
-// the relay resolves with is the fake JobContext itself — getDB type-asserts it back to
-// read the db supplied via newFakeJobCtx, preserving the existing test ergonomics.
+// client. tenants is [""], so multitenant.SetTenant is a no-op; getDB reads the db from a
+// context value (dbFromCtx) stashed by newFakeJobCtx, which survives the per-tenant lease
+// scope's context wrapping (ADR-032).
 func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 	return &Relay{
 		store: store,
@@ -51,10 +50,7 @@ func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 			MaxRetries: 3,
 		},
 		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
-			if jc, ok := ctx.(scheduler.JobContext); ok {
-				return jc.DB(), nil
-			}
-			return nil, nil
+			return dbFromCtx(ctx), nil
 		},
 		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return amqp, nil },
 		tenants:      []string{""},

@@ -6,9 +6,25 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 )
+
+// acquireLease registers a per-tenant resource lease (the release callback returned by a
+// manager's Get/Publisher) into the unit-of-work lease scope carried by ctx, so it is
+// released when the request/job/message completes. When ctx carries no scope (framework
+// probes, ad-hoc background work) the lease is released immediately — non-leaking, but
+// unprotected against mid-use eviction, matching the pre-lease behavior. See ADR-032.
+// On error it returns the zero value and the error, releasing nothing (release is nil).
+func acquireLease[T any](ctx context.Context, v T, release func(), err error) (T, error) {
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	leasescope.Register(ctx, release)
+	return v, nil
+}
 
 const (
 	testMessage            = "(optional)"
@@ -58,7 +74,8 @@ func (p *SingleTenantResourceProvider) DB(ctx context.Context) (database.Interfa
 			Action:   "to enable: set DATABASE_HOST env var or add database.host to config.yaml",
 		}
 	}
-	return p.dbManager.Get(ctx, "")
+	conn, release, err := p.dbManager.Get(ctx, "")
+	return acquireLease(ctx, conn, release, err)
 }
 
 // DBByName returns a named database interface for single-tenant mode.
@@ -82,7 +99,8 @@ func (p *SingleTenantResourceProvider) DBByName(ctx context.Context, name string
 		}
 	}
 	// Use "named:" prefix to distinguish from tenant keys
-	return p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
+	conn, release, err := p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
+	return acquireLease(ctx, conn, release, err)
 }
 
 // Messaging returns the messaging client for single-tenant mode.
@@ -103,7 +121,8 @@ func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging
 		}
 	}
 
-	return p.messagingManager.Publisher(ctx, "")
+	client, release, err := p.messagingManager.Publisher(ctx, "")
+	return acquireLease(ctx, client, release, err)
 }
 
 // Cache returns the cache instance for single-tenant mode.
@@ -116,7 +135,8 @@ func (p *SingleTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, 
 			Action:   "to enable: set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
 		}
 	}
-	return p.cacheManager.Get(ctx, "")
+	c, release, err := p.cacheManager.Get(ctx, "")
+	return acquireLease(ctx, c, release, err)
 }
 
 // SetDeclarations updates the declaration store used for ensuring consumers.
@@ -164,7 +184,8 @@ func (p *MultiTenantResourceProvider) DB(ctx context.Context) (database.Interfac
 		return nil, ErrNoTenantInContext
 	}
 
-	return p.dbManager.Get(ctx, tenantID)
+	conn, release, err := p.dbManager.Get(ctx, tenantID)
+	return acquireLease(ctx, conn, release, err)
 }
 
 // DBByName returns a named database interface for multi-tenant mode.
@@ -189,7 +210,8 @@ func (p *MultiTenantResourceProvider) DBByName(ctx context.Context, name string)
 		}
 	}
 	// Named databases are tenant-agnostic - shared configuration across all tenants
-	return p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
+	conn, release, err := p.dbManager.Get(ctx, config.NamedDatabasePrefix+name)
+	return acquireLease(ctx, conn, release, err)
 }
 
 // Messaging returns the messaging client for the tenant specified in context.
@@ -216,7 +238,8 @@ func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.
 		}
 	}
 
-	return p.messagingManager.Publisher(ctx, tenantID)
+	client, release, err := p.messagingManager.Publisher(ctx, tenantID)
+	return acquireLease(ctx, client, release, err)
 }
 
 // Cache returns the cache instance for the tenant specified in context.
@@ -235,7 +258,8 @@ func (p *MultiTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, e
 		return nil, ErrNoTenantInContext
 	}
 
-	return p.cacheManager.Get(ctx, tenantID)
+	c, release, err := p.cacheManager.Get(ctx, tenantID)
+	return acquireLease(ctx, c, release, err)
 }
 
 // SetDeclarations updates the declaration store used for ensuring consumers.

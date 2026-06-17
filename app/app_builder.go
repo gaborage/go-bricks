@@ -283,8 +283,12 @@ func (b *Builder) preInitDatabase(parent context.Context, timeout time.Duration)
 		timeout,
 		config.IsDatabaseConfigured(&b.cfg.Database),
 		func(ctx context.Context) error {
-			_, err := b.bundle.dbManager.Get(ctx, "")
-			return err
+			_, release, err := b.bundle.dbManager.Get(ctx, "")
+			if err != nil {
+				return err
+			}
+			release() // startup probe only verifies connectivity; release the lease immediately
+			return nil
 		},
 	)
 }
@@ -301,8 +305,12 @@ func (b *Builder) preInitMessaging(parent context.Context, timeout time.Duration
 		timeout,
 		config.IsMessagingConfigured(&b.cfg.Messaging),
 		func(ctx context.Context) error {
-			_, err := b.bundle.messagingManager.Publisher(ctx, "")
-			return err
+			_, release, err := b.bundle.messagingManager.Publisher(ctx, "")
+			if err != nil {
+				return err
+			}
+			release() // startup probe only verifies connectivity; release the lease immediately
+			return nil
 		},
 	)
 }
@@ -346,7 +354,8 @@ func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	if _, err := b.bundle.cacheManager.Get(ctx, ""); err != nil {
+	_, release, err := b.bundle.cacheManager.Get(ctx, "")
+	if err != nil {
 		if config.IsNotConfigured(err) {
 			b.logger.Debug().Msg("Skipping cache pre-initialization: not configured")
 			return
@@ -354,6 +363,7 @@ func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
 		b.logger.Warn().Err(err).Msg("Failed to pre-initialize cache connection (non-fatal)")
 		return
 	}
+	release() // startup probe only verifies connectivity; release the lease immediately
 	b.logger.Debug().Msg("Pre-initialized cache connection")
 }
 

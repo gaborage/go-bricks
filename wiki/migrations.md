@@ -2,6 +2,49 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Resource Managers Return a `ReleaseFunc` (ADR-032)
+
+Per [ADR-032](adr_032_lease_refcount_tenant_handles.md), the three per-tenant resource managers now
+reference-count their cached handles so an evicted handle is not closed while a caller is still using
+it (the M3 eviction-while-in-use race, issue #606). `Get()` / `Publisher()` therefore return a third
+value — a `ReleaseFunc` the caller invokes (typically deferred) when finished with the handle for the
+current unit of work.
+
+**This affects only direct callers of the raw managers** (`database.DbManager`, `cache.CacheManager`,
+`messaging.Manager`). **Application code is unchanged:** `deps.DB(ctx)`, `deps.Cache(ctx)`,
+`deps.Messaging(ctx)`, `deps.DBByName(ctx, name)`, and the `ResourceProvider` interface keep their
+existing two-value `(handle, error)` signatures — the framework registers and releases the lease for
+you at each request / message / job boundary.
+
+**Before:**
+
+```go
+conn, err := dbManager.Get(ctx, tenantID)
+client, err := messagingManager.Publisher(ctx, tenantID)
+inst, err := cacheManager.Get(ctx, tenantID)
+```
+
+**After:**
+
+```go
+conn, release, err := dbManager.Get(ctx, tenantID)
+if err != nil {
+    return err
+}
+defer release() // return the lease when done with this unit of work
+
+client, release, err := messagingManager.Publisher(ctx, tenantID)
+// ... defer release()
+
+inst, release, err := cacheManager.Get(ctx, tenantID)
+// ... defer release()
+```
+
+The `Manager` interface in `cache/types.go` changed its `Get` signature to match
+(`Get(ctx, key) (Cache, ReleaseFunc, error)`). On error the returned `ReleaseFunc` is `nil` — check
+`err` first. Releasing is idempotent; the handle itself is a shared, long-lived pool — `release()`
+does **not** close it, it only signals this borrower is done.
+
 ## Query Builder Validates Direct-String Identifiers (ADR-031)
 
 Per [ADR-031](adr_031_query_builder_identifier_validation.md), the string identifier arguments of `SelectQueryBuilder.From`, the JOIN family (`JoinOn`/`LeftJoinOn`/`RightJoinOn`/`InnerJoinOn`/`CrossJoinOn`), `OrderBy`, `GroupBy`, `UpdateQueryBuilder.Set`/`SetMap`, and `DeleteQueryBuilder.OrderBy` are now validated against a safe identifier grammar on **all vendors** before interpolation (previously only Oracle quoted them; PostgreSQL interpolated verbatim — the M9 SQL-injection vector). Values outside the grammar are surfaced as a `ToSQL()` error (the methods never panic on bad identifier content).

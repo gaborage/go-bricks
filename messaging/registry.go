@@ -10,6 +10,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -693,6 +694,15 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	// Extract trace context using centralized trace package
 	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, accessor)
+
+	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed via
+	// deps.DB/Cache/Messaging while handling this delivery (including inbox ProcessOnce,
+	// which runs inside the handler and inherits msgCtx) are released when the message is
+	// done, so a handle evicted mid-handling is not closed under it. Registered before the
+	// panic-recovery defer so ReleaseAll runs last (even on panic).
+	msgCtx, scope := leasescope.Install(msgCtx)
+	defer scope.ReleaseAll()
+
 	contextLog := log.WithContext(msgCtx)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
 	tlog := contextLog.WithFields(map[string]any{"correlation_id": traceID})

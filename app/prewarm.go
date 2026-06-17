@@ -109,8 +109,12 @@ func (w *ConnectionPreWarmer) PreWarmDatabase(ctx context.Context, key string) e
 		return fmt.Errorf("database manager not available")
 	}
 
-	_, err := w.dbManager.Get(ctx, key)
-	return err
+	_, release, err := w.dbManager.Get(ctx, key)
+	if err != nil {
+		return err
+	}
+	release() // pre-warm only verifies connectivity; release the lease immediately
+	return nil
 }
 
 // PreWarmMessaging attempts to establish messaging components for the given key.
@@ -134,9 +138,11 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 	}
 
 	// Pre-warm publisher
-	if _, err := w.messagingManager.Publisher(ctx, key); err != nil {
+	_, release, err := w.messagingManager.Publisher(ctx, key)
+	if err != nil {
 		return fmt.Errorf("failed to get publisher: %w", err)
 	}
+	release() // pre-warm only verifies connectivity; release the lease immediately
 	w.logger.Info().Msg("Pre-warmed messaging publisher")
 
 	return nil

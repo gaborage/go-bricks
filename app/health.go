@@ -66,10 +66,11 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 
 // checkDatabaseHealth checks database connection and health status
 func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (status string, stats map[string]any, err error) {
-	conn, err := dbManager.Get(ctx, "")
+	conn, release, err := dbManager.Get(ctx, "")
 	if err != nil {
 		return handleDatabaseConnectionError(err, dbManager)
 	}
+	defer release() // probe holds no scope; release the lease when the check returns
 
 	if err := conn.Health(ctx); err != nil {
 		dbStats := getStatsOrEmpty(dbManager.Stats())
@@ -126,7 +127,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			}
 
 			// Attempt to verify readiness using an existing publisher key when available
-			client, err := msgManager.Publisher(ctx, "")
+			client, release, err := msgManager.Publisher(ctx, "")
 			if err != nil {
 				// Check if messaging is not configured (not a failure)
 				if config.IsNotConfigured(err) {
@@ -137,6 +138,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
+			defer release() // probe holds no scope; release the lease when the check returns
 
 			// Check if client is ready
 			if !client.IsReady() {
@@ -172,7 +174,7 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 
 			// Attempt to verify readiness by getting cache instance
-			_, err := cacheManager.Get(ctx, "")
+			_, release, err := cacheManager.Get(ctx, "")
 			if err != nil {
 				// Check if cache is not configured (not a failure)
 				if config.IsNotConfigured(err) {
@@ -183,6 +185,7 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
+			release() // probe holds no scope; release the lease immediately
 
 			// Cache manager is healthy if we can get an instance
 			stats[statusKey] = healthyStatus

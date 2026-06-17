@@ -424,7 +424,7 @@ func createTestMessagingManagerWithStats(t *testing.T, stats map[string]any) *me
 	// If we need active publishers, create them
 	if activePublishers, ok := stats["active_publishers"].(int); ok && activePublishers > 0 {
 		for i := 0; i < activePublishers; i++ {
-			_, _ = manager.Publisher(context.Background(), "")
+			_, _, _ = manager.Publisher(context.Background(), "")
 		}
 	}
 

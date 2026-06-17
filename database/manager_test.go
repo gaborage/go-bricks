@@ -110,9 +110,9 @@ func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 		return &stubDB{key: cfg.Database}, nil
 	})
 
-	first, err := manager.Get(ctx, tenantA)
+	first, _, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
-	second, err := manager.Get(ctx, tenantA)
+	second, _, err := manager.Get(ctx, tenantA)
 	require.NoError(t, err)
 	assert.Same(t, first, second)
 	assert.Equal(t, 1, connectorCalls)
@@ -139,7 +139,7 @@ func TestDbManagerSingleflight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := manager.Get(ctx, "tenant-b")
+			_, _, err := manager.Get(ctx, "tenant-b")
 			require.NoError(t, err)
 		}()
 	}
@@ -176,16 +176,19 @@ func TestDbManagerEvictsLRU(t *testing.T) {
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: time.Minute}, connector)
 
-	_, err := manager.Get(ctx, "a")
+	_, relA, err := manager.Get(ctx, "a")
 	require.NoError(t, err)
-	_, err = manager.Get(ctx, "b")
+	_, _, err = manager.Get(ctx, "b")
 	require.NoError(t, err)
+	// Release "a"'s lease so eviction may actually close it — a leased connection's
+	// close is deferred until its last lease is released (ADR-032).
+	relA()
 
 	// Get("c") evicts "a"; its Close blocks until releaseClose, so run it in the
 	// background. With close-under-lock this would hold m.mu and stall every Get.
 	done := make(chan struct{})
 	go func() {
-		_, gErr := manager.Get(ctx, "c")
+		_, _, gErr := manager.Get(ctx, "c")
 		assert.NoError(t, gErr)
 		close(done)
 	}()
@@ -225,8 +228,10 @@ func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
 	}}
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: 10 * time.Millisecond}, connector)
-	_, err := manager.Get(ctx, "idle")
+	_, relIdle, err := manager.Get(ctx, "idle")
 	require.NoError(t, err)
+	// Release the lease so idle cleanup may actually close it (deferred-until-release, ADR-032).
+	relIdle()
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -272,9 +277,9 @@ func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 	}}
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
-	_, err := manager.Get(ctx, "tenant-x")
+	_, _, err := manager.Get(ctx, "tenant-x")
 	require.NoError(t, err)
-	_, err = manager.Get(ctx, "tenant-y")
+	_, _, err = manager.Get(ctx, "tenant-y")
 	require.NoError(t, err)
 
 	err = manager.Close()
@@ -325,9 +330,9 @@ func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) 
 	manager.conns["tenant"] = &dbEntry{conn: existing, element: element, lastUsed: time.Now(), key: "tenant"}
 	manager.mu.Unlock()
 
-	conn, err := manager.createConnection(ctx, "tenant")
+	entry, err := manager.createConnection(ctx, "tenant")
 	require.NoError(t, err)
-	assert.Same(t, existing, conn)
+	assert.Same(t, existing, entry.conn)
 }
 
 func TestStartCleanupDoesNotCreateMultipleRoutines(t *testing.T) {
@@ -403,9 +408,9 @@ func TestDbManagerStatsPopulatedManager(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	ctx := context.Background()
-	_, err := m.Get(ctx, "a")
+	_, _, err := m.Get(ctx, "a")
 	require.NoError(t, err)
-	_, err = m.Get(ctx, "b")
+	_, _, err = m.Get(ctx, "b")
 	require.NoError(t, err)
 
 	stats := m.Stats()
@@ -492,14 +497,16 @@ func TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: time.Minute}, connector)
 
-	_, err := manager.Get(ctx, "a")
+	_, relA, err := manager.Get(ctx, "a")
 	require.NoError(t, err)
-	_, err = manager.Get(ctx, "b")
+	_, _, err = manager.Get(ctx, "b")
 	require.NoError(t, err)
+	// Release "a"'s lease so the eviction can close it (deferred-until-release, ADR-032).
+	relA()
 
 	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
 	go func() {
-		_, _ = manager.Get(ctx, "c")
+		_, _, _ = manager.Get(ctx, "c")
 	}()
 
 	// Wait until the slow Close has actually begun before measuring.
@@ -512,7 +519,7 @@ func TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
 	// "b" is still cached: this Get only needs getExisting's lock. If eviction holds
 	// the manager mutex across Close (the M3 bug), this blocks for ~slowClose.
 	start := time.Now()
-	_, err = manager.Get(ctx, "b")
+	_, _, err = manager.Get(ctx, "b")
 	require.NoError(t, err)
 	elapsed := time.Since(start)
 
@@ -531,8 +538,10 @@ func TestCleanupIdleConnectionsLogsCloseError(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	ctx := context.Background()
-	_, err := m.Get(ctx, "x")
+	_, relX, err := m.Get(ctx, "x")
 	require.NoError(t, err)
+	// Release the lease so idle cleanup may close it (deferred-until-release, ADR-032).
+	relX()
 
 	// Backdate lastUsed so the cleanup pass sees the entry as idle. Direct
 	// field access under m.mu matches the pattern in
@@ -548,4 +557,156 @@ func TestCleanupIdleConnectionsLogsCloseError(t *testing.T) {
 	closed := failingStub.closed
 	failingStub.closedMu.Unlock()
 	assert.True(t, closed, "Close was attempted even though it returned an error")
+}
+
+// --- Lease/refcount: eviction-while-in-use race (issue #606, ADR-032) ---
+
+// newClosableDB returns a connector that records each connection's Close() in the
+// shared `closed` map under `mu`, keyed by the connection's config Database value.
+func newClosableDB(mu *sync.Mutex, closed map[string]bool) Connector {
+	return func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		return &stubDB{key: cfg.Database, onClosed: func(key string) {
+			mu.Lock()
+			closed[key] = true
+			mu.Unlock()
+		}}, nil
+	}
+}
+
+func twoTenantSource() *stubResourceSource {
+	return &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"a": {Type: "postgresql", Database: "a"},
+		"b": {Type: "postgresql", Database: "b"},
+	}}
+}
+
+func TestDbManagerGetReturnsNonNilReleaseFunc(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	conn, release, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	require.NotNil(t, conn)
+	require.NotNil(t, release, "Get must return a non-nil release so callers can always defer it")
+
+	// Releasing a still-cached (non-evicted) connection must NOT close it.
+	release()
+	mu.Lock()
+	wasClosed := closed["a"]
+	mu.Unlock()
+	assert.False(t, wasClosed, "releasing a lease on a live cached connection must not close it")
+	assert.Equal(t, 1, m.Size())
+}
+
+func TestDbManagerEvictionWhileLeasedDefersCloseUntilRelease(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	// MaxSize 1 → getting a second key evicts the first.
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, releaseA, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+
+	// Borrowing "b" evicts "a" from the LRU. "a" is still leased, so it must NOT close.
+	_, releaseB, err := m.Get(ctx, "b")
+	require.NoError(t, err)
+	defer releaseB()
+
+	mu.Lock()
+	closedWhileLeased := closed["a"]
+	mu.Unlock()
+	assert.False(t, closedWhileLeased,
+		"an evicted-but-leased connection must not be closed while a lease is held (the #606 race)")
+
+	// Releasing the last lease closes the evicted connection now.
+	releaseA()
+	mu.Lock()
+	closedAfterRelease := closed["a"]
+	mu.Unlock()
+	assert.True(t, closedAfterRelease,
+		"an evicted connection must be closed once its last lease is released")
+}
+
+func TestDbManagerTwoLeasesKeepConnectionAliveUntilBothReleased(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, release1, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	_, release2, err := m.Get(ctx, "a") // same key, second borrower → refcount 2
+	require.NoError(t, err)
+
+	// Evict "a".
+	_, releaseB, err := m.Get(ctx, "b")
+	require.NoError(t, err)
+	defer releaseB()
+
+	release1()
+	mu.Lock()
+	closedAfterFirst := closed["a"]
+	mu.Unlock()
+	assert.False(t, closedAfterFirst, "connection must stay open while a second lease is outstanding")
+
+	release2()
+	mu.Lock()
+	closedAfterSecond := closed["a"]
+	mu.Unlock()
+	assert.True(t, closedAfterSecond, "connection must close when the final lease is released")
+}
+
+func TestDbManagerIdleCleanupWhileLeasedDefersClose(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 5, IdleTTL: time.Nanosecond}, newClosableDB(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, releaseA, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond) // ensure idle threshold passed
+	m.cleanupIdleConnections()   // detaches "a" (idle) but it is still leased
+
+	mu.Lock()
+	closedWhileLeased := closed["a"]
+	mu.Unlock()
+	assert.False(t, closedWhileLeased, "idle cleanup must not close a leased connection")
+
+	releaseA()
+	mu.Lock()
+	closedAfterRelease := closed["a"]
+	mu.Unlock()
+	assert.True(t, closedAfterRelease, "idle-cleaned connection closes when its last lease is released")
+}
+
+func TestDbManagerReleaseIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, releaseA, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	_, releaseB, err := m.Get(ctx, "b") // evict "a"
+	require.NoError(t, err)
+	defer releaseB()
+
+	assert.NotPanics(t, func() {
+		releaseA()
+		releaseA() // double release must be a safe no-op (no double close, no negative refcount)
+	})
 }

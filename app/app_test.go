@@ -442,10 +442,20 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		Logger: log,
 		Config: cfg,
 		DB: func(ctx context.Context) (database.Interface, error) {
-			return dbManager.Get(ctx, "")
+			db, release, err := dbManager.Get(ctx, "")
+			if err != nil {
+				return nil, err
+			}
+			release() // test fixture (no scope): release immediately, like the probe paths
+			return db, nil
 		},
 		Messaging: func(ctx context.Context) (messaging.AMQPClient, error) {
-			return messagingManager.Publisher(ctx, "")
+			client, release, err := messagingManager.Publisher(ctx, "")
+			if err != nil {
+				return nil, err
+			}
+			release()
+			return client, nil
 		},
 	}
 
@@ -661,9 +671,9 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	app, _, err := NewWithConfig(cfg, opts)
 	require.NoError(t, err)
 
-	_, err = app.dbManager.Get(context.Background(), "")
+	_, _, err = app.dbManager.Get(context.Background(), "")
 	require.NoError(t, err)
-	_, err = app.messagingManager.Publisher(context.Background(), "")
+	_, _, err = app.messagingManager.Publisher(context.Background(), "")
 	require.NoError(t, err)
 
 	assert.Greater(t, resource.dbCalls, 0)
@@ -869,11 +879,11 @@ func TestNewWithConfigUsesConnectors(t *testing.T) {
 	assert.True(t, messagingCalled)
 	// Verify the injected factories are used by testing manager behavior
 	ctx := context.Background()
-	dbConn, err := app.dbManager.Get(ctx, "")
+	dbConn, _, err := app.dbManager.Get(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, dbMock, dbConn)
 
-	msgClient, err := app.messagingManager.Publisher(ctx, "")
+	msgClient, _, err := app.messagingManager.Publisher(ctx, "")
 	require.NoError(t, err)
 	assert.Equal(t, msgMock, msgClient)
 }

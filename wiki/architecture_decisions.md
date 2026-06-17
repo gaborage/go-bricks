@@ -394,6 +394,30 @@ Valid identifiers on PostgreSQL stay **unquoted** to avoid a case-folding regres
 
 ---
 
+### [ADR-032: Lease/Refcount Per-Tenant Resource Handles to Close the Eviction-While-In-Use Race](adr_032_lease_refcount_tenant_handles.md)
+
+**Date:** 2026-06-17 | **Status:** Accepted
+
+The per-tenant resource managers (`cache.CacheManager`, `database.DbManager`, `messaging.Manager`)
+handed out the raw handle from `Get()`/`Publisher()` and later `Close()`d that same handle from LRU
+eviction or idle cleanup with **no reference counting** — so a handle could be closed while a request
+that obtained it was still mid-operation (M3, issue #606; PR #605 was the non-breaking mitigation).
+The managers now **reference-count** each entry: `Get()`/`Publisher()` return `(handle, ReleaseFunc, error)`,
+eviction/idle-cleanup **detach** an entry immediately but **defer its `Close()` until the last lease is
+released**, and a brand-new entry carries a **seed lease** so concurrent eviction/`Remove` can only detach
+(never close) it during the acquisition window. A private `internal/leasescope` package carries a per-unit
+lease scope in `context.Context`; the framework installs it at three seams (HTTP `RequestEnrich`, AMQP
+`processMessage`, scheduler `executeJob`) covering six unit-of-work types via context inheritance, and the
+per-tenant accessors register each lease there — so **`deps.DB/Cache/Messaging` and `ResourceProvider` are
+unchanged and applications do not change**.
+
+**Breaking:** the raw managers' `Get()`/`Publisher()` return types gain a `ReleaseFunc` (third return).
+Direct callers must capture and invoke it; unscoped contexts release immediately (non-leaking, unprotected).
+
+**Key Benefits:** An in-use handle is never closed — the M3 race is closed on every concurrent multi-tenant path (HTTP, consumers, jobs, outbox relay, inbox); no application-facing API change; robust under heavy eviction/`Remove` churn via the seed-lease hand-off
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -403,7 +427,7 @@ Valid identifiers on PostgreSQL stay **unquoted** to avoid a case-folding regres
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-031) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-032) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

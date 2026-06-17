@@ -35,12 +35,38 @@ type ManagerStats struct {
 // This abstraction allows dependency injection for testing.
 type Connector func(ctx context.Context, key string) (Cache, error)
 
+// ReleaseFunc releases a lease obtained from Get. Callers must invoke it (typically
+// deferred) when finished with the cache for the current unit of work. It is idempotent.
+// Release does NOT close the shared cache instance; it signals this borrower is done, so
+// a cache instance evicted while leased is closed only once its last lease is released.
+// See ADR-032.
+type ReleaseFunc func()
+
+// maxGetAttempts bounds the rare retry where a freshly resolved entry is evicted before
+// the caller can take a lease (only under extreme pool churn). A new entry is inserted at
+// the LRU front, so in practice the first attempt always succeeds.
+const maxGetAttempts = 4
+
 // cacheEntry represents a cache instance in the manager's LRU.
+// refs, detached, and closed are guarded by CacheManager.mu.
 type cacheEntry struct {
 	cache    Cache
 	key      string
 	lastUsed time.Time
 	element  *list.Element // Position in LRU list
+
+	// refs counts outstanding leases (current borrowers); a cache with refs > 0 is in use.
+	refs int
+	// seedHeld is true when one of refs is an unclaimed "seed" lease taken at creation. The
+	// seed keeps a brand-new entry alive (refs >= 1) through the window before its first Get
+	// caller claims it, so a concurrent evict/Remove can only detach (never close) it. The
+	// first claimOrAcquire takes the seed; later callers increment refs normally.
+	seedHeld bool
+	// detached marks an entry removed from the map+LRU whose Close() was deferred because
+	// a lease was still outstanding.
+	detached bool
+	// closed guards against a double Close() once the deferred close has run.
+	closed bool
 }
 
 // CacheManager implements the Manager interface for multi-tenant cache instances.
@@ -124,40 +150,76 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 	return m, nil
 }
 
-// Get retrieves or creates a cache instance for the given key.
-// Returns ErrManagerClosed if Close() has been called.
-func (m *CacheManager) Get(ctx context.Context, key string) (Cache, error) {
-	if m.closed.Load() {
-		return nil, ErrManagerClosed
-	}
-	// Fast path: check if cache already exists
-	if cache := m.getExisting(key); cache != nil {
-		return cache, nil
-	}
-
-	// Slow path: use singleflight to prevent thundering herd
-	result, err, _ := m.sfg.Do(key, func() (any, error) {
-		// Double-check after acquiring singleflight lock
-		if cache := m.getExisting(key); cache != nil {
-			return cache, nil
+// Get retrieves or creates a cache instance for the given key, plus a ReleaseFunc the
+// caller must invoke when finished with it for the current unit of work (typically
+// deferred). Returns ErrManagerClosed if Close() has been called. The lease prevents a
+// cache instance evicted while in use from being closed under an active caller (the #606
+// race). On error the returned ReleaseFunc is nil — check err first.
+func (m *CacheManager) Get(ctx context.Context, key string) (Cache, ReleaseFunc, error) {
+	for attempt := 0; attempt < maxGetAttempts; attempt++ {
+		// Re-check on every iteration (not just once up front): a concurrent Close() must not
+		// be raced into recreating an instance on a shut-down manager. createCache also
+		// re-checks under the lock to close the window fully.
+		if m.closed.Load() {
+			return nil, nil, ErrManagerClosed
 		}
 
-		// Create new cache instance
-		return m.createCache(ctx, key)
-	})
+		// Fast path: getExisting increments the refcount atomically with the lookup, so the
+		// cache cannot be evicted-and-closed before the lease is taken.
+		if entry := m.getExisting(key); entry != nil {
+			return entry.cache, m.makeRelease(entry), nil
+		}
 
-	if err != nil {
-		m.mu.Lock()
-		m.errors++
-		m.mu.Unlock()
-		return nil, err
+		// Slow path: singleflight collapses concurrent creates for the same key into one. It
+		// returns the shared entry (freshly created with a seed lease, or an existing one);
+		// every caller then takes its own lease on that pointer via claimOrAcquire — the first
+		// claims the seed, the rest increment — so each concurrent borrower is counted.
+		v, err, _ := m.sfg.Do(key, func() (any, error) {
+			if e := m.peek(key); e != nil {
+				return e, nil
+			}
+			return m.createCache(ctx, key)
+		})
+		if err != nil {
+			m.mu.Lock()
+			m.errors++
+			m.mu.Unlock()
+			return nil, nil, err
+		}
+
+		entry := v.(*cacheEntry)
+		if m.claimOrAcquire(entry) {
+			return entry.cache, m.makeRelease(entry), nil
+		}
+		// The reused entry was closed in the window between lookup and claim (a concurrent
+		// evict/Remove of an unleased entry); loop to create a fresh one. The create path
+		// always succeeds because a new entry carries a seed lease, so this converges.
 	}
 
-	return result.(Cache), nil
+	return nil, nil, fmt.Errorf("failed to acquire cache for key %q after %d attempts (pool churn)", key, maxGetAttempts)
 }
 
-// getExisting retrieves an existing cache and updates LRU position.
-func (m *CacheManager) getExisting(key string) Cache {
+// claimOrAcquire takes one lease on entry, operating on the shared pointer so it can never
+// "miss" via a map lookup. It returns false only when the entry has already been fully closed
+// (a reused entry that lost a race), signaling the caller to retry with a fresh entry.
+func (m *CacheManager) claimOrAcquire(entry *cacheEntry) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry.closed {
+		return false
+	}
+	if entry.seedHeld {
+		entry.seedHeld = false // claim the seed: that ref becomes this caller's lease
+	} else {
+		entry.refs++
+	}
+	return true
+}
+
+// getExisting retrieves an existing entry with a lease acquired (refcount incremented) and
+// updates LRU position, or nil if not found. The refcount increment happens under the same
+// lock as the lookup so the entry cannot be evicted-and-closed before the lease is taken.
+func (m *CacheManager) getExisting(key string) *cacheEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -169,12 +231,50 @@ func (m *CacheManager) getExisting(key string) Cache {
 	// Update LRU position (move to front)
 	m.lru.MoveToFront(entry.element)
 	entry.lastUsed = time.Now()
+	entry.refs++
 
-	return entry.cache
+	return entry
 }
 
-// createCache creates a new cache instance and adds it to the manager.
-func (m *CacheManager) createCache(ctx context.Context, key string) (Cache, error) {
+// peek reports whether an entry exists for the key without taking a lease or touching LRU.
+func (m *CacheManager) peek(key string) *cacheEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.caches[key]
+}
+
+// makeRelease returns an idempotent ReleaseFunc bound to a single lease on entry.
+func (m *CacheManager) makeRelease(entry *cacheEntry) ReleaseFunc {
+	var once sync.Once
+	return func() {
+		once.Do(func() { m.releaseEntry(entry) })
+	}
+}
+
+// releaseEntry drops one lease. If the entry was detached (evicted/idle-cleaned) while
+// leased and this was the final lease, it closes the cache now — outside the lock.
+func (m *CacheManager) releaseEntry(entry *cacheEntry) {
+	m.mu.Lock()
+	entry.refs--
+	shouldClose := entry.detached && entry.refs <= 0 && !entry.closed
+	if shouldClose {
+		entry.closed = true
+	}
+	m.mu.Unlock()
+
+	if shouldClose {
+		if err := entry.cache.Close(); err != nil {
+			m.mu.Lock()
+			m.errors++
+			m.mu.Unlock()
+		}
+	}
+}
+
+// createCache creates a new cache instance and adds it to the manager with a single seed
+// lease (refs == 1, seedHeld). The seed keeps the entry alive through the window before the
+// caller claims it via claimOrAcquire, so a concurrent evict/Remove can only detach it.
+func (m *CacheManager) createCache(ctx context.Context, key string) (*cacheEntry, error) {
 	// Create cache using connector function
 	cache, err := m.connector(ctx, key)
 	if err != nil {
@@ -182,14 +282,25 @@ func (m *CacheManager) createCache(ctx context.Context, key string) (Cache, erro
 	}
 
 	m.mu.Lock()
+	// If Close() ran between the caller's m.closed check and here, do not resurrect the
+	// (cleared) map with a new instance that nothing would ever close. Close the just-created
+	// instance and report the manager as closed.
+	if m.closed.Load() {
+		m.mu.Unlock()
+		_ = cache.Close()
+		return nil, ErrManagerClosed
+	}
+
 	// Evict LRU cache if at capacity (returns entry to close outside lock)
 	evicted := m.evictIfNeeded()
 
-	// Add to LRU front (most recently used)
+	// Add to LRU front (most recently used) with a seed lease.
 	entry := &cacheEntry{
 		cache:    cache,
 		key:      key,
 		lastUsed: time.Now(),
+		refs:     1,
+		seedHeld: true,
 	}
 	entry.element = m.lru.PushFront(entry)
 	m.caches[key] = entry
@@ -201,11 +312,14 @@ func (m *CacheManager) createCache(ctx context.Context, key string) (Cache, erro
 		_ = evicted.cache.Close()
 	}
 
-	return cache, nil
+	return entry, nil
 }
 
-// evictIfNeeded removes the least recently used cache if at capacity.
-// Must be called with mu lock held. Returns the evicted entry (caller must close).
+// evictIfNeeded removes the least recently used cache if at capacity. Must be called with
+// mu held. It detaches the entry and returns it for the caller to close OUTSIDE the lock —
+// but ONLY when the entry has no outstanding leases. If the LRU victim is still leased, its
+// Close() is deferred to the final lease release (the #606 race). Returns nil when nothing
+// should be closed now.
 func (m *CacheManager) evictIfNeeded() *cacheEntry {
 	if m.maxSize <= 0 || len(m.caches) < m.maxSize {
 		return nil
@@ -218,9 +332,14 @@ func (m *CacheManager) evictIfNeeded() *cacheEntry {
 	}
 
 	entry := oldest.Value.(*cacheEntry)
-	evicted := m.removeEntryLocked(entry.key)
+	m.removeEntryLocked(entry.key)
 	m.evictions++
-	return evicted
+
+	if entry.refs > 0 {
+		return nil // still leased — defer the close to the final lease release
+	}
+	entry.closed = true
+	return entry
 }
 
 // Remove explicitly removes a cache instance from the manager.
@@ -231,10 +350,20 @@ func (m *CacheManager) Remove(key string) error {
 	}
 	m.mu.Lock()
 	entry := m.removeEntryLocked(key)
+	shouldClose := entry != nil && entry.refs <= 0 && !entry.closed
+	if shouldClose {
+		entry.closed = true
+	}
 	m.mu.Unlock()
 
 	if entry == nil {
 		return nil // Already removed
+	}
+
+	// A still-leased entry is detached now but its Close() is deferred to the final lease
+	// release, so an in-use cache is never closed (the #606 race).
+	if !shouldClose {
+		return nil
 	}
 
 	// Close the cache instance outside the lock
@@ -257,6 +386,7 @@ func (m *CacheManager) removeEntryLocked(key string) *cacheEntry {
 	// Remove from tracking structures (always cleanup, even if close fails later)
 	m.lru.Remove(entry.element)
 	delete(m.caches, key)
+	entry.detached = true
 
 	return entry
 }
@@ -290,8 +420,12 @@ func (m *CacheManager) cleanupIdleCaches() {
 	for key, entry := range m.caches {
 		if now.Sub(entry.lastUsed) > m.idleTTL {
 			if removed := m.removeEntryLocked(key); removed != nil {
-				toClose = append(toClose, removed)
 				m.idleCleanups++
+				if removed.refs > 0 {
+					continue // still leased — defer close to the final lease release
+				}
+				removed.closed = true
+				toClose = append(toClose, removed)
 			}
 		}
 	}
@@ -325,11 +459,13 @@ func (m *CacheManager) Close() error {
 		// Signal cleanup goroutine to stop
 		close(m.closeCh)
 
-		// Collect all cache entries under lock
+		// Collect all cache entries under lock. Mark each closed under the lock so a
+		// concurrent lease release cannot also close it (avoids a double Close()).
 		m.mu.Lock()
 		var toClose []*cacheEntry
 		for key := range m.caches {
 			if entry := m.removeEntryLocked(key); entry != nil {
+				entry.closed = true
 				toClose = append(toClose, entry)
 			}
 		}
