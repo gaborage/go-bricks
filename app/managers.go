@@ -27,6 +27,11 @@ const (
 type ManagerConfigBuilder struct {
 	multiTenantEnabled bool
 	tenantLimit        int
+	// staticTenantCount is the number of tenants statically configured under
+	// multitenant.tenants (0 for single-tenant or dynamic tenant sources). It is
+	// used only to emit a startup WARN when a resource pool's MaxSize is below the
+	// known tenant count, signaling per-request eviction thrash. Set by bootstrap.
+	staticTenantCount int
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
@@ -138,6 +143,12 @@ func (b *ManagerConfigBuilder) TenantLimit() int {
 	return b.tenantLimit
 }
 
+// StaticTenantCount returns the number of statically-configured tenants
+// (multitenant.tenants). It is 0 for single-tenant or dynamic tenant sources.
+func (b *ManagerConfigBuilder) StaticTenantCount() int {
+	return b.staticTenantCount
+}
+
 // ResourceManagerFactory creates database and messaging managers using
 // resolved factories and configuration options.
 type ResourceManagerFactory struct {
@@ -175,7 +186,45 @@ func (f *ResourceManagerFactory) CreateDatabaseManager(
 	dbConnector := f.factoryResolver.DatabaseConnector()
 	dbOptions := f.configBuilder.BuildDatabaseOptions()
 
+	f.warnIfPoolBelowTenantCount("database", dbOptions.MaxSize)
+
 	return database.NewDbManager(resourceSource, f.logger, dbOptions, dbConnector)
+}
+
+// warnIfPoolBelowTenantCount emits a startup WARN when a per-tenant resource pool's
+// MaxSize is below the number of statically-configured tenants. With fewer cached
+// handles than tenants, the LRU manager evicts and recreates a connection on every
+// request that targets a not-currently-cached tenant — head-of-line thrash that
+// silently degrades latency. This is advisory (non-fatal) to stay non-breaking: an
+// operator may intentionally under-provision, and dynamic tenant sources have no
+// static count (staticTenantCount == 0), in which case the check is skipped.
+func (f *ResourceManagerFactory) warnIfPoolBelowTenantCount(resource string, maxSize int) {
+	tenantCount := f.configBuilder.StaticTenantCount()
+	if !poolBelowTenantCount(maxSize, tenantCount) {
+		return
+	}
+
+	f.logger.Warn().
+		Str("resource", resource).
+		Int("pool_max_size", maxSize).
+		Int("configured_tenants", tenantCount).
+		Msg("Resource pool max size is below the number of configured tenants; " +
+			"the LRU manager will evict and recreate handles on requests for uncached tenants " +
+			"(eviction thrash). Raise the pool size for this resource " +
+			"(cache.manager.maxsize, messaging.publisher.maxcached, or multitenant.limits.tenants " +
+			"for the database) to at least the tenant count.")
+}
+
+// poolBelowTenantCount reports whether a per-tenant pool of the given maxSize is
+// too small to hold every statically-configured tenant simultaneously. It returns
+// false (no warning) when there is no static tenant count (0, e.g. dynamic sources
+// or single-tenant) or when maxSize is non-positive (unbounded / default sentinel),
+// so the advisory only fires on a genuine under-provisioning.
+func poolBelowTenantCount(maxSize, tenantCount int) bool {
+	if tenantCount <= 0 || maxSize <= 0 {
+		return false
+	}
+	return maxSize < tenantCount
 }
 
 // CreateMessagingManager creates a messaging manager using the resolved factory
@@ -193,6 +242,8 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 
 	msgOptions := f.configBuilder.BuildMessagingOptions()
 	clientFactory := f.factoryResolver.MessagingClientFactory(msgOptions.ConnectionTimeout)
+
+	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
 
 	return messaging.NewMessagingManager(resourceSource, f.logger, msgOptions, clientFactory)
 }
@@ -212,6 +263,8 @@ func (f *ResourceManagerFactory) CreateCacheManager(
 
 	cacheConnector := f.factoryResolver.CacheConnector(resourceSource, f.logger)
 	cacheOptions := f.configBuilder.BuildCacheOptions()
+
+	f.warnIfPoolBelowTenantCount("cache", cacheOptions.MaxSize)
 
 	manager, err := cache.NewCacheManager(cacheOptions, cacheConnector)
 	if err != nil {

@@ -127,6 +127,14 @@ cache:
     cleanupinterval: 10m # Less frequent cleanup
 ```
 
+### Sizing `maxsize` for multi-tenant deployments
+
+`maxsize` is an LRU cap, not a per-tenant guarantee. When more tenants are active than `maxsize`, every request that targets a not-currently-cached tenant evicts the least-recently-used instance and recreates a fresh one — **eviction thrash** that silently degrades latency (each miss pays the full connect cost) without any error.
+
+Size the pool to hold every concurrently-active tenant: set `cache.manager.maxsize` (and `multitenant.limits.tenants`) to at least the number of tenants you expect to serve simultaneously. For **statically-configured** tenants (`multitenant.tenants`), the framework counts them at startup and emits a **WARN** when the pool's `maxsize` is below the configured tenant count, so under-provisioning is visible in logs. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size `maxsize` against your expected fleet manually.
+
+> Eviction closes the evicted instance **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Get()` calls for other tenants. It does, however, still incur a recreate on the next request for the evicted tenant.
+
 ---
 
 For comprehensive code-snippet examples (cache operations, multi-tenant patterns, testing), see [llms.txt](../llms.txt).

@@ -44,6 +44,16 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 	configBuilder.connectionTimeout = b.cfg.Messaging.Reconnect.ConnectionTimeout
 	configBuilder.publisherConfig = b.cfg.Messaging.Publisher
 	configBuilder.cacheConfig = b.cfg.Cache.Manager
+	// Only count statically-configured tenants when multitenancy is enabled. Koanf
+	// populates Multitenant.Tenants from YAML regardless of the enabled flag, but
+	// those entries are meaningless in single-tenant mode (mirrors the guard in
+	// config/tenant_store.go). Without this gate, leftover/shared tenants entries
+	// would trip a spurious pool-below-tenant-count WARN even though single-tenant
+	// pools are never per-tenant keyed — and would contradict StaticTenantCount's
+	// documented "0 for single-tenant" contract.
+	if b.cfg.Multitenant.Enabled {
+		configBuilder.staticTenantCount = len(b.cfg.Multitenant.Tenants)
+	}
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	// Log factory configuration for debugging
