@@ -202,7 +202,7 @@ messaging:
 
 ### Sizing the publisher pool for multi-tenant deployments
 
-`publisher.maxcached` (and, in multi-tenant mode, `multitenant.limits.tenants`) is an LRU cap on cached publisher clients, not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
+`publisher.maxcached` is the LRU cap on cached publisher clients (in multi-tenant mode, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
 
 Size the cap to hold every concurrently-publishing tenant. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the publisher pool's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the cap against your expected fleet manually.
 

@@ -156,7 +156,12 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 		m.mu.Unlock()
 
 		// Close our new connection outside the lock and return the existing one.
-		conn.Close()
+		if err := conn.Close(); err != nil {
+			m.logger.Error().
+				Err(err).
+				Str("key", key).
+				Msg("Error closing redundant database connection")
+		}
 		return existingConn, nil
 	}
 
