@@ -13,10 +13,11 @@ import (
 //
 // Example usage:
 //
-//	cache, err := cacheManager.Get(ctx, tenantID)
+//	cache, release, err := cacheManager.Get(ctx, tenantID)
 //	if err != nil {
 //	    return err
 //	}
+//	defer release()
 //
 //	// Basic operations
 //	err = cache.Set(ctx, "user:123", userData, 5*time.Minute)
@@ -99,14 +100,20 @@ type Cache interface {
 //	manager.StartCleanup(1 * time.Minute)
 //	defer manager.Close()
 //
-//	// Get cache for tenant (auto-creates if needed)
-//	cache, err := manager.Get(ctx, tenantID)
+//	// Get cache for tenant (auto-creates if needed); release the lease when done
+//	inst, release, err := manager.Get(ctx, tenantID)
+//	if err != nil {
+//	    return err
+//	}
+//	defer release()
 type Manager interface {
-	// Get returns a cache instance for the specified tenant.
+	// Get returns a cache instance for the specified tenant plus a ReleaseFunc the caller
+	// must invoke when finished with it for the current unit of work (typically deferred).
 	// Creates a new connection if one doesn't exist (lazy initialization).
 	// Uses singleflight to prevent duplicate connections for the same tenant.
-	// Implements LRU eviction when max size is exceeded.
-	Get(ctx context.Context, tenantID string) (Cache, error)
+	// Implements LRU eviction when max size is exceeded; the lease defers closing an
+	// evicted-but-in-use instance until its last lease is released (ADR-032).
+	Get(ctx context.Context, tenantID string) (Cache, ReleaseFunc, error)
 
 	// Stats returns aggregated statistics across all managed caches.
 	// Includes manager-specific metrics like total_connections, lru_evictions, etc.

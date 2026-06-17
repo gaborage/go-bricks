@@ -12,11 +12,87 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
+
+// keyedDBConfigSource returns a DatabaseConfig whose Database field is the lookup key, so a
+// connector can mint a distinct (and individually closeable) mock per tenant.
+type keyedDBConfigSource struct{}
+
+func (keyedDBConfigSource) DBConfig(_ context.Context, key string) (*config.DatabaseConfig, error) {
+	return &config.DatabaseConfig{Type: "postgresql", Database: key}, nil
+}
+
+// TestResourceProviderDBLeaseSurvivesConcurrentEviction is the end-to-end proof of issue
+// #606: a handle borrowed via deps.DB during a unit of work (with a lease scope installed,
+// as the HTTP middleware / job runner do) is NOT closed when a concurrent unit of work for
+// another tenant evicts it — it is closed only once the borrowing scope releases its lease.
+func TestResourceProviderDBLeaseSurvivesConcurrentEviction(t *testing.T) {
+	mocks := map[string]*testmocks.MockDatabase{}
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
+		m := &testmocks.MockDatabase{}
+		m.On("Close").Return(nil)
+		mocks[cfg.Database] = m
+		return m, nil
+	}
+	// MaxSize 1: borrowing a second tenant evicts the first.
+	dbMgr := database.NewDbManager(keyedDBConfigSource{}, logger.New("error", false),
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour}, connector)
+	defer func() { _ = dbMgr.Close() }()
+	provider := NewMultiTenantResourceProvider(dbMgr, nil, nil, nil)
+
+	// Unit of work for tenant "a" borrows its handle under a lease scope (the framework
+	// installs this scope in the HTTP middleware / scheduler job runner).
+	ctxA, scopeA := leasescope.Install(multitenant.SetTenant(context.Background(), "a"))
+	connA, err := provider.DB(ctxA)
+	require.NoError(t, err)
+	require.NotNil(t, connA)
+
+	// A concurrent unit of work for tenant "b" evicts "a" from the (size-1) pool.
+	ctxB, scopeB := leasescope.Install(multitenant.SetTenant(context.Background(), "b"))
+	_, err = provider.DB(ctxB)
+	require.NoError(t, err)
+
+	// "a" was evicted but is still leased by scope A → it must NOT have been closed.
+	mocks["a"].AssertNotCalled(t, "Close")
+
+	// Scope A's unit of work completes → its lease is released → "a" is closed now.
+	scopeA.ReleaseAll()
+	mocks["a"].AssertCalled(t, "Close")
+
+	scopeB.ReleaseAll()
+}
+
+// TestResourceProviderDBWithoutScopeReleasesImmediately documents the unscoped fallback:
+// when ctx carries no lease scope (framework probes, ad-hoc background work) the lease is
+// released as soon as DB() returns, so nothing leaks (but the handle is unprotected).
+func TestResourceProviderDBWithoutScopeReleasesImmediately(t *testing.T) {
+	mocks := map[string]*testmocks.MockDatabase{}
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
+		m := &testmocks.MockDatabase{}
+		m.On("Close").Return(nil)
+		mocks[cfg.Database] = m
+		return m, nil
+	}
+	dbMgr := database.NewDbManager(keyedDBConfigSource{}, logger.New("error", false),
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour}, connector)
+	defer func() { _ = dbMgr.Close() }()
+	provider := NewMultiTenantResourceProvider(dbMgr, nil, nil, nil)
+
+	// No leasescope.Install: the request context carries no scope.
+	_, err := provider.DB(multitenant.SetTenant(context.Background(), "a"))
+	require.NoError(t, err)
+
+	// Borrowing "b" evicts "a"; because "a"'s lease was released immediately (no scope),
+	// the evicted handle is closed right away — non-leaking, but unprotected.
+	_, err = provider.DB(multitenant.SetTenant(context.Background(), "b"))
+	require.NoError(t, err)
+	mocks["a"].AssertCalled(t, "Close")
+}
 
 const (
 	testTenantID         = "tenant-123"

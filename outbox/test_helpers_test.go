@@ -26,15 +26,29 @@ type fakeJobCtx struct {
 	cfg       *config.Config
 }
 
+// fakeDBKey is the context key under which newFakeJobCtx stashes the test db, so getDB
+// closures can recover it via a context VALUE rather than type-asserting the context back
+// to a JobContext. Reading a value survives the context wrapping that SetTenant and the
+// per-tenant lease scope apply — matching how production deps.DB resolves the tenant via
+// multitenant.GetTenant rather than relying on the concrete context type.
+type fakeDBKey struct{}
+
 func newFakeJobCtx(db dbtypes.Interface, msgClient messaging.Client) *fakeJobCtx {
 	return &fakeJobCtx{
-		Context:   context.Background(),
+		Context:   context.WithValue(context.Background(), fakeDBKey{}, db),
 		jobID:     "outbox-test-job",
 		trigger:   "scheduled",
 		log:       logger.New("disabled", true),
 		db:        db,
 		msgClient: msgClient,
 	}
+}
+
+// dbFromCtx recovers the db stashed by newFakeJobCtx from a context value. Returns nil when
+// no db was supplied (the "database not available" test cases).
+func dbFromCtx(ctx context.Context) dbtypes.Interface {
+	db, _ := ctx.Value(fakeDBKey{}).(dbtypes.Interface)
+	return db
 }
 
 func (c *fakeJobCtx) JobID() string               { return c.jobID }

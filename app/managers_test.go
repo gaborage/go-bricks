@@ -623,7 +623,7 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 
 		// Verify Get() operations fail with the connector error
 		ctx := context.Background()
-		_, err := manager.Get(ctx, "test-key")
+		_, _, err := manager.Get(ctx, "test-key")
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "cache connector failed")
 	})

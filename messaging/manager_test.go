@@ -147,9 +147,9 @@ func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
-	first, err := manager.Publisher(ctx, tenantID)
+	first, _, err := manager.Publisher(ctx, tenantID)
 	require.NoError(t, err)
-	second, err := manager.Publisher(ctx, tenantID)
+	second, _, err := manager.Publisher(ctx, tenantID)
 	require.NoError(t, err)
 	assert.Same(t, first, second)
 
@@ -167,7 +167,7 @@ func TestMessagingManagerInjectsTenantHeader(t *testing.T) {
 	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
 
-	pub, err := manager.Publisher(ctx, tenantID)
+	pub, _, err := manager.Publisher(ctx, tenantID)
 	require.NoError(t, err)
 
 	err = pub.PublishToExchange(ctx, PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload"))
@@ -195,7 +195,7 @@ func TestMessagingManagerSingleflightPublishers(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := manager.Publisher(ctx, tenantID)
+			_, _, err := manager.Publisher(ctx, tenantID)
 			require.NoError(t, err)
 		}()
 	}
@@ -226,8 +226,10 @@ func TestMessagingManagerCleanupEvictsIdlePublishers(t *testing.T) {
 	}
 
 	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
-	_, err := manager.Publisher(ctx, "idle")
+	_, relIdle, err := manager.Publisher(ctx, "idle")
 	require.NoError(t, err)
+	// Release the lease so cleanup may actually close it (deferred-until-release, ADR-032).
+	relIdle()
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -284,16 +286,19 @@ func TestMessagingManagerEvictsLRU(t *testing.T) {
 	}}
 
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
-	_, err := manager.Publisher(ctx, "a")
+	_, relA, err := manager.Publisher(ctx, "a")
 	require.NoError(t, err)
-	_, err = manager.Publisher(ctx, "b")
+	_, _, err = manager.Publisher(ctx, "b")
 	require.NoError(t, err)
+	// Release "a"'s lease so eviction may actually close it — a leased publisher's close
+	// is deferred until its last lease is released (ADR-032).
+	relA()
 
 	// Publisher("c") evicts "a"; its Close blocks until releaseClose, so run it in the
 	// background. With close-under-lock this would hold m.pubMu and stall every Publisher.
 	done := make(chan struct{})
 	go func() {
-		_, gErr := manager.Publisher(ctx, "c")
+		_, _, gErr := manager.Publisher(ctx, "c")
 		assert.NoError(t, gErr)
 		close(done)
 	}()
@@ -350,14 +355,16 @@ func TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher(t 
 
 	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
 
-	_, err := manager.Publisher(ctx, "a")
+	_, relA, err := manager.Publisher(ctx, "a")
 	require.NoError(t, err)
-	_, err = manager.Publisher(ctx, "b")
+	_, _, err = manager.Publisher(ctx, "b")
 	require.NoError(t, err)
+	// Release "a"'s lease so the eviction can close it (deferred-until-release, ADR-032).
+	relA()
 
 	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
 	go func() {
-		_, _ = manager.Publisher(ctx, "c")
+		_, _, _ = manager.Publisher(ctx, "c")
 	}()
 
 	// Wait until the slow Close has actually begun before measuring.
@@ -370,7 +377,7 @@ func TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher(t 
 	// "b" is still cached: this Publisher only needs getExistingPublisher's lock. If
 	// eviction holds the publisher mutex across Close (the M3 bug), this blocks ~slowClose.
 	start := time.Now()
-	_, err = manager.Publisher(ctx, "b")
+	_, _, err = manager.Publisher(ctx, "b")
 	require.NoError(t, err)
 	elapsed := time.Since(start)
 
@@ -403,7 +410,7 @@ func TestMessagingManagerCreatePublisherReturnsExistingOnDoubleCreate(t *testing
 
 	got, err := manager.createPublisher(ctx, tenantID)
 	require.NoError(t, err)
-	assert.Same(t, existing, got, "createPublisher must return the already-cached publisher")
+	assert.Same(t, existing, got.client, "createPublisher must return the already-cached publisher")
 
 	fresh.closedMu.Lock()
 	closed := fresh.closed
@@ -424,8 +431,10 @@ func TestMessagingManagerCleanupIdlePublishersLogsCloseError(t *testing.T) {
 	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
 	defer func() { _ = manager.Close() }()
 
-	_, err := manager.Publisher(ctx, "idle")
+	_, relIdle, err := manager.Publisher(ctx, "idle")
 	require.NoError(t, err)
+	// Release the lease so cleanup may close it (deferred-until-release, ADR-032).
+	relIdle()
 
 	// Backdate lastUsed so the cleanup pass sees the entry as idle.
 	manager.pubMu.Lock()
@@ -785,8 +794,10 @@ func TestMessagingManagerCleanupLoopEvictsOnTick(t *testing.T) {
 		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond},
 		factory,
 	)
-	_, err := manager.Publisher(ctx, "idle")
+	_, relIdle, err := manager.Publisher(ctx, "idle")
 	require.NoError(t, err)
+	// Release the lease so the cleanup loop may close it (deferred-until-release, ADR-032).
+	relIdle()
 
 	manager.StartCleanup(20 * time.Millisecond)
 	t.Cleanup(manager.StopCleanup)
@@ -822,9 +833,9 @@ func TestMessagingManagerCloseClosesPublishersAndConsumers(t *testing.T) {
 	manager.StartCleanup(time.Minute)
 
 	// Seed two publishers and a consumer registry.
-	_, err := manager.Publisher(ctx, tenant1ID)
+	_, _, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
-	_, err = manager.Publisher(ctx, tenant2ID)
+	_, _, err = manager.Publisher(ctx, tenant2ID)
 	require.NoError(t, err)
 
 	decls := NewDeclarations()
@@ -868,7 +879,7 @@ func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
 		factory,
 	)
-	_, err := manager.Publisher(ctx, tenant1ID)
+	_, _, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
 
 	// Swap in a failing client behind the cache so Close() surfaces an aggregated error.
@@ -932,11 +943,128 @@ func TestMessagingManagerStats(t *testing.T) {
 	assert.Equal(t, 0, stats["active_consumers"])
 	assert.Equal(t, 90, stats["idle_ttl_seconds"])
 
-	_, err := manager.Publisher(ctx, tenant1ID)
+	_, _, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
-	_, err = manager.Publisher(ctx, tenant2ID)
+	_, _, err = manager.Publisher(ctx, tenant2ID)
 	require.NoError(t, err)
 
 	stats = manager.Stats()
 	assert.Equal(t, 2, stats["active_publishers"])
+}
+
+// --- Lease/refcount: eviction-while-in-use race (issue #606, ADR-032) ---
+
+// leasedClosableFactory builds publisher clients that record each Close() in the shared
+// `closed` map (keyed by broker URL) under `mu`.
+func leasedClosableFactory(mu *sync.Mutex, closed map[string]bool) ClientFactory {
+	return func(url string, _ logger.Logger) AMQPClient {
+		return &stubAMQPClient{closeCallback: func() {
+			mu.Lock()
+			closed[url] = true
+			mu.Unlock()
+		}}
+	}
+}
+
+func twoPublisherSource() *stubMessagingSource {
+	return &stubMessagingSource{urls: map[string]string{"a": amqpURLA, "b": amqpURLB}}
+}
+
+func TestMessagingManagerPublisherReturnsNonNilReleaseFunc(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	pub, release, err := m.Publisher(ctx, "a")
+	require.NoError(t, err)
+	require.NotNil(t, pub)
+	require.NotNil(t, release, "Publisher must return a non-nil release so callers can always defer it")
+
+	release() // releasing a live cached publisher must NOT close it
+	mu.Lock()
+	wasClosed := closed[amqpURLA]
+	mu.Unlock()
+	assert.False(t, wasClosed, "releasing a lease on a live cached publisher must not close it")
+}
+
+func TestMessagingManagerEvictionWhileLeasedDefersCloseUntilRelease(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, releaseA, err := m.Publisher(ctx, "a")
+	require.NoError(t, err)
+
+	_, releaseB, err := m.Publisher(ctx, "b") // evicts "a", which is still leased
+	require.NoError(t, err)
+	defer releaseB()
+
+	mu.Lock()
+	closedWhileLeased := closed[amqpURLA]
+	mu.Unlock()
+	assert.False(t, closedWhileLeased,
+		"an evicted-but-leased publisher must not be closed while a lease is held (the #606 race)")
+
+	releaseA()
+	mu.Lock()
+	closedAfterRelease := closed[amqpURLA]
+	mu.Unlock()
+	assert.True(t, closedAfterRelease,
+		"an evicted publisher must be closed once its last lease is released")
+}
+
+func TestMessagingManagerTwoLeasesKeepPublisherAliveUntilBothReleased(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, release1, err := m.Publisher(ctx, "a")
+	require.NoError(t, err)
+	_, release2, err := m.Publisher(ctx, "a") // same key, second borrower → refcount 2
+	require.NoError(t, err)
+
+	_, releaseB, err := m.Publisher(ctx, "b") // evict "a"
+	require.NoError(t, err)
+	defer releaseB()
+
+	release1()
+	mu.Lock()
+	closedAfterFirst := closed[amqpURLA]
+	mu.Unlock()
+	assert.False(t, closedAfterFirst, "publisher must stay open while a second lease is outstanding")
+
+	release2()
+	mu.Lock()
+	closedAfterSecond := closed[amqpURLA]
+	mu.Unlock()
+	assert.True(t, closedAfterSecond, "publisher must close when the final lease is released")
+}
+
+func TestMessagingManagerPublisherReleaseIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
+	defer func() { _ = m.Close() }()
+
+	_, releaseA, err := m.Publisher(ctx, "a")
+	require.NoError(t, err)
+	_, releaseB, err := m.Publisher(ctx, "b") // evict "a"
+	require.NoError(t, err)
+	defer releaseB()
+
+	assert.NotPanics(t, func() {
+		releaseA()
+		releaseA() // double release must be a safe no-op
+	})
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -56,6 +57,14 @@ func (r *Relay) Execute(jobCtx scheduler.JobContext) error {
 
 // relayTenant runs a single relay cycle for the given (tenant-scoped) context.
 func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID string) error {
+	// Install a per-tenant lease scope so this tenant's DB and messaging handles are released
+	// at the end of its relay cycle rather than pinned until the whole fan-out job ends
+	// (ADR-032). This bounds the working set to ~one tenant, so a large multi-tenant relay
+	// cannot hold every tenant's connection open at once and exceed the pool's MaxSize. The
+	// per-tenant scope shadows the job-level scope installed by the scheduler.
+	ctx, scope := leasescope.Install(ctx)
+	defer scope.ReleaseAll()
+
 	db, err := r.getDB(ctx)
 	if err != nil {
 		return fmt.Errorf("database not available: %w", err)

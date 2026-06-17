@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -129,6 +130,13 @@ func (m *Module) executeManualJob(entry *jobEntry) {
 	// Create execution context
 	ctx, cancel := context.WithCancel(m.shutdownCtx)
 	defer cancel()
+
+	// Install the per-job lease scope (ADR-032), same as the scheduled path: a manually
+	// triggered job (POST /_sys/job/:jobId) borrows per-tenant handles via JobContext.DB()/
+	// Messaging() and runs concurrently with other tenants' work, so its leases must be held
+	// until the run completes — otherwise an evicted handle could be closed mid-job.
+	ctx, scope := leasescope.Install(ctx)
+	defer scope.ReleaseAll()
 
 	// Create JobContext with manual trigger type
 	jobCtx := newJobContext(

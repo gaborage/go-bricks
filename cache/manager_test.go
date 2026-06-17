@@ -195,13 +195,13 @@ func TestCacheManagerGet(t *testing.T) {
 		ctx := context.Background()
 
 		// First call creates cache
-		c1, err := mgr.Get(ctx, tenantOne)
+		c1, _, err := mgr.Get(ctx, tenantOne)
 		require.NoError(t, err)
 		require.NotNil(t, c1)
 		assert.Equal(t, int32(1), creationCount.Load())
 
 		// Second call reuses existing cache
-		c2, err := mgr.Get(ctx, tenantOne)
+		c2, _, err := mgr.Get(ctx, tenantOne)
 		require.NoError(t, err)
 		assert.Same(t, c1, c2)
 		assert.Equal(t, int32(1), creationCount.Load()) // No new creation
@@ -223,13 +223,13 @@ func TestCacheManagerGet(t *testing.T) {
 		ctx := context.Background()
 
 		// Create caches for different tenants
-		c1, err := mgr.Get(ctx, tenantOne)
+		c1, _, err := mgr.Get(ctx, tenantOne)
 		require.NoError(t, err)
 
-		c2, err := mgr.Get(ctx, tenantTwo)
+		c2, _, err := mgr.Get(ctx, tenantTwo)
 		require.NoError(t, err)
 
-		c3, err := mgr.Get(ctx, tenantThree)
+		c3, _, err := mgr.Get(ctx, tenantThree)
 		require.NoError(t, err)
 
 		// Ensure all are different instances
@@ -253,7 +253,7 @@ func TestCacheManagerGet(t *testing.T) {
 		defer mgr.Close()
 
 		ctx := context.Background()
-		c, err := mgr.Get(ctx, tenantOne)
+		c, _, err := mgr.Get(ctx, tenantOne)
 		assert.Error(t, err)
 		assert.Nil(t, c)
 		assert.Contains(t, err.Error(), "failed to create cache")
@@ -299,7 +299,7 @@ func TestCacheManagerSingleflight(t *testing.T) {
 	// Spawn concurrent requests for same tenant
 	for i := 0; i < workers; i++ {
 		go func() {
-			c, err := mgr.Get(ctx, tenantOne)
+			c, _, err := mgr.Get(ctx, tenantOne)
 			results <- result{cache: c, err: err}
 		}()
 	}
@@ -345,25 +345,28 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	ctx := context.Background()
 
 	// Fill to capacity
-	c1, err := mgr.Get(ctx, tenantOne)
+	c1, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	c2, err := mgr.Get(ctx, tenantTwo)
+	c2, _, err := mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantThree)
+	_, relThree, err := mgr.Get(ctx, tenantThree)
 	require.NoError(t, err)
+	// Release tenant-3's lease so its later eviction can actually close it
+	// (a leased cache's close is deferred until lease release — ADR-032).
+	relThree()
 
 	stats := mgr.Stats()
 	assert.Equal(t, 3, stats.ActiveCaches)
 	assert.Equal(t, 0, stats.Evictions)
 
 	// Access tenant-1 and tenant-2 to refresh LRU (tenant-3 becomes oldest)
-	_, err = mgr.Get(ctx, tenantOne)
+	_, _, err = mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantTwo)
+	_, _, err = mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 
 	// Add tenant-4, should evict tenant-3 (oldest)
-	c4, err := mgr.Get(ctx, "tenant-4")
+	c4, _, err := mgr.Get(ctx, "tenant-4")
 	require.NoError(t, err)
 	require.NotNil(t, c4)
 
@@ -376,15 +379,15 @@ func TestCacheManagerLRUEviction(t *testing.T) {
 	assert.True(t, closed, "tenant-3 should have been evicted and closed")
 
 	// Verify tenant-1, tenant-2, tenant-4 still active
-	c1Again, err := mgr.Get(ctx, tenantOne)
+	c1Again, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	assert.Same(t, c1, c1Again, "tenant-1 should still be active")
 
-	c2Again, err := mgr.Get(ctx, tenantTwo)
+	c2Again, _, err := mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 	assert.Same(t, c2, c2Again, "tenant-2 should still be active")
 
-	c4Again, err := mgr.Get(ctx, "tenant-4")
+	c4Again, _, err := mgr.Get(ctx, "tenant-4")
 	require.NoError(t, err)
 	assert.Same(t, c4, c4Again, "tenant-4 should still be active")
 }
@@ -406,9 +409,9 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	ctx := context.Background()
 
 	// Create caches
-	c1, err := mgr.Get(ctx, tenantOne)
+	c1, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	c2, err := mgr.Get(ctx, tenantTwo)
+	c2, _, err := mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 	require.NotNil(t, c1)
 	require.NotNil(t, c2)
@@ -425,7 +428,7 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				_, gerr := mgr.Get(ctx, tenantOne)
+				_, _, gerr := mgr.Get(ctx, tenantOne)
 				if gerr != nil {
 					return // Manager may be closed during test cleanup
 				}
@@ -444,12 +447,12 @@ func TestCacheManagerIdleCleanup(t *testing.T) {
 	assert.Equal(t, 1, stats.IdleCleanups, "tenant-2 should have been cleaned up")
 
 	// Verify tenant-1 still accessible
-	c1Again, err := mgr.Get(ctx, tenantOne)
+	c1Again, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	assert.Same(t, c1, c1Again)
 
 	// Verify tenant-2 was removed (new instance created)
-	c2Again, err := mgr.Get(ctx, tenantTwo)
+	c2Again, _, err := mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 	assert.NotSame(t, c2, c2Again, "tenant-2 should be a new instance after cleanup")
 }
@@ -476,9 +479,11 @@ func TestCacheManagerIdleCleanupWithCloseError(t *testing.T) {
 	ctx := context.Background()
 
 	// Create cache that will become idle
-	c1, err := mgr.Get(ctx, tenantOne)
+	c1, relOne, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	require.NotNil(t, c1)
+	// Release the lease so idle cleanup may close it (deferred-until-release, ADR-032).
+	relOne()
 
 	stats := mgr.Stats()
 	assert.Equal(t, 1, stats.ActiveCaches)
@@ -506,9 +511,11 @@ func TestCacheManagerRemove(t *testing.T) {
 	ctx := context.Background()
 
 	// Create cache
-	c1, err := mgr.Get(ctx, tenantOne)
+	c1, relOne, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	require.NotNil(t, c1)
+	// Release the lease so Remove may close it (deferred-until-release, ADR-032).
+	relOne()
 
 	stats := mgr.Stats()
 	assert.Equal(t, 1, stats.ActiveCaches)
@@ -525,7 +532,7 @@ func TestCacheManagerRemove(t *testing.T) {
 	assert.True(t, mock.closed.Load())
 
 	// Get should create new instance
-	c2, err := mgr.Get(ctx, tenantOne)
+	c2, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	assert.NotSame(t, c1, c2, "should create new cache after removal")
 
@@ -578,9 +585,11 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 	ctx := context.Background()
 
 	// Create cache
-	c1, err := mgr.Get(ctx, tenantOne)
+	c1, relOne, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	require.NotNil(t, c1)
+	// Release the lease so Remove may attempt the (failing) close (deferred-until-release, ADR-032).
+	relOne()
 
 	stats := mgr.Stats()
 	assert.Equal(t, 1, stats.ActiveCaches)
@@ -595,7 +604,7 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 	assert.Equal(t, 0, stats.ActiveCaches, "entry should be removed from manager despite close error")
 
 	// Get should create a NEW instance (proving old entry was removed)
-	c2, err := mgr.Get(ctx, tenantOne)
+	c2, _, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
 	assert.NotSame(t, c1, c2, "should create new cache after removal despite close error")
 
@@ -620,11 +629,11 @@ func TestCacheManagerClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple caches
-	_, err = mgr.Get(ctx, tenantOne)
+	_, _, err = mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantTwo)
+	_, _, err = mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantThree)
+	_, _, err = mgr.Get(ctx, tenantThree)
 	require.NoError(t, err)
 
 	stats := mgr.Stats()
@@ -665,7 +674,7 @@ func TestCacheManagerGetAfterCloseReturnsErrManagerClosed(t *testing.T) {
 
 	require.NoError(t, mgr.Close())
 
-	_, err = mgr.Get(context.Background(), tenantOne)
+	_, _, err = mgr.Get(context.Background(), tenantOne)
 	assert.ErrorIs(t, err, cache.ErrManagerClosed)
 }
 
@@ -681,7 +690,7 @@ func TestCacheManagerRemoveAfterCloseReturnsErrManagerClosed(t *testing.T) {
 	// Seed an entry first so we can prove the closed-state check fires BEFORE
 	// the lookup — without the guard, Remove would happily delete from a
 	// half-torn-down map.
-	_, err = mgr.Get(context.Background(), tenantOne)
+	_, _, err = mgr.Get(context.Background(), tenantOne)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Close())
@@ -710,7 +719,7 @@ func TestCacheManagerGetRacesCloseReturnsErrOrSuccess(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func(id int) {
 			<-start
-			_, err := mgr.Get(context.Background(), fmt.Sprintf("tenant-%d", id))
+			_, _, err := mgr.Get(context.Background(), fmt.Sprintf("tenant-%d", id))
 			results <- err
 		}(i)
 	}
@@ -757,9 +766,9 @@ func TestCacheManagerStats(t *testing.T) {
 	assert.Equal(t, int64(900), stats.IdleTTL) // 15 minutes = 900 seconds
 
 	// Create caches
-	_, err = mgr.Get(ctx, tenantOne)
+	_, _, err = mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantTwo)
+	_, _, err = mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 
 	stats = mgr.Stats()
@@ -767,7 +776,7 @@ func TestCacheManagerStats(t *testing.T) {
 	assert.Equal(t, 2, stats.TotalCreated)
 
 	// Trigger eviction
-	_, err = mgr.Get(ctx, tenantThree)
+	_, _, err = mgr.Get(ctx, tenantThree)
 	require.NoError(t, err)
 
 	stats = mgr.Stats()
@@ -822,7 +831,7 @@ func runThreadSafetyWorker(ctx context.Context, t *testing.T, mgr *cache.CacheMa
 	for j := 0; j < operations; j++ {
 		tenantID := fmt.Sprintf("tenant-%d", j%5) // 5 different tenants
 
-		c, err := mgr.Get(ctx, tenantID)
+		c, _, err := mgr.Get(ctx, tenantID)
 		if err != nil {
 			t.Errorf("worker %d: Get failed: %v", workerID, err)
 			continue
@@ -871,9 +880,9 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create caches up to capacity
-	_, err = mgr.Get(ctx, tenantOne)
+	_, _, err = mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantTwo)
+	_, _, err = mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
 
 	// Channel to signal when Get() operations complete
@@ -882,7 +891,7 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 	// Start a goroutine that will trigger eviction (slow close)
 	go func() {
 		// Triggers eviction of tenant-1 (200ms close) - error intentionally ignored in background goroutine
-		if _, gerr := mgr.Get(ctx, tenantThree); gerr != nil {
+		if _, _, gerr := mgr.Get(ctx, tenantThree); gerr != nil {
 			// Log but don't fail - background operation
 			t.Logf("background Get error (may be expected during cleanup): %v", gerr)
 		}
@@ -893,7 +902,7 @@ func TestCacheManagerConcurrentAccessDuringClose(t *testing.T) {
 
 	// While tenant-1 is being closed (outside lock), verify Get() is NOT blocked
 	start := time.Now()
-	c, err := mgr.Get(ctx, tenantTwo) // Should NOT wait for close to complete
+	c, _, err := mgr.Get(ctx, tenantTwo) // Should NOT wait for close to complete
 	elapsed := time.Since(start)
 	getChan <- elapsed
 
@@ -931,11 +940,11 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple caches
-	_, err = mgr.Get(ctx, tenantOne)
+	_, _, err = mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantTwo)
+	_, _, err = mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
-	_, err = mgr.Get(ctx, tenantThree)
+	_, _, err = mgr.Get(ctx, tenantThree)
 	require.NoError(t, err)
 
 	// Start removing tenant-1 (slow close in background)
@@ -961,13 +970,13 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 			// These should all complete quickly - errors ignored as concurrent operations may race
 			stats := mgr.Stats()
 			_ = stats // intentionally unused - just checking non-blocking behavior
-			c2, gerr := mgr.Get(ctx, tenantTwo)
+			c2, _, gerr := mgr.Get(ctx, tenantTwo)
 			if gerr != nil {
 				t.Fail()
 			}
 			_ = c2 // intentionally unused
 
-			c3, gerr := mgr.Get(ctx, tenantThree)
+			c3, _, gerr := mgr.Get(ctx, tenantThree)
 			if gerr != nil {
 				t.Fail()
 			}
@@ -989,4 +998,172 @@ func TestCacheManagerConcurrentRemoveDuringGet(t *testing.T) {
 	// Verify final state
 	stats := mgr.Stats()
 	assert.Equal(t, 2, stats.ActiveCaches)
+}
+
+// --- Lease/refcount: eviction-while-in-use race (issue #606, ADR-032) ---
+
+func leasedClosableConnector(closed *sync.Map) cache.Connector {
+	return func(_ context.Context, key string) (cache.Cache, error) {
+		return newTrackableMockCache(key, func(id string) { closed.Store(id, true) }), nil
+	}
+}
+
+func TestCacheManagerGetReturnsNonNilReleaseFunc(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 5
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	c, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.NotNil(t, release, "Get must return a non-nil release so callers can always defer it")
+
+	release() // releasing a live cached cache must NOT close it
+	_, isClosed := closed.Load(tenantOne)
+	assert.False(t, isClosed, "releasing a lease on a live cached cache must not close it")
+	assert.Equal(t, 1, mgr.Stats().ActiveCaches)
+}
+
+func TestCacheManagerEvictionWhileLeasedDefersCloseUntilRelease(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 1 // getting a second key evicts the first
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+	ctx := context.Background()
+
+	_, releaseA, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+
+	_, releaseB, err := mgr.Get(ctx, tenantTwo) // evicts tenant-1, which is still leased
+	require.NoError(t, err)
+	defer releaseB()
+
+	_, closedWhileLeased := closed.Load(tenantOne)
+	assert.False(t, closedWhileLeased,
+		"an evicted-but-leased cache must not be closed while a lease is held (the #606 race)")
+
+	releaseA()
+	_, closedAfterRelease := closed.Load(tenantOne)
+	assert.True(t, closedAfterRelease,
+		"an evicted cache must be closed once its last lease is released")
+}
+
+func TestCacheManagerTwoLeasesKeepCacheAliveUntilBothReleased(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 1
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+	ctx := context.Background()
+
+	_, release1, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, release2, err := mgr.Get(ctx, tenantOne) // same key, second borrower → refcount 2
+	require.NoError(t, err)
+
+	_, releaseB, err := mgr.Get(ctx, tenantTwo) // evict tenant-1
+	require.NoError(t, err)
+	defer releaseB()
+
+	release1()
+	_, closedAfterFirst := closed.Load(tenantOne)
+	assert.False(t, closedAfterFirst, "cache must stay open while a second lease is outstanding")
+
+	release2()
+	_, closedAfterSecond := closed.Load(tenantOne)
+	assert.True(t, closedAfterSecond, "cache must close when the final lease is released")
+}
+
+func TestCacheManagerRemoveWhileLeasedDefersClose(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 5
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	_, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Remove(tenantOne)) // explicit removal while leased → defers close
+	_, closedWhileLeased := closed.Load(tenantOne)
+	assert.False(t, closedWhileLeased, "Remove must not close a leased cache")
+
+	release()
+	_, closedAfterRelease := closed.Load(tenantOne)
+	assert.True(t, closedAfterRelease, "removed cache closes when its last lease is released")
+}
+
+func TestCacheManagerIdleCleanupWhileLeasedDefersClose(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 5
+	cfg.IdleTTL = 50 * time.Millisecond
+	cfg.CleanupInterval = 25 * time.Millisecond
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	_, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+
+	// Wait for at least one idle-cleanup cycle to detach the idle (but leased) entry.
+	require.Eventually(t, func() bool { return mgr.Stats().IdleCleanups >= 1 }, time.Second, 10*time.Millisecond)
+
+	_, closedWhileLeased := closed.Load(tenantOne)
+	assert.False(t, closedWhileLeased, "idle cleanup must not close a leased cache")
+
+	release()
+	require.Eventually(t, func() bool { _, c := closed.Load(tenantOne); return c }, time.Second, 10*time.Millisecond,
+		"idle-cleaned cache closes when its last lease is released")
+}
+
+func TestCacheManagerReleaseIsIdempotent(t *testing.T) {
+	var closed sync.Map
+	cfg := cache.DefaultManagerConfig()
+	cfg.MaxSize = 1
+	mgr, err := cache.NewCacheManager(cfg, leasedClosableConnector(&closed))
+	require.NoError(t, err)
+	defer mgr.Close()
+	ctx := context.Background()
+
+	_, releaseA, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	_, releaseB, err := mgr.Get(ctx, tenantTwo) // evict tenant-1
+	require.NoError(t, err)
+	defer releaseB()
+
+	assert.NotPanics(t, func() {
+		releaseA()
+		releaseA() // double release must be a safe no-op
+	})
+}
+
+// TestCacheManagerCreateRacingCloseDoesNotResurrect drives Close() into the window between
+// Get's top-of-loop closed check and createCache taking the lock: the connector closes the
+// manager before returning. createCache must re-check under the lock, close the just-created
+// instance, and report ErrManagerClosed rather than resurrecting the cleared map (a leak).
+func TestCacheManagerCreateRacingCloseDoesNotResurrect(t *testing.T) {
+	var mgr *cache.CacheManager
+	var once sync.Once
+	var instanceClosed atomic.Bool
+
+	cfg := cache.DefaultManagerConfig()
+	cfg.IdleTTL = 0 // no background cleanup goroutine
+	mgr, err := cache.NewCacheManager(cfg, func(_ context.Context, key string) (cache.Cache, error) {
+		once.Do(func() { _ = mgr.Close() }) // Close lands before createCache takes the lock
+		return newTrackableMockCache(key, func(string) { instanceClosed.Store(true) }), nil
+	})
+	require.NoError(t, err)
+
+	_, _, gErr := mgr.Get(context.Background(), tenantOne)
+	assert.ErrorIs(t, gErr, cache.ErrManagerClosed, "Get must report closed, not resurrect the map")
+	assert.True(t, instanceClosed.Load(), "the just-created instance must be closed, not leaked")
+	assert.Equal(t, 0, mgr.Stats().ActiveCaches, "the map must not be resurrected with a new entry")
 }

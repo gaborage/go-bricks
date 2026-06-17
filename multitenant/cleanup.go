@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -60,6 +61,13 @@ func cleanupTenant(
 			err = fmt.Errorf("%s cleanup: tenant %q: panic: %v", name, tenantID, r)
 		}
 	}()
+
+	// Install a per-tenant lease scope so this tenant's DB handle is released at the end of
+	// its cleanup rather than pinned until the whole fan-out job ends (ADR-032). This bounds
+	// the working set to ~one tenant, so a large fan-out cannot hold every tenant's connection
+	// open at once and exceed the pool's MaxSize. The scope shadows the scheduler's job scope.
+	ctx, scope := leasescope.Install(ctx)
+	defer scope.ReleaseAll()
 
 	db, err := getDB(ctx)
 	if err != nil {

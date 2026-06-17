@@ -10,6 +10,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -573,6 +574,13 @@ func (m *Module) createJobWrapper(entry *jobEntry) func() {
 		// Create execution context with cancellation for graceful shutdown
 		ctx, cancel := context.WithCancel(m.shutdownCtx)
 		defer cancel()
+
+		// Install the per-job lease scope (ADR-032): per-tenant handles the job borrows via
+		// JobContext.DB()/Messaging() — including the per-tenant fan-out in outbox relay and
+		// inbox cleanup, whose SetTenant children inherit this scope — are released when the
+		// job run completes, so a handle evicted mid-job is not closed under it.
+		ctx, scope := leasescope.Install(ctx)
+		defer scope.ReleaseAll()
 
 		// Create JobContext with multi-tenant resolvers
 		jobCtx := newJobContext(
