@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.43.0](https://github.com/gaborage/go-bricks/compare/v0.42.0...v0.43.0) (2026-06-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* lease/refcount per-tenant resource handles to close the eviction-while-in-use race ([#606](https://github.com/gaborage/go-bricks/issues/606)) (#607)
+* **database:** validate direct-string identifier arguments in the query builder (close M9 SQLi) ([#604](https://github.com/gaborage/go-bricks/issues/604))
+* **config:** harden env ingestion, honor explicit keep-alive disable, fail-fast tenant cache ([#601](https://github.com/gaborage/go-bricks/issues/601))
+
+### Fixed
+
+* **app:** consume validated startup-budget and manager-tuning config keys ([#600](https://github.com/gaborage/go-bricks/issues/600)) ([b2acd0e](https://github.com/gaborage/go-bricks/commit/b2acd0e2beca31cd4f99550ffac37f7c57832bac))
+* close evicted resource handles outside the manager lock; warn on under-provisioned pools ([#605](https://github.com/gaborage/go-bricks/issues/605)) ([4668189](https://github.com/gaborage/go-bricks/commit/46681897a7eb37ca903876cf5f8463caea60cd66))
+* **config:** harden env ingestion, honor explicit keep-alive disable, fail-fast tenant cache ([#601](https://github.com/gaborage/go-bricks/issues/601)) ([489759c](https://github.com/gaborage/go-bricks/commit/489759ce5dc2868af772013c5e80a42c42edb134))
+* **database:** correct Oracle identifier quoting in the query builder ([#603](https://github.com/gaborage/go-bricks/issues/603)) ([e8b2949](https://github.com/gaborage/go-bricks/commit/e8b29497ddf370da23a672b0c5ceaeeed03249e0))
+* **database:** validate direct-string identifier arguments in the query builder (close M9 SQLi) ([#604](https://github.com/gaborage/go-bricks/issues/604)) ([d86e864](https://github.com/gaborage/go-bricks/commit/d86e864a1899fbf255520b68ce8c8e5e6b25c662))
+* **deps:** update aws-sdk-go-v2 monorepo to v1.32.25 ([#584](https://github.com/gaborage/go-bricks/issues/584)) ([8dd6894](https://github.com/gaborage/go-bricks/commit/8dd6894e1900ef61f26196adc32cbe3651c44e4a))
+* **deps:** update module github.com/gaborage/go-bricks to v0.42.0 ([#591](https://github.com/gaborage/go-bricks/issues/591)) ([9844b18](https://github.com/gaborage/go-bricks/commit/9844b18b6f79753038ddc4b81a91c4e715eae886))
+* **deps:** update module github.com/labstack/echo/v5 to v5.2.0 ([#597](https://github.com/gaborage/go-bricks/issues/597)) ([c55d9de](https://github.com/gaborage/go-bricks/commit/c55d9debaffb7debd60cad47973144c7cb1b87c9))
+* **inbox:** support the default (empty) tenant on Oracle ([#593](https://github.com/gaborage/go-bricks/issues/593)) ([57c92f1](https://github.com/gaborage/go-bricks/commit/57c92f1375c7d4e828ccc6bab77f04c39822260d))
+* lease/refcount per-tenant resource handles to close the eviction-while-in-use race ([#606](https://github.com/gaborage/go-bricks/issues/606)) ([#607](https://github.com/gaborage/go-bricks/issues/607)) ([e578ffc](https://github.com/gaborage/go-bricks/commit/e578ffcd15100de1e56773a01ea702203cca196d))
+* **lint:** enable correctness linters and fix surfaced defects ([#596](https://github.com/gaborage/go-bricks/issues/596)) ([28c027b](https://github.com/gaborage/go-bricks/commit/28c027bf68cb9e2d5798e755c061a46f347afe1c))
+
 ## [0.42.0](https://github.com/gaborage/go-bricks/compare/v0.41.0...v0.42.0) (2026-06-11)
 
 
