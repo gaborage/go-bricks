@@ -22,7 +22,7 @@ require (
 	github.com/knadh/koanf/providers/rawbytes v1.0.0
 	github.com/knadh/koanf/v2 v2.3.5
 	github.com/labstack/echo-opentelemetry v0.0.2
-	github.com/labstack/echo/v5 v5.2.0
+	github.com/labstack/echo/v5 v5.2.1
 	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/redis/go-redis/v9 v9.20.1
 	github.com/rs/zerolog v1.35.1
