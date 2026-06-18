@@ -5,7 +5,7 @@ PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
 INTEGRATION_PKGS :=
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION := v1.3.0
+GOVULNCHECK_VERSION := v1.4.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.27.1
