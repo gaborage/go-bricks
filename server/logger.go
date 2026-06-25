@@ -357,8 +357,7 @@ func extractOperationalMetrics(ctx context.Context) operationalMetrics {
 // extractTenantID extracts tenant ID from request context.
 // Returns empty string if tenant is not present.
 func extractTenantID(ctx context.Context) string {
-	//nolint:S8148 // NOSONAR: Error intentionally ignored - empty tenant ID is valid fallback for single-tenant apps
-	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
+	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" { // NOSONAR: Error intentionally ignored - empty tenant ID is valid fallback for single-tenant apps
 		return tenantID
 	}
 	return ""

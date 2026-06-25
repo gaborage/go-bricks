@@ -60,7 +60,7 @@ func createFailingRow(err error) types.Row {
 	// Create a mock database connection that will return an error
 	db, sqlMock, mockErr := sqlmock.New()
 	if mockErr != nil {
-		panic(mockErr) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
+		panic(mockErr) // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	defer db.Close()
 
@@ -156,7 +156,7 @@ func NewDatabaseWithData(data map[string][]any) *mocks.MockDatabase {
 		}
 		rows := NewMockRows(columns, rowsData)
 		if rows.Err() != nil {
-			panic(rows.Err()) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
+			panic(rows.Err()) // NOSONAR: Test fixture - panic on setup failure is intentional
 		}
 		mockDB.ExpectQuery(query, rows, nil)
 	}
@@ -172,7 +172,7 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 	// Allow read operations
 	rows := NewMockRows([]string{"colA"}, [][]any{{1}, {2}, {3}})
 	if rows.Err() != nil {
-		panic(rows.Err()) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
+		panic(rows.Err()) // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	mockDB.On("Query", mock.Anything, mock.Anything, mock.Anything).Return(rows, nil)
 	mockDB.On("QueryRow", mock.Anything, mock.Anything, mock.Anything).Return(createFailingRow(sql.ErrNoRows))
@@ -203,7 +203,7 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	// Create a mock database connection
 	db, sqlMock, err := sqlmock.New()
 	if err != nil {
-		panic(err) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
+		panic(err) // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	defer db.Close()
 
@@ -229,7 +229,7 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 	//nolint:sqlclosecheck // fixture rows are returned for the caller to own; see comment above
 	result, err := db.QueryContext(context.Background(), "SELECT")
 	if err != nil {
-		panic(err) //nolint:S8148 // NOSONAR: Test fixture - panic on setup failure is intentional
+		panic(err) // NOSONAR: Test fixture - panic on setup failure is intentional
 	}
 	return result
 }
