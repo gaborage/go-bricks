@@ -251,7 +251,7 @@ jobs:
         # NOTE: Flyway stopped publishing the self-contained platform CLI tarballs
         # to Maven Central mid-11.x; 12.x ships only from Redgate's own distribution
         # server (see the Install step). The SHA256 pin keeps the new host integrity-checked.
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/flyway-12.8.1
           key: flyway-12.8.1-706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
