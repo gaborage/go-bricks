@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.44.0](https://github.com/gaborage/go-bricks/compare/v0.43.0...v0.44.0) (2026-06-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** update actions/checkout action to v7 ([#609](https://github.com/gaborage/go-bricks/issues/609))
+
+* **deps:** update actions/checkout action to v7 ([#609](https://github.com/gaborage/go-bricks/issues/609)) ([4023b73](https://github.com/gaborage/go-bricks/commit/4023b73e57900137125606bc9e27ef55967a3c04))
+
+
+### Fixed
+
+* **deps:** update amqp091-go to v1.12.0 and go-redis to v9.21.0 ([#616](https://github.com/gaborage/go-bricks/issues/616)) ([38ebe32](https://github.com/gaborage/go-bricks/commit/38ebe3211b35706de05db1432bb48289c428549d))
+* **deps:** update module github.com/gaborage/go-bricks to v0.43.0 ([#611](https://github.com/gaborage/go-bricks/issues/611)) ([6b3fade](https://github.com/gaborage/go-bricks/commit/6b3fadece0189e495a47c0d0a5cdc5b828c79ff9))
+* **deps:** update module github.com/labstack/echo/v5 to v5.2.1 ([#598](https://github.com/gaborage/go-bricks/issues/598)) ([ca838b1](https://github.com/gaborage/go-bricks/commit/ca838b1cf299b4a4e2208c6ee3e0844ad5eeea11))
+* **deps:** update testcontainers-go monorepo to v0.43.0 ([#612](https://github.com/gaborage/go-bricks/issues/612)) ([9fa97df](https://github.com/gaborage/go-bricks/commit/9fa97df648014d3dad06692170cb40c1cce32d65))
+
 ## [0.43.0](https://github.com/gaborage/go-bricks/compare/v0.42.0...v0.43.0) (2026-06-17)
 
 
