@@ -70,7 +70,7 @@ type JobContext interface {
 // Multi-tenancy support: DB and Messaging are resolved dynamically via functions
 // to support tenant-specific resource resolution at execution time.
 type jobContextImpl struct {
-	context.Context //nolint:S8242 // NOSONAR: JobContext interface requires context embedding for OpenTelemetry propagation
+	context.Context // NOSONAR: JobContext interface requires context embedding for OpenTelemetry propagation
 	jobID           string
 	triggerType     string
 	logger          logger.Logger

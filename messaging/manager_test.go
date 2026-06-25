@@ -481,7 +481,7 @@ func (m *mockMessageHandler) Handle(context.Context, *amqp.Delivery) error { ret
 func (m *mockMessageHandler) EventType() string                            { return genericError }
 
 type tenantCapturingHandler struct {
-	capturedCtx context.Context //nolint:S8242 // NOSONAR: Test-only struct capturing context for verification
+	capturedCtx context.Context // NOSONAR: Test-only struct capturing context for verification
 }
 
 func (h *tenantCapturingHandler) Handle(ctx context.Context, _ *amqp.Delivery) error {

@@ -193,7 +193,7 @@ var (
 
 Beyond `database/types/`, `database/internal/builder/query_builder.go` also had panic-to-error conversions applied.
 
-The following files **intentionally retain panics** (suppressed with `//nolint:S8148 // NOSONAR`) because the panics represent startup-time configuration failures or test-helper programmer-error conditions that should crash immediately rather than return errors:
+The following files **intentionally retain panics** (suppressed with `// NOSONAR` for SonarCloud rule S8148) because the panics represent startup-time configuration failures or test-helper programmer-error conditions that should crash immediately rather than return errors:
 
 | File | Reason panics are retained |
 |------|---------------------------|

@@ -92,7 +92,7 @@ func TestSchedulerLifecycleGracefulShutdown(t *testing.T) {
 
 // TestSchedulerLifecycleNoJobsRegistered verifies scheduler handles no jobs gracefully
 func TestSchedulerLifecycleNoJobsRegistered(t *testing.T) {
-	//nolint:S8148 // NOSONAR: JobRegistrar intentionally ignored - test only needs Module to verify shutdown behavior
+	// NOSONAR: JobRegistrar intentionally ignored - test only needs Module to verify shutdown behavior
 	module, _ := newTestScheduler(t, 5*time.Second)
 
 	// Shutdown without registering any jobs

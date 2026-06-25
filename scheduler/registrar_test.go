@@ -270,7 +270,7 @@ func TestJobRegistrarMonthlyAt(t *testing.T) {
 func mustParseTime(s string) time.Time {
 	t, err := time.Parse("15:04", s)
 	if err != nil {
-		panic(err) //nolint:S8148 // NOSONAR: Test helper - panic on invalid time format is intentional
+		panic(err) // NOSONAR: Test helper - panic on invalid time format is intentional
 	}
 	return t
 }
