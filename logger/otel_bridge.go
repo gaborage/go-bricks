@@ -106,8 +106,7 @@ func applyTimestamp(rec *log.Record, entry map[string]any) {
 	if !ok {
 		return
 	}
-	// NOSONAR: Parse error intentional - invalid timestamps use zero value (OTel default)
-	if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil {
+	if t, err := time.Parse(time.RFC3339Nano, timeStr); err == nil { // NOSONAR: Parse error intentional - invalid timestamps use zero value (OTel default)
 		rec.SetTimestamp(t)
 	}
 }
@@ -220,8 +219,7 @@ func parseTraceFlags(value any) (trace.TraceFlags, bool) {
 				return trace.TraceFlags(parsed), true
 			}
 		}
-		// NOSONAR: Parse error intentional - invalid trace flags return false (not found)
-		if parsed, err := strconv.ParseUint(v, 10, 8); err == nil {
+		if parsed, err := strconv.ParseUint(v, 10, 8); err == nil { // NOSONAR: Parse error intentional - invalid trace flags return false (not found)
 			return trace.TraceFlags(parsed), true
 		}
 	case float64:

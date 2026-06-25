@@ -66,8 +66,7 @@ type Module struct {
 	mu        sync.RWMutex // Protects scheduler and jobs map
 
 	// Shutdown coordination
-	// NOSONAR: Lifecycle context for graceful shutdown coordination - NOT request context (standard Go service pattern)
-	shutdownCtx    context.Context
+	shutdownCtx    context.Context // NOSONAR: Lifecycle context for graceful shutdown coordination - NOT request context (standard Go service pattern)
 	shutdownCancel context.CancelFunc
 	wg             sync.WaitGroup // Tracks in-flight job executions
 }
@@ -102,23 +101,20 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		meter := m.meterProvider.Meter("scheduler")
 
 		// Create execution counter
-		// NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
-		m.executionCounter, _ = meter.Int64Counter(
+		m.executionCounter, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.execution.total",
 			metric.WithDescription("Total number of job executions by status"),
 		)
 
 		// Create duration histogram
-		// NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
-		m.durationHistogram, _ = meter.Float64Histogram(
+		m.durationHistogram, _ = meter.Float64Histogram( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.execution.duration",
 			metric.WithDescription("Job execution duration in seconds"),
 			metric.WithUnit("s"),
 		)
 
 		// Create panic counter
-		// NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
-		m.panicCounter, _ = meter.Int64Counter(
+		m.panicCounter, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.panic.total",
 			metric.WithDescription("Total number of job panics"),
 		)
@@ -766,8 +762,7 @@ func (m *Module) logJobResultSummary(
 	}
 
 	// Tenant context
-	// NOSONAR: Error intentionally ignored - empty tenant ID is valid fallback for single-tenant apps
-	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" {
+	if tenantID, _ := multitenant.GetTenant(ctx); tenantID != "" { // NOSONAR: Error intentionally ignored - empty tenant ID is valid fallback for single-tenant apps
 		event = event.Str("tenant", tenantID)
 	}
 
