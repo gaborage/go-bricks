@@ -171,7 +171,7 @@ func TestAuthMiddleware(t *testing.T) {
 		{
 			// RFC 7235: the auth scheme is case-insensitive, so a lowercase "bearer"
 			// with a valid token is accepted (matched via strings.EqualFold).
-			name:               "case-insensitive bearer scheme accepted",
+			name:               "case_insensitive_bearer_scheme_accepted",
 			authHeader:         "bearer test-secret-token",
 			expectedStatusCode: http.StatusOK,
 		},

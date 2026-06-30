@@ -162,12 +162,12 @@ func (s *Server) RootGroup() RouteRegistrar {
 // Passing nil restores the default handler. The handler is adapted to the engine once here.
 func (s *Server) RegisterReadyHandler(handler Handler) {
 	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
 	if handler == nil {
 		s.readyHandler = s.readyCheck
 	} else {
 		s.readyHandler = adaptHandler(handler, s.cfg)
 	}
-	s.readyMu.Unlock()
 }
 
 // dispatchReady executes the currently registered ready handler.
