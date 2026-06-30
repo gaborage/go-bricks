@@ -4,7 +4,7 @@ BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s|^tools/migration/||" | grep . || echo "dev")
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION := v1.4.0
+GOVULNCHECK_VERSION := v1.5.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.27.1
