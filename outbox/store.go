@@ -64,8 +64,10 @@ type Store interface {
 	MarkFailed(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error
 
 	// MarkDeadLettered increments retry count, records the error, and sets the event
-	// status to "failed" — a terminal state the relay stops retrying. Used when a
-	// poison event (broker-rejected or corrupt) exhausts MaxRetries.
+	// status to "failed" — a terminal state the relay stops retrying. Used ONLY for
+	// poison events (undecodable headers) that exhaust MaxRetries. Connectivity failures
+	// (broker down, NACK, confirmation timeout) must never call this — they advance
+	// retry_count via MarkFailed and keep retrying indefinitely.
 	MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error
 
 	// DeletePublished removes events that were published before the given time.

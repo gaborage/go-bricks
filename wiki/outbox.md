@@ -149,6 +149,11 @@ Consequences worth knowing:
   connectivity failure and re-publishes the (already-delivered) event every cycle.
 - **Underneath, the AMQP publish itself is bounded** by `messaging.reconnect.maxpublishattempts`
   (default 5), after which it returns `messaging.ErrPublishRetriesExhausted` wrapping the cause.
+  Note the two ceilings interact on the relay path: with default `connectiontimeout` (30s) a
+  stalled-confirmation worst case is `5 × 30s = 150s`, which exceeds the 60s `publishtimeout`, so
+  the per-record deadline usually fires first and the relay observes `DeadlineExceeded` (still
+  connectivity) rather than `ErrPublishRetriesExhausted` — keep that in mind when tuning the three
+  knobs together.
 - **A relay cycle that has pending work but cannot reach the broker returns a job error** (after
   advancing every record's `retry_count`), so the failure stays visible at the scheduler level and,
   in multi-tenant mode, names the affected tenant. An idle relay (nothing pending) is not an error.
