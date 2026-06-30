@@ -184,6 +184,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
 | `reconnect.connectiontimeout` | 30s | Per-publish broker confirmation (ACK/NACK) timeout |
+| `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
 | `publisher.idlettl` | 10m | TTL for idle publisher channels |
@@ -199,6 +200,33 @@ messaging:
     maxcached: 100       # More cached publishers for high-throughput
     idlettl: 30m         # Keep publishers longer
 ```
+
+### Bounded publish retries (`reconnect.maxpublishattempts`)
+
+`PublishToExchange` (and the `Publish` convenience) retries a failing publish — publish error,
+broker NACK, or confirmation timeout — but the loop is **bounded** by
+`reconnect.maxpublishattempts` (default 5). On exhaustion it returns
+`messaging.ErrPublishRetriesExhausted` **wrapping the last cause**, so callers can classify the
+failure:
+
+| Cause sentinel | Meaning |
+|----------------|---------|
+| `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
+| `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
+| `messaging.ErrNotConnected` | the client was not connected when the publish was attempted |
+
+Cancel / shutdown / deadline returns are also wrapped with the last cause, so a deadline that
+fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**.
+Between NACK retries the client waits a small cancelable `nackBackoff` (100ms) rather than
+busy-spinning. These causes are informational for logging/observability; the outbox relay treats
+**every** publish failure (NACK included) as a recoverable *connectivity* failure that retries and
+never parks — only undecodable message bodies are poison — see
+[outbox.md](outbox.md#retry--dead-lettering) and [ADR-033](adr_033_outbox_retry_count_status_parking.md).
+
+> **Breaking change:** before this, a persistently-failing publish looped **forever** (returning
+> only on cancel/shutdown/ACK). It now returns an error after `maxpublishattempts`. Direct
+> publishers that relied on infinite blocking should handle the error; durable delivery should go
+> through the outbox, which retries on its next cycle. See [migrations.md](migrations.md).
 
 ### Sizing the publisher pool for multi-tenant deployments
 

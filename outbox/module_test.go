@@ -150,8 +150,8 @@ func TestModuleInitDisabledAllowsNilResolvers(t *testing.T) {
 }
 
 // TestModuleInitEnabledMessagingUnconfiguredSingleTenant guards issue #366:
-// outbox.enabled=true with no messaging.broker.url must fail at startup
-// instead of letting the relay job log "messaging not available" each poll.
+// outbox.enabled=true with no messaging.broker.url must fail at startup instead of
+// letting the relay advance every event's retry_count each poll without delivering.
 func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
@@ -171,6 +171,30 @@ func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 	err := m.Init(deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging is not configured")
+}
+
+// TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout guards the fail-fast: a
+// publishtimeout shorter than the broker confirmation wait would truncate every publish
+// into a connectivity failure (an unbounded duplicate-delivery loop), so Init rejects it.
+func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 10 * time.Second},
+			Messaging: config.MessagingConfig{
+				Broker:    config.BrokerConfig{URL: "amqp://localhost"},
+				Reconnect: config.ReconnectConfig{ConnectionTimeout: 30 * time.Second},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publishtimeout")
+	assert.Contains(t, err.Error(), "connectiontimeout")
 }
 
 // TestModuleInitEnabledMessagingUnconfiguredMultiTenant verifies the static
@@ -466,7 +490,7 @@ func TestLazyStoreFetchPendingDelegatesAfterInit(t *testing.T) {
 		"routing_key", "status", "retry_count", "created_at",
 	))
 
-	_, err := ls.FetchPending(context.Background(), db, 10, 3)
+	_, err := ls.FetchPending(context.Background(), db, 10)
 	require.NoError(t, err)
 	assert.NotNil(t, m.store, "lazyStore.FetchPending triggered lazy init")
 }

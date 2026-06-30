@@ -2,6 +2,45 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Bounded Publish Retries + Status-Driven Outbox Dead-Lettering (ADR-033)
+
+Per [ADR-033](adr_033_outbox_retry_count_status_parking.md), the outbox relay now advances an
+event's `retry_count` on **every** failed delivery (including a full broker outage), the messaging
+publish loop is now bounded, and outbox parking is driven by `status = 'failed'` rather than by
+`retry_count`. **No DB schema migration is required** — the `status` column and `'failed'` value
+already exist. What changes for callers:
+
+| Area | Before | After |
+|------|--------|-------|
+| `messaging.PublishToExchange` / `Publish` | retried a failing publish **forever** (returned only on cancel/shutdown/ACK) | returns `ErrPublishRetriesExhausted` after `messaging.reconnect.maxpublishattempts` (default **5**), wrapping the cause (`ErrPublishNacked` / `ErrPublishConfirmTimeout` / raw error) |
+| Error identity on cancel/deadline | bare `context.Canceled` / `DeadlineExceeded` | same errors, now **wrapped** with the last attempt cause — match with `errors.Is`, not `==` |
+| `outbox.Store.FetchPending` | `FetchPending(ctx, db, batchSize, maxRetries)` | `FetchPending(ctx, db, batchSize)` — status-gated, `maxRetries` parameter removed |
+| `outbox.Store` | — | new method `MarkDeadLettered(ctx, db, eventID, errMsg)` |
+| `outbox.maxretries` semantics | skipped events whose `retry_count` exceeded it (left silently `pending`) | bounds **poison only** (undecodable headers) → dead-letters to `status = 'failed'`; ALL broker-side failures — broker down, **NACK**, confirmation timeout, missing exchange — are connectivity and **never park** (retry indefinitely; monitor `retry_count` growth) |
+| Relay during a broker outage | early-returned, `retry_count` frozen; job logged an error | advances `retry_count` per record per cycle, then returns a job error (only when there IS pending work) so the scheduler-level failure signal is preserved |
+
+**New config keys (additive, safe defaults):** `messaging.reconnect.maxpublishattempts` (default 5)
+and `outbox.publishtimeout` (default 60s). **`publishtimeout` must be ≥
+`messaging.reconnect.connectiontimeout`** — the outbox module now **fails to start** otherwise.
+
+**⚠️ Upgrade hazard — re-delivery of previously-abandoned events.** Before ADR-033 the relay fetch
+filtered on `retry_count < maxretries`, so any event that exhausted its retries was *silently
+soft-parked* (left `status='pending'`, never fetched again). The new `FetchPending` is status-gated
+only, so on the first post-upgrade relay cycle **every such soft-parked row becomes eligible again and
+is re-published in a burst.** This is technically correct un-sticking (those events were never
+delivered and the outbox is at-least-once), but it can be a surprising surge. **Before upgrading,**
+inspect `SELECT count(*) FROM <outbox> WHERE status='pending' AND retry_count >= <maxretries>` and
+either let them re-deliver (ensure consumers are idempotent — they must be anyway) or delete the rows
+you intend to abandon.
+
+**Action required only if you:** call `messaging.PublishToExchange` / `Publish` directly and relied on
+infinite blocking (now returns an error — handle it; the durable path is the outbox, which retries next
+cycle); assert publish errors with `==` (switch to `errors.Is`); implement a custom `outbox.Store`
+(update `FetchPending`'s signature and add `MarkDeadLettered`); or set `outbox.publishtimeout` below
+`messaging.reconnect.connectiontimeout` (now rejected at startup). Applications using the outbox via
+`deps.Outbox` need no code changes. Note `failed` rows accumulate (`DeletePublished` purges only
+`published`) — monitor and prune them.
+
 ## Resource Managers Return a `ReleaseFunc` (ADR-032)
 
 Per [ADR-032](adr_032_lease_refcount_tenant_handles.md), the three per-tenant resource managers now

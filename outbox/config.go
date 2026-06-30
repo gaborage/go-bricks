@@ -25,6 +25,9 @@ func validateConfig(c *config.OutboxConfig) error {
 	if c.RetentionPeriod < 0 {
 		return fmt.Errorf("outbox: retentionperiod must not be negative, got %s", c.RetentionPeriod)
 	}
+	if c.PublishTimeout < 0 {
+		return fmt.Errorf("outbox: publishtimeout must not be negative, got %s", c.PublishTimeout)
+	}
 	return nil
 }
 
@@ -46,5 +49,8 @@ func applyDefaults(c *config.OutboxConfig) {
 	}
 	if c.RetentionPeriod == 0 {
 		c.RetentionPeriod = 72 * time.Hour
+	}
+	if c.PublishTimeout == 0 {
+		c.PublishTimeout = 60 * time.Second
 	}
 }

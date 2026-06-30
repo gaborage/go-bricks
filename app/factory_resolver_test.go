@@ -127,7 +127,7 @@ func TestFactoryResolverHasCustomFactories(t *testing.T) {
 func TestFactoryResolverMessagingClientFactory(t *testing.T) {
 	t.Run("default factory builds an AMQP client", func(t *testing.T) {
 		resolver := NewFactoryResolver(nil)
-		factory := resolver.MessagingClientFactory(7 * time.Second)
+		factory := resolver.MessagingClientFactory(7*time.Second, 5)
 		assert.NotNil(t, factory)
 
 		// Port 1 refuses immediately, so the reconnect goroutine fails fast; Close is

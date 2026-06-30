@@ -88,7 +88,7 @@ func TestPostgresStoreFetchPendingSuccess(t *testing.T) {
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
-	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, "evt-1", out[0].ID)
@@ -106,7 +106,7 @@ func TestPostgresStoreFetchPendingEmpty(t *testing.T) {
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
-	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	assert.Empty(t, out)
 }
@@ -118,10 +118,61 @@ func TestPostgresStoreFetchPendingQueryError(t *testing.T) {
 	wantErr := errors.New("connection refused")
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnError(wantErr)
 
-	_, err := store.FetchPending(t.Context(), db, 10, 3)
+	_, err := store.FetchPending(t.Context(), db, 10)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "fetch pending failed")
+}
+
+// TestPostgresStoreFetchPendingSelectsByStatusOnly pins the parking-semantics
+// change: the relay fetch must NOT filter by retry_count anymore, so an
+// outage-inflated count can never freeze a healthy pending event. Parking is now
+// driven solely by status='failed' (set by MarkDeadLettered).
+func TestPostgresStoreFetchPendingSelectsByStatusOnly(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "status", "retry_count", "created_at",
+	)
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	_, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+
+	q := db.QueryLog()
+	require.Len(t, q, 1)
+	assert.NotContains(t, q[0].SQL, "retry_count <", "fetch must not gate on retry_count")
+	assert.Contains(t, q[0].SQL, "WHERE status")
+	assert.Equal(t, []any{StatusPending, 10}, q[0].Args)
+}
+
+// --- MarkDeadLettered -------------------------------------------------------
+
+func TestPostgresStoreMarkDeadLetteredSetsFailedStatus(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectExec(`UPDATE gobricks_outbox SET retry_count`).WillReturnRowsAffected(1)
+
+	require.NoError(t, store.MarkDeadLettered(t.Context(), db, "evt-1", "poison: nacked"))
+
+	execs := db.ExecLog()
+	require.Len(t, execs, 1)
+	assert.Contains(t, execs[0].SQL, "retry_count = retry_count + 1")
+	assert.Contains(t, execs[0].SQL, "status =")
+	assert.Equal(t, []any{StatusFailed, "poison: nacked", "evt-1"}, execs[0].Args)
+}
+
+func TestPostgresStoreMarkDeadLetteredExecError(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	wantErr := errors.New("update failed")
+	db.ExpectExec(`UPDATE gobricks_outbox SET retry_count`).WillReturnError(wantErr)
+
+	err := store.MarkDeadLettered(t.Context(), db, "evt-1", "poison")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	assert.Contains(t, err.Error(), "mark dead-lettered failed")
 }
 
 // --- MarkPublished ----------------------------------------------------------

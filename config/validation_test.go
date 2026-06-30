@@ -2168,6 +2168,22 @@ func TestApplyMessagingDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
+	t.Run("zero_gets_default", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, defaultMaxPublishAttempts, cfg.Reconnect.MaxPublishAttempts)
+	})
+	t.Run("explicit_value_preserved", func(t *testing.T) {
+		cfg := &MessagingConfig{
+			Broker:    BrokerConfig{URL: testAMQPHost},
+			Reconnect: ReconnectConfig{MaxPublishAttempts: 9},
+		}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, 9, cfg.Reconnect.MaxPublishAttempts)
+	})
+}
+
 func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -2221,6 +2237,14 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 				Reconnect: ReconnectConfig{MaxDelay: -1 * time.Second},
 			},
 			errorContains: "messaging.reconnect.maxdelay",
+		},
+		{
+			name: "negative_max_publish_attempts_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{MaxPublishAttempts: -1},
+			},
+			errorContains: "messaging.reconnect.maxpublishattempts",
 		},
 		{
 			name: "negative_publisher_idle_ttl_rejected",

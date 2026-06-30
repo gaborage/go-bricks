@@ -50,15 +50,23 @@ type Store interface {
 	// Insert writes an event row to the outbox table within the given transaction.
 	Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error
 
-	// FetchPending retrieves up to batchSize unpublished events ordered by creation time.
-	// Events with retry count exceeding maxRetries are skipped.
-	FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error)
+	// FetchPending retrieves up to batchSize pending events ordered by creation time.
+	// Selection is status-gated only: parking is driven by the "failed" status
+	// (set by MarkDeadLettered), NOT by retry_count, so an outage-inflated count can
+	// never freeze a healthy pending event.
+	FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error)
 
 	// MarkPublished updates the event status to published with a timestamp.
 	MarkPublished(ctx context.Context, db dbtypes.Interface, eventID string) error
 
-	// MarkFailed increments retry count and records the error.
+	// MarkFailed increments retry count and records the error, leaving the event
+	// "pending" so the relay retries it on a later cycle.
 	MarkFailed(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error
+
+	// MarkDeadLettered increments retry count, records the error, and sets the event
+	// status to "failed" — a terminal state the relay stops retrying. Used when a
+	// poison event (broker-rejected or corrupt) exhausts MaxRetries.
+	MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error
 
 	// DeletePublished removes events that were published before the given time.
 	// Returns the number of rows deleted.

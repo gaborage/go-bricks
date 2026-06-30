@@ -85,21 +85,22 @@ func (s *oracleStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record)
 	return nil
 }
 
-// FetchPending returns up to batchSize pending events (retry_count below maxRetries),
-// oldest first. An empty exchange or routing_key is stored as NULL on Oracle (an empty
-// string is NULL there) and mapped back to an empty string on scan; see issue #586.
-func (s *oracleStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error) {
+// FetchPending returns up to batchSize pending events, oldest first. Selection is
+// status-gated only (no retry_count filter) so an outage-inflated count cannot
+// freeze a healthy event. An empty exchange or routing_key is stored as NULL on
+// Oracle (an empty string is NULL there) and mapped back to "" on scan; see issue #586.
+func (s *oracleStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error) {
 	// Oracle uses FETCH FIRST N ROWS ONLY (12c+) instead of LIMIT
 	query := fmt.Sprintf(
 		`SELECT id, event_type, aggregate_id, payload, headers, exchange, routing_key, status, retry_count, created_at
 		 FROM %s
-		 WHERE status = :1 AND retry_count < :2
+		 WHERE status = :1
 		 ORDER BY created_at ASC
-		 FETCH FIRST :3 ROWS ONLY`,
+		 FETCH FIRST :2 ROWS ONLY`,
 		s.tableName,
 	)
 
-	rows, err := db.Query(ctx, query, StatusPending, maxRetries, batchSize)
+	rows, err := db.Query(ctx, query, StatusPending, batchSize)
 	if err != nil {
 		return nil, fmt.Errorf("outbox oracle: fetch pending failed: %w", err)
 	}
@@ -153,6 +154,21 @@ func (s *oracleStore) MarkFailed(ctx context.Context, db dbtypes.Interface, even
 	_, err := db.Exec(ctx, query, errMsg, eventID)
 	if err != nil {
 		return fmt.Errorf("outbox oracle: mark failed failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *oracleStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
+	// Oracle's error column is error_msg (a reserved-word rename), not error.
+	query := fmt.Sprintf(
+		`UPDATE %s SET retry_count = retry_count + 1, status = :1, error_msg = :2 WHERE id = :3`,
+		s.tableName,
+	)
+
+	_, err := db.Exec(ctx, query, StatusFailed, errMsg, eventID)
+	if err != nil {
+		return fmt.Errorf("outbox oracle: mark dead-lettered failed: %w", err)
 	}
 
 	return nil

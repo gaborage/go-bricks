@@ -36,13 +36,16 @@ func (s *mockStore) Insert(_ context.Context, _ dbtypes.Tx, record *Record) erro
 	return nil
 }
 
-func (s *mockStore) FetchPending(_ context.Context, _ dbtypes.Interface, _, _ int) ([]Record, error) {
+func (s *mockStore) FetchPending(_ context.Context, _ dbtypes.Interface, _ int) ([]Record, error) {
 	return nil, nil
 }
 func (s *mockStore) MarkPublished(_ context.Context, _ dbtypes.Interface, _ string) error {
 	return nil
 }
 func (s *mockStore) MarkFailed(_ context.Context, _ dbtypes.Interface, _, _ string) error {
+	return nil
+}
+func (s *mockStore) MarkDeadLettered(_ context.Context, _ dbtypes.Interface, _, _ string) error {
 	return nil
 }
 func (s *mockStore) DeletePublished(_ context.Context, _ dbtypes.Interface, _ time.Time) (int64, error) {

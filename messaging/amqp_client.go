@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"math/rand/v2"
 	"sync"
@@ -84,6 +85,14 @@ type AMQPClientImpl struct {
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
 	connectionTimeout time.Duration
+	// maxPublishAttempts bounds the per-publish retry loop so PublishToExchange
+	// always returns to its caller. A value <= 0 means unbounded (the historical
+	// behavior) — kept so struct-literal test clients that don't set the field
+	// retain their old semantics.
+	maxPublishAttempts int
+	// nackBackoff is the cancelable delay inserted between NACK retries, replacing
+	// the old zero-delay hot-spin. Zero means no delay.
+	nackBackoff time.Duration
 }
 
 // Reconnection delays
@@ -93,6 +102,15 @@ const (
 	defaultReInitDelay       = 2 * time.Second
 	defaultResendDelay       = 5 * time.Second
 	defaultConnectionTimeout = 30 * time.Second
+	// defaultMaxPublishAttempts bounds the publish retry loop. 5 rides out a
+	// typical reconnect (reconnectDelay 5s + reInitDelay 2s) across a few resend
+	// cycles before giving up and returning a classifiable error to the caller.
+	defaultMaxPublishAttempts = 5
+	// defaultNackBackoff is a small cancelable pause between NACK retries so a
+	// transiently-unroutable publish (e.g. a binding still being created) gets a
+	// few spaced attempts without busy-spinning, while staying well under a tight
+	// request deadline.
+	defaultNackBackoff = 100 * time.Millisecond
 	// defaultConfirmBufferSize sizes the channel that receives broker publish
 	// confirmations. Big enough to absorb a reasonable concurrent-publish burst
 	// without backpressuring producers, small enough that a stalled dispatcher
@@ -111,9 +129,31 @@ const (
 )
 
 var (
-	errNotConnected  = errors.New("not connected to AMQP broker")
+	// ErrNotConnected is returned by a publish when the client is not connected to the broker.
+	ErrNotConnected = errors.New("not connected to AMQP broker")
+	// ErrShutdown is returned when a publish is interrupted by client shutdown. The outbox
+	// relay treats this (and context.Canceled) as a shutdown abort that must NOT advance an
+	// event's retry_count — it is the one publish error the relay branches on.
+	ErrShutdown = errors.New("AMQP client is shutting down")
+	// ErrPublishRetriesExhausted is returned by PublishToExchange once the bounded retry loop
+	// reaches maxPublishAttempts. It wraps the last attempt's cause (one of ErrPublishNacked,
+	// ErrPublishConfirmTimeout, or the raw publish error) so a caller can see WHY it gave up.
+	ErrPublishRetriesExhausted = errors.New("amqp: publish retries exhausted")
+	// ErrPublishNacked is the cause when the broker negatively acknowledged a publish. A
+	// basic.nack on a publish-confirm is a transient broker condition (disk alarm, mirror
+	// resync, failover), not a statement that the message is bad. These cause sentinels are
+	// informational (logging / direct-publisher branching) — the outbox relay does NOT
+	// classify on them (see ADR-033); it retries every publish failure.
+	ErrPublishNacked = errors.New("amqp: publish nacked by broker")
+	// ErrPublishConfirmTimeout is the cause when a confirmed publish never received an
+	// ACK/NACK within connectionTimeout.
+	ErrPublishConfirmTimeout = errors.New("amqp: publish confirmation timed out")
+
+	// errNotConnected / errShutdown alias the exported sentinels so the many existing
+	// internal references keep compiling and assert.Equal-style tests keep matching.
+	errNotConnected  = ErrNotConnected
+	errShutdown      = ErrShutdown
 	errAlreadyClosed = errors.New("AMQP client already closed")
-	errShutdown      = errors.New("AMQP client is shutting down")
 )
 
 // ClientOption configures an AMQPClientImpl at construction time.
@@ -130,21 +170,34 @@ func WithConnectionTimeout(d time.Duration) ClientOption {
 	}
 }
 
+// WithMaxPublishAttempts bounds the per-publish retry loop: after n failed
+// attempts PublishToExchange returns ErrPublishRetriesExhausted instead of
+// retrying forever. Non-positive values are ignored, leaving the default (5).
+func WithMaxPublishAttempts(n int) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if n >= 1 {
+			c.maxPublishAttempts = n
+		}
+	}
+}
+
 // NewAMQPClient creates a new AMQP client instance.
 // It automatically attempts to connect to the broker and handles reconnections.
 // Optional Option values (e.g. WithConnectionTimeout) override the defaults.
 func NewAMQPClient(brokerURL string, log logger.Logger, opts ...ClientOption) *AMQPClientImpl {
 	client := &AMQPClientImpl{
-		m:                 &sync.RWMutex{},
-		brokerURL:         brokerURL,
-		log:               log,
-		done:              make(chan bool),
-		reconnectDone:     make(chan struct{}),
-		reconnectDelay:    defaultReconnectDelay,
-		reconnectMaxDelay: defaultReconnectMaxDelay,
-		reInitDelay:       defaultReInitDelay,
-		resendDelay:       defaultResendDelay,
-		connectionTimeout: defaultConnectionTimeout,
+		m:                  &sync.RWMutex{},
+		brokerURL:          brokerURL,
+		log:                log,
+		done:               make(chan bool),
+		reconnectDone:      make(chan struct{}),
+		reconnectDelay:     defaultReconnectDelay,
+		reconnectMaxDelay:  defaultReconnectMaxDelay,
+		reInitDelay:        defaultReInitDelay,
+		resendDelay:        defaultResendDelay,
+		connectionTimeout:  defaultConnectionTimeout,
+		maxPublishAttempts: defaultMaxPublishAttempts,
+		nackBackoff:        defaultNackBackoff,
 	}
 
 	for _, opt := range opts {
@@ -246,22 +299,17 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	defer span.End()
 
 	retryCount := 0
+	// lastCause records why the most recent attempt failed (the raw publish error,
+	// ErrPublishNacked, or ErrPublishConfirmTimeout). It is wrapped into the terminal error on
+	// every exit path so a deadline/cancel that fires mid-retry still reports what was going
+	// wrong — for the caller's logging and for direct publishers that branch on the cause.
+	var lastCause error
 	for {
 		select {
 		case <-ctx.Done():
-			// Record failed publish metrics before returning
-			elapsed := time.Since(startTime)
-			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
-			span.RecordError(ctx.Err())
-			span.SetStatus(codes.Error, ctx.Err().Error())
-			return ctx.Err()
+			return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
 		case <-c.done:
-			// Record failed publish metrics before returning
-			elapsed := time.Since(startTime)
-			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
-			span.RecordError(errShutdown)
-			span.SetStatus(codes.Error, errShutdown.Error())
-			return errShutdown
+			return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
 		default:
 		}
 
@@ -320,6 +368,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// will be silently dropped by the dispatcher's unmatched-tag handling.)
 			c.pendingPublishes.Delete(key)
 			retryCount++
+			lastCause = err
 			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
 
 			// Record retry metric
@@ -330,22 +379,8 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				attribute.String("error", err.Error()),
 				attribute.Int("retry_count", retryCount),
 			))
-			select {
-			case <-ctx.Done():
-				// Record failed publish metrics before returning
-				elapsed := time.Since(startTime)
-				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
-				span.RecordError(ctx.Err())
-				span.SetStatus(codes.Error, ctx.Err().Error())
-				return ctx.Err()
-			case <-c.done:
-				// Record failed publish metrics before returning
-				elapsed := time.Since(startTime)
-				tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
-				span.RecordError(errShutdown)
-				span.SetStatus(codes.Error, errShutdown.Error())
-				return errShutdown
-			case <-time.After(c.resendDelay):
+			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, c.resendDelay); termErr != nil {
+				return termErr
 			}
 			continue
 		}
@@ -357,18 +392,10 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		case <-ctx.Done():
 			// Cleanup so the dispatcher doesn't hold a stale chan reference.
 			c.pendingPublishes.Delete(key)
-			elapsed := time.Since(startTime)
-			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, ctx.Err())
-			span.RecordError(ctx.Err())
-			span.SetStatus(codes.Error, ctx.Err().Error())
-			return ctx.Err()
+			return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
 		case <-c.done:
 			c.pendingPublishes.Delete(key)
-			elapsed := time.Since(startTime)
-			tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, elapsed, errShutdown)
-			span.RecordError(errShutdown)
-			span.SetStatus(codes.Error, errShutdown.Error())
-			return errShutdown
+			return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
 		case confirm := <-confirmCh:
 			if confirm.Ack {
 				// Track elapsed time and increment AMQP counter in context for request tracking
@@ -395,6 +422,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			}
 			// NACK received - retry the publish
 			retryCount++
+			lastCause = ErrPublishNacked
 			c.log.Warn().
 				Uint64("delivery_tag", confirm.DeliveryTag).
 				Int("retry_count", retryCount).
@@ -409,7 +437,12 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				semconv.MessagingRabbitMQMessageDeliveryTag(int(confirm.DeliveryTag)),
 				attribute.Int("retry_count", retryCount),
 			))
-			// Continue to retry the publish operation
+			// retryBackoff applies the attempt ceiling and a cancelable backoff between
+			// NACK retries — replacing the old zero-delay hot-spin so a transiently-
+			// unroutable publish gets a few spaced attempts without pinning a core.
+			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, c.nackBackoff); termErr != nil {
+				return termErr
+			}
 			continue
 		case <-time.After(c.connectionTimeout):
 			// Drop this attempt's waiter from pendingPublishes before retrying.
@@ -422,6 +455,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			c.pendingPublishes.Delete(key)
 			// Confirmation timeout - retry the publish
 			retryCount++
+			lastCause = ErrPublishConfirmTimeout
 			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
 
 			// Record retry metric
@@ -431,10 +465,72 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				attribute.String("reason", "confirmation timeout"),
 				attribute.Int("retry_count", retryCount),
 			))
-			// Continue to retry the publish operation
+			// No extra backoff — this path already waited connectionTimeout; just
+			// apply the attempt ceiling before retrying.
+			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, 0); termErr != nil {
+				return termErr
+			}
 			continue
 		}
 	}
+}
+
+// retryBackoff is the shared tail of every failed-attempt branch. It applies the
+// attempt ceiling (returning a terminal ErrPublishRetriesExhausted once reached) and,
+// if backoff > 0, a cancelable wait that still honors ctx cancel / client shutdown.
+// It returns a non-nil error the caller must RETURN from PublishToExchange, or nil to
+// CONTINUE the retry loop. (Only the failure branches call it — never the ACK path.)
+func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, retryCount int, lastCause error, backoff time.Duration) error {
+	if c.maxPublishAttempts > 0 && retryCount >= c.maxPublishAttempts {
+		return c.publishExhausted(ctx, options, startTime, span, retryCount, lastCause)
+	}
+	if backoff <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+	case <-c.done:
+		return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
+	case <-time.After(backoff):
+		return nil
+	}
+}
+
+// recordPublishFailure stamps the shared terminal metrics/span state for a publish that is
+// ending in failure and returns err unchanged, so the terminal helpers only differ in how
+// they build err.
+func (c *AMQPClientImpl) recordPublishFailure(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, err error) error {
+	tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, time.Since(startTime), err)
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	return err
+}
+
+// wrapCause attaches the last retry cause to a terminal error (context cancel, deadline, or
+// shutdown). errors.Is on the result matches BOTH the primary error and the cause, so a deadline
+// that fires after a NACK still reports ErrPublishNacked — useful for a caller's logging and for
+// direct publishers that branch on the cause. (The outbox relay does NOT branch on it: see
+// ADR-033 — it treats every publish failure as connectivity.)
+func wrapCause(primary, lastCause error) error {
+	if lastCause == nil {
+		return primary
+	}
+	return fmt.Errorf("%w; last attempt: %w", primary, lastCause)
+}
+
+// publishAbort records terminal state for a publish ending without success (cancel, deadline,
+// or shutdown) and returns the primary error wrapped with the last retry cause.
+func (c *AMQPClientImpl) publishAbort(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, primary, lastCause error) error {
+	return c.recordPublishFailure(ctx, options, startTime, span, wrapCause(primary, lastCause))
+}
+
+// publishExhausted is the terminal return once the bounded retry loop reaches maxPublishAttempts.
+// The returned error wraps ErrPublishRetriesExhausted around the last attempt's cause (publish
+// error, ErrPublishNacked, or ErrPublishConfirmTimeout) so the caller can see why it gave up.
+func (c *AMQPClientImpl) publishExhausted(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, attempts int, cause error) error {
+	err := fmt.Errorf("%w after %d attempts: %w", ErrPublishRetriesExhausted, attempts, cause)
+	return c.recordPublishFailure(ctx, options, startTime, span, err)
 }
 
 // Consume starts consuming messages from the specified destination (queue name).

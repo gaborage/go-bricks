@@ -1176,6 +1176,170 @@ func TestPublishToExchangeMultipleNacksBeforeTimeout(t *testing.T) {
 	// Test passes if it doesn't hang indefinitely
 }
 
+// ============================================================================
+// Bounded publish-retry loop (issue: outbox retry_count never advances).
+//
+// Before the fix the publish loop was unbounded: it incremented an in-memory
+// retryCount, logged "...retrying...", and looped forever, never returning to
+// the caller (so the outbox relay never reached MarkFailed). These tests pin the
+// loop to a maximum attempt count and require it to surface a CLASSIFIABLE error
+// (publish-error vs nack vs confirm-timeout) so the relay can decide whether a
+// failure is connectivity (never park) or poison (park at MaxRetries).
+// ============================================================================
+
+// TestPublishToExchangeReturnsExhaustedOnPersistentPublishError proves the loop
+// terminates on a never-succeeding PublishWithContext under a DEADLINE-FREE
+// context — i.e. the attempt ceiling, not a context deadline, stops it.
+func TestPublishToExchangeReturnsExhaustedOnPersistentPublishError(t *testing.T) {
+	ch := &fakeChannel{publishErr: errors.New("publish boom")}
+	c := newClientWithFakeChannel(t, ch)
+	c.resendDelay = time.Millisecond
+	c.maxPublishAttempts = 3
+
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	if !errors.Is(err, ErrPublishRetriesExhausted) {
+		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
+	}
+}
+
+// TestPublishToExchangeReturnsExhaustedOnPersistentNack proves a never-acked
+// publish stops at the ceiling and that the returned error carries the NACK
+// cause (so the relay classifies it as poison).
+func TestPublishToExchangeReturnsExhaustedOnPersistentNack(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.maxPublishAttempts = 3
+	c.nackBackoff = time.Millisecond
+
+	sendConfirmsAfterEachAttempt(t, c, ch,
+		amqp.Confirmation{Ack: false, DeliveryTag: 1},
+		amqp.Confirmation{Ack: false, DeliveryTag: 2},
+		amqp.Confirmation{Ack: false, DeliveryTag: 3},
+	)
+
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	if !errors.Is(err, ErrPublishRetriesExhausted) {
+		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
+	}
+	if !errors.Is(err, ErrPublishNacked) {
+		t.Fatalf("expected wrapped ErrPublishNacked cause, got %v", err)
+	}
+}
+
+// TestPublishToExchangeReturnsExhaustedOnConfirmTimeout proves a never-confirmed
+// publish stops at the ceiling (deadline-free ctx) carrying the timeout cause.
+func TestPublishToExchangeReturnsExhaustedOnConfirmTimeout(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.connectionTimeout = 5 * time.Millisecond
+	c.maxPublishAttempts = 3
+
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	if !errors.Is(err, ErrPublishRetriesExhausted) {
+		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
+	}
+	if !errors.Is(err, ErrPublishConfirmTimeout) {
+		t.Fatalf("expected wrapped ErrPublishConfirmTimeout cause, got %v", err)
+	}
+}
+
+// TestPublishToExchangeUnboundedWhenMaxAttemptsZero guards finding S11: the
+// struct-literal test helper leaves maxPublishAttempts at 0, which MUST mean
+// "unbounded" — otherwise a 0-as-ceiling misread would exhaust on attempt 1 and
+// silently break every existing multi-retry test.
+func TestPublishToExchangeUnboundedWhenMaxAttemptsZero(t *testing.T) {
+	ch := &fakeChannel{publishErr: errors.New("temporary")}
+	c := newClientWithFakeChannel(t, ch) // maxPublishAttempts stays 0 (unbounded)
+	c.resendDelay = time.Millisecond
+
+	publishAttempts := make(chan struct{}, 2)
+	ch.mu.Lock()
+	ch.publishAttemptSignal = publishAttempts
+	ch.mu.Unlock()
+
+	go func() {
+		<-publishAttempts // attempt 1 fired (fails)
+		ch.mu.Lock()
+		ch.publishErr = nil
+		ch.mu.Unlock()
+		<-publishAttempts // attempt 2 fired (succeeds, tag 2)
+		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 2}
+	}()
+
+	if err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+		t.Fatalf("expected success with unbounded retries (field 0), got %v", err)
+	}
+}
+
+// TestWithMaxPublishAttemptsOption verifies the constructor option sets the
+// ceiling and ignores non-positive values (which keep the existing value).
+func TestWithMaxPublishAttemptsOption(t *testing.T) {
+	c := &AMQPClientImpl{}
+	WithMaxPublishAttempts(7)(c)
+	assert.Equal(t, 7, c.maxPublishAttempts)
+	WithMaxPublishAttempts(0)(c)
+	assert.Equal(t, 7, c.maxPublishAttempts)
+	WithMaxPublishAttempts(-3)(c)
+	assert.Equal(t, 7, c.maxPublishAttempts)
+}
+
+// TestPublishToExchangeNackBackoffHonorsContextCancel proves the new backoff
+// between NACK retries is cancelable (not a blind sleep) — a 1h backoff returns
+// promptly when the context is canceled.
+func TestPublishToExchangeNackBackoffHonorsContextCancel(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.nackBackoff = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch.mu.Lock()
+	sig := make(chan struct{}, 2)
+	ch.publishAttemptSignal = sig
+	ch.mu.Unlock()
+
+	go func() {
+		<-sig                                                            // first publish fired
+		c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 1} // NACK -> enters backoff
+		cancel()
+	}()
+
+	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled during nack backoff, got %v", err)
+	}
+}
+
+// TestPublishToExchangeDeadlineAfterNackWrapsNackCause guards finding S5: when a
+// context deadline (e.g. the relay's per-record PublishTimeout) fires AFTER a
+// NACK, the returned error must still carry the NACK cause so a genuine poison
+// message is classified as poison rather than connectivity.
+func TestPublishToExchangeDeadlineAfterNackWrapsNackCause(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	c.nackBackoff = time.Hour // force the deadline to win the race during backoff
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	ch.mu.Lock()
+	sig := make(chan struct{}, 2)
+	ch.publishAttemptSignal = sig
+	ch.mu.Unlock()
+
+	go func() {
+		<-sig
+		c.notifyConfirm <- amqp.Confirmation{Ack: false, DeliveryTag: 1} // NACK -> enters 1h backoff
+	}()
+
+	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if !errors.Is(err, ErrPublishNacked) {
+		t.Fatalf("expected wrapped ErrPublishNacked cause, got %v", err)
+	}
+}
+
 func TestPublishBasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)

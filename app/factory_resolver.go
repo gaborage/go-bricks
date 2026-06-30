@@ -37,9 +37,10 @@ func (f *FactoryResolver) DatabaseConnector() database.Connector {
 
 // MessagingClientFactory returns the appropriate messaging client factory function.
 // The default factory creates AMQPClient instances configured with the supplied per-publish
-// connection timeout. If a custom Options.MessagingClientFactory is set it owns construction
-// and receives only (url, log) — the connectionTimeout does not apply to it.
-func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration) messaging.ClientFactory {
+// connection timeout and bounded publish-retry attempts. If a custom
+// Options.MessagingClientFactory is set it owns construction and receives only (url, log) —
+// neither connectionTimeout nor maxPublishAttempts applies to it.
+func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration, maxPublishAttempts int) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {
 			return f.opts.MessagingClientFactory(url, log)
@@ -47,7 +48,10 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 	}
 
 	return func(url string, log logger.Logger) messaging.AMQPClient {
-		return messaging.NewAMQPClient(url, log, messaging.WithConnectionTimeout(connectionTimeout))
+		return messaging.NewAMQPClient(url, log,
+			messaging.WithConnectionTimeout(connectionTimeout),
+			messaging.WithMaxPublishAttempts(maxPublishAttempts),
+		)
 	}
 }
 
