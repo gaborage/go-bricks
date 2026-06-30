@@ -28,7 +28,7 @@ Inside a handler, the request context already carries a 5-second deadline (the c
 
 ```go
 func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()  // inherits the 5s deadline
+    reqCtx := ctx.RequestContext()  // inherits the 5s deadline
 
     // Each call below observes the inherited deadline — no manual wrapping needed:
     _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))  // Redis dial/read/write
@@ -82,7 +82,7 @@ For fire-and-forget background work that must outlive the request (e.g. sending 
 
 ```go
 func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()
+    reqCtx := ctx.RequestContext()
 
     bgCtx := context.WithoutCancel(reqCtx)              // inherits values, sheds deadline
     bgCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)  // re-apply a budget

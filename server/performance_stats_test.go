@@ -90,7 +90,7 @@ func TestPerformanceStats(t *testing.T) {
 			c := e.NewContext(req, rec)
 
 			// Create middleware
-			middleware := PerformanceStats()
+			middleware := performanceStatsEcho()
 			handler := middleware(tt.handler)
 
 			// Execute
@@ -156,7 +156,7 @@ func TestPerformanceStatsContextInitialization(t *testing.T) {
 	assert.Equal(t, int64(0), logger.GetAMQPElapsed(originalCtx))
 	assert.Equal(t, int64(0), logger.GetDBElapsed(originalCtx))
 
-	middleware := PerformanceStats()
+	middleware := performanceStatsEcho()
 	handler := middleware(func(c *echo.Context) error {
 		// After middleware, context should have performance tracking initialized
 		ctx := c.Request().Context()
@@ -191,7 +191,7 @@ func TestPerformanceStatsConcurrentAccess(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	middleware := PerformanceStats()
+	middleware := performanceStatsEcho()
 
 	// Test concurrent increments to verify atomic operations work correctly
 	handler := middleware(func(c *echo.Context) error {
@@ -248,7 +248,7 @@ func TestPerformanceStatsMiddlewareChaining(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	// Test that performance stats middleware works correctly when chained with other middleware
-	performanceMiddleware := PerformanceStats()
+	performanceMiddleware := performanceStatsEcho()
 
 	// Simple middleware that modifies request context
 	type customContextKey string

@@ -141,7 +141,7 @@ func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
 func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -175,7 +175,7 @@ func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -202,7 +202,7 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -255,7 +255,7 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -312,7 +312,7 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -344,7 +344,7 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
 	e := echo.New()
 	recLog := &recLogger{}
-	e.Use(LoggerWithConfig(recLog, LoggerConfig{
+	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
 		ReadyPath:            testReadyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -442,11 +442,29 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 	require.True(t, reqCtx.hadExplicitWarningOccurred(), "Should have explicit warning after concurrent escalations")
 }
 
+// TestHandlerContextEscalateSeverity verifies the public HandlerContext.EscalateSeverity
+// method routes to the request-log context and is a safe no-op when none is present.
+func TestHandlerContextEscalateSeverity(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/escalate", http.NoBody)
+	c := NewHandlerContextForTest(rec, req, nil)
+
+	// No request-log context present → must be a safe no-op (no panic).
+	require.NotPanics(t, func() { c.EscalateSeverity(zerolog.WarnLevel) })
+
+	// With a request-log context, the method escalates through the public boundary.
+	reqCtx := newRequestLogContext()
+	c.Set(RequestLogContextKey, reqCtx)
+	c.EscalateSeverity(zerolog.WarnLevel)
+	require.True(t, reqCtx.hadExplicitWarningOccurred(),
+		"HandlerContext.EscalateSeverity must escalate the request-log context via the public boundary")
+}
+
 // TestEscalateSeverityConcurrency verifies that the public EscalateSeverity function
 // is thread-safe when called from multiple goroutines.
 func TestEscalateSeverityConcurrency(t *testing.T) {
 	e := echo.New()
-	e.Use(LoggerWithConfig(logger.New("info", false), LoggerConfig{
+	e.Use(loggerWithConfigEcho(logger.New("info", false), LoggerConfig{
 		SlowRequestThreshold: 100 * time.Millisecond,
 	}))
 
@@ -459,7 +477,7 @@ func TestEscalateSeverityConcurrency(t *testing.T) {
 			go func() {
 				defer func() { done <- struct{}{} }()
 				// Simulate concurrent severity escalations from async work
-				EscalateSeverity(c, zerolog.WarnLevel)
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.WarnLevel)
 			}()
 		}
 

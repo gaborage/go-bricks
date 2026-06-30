@@ -25,7 +25,18 @@ import (
 // so it adds no extra per-request allocation, and its release slice stays nil until the first
 // borrow (a request touching no managed resource pays nothing). Registered early in
 // SetupMiddlewares so ReleaseAll runs after the handler and every inner middleware.
-func RequestEnrich() echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in requestEnrichEcho, which SetupMiddlewares wires directly
+// on the default request path (ADR-026, no per-request baton).
+func RequestEnrich() MiddlewareFunc {
+	return fromEchoMiddleware(requestEnrichEcho())
+}
+
+// requestEnrichEcho is the echo-native request-enrichment middleware constructor.
+// Public callers use RequestEnrich (echo-free); SetupMiddlewares uses this form to
+// keep the default chain baton-free.
+func requestEnrichEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			req := c.Request()

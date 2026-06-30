@@ -33,7 +33,18 @@ import (
 // only when the Timing middleware actually emits the header (server.responsetime.
 // enabled). Advertising an expose-header the server never sends is harmless but
 // misleading, so this keeps the CORS contract aligned with what is on the wire.
-func CORS(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in corsEcho, which SetupMiddlewares wires directly on
+// the default request path (ADR-026, no per-request baton).
+func CORS(exposeResponseTime bool, envOverride ...string) MiddlewareFunc {
+	return fromEchoMiddleware(corsEcho(exposeResponseTime, envOverride...))
+}
+
+// corsEcho is the echo-native CORS middleware constructor. Public callers use
+// CORS (echo-free); SetupMiddlewares uses this form to keep the default chain
+// baton-free.
+func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFunc {
 	exposeHeaders := []string{echo.HeaderXRequestID}
 	if exposeResponseTime {
 		exposeHeaders = append(exposeHeaders, HeaderXResponseTime)

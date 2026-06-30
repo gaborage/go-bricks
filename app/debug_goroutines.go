@@ -10,17 +10,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v5"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // handleGoroutines provides detailed goroutine information
-func (d *DebugHandlers) handleGoroutines(c *echo.Context) error {
+func (d *DebugHandlers) handleGoroutines(c server.HandlerContext) error {
 	start := time.Now()
 
 	// Query parameters
-	includeStacks := c.QueryParam("stacks") == "true"
-	detectLeaks := c.QueryParam("leaks") == "true"
-	format := c.QueryParam("format") // "json" (default) or "text"
+	includeStacks := c.Query("stacks") == "true"
+	detectLeaks := c.Query("leaks") == "true"
+	format := c.Query("format") // "json" (default) or "text"
 
 	if format == "text" {
 		return d.handleGoroutinesText(c)
@@ -37,13 +37,14 @@ func (d *DebugHandlers) handleGoroutines(c *echo.Context) error {
 }
 
 // handleGoroutinesText returns raw goroutine stacks as text
-func (d *DebugHandlers) handleGoroutinesText(c *echo.Context) error {
+func (d *DebugHandlers) handleGoroutinesText(c server.HandlerContext) error {
 	var buf strings.Builder
 	if pprof.Lookup("goroutine").WriteTo(&buf, 1) != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get goroutine dump")
+		return server.NewInternalServerError("Failed to get goroutine dump")
 	}
 
-	c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextPlain)
+	// "text/plain" (no charset) matches the prior echo.MIMETextPlain value byte-for-byte.
+	c.ResponseWriter().Header().Set("Content-Type", "text/plain")
 	return c.String(http.StatusOK, buf.String())
 }
 
@@ -309,7 +310,7 @@ func (d *DebugHandlers) checkNetworkIO(stack GoroutineStack) *PotentialLeak {
 }
 
 // handleGC provides garbage collection information
-func (d *DebugHandlers) handleGC(c *echo.Context) error {
+func (d *DebugHandlers) handleGC(c server.HandlerContext) error {
 	start := time.Now()
 
 	var memBefore runtime.MemStats
@@ -331,7 +332,7 @@ func (d *DebugHandlers) handleGC(c *echo.Context) error {
 }
 
 // handleForceGC forces garbage collection and reports before/after memory
-func (d *DebugHandlers) handleForceGC(c *echo.Context) error {
+func (d *DebugHandlers) handleForceGC(c server.HandlerContext) error {
 	start := time.Now()
 
 	var memBefore runtime.MemStats

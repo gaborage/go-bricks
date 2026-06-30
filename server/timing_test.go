@@ -41,7 +41,7 @@ func TestTiming(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			e.Use(Timing())
+			e.Use(timingEcho())
 
 			e.GET("/test", func(c *echo.Context) error {
 				if tt.handlerDelay > 0 {
@@ -89,7 +89,7 @@ func TestTiming(t *testing.T) {
 
 func TestTimingErrorHandler(t *testing.T) {
 	e := echo.New()
-	e.Use(Timing())
+	e.Use(timingEcho())
 
 	// Handler that returns an error
 	e.GET("/error", func(_ *echo.Context) error {
@@ -119,7 +119,7 @@ func TestTimingErrorHandler(t *testing.T) {
 func TestTimingPanicHandler(t *testing.T) {
 	e := echo.New()
 
-	e.Use(Timing())
+	e.Use(timingEcho())
 
 	// Add recovery middleware AFTER timing to handle panics gracefully
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -159,7 +159,7 @@ func TestTimingPanicHandler(t *testing.T) {
 
 func TestTimingConcurrentRequests(t *testing.T) {
 	e := echo.New()
-	e.Use(Timing())
+	e.Use(timingEcho())
 
 	e.GET("/test", func(c *echo.Context) error {
 		// Simulate different processing times based on query parameter
@@ -221,7 +221,7 @@ func TestTimingConcurrentRequests(t *testing.T) {
 
 func TestTimingHeaderFormat(t *testing.T) {
 	e := echo.New()
-	e.Use(Timing())
+	e.Use(timingEcho())
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -263,7 +263,7 @@ func TestTimingWithOtherMiddleware(t *testing.T) {
 		}
 	})
 
-	e.Use(Timing())
+	e.Use(timingEcho())
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {

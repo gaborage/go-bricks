@@ -17,7 +17,18 @@ const (
 // This middleware runs before tenant resolution to block obvious attacks and invalid tenant sprays.
 // It uses a higher threshold than the main rate limiter and only protects against IP-based attacks.
 // If threshold is 0 or negative, IP pre-guard is disabled.
-func IPPreGuard(threshold int) echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in ipPreGuardEcho, which SetupMiddlewares wires directly
+// on the default request path (ADR-026, no per-request baton).
+func IPPreGuard(threshold int) MiddlewareFunc {
+	return fromEchoMiddleware(ipPreGuardEcho(threshold))
+}
+
+// ipPreGuardEcho is the echo-native IP pre-guard middleware constructor. Public
+// callers use IPPreGuard (echo-free); SetupMiddlewares uses this form to keep the
+// default chain baton-free.
+func ipPreGuardEcho(threshold int) echo.MiddlewareFunc {
 	if threshold <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

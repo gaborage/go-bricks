@@ -150,7 +150,7 @@ func newTestServer(basePath, healthRoute, readyRoute string) *Server {
 func assertHTTPGetResponse(t *testing.T, server *Server, path string, expectedStatus int, expectedBody ...string) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
 	rec := httptest.NewRecorder()
-	server.Echo().ServeHTTP(rec, req)
+	server.echo.ServeHTTP(rec, req)
 
 	assert.Equal(t, expectedStatus, rec.Code)
 	if len(expectedBody) > 0 {
@@ -162,13 +162,13 @@ func assertHealthEndpoints(t *testing.T, server *Server, healthPath, readyPath s
 	// Test health endpoint
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, healthPath, http.NoBody)
 	rec := httptest.NewRecorder()
-	server.Echo().ServeHTTP(rec, req)
+	server.echo.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Test ready endpoint with JSON validation
 	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyPath, http.NoBody)
 	rec = httptest.NewRecorder()
-	server.Echo().ServeHTTP(rec, req)
+	server.echo.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	var readyPayload map[string]any
@@ -181,7 +181,7 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	srv := newTestServer("", "", "")
 	require.NotNil(t, srv)
 
-	e := srv.Echo()
+	e := srv.echo
 	require.NotNil(t, e)
 	// HideBanner/HidePort moved to StartConfig in Echo v5
 	require.NotNil(t, e.Validator)
@@ -226,13 +226,52 @@ func TestServerStartAndShutdown(t *testing.T) {
 	}
 }
 
-func TestServerEchoReturnsUnderlyingInstance(t *testing.T) {
-	srv := newTestServer("", "", "")
-	require.NotNil(t, srv)
+// TestRootGroupRegistersAtURLRoot verifies RootGroup() returns a working registrar
+// rooted at the engine with NO base path applied, even when a base path is configured.
+// This replaces the former Echo() accessor for framework-internal root endpoints.
+func TestRootGroupRegistersAtURLRoot(t *testing.T) {
+	srv := newTestServer("/api", "", "") // base path set — RootGroup must ignore it
+	root := srv.RootGroup()
+	require.NotNil(t, root)
+	_, isRouteGroup := any(root).(*routeGroup)
+	assert.True(t, isRouteGroup, "RootGroup should return the internal routeGroup wrapper")
 
-	e := srv.Echo()
-	require.NotNil(t, e)
-	assert.Same(t, e, srv.echo)
+	root.Add(http.MethodGet, "/_sys/ping", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "pong")
+	})
+
+	// Endpoint must sit at the URL root, NOT under the /api base path.
+	assertHTTPGetResponse(t, srv, "/_sys/ping", http.StatusOK, "pong")
+	assertHTTPGetResponse(t, srv, "/api/_sys/ping", http.StatusNotFound)
+}
+
+// TestRegisterReadyHandlerOverrideAndRestore verifies a custom go-bricks Handler
+// overrides the readiness endpoint, and passing nil restores the framework default.
+func TestRegisterReadyHandlerOverrideAndRestore(t *testing.T) {
+	srv := newTestServer("", "", "")
+
+	// Override with a custom handler.
+	srv.RegisterReadyHandler(func(c HandlerContext) error {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{"status": "draining"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testReadyRoute, http.NoBody)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	var payload map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	assert.Equal(t, "draining", payload["status"])
+
+	// nil restores the default ready handler (200 + status:ready).
+	srv.RegisterReadyHandler(nil)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, testReadyRoute, http.NoBody)
+	rec = httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var restored map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &restored))
+	assert.Equal(t, "ready", restored["status"])
 }
 
 func TestPathNormalization(t *testing.T) {
@@ -439,8 +478,8 @@ func TestModuleGroupBehavior(t *testing.T) {
 				server := newTestServer(tt.basePath, "", "")
 				group := server.ModuleGroup()
 
-				group.Add(http.MethodGet, tt.registerPath, func(c *echo.Context) error {
-					return c.NoContent(http.StatusNoContent)
+				group.Add(http.MethodGet, tt.registerPath, func(c HandlerContext) error {
+					return c.String(http.StatusNoContent, "")
 				})
 
 				assertHTTPGetResponse(t, server, tt.expectedURL, http.StatusNoContent)
@@ -459,13 +498,13 @@ func TestModuleGroupBehavior(t *testing.T) {
 		assert.True(t, isRouteGroup, "nested group should use wrapper")
 
 		// Add route to nested group
-		nested.Add(http.MethodGet, "/resource", func(c *echo.Context) error {
+		nested.Add(http.MethodGet, "/resource", func(c HandlerContext) error {
 			return c.String(http.StatusOK, "nested")
 		})
 		assertHTTPGetResponse(t, server, testAPIV1Path+"/resource", http.StatusOK, "nested")
 
 		// Test deduplication - path with base prefix shouldn't duplicate
-		nested.Add(http.MethodGet, testAPIV1Path+"/dedup", func(c *echo.Context) error {
+		nested.Add(http.MethodGet, testAPIV1Path+"/dedup", func(c HandlerContext) error {
 			return c.String(http.StatusOK, "dedup")
 		})
 		assertHTTPGetResponse(t, server, testAPIV1Path+"/dedup", http.StatusOK, "dedup")

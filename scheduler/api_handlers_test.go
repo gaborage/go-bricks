@@ -27,7 +27,6 @@ func TestListJobsHandler(t *testing.T) {
 	// Call the handler
 	req := EmptyRequest{}
 	ctx := server.HandlerContext{
-		Echo:   nil, // Not needed for this test
 		Config: &config.Config{},
 	}
 
@@ -54,7 +53,6 @@ func TestListJobsHandlerEmptyScheduler(t *testing.T) {
 
 	req := EmptyRequest{}
 	ctx := server.HandlerContext{
-		Echo:   nil,
 		Config: &config.Config{},
 	}
 
@@ -78,7 +76,6 @@ func TestTriggerJobHandler(t *testing.T) {
 	// Call the handler
 	req := JobIDParam{JobID: testJobID}
 	ctx := server.HandlerContext{
-		Echo:   nil,
 		Config: &config.Config{},
 	}
 
@@ -115,7 +112,6 @@ func TestTriggerJobHandlerNotFound(t *testing.T) {
 
 	req := JobIDParam{JobID: "non-existent-job"}
 	ctx := server.HandlerContext{
-		Echo:   nil,
 		Config: &config.Config{},
 	}
 
@@ -142,7 +138,6 @@ func TestTriggerJobHandlerShuttingDown(t *testing.T) {
 	// Try to trigger job
 	req := JobIDParam{JobID: testJobID}
 	ctx := server.HandlerContext{
-		Echo:   nil,
 		Config: &config.Config{},
 	}
 

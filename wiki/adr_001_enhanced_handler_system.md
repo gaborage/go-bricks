@@ -119,10 +119,11 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Superseded in part by [ADR-002](adr_002_base_path_and_health_routes.md):** the second parameter is no longer the raw `*echo.Echo`; the current signature is `RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)`.
 
 ### 8. **Context Access Design**
+> Superseded by [ADR-034](adr_034_echo_boundary_types.md) for the public boundary types — `HandlerContext` no longer exposes the underlying `echo.Context`; advanced access is via stdlib-typed accessors (`RequestContext()`, `Request()`, …).
 - **Decision:** Provide optional HandlerContext for advanced scenarios
 - **Rationale:**
-  - Most handlers don't need Echo context access
-  - Advanced use cases can still access underlying Echo context
+  - Most handlers don't need direct request/response access
+  - Advanced use cases reach request internals via stdlib-typed accessors (`RequestContext()`, `Request()`, `ResponseWriter()`) — see [ADR-034](adr_034_echo_boundary_types.md); the underlying `echo.Context` is no longer exposed
   - Maintains framework flexibility
 - **Alternative Considered:** No context access or always-required context
 - **Trade-offs:** Slightly more complex API, but maintains power-user capabilities

@@ -446,6 +446,32 @@ migration.
 
 ---
 
+### [ADR-034: Echo-Free Boundary Types](adr_034_echo_boundary_types.md)
+
+**Date:** 2026-06-30 | **Status:** Accepted
+
+> _Numbering note: ADR-033 is reserved for a concurrent change (outbox retry-count, PR #626) landing in parallel; this echo-boundary ADR took the next free number, 034._
+
+Resolves issue #623. Wraps every remaining `github.com/labstack/echo/v5` leak on the
+public surface behind go-bricks boundary types while Echo stays the unchanged engine
+inside `server/`. Introduces a flat `server.MiddlewareFunc func(c HandlerContext, next func() error) error`
+and an untyped `server.Handler func(c HandlerContext) error`; replaces the
+`HandlerContext.Echo` field with stdlib-typed accessors (`RequestContext()`,
+`Request()`, `SetRequestContext()`, …); makes `RouteRegistrar` echo-free (drops the
+`echo.RouteInfo` return); removes `ServerRunner.Echo()`, adds `RootGroup()`, and
+retypes `RegisterReadyHandler` to `server.Handler`. `scheduler.CIDRMiddleware`, the
+framework middleware-constructor class (call sites unchanged), `SkipperFunc`, and
+`EscalateSeverity` all move to go-bricks types. Big-bang removal (no `// Deprecated:`).
+
+**Breaking:** all six echo leak classes are removed from the consumer surface; custom
+middleware moves to the flat shape and `HandlerContext.Echo` field accesses move to accessors. The
+typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-026
+preserved); only middleware routes pay a bounded +1 baton alloc.
+
+**Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -455,7 +481,7 @@ migration.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-033) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-034) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

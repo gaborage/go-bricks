@@ -2,24 +2,45 @@ package app
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
+// invokeDebugMiddleware runs a flat debug MiddlewareFunc against req, reporting whether the
+// downstream next() ran (allowed) and the error returned (nil when allowed). Mirrors the
+// scheduler's invokeCIDRMiddleware helper for the converted echo-free middleware shape.
+func invokeDebugMiddleware(mw server.MiddlewareFunc, req *http.Request) (nextCalled bool, err error) {
+	rec := httptest.NewRecorder()
+	ctx := server.NewHandlerContextForTest(rec, req, nil)
+	err = mw(ctx, func() error {
+		nextCalled = true
+		return nil
+	})
+	return nextCalled, err
+}
+
+// assertAPIErrorStatus asserts err is a go-bricks IAPIError carrying wantStatus.
+func assertAPIErrorStatus(t *testing.T, err error, wantStatus int) {
+	t.Helper()
+	require.Error(t, err)
+	var apiErr server.IAPIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, wantStatus, apiErr.HTTPStatus())
+}
+
 // TestIPWhitelistMiddlewareTrustedProxy verifies that the debug-endpoint IP allowlist
-// cannot be bypassed by spoofing X-Forwarded-For. The allowlist must be evaluated against
-// the immediate peer IP unless the peer is a configured trusted proxy — mirroring the
-// scheduler's CIDR middleware. Regression test for the High audit finding: the handler
-// previously used echo's spoofable c.RealIP(), so an attacker connecting directly could
+// cannot be bypassed by spoofing X-Forwarded-For. The allowlist is evaluated against the
+// trusted-proxy-aware client IP (server.ClientIP): X-Forwarded-For / X-Real-IP are honored
+// only when the immediate peer is a configured trusted proxy, mirroring the scheduler's
+// CIDR middleware. Regression test for the High audit finding that a direct attacker could
 // send "X-Forwarded-For: 127.0.0.1" to satisfy a localhost-only allowlist.
 func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 	app := &App{logger: logger.New("info", false)}
@@ -80,33 +101,23 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 				TrustedProxies: tc.trustedProxies,
 			}
 			debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
-			wrapped := debugHandlers.ipWhitelistMiddleware()(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "success")
-			})
+			trustedNets, _ := server.ParseCIDRs(tc.trustedProxies)
+			mw := debugHandlers.ipWhitelistMiddleware(trustedNets)
 
-			e := echo.New()
-			// Replicate the production server config (server/server.go), where
-			// LegacyIPExtractor makes c.RealIP() trust X-Forwarded-For unconditionally —
-			// the exact setting that makes the allowlist spoofable before the fix.
-			e.IPExtractor = echo.LegacyIPExtractor()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/_debug/info", http.NoBody)
 			req.RemoteAddr = tc.remoteAddr
 			if tc.xff != "" {
 				req.Header.Set("X-Forwarded-For", tc.xff)
 			}
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := wrapped(c)
+			nextCalled, err := invokeDebugMiddleware(mw, req)
 
 			if tc.wantStatus == http.StatusOK {
 				assert.NoError(t, err)
-				assert.Equal(t, http.StatusOK, rec.Code)
+				assert.True(t, nextCalled, "next should run when the client IP is allowed")
 			} else {
-				assert.Error(t, err)
-				var httpErr *echo.HTTPError
-				require.True(t, errors.As(err, &httpErr))
-				assert.Equal(t, tc.wantStatus, httpErr.Code)
+				assert.False(t, nextCalled, "next must not run when access is denied")
+				assertAPIErrorStatus(t, err, tc.wantStatus)
 			}
 		})
 	}
@@ -124,90 +135,65 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
-	// Create a test handler that returns success if auth passes
-	testHandler := func(c *echo.Context) error {
-		return c.String(http.StatusOK, "success")
-	}
-
-	// Get the auth middleware
-	authMiddleware := debugHandlers.authMiddleware()
-	wrappedHandler := authMiddleware(testHandler)
+	// The auth middleware is flat: trustedNets only affects the denial log's client IP.
+	authMiddleware := debugHandlers.authMiddleware(nil)
 
 	tests := []struct {
 		name               string
 		authHeader         string
 		expectedStatusCode int
-		expectedBody       string
 	}{
 		{
 			name:               "valid bearer token",
 			authHeader:         "Bearer test-secret-token",
 			expectedStatusCode: http.StatusOK,
-			expectedBody:       "success",
 		},
 		{
 			name:               "invalid bearer token",
 			authHeader:         "Bearer wrong-token",
 			expectedStatusCode: http.StatusUnauthorized,
-			expectedBody:       "",
 		},
 		{
 			name:               "missing bearer prefix",
 			authHeader:         "test-secret-token",
 			expectedStatusCode: http.StatusUnauthorized,
-			expectedBody:       "",
 		},
 		{
 			name:               "empty authorization header",
 			authHeader:         "",
 			expectedStatusCode: http.StatusUnauthorized,
-			expectedBody:       "",
 		},
 		{
 			name:               "bearer with no token",
 			authHeader:         "Bearer ",
 			expectedStatusCode: http.StatusUnauthorized,
-			expectedBody:       "",
 		},
 		{
-			name:               "case sensitive bearer",
+			// RFC 7235: the auth scheme is case-insensitive, so a lowercase "bearer"
+			// with a valid token is accepted (matched via strings.EqualFold).
+			name:               "case_insensitive_bearer_scheme_accepted",
 			authHeader:         "bearer test-secret-token",
-			expectedStatusCode: http.StatusUnauthorized,
-			expectedBody:       "",
+			expectedStatusCode: http.StatusOK,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create test request
-			e := echo.New()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
-
-			// Set a test remote IP for logging
+			// Set a test remote IP for the denial log.
 			req.RemoteAddr = "127.0.0.1:12345"
 
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
-
-			// Execute the wrapped handler
-			err := wrappedHandler(c)
+			nextCalled, err := invokeDebugMiddleware(authMiddleware, req)
 
 			if tt.expectedStatusCode == http.StatusOK {
-				// Should succeed
 				assert.NoError(t, err)
-				assert.Equal(t, tt.expectedStatusCode, rec.Code)
-				assert.Contains(t, rec.Body.String(), tt.expectedBody)
+				assert.True(t, nextCalled, "next should run on valid token")
 			} else {
-				// Should return an HTTP error
-				assert.Error(t, err)
-
-				// Check if it's an echo.HTTPError
-				var httpErr *echo.HTTPError
-				require.True(t, errors.As(err, &httpErr))
-				assert.Equal(t, tt.expectedStatusCode, httpErr.Code)
+				assert.False(t, nextCalled, "next must not run when auth fails")
+				assertAPIErrorStatus(t, err, tt.expectedStatusCode)
 			}
 		})
 	}
@@ -227,12 +213,7 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 	}
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
-	testHandler := func(c *echo.Context) error {
-		return c.String(http.StatusOK, "success")
-	}
-
-	authMiddleware := debugHandlers.authMiddleware()
-	wrappedHandler := authMiddleware(testHandler)
+	authMiddleware := debugHandlers.authMiddleware(nil)
 
 	// Test tokens that are similar but not exact
 	tokens := []struct {
@@ -249,23 +230,18 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 
 	for _, tt := range tokens {
 		t.Run("token_"+tt.token, func(t *testing.T) {
-			e := echo.New()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.Header.Set("Authorization", "Bearer "+tt.token)
 			req.RemoteAddr = "127.0.0.1:12345"
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := wrappedHandler(c)
+			nextCalled, err := invokeDebugMiddleware(authMiddleware, req)
 
 			if tt.expected {
 				assert.NoError(t, err)
-				assert.Equal(t, http.StatusOK, rec.Code)
+				assert.True(t, nextCalled)
 			} else {
-				assert.Error(t, err)
-				var httpErr *echo.HTTPError
-				require.True(t, errors.As(err, &httpErr))
-				assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+				assert.False(t, nextCalled)
+				assertAPIErrorStatus(t, err, http.StatusUnauthorized)
 			}
 		})
 	}

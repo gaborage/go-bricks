@@ -5,8 +5,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/labstack/echo/v5"
-
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
@@ -28,9 +26,9 @@ type TimeoutProvider interface {
 type ServerRunner interface {
 	Start() error
 	Shutdown(ctx context.Context) error
-	Echo() *echo.Echo
+	RootGroup() server.RouteRegistrar
 	ModuleGroup() server.RouteRegistrar
-	RegisterReadyHandler(handler echo.HandlerFunc)
+	RegisterReadyHandler(handler server.Handler)
 }
 
 // TenantStore combines the interfaces required by the database, messaging, and cache managers.

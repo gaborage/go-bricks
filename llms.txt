@@ -163,7 +163,7 @@ type CreateUserReq struct {
 }
 
 func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	user, err := h.svc.Create(ctx.Echo.Request().Context(), req.Name, req.Email)
+	user, err := h.svc.Create(ctx.RequestContext(), req.Name, req.Email)
 	switch {
 	case errors.Is(err, ErrUserExists):
 		return server.Result[User]{}, server.NewConflictError(err.Error())
@@ -519,7 +519,7 @@ type User struct {
 }
 
 func (h *Handler) Create(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	reqCtx := ctx.Echo.Request().Context()
+	reqCtx := ctx.RequestContext()
 	user, err := h.svc.Create(reqCtx, req)
 	if err != nil {
 		return server.Result[User]{}, server.NewInternalServerError(err.Error())
@@ -544,7 +544,7 @@ type GetUserReq struct {
 }
 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	user, err := h.svc.FindByID(ctx.Echo.Request().Context(), req.ID)
+	user, err := h.svc.FindByID(ctx.RequestContext(), req.ID)
 	if err != nil {
 		return server.Result[User]{}, server.NewNotFoundError("user")
 	}
@@ -565,7 +565,7 @@ func (h *Handler) ListUsers(req ListUsersReq, ctx server.HandlerContext) (server
 	if limit == 0 {
 		limit = 20 // Default
 	}
-	users, err := h.svc.List(ctx.Echo.Request().Context(), req.Status, limit)
+	users, err := h.svc.List(ctx.RequestContext(), req.Status, limit)
 	if err != nil {
 		return server.Result[[]User]{}, server.NewInternalServerError(err.Error())
 	}
@@ -595,7 +595,7 @@ type ListUsersResp struct {
 }
 
 func (h *Handler) ListUsersPaginated(req ListUsersReq, hctx server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
-	ctx := hctx.Echo.Request().Context()
+	ctx := hctx.RequestContext()
 	users, total, err := h.svc.ListPaged(ctx, req.Limit, req.Offset)
 	if err != nil {
 		return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError(err.Error())
@@ -629,7 +629,7 @@ type FileUploadRequest struct {
 }
 
 func (h *Handler) UploadFile(req *FileUploadRequest, ctx server.HandlerContext) (server.Result[UploadResponse], server.IAPIError) {
-	reqCtx := ctx.Echo.Request().Context()
+	reqCtx := ctx.RequestContext()
 	fileID, err := h.storageService.Store(reqCtx, req.Data, req.Filename, req.MimeType)
 	if err != nil {
 		return server.Result[UploadResponse]{}, server.NewInternalServerError(err.Error())
@@ -645,7 +645,7 @@ type BulkExportResponse struct {
 }
 
 func (h *Handler) ExportRecords(req ExportRequest, ctx server.HandlerContext) (*BulkExportResponse, server.IAPIError) {
-	reqCtx := ctx.Echo.Request().Context()
+	reqCtx := ctx.RequestContext()
 	records, err := h.recordService.GetAll(reqCtx, req.Filter)
 	if err != nil {
 		return nil, server.NewInternalServerError(err.Error())
@@ -670,7 +670,7 @@ type BulkImportResponse struct {
 }
 
 func (h *Handler) BulkImport(req *BulkImportRequest, ctx server.HandlerContext) (*BulkImportResponse, server.IAPIError) {
-	reqCtx := ctx.Echo.Request().Context()
+	reqCtx := ctx.RequestContext()
 	result, err := h.importService.ProcessBulk(reqCtx, req.Records, req.DryRun)
 	if err != nil {
 		return nil, server.NewInternalServerError(err.Error())
@@ -716,7 +716,7 @@ type LegacyUser struct {
 }
 
 func (h *Handler) getLegacyUser(req GetUserReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
-    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
+    user, err := h.svc.Find(ctx.RequestContext(), req.ID)
     if err != nil {
         return LegacyUser{}, server.NewNotFoundError("user")
     }
@@ -733,7 +733,7 @@ func (h *Handler) getLegacyUser(req GetUserReq, ctx server.HandlerContext) (Lega
 // === Custom Status with Result[R] ===
 
 func (h *Handler) createLegacyUser(req CreateReq, ctx server.HandlerContext) (server.Result[LegacyUser], server.IAPIError) {
-    user, err := h.svc.Create(ctx.Echo.Request().Context(), req)
+    user, err := h.svc.Create(ctx.RequestContext(), req)
     if err != nil {
         return server.Result[LegacyUser]{}, server.NewInternalServerError("creation failed")
     }
@@ -755,7 +755,7 @@ type DeleteReq struct {
 }
 
 func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (server.NoContentResult, server.IAPIError) {
-    err := h.svc.Delete(ctx.Echo.Request().Context(), req.ID)
+    err := h.svc.Delete(ctx.RequestContext(), req.ID)
     if err != nil {
         // Return domain error in legacy format via IAPIError
         return server.NoContentResult{}, server.NewBusinessLogicError("DELETE_BLOCKED", "Cannot delete user with active orders")
@@ -768,7 +768,7 @@ func (h *Handler) deleteLegacyUser(req DeleteReq, ctx server.HandlerContext) (se
 // For FULL control over legacy error shapes (not just code/message), return errors
 // as the response type R instead of using IAPIError:
 func (h *Handler) updateLegacyUser(req GetUserReq, ctx server.HandlerContext) (server.Result[LegacyErrorResponse], server.IAPIError) {
-    err := h.svc.Update(ctx.Echo.Request().Context(), req.ID)
+    err := h.svc.Update(ctx.RequestContext(), req.ID)
     if err != nil {
         // Domain error in legacy format — returned as the response, not IAPIError
         return server.NewResult(http.StatusUnprocessableEntity, LegacyErrorResponse{
@@ -805,7 +805,7 @@ The framework configures timeouts at every external boundary; **inherited deadli
 // All framework operations (DB, cache, HTTP client, AMQP) propagate it automatically.
 
 func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()  // already has the 5s deadline
+    reqCtx := ctx.RequestContext()  // already has the 5s deadline
 
     // No wrapping needed — every call below observes the inherited deadline:
     _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
@@ -834,7 +834,7 @@ func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
 // sheds the parent's cancellation/deadline. Always re-apply a fresh budget.
 
 func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Result[Receipt], server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()
+    reqCtx := ctx.RequestContext()
     bgCtx := context.WithoutCancel(reqCtx)
     bgCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
     go func() {
@@ -873,47 +873,51 @@ func (h *Handler) acceptJob(req JobReq, ctx server.HandlerContext) (server.Resul
 
 import (
 	"context"
+	"net/http"
+	"time"
 
-	"github.com/labstack/echo/v5"
-	"github.com/gaborage/go-bricks/server"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/server"
 )
 
-// Authentication middleware - validates token and injects user into context
-func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		token := c.Request().Header.Get("Authorization")
-		if token == "" {
-			return server.NewUnauthorizedError("missing authorization header")
-		}
+// ctxKey is an unexported context-key type — the idiomatic way to avoid cross-package
+// key collisions (go vet / staticcheck SA1029) instead of a bare string literal.
+type ctxKey string
 
-		// Validate token (your auth logic here)
-		userID, err := validateToken(token)
-		if err != nil {
-			return server.NewUnauthorizedError("invalid token")
-		}
+const userIDKey ctxKey = "user_id"
 
-		// Add user to context for downstream handlers
-		ctx := context.WithValue(c.Request().Context(), "user_id", userID)
-		c.SetRequest(c.Request().WithContext(ctx))
-		return next(c)
+// Authentication middleware - validates token and injects user into context.
+// A no-arg middleware can be a plain func whose signature IS server.MiddlewareFunc,
+// so it registers directly with r.Use(AuthMiddleware) / r.Group("/admin", AuthMiddleware).
+func AuthMiddleware(c server.HandlerContext, next func() error) error {
+	token := c.RequestHeader("Authorization")
+	if token == "" {
+		return server.NewUnauthorizedError("missing authorization header")
 	}
+
+	// Validate token (your auth logic here)
+	userID, err := validateToken(token)
+	if err != nil {
+		return server.NewUnauthorizedError("invalid token")
+	}
+
+	// Add user to the request context for downstream handlers
+	c.SetRequestContext(context.WithValue(c.RequestContext(), userIDKey, userID))
+	return next()
 }
 
-// Logging middleware - logs request details
-func LoggingMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+// Logging middleware - a constructor capturing an injected logger. The flat MiddlewareFunc
+// itself takes no logger, so wrap it in a constructor (vs. AuthMiddleware's no-arg plain form).
+func LoggingMiddleware(log logger.Logger) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
 		start := time.Now()
-		err := next(c)
-		duration := time.Since(start)
-
-		logger.Info().
+		err := next()
+		log.Info().
 			Str("method", c.Request().Method).
 			Str("path", c.Request().URL.Path).
-			Int("status", c.Response().Status).
-			Dur("duration", duration).
+			Dur("duration", time.Since(start)).
 			Msg("Request completed")
-
 		return err
 	}
 }
@@ -922,7 +926,7 @@ func LoggingMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Global middleware for all routes in this module
-	r.Use(LoggingMiddleware)
+	r.Use(LoggingMiddleware(m.logger))
 
 	// Group with auth middleware - all routes inherit it
 	admin := r.Group("/admin", AuthMiddleware)
@@ -938,46 +942,41 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 // === Middleware with Skipper (Conditional Execution) ===
 
 // RateLimitWithSkipper - skips rate limiting for health probes
-func RateLimitWithSkipper(rps int, skipper func(echo.Context) bool) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			if skipper != nil && skipper(c) {
-				return next(c) // Skip rate limiting
-			}
-			// Apply rate limiting logic here
-			return next(c)
+func RateLimitWithSkipper(rps int, skipper server.SkipperFunc) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
+		if skipper != nil && skipper(c.Request()) {
+			return next() // Skip rate limiting
 		}
+		// Apply rate limiting logic here
+		return next()
 	}
 }
 
-// Common skipper - skip health and ready probes
-func healthSkipper(c echo.Context) bool {
-	path := c.Request().URL.Path
+// Common skipper - skip health and ready probes (server.SkipperFunc = func(*http.Request) bool)
+func healthSkipper(r *http.Request) bool {
+	path := r.URL.Path
 	return path == "/health" || path == "/ready"
 }
 
 // === Context Propagation Pattern (Tenant/User Injection) ===
 
 // TenantMiddleware - extracts tenant from header and injects into context
-func TenantMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		tenantID := c.Request().Header.Get("X-Tenant-ID")
-		if tenantID == "" {
-			return server.NewBadRequestError("X-Tenant-ID header required")
-		}
-
-		// Inject tenant into context - available to all downstream code
-		ctx := multitenant.SetTenant(c.Request().Context(), tenantID)
-		c.SetRequest(c.Request().WithContext(ctx))
-		return next(c)
+func TenantMiddleware(c server.HandlerContext, next func() error) error {
+	tenantID := c.RequestHeader("X-Tenant-ID")
+	if tenantID == "" {
+		return server.NewBadRequestError("X-Tenant-ID header required")
 	}
+
+	// Inject tenant into the request context - available to all downstream code
+	c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), tenantID))
+	return next()
 }
 
 // Access tenant in handler
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	tenantID, _ := multitenant.GetTenant(ctx.Echo.Request().Context())
+	tenantID, _ := multitenant.GetTenant(ctx.RequestContext())
 	// tenantID is now available for tenant-specific logic
-	user, err := h.svc.GetUserForTenant(ctx.Echo.Request().Context(), tenantID, req.ID)
+	user, err := h.svc.GetUserForTenant(ctx.RequestContext(), tenantID, req.ID)
 	// ...
 }
 ```
@@ -1867,8 +1866,8 @@ return processJob(ctx)
 import "github.com/gaborage/go-bricks/multitenant"
 
 // HTTP handler - tenant resolved from request headers/hostname
-func (h *Handler) GetUser(c echo.Context) error {
-    ctx := c.Request().Context()  // Tenant already in context via middleware
+func (h *Handler) GetUser(c server.HandlerContext) error {
+    ctx := c.RequestContext()  // Tenant already in context via middleware
 
     user, err := h.service.GetUser(ctx, userID)  // Uses tenant-specific cache
     return c.JSON(200, user)
@@ -3211,7 +3210,7 @@ type jtiCache interface {
 }
 
 func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (ExchangeResponse, server.IAPIError) {
-    reqCtx := ctx.Echo.Request().Context()
+    reqCtx := ctx.RequestContext()
     claims := jose.ClaimsFromContext(reqCtx)
     if claims == nil {
         // Defensive — this only happens if the route is not actually JOSE-protected
@@ -3475,7 +3474,7 @@ func NewHandler(getDB func(context.Context) (database.Interface, error), logger 
 func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
     // Tenant automatically resolved from X-Tenant-ID header by middleware
     // Context contains tenant ID when multitenant.enabled: true
-    reqCtx := ctx.Echo.Request().Context()
+    reqCtx := ctx.RequestContext()
 
     user, err := h.svc.GetUser(reqCtx, req.ID)
     if err != nil {
@@ -3777,7 +3776,7 @@ type ListTenantsResp struct {
 }
 
 func (h *Handler) listTenants(req ListTenantsReq, ctx server.HandlerContext) (server.Result[ListTenantsResp], server.IAPIError) {
-    ids, next, err := h.tenants.Page(ctx.Echo.Request().Context(), req.Limit, req.Cursor)
+    ids, next, err := h.tenants.Page(ctx.RequestContext(), req.Limit, req.Cursor)
     if err != nil {
         return server.Result[ListTenantsResp]{}, server.NewInternalServerError(err.Error())
     }
@@ -4248,14 +4247,14 @@ type CreateUserReq struct {
 }
 
 func (h *Handler) CreateUser(req CreateUserReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-	log := h.logger.WithContext(ctx.Echo.Request().Context())
+	log := h.logger.WithContext(ctx.RequestContext())
 
 	log.Info().
 		Str("email", req.Email).
 		Str("role", req.Role).
 		Msg("Creating new user")
 
-	user, err := h.service.Create(ctx.Echo.Request().Context(), req)
+	user, err := h.service.Create(ctx.RequestContext(), req)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -4399,7 +4398,6 @@ Action logs derive severity automatically:
 
 ```go
 import (
-    "github.com/labstack/echo/v5"
     "github.com/rs/zerolog"
 
     "github.com/gaborage/go-bricks/server"
@@ -4407,14 +4405,12 @@ import (
 
 // Inside any middleware or handler — escalates the request's action-log severity.
 // Once escalated to WARN+, the action log is emitted at that level even on a 2xx response.
-func RateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-    return func(c *echo.Context) error {
-        if exceededRateLimit(c) {
-            server.EscalateSeverity(c, zerolog.WarnLevel) // request summary now logs at WARN
-            return c.JSON(429, map[string]string{"error": "rate limited"})
-        }
-        return next(c)
+func RateLimitMiddleware(c server.HandlerContext, next func() error) error {
+    if exceededRateLimit(c) {
+        c.EscalateSeverity(zerolog.WarnLevel) // request summary now logs at WARN
+        return c.JSON(429, map[string]string{"error": "rate limited"})
     }
+    return next()
 }
 ```
 
@@ -4934,8 +4930,8 @@ For application logs, exercise the production logger directly and capture into a
 | Startup panics with "cannot use OTLP logs with pretty=true" | `logger.pretty: true` while `observability.logs.enabled: true` — the dual-mode log processor needs the output to be structured JSON | Set `logger.pretty: false` whenever logs export to OTLP |
 | gRPC error: `frame too large, note that the frame header looked like an HTTP/1.1 header` | gRPC client connecting to an HTTP endpoint (e.g. port `4318` with `protocol: grpc`, or `https://...` scheme with gRPC) | Use `host:port` (no scheme) on port `4317` for gRPC; use `https://host:port/v1/...` on port `4318` for HTTP |
 | Spans appear in console (`endpoint: stdout`) but not in collector | App can't reach collector / TLS misconfiguration / batch hasn't flushed yet | Check connectivity, set `insecure: true` for in-cluster collectors, wait for batch flush (~5s prod) or trigger graceful shutdown |
-| Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.Echo.Request().Context()` |
-| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slowrequestthreshold` or call `server.EscalateSeverity(c, level)` |
+| Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.RequestContext()` |
+| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slowrequestthreshold` or call `c.EscalateSeverity(level)` |
 | INFO/DEBUG application logs are dropped | Default `samplingrate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.samplingrate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
 | Custom metric is `nil` when recording | `observability.enabled: false` makes `deps.MeterProvider` a no-op, but the helper-returned instruments may still be `nil` if `Meter()` was never called | Always nil-check before recording: `if m.counter != nil { m.counter.Add(...) }` |
 | Noisy `[OBSERVABILITY]` debug output | `GOBRICKS_DEBUG` env var is set | Unset `GOBRICKS_DEBUG` |
@@ -5037,7 +5033,7 @@ func mapOrderError(err error) server.IAPIError {
 
 // Handler uses the mapper for consistent error translation
 func (h *Handler) CreateOrder(req CreateOrderReq, ctx server.HandlerContext) (server.Result[Order], server.IAPIError) {
-    order, err := h.svc.Create(ctx.Echo.Request().Context(), req.ProductID, req.Quantity)
+    order, err := h.svc.Create(ctx.RequestContext(), req.ProductID, req.Quantity)
     if err != nil {
         return server.Result[Order]{}, mapOrderError(err)
     }

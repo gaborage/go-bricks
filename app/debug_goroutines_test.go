@@ -6,11 +6,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/server"
 )
 
 const (
@@ -474,10 +474,9 @@ func TestHandleGC(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
 	// Create test request
-	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/gc", http.NoBody)
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
+	c := server.NewHandlerContextForTest(rec, req, nil)
 
 	// Execute handler
 	err := debugHandlers.handleGC(c)
@@ -503,10 +502,9 @@ func TestHandleForceGC(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
 	// Create test request
-	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/gc", http.NoBody)
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
+	c := server.NewHandlerContextForTest(rec, req, nil)
 
 	// Execute handler
 	err := debugHandlers.handleForceGC(c)

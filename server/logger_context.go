@@ -100,12 +100,12 @@ func (r *requestLogContext) hadExplicitWarningOccurred() bool {
 // Example:
 //
 //	if rateLimit.Exceeded() {
-//	    server.EscalateSeverity(c, zerolog.WarnLevel)
+//	    ctx.EscalateSeverity(zerolog.WarnLevel)
 //	}
 //
 // Thread-safe: Can be called from multiple goroutines concurrently.
-func EscalateSeverity(c *echo.Context, level zerolog.Level) {
-	if reqCtx := getRequestLogContext(c); reqCtx != nil {
+func (c HandlerContext) EscalateSeverity(level zerolog.Level) {
+	if reqCtx := getRequestLogContext(c.echoContext()); reqCtx != nil {
 		reqCtx.escalateSeverity(level)
 	}
 }

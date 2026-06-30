@@ -18,7 +18,18 @@ const (
 // RateLimit returns a rate limiting middleware with the specified requests per second.
 // It limits the number of requests from each IP address to prevent abuse.
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
-func RateLimit(requestsPerSecond int) echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in rateLimitEcho, which SetupMiddlewares wires directly
+// on the default request path (ADR-026, no per-request baton).
+func RateLimit(requestsPerSecond int) MiddlewareFunc {
+	return fromEchoMiddleware(rateLimitEcho(requestsPerSecond))
+}
+
+// rateLimitEcho is the echo-native rate-limiting middleware constructor. Public
+// callers use RateLimit (echo-free); SetupMiddlewares uses this form to keep the
+// default chain baton-free.
+func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
 	if requestsPerSecond <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -174,8 +173,7 @@ type mockServer struct {
 	shutdownErr   error
 	startCalls    int32
 	shutdownCalls int32
-	e             *echo.Echo
-	readyHandler  echo.HandlerFunc
+	readyHandler  server.Handler
 
 	gate     chan struct{}
 	gateOnce sync.Once
@@ -184,7 +182,6 @@ type mockServer struct {
 func newMockServer() *mockServer {
 	return &mockServer{
 		startErr: http.ErrServerClosed,
-		e:        echo.New(),
 		gate:     make(chan struct{}),
 	}
 }
@@ -208,15 +205,15 @@ func (m *mockServer) Shutdown(ctx context.Context) error {
 	return m.shutdownErr
 }
 
-func (m *mockServer) Echo() *echo.Echo {
-	return m.e
+func (m *mockServer) RootGroup() server.RouteRegistrar {
+	return &noopRouteRegistrar{}
 }
 
 func (m *mockServer) ModuleGroup() server.RouteRegistrar {
 	return &noopRouteRegistrar{}
 }
 
-func (m *mockServer) RegisterReadyHandler(handler echo.HandlerFunc) {
+func (m *mockServer) RegisterReadyHandler(handler server.Handler) {
 	m.readyHandler = handler
 }
 
@@ -230,15 +227,15 @@ func (m *mockServer) shutdownCount() int {
 
 type noopRouteRegistrar struct{}
 
-func (n *noopRouteRegistrar) Add(_, _ string, _ echo.HandlerFunc, _ ...echo.MiddlewareFunc) echo.RouteInfo {
-	return echo.RouteInfo{}
+func (n *noopRouteRegistrar) Add(_, _ string, _ server.Handler, _ ...server.MiddlewareFunc) {
+	// No-op
 }
 
-func (n *noopRouteRegistrar) Group(_ string, _ ...echo.MiddlewareFunc) server.RouteRegistrar {
+func (n *noopRouteRegistrar) Group(_ string, _ ...server.MiddlewareFunc) server.RouteRegistrar {
 	return &noopRouteRegistrar{}
 }
 
-func (n *noopRouteRegistrar) Use(_ ...echo.MiddlewareFunc) {
+func (n *noopRouteRegistrar) Use(_ ...server.MiddlewareFunc) {
 	// No-op
 }
 
@@ -494,7 +491,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	}
 
 	fixture.rebuildClosersAndHealth()
-	fixture.server.Echo().GET(readyEndpoint, fixture.app.readyCheck)
+	fixture.server.RegisterReadyHandler(fixture.app.readyCheck)
 
 	return fixture
 }
@@ -546,11 +543,10 @@ func defaultTestConfig() *config.Config {
 	}
 }
 
-func (f *testAppFixture) newReadyContext() (*echo.Context, *httptest.ResponseRecorder) {
-	e := echo.New()
+func (f *testAppFixture) newReadyContext() (server.HandlerContext, *httptest.ResponseRecorder) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
 	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
+	c := server.NewHandlerContextForTest(rec, req, f.app.cfg)
 	return c, rec
 }
 
@@ -1346,9 +1342,9 @@ type stubServerRunner struct{}
 
 func (s *stubServerRunner) Start() error                       { return nil }
 func (s *stubServerRunner) Shutdown(_ context.Context) error   { return nil }
-func (s *stubServerRunner) Echo() *echo.Echo                   { return echo.New() }
+func (s *stubServerRunner) RootGroup() server.RouteRegistrar   { return nil }
 func (s *stubServerRunner) ModuleGroup() server.RouteRegistrar { return nil }
-func (s *stubServerRunner) RegisterReadyHandler(_ echo.HandlerFunc) {
+func (s *stubServerRunner) RegisterReadyHandler(_ server.Handler) {
 	// no-op
 }
 

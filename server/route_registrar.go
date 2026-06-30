@@ -3,38 +3,63 @@ package server
 import (
 	"github.com/labstack/echo/v5"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 type routeGroup struct {
 	group  *echo.Group
 	prefix string
+	cfg    *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
 }
 
-func newRouteGroup(group *echo.Group, prefix string) RouteRegistrar {
+func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) RouteRegistrar {
 	return &routeGroup{
 		group:  group,
 		prefix: pathutil.NormalizePrefix(prefix),
+		cfg:    cfg,
 	}
 }
 
-func (rg *routeGroup) Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo {
-	normalized := rg.relativePath(path)
-	return rg.group.Add(method, normalized, handler, middleware...)
+// addEcho implements the unexported echoAdder seam: it registers a pre-built
+// echo.HandlerFunc directly, so the framework's typed-handler hot path pays no
+// per-request adapter cost (ADR-026).
+func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc) {
+	rg.group.Add(method, rg.relativePath(path), h)
 }
 
-func (rg *routeGroup) Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar {
+// Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
+// adapters are built once here at registration time; the route handle (echo.RouteInfo)
+// is intentionally discarded.
+func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
+	rg.group.Add(method, rg.relativePath(path), adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
+}
+
+func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
 	normalized := pathutil.NormalizePrefix(prefix)
-	newGroup := rg.group.Group(normalized, middleware...)
+	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
 
 	return &routeGroup{
 		group:  newGroup,
 		prefix: rg.combinePrefix(normalized),
+		cfg:    rg.cfg,
 	}
 }
 
-func (rg *routeGroup) Use(middleware ...echo.MiddlewareFunc) {
-	rg.group.Use(middleware...)
+func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
+	rg.group.Use(rg.adaptAll(middleware)...)
+}
+
+// adaptAll converts a slice of flat MiddlewareFunc to echo middleware using the group's config.
+func (rg *routeGroup) adaptAll(mw []MiddlewareFunc) []echo.MiddlewareFunc {
+	if len(mw) == 0 {
+		return nil
+	}
+	out := make([]echo.MiddlewareFunc, len(mw))
+	for i, m := range mw {
+		out[i] = adaptMiddleware(m, rg.cfg)
+	}
+	return out
 }
 
 func (rg *routeGroup) FullPath(path string) string {

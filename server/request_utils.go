@@ -45,7 +45,18 @@ func validateRequestID(id string) string {
 //
 // Register this BEFORE TraceContext and any logger/rate-limit middleware
 // so the rest of the stack sees a sanitized value.
-func RequestIDMiddleware() echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in requestIDMiddlewareEcho, which SetupMiddlewares wires
+// directly on the default request path (ADR-026, no per-request baton).
+func RequestIDMiddleware() MiddlewareFunc {
+	return fromEchoMiddleware(requestIDMiddlewareEcho())
+}
+
+// requestIDMiddlewareEcho is the echo-native request-ID middleware constructor.
+// Public callers use RequestIDMiddleware (echo-free); SetupMiddlewares uses this
+// form to keep the default chain baton-free.
+func requestIDMiddlewareEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			id := validateRequestID(c.Request().Header.Get(echo.HeaderXRequestID))

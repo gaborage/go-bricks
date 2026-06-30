@@ -145,6 +145,17 @@ jobs:
           # Test all packages - tools/* are separate modules, excluded automatically
           go test -race -cover -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
+      - name: Enforce ADR-026 allocation guards (no -race)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          # The race detector inflates testing.AllocsPerRun counts, so these guards skip
+          # under -race (server/alloc_guard_*_test.go). Run them without -race so the
+          # ADR-026 zero-overhead invariant (typed-path allocs/op ceiling + echo-native
+          # default chain) is actually enforced on PRs, not silently skipped. Delegates to
+          # the `make test-alloc` target so the command lives in exactly one place.
+          make test-alloc
+
       - name: Run tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh

@@ -394,14 +394,14 @@ type taggedResp struct {
 }
 
 // fakeRegistrar collects added routes without standing up a real Echo router.
+// It satisfies the echo-free RouteRegistrar interface only (no addEcho seam), so
+// RegisterHandler exercises its non-echoAdder fallback path through Add.
 type fakeRegistrar struct{}
 
-func (fakeRegistrar) Add(string, string, echo.HandlerFunc, ...echo.MiddlewareFunc) echo.RouteInfo {
-	return echo.RouteInfo{}
-}
-func (fakeRegistrar) Group(string, ...echo.MiddlewareFunc) RouteRegistrar { return fakeRegistrar{} }
-func (fakeRegistrar) Use(...echo.MiddlewareFunc)                          {}
-func (fakeRegistrar) FullPath(p string) string                            { return p }
+func (fakeRegistrar) Add(_, _ string, _ Handler, _ ...MiddlewareFunc) {}
+func (fakeRegistrar) Group(string, ...MiddlewareFunc) RouteRegistrar  { return fakeRegistrar{} }
+func (fakeRegistrar) Use(...MiddlewareFunc)                           {}
+func (fakeRegistrar) FullPath(p string) string                        { return p }
 
 func registerJOSE[T, R any](resolver jose.KeyResolver, opts ...RouteOption) func() {
 	return func() {

@@ -125,7 +125,7 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	// middleware is registered only when observability is enabled (zero overhead when off).
 	SetupMiddlewares(e, log, cfg, cfg.Bool("observability.enabled", false), healthPath, readyPath)
 
-	s.RegisterReadyHandler(s.readyCheck)
+	s.RegisterReadyHandler(nil)
 
 	e.GET(healthPath, s.healthCheck)
 	e.HEAD(healthPath, s.healthCheck)
@@ -141,30 +141,33 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	return s
 }
 
-// Echo returns the underlying Echo instance for route registration.
-// This allows modules to register their routes with the server.
-func (s *Server) Echo() *echo.Echo {
-	return s.echo
-}
-
-// ModuleGroup returns an Echo group with the base path applied for module route registration.
-// If no base path is configured, it returns a group with empty prefix.
+// ModuleGroup returns a route registrar with the base path applied for module route
+// registration. If no base path is configured, it returns a registrar with empty prefix.
 func (s *Server) ModuleGroup() RouteRegistrar {
 	if s.basePath == "" || s.basePath == "/" {
-		return newRouteGroup(s.echo.Group(""), "")
+		return newRouteGroup(s.echo.Group(""), "", s.cfg)
 	}
-	return newRouteGroup(s.echo.Group(s.basePath), s.basePath)
+	return newRouteGroup(s.echo.Group(s.basePath), s.basePath, s.cfg)
 }
 
-// RegisterReadyHandler overrides the ready endpoint handler.
-// Passing nil restores the default handler.
-func (s *Server) RegisterReadyHandler(handler echo.HandlerFunc) {
-	if handler == nil {
-		handler = s.readyCheck
-	}
+// RootGroup returns a route registrar rooted at the engine with NO base path applied. It
+// is the registration surface for framework-internal endpoints that must sit at the URL
+// root regardless of server.path.base — e.g. the debug/system endpoints. It replaces the
+// former Echo() accessor for that internal need without exposing the engine.
+func (s *Server) RootGroup() RouteRegistrar {
+	return newRouteGroup(s.echo.Group(""), "", s.cfg)
+}
+
+// RegisterReadyHandler overrides the readiness endpoint handler with a go-bricks Handler.
+// Passing nil restores the default handler. The handler is adapted to the engine once here.
+func (s *Server) RegisterReadyHandler(handler Handler) {
 	s.readyMu.Lock()
-	s.readyHandler = handler
-	s.readyMu.Unlock()
+	defer s.readyMu.Unlock()
+	if handler == nil {
+		s.readyHandler = s.readyCheck
+	} else {
+		s.readyHandler = adaptHandler(handler, s.cfg)
+	}
 }
 
 // dispatchReady executes the currently registered ready handler.

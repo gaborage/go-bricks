@@ -72,7 +72,7 @@ type ListTenantsResp struct {
 }
 
 func (h *Handler) listTenants(req ListTenantsReq, ctx server.HandlerContext) (server.Result[ListTenantsResp], server.IAPIError) {
-    ids, next, err := h.tenants.Page(ctx.Echo.Request().Context(), req.Limit, req.Cursor)
+    ids, next, err := h.tenants.Page(ctx.RequestContext(), req.Limit, req.Cursor)
     if err != nil {
         return server.Result[ListTenantsResp]{}, server.NewInternalServerError(err.Error())
     }

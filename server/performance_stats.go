@@ -9,7 +9,16 @@ import (
 // PerformanceStats returns middleware that initializes operation tracking for each request.
 // It adds both AMQP message counter and database operation counter to the request context
 // that can be incremented by messaging clients and database layer, then logged in the request logger.
-func PerformanceStats() echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in performanceStatsEcho.
+func PerformanceStats() MiddlewareFunc {
+	return fromEchoMiddleware(performanceStatsEcho())
+}
+
+// performanceStatsEcho is the echo-native operation-tracking middleware constructor.
+// Public callers use PerformanceStats (echo-free).
+func performanceStatsEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			// Seed the shared per-request AMQP/DB counters.

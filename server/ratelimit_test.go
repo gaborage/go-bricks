@@ -57,7 +57,7 @@ func TestRateLimit(t *testing.T) {
 			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
 			e := echo.New()
-			e.Use(RateLimit(tt.requestsPerSec))
+			e.Use(rateLimitEcho(tt.requestsPerSec))
 
 			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -95,7 +95,7 @@ func TestRateLimit(t *testing.T) {
 
 func TestRateLimitDifferentIPs(t *testing.T) {
 	e := echo.New()
-	e.Use(RateLimit(2)) // Very low limit to trigger easily
+	e.Use(rateLimitEcho(2)) // Very low limit to trigger easily
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -135,7 +135,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 
 func TestRateLimitErrorResponse(t *testing.T) {
 	e := echo.New()
-	e.Use(RateLimit(1)) // Very restrictive limit
+	e.Use(rateLimitEcho(1)) // Very restrictive limit
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -178,7 +178,7 @@ func TestRateLimitErrorResponse(t *testing.T) {
 func TestRateLimitIPExtraction(t *testing.T) {
 	e := echo.New()
 	e.IPExtractor = echo.LegacyIPExtractor() // Restore v4-compatible header-based IP extraction
-	e.Use(RateLimit(2))
+	e.Use(rateLimitEcho(2))
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -262,7 +262,7 @@ func TestRateLimitDisabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			e.Use(RateLimit(0))
+			e.Use(rateLimitEcho(0))
 
 			callCount := 0
 			handler := func(c *echo.Context) error {
@@ -300,7 +300,7 @@ func TestRateLimitReset(t *testing.T) {
 	}
 
 	e := echo.New()
-	e.Use(RateLimit(2)) // 2 requests per second
+	e.Use(rateLimitEcho(2)) // 2 requests per second
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

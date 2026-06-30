@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/labstack/echo/v5"
+	"github.com/gaborage/go-bricks/server"
 )
 
 const (
@@ -52,7 +52,7 @@ type Info struct {
 }
 
 // handleHealthDebug provides comprehensive health debugging information
-func (d *DebugHandlers) handleHealthDebug(c *echo.Context) error {
+func (d *DebugHandlers) handleHealthDebug(c server.HandlerContext) error {
 	start := time.Now()
 
 	healthInfo := &HealthDebugInfo{
@@ -63,7 +63,7 @@ func (d *DebugHandlers) handleHealthDebug(c *echo.Context) error {
 	// Run all health probes and collect detailed information
 	for _, probe := range d.app.healthProbes {
 		probeStart := time.Now()
-		result := probe.Run(c.Request().Context())
+		result := probe.Run(c.RequestContext())
 		duration := time.Since(probeStart)
 
 		component := ComponentHealth{
