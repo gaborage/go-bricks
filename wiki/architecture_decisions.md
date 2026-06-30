@@ -418,6 +418,34 @@ Direct callers must capture and invoke it; unscoped contexts release immediately
 
 ---
 
+### [ADR-033: Bounded Publish Retries + Status-Driven Outbox Dead-Lettering](adr_033_outbox_retry_count_status_parking.md)
+
+**Date:** 2026-06-30 | **Status:** Accepted
+
+The outbox relay's per-row `retry_count` stayed frozen under negative conditions (broker down,
+missing exchange) even though the relay logged that it was "retrying". Two defects: (1)
+`AMQPClientImpl.PublishToExchange` retried in an **unbounded loop** whose counter was only logged,
+never a ceiling — and the relay calls it with a deadline-free context, so it never returned to run
+`MarkFailed`; (2) the relay **early-returned** when the broker was not ready, skipping the whole
+batch. The fix bounds the publish loop (`messaging.reconnect.maxpublishattempts`, default 5) so it
+always returns a **classifiable** error (new `ErrPublishRetriesExhausted` / `ErrPublishNacked` /
+`ErrPublishConfirmTimeout` sentinels, wrapping the last cause), and reworks the relay to advance
+`retry_count` on **every** failed attempt — including a full outage (outage fast-path) — under a
+per-record `outbox.publishtimeout` (default 60s). Parking is decoupled from the counter:
+`FetchPending` is status-gated only, and a new `MarkDeadLettered` sets `status = 'failed'` **only for
+poison (undecodable headers) at `MaxRetries`** — a broker NACK is transient and a missing exchange
+surfaces as a NACK, so both are connectivity and never park, meaning neither an outage nor a
+recoverable broker fault can exhaust a healthy event. Shutdown/cancel does not count. No DB schema
+migration.
+
+**Breaking:** `PublishToExchange` returns after `maxpublishattempts` instead of looping forever
+(observable to every publisher); the `outbox.Store` interface changed (`FetchPending` drops its
+`maxRetries` param, gains `MarkDeadLettered`).
+
+**Key Benefits:** the reported frozen-`retry_count` bug is fixed and operator-visible during outages; genuine poison becomes a visible `status = 'failed'` row instead of lingering `pending`; a prolonged broker outage can never permanently park healthy events; one stuck record can no longer starve the relay batch
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -427,7 +455,7 @@ Direct callers must capture and invoke it; unscoped contexts release immediately
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-032) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-033) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

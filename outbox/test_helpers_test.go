@@ -65,26 +65,31 @@ type fakeStore struct {
 	mu sync.Mutex
 
 	// Configurable returns.
-	InsertErr          error
-	FetchPendingResult []Record
-	FetchPendingErr    error
-	MarkPublishedErr   error
-	MarkFailedErr      error
-	DeletePublishedN   int64
-	DeletePublishedErr error
-	CreateTableErr     error
+	InsertErr           error
+	FetchPendingResult  []Record
+	FetchPendingErr     error
+	MarkPublishedErr    error
+	MarkFailedErr       error
+	MarkDeadLetteredErr error
+	DeletePublishedN    int64
+	DeletePublishedErr  error
+	CreateTableErr      error
 
 	// Call counters and last-arg captures.
-	InsertCalls           int
-	FetchPendingCalls     int
-	MarkPublishedCalls    int
-	MarkPublishedLastID   string
-	MarkFailedCalls       int
-	MarkFailedLastID      string
-	MarkFailedLastErr     string
-	DeletePublishedCalls  int
-	DeletePublishedCutoff time.Time
-	CreateTableCalls      int
+	InsertCalls             int
+	FetchPendingCalls       int
+	FetchPendingLastBatch   int
+	MarkPublishedCalls      int
+	MarkPublishedLastID     string
+	MarkFailedCalls         int
+	MarkFailedLastID        string
+	MarkFailedLastErr       string
+	MarkDeadLetteredCalls   int
+	MarkDeadLetteredLastID  string
+	MarkDeadLetteredLastErr string
+	DeletePublishedCalls    int
+	DeletePublishedCutoff   time.Time
+	CreateTableCalls        int
 }
 
 func (s *fakeStore) Insert(_ context.Context, _ dbtypes.Tx, _ *Record) error {
@@ -94,10 +99,11 @@ func (s *fakeStore) Insert(_ context.Context, _ dbtypes.Tx, _ *Record) error {
 	return s.InsertErr
 }
 
-func (s *fakeStore) FetchPending(_ context.Context, _ dbtypes.Interface, _, _ int) ([]Record, error) {
+func (s *fakeStore) FetchPending(_ context.Context, _ dbtypes.Interface, batchSize int) ([]Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.FetchPendingCalls++
+	s.FetchPendingLastBatch = batchSize
 	return s.FetchPendingResult, s.FetchPendingErr
 }
 
@@ -116,6 +122,15 @@ func (s *fakeStore) MarkFailed(_ context.Context, _ dbtypes.Interface, eventID, 
 	s.MarkFailedLastID = eventID
 	s.MarkFailedLastErr = errMsg
 	return s.MarkFailedErr
+}
+
+func (s *fakeStore) MarkDeadLettered(_ context.Context, _ dbtypes.Interface, eventID, errMsg string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.MarkDeadLetteredCalls++
+	s.MarkDeadLetteredLastID = eventID
+	s.MarkDeadLetteredLastErr = errMsg
+	return s.MarkDeadLetteredErr
 }
 
 func (s *fakeStore) DeletePublished(_ context.Context, _ dbtypes.Interface, before time.Time) (int64, error) {
@@ -145,6 +160,10 @@ type fakeAMQP struct {
 	// exchange + routing key — first hit wins. PublishErr is the fallback.
 	PublishErrFor map[string]error
 	PublishErr    error
+	// PublishBlock, keyed by exchange:routingKey, makes PublishToExchange block
+	// until ctx is done and then return ctx.Err() — simulating a stuck broker that
+	// the relay's per-record PublishTimeout must interrupt without starving siblings.
+	PublishBlock map[string]bool
 
 	// Captured calls.
 	PublishCalls    int
@@ -164,17 +183,26 @@ func (f *fakeAMQP) Publish(_ context.Context, _ string, _ []byte) error { return
 
 func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.PublishOptions, data []byte) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.PublishCalls++
 	f.LastPublishOpts = opts
 	f.LastPublishData = data
 	f.LastPublishHdrs = opts.Headers
 	f.LastPublishCtx = ctx
 	key := opts.Exchange + ":" + opts.RoutingKey
-	if err, found := f.PublishErrFor[key]; found {
-		return err
+	block := f.PublishBlock[key]
+	err := f.PublishErr
+	if e, found := f.PublishErrFor[key]; found {
+		err = e
 	}
-	return f.PublishErr
+	f.mu.Unlock()
+
+	// Block (lock released) until the per-record context is canceled/expired,
+	// then surface its error — exercising the relay's per-record timeout.
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return err
 }
 
 func (f *fakeAMQP) Consume(_ context.Context, _ string) (<-chan amqp091.Delivery, error) {

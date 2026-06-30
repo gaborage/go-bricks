@@ -216,9 +216,10 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 
 	// Don't send confirmation - let it timeout and then context expires
 	err := client.Publish(ctx, destination, data)
-	// Should return context deadline exceeded
+	// Should return context deadline exceeded. The error now wraps the last retry
+	// cause (ErrPublishConfirmTimeout), so match by errors.Is rather than identity.
 	require.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 
 	// Verify span was created and recorded error
 	spans := exporter.GetSpans()

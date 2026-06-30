@@ -76,17 +76,17 @@ func (s *postgresStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Recor
 	return nil
 }
 
-func (s *postgresStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error) {
+func (s *postgresStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error) {
 	query := fmt.Sprintf(
 		`SELECT id, event_type, aggregate_id, payload, headers, exchange, routing_key, status, retry_count, created_at
 		 FROM %s
-		 WHERE status = $1 AND retry_count < $2
+		 WHERE status = $1
 		 ORDER BY created_at ASC
-		 LIMIT $3`,
+		 LIMIT $2`,
 		s.tableName,
 	)
 
-	rows, err := db.Query(ctx, query, StatusPending, maxRetries, batchSize)
+	rows, err := db.Query(ctx, query, StatusPending, batchSize)
 	if err != nil {
 		return nil, fmt.Errorf("outbox postgres: fetch pending failed: %w", err)
 	}
@@ -134,6 +134,20 @@ func (s *postgresStore) MarkFailed(ctx context.Context, db dbtypes.Interface, ev
 	_, err := db.Exec(ctx, query, errMsg, eventID)
 	if err != nil {
 		return fmt.Errorf("outbox postgres: mark failed failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *postgresStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
+	query := fmt.Sprintf(
+		`UPDATE %s SET retry_count = retry_count + 1, status = $1, error = $2 WHERE id = $3`,
+		s.tableName,
+	)
+
+	_, err := db.Exec(ctx, query, StatusFailed, errMsg, eventID)
+	if err != nil {
+		return fmt.Errorf("outbox postgres: mark dead-lettered failed: %w", err)
 	}
 
 	return nil

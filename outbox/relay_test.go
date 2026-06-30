@@ -3,7 +3,9 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,8 +48,9 @@ func newRelayWithFakes(store *fakeStore, amqp *fakeAMQP) *Relay {
 	return &Relay{
 		store: store,
 		config: config.OutboxConfig{
-			BatchSize:  10,
-			MaxRetries: 3,
+			BatchSize:      10,
+			MaxRetries:     3,
+			PublishTimeout: 5 * time.Second,
 		},
 		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
 			return dbFromCtx(ctx), nil
@@ -66,33 +69,52 @@ func TestRelayExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {
 	assert.Contains(t, err.Error(), "database not available")
 }
 
-func TestRelayExecuteReturnsErrorWhenMessagingUnavailable(t *testing.T) {
+// TestRelayAdvancesRetryCountWhenMessagingResolverReturnsNil: a tenant whose broker
+// cannot be resolved (nil client) is treated as unreachable — every pending record's
+// retry_count advances rather than the whole cycle erroring out and freezing the count.
+func TestRelayAdvancesRetryCountWhenMessagingResolverReturnsNil(t *testing.T) {
 	db := dbtesting.NewTestDB("postgresql")
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk"},
+	}}
 	r := &Relay{
-		store:  &fakeStore{},
-		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
-		getDB:  func(context.Context) (dbtypes.Interface, error) { return db, nil },
-		// getMessaging deliberately returns nil to simulate misconfigured tenant.
+		store:        store,
+		config:       config.OutboxConfig{BatchSize: 10, MaxRetries: 3, PublishTimeout: 5 * time.Second},
+		getDB:        func(context.Context) (dbtypes.Interface, error) { return db, nil },
 		getMessaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
 		tenants:      []string{""},
 	}
 	ctx := newFakeJobCtx(db, nil)
 
 	err := r.Execute(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "messaging not available")
+	require.Error(t, err, "an unusable broker with pending work surfaces as a job error")
+	assert.Contains(t, err.Error(), "messaging not ready")
+	assert.Equal(t, 2, store.MarkFailedCalls, "retry_count still advances for every record before the cycle reports failure")
+	assert.Equal(t, 0, store.MarkPublishedCalls)
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls, "an unreachable broker is connectivity — never parked")
 }
 
-func TestRelayExecuteReturnsErrorWhenMessagingNotReady(t *testing.T) {
+// TestRelayAdvancesRetryCountWhenBrokerNotReady is the direct regression test for the
+// reported bug: when the broker is not ready the relay used to early-return and the
+// retry_count stayed frozen. Now every pending record's retry_count advances per cycle.
+func TestRelayAdvancesRetryCountWhenBrokerNotReady(t *testing.T) {
 	amqp := newFakeAMQP()
 	amqp.Ready = false
-	r := newRelayWithFakes(&fakeStore{}, amqp)
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk"},
+	}}
+	r := newRelayWithFakes(store, amqp)
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
 	err := r.Execute(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "messaging client not ready")
+	require.Error(t, err, "a not-ready broker with pending work surfaces as a job error (preserves the failure signal)")
+	assert.Contains(t, err.Error(), "messaging not ready")
+	assert.Equal(t, 2, store.MarkFailedCalls, "retry_count still advances for every record while the broker is down (the reported bug)")
+	assert.Equal(t, 0, amqp.PublishCalls, "no publish is attempted when the broker is not ready")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
 }
 
 func TestRelayExecuteWrapsFetchPendingError(t *testing.T) {
@@ -170,9 +192,9 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-bad-hdr", Headers: []byte(`{not valid json}`)}
-	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
-	assert.False(t, ok, "publishRecord returns false when headers can't be decoded")
+	assert.Equal(t, outcomeFailed, out, "corrupt headers are a (poison) failure")
 	assert.Equal(t, 0, amqp.PublishCalls, "publish never attempted with bad headers")
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "evt-bad-hdr", store.MarkFailedLastID)
@@ -193,8 +215,8 @@ func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"x-correlation-id":"abc"}`),
 	}
-	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
-	require.True(t, ok)
+	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	require.Equal(t, outcomePublished, out)
 
 	require.NotNil(t, amqp.LastPublishHdrs)
 	assert.Equal(t, "evt-42", amqp.LastPublishHdrs[HeaderEventID])
@@ -212,7 +234,7 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-7", EventType: "x.y", Exchange: "ex", RoutingKey: "rk"}
-	require.True(t, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
+	require.Equal(t, outcomePublished, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
 	require.NotNil(t, amqp.LastPublishHdrs)
 	assert.Equal(t, "evt-7", amqp.LastPublishHdrs[HeaderEventID])
 }
@@ -225,9 +247,9 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-mp-fail", Exchange: "ex", RoutingKey: "rk"}
-	ok := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
-	assert.False(t, ok, "MarkPublished failure makes the cycle treat the record as failed")
+	assert.Equal(t, outcomePublishedUnrecorded, out, "the message WAS delivered; a MarkPublished failure must not bump retry_count")
 	assert.Equal(t, 1, amqp.PublishCalls)
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls, "MarkFailed not called when only MarkPublished failed")
@@ -254,7 +276,7 @@ func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"traceparent":"` + inboundTraceparent + `","X-Request-ID":"` + inboundTraceID + `"}`),
 	}
-	require.True(t, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
+	require.Equal(t, outcomePublished, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
 
 	require.NotNil(t, amqp.LastPublishCtx, "publish context must be captured")
 	tp, ok := gobrickstrace.ParentFromContext(amqp.LastPublishCtx)
@@ -288,7 +310,7 @@ func TestRelayExecuteFansOutAcrossStaticTenants(t *testing.T) {
 	amqp := newFakeAMQP()
 	r := &Relay{
 		store:  store,
-		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
+		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3, PublishTimeout: 5 * time.Second},
 		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
 			tid, _ := multitenant.GetTenant(ctx)
 			resolved = append(resolved, tid)
@@ -312,7 +334,7 @@ func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
 	amqp := newFakeAMQP()
 	r := &Relay{
 		store:  store,
-		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3},
+		config: config.OutboxConfig{BatchSize: 10, MaxRetries: 3, PublishTimeout: 5 * time.Second},
 		getDB: func(ctx context.Context) (dbtypes.Interface, error) {
 			if tid, _ := multitenant.GetTenant(ctx); tid == "bad" {
 				return nil, errors.New("tenant db down")
@@ -329,4 +351,107 @@ func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
 	assert.Contains(t, err.Error(), `tenant "bad"`)
 	assert.Contains(t, err.Error(), "tenant db down")
 	assert.Equal(t, 1, store.FetchPendingCalls, "the healthy tenant is still relayed despite the other failing")
+}
+
+// --- Status-driven parking: poison (corrupt) vs connectivity (everything else) ---
+
+// TestRelayDeadLettersPoisonAtMaxRetries: the ONLY genuine poison is an undecodable
+// (broker-independent) message — corrupt headers. At MaxRetries it is dead-lettered to
+// status=failed rather than retried forever.
+func TestRelayDeadLettersPoisonAtMaxRetries(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "poison", Headers: []byte(`{not valid json}`), RetryCount: 2}, // MaxRetries-1
+	}}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 0, amqp.PublishCalls, "undecodable headers never reach the broker")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "corrupt-header poison at MaxRetries is parked as failed")
+	assert.Equal(t, "poison", store.MarkDeadLetteredLastID)
+	assert.Equal(t, 0, store.MarkFailedCalls)
+}
+
+// TestRelayMarksNackAsConnectivityNeverParks: a broker NACK is a transient broker condition
+// (disk alarm, mirror resync, failover) and a missing exchange surfaces as a synthesized NACK
+// — both are CONNECTIVITY, so they advance retry_count and are NEVER dead-lettered, even past
+// MaxRetries. This is the at-least-once guarantee for recoverable broker faults.
+func TestRelayMarksNackAsConnectivityNeverParks(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "nacked", Exchange: "ex", RoutingKey: "rk", RetryCount: 99}, // well past MaxRetries
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk": fmt.Errorf("%w after 5 attempts: %w", messaging.ErrPublishRetriesExhausted, messaging.ErrPublishNacked),
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 1, store.MarkFailedCalls, "a NACK advances retry_count (connectivity)")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls, "a NACK never parks, no matter the count")
+}
+
+// TestRelayNeverDeadLettersConnectivityEvenPastMaxRetries guards the locked decision:
+// a prolonged outage must never park a healthy event, even once its (outage-inflated)
+// retry_count is well past MaxRetries.
+func TestRelayNeverDeadLettersConnectivityEvenPastMaxRetries(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt", Exchange: "ex", RoutingKey: "rk", RetryCount: 99},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:rk": messaging.ErrPublishConfirmTimeout}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 1, store.MarkFailedCalls, "connectivity advances retry_count")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls, "connectivity never parks, no matter the count")
+}
+
+// TestRelayShutdownDuringPublishDoesNotInflateRetryCount guards finding S4: a publish
+// interrupted by shutdown (ErrShutdown / context.Canceled) must NOT advance retry_count,
+// and stops the batch cleanly.
+func TestRelayShutdownDuringPublishDoesNotInflateRetryCount(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk"},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErr = messaging.ErrShutdown
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 0, store.MarkFailedCalls, "shutdown must not inflate retry_count")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
+	assert.Equal(t, 1, amqp.PublishCalls, "the batch stops at the first shutdown-aborted record")
+}
+
+// TestRelayPerRecordPublishTimeoutDoesNotStarveBatch guards finding S1: one stuck record
+// is bounded by PublishTimeout (DeadlineExceeded -> connectivity -> MarkFailed) and does
+// NOT prevent the rest of the batch from publishing.
+func TestRelayPerRecordPublishTimeoutDoesNotStarveBatch(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "stuck", Exchange: "ex", RoutingKey: "slow"},
+		{ID: "healthy", Exchange: "ex", RoutingKey: "fast"},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishBlock = map[string]bool{"ex:slow": true}
+	r := newRelayWithFakes(store, amqp)
+	r.config.PublishTimeout = 30 * time.Millisecond
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 2, amqp.PublishCalls, "the healthy record is still attempted after the stuck one times out")
+	assert.Equal(t, 1, store.MarkPublishedCalls, "the healthy record publishes")
+	assert.Equal(t, "healthy", store.MarkPublishedLastID)
+	assert.Equal(t, 1, store.MarkFailedCalls, "the stuck record times out and advances retry_count (connectivity)")
+	assert.Equal(t, "stuck", store.MarkFailedLastID)
 }

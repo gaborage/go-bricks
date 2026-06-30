@@ -388,6 +388,12 @@ type ReconnectConfig struct {
 	// not by this value. Default: 30s. Set higher for high-latency networks.
 	ConnectionTimeout time.Duration `koanf:"connectiontimeout" json:"connectiontimeout" yaml:"connectiontimeout" toml:"connectiontimeout" mapstructure:"connectiontimeout"`
 
+	// MaxPublishAttempts bounds the per-publish retry loop: after this many failed
+	// attempts a publish returns an error instead of retrying forever. This is what
+	// lets the outbox relay regain control and advance an event's retry_count.
+	// Default: 5. Must be >= 1 (0 applies the default).
+	MaxPublishAttempts int `koanf:"maxpublishattempts" json:"maxpublishattempts" yaml:"maxpublishattempts" toml:"maxpublishattempts" mapstructure:"maxpublishattempts"`
+
 	// MaxDelay is the maximum delay for exponential backoff during reconnection.
 	// Default: 60s. Prevents unbounded delays during prolonged outages.
 	MaxDelay time.Duration `koanf:"maxdelay" json:"maxdelay" yaml:"maxdelay" toml:"maxdelay" mapstructure:"maxdelay"`
@@ -540,15 +546,24 @@ type OutboxConfig struct {
 	// Default: 100. Higher values improve throughput but increase memory usage.
 	BatchSize int `koanf:"batchsize" json:"batchsize" yaml:"batchsize" toml:"batchsize" mapstructure:"batchsize"`
 
-	// MaxRetries is the maximum number of publish attempts before giving up.
-	// Events exceeding this count remain in the table with status "pending" but are skipped by the relay.
-	// Default: 5.
+	// MaxRetries is the retry ceiling after which a *poison* event (undecodable headers
+	// — a deterministic, broker-independent failure) is dead-lettered to status "failed"
+	// and stops being retried. Connectivity failures (broker down, NACK, confirmation
+	// timeout) advance retry_count but are NEVER dead-lettered by this count, so neither a
+	// prolonged outage nor a transient broker fault can park healthy events. Default: 5.
 	MaxRetries int `koanf:"maxretries" json:"maxretries" yaml:"maxretries" toml:"maxretries" mapstructure:"maxretries"`
 
 	// RetentionPeriod is how long published events are kept before cleanup.
 	// Set to 0 to disable automatic cleanup.
 	// Default: 72h.
 	RetentionPeriod time.Duration `koanf:"retentionperiod" json:"retentionperiod" yaml:"retentionperiod" toml:"retentionperiod" mapstructure:"retentionperiod"`
+
+	// PublishTimeout bounds a single relay publish attempt so one stuck record cannot
+	// block the whole relay cycle (and starve the rest of the batch). It MUST be >=
+	// messaging.reconnect.connectiontimeout — the outbox module fails to start otherwise,
+	// because a shorter value truncates every legitimate confirmation into a false failure
+	// and re-publishes the (already-delivered) event every cycle. Default: 60s.
+	PublishTimeout time.Duration `koanf:"publishtimeout" json:"publishtimeout" yaml:"publishtimeout" toml:"publishtimeout" mapstructure:"publishtimeout"`
 }
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.

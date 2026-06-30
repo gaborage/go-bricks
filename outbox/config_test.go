@@ -17,6 +17,7 @@ func TestApplyDefaultsAllZero(t *testing.T) {
 	assert.Equal(t, 100, cfg.BatchSize)
 	assert.Equal(t, 5, cfg.MaxRetries)
 	assert.Equal(t, 72*time.Hour, cfg.RetentionPeriod)
+	assert.Equal(t, 60*time.Second, cfg.PublishTimeout)
 }
 
 func TestApplyDefaultsPreservesExplicitValues(t *testing.T) {
@@ -48,6 +49,18 @@ func TestApplyDefaultsPartialOverride(t *testing.T) {
 	assert.Equal(t, 100, cfg.BatchSize)
 	assert.Equal(t, 5, cfg.MaxRetries)
 	assert.Equal(t, 72*time.Hour, cfg.RetentionPeriod)
+	assert.Equal(t, 60*time.Second, cfg.PublishTimeout)
+}
+
+func TestValidateConfigNegativePublishTimeout(t *testing.T) {
+	cfg := &config.OutboxConfig{
+		PollInterval:   5 * time.Second,
+		BatchSize:      100,
+		PublishTimeout: -1 * time.Second,
+	}
+	err := validateConfig(cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "publishtimeout")
 }
 
 func TestValidateConfigValid(t *testing.T) {

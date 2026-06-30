@@ -35,6 +35,9 @@ type ManagerConfigBuilder struct {
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
+	// maxPublishAttempts bounds the per-publish retry loop, sourced from
+	// messaging.reconnect.maxpublishattempts and set by bootstrap.
+	maxPublishAttempts int
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
 	// When unset, documented defaults are applied as fallbacks.
@@ -95,9 +98,10 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 	}
 
 	return messaging.ManagerOptions{
-		MaxPublishers:     maxPublishers,
-		IdleTTL:           idleTTL,
-		ConnectionTimeout: b.connectionTimeout,
+		MaxPublishers:      maxPublishers,
+		IdleTTL:            idleTTL,
+		ConnectionTimeout:  b.connectionTimeout,
+		MaxPublishAttempts: b.maxPublishAttempts,
 	}
 }
 
@@ -241,7 +245,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	}
 
 	msgOptions := f.configBuilder.BuildMessagingOptions()
-	clientFactory := f.factoryResolver.MessagingClientFactory(msgOptions.ConnectionTimeout)
+	clientFactory := f.factoryResolver.MessagingClientFactory(msgOptions.ConnectionTimeout, msgOptions.MaxPublishAttempts)
 
 	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
 

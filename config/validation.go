@@ -40,13 +40,14 @@ const (
 
 // Messaging reconnection defaults
 const (
-	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
-	defaultReinitDelay       = 2 * time.Second  // Delay before channel reinitialization
-	defaultResendDelay       = 5 * time.Second  // Delay before retrying failed publishes
-	defaultConnectionTimeout = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
-	defaultMaxReconnectDelay = 60 * time.Second // Maximum delay for exponential backoff cap
-	defaultMaxPublishers     = 50               // Maximum publisher clients in cache
-	defaultPublisherIdleTTL  = 10 * time.Minute // Time before idle publishers are evicted
+	defaultReconnectDelay     = 5 * time.Second  // Initial delay between reconnection attempts
+	defaultReinitDelay        = 2 * time.Second  // Delay before channel reinitialization
+	defaultResendDelay        = 5 * time.Second  // Delay before retrying failed publishes
+	defaultConnectionTimeout  = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
+	defaultMaxReconnectDelay  = 60 * time.Second // Maximum delay for exponential backoff cap
+	defaultMaxPublishers      = 50               // Maximum publisher clients in cache
+	defaultPublisherIdleTTL   = 10 * time.Minute // Time before idle publishers are evicted
+	defaultMaxPublishAttempts = 5                // Bounded publish retry attempts before giving up
 )
 
 // Cache manager defaults
@@ -637,55 +638,51 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig) error {
-	// Reconnect.Delay
-	if cfg.Reconnect.Delay == 0 {
-		cfg.Reconnect.Delay = defaultReconnectDelay
-	} else if cfg.Reconnect.Delay < 0 {
-		return NewValidationError("messaging.reconnect.delay", errMustBeNonNegative)
+	// Each field follows the same "zero applies the default, negative is invalid" rule,
+	// factored into applyNonNegativeDefault to keep the policy in one place.
+	for _, d := range []struct {
+		field *time.Duration
+		def   time.Duration
+		name  string
+	}{
+		{&cfg.Reconnect.Delay, defaultReconnectDelay, "messaging.reconnect.delay"},
+		{&cfg.Reconnect.ReinitDelay, defaultReinitDelay, "messaging.reconnect.reinitdelay"},
+		{&cfg.Reconnect.ResendDelay, defaultResendDelay, "messaging.reconnect.resenddelay"},
+		{&cfg.Reconnect.ConnectionTimeout, defaultConnectionTimeout, "messaging.reconnect.connectiontimeout"},
+		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
+		{&cfg.Publisher.IdleTTL, defaultPublisherIdleTTL, "messaging.publisher.idlettl"},
+	} {
+		if err := applyNonNegativeDefault(d.field, d.def, d.name); err != nil {
+			return err
+		}
 	}
 
-	// Reconnect.ReinitDelay
-	if cfg.Reconnect.ReinitDelay == 0 {
-		cfg.Reconnect.ReinitDelay = defaultReinitDelay
-	} else if cfg.Reconnect.ReinitDelay < 0 {
-		return NewValidationError("messaging.reconnect.reinitdelay", errMustBeNonNegative)
+	for _, n := range []struct {
+		field *int
+		def   int
+		name  string
+	}{
+		{&cfg.Reconnect.MaxPublishAttempts, defaultMaxPublishAttempts, "messaging.reconnect.maxpublishattempts"},
+		{&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached"},
+	} {
+		if err := applyNonNegativeDefault(n.field, n.def, n.name); err != nil {
+			return err
+		}
 	}
 
-	// Reconnect.ResendDelay
-	if cfg.Reconnect.ResendDelay == 0 {
-		cfg.Reconnect.ResendDelay = defaultResendDelay
-	} else if cfg.Reconnect.ResendDelay < 0 {
-		return NewValidationError("messaging.reconnect.resenddelay", errMustBeNonNegative)
-	}
+	return nil
+}
 
-	// Reconnect.ConnectionTimeout
-	if cfg.Reconnect.ConnectionTimeout == 0 {
-		cfg.Reconnect.ConnectionTimeout = defaultConnectionTimeout
-	} else if cfg.Reconnect.ConnectionTimeout < 0 {
-		return NewValidationError("messaging.reconnect.connectiontimeout", errMustBeNonNegative)
+// applyNonNegativeDefault sets *field to def when it is zero, or returns a validation
+// error for the named config key when it is negative. Shared across default-appliers
+// to keep the "zero applies the default, negative is invalid" rule in one place.
+func applyNonNegativeDefault[T ~int64 | ~int](field *T, def T, name string) error {
+	switch {
+	case *field == 0:
+		*field = def
+	case *field < 0:
+		return NewValidationError(name, errMustBeNonNegative)
 	}
-
-	// Reconnect.MaxDelay
-	if cfg.Reconnect.MaxDelay == 0 {
-		cfg.Reconnect.MaxDelay = defaultMaxReconnectDelay
-	} else if cfg.Reconnect.MaxDelay < 0 {
-		return NewValidationError("messaging.reconnect.maxdelay", errMustBeNonNegative)
-	}
-
-	// Publisher.MaxCached
-	if cfg.Publisher.MaxCached == 0 {
-		cfg.Publisher.MaxCached = defaultMaxPublishers
-	} else if cfg.Publisher.MaxCached < 0 {
-		return NewValidationError("messaging.publisher.maxcached", errMustBeNonNegative)
-	}
-
-	// Publisher.IdleTTL
-	if cfg.Publisher.IdleTTL == 0 {
-		cfg.Publisher.IdleTTL = defaultPublisherIdleTTL
-	} else if cfg.Publisher.IdleTTL < 0 {
-		return NewValidationError("messaging.publisher.idlettl", errMustBeNonNegative)
-	}
-
 	return nil
 }
 

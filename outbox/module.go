@@ -72,6 +72,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
+	if err := m.validatePublishTimeout(); err != nil {
+		return err
+	}
+
 	// Fail fast: when outbox is enabled, DB and Messaging resolvers are required.
 	// Without them, the relay job would panic on first poll instead of failing at startup.
 	if m.getDB == nil {
@@ -82,7 +86,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 
 	// Fail fast: in single-tenant mode the broker URL must be set at startup,
-	// otherwise the relay job logs "messaging not available" every poll cycle (issue #366).
+	// otherwise the relay treats the broker as permanently unreachable and advances
+	// every pending event's retry_count on every poll without ever delivering (issue #366).
 	// Multi-tenant resolves messaging per-tenant via the resource source, so a static
 	// check would yield false positives — skip it there.
 	if m.config != nil && !m.config.Multitenant.Enabled && !config.IsMessagingConfigured(&m.config.Messaging) {
@@ -117,6 +122,25 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		Int("batchSize", m.cfg.BatchSize).
 		Msg("Outbox module initialized")
 
+	return nil
+}
+
+// validatePublishTimeout fails fast when outbox.publishtimeout is shorter than the broker
+// confirmation wait (messaging.reconnect.connectiontimeout). A shorter timeout would truncate
+// EVERY legitimate confirmation into a connectivity failure: the broker actually receives and
+// routes the message, but the relay never marks it published and re-publishes it on every
+// cycle — an unbounded duplicate-delivery loop. That is severe enough to reject at startup
+// (Fail Fast) rather than emit a warning an operator might miss.
+func (m *Module) validatePublishTimeout() error {
+	if m.config == nil {
+		return nil
+	}
+	ct := m.config.Messaging.Reconnect.ConnectionTimeout
+	if ct > 0 && m.cfg.PublishTimeout < ct {
+		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.connectiontimeout (%s); "+
+			"a shorter value truncates every publish confirmation into a false failure (duplicate-delivery loop)",
+			m.cfg.PublishTimeout, ct)
+	}
 	return nil
 }
 
@@ -261,11 +285,11 @@ func (s *lazyStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) e
 	return s.module.store.Insert(ctx, tx, record)
 }
 
-func (s *lazyStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize, maxRetries int) ([]Record, error) {
+func (s *lazyStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error) {
 	if err := s.module.ensureStoreInitialized(ctx); err != nil {
 		return nil, err
 	}
-	return s.module.store.FetchPending(ctx, db, batchSize, maxRetries)
+	return s.module.store.FetchPending(ctx, db, batchSize)
 }
 
 func (s *lazyStore) MarkPublished(ctx context.Context, db dbtypes.Interface, eventID string) error {
@@ -280,6 +304,13 @@ func (s *lazyStore) MarkFailed(ctx context.Context, db dbtypes.Interface, eventI
 		return err
 	}
 	return s.module.store.MarkFailed(ctx, db, eventID, errMsg)
+}
+
+func (s *lazyStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
+	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+		return err
+	}
+	return s.module.store.MarkDeadLettered(ctx, db, eventID, errMsg)
 }
 
 func (s *lazyStore) DeletePublished(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {

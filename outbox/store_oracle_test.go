@@ -81,7 +81,7 @@ func TestOracleStoreFetchPendingSuccess(t *testing.T) {
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
-	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, "evt-1", out[0].ID)
@@ -105,7 +105,7 @@ func TestOracleStoreFetchPendingHandlesNullExchangeAndRoutingKey(t *testing.T) {
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
-	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, "", out[0].Exchange, "NULL exchange must map to the empty (default) exchange")
@@ -122,7 +122,7 @@ func TestOracleStoreFetchPendingEmpty(t *testing.T) {
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
-	out, err := store.FetchPending(t.Context(), db, 10, 3)
+	out, err := store.FetchPending(t.Context(), db, 10)
 	require.NoError(t, err)
 	assert.Empty(t, out)
 }
@@ -134,7 +134,7 @@ func TestOracleStoreFetchPendingQueryError(t *testing.T) {
 	wantErr := errors.New("ORA-12541 TNS no listener")
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnError(wantErr)
 
-	_, err := store.FetchPending(t.Context(), db, 10, 3)
+	_, err := store.FetchPending(t.Context(), db, 10)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "fetch pending failed")
@@ -160,6 +160,57 @@ func TestOracleStoreMarkPublishedExecError(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "mark published failed")
+}
+
+// TestOracleStoreFetchPendingSelectsByStatusOnly mirrors the Postgres test: the
+// fetch is status-gated (no retry_count filter) so an outage cannot freeze events.
+func TestOracleStoreFetchPendingSelectsByStatusOnly(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "status", "retry_count", "created_at",
+	)
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	_, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+
+	q := db.QueryLog()
+	require.Len(t, q, 1)
+	assert.NotContains(t, q[0].SQL, "retry_count <", "fetch must not gate on retry_count")
+	assert.Contains(t, q[0].SQL, "WHERE status")
+	assert.Equal(t, []any{StatusPending, 10}, q[0].Args)
+}
+
+// --- MarkDeadLettered -------------------------------------------------------
+
+func TestOracleStoreMarkDeadLetteredSetsFailedStatus(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	db.ExpectExec(`UPDATE GOBRICKS_OUTBOX SET retry_count`).WillReturnRowsAffected(1)
+
+	require.NoError(t, store.MarkDeadLettered(t.Context(), db, "evt-1", "poison: nacked"))
+
+	execs := db.ExecLog()
+	require.Len(t, execs, 1)
+	assert.Contains(t, execs[0].SQL, "retry_count = retry_count + 1")
+	assert.Contains(t, execs[0].SQL, "status =")
+	// Oracle's error column is error_msg (a reserved-word rename), NOT error.
+	assert.Contains(t, execs[0].SQL, "error_msg =")
+	assert.Equal(t, []any{StatusFailed, "poison: nacked", "evt-1"}, execs[0].Args)
+}
+
+func TestOracleStoreMarkDeadLetteredExecError(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	wantErr := errors.New("ORA-08177 serialization failure")
+	db.ExpectExec(`UPDATE GOBRICKS_OUTBOX SET retry_count`).WillReturnError(wantErr)
+
+	err := store.MarkDeadLettered(t.Context(), db, "evt-1", "poison")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	assert.Contains(t, err.Error(), "mark dead-lettered failed")
 }
 
 // --- MarkFailed -------------------------------------------------------------
